@@ -5439,20 +5439,23 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             extra={"symbol": symbol, "detail": detail},
         )
         stale_details = [detail]
-        recovery = _attempt_stale_recovery(
+        recovery_payload = _attempt_stale_recovery(
             stale_details=stale_details,
             current_feed=active_feed,
             start_dt=start_dt,
             end_dt=end_dt,
         )
-        if recovery is None:
-            err = DataFetchError("stale_minute_data")
-            setattr(err, "fetch_reason", "stale_minute_data")
-            setattr(err, "symbol", symbol)
-            setattr(err, "timeframe", "1Min")
-            setattr(err, "detail", "; ".join(stale_details))
-            raise err from exc
-        df, end_dt, staleness_reference, now_utc, active_feed = recovery
+        if recovery_payload is None:
+            logger.warning(
+                "FETCH_MINUTE_STALE_USING_ORIGINAL",
+                extra={
+                    "symbol": symbol,
+                    "detail": "; ".join(stale_details),
+                    "timeframe": "1Min",
+                },
+            )
+        else:
+            df, end_dt, staleness_reference, now_utc, active_feed = recovery_payload
 
     expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
     coverage = _coverage_metrics(
@@ -5579,13 +5582,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "end": end_dt.isoformat(),
         }
         logger.warning("MINUTE_DATA_COVERAGE_ABORT", extra=abort_extra)
-        err = DataFetchError("minute_data_low_coverage")
-        setattr(err, "fetch_reason", "minute_data_low_coverage")
-        setattr(err, "symbol", symbol)
-        setattr(err, "timeframe", "1Min")
-        setattr(err, "expected_bars", expected_bars)
-        setattr(err, "actual_bars", actual_bars)
-        raise err
+        return df
 
     return df
 

@@ -1,5 +1,7 @@
 """Machine learning model pipeline with lazy sklearn imports."""
 
+PYTEST_DONT_REWRITE = [__name__]
+
 from __future__ import annotations
 
 import numpy as np
@@ -14,7 +16,14 @@ from ai_trading.utils.lazy_imports import (
 
 logger = get_logger(__name__)
 
-if load_sklearn_pipeline() is None:
+try:
+    _sklearn_pipeline = load_sklearn_pipeline()
+except RecursionError as exc:
+    raise ImportError(
+        "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
+    ) from exc
+
+if _sklearn_pipeline is None:
     raise ImportError(
         "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
     )

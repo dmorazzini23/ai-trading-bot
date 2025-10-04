@@ -8,6 +8,7 @@ import logging
 from threading import Thread
 import errno
 import socket
+import signal
 import sys
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
@@ -566,9 +567,24 @@ def _as_float(val, default: float = 0.0) -> float:
 
 
 def _install_signal_handlers() -> None:
-    """Ensure cooperative signal handlers are active."""
+    """Install signal handlers that log and request cooperative shutdown."""
 
-    register_signal_handlers()
+    def _handler(signum, frame):  # pragma: no cover - exercised via unit tests
+        try:
+            signame = signal.Signals(signum).name
+        except Exception:
+            signame = str(signum)
+        logger.info("SERVICE_SIGNAL", extra={"signal": signame})
+        request_stop(f"signal:{signame}")
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "SIGNAL_HANDLER_INSTALL_FAILED",
+                extra={"signal": sig, "error": str(exc)},
+            )
 
 
 def _fail_fast_env() -> None:
@@ -1714,4 +1730,3 @@ def _emit_capture_handler_record(detail: str, action: str) -> None:
             handler.emit(record)
         except Exception:  # pragma: no cover - defensive guard for custom handlers
             continue
-

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import pickle
 import re
 import time
@@ -131,7 +132,13 @@ class ModelRegistry:
         *,
         index_filename: str | None = None,
     ) -> None:
-        self.base_path = Path(base_path) if base_path is not None else MODELS_DIR
+        if base_path is None:
+            env_override = os.getenv("MODEL_REGISTRY_DIR")
+            if env_override:
+                base_path = Path(env_override).expanduser()
+            else:
+                base_path = MODELS_DIR
+        self.base_path = Path(base_path)
         self.base_path = self.base_path.resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
 

@@ -138,9 +138,17 @@ def _validate_startup_config() -> _StartupConfig:
         break
 
     timeframe_env = os.getenv("TIMEFRAME")
-
     try:
-        feed_value = feed_env if feed_env is not None else get_settings().alpaca_data_feed
+        if feed_env is not None:
+            feed_value = feed_env
+        else:
+            try:
+                feed_value = get_settings().alpaca_data_feed
+            except ValidationError as exc:
+                logger.error("CONFIG_VALIDATION_FAILED", extra={"errors": exc.errors()})
+                raise SystemExit(f"Invalid configuration: {exc}") from exc
+            except Exception:
+                feed_value = "iex"
         timeframe_value = (
             timeframe_env
             if timeframe_env and timeframe_env.strip()

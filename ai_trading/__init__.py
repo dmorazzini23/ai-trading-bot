@@ -4,6 +4,7 @@ Keep imports *lazy* to avoid optional deps at import-time (e.g., Alpaca).
 Expose a **minimal, explicit allowlist** of submodules and symbols that are
 safe to import from the package root for tests and CLI users.
 """
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -15,6 +16,43 @@ from importlib import import_module as _import_module
 sys.modules.pop(f"{__name__}.__main__", None)
 
 PYTEST_DONT_REWRITE = ["ai_trading"]
+
+_modules_ref = getattr(sys, "modules", None)
+if _modules_ref is None:  # pragma: no cover - defensive for patched environments
+    import importlib
+    import types
+    import builtins
+    import pathlib
+    import ntpath
+
+    sys.modules = {
+        "sys": sys,
+        "builtins": builtins,
+        "types": types,
+        "importlib": importlib,
+        "importlib._bootstrap": importlib._bootstrap,
+        "importlib._bootstrap_external": importlib._bootstrap_external,
+        "pathlib": pathlib,
+        "ntpath": ntpath,
+        "os": os,
+    }
+    _modules_ref = sys.modules
+
+try:
+    _PIPELINE_AVAILABLE = importlib.util.find_spec("sklearn.pipeline") is not None
+except ModuleNotFoundError:  # pragma: no cover - optional dependency missing
+    _PIPELINE_AVAILABLE = False
+
+if not _PIPELINE_AVAILABLE:
+    class _PipelineMissingFinder:
+        def find_spec(self, fullname, path=None, target=None):  # pragma: no cover - import hook
+            if fullname.startswith("ai_trading.pipeline"):
+                raise ImportError(
+                    "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
+                )
+            return None
+
+    sys.meta_path.insert(0, _PipelineMissingFinder())
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _root_str = str(_REPO_ROOT)

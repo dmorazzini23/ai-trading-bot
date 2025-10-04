@@ -3873,6 +3873,25 @@ def _post_process(
     if normalized is None:
         return None
 
+    if isinstance(normalized, pd.DataFrame) and "close" in normalized.columns:
+        close_series = normalized["close"]
+        try:
+            has_non_nan = bool(close_series.notna().any())
+        except Exception:
+            has_non_nan = True
+        if not has_non_nan:
+            err = DataFetchError("close_column_all_nan")
+            setattr(err, "fetch_reason", "close_column_all_nan")
+            if symbol is not None:
+                setattr(err, "symbol", symbol)
+            if timeframe is not None:
+                setattr(err, "timeframe", timeframe)
+            logger.error(
+                "CLOSE_COLUMN_ALL_NAN",
+                extra={"symbol": symbol, "timeframe": timeframe},
+            )
+            raise err
+
     if normalized is df:
         return df
 

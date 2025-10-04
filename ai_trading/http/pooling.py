@@ -407,7 +407,11 @@ def invalidate_host_limit_cache() -> None:
     The next access will recompute the limit and refresh semaphore records as needed.
     """
 
-    reset_host_semaphores(clear_limit_cache=True)
+    global _LIMIT_CACHE
+    _LIMIT_CACHE = None
+    limit, version = _resolve_limit()
+    snapshot = HostLimitSnapshot(limit, version)
+    _refresh_all_host_semaphores(snapshot)
 
 
 def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
