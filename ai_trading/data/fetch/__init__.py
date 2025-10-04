@@ -4641,9 +4641,22 @@ def _fetch_bars(
     else:
         _state["skip_empty_metrics"] = False
 
-    if short_circuit_empty:
-        empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
+    def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
+        if candidate is None:
+            frame = pd.DataFrame()
+        elif isinstance(candidate, pd.DataFrame):
+            frame = candidate
+        else:
+            try:
+                frame = pd.DataFrame(candidate)
+            except Exception:
+                frame = pd.DataFrame()
+        if short_circuit_empty and not _frame_has_rows(frame):
+            empty_df = _empty_ohlcv_frame(pd)
+            if isinstance(empty_df, pd.DataFrame):
+                return empty_df
+            return pd.DataFrame()
+        return frame
 
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
@@ -4669,14 +4682,8 @@ def _fetch_bars(
         fb_int = interval_map.get(_interval)
         if fb_int:
             fallback_df = _run_backup_fetch(fb_int)
-            if short_circuit_empty:
-                empty_df = _empty_ohlcv_frame(pd)
-                return empty_df if empty_df is not None else pd.DataFrame()
-            return fallback_df
-        if short_circuit_empty:
-            empty_df = _empty_ohlcv_frame(pd)
-            return empty_df if empty_df is not None else pd.DataFrame()
-        return pd.DataFrame()
+            return _finalize_frame(fallback_df)
+        return _finalize_frame(pd.DataFrame())
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
@@ -4715,13 +4722,9 @@ def _fetch_bars(
             fb_int = interval_map.get(_interval)
             if fb_int:
                 fallback_df = _run_backup_fetch(fb_int)
-                if short_circuit_empty:
-                    empty_df = _empty_ohlcv_frame(pd)
-                    return empty_df if empty_df is not None else pd.DataFrame()
-                return fallback_df
+                return _finalize_frame(fallback_df)
             if short_circuit_empty:
-                empty_df = _empty_ohlcv_frame(pd)
-                return empty_df if empty_df is not None else pd.DataFrame()
+                return _finalize_frame(None)
         else:
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
@@ -4764,7 +4767,7 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                return _run_backup_fetch(fb_int)
+                return _finalize_frame(_run_backup_fetch(fb_int))
     # Respect recent fallback TTL at coarse granularity
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
@@ -4775,7 +4778,7 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            return _run_backup_fetch(fb_int)
+            return _finalize_frame(_run_backup_fetch(fb_int))
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
         if not _sip_allowed() and not _SIP_DISALLOWED_WARNED:
@@ -4791,9 +4794,8 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                return _run_backup_fetch(fb_int)
-            empty_df = _empty_ohlcv_frame(pd)
-            return empty_df if empty_df is not None else pd.DataFrame()
+                return _finalize_frame(_run_backup_fetch(fb_int))
+            return _finalize_frame(None)
 
     if _feed == "sip" and _is_sip_unauthorized():
         _log_sip_unavailable(symbol, _interval)
@@ -4803,8 +4805,8 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            return _run_backup_fetch(fb_int)
-        return pd.DataFrame()
+            return _finalize_frame(_run_backup_fetch(fb_int))
+        return _finalize_frame(pd.DataFrame())
 
     headers = {
         "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
@@ -6179,7 +6181,7 @@ def _fetch_bars(
         # Otherwise, loop to give the provider another chance
     if df is not None and not getattr(df, "empty", True):
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
-        return df
+        return _finalize_frame(df)
     if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
@@ -6215,7 +6217,7 @@ def _fetch_bars(
                     resolved_feed="yahoo",
                 )
                 if _state.get("window_has_session", True):
-                    return annotated_df
+                    return _finalize_frame(annotated_df)
                 http_fallback_frame = annotated_df
     if not _state.get("window_has_session", True):
         tf_norm = _canon_tf(_interval)
@@ -6247,12 +6249,12 @@ def _fetch_bars(
                 from_feed = initial_norm or initial_feed
                 _record_feed_switch(symbol, tf_norm, from_feed, fallback_norm)
         if http_fallback_frame is not None and not getattr(http_fallback_frame, "empty", True):
-            return http_fallback_frame
+            return _finalize_frame(http_fallback_frame)
         empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
+        return _finalize_frame(empty_df)
     if df is None or getattr(df, "empty", True):
         return None
-    return df
+    return _finalize_frame(df)
 
 
 def _fetch_minute_from_provider(
