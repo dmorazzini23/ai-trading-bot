@@ -23,6 +23,13 @@ class FieldInfo:
 def Field(default: Any = None, *_, **__):
     return default
 
+
+class ConfigDict(dict):
+    """Lightweight runtime-compatible stand-in for :class:`pydantic.ConfigDict`."""
+
+    def __init__(self, **config: Any):
+        super().__init__(config)
+
 class AliasChoices(tuple):
     def __new__(cls, *names: str):
         return super().__new__(cls, names)
