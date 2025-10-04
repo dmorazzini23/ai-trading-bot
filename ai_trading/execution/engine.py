@@ -1666,7 +1666,15 @@ class ExecutionEngine:
                 had_manual_price or (isinstance(price_source, str) and price_source.startswith("alpaca"))
             )
             if apply_slippage_controls:
-                base_threshold = base_threshold_env
+                base_threshold = float(base_threshold_env)
+                if had_manual_price:
+                    try:
+                        manual_threshold = float(order.max_slippage_bps)
+                    except Exception:
+                        manual_threshold = base_threshold
+                    else:
+                        if math.isfinite(manual_threshold) and manual_threshold > 0:
+                            base_threshold = min(base_threshold, manual_threshold)
                 threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
                 if isinstance(price_source, str) and price_source.startswith("alpaca"):
                     base_price = self._apply_slippage(order, base_price, expected, threshold)
@@ -1704,8 +1712,19 @@ class ExecutionEngine:
                 directional_predicted = predicted_slippage_bps if side == OrderSide.BUY else -predicted_slippage_bps
                 adverse_predicted_bps = max(directional_predicted, 0.0)
             if adverse_predicted_bps > threshold:
+                if had_manual_price:
+                    logger.warning(
+                        "MANUAL_SLIPPAGE_THRESHOLD_EXCEEDED",
+                        extra={
+                            "order_id": order.id,
+                            "adverse_slippage_bps": round(adverse_predicted_bps, 2),
+                            "threshold_bps": round(threshold, 2),
+                        },
+                    )
+                    raise AssertionError(
+                        f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
+                    )
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
-                limit_conversion_ok = True
                 if order.order_type == OrderType.MARKET:
                     adj = float(expected) * (tol_bps / 10000.0)
                     limit_price = float(expected) + adj if side == OrderSide.BUY else float(expected) - adj
@@ -1713,7 +1732,7 @@ class ExecutionEngine:
                     try:
                         price_money = Money(limit_price, tick)
                     except Exception:
-                        limit_conversion_ok = False
+                        price_money = None
                     else:
                         order.order_type = OrderType.LIMIT
                         order.price = price_money
@@ -1727,10 +1746,8 @@ class ExecutionEngine:
                         },
                     )
                 reduced = max(1, int(order.quantity * threshold / adverse_predicted_bps))
-                qty_reduced = False
                 if reduced < order.quantity:
                     order.quantity = reduced
-                    qty_reduced = True
                     logger.warning(
                         "SLIPPAGE_QTY_REDUCED",
                         extra={
@@ -1748,13 +1765,7 @@ class ExecutionEngine:
                             "adverse_slippage_bps": round(adverse_predicted_bps, 2),
                         },
                     )
-                    if had_manual_price:
-                        raise AssertionError(f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold")
                     return
-                if had_manual_price:
-                    if not limit_conversion_ok or not qty_reduced:
-                        raise AssertionError(f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold")
-                    return order
                 try:
                     from ai_trading.core.bot_engine import get_trade_logger
 
