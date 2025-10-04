@@ -7935,12 +7935,21 @@ class DataFetcher:
     def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
-        be_module = sys.modules.get(__name__)
-        monotonic = (
-            getattr(be_module, "monotonic_time", monotonic_time)
-            if be_module is not None
-            else monotonic_time
-        )
+        time_monotonic = getattr(time, "monotonic", None)
+        if callable(time_monotonic):
+            monotonic_fn: Callable[[], float] = time_monotonic
+        else:
+            be_module = sys.modules.get(__name__)
+            module_monotonic = (
+                getattr(be_module, "monotonic_time", None)
+                if be_module is not None
+                else None
+            )
+            monotonic_fn = (
+                module_monotonic
+                if callable(module_monotonic)
+                else monotonic_time
+            )
 
         try:  # lazy import to avoid hard dependency at import time
             from ai_trading.market.calendars import is_trading_day as _is_trading_day
@@ -7979,7 +7988,7 @@ class DataFetcher:
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = float(monotonic())
+        now_monotonic = float(monotonic_fn())
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
@@ -8456,7 +8465,7 @@ class DataFetcher:
             )
 
         with cache_lock:
-            stamp = float(monotonic())
+            stamp = float(monotonic_fn())
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
