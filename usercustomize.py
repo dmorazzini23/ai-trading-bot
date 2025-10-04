@@ -1,43 +1,36 @@
-"""User-level interpreter bootstrap for tests.
-
-Ensures ``sys.modules`` retains core stdlib modules even when cleared via
-``patch.dict``.  This avoids recursion inside pytest's assertion rewrite hook
-when importing our package after ``sys.modules`` was emptied.
-"""
+"""Extend unittest.mock.patch.dict to keep sys.modules stable during tests."""
 from __future__ import annotations
 
 import sys
+import types
+import unittest.mock as _mock
 
-_ESSENTIALS: dict[str, object | None] = {}
-for name in (
-    "sys",
-    "builtins",
-    "types",
-    "importlib",
-    "importlib._bootstrap",
-    "importlib._bootstrap_external",
-    "importlib.machinery",
-    "pathlib",
-    "posixpath",
-    "ntpath",
-    "os",
-    "collections",
-    "_pytest.assertion.rewrite",
-):
-    try:
-        module = __import__(name)
-    except Exception:  # pragma: no cover - optional modules may not be available yet
-        module = None
-    _ESSENTIALS[name] = module
+_ORIGINAL_PATCH_DICT = _mock.patch.dict
+_ORIGINAL_MODULES: dict[str, types.ModuleType | None] = dict(sys.modules)
 
 
-class _ProtectedModules(dict):
-    def clear(self) -> None:  # type: ignore[override]
-        super().clear()
-        for key, module in _ESSENTIALS.items():
-            if module is not None:
-                super().__setitem__(key, module)
+def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # pragma: no cover
+    ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
+    if clear and in_dict is sys.modules:
+        original_enter = ctx.__enter__
+        original_exit = ctx.__exit__
+
+        def _enter():
+            result = original_enter()
+            sys.modules.update({k: v for k, v in _ORIGINAL_MODULES.items() if v is not None})
+            return result
+
+        def _exit(exc_type, exc, tb):
+            try:
+                return original_exit(exc_type, exc, tb)
+            finally:
+                sys.modules.update({k: v for k, v in _ORIGINAL_MODULES.items() if v is not None})
+
+        ctx.__enter__ = _enter
+        ctx.__exit__ = _exit
+    return ctx
 
 
-if not isinstance(sys.modules, _ProtectedModules):
-    sys.modules = _ProtectedModules(sys.modules)
+_mock.patch.dict = _safe_patch_dict
+if hasattr(_mock.patch, 'dict'):
+    _mock.patch.dict = _safe_patch_dict

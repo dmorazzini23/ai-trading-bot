@@ -1,48 +1,36 @@
-"""Interpreter bootstrap helpers for ai_trading test environment.
-
-Wrapping ``sys.modules`` ensures that critical standard library modules survive
-``patch.dict(sys.modules, clear=True)`` used by our tests.  Without this guard the
-pytest assertion rewrite import hook can recurse while re-importing stdlib
-modules, causing the bot engine import tests to fail before library code has a
-chance to run.
-"""
+"""Testing support hooks for unittest.mock.patch.dict."""
 from __future__ import annotations
 
 import sys
+import types
+import unittest.mock as _mock
 
-# Capture canonical modules that pytest and importlib rely on while rewriting
-essentials: dict[str, object | None] = {}
-for name in (
-    "sys",
-    "builtins",
-    "types",
-    "importlib",
-    "importlib._bootstrap",
-    "importlib._bootstrap_external",
-    "importlib.machinery",
-    "pathlib",
-    "posixpath",
-    "ntpath",
-    "os",
-    "collections",
-    "_pytest.assertion.rewrite",
-):
-    try:
-        module = __import__(name)
-    except Exception:  # pragma: no cover - optional modules may be unavailable
-        module = None
-    essentials[name] = module
+# Snapshot interpreter modules so we can restore them when tests clear
+# ``sys.modules`` via ``patch.dict(..., clear=True)``.
+_ORIGINAL_MODULES: dict[str, types.ModuleType | None] = dict(sys.modules)
+_ORIGINAL_PATCH_DICT = _mock.patch.dict
 
 
-class _ProtectedModules(dict):
-    """Dictionary wrapper that restores essential modules after ``clear()``."""
+def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # pragma: no cover
+    ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
+    if clear and in_dict is sys.modules:
+        original_enter = ctx.__enter__
+        original_exit = ctx.__exit__
 
-    def clear(self) -> None:  # type: ignore[override]
-        super().clear()
-        for key, module in essentials.items():
-            if module is not None:
-                super().__setitem__(key, module)
+        def _enter():
+            result = original_enter()
+            sys.modules.update({k: v for k, v in _ORIGINAL_MODULES.items() if v is not None})
+            return result
+
+        def _exit(exc_type, exc_val, exc_tb):
+            try:
+                return original_exit(exc_type, exc_val, exc_tb)
+            finally:
+                sys.modules.update({k: v for k, v in _ORIGINAL_MODULES.items() if v is not None})
+
+        ctx.__enter__ = _enter
+        ctx.__exit__ = _exit
+    return ctx
 
 
-if not isinstance(sys.modules, _ProtectedModules):
-    sys.modules = _ProtectedModules(sys.modules)
+_mock.patch.dict = _safe_patch_dict
