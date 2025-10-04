@@ -50,6 +50,26 @@ def _reset_state():
     fetch._IEX_EMPTY_COUNTS.clear()
     fetch._ALPACA_EMPTY_ERROR_COUNTS.clear()
     fetch._CYCLE_FALLBACK_FEED.clear()
+    fetch.provider_monitor.fail_counts.clear()
+    fetch.provider_monitor.disabled_until.clear()
+    fetch.provider_monitor.disabled_since.clear()
+    fetch.provider_monitor.disable_counts.clear()
+    fetch.provider_monitor.outage_start.clear()
+    fetch.provider_monitor.switch_counts.clear()
+    fetch.provider_monitor.consecutive_switches = 0
+    fetch.provider_monitor.consecutive_switches_by_provider.clear()
+    fetch.provider_monitor._last_switch_time.clear()
+    fetch.provider_monitor._alert_cooldown_until.clear()
+    fetch.provider_monitor._switchover_disable_counts.clear()
+    fetch.provider_monitor._current_switch_cooldowns.clear()
+    fetch.provider_monitor._pair_states.clear()
+    fetch.provider_monitor._last_switch_logged = None
+    fetch.provider_monitor._last_switch_ts = None
+    fetch.provider_monitor._last_switchover_provider = None
+    fetch.provider_monitor._last_switchover_ts = 0.0
+    fetch.provider_monitor._last_switchover_passes = 0
+    fetch.provider_monitor._last_sip_warn_ts = 0.0
+    fetch.provider_monitor._pair_switch_history.clear()
 
 
 def test_empty_payload_switches_to_preferred_feed(monkeypatch, capmetrics):
@@ -478,6 +498,15 @@ def test_alt_feed_switch_records_override(monkeypatch):
     monkeypatch.setattr(fetch, "_post_process", lambda df, *a, **k: df)
     monkeypatch.setattr(fetch, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
 
+    switch_calls: list[tuple[str, str, str | None, str | None]] = []
+    original_switch = fetch._record_feed_switch
+
+    def _record_feed_switch_spy(symbol: str, timeframe: str, from_feed: str | None, to_feed: str | None) -> None:
+        switch_calls.append((symbol, timeframe, from_feed, to_feed))
+        original_switch(symbol, timeframe, from_feed, to_feed)
+
+    monkeypatch.setattr(fetch, "_record_feed_switch", _record_feed_switch_spy)
+
     symbol = "AAPL"
     start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
     end = start + timedelta(minutes=1)
@@ -506,6 +535,10 @@ def test_alt_feed_switch_records_override(monkeypatch):
 
     assert hasattr(df, "empty")
     assert getattr(df, "empty", True)
+    assert len(switch_calls) == 1
+    assert switch_calls[0][0] == symbol
+    assert switch_calls[0][1] == "1Min"
+    assert switch_calls[0][3] == "sip"
     assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
     assert (symbol, "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
     assert fetch._FEED_SWITCH_HISTORY == [(symbol, "1Min", "sip")]

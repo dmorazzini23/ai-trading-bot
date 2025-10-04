@@ -4894,10 +4894,12 @@ def _fetch_bars(
                     _state.pop("defer_success_metric", None)
                 else:
                     _state["defer_success_metric"] = prev_defer
-            if result is not None and not getattr(result, "empty", True):
+            result_has_rows = result is not None and not getattr(result, "empty", True)
+            if result_has_rows:
                 tags = _tags()
                 _record_fallback_success_metric(tags)
                 _record_success_metric(tags, prefer_fallback=True)
+            if result is not None:
                 _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
             if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
                 _mark_fallback(
