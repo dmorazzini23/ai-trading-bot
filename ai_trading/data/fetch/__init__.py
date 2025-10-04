@@ -4640,6 +4640,10 @@ def _fetch_bars(
         short_circuit_empty = True
     else:
         _state["skip_empty_metrics"] = False
+
+    if short_circuit_empty:
+        empty_df = _empty_ohlcv_frame(pd)
+        return empty_df if empty_df is not None else pd.DataFrame()
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
