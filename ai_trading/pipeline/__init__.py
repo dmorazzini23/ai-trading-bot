@@ -1,8 +1,8 @@
 """Machine learning model pipeline with lazy sklearn imports."""
 
-PYTEST_DONT_REWRITE = [__name__]
-
 from __future__ import annotations
+
+PYTEST_DONT_REWRITE = [__name__]
 
 import numpy as np
 

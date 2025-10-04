@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
-import yfinance as yf
+
+try:  # optional dependency; tests stub behaviour when absent
+    import yfinance as yf
+except Exception:  # pragma: no cover - optional dependency missing
+    yf = None  # type: ignore[assignment]
 
 from ai_trading.config.management import get_env
 from ai_trading.data.normalize import ensure_ohlcv
@@ -42,6 +46,8 @@ def _sleep_backoff(attempt: int) -> None:
 def _download_batch(
     tickers: List[str], *, start=None, end=None, period="1y", interval="1d"
 ) -> pd.DataFrame:
+    if yf is None:
+        raise RuntimeError("yfinance_unavailable")
     return yf.download(
         tickers=" ".join(tickers),
         period=period if start is None else None,
@@ -122,4 +128,3 @@ def fetch_yf_batched(
 
 
 __all__ = ["fetch_yf_batched"]
-

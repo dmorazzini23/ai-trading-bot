@@ -18,6 +18,41 @@ sys.modules.pop(f"{__name__}.__main__", None)
 PYTEST_DONT_REWRITE = ["ai_trading"]
 
 _modules_ref = getattr(sys, "modules", None)
+_ESSENTIAL_NAMES = (
+    "sys",
+    "builtins",
+    "types",
+    "importlib",
+    "importlib._bootstrap",
+    "importlib._bootstrap_external",
+    "importlib.machinery",
+    "pathlib",
+    "ntpath",
+    "posixpath",
+    "os",
+    "collections",
+    "_pytest.assertion.rewrite",
+)
+
+for _mod_name in _ESSENTIAL_NAMES:
+    try:  # pragma: no cover - ensure snapshot captures initialized modules
+        __import__(_mod_name)
+    except Exception:
+        continue
+
+_ESSENTIAL_SNAPSHOT = {name: sys.modules.get(name) for name in _ESSENTIAL_NAMES}
+
+
+def _restore_essential_modules() -> None:  # pragma: no cover - defensive restoration
+    for name, module in _ESSENTIAL_SNAPSHOT.items():
+        if module is not None and sys.modules.get(name) is None:
+            sys.modules[name] = module
+
+
+if not _modules_ref or any(sys.modules.get(name) is None for name in ("importlib", "pathlib", "os")):
+    _restore_essential_modules()
+    _modules_ref = sys.modules
+
 if _modules_ref is None:  # pragma: no cover - defensive for patched environments
     import importlib
     import types
@@ -44,12 +79,27 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency missing
     _PIPELINE_AVAILABLE = False
 
 if not _PIPELINE_AVAILABLE:
-    class _PipelineMissingFinder:
-        def find_spec(self, fullname, path=None, target=None):  # pragma: no cover - import hook
+    import importlib.machinery
+    import importlib.abc
+
+    class _PipelineMissingLoader(importlib.abc.Loader):  # pragma: no cover - loader raising ImportError
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            raise ImportError(
+                "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
+            )
+
+        def get_source(self, fullname):
+            raise ImportError(
+                "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
+            )
+
+    class _PipelineMissingFinder(importlib.abc.MetaPathFinder):  # pragma: no cover - import hook
+        def find_spec(self, fullname, path=None, target=None):
             if fullname.startswith("ai_trading.pipeline"):
-                raise ImportError(
-                    "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
-                )
+                return importlib.machinery.ModuleSpec(fullname, _PipelineMissingLoader())
             return None
 
     sys.meta_path.insert(0, _PipelineMissingFinder())
