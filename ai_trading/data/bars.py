@@ -411,9 +411,9 @@ def _get_entitled_feeds(client: Any) -> set[str]:
     else:
         cached_feeds = cached_entry.feeds
         feeds_changed = entry.feeds != cached_feeds
-        generation_increased = entry.generation > cached_entry.generation
+        generation_changed = entry.generation != cached_entry.generation
         sip_upgrade = "sip" in entry.feeds and "sip" not in cached_feeds
-        if feeds_changed or generation_increased or sip_upgrade:
+        if feeds_changed or generation_changed or sip_upgrade:
             _ENTITLE_CACHE[key] = entry
         else:
             entry = cached_entry
