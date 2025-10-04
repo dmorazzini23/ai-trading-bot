@@ -30,6 +30,13 @@ def test_window_without_trading_session_returns_empty(monkeypatch):
     start = datetime(2024, 1, 6, tzinfo=UTC)
     end = start + timedelta(days=1)
 
+    calls: list[tuple[str, float, dict[str, str] | None]] = []
+
+    def _fake_incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
+        calls.append((metric, value, tags))
+
+    monkeypatch.setattr(fetch, "_incr", _fake_incr)
+
     class _Session:
         def __init__(self) -> None:
             self.called = False
@@ -46,6 +53,8 @@ def test_window_without_trading_session_returns_empty(monkeypatch):
     assert isinstance(out, pd.DataFrame)
     pd.testing.assert_frame_equal(out, expected if expected is not None else pd.DataFrame())
     assert session.called is False
+    empty_metrics = [metric for metric, _, _ in calls if metric == "data.fetch.empty"]
+    assert len(empty_metrics) == 1
 
 
 def test_missing_session_raises(monkeypatch):
