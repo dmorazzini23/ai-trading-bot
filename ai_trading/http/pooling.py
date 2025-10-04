@@ -423,16 +423,34 @@ def invalidate_host_limit_cache() -> None:
 def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
     """Refresh cached limit metadata when relevant environment variables change."""
 
+    global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE
+
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
     cache = _LIMIT_CACHE
     if cache is not None and cache.env_snapshot == env_snapshot:
+        _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
         _set_pooling_limit_state(snapshot.limit, snapshot.version)
         return snapshot
 
-    reset_host_semaphores(clear_limit_cache=True)
     limit, version = _resolve_limit()
+    cache = _LIMIT_CACHE
+    if cache is not None and cache.env_snapshot != env_snapshot:
+        cache = _ResolvedLimitCache(
+            env_key=cache.env_key,
+            raw_env=cache.raw_env,
+            limit=cache.limit,
+            version=cache.version,
+            config_id=cache.config_id,
+            env_snapshot=env_snapshot,
+        )
+        _LIMIT_CACHE = cache
     snapshot = HostLimitSnapshot(limit, version)
+    if cache is not None:
+        _LAST_LIMIT_ENV_SNAPSHOT = cache.env_snapshot
+        snapshot = HostLimitSnapshot(cache.limit, cache.version)
+    else:
+        _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
     _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return snapshot
 
