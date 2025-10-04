@@ -8,6 +8,7 @@ import importlib
 import random
 import socket
 import sys
+import unittest.mock as _mock
 from datetime import datetime, timezone
 import pathlib
 import types
@@ -36,6 +37,57 @@ if "dotenv" not in sys.modules:
 import pytest
 
 # NOTE: Avoid importing `ai_trading` modules at collection time; lazy import in helpers.
+
+
+_ORIGINAL_PATCH_DICT = _mock.patch.dict
+_ESSENTIAL = (
+    "importlib",
+    "importlib._bootstrap",
+    "importlib._bootstrap_external",
+    "importlib.machinery",
+    "pathlib",
+    "posixpath",
+    "ntpath",
+    "os",
+    "collections",
+    "runpy",
+    "zipimport",
+    "pkgutil",
+    "zoneinfo",
+    "zoneinfo._tzpath",
+)
+for _name in _ESSENTIAL:
+    try:
+        __import__(_name)
+    except Exception:
+        continue
+
+_SNAPSHOT_MODULES = dict(sys.modules)
+
+
+def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # pragma: no cover - test helper
+    ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
+    if clear and in_dict is sys.modules:
+        original_enter = ctx.__enter__
+        original_exit = ctx.__exit__
+
+        def _enter():
+            result = original_enter()
+            sys.modules.update({name: module for name, module in _SNAPSHOT_MODULES.items() if module is not None})
+            return result
+
+        def _exit(exc_type, exc_val, exc_tb):
+            try:
+                return original_exit(exc_type, exc_val, exc_tb)
+            finally:
+                sys.modules.update({name: module for name, module in _SNAPSHOT_MODULES.items() if module is not None})
+
+        ctx.__enter__ = _enter
+        ctx.__exit__ = _exit
+    return ctx
+
+
+_mock.patch.dict = _safe_patch_dict
 
 
 if "flask" not in _sys.modules:

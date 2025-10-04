@@ -1,14 +1,12 @@
-"""Testing support hooks for unittest.mock.patch.dict."""
+"""Testing helper to keep sys.modules intact during patch.dict(clear=True)."""
 from __future__ import annotations
 
 import sys
 import types
 import unittest.mock as _mock
 
-# Snapshot interpreter modules so we can restore them when tests clear
-# ``sys.modules`` via ``patch.dict(..., clear=True)``.
-_ORIGINAL_MODULES: dict[str, types.ModuleType | None] = dict(sys.modules)
 _ORIGINAL_PATCH_DICT = _mock.patch.dict
+_ORIGINAL_MODULES: dict[str, types.ModuleType | None] = dict(sys.modules)
 
 
 def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # pragma: no cover
@@ -17,16 +15,16 @@ def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # prag
         original_enter = ctx.__enter__
         original_exit = ctx.__exit__
 
-        def _enter():
+        def _enter() -> object:
             result = original_enter()
-            sys.modules.update({k: v for k, v in _ORIGINAL_MODULES.items() if v is not None})
+            sys.modules.update({name: module for name, module in _ORIGINAL_MODULES.items() if module is not None})
             return result
 
-        def _exit(exc_type, exc_val, exc_tb):
+        def _exit(exc_type, exc_val, exc_tb) -> bool:
             try:
                 return original_exit(exc_type, exc_val, exc_tb)
             finally:
-                sys.modules.update({k: v for k, v in _ORIGINAL_MODULES.items() if v is not None})
+                sys.modules.update({name: module for name, module in _ORIGINAL_MODULES.items() if module is not None})
 
         ctx.__enter__ = _enter
         ctx.__exit__ = _exit
