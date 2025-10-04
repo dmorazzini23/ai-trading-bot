@@ -76,7 +76,8 @@ def safe_subprocess_run(
         stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
     except subprocess.TimeoutExpired as exc:
         exc.timeout = run_timeout
-        raise _augment_timeout_exception(proc, exc)
+        _augment_timeout_exception(proc, exc)
+        raise
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
             proc.kill()
@@ -107,7 +108,7 @@ def _normalize_stream(stream: str | bytes | None) -> str:
 def _augment_timeout_exception(
     proc: subprocess.Popen[bytes] | subprocess.Popen[str],
     exc: subprocess.TimeoutExpired,
-) -> subprocess.TimeoutExpired:
+) -> None:
     """Populate timeout exception metadata before re-raising."""
 
     with suppress(ProcessLookupError):
@@ -133,4 +134,3 @@ def _augment_timeout_exception(
     exc.stdout = collected_stdout
     exc.stderr = collected_stderr
     exc.result = result
-    return exc
