@@ -831,10 +831,10 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="float",
         default=300.0,
         description=(
-            "Interval between background health checks. Values below 30s are"
-            " allowed for testing but will be clamped at runtime."
+            "Interval between background health checks. Values must be at least"
+            " 30 seconds to avoid flapping health probes."
         ),
-        min_value=1.0,
+        min_value=30.0,
     ),
     ConfigSpec(
         field="hard_stop_cooldown_min",
@@ -1351,6 +1351,41 @@ _CACHED_SIGNATURE: tuple[tuple[str, str | None], ...] | None = None
 
 _SENSITIVE_ENV_KEYS: tuple[str, ...] | None = None
 
+_STRICT_ENV_PREFIXES: tuple[str, ...] = (
+    "AI_TRADING_",
+    "TRADING_",
+    "ALPACA_",
+    "CAPITAL_",
+    "DOLLAR_",
+    "HEALTH_",
+    "EXECUTION_",
+    "RISK_",
+    "PORTFOLIO_",
+    "SENTIMENT_",
+    "NEWS_",
+    "WEBHOOK_",
+    "RL_",
+    "CPU_",
+    "WATCHDOG_",
+    "REBALANCE_",
+    "CYCLE_",
+    "TICK_",
+    "POSITION_",
+    "SLIPPAGE_",
+    "PROVIDER_",
+    "BUDGET_",
+    "SHADOW_",
+    "CONF_",
+    "KELLY_",
+)
+
+_ADDITIONAL_ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "AI_TRADING_MODEL_MODULE",
+        "AI_TRADING_MODELS_DIR",
+    }
+)
+
 
 def _get_sensitive_env_keys() -> tuple[str, ...]:
     """Return environment keys that impact configuration caching."""
@@ -1369,6 +1404,52 @@ def _get_sensitive_env_keys() -> tuple[str, ...]:
 
     _SENSITIVE_ENV_KEYS = tuple(sorted(keys))
     return _SENSITIVE_ENV_KEYS
+
+
+def _validate_override_keys(overrides: Mapping[str, Any]) -> None:
+    """Ensure explicit overrides only target known configuration keys."""
+
+    if not overrides:
+        return
+
+    allowed = set(_get_sensitive_env_keys())
+    invalid = sorted(
+        {
+            key
+            for key in overrides
+            if (
+                (upper := key.upper()) not in allowed
+                and upper not in _ADDITIONAL_ALLOWED_ENV_KEYS
+                and any(upper.startswith(prefix) for prefix in _STRICT_ENV_PREFIXES)
+            )
+        }
+    )
+    if invalid:
+        names = ", ".join(invalid)
+        raise RuntimeError(f"Unsupported trading config override keys: {names}")
+
+
+def _find_unrecognized_env_keys(snapshot: Mapping[str, str]) -> list[str]:
+    """Return suspicious env keys that look like config but lack specs."""
+
+    known = set(_get_sensitive_env_keys())
+    unknown: set[str] = set()
+    for key in snapshot:
+        upper = key.upper()
+        if upper in known or upper in _ADDITIONAL_ALLOWED_ENV_KEYS:
+            continue
+        if any(upper.startswith(prefix) for prefix in _STRICT_ENV_PREFIXES):
+            unknown.add(key)
+    return sorted(unknown)
+
+
+def _assert_known_env_keys(snapshot: Mapping[str, str]) -> None:
+    """Raise when snapshot includes unrecognized trading configuration env vars."""
+
+    unknown = _find_unrecognized_env_keys(snapshot)
+    if unknown:
+        joined = ", ".join(unknown)
+        raise RuntimeError(f"Unrecognized trading configuration environment variables: {joined}")
 
 
 def _signature_from_snapshot(snapshot: Mapping[str, str]) -> tuple[tuple[str, str | None], ...]:
@@ -1550,7 +1631,10 @@ class TradingConfig:
         *,
         allow_missing_drawdown: bool = False,
     ) -> "TradingConfig":
+        if isinstance(env_overrides, Mapping):
+            _validate_override_keys(env_overrides)
         env_map = _env_snapshot(env_overrides)
+        _assert_known_env_keys(env_map)
         if not allow_missing_drawdown:
             has_drawdown = any(
                 env_map.get(key) not in (None, "")
