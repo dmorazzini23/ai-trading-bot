@@ -7957,6 +7957,7 @@ class DataFetcher:
             _is_trading_day = None  # type: ignore[assignment]
 
         ref_date = now_utc.date()
+        print("ref_date", ref_date)
         if not is_market_open():
             for _ in range(10):  # safety bound
                 ref_date = ref_date - timedelta(days=1)
@@ -7987,6 +7988,7 @@ class DataFetcher:
         timeframe_key = "1Day"
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
+        import pdb; pdb.set_trace()
         min_interval = self._daily_fetch_min_interval(ctx)
         now_monotonic = float(monotonic_fn())
         ttl_window = (
@@ -8197,13 +8199,13 @@ class DataFetcher:
             return _finalize_cached_return()
 
         memo_hit = False
-        memo_short_circuit = False
 
         memo_check_pairs = (
             (memo_key, legacy_memo_key),
             (legacy_memo_key, memo_key),
         )
         for candidate_key, counterpart_key in memo_check_pairs:
+            print("memo candidate", candidate_key, counterpart_key)
             entry = _memo_get_entry(candidate_key)
             if entry is None:
                 continue
@@ -8221,36 +8223,19 @@ class DataFetcher:
                     min_interval if min_interval > 0 else ttl_window
                 )
             )
+            print("memo entry", entry_ts, age, is_fresh)
             if not is_fresh:
                 continue
-            cached_df = payload
-            cached_reason = "memo"
-            refresh_stamp = now_monotonic
-            refresh_df = payload
-            refresh_source = "memo"
             memo_hit = True
-            updated_pair = (now_monotonic, payload)
+            normalized_pair = (now_monotonic, payload)
+            import pdb; pdb.set_trace()
             with cache_lock:
-                _memo_set_entry(candidate_key, updated_pair)
+                _memo_set_entry(candidate_key, normalized_pair)
                 if counterpart_key != candidate_key:
-                    _memo_set_entry(counterpart_key, updated_pair)
-            if daily_cache_hit:
-                try:
-                    daily_cache_hit.inc()
-                except (
-                    FileNotFoundError,
-                    PermissionError,
-                    IsADirectoryError,
-                    JSONDecodeError,
-                    ValueError,
-                    KeyError,
-                    TypeError,
-                    OSError,
-                ) as exc:
-                    logger.exception("bot.py unexpected", exc_info=exc)
-                    raise
-            self._log_daily_cache_hit_once(symbol, reason="memo")
-            return cached_df
+                    _memo_set_entry(counterpart_key, normalized_pair)
+            return payload
+
+        memo_ready = False
 
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window
@@ -8308,13 +8293,12 @@ class DataFetcher:
             elif _apply_memo_entry(legacy_memo_key, counterpart=memo_key):
                 memo_hit = True
 
-            if memo_hit and cached_df is not None:
-                memo_short_circuit = True
+            memo_ready = memo_hit and cached_df is not None
+
+            if memo_ready:
+                entry = None
             else:
-                if symbol in self._daily_cache:
-                    entry = self._daily_cache[symbol]
-                else:
-                    entry = None
+                entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
                     cached_reason = "cache"
@@ -8341,7 +8325,7 @@ class DataFetcher:
                     raise self._clone_fetch_error(cached_error)
                 self._daily_error_state.pop(error_key, None)
 
-        if memo_short_circuit:
+        if memo_hit and cached_df is not None:
             return _finalize_cached_return()
         if cached_df is None:
             provider_key = (planned_provider, fetch_date.isoformat(), symbol)
