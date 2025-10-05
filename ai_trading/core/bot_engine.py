@@ -8197,6 +8197,60 @@ class DataFetcher:
             return _finalize_cached_return()
 
         memo_hit = False
+        memo_short_circuit = False
+
+        memo_check_pairs = (
+            (memo_key, legacy_memo_key),
+            (legacy_memo_key, memo_key),
+        )
+        for candidate_key, counterpart_key in memo_check_pairs:
+            entry = _memo_get_entry(candidate_key)
+            if entry is None:
+                continue
+            entry_ts, entry_df, normalized_pair = _normalize_memo_entry(entry)
+            payload = entry_df
+            if payload is None and normalized_pair is not None:
+                payload = normalized_pair[1]
+            if payload is None:
+                continue
+            age = None if entry_ts is None else now_monotonic - entry_ts
+            is_fresh = (
+                age is None
+                or age <= _DAILY_FETCH_MEMO_TTL
+                or age <= (
+                    min_interval if min_interval > 0 else ttl_window
+                )
+            )
+            if not is_fresh:
+                continue
+            cached_df = payload
+            cached_reason = "memo"
+            refresh_stamp = now_monotonic
+            refresh_df = payload
+            refresh_source = "memo"
+            memo_hit = True
+            updated_pair = (now_monotonic, payload)
+            with cache_lock:
+                _memo_set_entry(candidate_key, updated_pair)
+                if counterpart_key != candidate_key:
+                    _memo_set_entry(counterpart_key, updated_pair)
+            if daily_cache_hit:
+                try:
+                    daily_cache_hit.inc()
+                except (
+                    FileNotFoundError,
+                    PermissionError,
+                    IsADirectoryError,
+                    JSONDecodeError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    OSError,
+                ) as exc:
+                    logger.exception("bot.py unexpected", exc_info=exc)
+                    raise
+            self._log_daily_cache_hit_once(symbol, reason="memo")
+            return cached_df
 
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window
@@ -8254,8 +8308,13 @@ class DataFetcher:
             elif _apply_memo_entry(legacy_memo_key, counterpart=memo_key):
                 memo_hit = True
 
-            if not memo_hit:
-                entry = self._daily_cache.get(symbol)
+            if memo_hit and cached_df is not None:
+                memo_short_circuit = True
+            else:
+                if symbol in self._daily_cache:
+                    entry = self._daily_cache[symbol]
+                else:
+                    entry = None
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
                     cached_reason = "cache"
@@ -8281,6 +8340,9 @@ class DataFetcher:
                 if now_monotonic - error_ts <= ttl_window:
                     raise self._clone_fetch_error(cached_error)
                 self._daily_error_state.pop(error_key, None)
+
+        if memo_short_circuit:
+            return _finalize_cached_return()
         if cached_df is None:
             provider_key = (planned_provider, fetch_date.isoformat(), symbol)
             session_entry = _DAILY_PROVIDER_SESSION_CACHE.get(provider_key)

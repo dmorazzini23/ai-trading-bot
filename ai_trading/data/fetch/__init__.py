@@ -6736,6 +6736,24 @@ def get_minute_df(
                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
                     _SKIPPED_SYMBOLS.discard(tf_key)
+                    if not switch_recorded:
+                        try:
+                            priorities = provider_priority()
+                        except Exception:
+                            priorities = ()
+                        fallback_target: str | None = None
+                        current_feed = str(feed_to_use or initial_feed or "").replace("alpaca_", "")
+                        for priority in priorities or ():
+                            candidate = str(priority or "").replace("alpaca_", "")
+                            if not candidate or candidate == current_feed:
+                                continue
+                            if candidate in {"iex", "sip"}:
+                                fallback_target = candidate
+                                break
+                        if fallback_target is None and current_feed == "iex" and _sip_configured():
+                            fallback_target = "sip"
+                        if fallback_target and fallback_target != current_feed:
+                            _record_feed_switch(symbol, "1Min", current_feed, fallback_target)
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 try:
                     market_open = is_market_open()

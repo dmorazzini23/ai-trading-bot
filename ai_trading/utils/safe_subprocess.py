@@ -13,7 +13,7 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 # Default timeout for subprocess operations in seconds
-SUBPROCESS_TIMEOUT_S = 5.0
+SUBPROCESS_TIMEOUT_S = 0.3
 
 # Back-compat alias expected by callers
 SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S

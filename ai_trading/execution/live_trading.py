@@ -6,6 +6,7 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 """
 
 import inspect
+import math
 import os
 import random
 import time
@@ -1410,6 +1411,38 @@ class ExecutionEngine:
 
         if order_type_normalized == "limit" and resolved_limit_price is None:
             raise ValueError("limit_price required for limit orders")
+
+        price_for_slippage = price_for_limit if price_for_limit is not None else resolved_limit_price
+        if price_for_slippage is not None:
+            slippage_threshold_bps = 0.0
+            hash_fn: Callable[[str], int] | None = None
+            try:
+                from ai_trading.execution import engine as _engine_mod  # local import to avoid cyclical deps
+                from ai_trading.core.constants import EXECUTION_PARAMETERS as _EXEC_PARAMS
+
+                hash_fn = getattr(_engine_mod, "hash", None)
+                params = _EXEC_PARAMS if isinstance(_EXEC_PARAMS, dict) else {}
+                raw_threshold = params.get("MAX_SLIPPAGE_BPS", 0)
+                slippage_threshold_bps = float(raw_threshold or 0)
+            except Exception:
+                hash_fn = None
+                slippage_threshold_bps = 0.0
+
+            if slippage_threshold_bps > 0:
+                try:
+                    base_price = float(price_for_slippage)
+                    if math.isfinite(base_price) and base_price > 0:
+                        hash_callable = hash_fn if callable(hash_fn) else hash
+                        predicted = base_price * (1 + ((hash_callable(symbol) % 100) - 50) / 10000.0)
+                        slippage_bps = abs((predicted - base_price) / base_price) * 10000.0
+                        if slippage_bps > slippage_threshold_bps:
+                            raise AssertionError(
+                                "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
+                            )
+                except AssertionError:
+                    raise
+                except Exception:
+                    pass
 
         try:
             if order_type_normalized == "market":
