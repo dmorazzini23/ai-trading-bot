@@ -72,6 +72,7 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
         "get_settings",
         lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
     )
+    monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
 
     with caplog.at_level(logging.INFO):
         result = data_fetcher.get_minute_df("AAPL", start, end, feed="sip")

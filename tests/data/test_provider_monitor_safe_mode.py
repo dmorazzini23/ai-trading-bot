@@ -63,6 +63,10 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
     )
 
     record_func = getattr(pm, record_name)
+    if record_name == "record_unauthorized_sip_event":
+        monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
+    else:
+        monkeypatch.delenv("DATA_FEED_INTRADAY", raising=False)
     for _ in range(3):
         record_func({"symbol": "AAPL"})
 
