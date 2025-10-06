@@ -89,19 +89,20 @@ def _sip_allowed() -> bool:
     override = globals().get("_ALLOW_SIP")
     if override is not None:
         return bool(override)
-    try:
-        explicit = get_env("ALPACA_ALLOW_SIP", None, cast=bool)
-    except Exception:
-        explicit = None
-    if explicit is not None:
-        return bool(explicit)
-    raw_allow = os.getenv("ALPACA_ALLOW_SIP")
-    if raw_allow is not None:
-        return raw_allow.strip().lower() in {"1", "true", "yes", "on"}
-    raw_entitlement = os.getenv("ALPACA_HAS_SIP")
-    if raw_entitlement is not None:
-        return raw_entitlement.strip().lower() in {"1", "true", "yes", "on"}
-    return True
+    for key in ("ALPACA_ALLOW_SIP", "ALPACA_HAS_SIP"):
+        try:
+            explicit = get_env(key, None, cast=bool)
+        except Exception:
+            explicit = None
+        if explicit is not None:
+            return bool(explicit)
+        raw_value = os.getenv(key)
+        if raw_value is not None:
+            normalized = raw_value.strip().lower()
+            if normalized:
+                return normalized in {"1", "true", "yes", "on"}
+            return False
+    return False
 
 
 def _ordered_fallbacks(primary_feed: str) -> List[str]:
@@ -215,6 +216,8 @@ def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
             return
     if not normalized_feed:
         return
+    if normalized_feed == "sip" and not _sip_allowed():
+        return
     tf_norm = _canon_tf(timeframe)
     _cycle_feed_override[symbol] = normalized_feed
     _override_set_ts[symbol] = _time_now()
@@ -229,11 +232,14 @@ def _clear_override(symbol: str) -> None:
 def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     cached = _cycle_feed_override.get(symbol)
     if cached:
-        ts = _override_set_ts.get(symbol, 0.0)
-        now_ts = _time_now(None)
-        if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
-            return cached
-        _clear_override(symbol)
+        if cached == "sip" and not _sip_allowed():
+            _clear_override(symbol)
+        else:
+            ts = _override_set_ts.get(symbol, 0.0)
+            now_ts = _time_now(None)
+            if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
+                return cached
+            _clear_override(symbol)
     normalized_primary = str(primary_feed or "iex").strip().lower() or "iex"
     return normalized_primary
 
@@ -789,6 +795,7 @@ def _iter_preferred_feeds(symbol: str, timeframe: str, current_feed: str) -> tup
                 feeds.append(provider)
     out: list[str] = []
     sip_locked = _is_sip_unauthorized()
+    sip_enabled = _sip_allowed()
     for raw in feeds:
         try:
             candidate = _to_feed_str(raw)
@@ -798,9 +805,10 @@ def _iter_preferred_feeds(symbol: str, timeframe: str, current_feed: str) -> tup
             continue
         if candidate in attempted:
             continue
-        if candidate == "sip" and sip_locked:
-            attempted.add(candidate)
-            continue
+        if candidate == "sip":
+            if sip_locked or not sip_enabled:
+                attempted.add(candidate)
+                continue
         attempted.add(candidate)
         out.append(candidate)
     return tuple(out)
@@ -2882,11 +2890,16 @@ def _get_cycle_id() -> str:
 
 
 def _fallback_cache_for_cycle(cycle_id: str, symbol: str, timeframe: str) -> str | None:
-    return _CYCLE_FALLBACK_FEED.get((cycle_id, symbol, timeframe))
+    cached = _CYCLE_FALLBACK_FEED.get((cycle_id, symbol, timeframe))
+    if cached == "sip" and not _sip_allowed():
+        return None
+    return cached
 
 
 def _remember_fallback_for_cycle(cycle_id: str, symbol: str, timeframe: str, feed: str) -> None:
     if not feed:
+        return
+    if feed == "sip" and not _sip_allowed():
         return
     _CYCLE_FALLBACK_FEED[(cycle_id, symbol, timeframe)] = feed
 
@@ -2931,19 +2944,22 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")
     global _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
+    allow_sip = _sip_allowed()
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+        if not allow_sip:
+            return False
         if _is_sip_unauthorized():
             return False
         if _SIP_PRECHECK_DONE:
             return True
         _SIP_PRECHECK_DONE = True
         return True
-    if not _sip_allowed():
+    if not allow_sip:
         return False
     if not _sip_configured():
-        if not _sip_allowed() and not _SIP_DISALLOWED_WARNED:
+        if not allow_sip and not _SIP_DISALLOWED_WARNED:
             logger.warning(
                 "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe}),
