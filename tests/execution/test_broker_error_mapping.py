@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,11 +10,36 @@ from ai_trading.execution import live_trading as lt
 
 
 class DummyAPIError(lt.APIError):
-    def __init__(self, message: str, *, code: str | None = None, status_code: int = 403):
-        super().__init__(message)
-        self.message = message
-        self.code = code
-        self.status_code = status_code
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        status_code: int | None = 403,
+    ) -> None:
+        payload = {"message": message, "code": code}
+        http_error = None
+        if status_code is not None:
+            http_error = SimpleNamespace(
+                response=SimpleNamespace(status_code=status_code),
+                request=None,
+            )
+        super().__init__(json.dumps(payload), http_error=http_error)
+        self._message = message
+        self._code = code
+        self._status_code = status_code
+
+    @property
+    def message(self):  # type: ignore[override]
+        return self._message
+
+    @property
+    def code(self):  # type: ignore[override]
+        return self._code
+
+    @property
+    def status_code(self):  # type: ignore[override]
+        return self._status_code
 
 
 def _engine() -> lt.ExecutionEngine:
