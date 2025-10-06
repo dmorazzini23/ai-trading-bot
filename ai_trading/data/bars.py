@@ -453,12 +453,13 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         if explicit_env_allow or sip_capability:
             sip_entitled_flag = sip_allowed
     prefer_sip = normalized_req == "sip"
-    if normalized_req == "sip" and "sip" in feeds:
+    sip_return_allowed = sip_allowed and sip_entitled_flag
+    if prefer_sip and sip_return_allowed and "sip" in feeds:
         return "sip"
-    resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_entitled_flag)
+    resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_return_allowed)
     if resolved in feeds:
         return resolved
-    eligible_feeds = [feed for feed in feeds if feed != "sip" or sip_entitled_flag]
+    eligible_feeds = [feed for feed in feeds if feed != "sip" or sip_return_allowed]
     if eligible_feeds:
         alt = eligible_feeds[0]
         if resolved != alt:
