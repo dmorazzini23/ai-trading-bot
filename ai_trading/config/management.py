@@ -176,10 +176,28 @@ def validate_required_env(
     env_snapshot: dict[str, str] = {
         k: v for k, v in os.environ.items() if isinstance(v, str)
     }
+    overrides: dict[str, str] | None = None
+    config_overrides: dict[str, str] | None = None
     if env is not None:
-        env_snapshot.update({k: str(v) for k, v in env.items() if v is not None})
+        overrides = {
+            str(key).upper(): str(value)
+            for key, value in env.items()
+            if value is not None
+        }
+        if overrides:
+            env_snapshot.update(overrides)
+            config_overrides = {
+                key: value for key, value in overrides.items() if key in SPEC_BY_ENV
+            }
+            if not config_overrides:
+                config_overrides = None
+        else:
+            overrides = None
+            config_overrides = None
 
-    cfg = TradingConfig.from_env(env_snapshot, allow_missing_drawdown=True)
+    cfg = TradingConfig.from_env(
+        config_overrides, allow_missing_drawdown=True
+    )
 
     required_fields = {
         "ALPACA_API_KEY": cfg.alpaca_api_key,

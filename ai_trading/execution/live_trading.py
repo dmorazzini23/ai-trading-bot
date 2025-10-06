@@ -2078,12 +2078,9 @@ class ExecutionEngine:
                 resp = self.trading_client.submit_order(**cleaned)
 
         client_order_id = order_data.get("client_order_id")
-        fallback_id = client_order_id or ""
-        if not fallback_id or not str(fallback_id).startswith(("alpaca-", "order_")):
-            fallback_id = f"alpaca-pending-{int(time.time() * 1000)}"
-            client_order_id = str(fallback_id)
 
         if not resp:
+            fallback_id = f"alpaca-pending-{int(time.time() * 1000)}"
             logger.warning(
                 "ORDER_SUBMIT_EMPTY_RESPONSE",
                 extra={
@@ -2091,12 +2088,13 @@ class ExecutionEngine:
                     "qty": order_data.get("quantity"),
                     "side": order_data.get("side"),
                     "type": order_data.get("type"),
-                    "client_order_id": client_order_id,
+                    "client_order_id": client_order_id or fallback_id,
                 },
             )
+            resolved_client_id = fallback_id
             return {
                 "id": str(fallback_id),
-                "client_order_id": client_order_id or str(fallback_id),
+                "client_order_id": str(resolved_client_id),
                 "status": "accepted",
                 "symbol": order_data["symbol"],
                 "qty": order_data["quantity"],
@@ -2137,19 +2135,26 @@ class ExecutionEngine:
             "raw": raw_payload,
         }
 
-        if not normalized["id"] or not str(normalized["id"]).startswith(("alpaca-", "order_")):
-            normalized["id"] = str(fallback_id)
+        fallback_preference: str | None = None
+        if normalized.get("client_order_id"):
+            fallback_preference = str(normalized["client_order_id"])
+        elif client_order_id:
+            fallback_preference = str(client_order_id)
+        if fallback_preference is None:
+            fallback_preference = f"alpaca-pending-{int(time.time() * 1000)}"
+        fallback_id = fallback_preference
+        resolved_id = normalized.get("id")
+        if not resolved_id:
+            resolved_id = fallback_id
+        normalized["id"] = str(resolved_id)
+
+        if not normalized.get("client_order_id"):
             normalized["client_order_id"] = str(fallback_id)
-            if not normalized.get("status"):
-                normalized["status"] = "accepted"
+
+        if not normalized.get("status"):
+            normalized["status"] = "accepted"
 
         if not normalized["id"]:
-            preferred = normalized.get("client_order_id") or client_order_id
-            normalized["id"] = str(preferred or fallback_id)
-            if not normalized["client_order_id"] and preferred is None:
-                normalized["client_order_id"] = str(fallback_id)
-            if not normalized.get("status"):
-                normalized["status"] = "accepted"
             logger.warning(
                 "ORDER_SUBMIT_MISSING_ID",
                 extra={

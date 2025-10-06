@@ -632,8 +632,7 @@ __all__ = [
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
 
-class DataFetchError(RuntimeError):
-    """Raised when required market data is unavailable."""  # AI-AGENT-REF
+DataFetchError = data_fetcher_module.DataFetchError
 
 
 COMMON_EXC = COMMON_EXC + (DataFetchError,)  # AI-AGENT-REF: broaden common exceptions
