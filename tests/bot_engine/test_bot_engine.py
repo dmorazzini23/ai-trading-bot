@@ -842,6 +842,63 @@ def test_enter_long_warns_when_fallback_quote_unavailable(monkeypatch, caplog):
     assert quality_meta.get("fallback_quote_error") == "quote_source_unavailable"
 
 
+def test_enter_long_skips_when_only_last_close_available(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_data_gating",
+        lambda *a, **k: bot_engine.DataGateDecision(False, tuple(), None, {}),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price)),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: (101.0, "last_close"),
+    )
+
+    caplog.set_level("INFO")
+
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.8,
+        strat="last_close_skip_test",
+    )
+
+    assert result is True
+    assert orders == []
+    skip_logs = [
+        record
+        for record in caplog.records
+        if record.message.startswith("ORDER_SKIPPED_UNRELIABLE_PRICE")
+    ]
+    assert skip_logs, "Expected skip log for unreliable fallback price"
+    assert any(
+        getattr(record, "skip_reason", "") == "nbbo_missing_fallback_price"
+        for record in skip_logs
+    )
+    assert not any(
+        record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
+    )
+
+
 def test_enter_long_blocks_on_stale_fallback_quote(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
 
@@ -1011,6 +1068,63 @@ def test_enter_short_logs_fallback_for_non_alpaca_sources(monkeypatch, caplog):
     assert result is True
     assert orders and orders[0][3] == pytest.approx(101.0)
     assert any(
+        record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
+    )
+
+
+def test_enter_short_skips_when_only_last_close_available(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx, state, feat_df = _build_dummy_short_context(pd, symbol)
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(bot_engine, "calculate_entry_size", lambda *a, **k: 5)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_data_gating",
+        lambda *a, **k: bot_engine.DataGateDecision(False, tuple(), None, {}),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price)),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: (101.0, "last_close"),
+    )
+
+    caplog.set_level("INFO")
+
+    result = bot_engine._enter_short(
+        ctx,
+        state,
+        symbol,
+        feat_df=feat_df,
+        final_score=-1.0,
+        conf=-0.8,
+        strat="last_close_short_skip_test",
+    )
+
+    assert result is True
+    assert orders == []
+    skip_logs = [
+        record
+        for record in caplog.records
+        if record.message.startswith("ORDER_SKIPPED_UNRELIABLE_PRICE")
+    ]
+    assert skip_logs, "Expected skip log for unreliable fallback price"
+    assert any(
+        getattr(record, "skip_reason", "") == "nbbo_missing_fallback_price"
+        for record in skip_logs
+    )
+    assert not any(
         record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
     )
 

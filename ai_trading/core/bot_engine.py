@@ -973,6 +973,7 @@ _ALPACA_TERMINAL_PRICE_SOURCES = frozenset(
         "alpaca_minute_close",
     }
 )
+_TERMINAL_FALLBACK_PRICE_SOURCES = frozenset({"last_close"})
 _PRICE_PROVIDER_ORDER_CACHE: tuple[str, ...] | None = None
 _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
@@ -15740,6 +15741,25 @@ def _enter_long(
         )
         return True
 
+    normalized_source = str(price_source or "").strip().lower()
+    if not nbbo_available and normalized_source in _TERMINAL_FALLBACK_PRICE_SOURCES:
+        skip_reason = "nbbo_missing_fallback_price"
+        skip_reasons.append(skip_reason)
+        reason_label = ";".join(dict.fromkeys(skip_reasons)) or skip_reason
+        logger.info(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+            symbol,
+            reason_label,
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+                "skip_reason": skip_reason,
+            },
+        )
+        return True
+
     reasons_to_log: tuple[str, ...] | None = None
     if gate.reasons:
         filtered = [r for r in gate.reasons if r != "liquidity_fallback"]
@@ -15979,17 +15999,18 @@ def _enter_short(
         quote_price = current_price
         price_source = "alpaca_ask"
         _set_price_source(symbol, price_source)
+        nbbo_available = True
     else:
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
         _set_price_source(symbol, price_source)
-        fallback_active = (
+        nbbo_available = _is_primary_price_source(price_source)
+        if (
             prefer_backup_quote
             or price_source == _ALPACA_DISABLED_SENTINEL
-            or not _is_primary_price_source(price_source)
-        )
-        if fallback_active:
+            or not nbbo_available
+        ):
             logger.info(
                 "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
                 extra={"symbol": symbol, "provider": price_source or "unknown"},
@@ -15998,10 +16019,11 @@ def _enter_short(
             state, symbol, price_source
         ):
             return True
+    nbbo_available = _is_primary_price_source(price_source)
     fallback_active = (
         prefer_backup_quote
         or price_source == _ALPACA_DISABLED_SENTINEL
-        or not _is_primary_price_source(price_source)
+        or not nbbo_available
     )
 
     if quote_price is None:
@@ -16051,6 +16073,23 @@ def _enter_short(
                 "prefer_backup": prefer_backup_quote,
             },
         )
+    normalized_source = str(price_source or "").strip().lower()
+    if not nbbo_available and normalized_source in _TERMINAL_FALLBACK_PRICE_SOURCES:
+        skip_reason = "nbbo_missing_fallback_price"
+        logger.info(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+            symbol,
+            skip_reason,
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+                "skip_reason": skip_reason,
+            },
+        )
+        return True
+
     if fallback_active and quote_price is not None:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
