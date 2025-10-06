@@ -809,8 +809,17 @@ class ExecutionEngine:
         if daytrade_count >= daytrade_limit:
             return (True, "pdt_limit_reached", context)
 
-        if daytrade_count >= max(daytrade_limit - 1, 0):
-            return (True, "pdt_limit_imminent", context)
+        imminent_threshold = daytrade_limit - 1
+        if imminent_threshold >= 0 and daytrade_count == imminent_threshold:
+            logger.warning(
+                "PDT_LIMIT_IMMINENT",
+                extra={
+                    "daytrade_count": daytrade_count,
+                    "daytrade_limit": daytrade_limit,
+                    "pattern_day_trader": pattern_flag,
+                },
+            )
+            return (False, "pdt_limit_imminent", context)
 
         return (False, None, context)
 
