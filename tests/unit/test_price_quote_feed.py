@@ -466,6 +466,64 @@ def test_execute_order_routes_limit(monkeypatch):
     assert "market" not in calls
 
 
+def test_execute_order_limit_slippage_does_not_raise(monkeypatch, caplog):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    caplog.set_level("INFO")
+    import ai_trading.core.constants as core_constants
+    import ai_trading.execution.engine as engine_mod
+
+    monkeypatch.setitem(core_constants.EXECUTION_PARAMETERS, "MAX_SLIPPAGE_BPS", 0.1)
+    monkeypatch.setattr(engine_mod, "hash", lambda _symbol: 0, raising=False)
+
+    calls: dict[str, dict[str, object]] = {}
+
+    def fake_market(self, symbol, side, quantity, **kwargs):  # pragma: no cover - ensure unused
+        calls["market"] = {"symbol": symbol, "side": side, "qty": quantity, "kwargs": kwargs}
+        return {"id": "OID-MARKET"}
+
+    def fake_limit(self, symbol, side, quantity, **kwargs):
+        calls["limit"] = {"symbol": symbol, "side": side, "qty": quantity, "kwargs": kwargs}
+        return {"id": "OID-LIMIT", "status": "submitted", "qty": quantity}
+
+    monkeypatch.setattr(engine, "submit_market_order", types.MethodType(fake_market, engine))
+    monkeypatch.setattr(engine, "submit_limit_order", types.MethodType(fake_limit, engine))
+
+    result = engine.execute_order("FAKE", CoreOrderSide.BUY, 10, price=100.0)
+
+    assert result is not None
+    assert "limit" in calls and "market" not in calls
+    assert any(record.message == "SLIPPAGE_THRESHOLD_LIMIT_ORDER" for record in caplog.records)
+
+
+def test_execute_order_market_slippage_guard(monkeypatch, caplog):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    caplog.set_level("WARNING")
+    import ai_trading.core.constants as core_constants
+    import ai_trading.execution.engine as engine_mod
+
+    monkeypatch.setitem(core_constants.EXECUTION_PARAMETERS, "MAX_SLIPPAGE_BPS", 0.1)
+    monkeypatch.setattr(engine_mod, "hash", lambda _symbol: 0, raising=False)
+
+    calls: dict[str, dict[str, object]] = {}
+
+    def fake_market(self, symbol, side, quantity, **kwargs):
+        calls["market"] = {"symbol": symbol, "side": side, "qty": quantity, "kwargs": kwargs}
+        return {"id": "OID-MARKET", "status": "submitted", "qty": quantity}
+
+    def fake_limit(self, symbol, side, quantity, **kwargs):  # pragma: no cover - ensure unused
+        calls["limit"] = {"symbol": symbol, "side": side, "qty": quantity, "kwargs": kwargs}
+        return {"id": "OID-LIMIT"}
+
+    monkeypatch.setattr(engine, "submit_market_order", types.MethodType(fake_market, engine))
+    monkeypatch.setattr(engine, "submit_limit_order", types.MethodType(fake_limit, engine))
+
+    with pytest.raises(AssertionError):
+        engine.execute_order("FAKE", CoreOrderSide.BUY, 10, order_type="market", price=100.0)
+
+    assert "limit" not in calls
+    assert any(record.message == "SLIPPAGE_THRESHOLD_EXCEEDED" for record in caplog.records)
+
+
 def test_submit_limit_order_quantizes_price(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
     engine.is_initialized = True
