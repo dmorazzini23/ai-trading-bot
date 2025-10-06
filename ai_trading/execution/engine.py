@@ -30,7 +30,7 @@ except Exception:  # ImportError
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import get_counter
 from ai_trading.config.management import get_env
-from ai_trading.utils.time import safe_utcnow
+from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
 
 logger = get_logger(__name__)
@@ -198,7 +198,8 @@ class Order:
         self.filled_quantity = 0
         self.average_fill_price = Money(0)
         self.fills = []
-        self.created_at = datetime.now(UTC)
+        self.created_at = safe_utcnow()
+        self._created_monotonic = kwargs.get("created_monotonic", monotonic_time())
         self.updated_at = self.created_at
         self.executed_at = None
         self.client_order_id = kwargs.get("client_order_id", f"ord_{int(time.time())}")
@@ -641,30 +642,47 @@ class OrderManager:
         """Monitor active orders for timeouts and updates."""
         while self._monitor_running:
             try:
-                current_time = safe_utcnow()
-                expired_orders = []
-                for order_id, order in list(self.active_orders.items()):
-                    age_seconds = (current_time - order.created_at).total_seconds()
-                    if age_seconds > self.order_timeout:
-                        expired_orders.append(order_id)
-                    if order.status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
-                        self.active_orders.pop(order_id, None)
-                        self._notify_callbacks(order, "completed")
-                for order_id in expired_orders:
-                    order = self.active_orders.get(order_id)
-                    if order:
-                        order.status = OrderStatus.EXPIRED
-                        order.updated_at = current_time
-                        self.active_orders.pop(order_id, None)
-                        logger.warning(f"Order {order_id} expired after {self.order_timeout} seconds")
-                        self._notify_callbacks(order, "expired")
-                from .reconcile import reconcile_positions_and_orders
-
-                reconcile_positions_and_orders()
+                self._monitor_orders_tick()
                 time.sleep(1)
             except (APIError, TimeoutError, ConnectionError) as e:
                 logger.error("ORDER_MONITOR_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
                 time.sleep(5)
+
+    def _monitor_orders_tick(self) -> None:
+        """Evaluate active orders once using monotonic time for expiry checks."""
+
+        current_time = safe_utcnow()
+        current_monotonic = monotonic_time()
+        expired_orders: list[str] = []
+        for order_id, order in list(self.active_orders.items()):
+            created_monotonic = getattr(order, "_created_monotonic", None)
+            age_seconds: float
+            if isinstance(created_monotonic, (int, float)):
+                age_seconds = current_monotonic - float(created_monotonic)
+            else:
+                try:
+                    age_seconds = (current_time - order.created_at).total_seconds()
+                except Exception:
+                    age_seconds = float("inf")
+            if age_seconds > self.order_timeout:
+                expired_orders.append(order_id)
+            if order.status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
+                self.active_orders.pop(order_id, None)
+                self._notify_callbacks(order, "completed")
+
+        for order_id in expired_orders:
+            order = self.active_orders.get(order_id)
+            if not order:
+                continue
+            order.status = OrderStatus.EXPIRED
+            order.updated_at = current_time
+            self.active_orders.pop(order_id, None)
+            logger.warning(f"Order {order_id} expired after {self.order_timeout} seconds")
+            self._notify_callbacks(order, "expired")
+
+        from .reconcile import reconcile_positions_and_orders
+
+        reconcile_positions_and_orders()
 
     def _notify_callbacks(self, order: Order, event_type: str):
         """Notify registered callbacks of order events."""
