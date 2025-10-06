@@ -170,7 +170,16 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     assert first_stamp > 5.0
 
     # Simulate memo expiry and verify the cached entry refreshes memo storage
+    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
+    canonical_key = (
+        symbol,
+        "1Day",
+        start_ts.isoformat(),
+        end_ts.isoformat(),
+    )
     be._DAILY_FETCH_MEMO[memo_key] = (0.0, memo_df)
+    be._DAILY_FETCH_MEMO[canonical_key] = (0.0, memo_df)
     fetcher._daily_cache.raise_on_get = False
     second = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
     assert second is cached_df
@@ -325,6 +334,66 @@ def test_daily_fetch_legacy_tuple_normalizes_and_skips_daily_cache(monkeypatch):
         and value[0] > 5.0
         for key, value in memo_store.set_calls
     )
+
+
+def test_daily_fetch_canonical_and_legacy_memo_bypass_daily_cache(monkeypatch):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+
+    monotonic_values = iter([120.0, 130.0, 140.0])
+    monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
+
+    canonical_key = (
+        symbol,
+        "1Day",
+        start_ts.isoformat(),
+        end_ts.isoformat(),
+    )
+    legacy_key = (symbol, fetch_date.isoformat())
+    memo_payload = {"memo": True}
+
+    class CountingCache(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.get_calls = 0
+
+        def get(self, *args, **kwargs):  # pragma: no cover - verified via assertions
+            self.get_calls += 1
+            return super().get(*args, **kwargs)
+
+    fetcher._daily_cache = CountingCache({symbol: (fetch_date, {"cache": True})})
+
+    memo_store: dict[tuple[str, ...], tuple[float, object] | tuple[object, float]] = {
+        canonical_key: (110.0, memo_payload),
+        legacy_key: (memo_payload, 110.0),
+    }
+
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+
+    assert result is memo_payload
+    assert fetcher._daily_cache.get_calls == 0
+    assert be._DAILY_FETCH_MEMO[canonical_key][1] is memo_payload
+    assert be._DAILY_FETCH_MEMO[legacy_key][1] is memo_payload
+
 
 def test_daily_fetch_memo_handles_generator_factory():
     from ai_trading.data import fetch as fetch_module
