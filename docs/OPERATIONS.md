@@ -63,6 +63,17 @@ Set the following to control position sizing:
 3. **Inspect live feed metadata.** Run an interactive shell and call `ai_trading.data.fetch.get_minute_df("AAPL", start, end)` while the incident is active. The returned DataFrame exposes `df.attrs["source_label"]` (and related keys) so you can confirm which provider served the data when `IEX_MINUTE_DATA_STALE` triggers.
 4. **Restore primary feed preference.** After Alpaca minute data is healthy, clear any forced fallback by reloading the service (or calling the admin task) so that `provider_monitor` observes fresh bars and stops preferring the backup provider.
 
+### Provider safe-mode & halt handling
+
+Repeated Alpaca feed failures (such as `UNAUTHORIZED_SIP` or consecutive `MINUTE_GAPS_*` events) now trigger provider safe-mode:
+
+1. `AlertType.PROVIDER_OUTAGE` is emitted with `severity=CRITICAL`.
+2. `halt.flag` (configurable via `HALT_FLAG_PATH`/`AI_TRADING_HALT_FLAG_PATH`) is written to disk so operators see the halt without reading logs.
+3. `provider_monitor.disable("alpaca")` (and `_sip`) activates a backoff window.
+4. The core engine skips signal evaluation, refuses fallback-priced orders, and the execution layer blocks submissions while the halt file is present or the provider remains disabled.
+
+**Resume flow:** Clear the halt flag once Alpaca confirms SIP coverage has returned. After the cooldown expires `provider_monitor.record_success("alpaca")` (automatically called on healthy fetches) resets safe-mode state so the trading loop can resume.
+
 ### Execution exposure tracking
 
 - `ExecutionEngine.execute_order(...)` now returns an `ExecutionResult` object (a string subclass) containing the created order, its current status, the filled quantity, and the proportional signal weight that filled. Code that only needs the order ID can continue to treat the result as a string.

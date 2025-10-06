@@ -28,6 +28,7 @@ class AlertType(Enum):
     EXECUTION = 'execution'
     SYSTEM = 'system'
     COMPLIANCE = 'compliance'
+    PROVIDER_OUTAGE = 'provider_outage'
 
 class Alert:
     """

@@ -44,6 +44,171 @@ _MIN_RECOVERY_SECONDS = 600
 _MIN_RECOVERY_PASSES = 3
 _DEFAULT_SWITCH_QUIET_SECONDS = 15.0
 
+_HALT_EVENT_WINDOW_SECONDS = 600.0
+_SIP_AUTH_FAIL_THRESHOLD = 3
+_GAP_EVENT_THRESHOLD = 3
+_HALT_SUPPRESS_SECONDS = 60.0
+
+_sip_auth_events: Deque[float] = deque()
+_gap_events: Deque[float] = deque()
+_last_halt_reason: str | None = None
+_last_halt_ts: float = 0.0
+_SAFE_MODE_ACTIVE = False
+_SAFE_MODE_REASON: str | None = None
+
+
+def _resolve_halt_flag_path() -> str:
+    """Return the configured halt flag path with sensible fallbacks."""
+
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        path = getattr(settings, "halt_flag_path", None)
+        if isinstance(path, str) and path:
+            return path
+    env_path = os.getenv("AI_TRADING_HALT_FLAG_PATH")
+    if env_path:
+        return env_path
+    return "halt.flag"
+
+
+def _write_halt_flag(reason: str, metadata: Mapping[str, Any] | None = None) -> None:
+    path = _resolve_halt_flag_path()
+    directory = os.path.dirname(path)
+    if directory and not os.path.exists(directory):
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as exc:  # pragma: no cover - filesystem guard
+            logger.error(
+                "HALT_FLAG_DIR_CREATE_FAILED",
+                extra={"path": path, "error": str(exc)},
+            )
+            return
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(f"{reason} {datetime.now(UTC).isoformat()}")
+    except OSError as exc:  # pragma: no cover - filesystem guard
+        logger.error(
+            "HALT_FLAG_WRITE_FAILED",
+            extra={"path": path, "error": str(exc)},
+        )
+        return
+    payload: dict[str, Any] = {"path": path, "reason": reason}
+    if metadata:
+        payload.update({k: v for k, v in metadata.items() if k not in payload})
+    logger.warning("HALT_FLAG_WRITTEN", extra=payload)
+
+
+def is_safe_mode_active() -> bool:
+    """Return ``True`` if the provider monitor has triggered safe mode."""
+
+    return _SAFE_MODE_ACTIVE
+
+
+def safe_mode_reason() -> str | None:
+    """Return the most recent safe-mode trigger reason, if any."""
+
+    return _SAFE_MODE_REASON
+
+
+def _trigger_provider_safe_mode(
+    reason: str,
+    *,
+    count: int,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    global _last_halt_reason, _last_halt_ts, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+
+    now = monotonic_time()
+    if _last_halt_reason == reason and (now - _last_halt_ts) < _HALT_SUPPRESS_SECONDS:
+        return
+    _last_halt_reason = reason
+    _last_halt_ts = now
+    _SAFE_MODE_ACTIVE = True
+    _SAFE_MODE_REASON = reason
+
+    metadata_payload: dict[str, Any] = {"provider": "alpaca", "reason": reason, "events": count}
+    if metadata:
+        metadata_payload.update({k: v for k, v in metadata.items() if k not in metadata_payload})
+
+    monitor = globals().get("provider_monitor")
+    alert_manager: AlertManager | None = None
+    if monitor is not None:
+        alert_manager = getattr(monitor, "alert_manager", None)
+
+    if alert_manager is not None:
+        try:
+            alert_manager.create_alert(
+                AlertType.PROVIDER_OUTAGE,
+                AlertSeverity.CRITICAL,
+                "Alpaca minute feed outage detected",
+                metadata=metadata_payload,
+            )
+        except Exception:  # pragma: no cover - alerting best effort
+            logger.exception(
+                "PROVIDER_OUTAGE_ALERT_FAILED",
+                extra={"reason": reason},
+            )
+
+    logger.error(
+        "PROVIDER_SAFE_MODE_TRIGGERED",
+        extra=metadata_payload,
+    )
+
+    _write_halt_flag(reason, metadata=metadata_payload)
+
+    if monitor is not None:
+        for provider in ("alpaca", "alpaca_sip"):
+            try:
+                monitor.disable(provider)
+            except Exception:  # pragma: no cover - disable guard
+                logger.exception(
+                    "PROVIDER_SAFE_MODE_DISABLE_FAILED",
+                    extra={"provider": provider, "reason": reason},
+                )
+
+
+def _record_event(
+    bucket: Deque[float],
+    *,
+    threshold: int,
+    reason: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    now = monotonic_time()
+    bucket.append(now)
+    cutoff = now - _HALT_EVENT_WINDOW_SECONDS
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    count = len(bucket)
+    if count >= threshold:
+        _trigger_provider_safe_mode(reason, count=count, metadata=metadata)
+        bucket.clear()
+
+
+def record_unauthorized_sip_event(metadata: Mapping[str, Any] | None = None) -> None:
+    """Record an UNAUTHORIZED_SIP event for safe-mode tracking."""
+
+    _record_event(
+        _sip_auth_events,
+        threshold=_SIP_AUTH_FAIL_THRESHOLD,
+        reason="unauthorized_sip",
+        metadata=metadata,
+    )
+
+
+def record_minute_gap_event(metadata: Mapping[str, Any] | None = None) -> None:
+    """Record a minute coverage gap event for safe-mode tracking."""
+
+    _record_event(
+        _gap_events,
+        threshold=_GAP_EVENT_THRESHOLD,
+        reason="minute_gap",
+        metadata=metadata,
+    )
+
 
 def _resolve_max_cooldown() -> float:
     """Resolve the maximum provider cooldown from settings/env with bounds."""
@@ -486,6 +651,10 @@ class ProviderMonitor:
             provider_disabled.labels(provider=provider).set(0)
         except Exception:  # pragma: no cover - defensive
             pass
+        if provider.startswith("alpaca"):
+            global _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+            _SAFE_MODE_ACTIVE = False
+            _SAFE_MODE_REASON = None
 
     def _migrate_provider_state(self, old: str, new: str) -> None:
         if not old or old == new:
@@ -1047,4 +1216,8 @@ __all__ = [
     "ProviderMonitor",
     "ProviderAction",
     "decide_provider_action",
+    "is_safe_mode_active",
+    "safe_mode_reason",
+    "record_unauthorized_sip_event",
+    "record_minute_gap_event",
 ]

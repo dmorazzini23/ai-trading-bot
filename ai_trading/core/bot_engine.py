@@ -566,7 +566,11 @@ from ai_trading.config.settings import (
     sentiment_backoff_base,
     sentiment_backoff_strategy,
 )
-from ai_trading.data.provider_monitor import provider_monitor
+from ai_trading.data.provider_monitor import (
+    is_safe_mode_active,
+    provider_monitor,
+    safe_mode_reason,
+)
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD = 8  # Audit: trip circuit after 8 consecutive failures
@@ -15128,6 +15132,16 @@ def _should_skip_order_for_alpaca_unavailable(
         if isinstance(auth_skipped, set):
             auth_skipped.add(symbol)
         return True
+    if not _is_primary_price_source(price_source):
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={
+                "symbol": symbol,
+                "reason": "fallback_price_source",
+                "price_source": price_source,
+            },
+        )
+        return True
     return False
 
 
@@ -15586,25 +15600,33 @@ def _enter_long(
 ) -> bool:
     prefer_backup_quote = False
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    provider_enabled = True
     if callable(primary_provider_fn):
         try:
             provider_enabled = bool(primary_provider_fn())
         except Exception:  # pragma: no cover - defensive guard
             provider_enabled = True
-        if not provider_enabled:
-            logger.info(
-                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-                extra={"symbol": symbol, "provider": "alpaca"},
-            )
-            degraded = getattr(state, "degraded_providers", None)
-            if degraded is None:
-                degraded = set()
-                setattr(state, "degraded_providers", degraded)
-            degraded.add("alpaca")
-            prefer_backup_quote = True
-    degraded = getattr(state, "degraded_providers", None)
-    if isinstance(degraded, set) and "alpaca" in degraded:
-        prefer_backup_quote = True
+    if not provider_enabled:
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={"symbol": symbol, "reason": "primary_provider_disabled"},
+        )
+        degraded = getattr(state, "degraded_providers", None)
+        if degraded is None:
+            degraded = set()
+            setattr(state, "degraded_providers", degraded)
+        degraded.add("alpaca")
+        return True
+
+    if is_safe_mode_active():
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={
+                "symbol": symbol,
+                "reason": safe_mode_reason() or "provider_safe_mode",
+            },
+        )
+        return True
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -15636,10 +15658,15 @@ def _enter_long(
             or not _is_primary_price_source(price_source)
         )
         if fallback_active:
-            logger.info(
-                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-                extra={"symbol": symbol, "provider": price_source or "unknown"},
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": "fallback_price_source",
+                    "price_source": price_source,
+                },
             )
+            return True
         if _should_skip_order_for_alpaca_unavailable(
             state, symbol, price_source
         ):
@@ -16002,25 +16029,33 @@ def _enter_short(
 ) -> bool:
     prefer_backup_quote = False
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    provider_enabled = True
     if callable(primary_provider_fn):
         try:
             provider_enabled = bool(primary_provider_fn())
         except Exception:  # pragma: no cover - defensive guard
             provider_enabled = True
-        if not provider_enabled:
-            logger.info(
-                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-                extra={"symbol": symbol, "provider": "alpaca"},
-            )
-            degraded = getattr(state, "degraded_providers", None)
-            if degraded is None:
-                degraded = set()
-                setattr(state, "degraded_providers", degraded)
-            degraded.add("alpaca")
-            prefer_backup_quote = True
-    degraded = getattr(state, "degraded_providers", None)
-    if isinstance(degraded, set) and "alpaca" in degraded:
-        prefer_backup_quote = True
+    if not provider_enabled:
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={"symbol": symbol, "reason": "primary_provider_disabled"},
+        )
+        degraded = getattr(state, "degraded_providers", None)
+        if degraded is None:
+            degraded = set()
+            setattr(state, "degraded_providers", degraded)
+        degraded.add("alpaca")
+        return True
+
+    if is_safe_mode_active():
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={
+                "symbol": symbol,
+                "reason": safe_mode_reason() or "provider_safe_mode",
+            },
+        )
+        return True
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -16053,10 +16088,15 @@ def _enter_short(
             or price_source == _ALPACA_DISABLED_SENTINEL
             or not nbbo_available
         ):
-            logger.info(
-                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-                extra={"symbol": symbol, "provider": price_source or "unknown"},
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": "fallback_price_source",
+                    "price_source": price_source,
+                },
             )
+            return True
         if _should_skip_order_for_alpaca_unavailable(
             state, symbol, price_source
         ):
@@ -16424,15 +16464,26 @@ def trade_logic(
             "PRIMARY_PROVIDER_DEGRADED",
             extra={"symbol": symbol, "provider": "alpaca"},
         )
-        logger.info(
-            "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-            extra={"symbol": symbol, "provider": "alpaca"},
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={"symbol": symbol, "reason": "primary_provider_disabled"},
         )
         degraded = getattr(state, "degraded_providers", None)
         if degraded is None:
             degraded = set()
             setattr(state, "degraded_providers", degraded)
         degraded.add("alpaca")
+        return False
+
+    if is_safe_mode_active():
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={
+                "symbol": symbol,
+                "reason": safe_mode_reason() or "provider_safe_mode",
+            },
+        )
+        return False
 
     with StageTimer(logger, "FETCH_FEATURE_DATA", symbol=symbol):
         raw_df, feat_df, skip_flag = _fetch_feature_data(
