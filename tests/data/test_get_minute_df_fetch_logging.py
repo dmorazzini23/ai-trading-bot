@@ -86,6 +86,30 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     assert any(record.message == "UNAUTHORIZED_SIP" for record in caplog.records)
 
 
+def test_env_without_sip_does_not_schedule_sip(monkeypatch):
+    monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
+    monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
+    monkeypatch.setattr(data_fetcher, "_ALLOW_SIP", None, raising=False)
+    monkeypatch.setattr(data_fetcher, "_cycle_feed_override", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_override_set_ts", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_CYCLE_FALLBACK_FEED", {}, raising=False)
+
+    assert data_fetcher._sip_allowed() is False
+    assert "sip" not in data_fetcher._ordered_fallbacks("iex")
+
+    data_fetcher._record_override("AAPL", "sip", "1Min")
+    assert "AAPL" not in data_fetcher._cycle_feed_override
+
+    cycle_id = data_fetcher._get_cycle_id()
+    data_fetcher._CYCLE_FALLBACK_FEED[(cycle_id, "AAPL", "1Min")] = "sip"
+    assert data_fetcher._fallback_cache_for_cycle(cycle_id, "AAPL", "1Min") is None
+
+    monkeypatch.setattr(data_fetcher, "_time_now", lambda default=0.0: 200.0, raising=False)
+    data_fetcher._cycle_feed_override["AAPL"] = "sip"
+    data_fetcher._override_set_ts["AAPL"] = 100.0
+    assert data_fetcher._get_cached_or_primary("AAPL", "iex") == "iex"
+
+
 def test_clear_minute_fallback_state_clears_all_metadata(monkeypatch):
     start, end = _dt_range()
     key = data_fetcher._fallback_key("AAPL", "1Min", start, end)

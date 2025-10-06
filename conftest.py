@@ -53,6 +53,7 @@ os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.1")
 os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("ALPACA_API_KEY", "test-key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test-secret")
+os.environ.setdefault("ALPACA_ALLOW_SIP", "1")
 
 
 def _missing(mod: str) -> bool:
