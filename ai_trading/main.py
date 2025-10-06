@@ -1407,22 +1407,17 @@ def main(argv: list[str] | None = None) -> None:
     try:
         health_tick_seconds = int(raw_tick)
     except (ValueError, TypeError):
-        health_tick_seconds = 300
-    if health_tick_seconds < 1:
-        logger.warning(
-            "HEALTH_TICK_INTERVAL_INVALID",
-            extra={"configured": health_tick_seconds, "normalized": 1},
-        )
-        health_tick_seconds = 1
+        health_tick_seconds = int(getattr(S, "health_tick_seconds", 300))
     if health_tick_seconds < recommended_health_tick:
         logger.warning(
-            "HEALTH_TICK_INTERVAL_BELOW_RECOMMENDED",
+            "HEALTH_TICK_INTERVAL_MINIMUM_ENFORCED",
             extra={
                 "configured": health_tick_seconds,
-                "recommended_min": recommended_health_tick,
+                "normalized": recommended_health_tick,
             },
         )
-    health_tick_runtime = max(recommended_health_tick, health_tick_seconds)
+        health_tick_seconds = recommended_health_tick
+    health_tick_runtime = health_tick_seconds
     last_health = monotonic_time()
     env_iter = _get_int_env("SCHEDULER_ITERATIONS")
     raw_iter = (

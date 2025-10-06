@@ -321,11 +321,10 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     health_tick_seconds: int = Field(
         default=300,
         env="AI_TRADING_HEALTH_TICK_SECONDS",
-        ge=1,
+        ge=30,
         description=(
-            "Interval between background health checks. Testing may lower this"
-            " below the 30s production recommendation; runtime clamps when"
-            " needed."
+            "Interval between background health checks in seconds. A minimum"
+            " of 30s is enforced for reliability."
         ),
     )
     cpu_only: bool = Field(default=False, validation_alias="CPU_ONLY")

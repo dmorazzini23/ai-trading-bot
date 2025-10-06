@@ -1246,6 +1246,117 @@ def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
     assert warning_records[-1].fallback_provider == "yahoo"
 
 
+def test_fetch_minute_df_safe_yahoo_sparse_intraday_window(monkeypatch, caplog):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 20, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(hours=6, minutes=30)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    calls: list[str] = []
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        feed_name = str(feed or "iex")
+        calls.append(feed_name)
+        start_dt = bot_engine.data_fetcher_module.ensure_datetime(start)
+        end_dt = bot_engine.data_fetcher_module.ensure_datetime(end)
+        if feed_name == "iex":
+            idx = pd.date_range(
+                end=end_dt - timedelta(minutes=1),
+                periods=60,
+                freq="min",
+                tz="UTC",
+            )
+        else:
+            periods = max(1, int((end_dt - start_dt).total_seconds() // 60))
+            idx = pd.date_range(
+                start=start_dt,
+                periods=periods,
+                freq="min",
+                tz="UTC",
+            )
+        frame = pd.DataFrame(
+            {
+                "timestamp": idx,
+                "open": [1.0] * len(idx),
+                "high": [1.0] * len(idx),
+                "low": [1.0] * len(idx),
+                "close": [1.0] * len(idx),
+                "volume": [100] * len(idx),
+            }
+        )
+        provider = "alpaca_iex" if feed_name == "iex" else "yahoo"
+        frame.attrs["data_provider"] = provider
+        frame.attrs["fallback_provider"] = provider
+        frame.attrs["data_feed"] = feed_name
+        frame.attrs["fallback_feed"] = feed_name
+        return frame
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "0")
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 120, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "market_cache_enabled", False, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "data_feed", "iex", raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "alpaca_feed_failover", (), raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "minute_gap_backfill", None, raising=False)
+    monkeypatch.setattr(bot_engine, "S", bot_engine.CFG, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_SIP_UNAUTHORIZED",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module.provider_monitor,
+        "is_disabled",
+        lambda provider: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+        raising=False,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert result is not None and not result.empty
+    assert len(result) == 120
+    assert calls[-1] == "yahoo"
+    assert "MINUTE_DATA_COVERAGE_ABORT" not in [rec.message for rec in caplog.records]
+
+
 def test_fetch_minute_df_safe_extends_window_for_long_indicators(monkeypatch):
     pd = load_pandas()
 

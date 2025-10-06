@@ -15,7 +15,7 @@ class _FixedDatetime(datetime):
         return datetime(2024, 1, 1, 12, 5, 30, tzinfo=UTC)
 
 
-def test_fetch_minute_df_safe_filters_current_and_zero_volume(monkeypatch):
+def test_fetch_minute_df_safe_keeps_zero_volume_for_backup_provider(monkeypatch):
     pd = load_pandas()
     idx = pd.to_datetime(
         [
@@ -24,19 +24,22 @@ def test_fetch_minute_df_safe_filters_current_and_zero_volume(monkeypatch):
             "2024-01-01 12:02:00+00:00",
             "2024-01-01 12:03:00+00:00",
             "2024-01-01 12:04:00+00:00",
+            "2024-01-01 12:05:00+00:00",
         ]
     )
     df = pd.DataFrame(
         {
-            "open": [1, 1, 1, 1, 1],
-            "high": [1, 1, 1, 1, 1],
-            "low": [1, 1, 1, 1, 1],
-            "close": [1, 1, 1, 1, 1],
-            "volume": [100, 0, 100, 0, 150],
+            "open": [1, 1, 1, 1, 1, 1],
+            "high": [1, 1, 1, 1, 1, 1],
+            "low": [1, 1, 1, 1, 1, 1],
+            "close": [1, 1, 1, 1, 1, 1],
+            "volume": [100, 0, 100, -5, 150, 200],
             "timestamp": idx,
         },
         index=idx,
     )
+    df.attrs["data_provider"] = "yahoo"
+    df.attrs["fallback_provider"] = "yahoo"
     monkeypatch.setattr(bot_engine, "datetime", _FixedDatetime)
     monkeypatch.setattr(bot_engine, "_LONGEST_INTRADAY_INDICATOR_MINUTES", 1, raising=False)
     monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 1, raising=False)
@@ -67,9 +70,9 @@ def test_fetch_minute_df_safe_filters_current_and_zero_volume(monkeypatch):
     )
 
     result = bot_engine.fetch_minute_df_safe("AAPL")
-    assert (result["volume"] > 0).all()
-    assert pd.Timestamp("2024-01-01 12:01:00+00:00") not in result.index
+    assert pd.Timestamp("2024-01-01 12:05:00+00:00") not in result.index
     assert pd.Timestamp("2024-01-01 12:03:00+00:00") not in result.index
+    assert result.loc[pd.Timestamp("2024-01-01 12:01:00+00:00"), "volume"] == 0
 
 
 def test_fetch_minute_df_safe_drops_string_nan_rows(monkeypatch):

@@ -1389,6 +1389,38 @@ for spec in CONFIG_SPECS:
 _LIVE_ENV_VALUES = {"live", "live_prod", "prod", "production"}
 
 
+_ALLOWED_OVERRIDE_ENV_KEYS: frozenset[str] = frozenset(SPEC_BY_ENV.keys())
+
+
+def _validate_override_keys(overrides: Mapping[str, Any]) -> None:
+    """Ensure overrides only contain recognized TradingConfig environment keys."""
+
+    if not overrides:
+        return
+
+    unknown: list[str] = []
+    for key in overrides:
+        upper_key = str(key).upper()
+        if upper_key not in _ALLOWED_OVERRIDE_ENV_KEYS:
+            unknown.append(str(key))
+    if unknown:
+        names = ", ".join(sorted(dict.fromkeys(unknown)))
+        raise KeyError(
+            "Unknown TradingConfig override env keys: "
+            f"{names}."
+        )
+
+
+class _EnvSnapshotDict(dict):
+    """Dictionary subclass tagging mappings produced by :func:`_env_snapshot`."""
+
+    __slots__ = ("is_snapshot",)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.is_snapshot = True
+
+
 def _normalize_env_label(value: Any, *, default: str = "") -> str:
     """Return a lowercase, stripped string for environment labels."""
 
@@ -1550,7 +1582,10 @@ class TradingConfig:
         *,
         allow_missing_drawdown: bool = False,
     ) -> "TradingConfig":
-        env_map = _env_snapshot(env_overrides)
+        if isinstance(env_overrides, Mapping) and getattr(env_overrides, "is_snapshot", False):
+            env_map = dict(env_overrides)
+        else:
+            env_map = _env_snapshot(env_overrides)
         if not allow_missing_drawdown:
             has_drawdown = any(
                 env_map.get(key) not in (None, "")
@@ -1637,12 +1672,18 @@ def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
 
 
 def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
-    snap = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+    snap: _EnvSnapshotDict = _EnvSnapshotDict(
+        {k: v for k, v in os.environ.items() if isinstance(v, str)}
+    )
     if overrides:
         if isinstance(overrides, str):
             snap["TRADING_MODE"] = overrides
         else:
-            snap.update({k.upper(): str(v) for k, v in overrides.items()})
+            if getattr(overrides, "is_snapshot", False):
+                snap.update(overrides)
+            else:
+                _validate_override_keys(overrides)
+                snap.update({k.upper(): str(v) for k, v in overrides.items()})
     return snap
 
 
