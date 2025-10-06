@@ -7957,7 +7957,6 @@ class DataFetcher:
             _is_trading_day = None  # type: ignore[assignment]
 
         ref_date = now_utc.date()
-        print("ref_date", ref_date)
         if not is_market_open():
             for _ in range(10):  # safety bound
                 ref_date = ref_date - timedelta(days=1)
@@ -7988,7 +7987,6 @@ class DataFetcher:
         timeframe_key = "1Day"
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
-        import pdb; pdb.set_trace()
         min_interval = self._daily_fetch_min_interval(ctx)
         now_monotonic = float(monotonic_fn())
         ttl_window = (
@@ -8205,7 +8203,6 @@ class DataFetcher:
             (legacy_memo_key, memo_key),
         )
         for candidate_key, counterpart_key in memo_check_pairs:
-            print("memo candidate", candidate_key, counterpart_key)
             entry = _memo_get_entry(candidate_key)
             if entry is None:
                 continue
@@ -8223,12 +8220,10 @@ class DataFetcher:
                     min_interval if min_interval > 0 else ttl_window
                 )
             )
-            print("memo entry", entry_ts, age, is_fresh)
             if not is_fresh:
                 continue
             memo_hit = True
             normalized_pair = (now_monotonic, payload)
-            import pdb; pdb.set_trace()
             with cache_lock:
                 _memo_set_entry(candidate_key, normalized_pair)
                 if counterpart_key != candidate_key:
