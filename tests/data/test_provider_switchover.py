@@ -26,6 +26,7 @@ def test_missing_alpaca_warning_suppressed_for_backup_provider(monkeypatch):
 def test_missing_alpaca_warning_suppressed_when_sip_locked(monkeypatch):
     _reset_emit_once(monkeypatch)
     monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
+    monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
     monkeypatch.setattr(fetch, "_is_sip_unauthorized", lambda: True)
     monkeypatch.setattr(fetch, "get_settings", lambda: SimpleNamespace(data_provider="alpaca"))
     monkeypatch.setattr(fetch, "get_data_feed_override", lambda: None)

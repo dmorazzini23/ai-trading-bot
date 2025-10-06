@@ -33,6 +33,13 @@ operators can request entitlements before launch.
 * `AI_TRADING_HALT_FLAG_PATH` — Override the default `halt.flag` location used
   by provider safe-mode.
 
+### Troubleshooting SIP flags
+
+`ALPACA_SIP_UNAUTHORIZED=1` only disables the SIP path when
+`DATA_FEED_INTRADAY=sip`. Deployments running with `DATA_FEED_INTRADAY=iex`
+ignore this flag so primary IEX orders continue flowing. Clear the flag once
+SIP entitlements are restored before switching the intraday feed to `sip`.
+
 ### Validation Checklist
 
 1. Export the required variables in the deployment environment.

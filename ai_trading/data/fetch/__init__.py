@@ -158,6 +158,38 @@ def _ensure_override_state_current() -> None:
         _clear_cycle_overrides()
 
 
+def _current_intraday_feed() -> str:
+    """Return the active intraday feed identifier."""
+
+    env_feed = os.getenv("DATA_FEED_INTRADAY")
+    if env_feed not in (None, ""):
+        normalized = env_feed.strip().lower()
+        if normalized:
+            return normalized
+    try:
+        from ai_trading.config import DATA_FEED_INTRADAY as _CFG_INTRADAY  # local import to avoid cycles
+    except Exception:
+        _CFG_INTRADAY = None
+    feed = _CFG_INTRADAY
+    if feed in (None, ""):
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings is not None:
+            feed = getattr(settings, "data_feed_intraday", None) or getattr(settings, "alpaca_data_feed", None)
+    if feed in (None, ""):
+        feed = os.getenv("ALPACA_DATA_FEED")
+    normalized = str(feed or "iex").strip().lower()
+    return normalized or "iex"
+
+
+def _intraday_feed_prefers_sip() -> bool:
+    """Return ``True`` when SIP is the selected intraday feed."""
+
+    return _current_intraday_feed() == "sip"
+
+
 def _safe_empty_should_emit(key: tuple[str, ...], when: datetime) -> bool:
     hook = _empty_should_emit
     if callable(hook):
@@ -690,9 +722,11 @@ def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tu
 def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
     extra: dict[str, object] = {}
 
-    if os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1" or _is_sip_unauthorized():
+    sip_flagged = os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1" or _is_sip_unauthorized()
+    if sip_flagged:
         extra["sip_locked"] = True
-        return False, extra
+        if _intraday_feed_prefers_sip():
+            return False, extra
 
     try:
         settings = get_settings()
@@ -891,13 +925,14 @@ def _prepare_sip_fallback(
         push_to_caplog("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
     except Exception:  # pragma: no cover - defensive
         pass
-    try:
-        record_unauthorized_sip_event(extra_payload)
-    except Exception:  # pragma: no cover - defensive
-        logger.debug(
-            "SAFE_MODE_EVENT_RECORD_FAILED",
-            extra={"reason": "unauthorized_sip", "detail": "record_failed"},
-        )
+    if _intraday_feed_prefers_sip():
+        try:
+            record_unauthorized_sip_event(extra_payload)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "SAFE_MODE_EVENT_RECORD_FAILED",
+                extra={"reason": "unauthorized_sip", "detail": "record_failed"},
+            )
     try:
         tags = tags_factory()
     except Exception:
@@ -2999,7 +3034,8 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
             tags={"provider": "alpaca", "feed": "sip", "timeframe": timeframe},
         )
         metrics.unauthorized += 1
-        provider_monitor.record_failure("alpaca", "unauthorized")
+        provider_name = "alpaca" if _intraday_feed_prefers_sip() else "alpaca_sip"
+        provider_monitor.record_failure(provider_name, "unauthorized")
         logger.warning(
             "UNAUTHORIZED_SIP",
             extra=_norm_extra({"provider": "alpaca", "status": "precheck", "feed": "sip", "timeframe": timeframe}),
@@ -4761,7 +4797,7 @@ def _fetch_bars(
                 )
             except Exception:
                 pass
-            if explicit_feed_request and _SIP_UNAUTHORIZED and _feed == "iex":
+            if explicit_feed_request and _SIP_UNAUTHORIZED and _feed == "iex" and sip_intraday:
                 raise ValueError("rate_limited")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
@@ -4846,7 +4882,8 @@ def _fetch_bars(
         _log_sip_unavailable(symbol, _interval)
         _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
         metrics.unauthorized += 1
-        provider_monitor.record_failure("alpaca", "unauthorized")
+        provider_name = "alpaca" if _intraday_feed_prefers_sip() else "alpaca_sip"
+        provider_monitor.record_failure(provider_name, "unauthorized")
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
@@ -4898,6 +4935,8 @@ def _fetch_bars(
             raise ValueError("session_required")
 
         reload_host_limit_if_env_changed(session)
+
+        sip_intraday = _intraday_feed_prefers_sip()
 
         call_attempts = _state.setdefault("fallback_feeds_attempted", set())
         skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
@@ -5353,7 +5392,7 @@ def _fetch_bars(
             requested_feed = _feed
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             sip_locked = _is_sip_unauthorized()
-            if requested_feed == "iex" and (sip_locked or _SIP_UNAUTHORIZED):
+            if requested_feed == "iex" and sip_intraday and (sip_locked or _SIP_UNAUTHORIZED):
                 raise ValueError("rate_limited")
             metrics.rate_limit += 1
             provider_id = "alpaca"
@@ -5416,7 +5455,7 @@ def _fetch_bars(
                     return result
                 raise ValueError("rate_limited")
             attempt = _state["retries"] + 1
-            if requested_feed == "iex" and sip_locked:
+            if requested_feed == "iex" and sip_locked and sip_intraday:
                 fallback_viable = False
                 if fallback_target:
                     _, fb_feed, _, _ = fallback_target
@@ -6238,6 +6277,7 @@ def _fetch_bars(
             break
         # Stop immediately when SIP is unauthorized; further retries won't help.
         if _feed == "sip" and _is_sip_unauthorized():
+            _log_sip_unavailable(symbol, "1Min")
             break
         if df is not None and not getattr(df, "empty", True):
             break
@@ -6493,6 +6533,12 @@ def get_minute_df(
         nonlocal primary_failure_logged
         if primary_failure_logged:
             return
+        if (
+            reason == "fallback_in_use"
+            and (normalized_feed == "sip" or requested_feed == "sip")
+            and (_SIP_UNAUTHORIZED or _is_sip_unauthorized())
+        ):
+            _log_sip_unavailable(symbol, "1Min")
         logger.warning(
             "ALPACA_FETCH_FAILED",
             extra={"symbol": symbol, "err": str(reason)},

@@ -57,6 +57,38 @@ _SAFE_MODE_ACTIVE = False
 _SAFE_MODE_REASON: str | None = None
 
 
+def _current_intraday_feed() -> str:
+    """Return the configured intraday feed identifier."""
+
+    env_feed = os.getenv("DATA_FEED_INTRADAY")
+    if env_feed not in (None, ""):
+        normalized = env_feed.strip().lower()
+        if normalized:
+            return normalized
+    try:
+        from ai_trading.config import DATA_FEED_INTRADAY as _CFG_FEED  # local import to avoid cycles
+    except Exception:
+        _CFG_FEED = None
+    feed = _CFG_FEED
+    if feed in (None, ""):
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings is not None:
+            feed = getattr(settings, "data_feed_intraday", None) or getattr(settings, "alpaca_data_feed", None)
+    if feed in (None, ""):
+        feed = os.getenv("ALPACA_DATA_FEED")
+    normalized = str(feed or "iex").strip().lower()
+    return normalized or "iex"
+
+
+def _intraday_feed_is_sip() -> bool:
+    """Return ``True`` when SIP is the active intraday feed."""
+
+    return _current_intraday_feed() == "sip"
+
+
 def _resolve_halt_flag_path() -> str:
     """Return the configured halt flag path with sensible fallbacks."""
 
@@ -191,6 +223,8 @@ def _record_event(
 def record_unauthorized_sip_event(metadata: Mapping[str, Any] | None = None) -> None:
     """Record an UNAUTHORIZED_SIP event for safe-mode tracking."""
 
+    if not _intraday_feed_is_sip():
+        return
     _record_event(
         _sip_auth_events,
         threshold=_SIP_AUTH_FAIL_THRESHOLD,
