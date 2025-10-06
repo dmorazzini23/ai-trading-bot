@@ -11,11 +11,13 @@ from ai_trading.core.bot_engine import BotState
 def clear_gating_caches():
     bot_engine._strict_data_gating_enabled.cache_clear()
     bot_engine._gap_ratio_gate_limit.cache_clear()
+    bot_engine._fallback_gap_ratio_limit.cache_clear()
     bot_engine._fallback_quote_max_age_seconds.cache_clear()
     bot_engine._liquidity_fallback_cap.cache_clear()
     yield
     bot_engine._strict_data_gating_enabled.cache_clear()
     bot_engine._gap_ratio_gate_limit.cache_clear()
+    bot_engine._fallback_gap_ratio_limit.cache_clear()
     bot_engine._fallback_quote_max_age_seconds.cache_clear()
     bot_engine._liquidity_fallback_cap.cache_clear()
 
@@ -30,6 +32,7 @@ def _fresh_state() -> BotState:
 def test_gap_ratio_gate_blocks(monkeypatch):
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
     monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "200")
+    monkeypatch.setenv("AI_TRADING_FALLBACK_GAP_LIMIT_BPS", "200")
     state = _fresh_state()
     state.price_reliability["NFLX"] = (
         False,
@@ -57,6 +60,46 @@ def test_gap_ratio_gate_blocks(monkeypatch):
 
     assert decision.block
     assert any("gap_ratio" in reason for reason in decision.reasons)
+
+
+def test_gap_ratio_relaxed_for_fallback(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
+    monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "50")
+    monkeypatch.setenv("AI_TRADING_FALLBACK_GAP_LIMIT_BPS", "500")
+    state = _fresh_state()
+    state.price_reliability["XYZ"] = (
+        False,
+        "gap_ratio=1.80%>limit=0.50%",
+    )
+    state.data_quality["XYZ"] = {
+        "gap_ratio": 0.018,
+        "price_reliable": False,
+        "price_reliable_reason": "gap_ratio=1.80%>limit=0.50%",
+    }
+    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    monkeypatch.setattr(
+        bot_engine,
+        "_check_fallback_quote_age",
+        lambda *_, **__: (False, None, "quote_timestamp_missing"),
+    )
+
+    decision = bot_engine._evaluate_data_gating(
+        ctx,
+        state,
+        "XYZ",
+        "yahoo_close",
+        prefer_backup_quote=True,
+    )
+
+    assert not decision.block
+    assert decision.annotations.get("gap_limit_primary") == pytest.approx(0.005)
+    assert decision.annotations.get("gap_limit") == pytest.approx(0.05)
+    assert decision.annotations.get("gap_ratio_relaxed") is True
+    assert any("gap_ratio" in reason for reason in decision.reasons)
+    assert "quote_timestamp_missing" in decision.reasons
+    quality = state.data_quality["XYZ"]
+    assert quality["price_reliable"] is True
+    assert quality.get("fallback_gap_relaxed") is True
 
 
 def test_missing_ohlcv_blocks(monkeypatch):
@@ -148,6 +191,7 @@ def test_fallback_quote_age_blocks_when_stale(monkeypatch):
 def test_gap_limit_env_override(monkeypatch):
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
     monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "150")
+    monkeypatch.setenv("AI_TRADING_FALLBACK_GAP_LIMIT_BPS", "150")
     state = _fresh_state()
     state.price_reliability["NFLX"] = (
         False,

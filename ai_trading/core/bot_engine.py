@@ -15075,6 +15075,29 @@ _gap_ratio_gate_limit.cache_info = _gap_ratio_gate_limit_cached.cache_info  # ty
 
 
 @functools.lru_cache(maxsize=8)
+def _fallback_gap_ratio_limit_cached(signature: tuple[str | None, ...]) -> float:
+    """Return relaxed gap ratio threshold (in ratio form) for fallback providers."""
+
+    base_limit_bps = max(_gap_ratio_gate_limit() * 10000.0, 500.0)
+    raw = signature[0] if signature else None
+    try:
+        bps = float(raw) if raw not in (None, "") else base_limit_bps
+    except (TypeError, ValueError):
+        bps = base_limit_bps
+    return max(0.0, bps) / 10000.0
+
+
+def _fallback_gap_ratio_limit() -> float:
+    return _fallback_gap_ratio_limit_cached(
+        _env_signature("AI_TRADING_FALLBACK_GAP_LIMIT_BPS")
+    )
+
+
+_fallback_gap_ratio_limit.cache_clear = _fallback_gap_ratio_limit_cached.cache_clear  # type: ignore[attr-defined]
+_fallback_gap_ratio_limit.cache_info = _fallback_gap_ratio_limit_cached.cache_info  # type: ignore[attr-defined]
+
+
+@functools.lru_cache(maxsize=8)
 def _fallback_quote_max_age_seconds_cached(signature: tuple[str | None, ...]) -> float:
     raw = signature[0] if signature else None
     try:
@@ -15185,7 +15208,9 @@ def _extract_quote_timestamp(payload: Any) -> datetime | None:
     return None
 
 
-_TRANSIENT_FALLBACK_REASONS = frozenset({"quote_source_unavailable", "quote_fetch_error"})
+_TRANSIENT_FALLBACK_REASONS = frozenset(
+    {"quote_source_unavailable", "quote_fetch_error", "quote_timestamp_missing"}
+)
 _FALLBACK_PRICE_PROVIDERS = frozenset({"yahoo", "bars"})
 _PRIMARY_PRICE_PROVIDERS = frozenset(
     {
@@ -15254,28 +15279,81 @@ def _evaluate_data_gating(
 
     if strict:
         gap_limit = _gap_ratio_gate_limit()
+        gap_limit_primary = gap_limit
+        fallback_gap_limit: float | None = None
+        if fallback_source:
+            fallback_gap_limit = _fallback_gap_ratio_limit()
+            if fallback_gap_limit > gap_limit:
+                gap_limit = fallback_gap_limit
+                annotations["gap_limit_relaxed"] = gap_limit
+                annotations["gap_limit_primary"] = gap_limit_primary
+        annotations["gap_limit"] = gap_limit
+
+        ratio: float | None = None
+        gap_ratio_relaxed = False
         gap_ratio_val = quality.get("gap_ratio")
         if isinstance(gap_ratio_val, (int, float, np.floating)):
             ratio = float(gap_ratio_val)
             annotations["gap_ratio"] = ratio
-            annotations["gap_limit"] = gap_limit
             if ratio >= 0.999:
                 annotations["coverage_block"] = True
                 fatal_reasons.append("insufficient_intraday_coverage")
             elif ratio > gap_limit:
                 gap_ratio_reason = f"gap_ratio={ratio * 100:.2f}%>limit={gap_limit * 100:.2f}%"
                 fallback_required = True
+            elif fallback_source and ratio > gap_limit_primary:
+                gap_ratio_reason = f"gap_ratio={ratio * 100:.2f}%>limit={gap_limit_primary * 100:.2f}%"
+                gap_ratio_relaxed = True
+                annotations["gap_ratio_relaxed"] = True
             elif ratio > 0:
                 gap_ratio_reason = f"gap_ratio={ratio * 100:.2f}%"
+
         reason_text = str(quality.get("price_reliable_reason") or "")
-        if quality.get("missing_ohlcv"):
+        price_reliable = bool(quality.get("price_reliable", True))
+        missing_ohlcv = bool(quality.get("missing_ohlcv"))
+        stale_data = bool(quality.get("stale_data"))
+
+        if missing_ohlcv:
             fatal_reasons.append("ohlcv_columns_missing")
-        if quality.get("stale_data"):
+        if stale_data:
             fatal_reasons.append(reason_text or "stale_minute_data")
-        if not quality.get("price_reliable", True) and not fatal_reasons:
-            fatal_reasons.append(reason_text or "unreliable_price")
-        if "gap_ratio=" in reason_text and not any("gap_ratio" in entry for entry in fatal_reasons):
-            fatal_reasons.append(reason_text)
+
+        price_reliability_relaxed = False
+        if not price_reliable and not missing_ohlcv and not stale_data:
+            if (
+                fallback_source
+                and ratio is not None
+                and "gap_ratio" in reason_text
+                and ratio <= gap_limit
+            ):
+                price_reliable = True
+                price_reliability_relaxed = True
+                gap_ratio_relaxed = gap_ratio_relaxed or (
+                    fallback_gap_limit is not None and fallback_gap_limit > gap_limit_primary
+                )
+                if gap_ratio_relaxed:
+                    annotations["gap_ratio_relaxed"] = True
+                if isinstance(quality, dict):
+                    quality["price_reliable"] = True
+                    quality["price_reliable_reason"] = None
+                updates: dict[str, Any] = {
+                    "price_reliable": True,
+                    "price_reliable_reason": None,
+                    "fallback_gap_relaxed": True,
+                }
+                if ratio is not None:
+                    updates["gap_ratio"] = ratio
+                _update_data_quality(state, symbol, **updates)
+            else:
+                fatal_reasons.append(reason_text or "unreliable_price")
+
+        if "gap_ratio=" in reason_text:
+            if price_reliability_relaxed:
+                if reason_text and reason_text not in reasons:
+                    reasons.append(reason_text)
+            elif not any("gap_ratio" in entry for entry in fatal_reasons):
+                fatal_reasons.append(reason_text)
+
         fallback_source = fallback_source or fallback_required
         if fallback_source:
             max_fallback_age = _fallback_quote_max_age_seconds()
