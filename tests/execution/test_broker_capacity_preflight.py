@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from types import SimpleNamespace
 
 from ai_trading.execution import live_trading as lt
 
 
 class DummyAPIError(lt.APIError):
-    def __init__(self, status_code=403, code="40310000", message="insufficient day trading buying power"):
-        super().__init__(message)
+    def __init__(
+        self,
+        status_code: int | None = 403,
+        code: str | None = "40310000",
+        message: str = "insufficient day trading buying power",
+    ) -> None:
+        payload = {"message": message, "code": code}
+        http_error = None
+        if status_code is not None:
+            http_error = SimpleNamespace(
+                response=SimpleNamespace(status_code=status_code),
+                request=None,
+            )
+        super().__init__(json.dumps(payload), http_error=http_error)
         self._status_code = status_code
         self._code = code
         self._message = message
@@ -18,25 +32,13 @@ class DummyAPIError(lt.APIError):
     def status_code(self):  # type: ignore[override]
         return self._status_code
 
-    @status_code.setter
-    def status_code(self, value):  # type: ignore[override]
-        self._status_code = value
-
     @property
     def code(self):  # type: ignore[override]
         return self._code
 
-    @code.setter
-    def code(self, value):  # type: ignore[override]
-        self._code = value
-
     @property
     def message(self):  # type: ignore[override]
         return self._message
-
-    @message.setter
-    def message(self, value):  # type: ignore[override]
-        self._message = value
 
 
 def _engine() -> lt.ExecutionEngine:
