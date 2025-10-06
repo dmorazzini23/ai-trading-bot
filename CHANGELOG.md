@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file.
   populated during early trading.
 - Utils: `safe_subprocess_run` now returns a result object exposing `stdout`, `returncode`, and `timeout` flag.
 - Execution: convert market orders exceeding slippage threshold to limits with adjusted price and proportionally reduce quantity; record adjustments in trade log.
+- Core: ignore SIP failover preferences when entitlement checks fail and log a once-per-process notice for operators.
 
 ### Added
 - Cache fallback data provider usage to skip redundant Alpaca requests

@@ -2036,10 +2036,22 @@ def _sip_authorized() -> bool:
             candidates = (failover,)
         else:
             candidates = tuple(failover or ())  # type: ignore[arg-type]
-        if any(str(feed).lower() == "sip" for feed in candidates):
-            return True
     except Exception:  # pragma: no cover - defensive
-        pass
+        candidates = ()
+
+    if any(str(feed).lower() == "sip" for feed in candidates):
+        sip_allowed = False
+        try:
+            sip_allowed = bool(getattr(data_fetcher_module, "_sip_allowed")())
+        except Exception:  # pragma: no cover - defensive
+            sip_allowed = False
+        if sip_allowed:
+            return True
+        logger_once.info(
+            "SIP_FAILOVER_SKIPPED_UNAUTHORIZED",
+            key="sip_failover_skipped",
+        )
+        return False
 
     return False
 

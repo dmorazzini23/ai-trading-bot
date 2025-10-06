@@ -1,6 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
+from types import SimpleNamespace
+
 from ai_trading.data import bars
+from ai_trading.core import bot_engine
 
 
 class _Account:
@@ -173,3 +176,41 @@ def test_ensure_entitled_feed_blocks_direct_sip_when_explicit_entitlement_false(
     monkeypatch.setattr(bars, "sip_disallowed", lambda: False)
     client = _Client(['sip'])
     assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+
+
+def test_sip_authorized_rejects_failover_without_entitlement(monkeypatch):
+    monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
+    monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SIP_UNAUTHORIZED", raising=False)
+
+    monkeypatch.setattr(
+        bot_engine,
+        "CFG",
+        SimpleNamespace(alpaca_feed_failover=("sip",)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "get_trading_config",
+        lambda: SimpleNamespace(
+            alpaca_allow_sip=False,
+            alpaca_has_sip=False,
+            alpaca_api_key=None,
+            alpaca_secret_key=None,
+        ),
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_allowed",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_SIP_UNAUTHORIZED",
+        False,
+        raising=False,
+    )
+
+    assert bot_engine._sip_authorized() is False
