@@ -10,9 +10,33 @@ from ai_trading.execution import live_trading as lt
 class DummyAPIError(lt.APIError):
     def __init__(self, status_code=403, code="40310000", message="insufficient day trading buying power"):
         super().__init__(message)
-        self.status_code = status_code
-        self.code = code
-        self.message = message
+        self._status_code = status_code
+        self._code = code
+        self._message = message
+
+    @property
+    def status_code(self):  # type: ignore[override]
+        return self._status_code
+
+    @status_code.setter
+    def status_code(self, value):  # type: ignore[override]
+        self._status_code = value
+
+    @property
+    def code(self):  # type: ignore[override]
+        return self._code
+
+    @code.setter
+    def code(self, value):  # type: ignore[override]
+        self._code = value
+
+    @property
+    def message(self):  # type: ignore[override]
+        return self._message
+
+    @message.setter
+    def message(self, value):  # type: ignore[override]
+        self._message = value
 
 
 def _engine() -> lt.ExecutionEngine:
@@ -122,6 +146,53 @@ def test_skip_when_pdt_limit_reached(monkeypatch, caplog):
     assert any("ORDER_SKIPPED_NONRETRYABLE" == msg for msg in messages)
     reasons = [getattr(record, "reason", None) for record in caplog.records]
     assert "pdt_limit_reached" in reasons
+
+
+def test_pdt_limit_imminent_warns_but_allows_trade(monkeypatch, caplog):
+    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {
+        "total_execution_time": 0.0,
+        "total_orders": 0,
+        "successful_orders": 0,
+        "failed_orders": 0,
+    }
+    engine.trading_client = object()
+    monkeypatch.setenv("EXECUTION_DAYTRADE_LIMIT", "3")
+
+    account_snapshot = {"pattern_day_trader": True, "daytrade_count": 2}
+    engine._get_account_snapshot = lambda: account_snapshot
+
+    preflight_calls = {"count": 0}
+
+    def fake_preflight(symbol, side, price_hint, quantity, trading_client, account=None):
+        preflight_calls["count"] += 1
+        return lt.CapacityCheck(True, quantity, None)
+
+    monkeypatch.setattr(lt, "preflight_capacity", fake_preflight)
+    monkeypatch.setattr(engine, "_execute_with_retry", lambda fn, payload: {"id": "ok"})
+
+    caplog.set_level(logging.WARNING)
+
+    result = engine.submit_market_order("AAPL", "buy", 1)
+
+    assert result == {"id": "ok"}
+    assert preflight_calls["count"] == 1
+    assert engine.stats["total_orders"] == 1
+    assert engine.stats["successful_orders"] == 1
+    assert engine.stats["failed_orders"] == 0
+    assert "capacity_skips" not in engine.stats
+
+    warnings = [record for record in caplog.records if record.getMessage() == "PDT_LIMIT_IMMINENT"]
+    assert warnings, "expected PDT warning"
+    warning = warnings[0]
+    assert warning.levelno == logging.WARNING
+    assert getattr(warning, "daytrade_count", None) == 2
+    assert getattr(warning, "daytrade_limit", None) == 3
 
 
 def test_preflight_helper_supports_account_kwarg():
