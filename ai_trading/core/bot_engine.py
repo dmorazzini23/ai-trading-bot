@@ -4698,7 +4698,29 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             else:
                 df = df[df.index < current_minute]
             if "volume" in df.columns:
-                df = df[df["volume"] > 0]
+                volume_series = pd.to_numeric(df["volume"], errors="coerce")
+                df = df.loc[volume_series.notna()]
+                volume_series = volume_series.loc[df.index]
+                provider_hint = str(
+                    raw_attrs.get("fallback_provider")
+                    or raw_attrs.get("data_provider")
+                    or ""
+                ).strip().lower()
+                allow_zero_volume = provider_hint in {
+                    "yahoo",
+                    "finnhub",
+                    "finnhub_low_latency",
+                }
+                if allow_zero_volume:
+                    non_negative = volume_series >= 0
+                else:
+                    non_negative = volume_series > 0
+                df = df.loc[non_negative]
+                volume_series = volume_series.loc[df.index]
+                try:
+                    df.loc[:, "volume"] = volume_series
+                except Exception:
+                    df["volume"] = volume_series.to_numpy()
         except (*COMMON_EXC, AttributeError) as exc:  # pragma: no cover - defensive
             logger.debug("minute bar filtering failed: %s", exc)
 
@@ -5120,6 +5142,15 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         if materially_short:
             fallback_start_dt = start_dt
+            if not sip_authorized and planned_fallback_feed != "sip":
+                fallback_start_dt = max(
+                    end_dt - timedelta(minutes=intraday_lookback),
+                    start_dt,
+                )
+                if coverage_warning_context is not None:
+                    coverage_warning_context[
+                        "fallback_start_adjusted"
+                    ] = "intraday_window"
         else:
             fallback_start_dt = max(
                 end_dt - timedelta(minutes=intraday_lookback), start_dt
