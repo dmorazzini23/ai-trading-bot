@@ -7957,7 +7957,6 @@ class DataFetcher:
             _is_trading_day = None  # type: ignore[assignment]
 
         ref_date = now_utc.date()
-        print("ref_date", ref_date)
         if not is_market_open():
             for _ in range(10):  # safety bound
                 ref_date = ref_date - timedelta(days=1)
@@ -7988,7 +7987,6 @@ class DataFetcher:
         timeframe_key = "1Day"
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
-        import pdb; pdb.set_trace()
         min_interval = self._daily_fetch_min_interval(ctx)
         now_monotonic = float(monotonic_fn())
         ttl_window = (
@@ -8205,17 +8203,61 @@ class DataFetcher:
             (legacy_memo_key, memo_key),
         )
         for candidate_key, counterpart_key in memo_check_pairs:
-            print("memo candidate", candidate_key, counterpart_key)
             entry = _memo_get_entry(candidate_key)
             if entry is None:
                 continue
             entry_ts, entry_df, normalized_pair = _normalize_memo_entry(entry)
+            if (
+                entry_ts is None
+                and isinstance(entry, tuple)
+                and entry
+            ):
+                raw_first = entry[0]
+                if isinstance(raw_first, (int, float)) and math.isfinite(raw_first):
+                    entry_ts = float(raw_first)
+            if counterpart_key != candidate_key:
+                counterpart_entry = _memo_get_entry(counterpart_key)
+                if counterpart_entry is not None:
+                    (
+                        counterpart_entry_ts,
+                        counterpart_entry_df,
+                        counterpart_normalized,
+                    ) = _normalize_memo_entry(counterpart_entry)
+                    if (
+                        counterpart_entry_ts is None
+                        and isinstance(counterpart_entry, tuple)
+                        and counterpart_entry
+                    ):
+                        raw_first = counterpart_entry[0]
+                        if isinstance(raw_first, (int, float)) and math.isfinite(raw_first):
+                            counterpart_entry_ts = float(raw_first)
+                    if counterpart_entry_ts is not None and counterpart_entry_ts <= 0.0:
+                        entry_ts = counterpart_entry_ts
+                        if entry_df is None:
+                            entry_df = counterpart_entry_df
+                        if (
+                            entry_df is None
+                            and counterpart_normalized is not None
+                        ):
+                            entry_df = counterpart_normalized[1]
+                        if entry_df is not None:
+                            with cache_lock:
+                                _memo_set_entry(
+                                    candidate_key,
+                                    (
+                                        counterpart_entry_ts,
+                                        entry_df,
+                                    ),
+                                )
             payload = entry_df
             if payload is None and normalized_pair is not None:
                 payload = normalized_pair[1]
             if payload is None:
                 continue
-            age = None if entry_ts is None else now_monotonic - entry_ts
+            if entry_ts is not None and entry_ts <= 0.0:
+                age = float("inf")
+            else:
+                age = None if entry_ts is None else now_monotonic - entry_ts
             is_fresh = (
                 age is None
                 or age <= _DAILY_FETCH_MEMO_TTL
@@ -8223,12 +8265,10 @@ class DataFetcher:
                     min_interval if min_interval > 0 else ttl_window
                 )
             )
-            print("memo entry", entry_ts, age, is_fresh)
             if not is_fresh:
                 continue
             memo_hit = True
             normalized_pair = (now_monotonic, payload)
-            import pdb; pdb.set_trace()
             with cache_lock:
                 _memo_set_entry(candidate_key, normalized_pair)
                 if counterpart_key != candidate_key:
@@ -8243,11 +8283,61 @@ class DataFetcher:
             def _apply_memo_entry(
                 key: tuple[str, ...], *, counterpart: tuple[str, ...]
             ) -> bool:
-                nonlocal cached_df, cached_reason, refresh_stamp, refresh_df, refresh_source, fallback_entry
+                nonlocal cached_df, cached_reason, memo_ready, refresh_stamp, refresh_df, refresh_source, fallback_entry
                 entry = _memo_get_entry(key)
                 if entry is None:
                     return False
                 entry_ts, entry_df, normalized_pair = _normalize_memo_entry(entry)
+                if (
+                    entry_ts is None
+                    and isinstance(entry, tuple)
+                    and entry
+                ):
+                    raw_first = entry[0]
+                    if isinstance(raw_first, (int, float)) and math.isfinite(raw_first):
+                        entry_ts = float(raw_first)
+                effective_ts = entry_ts
+                counterpart_entry_ts: float | None = None
+                counterpart_payload: Any | None = None
+                if counterpart != key:
+                    counterpart_entry = _memo_get_entry(counterpart)
+                    if counterpart_entry is not None:
+                        (
+                            counterpart_entry_ts,
+                            counterpart_entry_df,
+                            counterpart_normalized,
+                        ) = _normalize_memo_entry(counterpart_entry)
+                        if (
+                            counterpart_entry_ts is None
+                            and isinstance(counterpart_entry, tuple)
+                            and counterpart_entry
+                        ):
+                            raw_first = counterpart_entry[0]
+                            if isinstance(raw_first, (int, float)) and math.isfinite(raw_first):
+                                counterpart_entry_ts = float(raw_first)
+                        if counterpart_entry_ts is not None and (
+                            effective_ts is None or counterpart_entry_ts < effective_ts
+                        ):
+                            effective_ts = counterpart_entry_ts
+                        if (
+                            counterpart_entry_ts is not None
+                            and counterpart_entry_ts <= 0.0
+                            and counterpart_payload is not None
+                        ):
+                            _memo_set_entry(
+                                key,
+                                (
+                                    counterpart_entry_ts,
+                                    counterpart_payload,
+                                ),
+                            )
+                        if counterpart_payload is None:
+                            counterpart_payload = counterpart_entry_df
+                        if (
+                            counterpart_payload is None
+                            and counterpart_normalized is not None
+                        ):
+                            counterpart_payload = counterpart_normalized[1]
                 if normalized_pair is not None:
                     _memo_set_entry(key, normalized_pair)
                     if counterpart != key:
@@ -8255,6 +8345,8 @@ class DataFetcher:
                 payload = entry_df
                 if payload is None and normalized_pair is not None:
                     payload = normalized_pair[1]
+                if payload is None and counterpart_payload is not None:
+                    payload = counterpart_payload
                 has_payload = payload is not None
                 if not has_payload:
                     # Entry missing data; remove to avoid repeated lookups.
@@ -8262,7 +8354,10 @@ class DataFetcher:
                     if key == memo_key and counterpart != key:
                         _memo_pop_entry(counterpart)
                     return False
-                age = None if entry_ts is None else now_monotonic - entry_ts
+                if effective_ts is not None and effective_ts <= 0.0:
+                    age: float | None = float("inf")
+                else:
+                    age = None if effective_ts is None else now_monotonic - effective_ts
                 is_fresh = (
                     age is None
                     or age <= _DAILY_FETCH_MEMO_TTL
@@ -8274,6 +8369,7 @@ class DataFetcher:
                     refresh_stamp = now_monotonic
                     refresh_df = payload
                     refresh_source = "memo"
+                    memo_ready = True
                     return True
                 if fallback_entry is None:
                     fallback_entry = (
@@ -8292,8 +8388,6 @@ class DataFetcher:
                 memo_hit = True
             elif _apply_memo_entry(legacy_memo_key, counterpart=memo_key):
                 memo_hit = True
-
-            memo_ready = memo_hit and cached_df is not None
 
             if memo_ready:
                 entry = None

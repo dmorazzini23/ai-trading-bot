@@ -298,3 +298,21 @@ def dummy_order():
         filled_qty=0,
         symbol="TEST",
     )
+
+
+@pytest.fixture
+def dummy_alpaca_client():
+    """Provide a callable-recording Alpaca client substitute for unit tests."""
+
+    class _DummyClient:
+        def __init__(self):
+            self.calls: list[dict[str, object]] = []
+            self.last_call: dict[str, object] | None = None
+
+        def submit_order(self, *args, **kwargs):
+            call = {"args": args, "kwargs": kwargs}
+            self.calls.append(call)
+            self.last_call = call
+            return {"id": f"dummy-order-{len(self.calls)}"}
+
+    return _DummyClient()

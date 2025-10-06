@@ -76,7 +76,7 @@ def safe_subprocess_run(
         stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
     except subprocess.TimeoutExpired as exc:
         exc.timeout = run_timeout
-        _augment_timeout_exception(proc, exc)
+        _augment_timeout_exception(proc, exc, run_timeout)
         raise
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
@@ -108,12 +108,25 @@ def _normalize_stream(stream: str | bytes | None) -> str:
 def _augment_timeout_exception(
     proc: subprocess.Popen[bytes] | subprocess.Popen[str],
     exc: subprocess.TimeoutExpired,
+    run_timeout: float,
 ) -> None:
     """Populate timeout exception metadata before re-raising."""
 
     with suppress(ProcessLookupError):
         proc.kill()
-    stdout_after, stderr_after = proc.communicate()
+
+    with suppress(subprocess.TimeoutExpired, ProcessLookupError):
+        proc.wait(timeout=run_timeout)
+
+    stdout_after: str | bytes | None = ""
+    stderr_after: str | bytes | None = ""
+    try:
+        stdout_after, stderr_after = proc.communicate(timeout=0)
+    except subprocess.TimeoutExpired as cleanup_timeout:
+        stdout_after = getattr(cleanup_timeout, "stdout", None)
+        stderr_after = getattr(cleanup_timeout, "stderr", None)
+    except OSError:
+        stdout_after, stderr_after = None, None
 
     def _merge_streams(primary: str | bytes | None, secondary: str | bytes | None) -> str:
         first = _normalize_stream(primary)

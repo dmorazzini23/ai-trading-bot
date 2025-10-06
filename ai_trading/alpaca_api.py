@@ -8,6 +8,7 @@ import uuid
 import inspect
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
+from threading import RLock
 
 try:
     from alpaca.trading.client import TradingClient
@@ -77,6 +78,8 @@ def _lazy_http_session() -> "Optional[HTTPSession]":
 
 
 _HTTP_SESSION: "Optional[HTTPSession]" = None
+_pending_orders_lock = RLock()
+_pending_orders: dict[str, dict[str, Any]] = {}
 
 
 def _get_http_session() -> "HTTPSession":
@@ -1421,4 +1424,6 @@ __all__ = [
     "start_trade_updates_stream",
     "initialize",
     "_HTTP",
+    "_pending_orders_lock",
+    "_pending_orders",
 ]

@@ -1357,11 +1357,13 @@ class ExecutionEngine:
         for key in list(ignored_keys):
             kwargs.pop(key, None)
 
+        order_type_initial = str(order_type or "limit").lower()
+
         resolved_limit_price = limit_price
         if resolved_limit_price is None:
             if limit_price_kwarg is not None:
                 resolved_limit_price = limit_price_kwarg
-            elif price_alias is not None:
+            elif price_alias is not None and order_type_initial != "market":
                 resolved_limit_price = price_alias
 
         price_for_limit = price_alias
@@ -1369,7 +1371,7 @@ class ExecutionEngine:
             price_for_limit = resolved_limit_price
             kwargs["price"] = price_for_limit
 
-        order_type_normalized = str(order_type or "limit").lower()
+        order_type_normalized = order_type_initial
         if resolved_limit_price is None and order_type_normalized == "limit":
             order_type_normalized = "market"
         elif resolved_limit_price is not None:
@@ -1431,18 +1433,28 @@ class ExecutionEngine:
             if slippage_threshold_bps > 0:
                 try:
                     base_price = float(price_for_slippage)
-                    if math.isfinite(base_price) and base_price > 0:
-                        hash_callable = hash_fn if callable(hash_fn) else hash
-                        predicted = base_price * (1 + ((hash_callable(symbol) % 100) - 50) / 10000.0)
-                        slippage_bps = abs((predicted - base_price) / base_price) * 10000.0
-                        if slippage_bps > slippage_threshold_bps:
+                except Exception:
+                    base_price = None
+
+                if base_price is not None and math.isfinite(base_price) and base_price > 0:
+                    hash_callable = hash_fn if callable(hash_fn) else hash
+                    predicted = base_price * (1 + ((hash_callable(symbol) % 100) - 50) / 10000.0)
+                    slippage_bps = abs((predicted - base_price) / base_price) * 10000.0
+                    if slippage_bps > slippage_threshold_bps:
+                        extra = {
+                            "symbol": symbol,
+                            "order_type": order_type_normalized,
+                            "price": round(base_price, 6),
+                            "predicted": round(predicted, 6),
+                            "slippage_bps": round(slippage_bps, 2),
+                            "threshold_bps": round(slippage_threshold_bps, 2),
+                        }
+                        if order_type_normalized == "market":
+                            logger.warning("SLIPPAGE_THRESHOLD_EXCEEDED", extra=extra)
                             raise AssertionError(
                                 "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                             )
-                except AssertionError:
-                    raise
-                except Exception:
-                    pass
+                        logger.info("SLIPPAGE_THRESHOLD_LIMIT_ORDER", extra=extra)
 
         try:
             if order_type_normalized == "market":
