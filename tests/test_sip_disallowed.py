@@ -60,3 +60,20 @@ def test_sip_disallowed_with_explicit_entitlement_false(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     assert sip_disallowed() is True
 
+
+def test_sip_failover_does_not_call_fetch_when_unentitled(monkeypatch):
+    class _Session:
+        def __init__(self):
+            self.called = False
+
+        def get(self, *args, **kwargs):  # pragma: no cover - defensive
+            self.called = True
+            return SimpleNamespace(status_code=200)
+
+    session = _Session()
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setattr("ai_trading.data.fetch._sip_allowed", lambda: False)
+    allowed = _sip_fallback_allowed(session, {}, "1Min")
+    assert allowed is False
+    assert session.called is False
+
