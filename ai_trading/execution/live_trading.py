@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Optional
 from ai_trading.logging import get_logger
 from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
+from ai_trading.config.settings import get_settings
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -85,6 +86,11 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
 
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
 from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
+from ai_trading.data.provider_monitor import (
+    is_safe_mode_active,
+    provider_monitor,
+    safe_mode_reason,
+)
 from ai_trading.execution.engine import (
     ExecutionResult,
     KNOWN_EXECUTE_ORDER_KWARGS,
@@ -595,6 +601,58 @@ def _stable_order_id(symbol: str, side: str) -> str:
     return stable_client_order_id(str(symbol), str(side).lower(), epoch_min)
 
 
+@lru_cache(maxsize=1)
+def _halt_flag_path() -> str:
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        path = getattr(settings, "halt_flag_path", None)
+        if isinstance(path, str) and path:
+            return path
+    env_path = os.getenv("AI_TRADING_HALT_FLAG_PATH")
+    if env_path:
+        return env_path
+    return "halt.flag"
+
+
+def _safe_mode_guard(
+    symbol: str | None = None,
+    side: str | None = None,
+    quantity: int | None = None,
+) -> bool:
+    reason: str | None = None
+    env_override = os.getenv("AI_TRADING_HALT", "").strip().lower()
+    if env_override in {"1", "true", "yes"}:
+        reason = "env_halt"
+    elif is_safe_mode_active():
+        reason = safe_mode_reason() or "provider_safe_mode"
+    else:
+        halt_file = _halt_flag_path()
+        try:
+            if os.path.exists(halt_file):
+                reason = "halt_flag"
+        except OSError as exc:  # pragma: no cover - filesystem guard
+            logger.info(
+                "HALT_FLAG_READ_ISSUE",
+                extra={"halt_file": halt_file, "error": str(exc)},
+            )
+        if reason is None and provider_monitor.is_disabled("alpaca"):
+            reason = "primary_provider_disabled"
+    if reason:
+        extra: dict[str, object] = {"reason": reason}
+        if symbol:
+            extra["symbol"] = symbol
+        if side:
+            extra["side"] = side
+        if quantity is not None:
+            extra["qty"] = quantity
+        logger.warning("ORDER_BLOCKED_SAFE_MODE", extra=extra)
+        return True
+    return False
+
+
 def submit_market_order(symbol: str, side: str, quantity: int):
     symbol = str(symbol)
     if not symbol or len(symbol) > 5 or (not symbol.isalpha()):
@@ -604,6 +662,8 @@ def submit_market_order(symbol: str, side: str, quantity: int):
     except (ValueError, TypeError) as e:
         logger.error("ORDER_INPUT_INVALID", extra={"cause": type(e).__name__, "detail": str(e)})
         return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+    if _safe_mode_guard(symbol, side, quantity):
+        return {"status": "error", "code": "SAFE_MODE_ACTIVE", "order_id": None}
     return {"status": "submitted", "symbol": symbol, "side": side, "quantity": quantity}
 
 
@@ -978,6 +1038,10 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+        if _safe_mode_guard(symbol, side, quantity):
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            return None
         closing_position = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
@@ -1180,6 +1244,10 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+        if _safe_mode_guard(symbol, side, quantity):
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            return None
         closing_position = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")

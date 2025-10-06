@@ -1624,7 +1624,11 @@ class TradingConfig:
             and not values.get("alpaca_has_sip")
         ):
             raise ValueError(
-                "DATA_FEED_INTRADAY=sip requires ALPACA_ALLOW_SIP=1 or ALPACA_HAS_SIP=1"
+                (
+                    "DATA_FEED_INTRADAY=sip requires SIP entitlements. Set ALPACA_ALLOW_SIP=1 or "
+                    "ALPACA_HAS_SIP=1. Ensure ALPACA_API_KEY, ALPACA_SECRET_KEY, and DATA_FEED_INTRADAY are "
+                    "configured. See docs/DEPLOYING.md#alpaca-feed-selection for setup guidance."
+                )
             )
 
         # Derived convenience fields expected by legacy callers.

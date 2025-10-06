@@ -59,7 +59,11 @@ from ai_trading.data.metrics import (
     provider_disabled,
     provider_disable_total,
 )
-from ai_trading.data.provider_monitor import provider_monitor
+from ai_trading.data.provider_monitor import (
+    provider_monitor,
+    record_minute_gap_event,
+    record_unauthorized_sip_event,
+)
 from ai_trading.core.daily_fetch_memo import get_daily_df_memoized
 from ai_trading.data.fetch_yf import fetch_yf_batched
 from .normalize import normalize_ohlcv_df
@@ -887,6 +891,13 @@ def _prepare_sip_fallback(
         push_to_caplog("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
     except Exception:  # pragma: no cover - defensive
         pass
+    try:
+        record_unauthorized_sip_event(extra_payload)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug(
+            "SAFE_MODE_EVENT_RECORD_FAILED",
+            extra={"reason": "unauthorized_sip", "detail": "record_failed"},
+        )
     try:
         tags = tags_factory()
     except Exception:
@@ -4119,6 +4130,19 @@ def _repair_rth_minute_gaps(
             "MINUTE_GAPS_TOLERATED",
             extra={"symbol": symbol, "gap_ratio": 0.0, "window_start": start.isoformat(), "window_end": end.isoformat()},
         )
+        try:
+            record_minute_gap_event(
+                {
+                    "symbol": symbol,
+                    "window_start": start.isoformat(),
+                    "window_end": end.isoformat(),
+                }
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "SAFE_MODE_EVENT_RECORD_FAILED",
+                extra={"reason": "minute_gap", "detail": "record_failed"},
+            )
     target_df = work_df if mutated else df
     try:
         attrs = target_df.attrs  # type: ignore[attr-defined]
