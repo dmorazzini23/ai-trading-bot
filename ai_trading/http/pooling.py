@@ -83,6 +83,25 @@ def _load_fallback_concurrency_module() -> ModuleType | None:
         return None
 
 
+def _invalidate_fallback_pooling_state() -> None:
+    """Drop cached fallback concurrency snapshots tied to previous generations."""
+
+    module = sys.modules.get("ai_trading.data.fallback.concurrency")
+    if module is None:
+        return
+    invalidator = getattr(module, "_invalidate_pooling_snapshot", None)
+    if callable(invalidator):
+        try:
+            invalidator()
+        except Exception:
+            pass
+        return
+    try:
+        module._POOLING_LIMIT_STATE = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 def _normalise_pooling_state(state: object | None) -> tuple[int, int] | None:
     if state is None:
         return None
@@ -200,6 +219,9 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
     Resetting the semaphore cache should also advance the cached limit
     version so that subsequent callers pick up freshly created semaphore
     instances even when the resolved limit value itself has not changed.
+    Whenever the cache is reset we also invalidate any fallback concurrency
+    snapshots so that event loops in other modules observe the new
+    generation before attempting to reuse stale semaphores.
     """
 
     global _LIMIT_CACHE, _LIMIT_VERSION
@@ -216,6 +238,8 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
     # rewrite it with the updated version to keep the metadata consistent.
     _LIMIT_VERSION += 1
 
+    _invalidate_fallback_pooling_state()
+
     if clear_limit_cache:
         _LIMIT_CACHE = None
     elif _LIMIT_CACHE is not None:
@@ -228,6 +252,13 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
             config_id=cache.config_id,
             env_snapshot=cache.env_snapshot,
         )
+        _set_pooling_limit_state(_LIMIT_CACHE.limit, _LIMIT_CACHE.version)
+    else:
+        snapshot = _get_pooling_limit_state()
+        if snapshot is not None:
+            limit, version = snapshot
+            if version != _LIMIT_VERSION:
+                _set_pooling_limit_state(limit, _LIMIT_VERSION)
 
 
 def testing_reset_host_semaphores() -> None:
@@ -595,6 +626,10 @@ def limit_url(url: str) -> AsyncHostLimiter:
     """Return an :class:`AsyncHostLimiter` keyed by ``url``'s hostname."""
 
     return AsyncHostLimiter.from_url(url)
+
+
+# Ensure fallback concurrency modules observe module reloads and cache resets.
+_invalidate_fallback_pooling_state()
 
 
 __all__ = [
