@@ -686,7 +686,10 @@ def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tu
 def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
     extra: dict[str, object] = {}
 
-    if os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1" or _is_sip_unauthorized():
+    if _sip_lock_relevant() and (
+        os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1" or _is_sip_unauthorized()
+    ):
+        extra["feed"] = _active_intraday_feed()
         extra["sip_locked"] = True
         return False, extra
 
@@ -2820,6 +2823,56 @@ def _prefers_sip() -> bool:
     return any(str(part).strip().lower() == "sip" for part in failover_tuple)
 
 
+def _active_intraday_feed() -> str:
+    """Return the currently configured intraday feed identifier."""
+
+    try:
+        override = get_data_feed_override()
+    except Exception:
+        override = None
+    if override:
+        try:
+            return _normalize_feed_value(override)
+        except Exception:
+            pass
+
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        for attr in ("data_feed_intraday", "alpaca_data_feed"):
+            candidate = getattr(settings, attr, None)
+            if candidate not in (None, ""):
+                try:
+                    return _normalize_feed_value(candidate)
+                except Exception:
+                    continue
+
+    for env_key in ("DATA_FEED_INTRADAY", "ALPACA_DATA_FEED"):
+        raw_value = os.getenv(env_key)
+        if raw_value:
+            try:
+                return _normalize_feed_value(raw_value)
+            except Exception:
+                continue
+
+    return "iex"
+
+
+def _sip_lock_relevant(feed: str | None = None) -> bool:
+    """Return ``True`` when SIP authorization directly affects *feed*."""
+
+    if feed is not None:
+        try:
+            normalized = _normalize_feed_value(feed)
+        except Exception:
+            normalized = ""
+    else:
+        normalized = _active_intraday_feed()
+    return normalized == "sip"
+
+
 _SIP_UNAUTHORIZED = _env_flag("ALPACA_SIP_UNAUTHORIZED")
 _HAS_SIP = _env_flag("ALPACA_HAS_SIP")
 _SIP_DISALLOWED_WARNED = False
@@ -4737,7 +4790,12 @@ def _fetch_bars(
                 )
             except Exception:
                 pass
-            if explicit_feed_request and _SIP_UNAUTHORIZED and _feed == "iex":
+            if (
+                explicit_feed_request
+                and _SIP_UNAUTHORIZED
+                and _feed == "iex"
+                and _sip_lock_relevant()
+            ):
                 raise ValueError("rate_limited")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
@@ -5329,7 +5387,8 @@ def _fetch_bars(
             requested_feed = _feed
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             sip_locked = _is_sip_unauthorized()
-            if requested_feed == "iex" and (sip_locked or _SIP_UNAUTHORIZED):
+            sip_lock_applies = _sip_lock_relevant()
+            if requested_feed == "iex" and sip_lock_applies and (sip_locked or _SIP_UNAUTHORIZED):
                 raise ValueError("rate_limited")
             metrics.rate_limit += 1
             provider_id = "alpaca"

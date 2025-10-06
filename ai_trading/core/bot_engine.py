@@ -93,7 +93,7 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
-from ai_trading.utils.env import alpaca_credential_status
+from ai_trading.utils.env import alpaca_credential_status, get_data_feed_override
 from ai_trading.logging import (
     flush_log_throttle_summaries,
     log_throttled_event,
@@ -1937,14 +1937,64 @@ def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
         _GLOBAL_INTRADAY_FALLBACK_FEED = None
 
 
+def _primary_intraday_feed() -> str:
+    """Return the normalized intraday feed configured for runtime."""
+
+    try:
+        override = get_data_feed_override()
+    except Exception:
+        override = None
+    if override not in (None, ""):
+        try:
+            normalized_override = str(override).strip().lower()
+        except Exception:
+            normalized_override = ""
+        else:
+            if normalized_override.startswith("alpaca_"):
+                normalized_override = normalized_override.split("_", 1)[1]
+            if normalized_override:
+                return normalized_override
+
+    feed = str(DATA_FEED_INTRADAY or "").strip().lower()
+
+    if not feed:
+        try:
+            cfg = get_trading_config()
+        except Exception:
+            cfg = None
+        if cfg is not None:
+            for attr in ("data_feed_intraday", "alpaca_data_feed"):
+                candidate = getattr(cfg, attr, None)
+                if candidate in (None, ""):
+                    continue
+                try:
+                    feed = str(candidate).strip().lower()
+                except Exception:
+                    continue
+                if feed:
+                    break
+
+    if not feed:
+        env_feed = os.getenv("DATA_FEED_INTRADAY")
+        if env_feed:
+            feed = env_feed.strip().lower()
+
+    if feed.startswith("alpaca_"):
+        feed = feed.split("_", 1)[1]
+
+    return feed or "iex"
+
+
 def _sip_lockout_active() -> bool:
     """Return ``True`` when the runtime has flagged SIP access as unauthorized."""
 
     if _truthy_env(os.getenv("PYTEST_RUNNING")):
         return False
-    return bool(os.getenv("ALPACA_SIP_UNAUTHORIZED")) or bool(
-        getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-    )
+    if _primary_intraday_feed() != "sip":
+        return False
+    if _truthy_env(os.getenv("ALPACA_SIP_UNAUTHORIZED")):
+        return True
+    return bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
 
 
 def _sip_authorized() -> bool:
