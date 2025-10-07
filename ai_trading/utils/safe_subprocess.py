@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shlex
 import subprocess
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -62,35 +61,30 @@ def safe_subprocess_run(
 
     argv = _coerce_cmd(cmd)
     try:
-        proc = subprocess.Popen(
+        completed = subprocess.run(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            timeout=run_timeout,
+            check=False,
         )
+    except subprocess.TimeoutExpired as exc:
+        _prepare_timeout_exception(exc, run_timeout)
+        raise
     except OSError as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
-
-    try:
-        stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
-    except subprocess.TimeoutExpired as exc:
-        exc.timeout = run_timeout
-        _augment_timeout_exception(proc, exc, run_timeout)
-        raise
     except subprocess.SubprocessError as exc:
-        with suppress(ProcessLookupError):
-            proc.kill()
-        proc.wait()
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
 
-    stdout_text = _normalize_stream(stdout_text)
-    stderr_text = _normalize_stream(stderr_text)
+    stdout_text = _normalize_stream(completed.stdout)
+    stderr_text = _normalize_stream(completed.stderr)
     return SafeSubprocessResult(
         stdout_text,
         stderr_text,
-        proc.returncode if proc.returncode is not None else 0,
+        completed.returncode if completed.returncode is not None else 0,
         False,
     )
 
@@ -105,45 +99,13 @@ def _normalize_stream(stream: str | bytes | None) -> str:
     return stream
 
 
-def _augment_timeout_exception(
-    proc: subprocess.Popen[bytes] | subprocess.Popen[str],
-    exc: subprocess.TimeoutExpired,
-    run_timeout: float,
-) -> None:
-    """Populate timeout exception metadata before re-raising."""
+def _prepare_timeout_exception(exc: subprocess.TimeoutExpired, run_timeout: float) -> None:
+    """Attach ``SafeSubprocessResult`` metadata to ``TimeoutExpired``."""
 
-    with suppress(ProcessLookupError):
-        proc.kill()
-
-    with suppress(subprocess.TimeoutExpired, ProcessLookupError):
-        proc.wait(timeout=run_timeout)
-
-    stdout_after: str | bytes | None = ""
-    stderr_after: str | bytes | None = ""
-    try:
-        stdout_after, stderr_after = proc.communicate(timeout=0)
-    except subprocess.TimeoutExpired as cleanup_timeout:
-        stdout_after = getattr(cleanup_timeout, "stdout", None)
-        stderr_after = getattr(cleanup_timeout, "stderr", None)
-    except OSError:
-        stdout_after, stderr_after = None, None
-
-    def _merge_streams(primary: str | bytes | None, secondary: str | bytes | None) -> str:
-        first = _normalize_stream(primary)
-        second = _normalize_stream(secondary)
-        if first and second:
-            if second.startswith(first):
-                return second
-            if first.endswith(second):
-                return first
-            return first + second
-        return first or second
-
-    collected_stdout = _merge_streams(getattr(exc, "stdout", None), stdout_after)
-    collected_stderr = _merge_streams(getattr(exc, "stderr", None), stderr_after)
-
-    result = SafeSubprocessResult(collected_stdout, collected_stderr, 124, True)
-    proc.returncode = 124
-    exc.stdout = collected_stdout
-    exc.stderr = collected_stderr
+    stdout_text = _normalize_stream(getattr(exc, "output", None))
+    stderr_text = _normalize_stream(getattr(exc, "stderr", None))
+    result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
+    exc.timeout = run_timeout
+    exc.stdout = stdout_text
+    exc.stderr = stderr_text
     exc.result = result
