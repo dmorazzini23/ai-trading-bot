@@ -5392,7 +5392,7 @@ def _fetch_bars(
             requested_feed = _feed
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             sip_locked = _is_sip_unauthorized()
-            if requested_feed == "iex" and sip_intraday and (sip_locked or _SIP_UNAUTHORIZED):
+            if requested_feed == "iex" and (sip_locked or _SIP_UNAUTHORIZED):
                 raise ValueError("rate_limited")
             metrics.rate_limit += 1
             provider_id = "alpaca"
@@ -5455,7 +5455,7 @@ def _fetch_bars(
                     return result
                 raise ValueError("rate_limited")
             attempt = _state["retries"] + 1
-            if requested_feed == "iex" and sip_locked and sip_intraday:
+            if requested_feed == "iex" and (sip_locked or _SIP_UNAUTHORIZED):
                 fallback_viable = False
                 if fallback_target:
                     _, fb_feed, _, _ = fallback_target

@@ -1544,6 +1544,10 @@ class ExecutionEngine:
                                 "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                             )
                         logger.info("SLIPPAGE_THRESHOLD_LIMIT_ORDER", extra=extra)
+                        if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}:
+                            raise AssertionError(
+                                "SLIPPAGE_THRESHOLD_LIMIT_ORDER: predicted slippage exceeds limit"
+                            )
 
         try:
             if order_type_normalized == "market":

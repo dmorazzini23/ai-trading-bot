@@ -1893,6 +1893,10 @@ class ExecutionEngine:
                             "threshold_bps": threshold,
                         },
                     )
+                    if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}:
+                        raise AssertionError(
+                            "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
+                        )
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
             logger.error(
                 "SIMULATION_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e), "order_id": order.id}

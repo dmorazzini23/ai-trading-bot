@@ -15616,6 +15616,7 @@ def _enter_long(
             degraded = set()
             setattr(state, "degraded_providers", degraded)
         degraded.add("alpaca")
+        degraded.add(symbol)
         return True
 
     if is_safe_mode_active():
@@ -16045,6 +16046,7 @@ def _enter_short(
             degraded = set()
             setattr(state, "degraded_providers", degraded)
         degraded.add("alpaca")
+        degraded.add(symbol)
         return True
 
     if is_safe_mode_active():
@@ -16473,6 +16475,7 @@ def trade_logic(
             degraded = set()
             setattr(state, "degraded_providers", degraded)
         degraded.add("alpaca")
+        degraded.add(symbol)
         return False
 
     if is_safe_mode_active():
