@@ -42,7 +42,7 @@ def provider_priority(s: Settings | None = None) -> tuple[str, ...]:
     """Return configured data provider priority order."""
     s = s or get_settings()
     return tuple(getattr(s, 'data_provider_priority', ())) or (
-        'alpaca_iex', 'alpaca_sip', 'yahoo'
+        'alpaca_iex', 'yahoo'
     )
 
 def max_data_fallbacks(s: Settings | None = None) -> int:

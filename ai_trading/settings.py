@@ -275,7 +275,8 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     alpaca_feed_failover: tuple[str, ...] = Field(("sip",), env="ALPACA_FEED_FAILOVER")
     alpaca_empty_to_backup: bool = Field(True, env="ALPACA_EMPTY_TO_BACKUP")
     alpaca_adjustment: Literal["all", "raw"] = Field("all", env="ALPACA_ADJUSTMENT")
-    data_provider_priority: tuple[str, ...] = Field(("alpaca_iex", "alpaca_sip", "yahoo"), env="DATA_PROVIDER_PRIORITY")
+    data_provider_priority: tuple[str, ...] = Field(("alpaca_iex", "yahoo"), env="DATA_PROVIDER_PRIORITY")
+    safe_mode_allow_paper: bool = Field(False, env="AI_TRADING_SAFE_MODE_ALLOW_PAPER")
     max_data_fallbacks: int = Field(2, env="MAX_DATA_FALLBACKS")
     minute_data_freshness_tolerance_seconds: int = Field(
         900,

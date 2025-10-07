@@ -209,6 +209,13 @@ def _record_event(
     reason: str,
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
+    if reason == "minute_gap" and metadata is not None:
+        provider_name = str(metadata.get("provider", "") or "").strip().lower()
+        residual_flag = metadata.get("residual_gap")
+        if provider_name == "yahoo":
+            return
+        if residual_flag is False:
+            return
     now = monotonic_time()
     bucket.append(now)
     cutoff = now - _HALT_EVENT_WINDOW_SECONDS

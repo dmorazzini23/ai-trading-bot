@@ -152,6 +152,7 @@ EXECUTION_MODE = str(getattr(_CFG, "execution_mode", "sim") or "sim").lower()
 SHADOW_MODE = bool(getattr(_CFG, "shadow_mode", False))
 DATA_FEED_INTRADAY = _derive_intraday_feed()
 SLIPPAGE_LIMIT_BPS = int(getattr(_CFG, "slippage_limit_bps", getattr(_CFG, "max_slippage_bps", 75)))
+SAFE_MODE_ALLOW_PAPER = bool(getattr(_CFG, "safe_mode_allow_paper", False))
 PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", (
     "alpaca_quote",
     "alpaca_trade",
