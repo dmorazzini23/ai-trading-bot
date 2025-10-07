@@ -263,9 +263,32 @@ def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
 def _clear_override(symbol: str) -> None:
     _cycle_feed_override.pop(symbol, None)
     _override_set_ts.pop(symbol, None)
+    _FEED_SWITCH_CACHE.pop((symbol,), None)
+    keys_to_remove = [key for key in _FEED_SWITCH_CACHE if len(key) == 2 and key[0] == symbol]
+    for key in keys_to_remove:
+        _FEED_SWITCH_CACHE.pop(key, None)
 
 
 def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
+    now_ts = _time_now(None)
+    cache_keys: list[tuple[Any, ...]] = [(symbol,)]
+    cache_keys.extend(
+        key
+        for key in list(_FEED_SWITCH_CACHE.keys())
+        if len(key) == 2 and key[0] == symbol
+    )
+    for cache_key in cache_keys:
+        entry = _FEED_SWITCH_CACHE.get(cache_key)
+        if not entry:
+            continue
+        cached_feed, expiry_ts = entry
+        if expiry_ts and now_ts is not None and now_ts > expiry_ts:
+            _FEED_SWITCH_CACHE.pop(cache_key, None)
+            continue
+        if cached_feed == "sip" and not _sip_allowed():
+            _FEED_SWITCH_CACHE.pop(cache_key, None)
+            continue
+        return cached_feed
     cached = _cycle_feed_override.get(symbol)
     if cached:
         if cached == "sip" and not _sip_allowed():
@@ -795,6 +818,7 @@ def _log_yf_warning(event: str, symbol: str, timeframe: str, extra: dict[str, ob
 
 # Track feed failovers so we avoid redundant retries for the same symbol/timeframe.
 _FEED_OVERRIDE_BY_TF: dict[tuple[str, str], str] = {}
+_FEED_SWITCH_CACHE: dict[tuple[Any, ...], tuple[str, float]] = {}
 _FEED_SWITCH_LOGGED: set[tuple[str, str, str]] = set()
 _FEED_SWITCH_HISTORY: list[tuple[str, str, str]] = []
 _FEED_FAILOVER_ATTEMPTS: dict[tuple[str, str], set[str]] = {}
@@ -875,6 +899,14 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     key = (symbol, tf_norm)
     _FEED_OVERRIDE_BY_TF[key] = to_norm
     _record_override(symbol, to_norm, tf_norm)
+    try:
+        ttl_seconds = float(_OVERRIDE_TTL_S)
+    except (TypeError, ValueError):
+        ttl_seconds = 0.0
+    expiry_base = float(time.time())
+    expiry_ts = expiry_base + ttl_seconds if ttl_seconds > 0 else expiry_base
+    _FEED_SWITCH_CACHE[(symbol, tf_norm)] = (to_norm, expiry_ts)
+    _FEED_SWITCH_CACHE[(symbol,)] = (to_norm, expiry_ts)
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
     attempted.add(to_norm)
     log_key = (symbol, tf_norm, to_norm)
@@ -4797,7 +4829,12 @@ def _fetch_bars(
                 )
             except Exception:
                 pass
-            if explicit_feed_request and _SIP_UNAUTHORIZED and _feed == "iex" and sip_intraday:
+            if (
+                explicit_feed_request
+                and _SIP_UNAUTHORIZED
+                and _feed == "iex"
+                and _intraday_feed_prefers_sip()
+            ):
                 raise ValueError("rate_limited")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
@@ -5678,6 +5715,23 @@ def _fetch_bars(
             if status == 200:
                 fallback_result: Any | None = None
                 fallback_attempted = False
+                if (
+                    base_feed == "iex"
+                    and _sip_configured()
+                    and not _is_sip_unauthorized()
+                    and "sip" not in call_attempts
+                ):
+                    slots_remaining = _fallback_slots_remaining()
+                    if slots_remaining is None or slots_remaining > 0:
+                        call_attempts.add("sip")
+                        sip_result = _attempt_fallback(
+                            (base_interval, "sip", base_start, base_end)
+                        )
+                        if sip_result is not None and not getattr(
+                            sip_result, "empty", True
+                        ):
+                            _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                            return sip_result
                 fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
                 if not _state.get("window_has_session", True):
                     filtered: list[str] = []

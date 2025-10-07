@@ -421,7 +421,34 @@ def _get_entitled_feeds(client: Any) -> set[str]:
 
 def _ensure_entitled_feed(client: Any, requested: str) -> str:
     """Return a feed we are entitled to, falling back when necessary."""
+    available_raw = getattr(client, "available_feeds", None)
+    available_set: set[str] = set()
+    if available_raw is not None:
+        if isinstance(available_raw, (str, bytes)):
+            candidates = [available_raw]
+        else:
+            try:
+                candidates = list(available_raw)
+            except TypeError:
+                candidates = [available_raw]
+        for value in candidates:
+            if value is None:
+                continue
+            if isinstance(value, bytes):
+                try:
+                    normalized = value.decode("utf-8", "ignore").strip().lower()
+                except UnicodeDecodeError:
+                    normalized = value.decode("latin-1", "ignore").strip().lower()
+            else:
+                normalized = str(value).strip().lower()
+            if normalized:
+                available_set.add(normalized)
+    available_has_sip = "sip" in available_set
+    if available_has_sip:
+        _ENTITLE_CACHE["sip"] = True
     feeds = _get_entitled_feeds(client)
+    if available_set:
+        feeds.update(available_set)
     req_raw = str(requested or '').lower()
     normalized_req = req_raw.replace("alpaca_", "")
     sip_capability = "sip" in feeds
@@ -445,6 +472,8 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
             sip_allowed = True
         elif not sip_allowed and sip_credentials_missing():
             sip_allowed = True
+    if available_has_sip and not explicit_env_disallow:
+        sip_allowed = True
 
     sip_entitled_flag = False
     if explicit_env_disallow:
@@ -452,12 +481,14 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     else:
         if explicit_env_allow or sip_capability:
             sip_entitled_flag = sip_allowed
+    if available_has_sip and not explicit_env_disallow:
+        sip_entitled_flag = True
     prefer_sip = normalized_req == "sip"
     sip_return_allowed = sip_allowed and sip_entitled_flag
     if prefer_sip and sip_return_allowed and "sip" in feeds:
         return "sip"
     resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_return_allowed)
-    if resolved in feeds:
+    if resolved in feeds and (resolved != "sip" or sip_return_allowed):
         return resolved
     eligible_feeds = [feed for feed in feeds if feed != "sip" or sip_return_allowed]
     if eligible_feeds:
@@ -468,6 +499,12 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
                 extra={'requested': normalized_req, 'using': alt},
             )
         return alt
+    if feeds:
+        if "sip" in feeds and (
+            sip_return_allowed or (available_has_sip and not explicit_env_disallow)
+        ):
+            return "sip"
+        return next(iter(feeds))
     emit_once(
         _log,
         f'no_feed:{normalized_req}',
