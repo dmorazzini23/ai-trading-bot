@@ -46,23 +46,39 @@ def _empty_df() -> Any:
 def _next_feed(cur_feed: str) -> str | None:
     """Return the next alpaca feed to try based on provider priority."""
     prio = list(provider_priority())
+    fallback_map = {"iex": "sip", "sip": "iex"}
+    sibling_feed = fallback_map.get(cur_feed)
+
+    try:
+        limit = max_data_fallbacks()
+    except Exception:
+        limit = 1
+    unlimited = limit <= 0
+
     try:
         idx = prio.index(f"alpaca_{cur_feed}")
     except ValueError:
-        try:
-            limit = max_data_fallbacks()
-        except Exception:
-            limit = 1
-        if limit <= 0:
+        if sibling_feed is None:
             return None
-        fallback_map = {"iex": "sip", "sip": "iex"}
-        return fallback_map.get(cur_feed)
-    limit = max_data_fallbacks()
-    for prov in prio[idx + 1 : idx + 1 + limit]:
+        return sibling_feed if unlimited or limit > 0 else None
+
+    search_window = prio[idx + 1 :] if unlimited else prio[idx + 1 : idx + 1 + limit]
+    for prov in search_window:
         if prov.startswith("alpaca_"):
             return prov.split("_", 1)[1]
-    fallback_map = {"iex": "sip", "sip": "iex"}
-    return fallback_map.get(cur_feed)
+
+    if sibling_feed is None:
+        return None
+
+    sibling_token = f"alpaca_{sibling_feed}"
+
+    if unlimited:
+        return sibling_feed
+
+    if sibling_token not in prio:
+        return sibling_feed
+
+    return sibling_feed if sibling_token in search_window else None
 
 
 def _http_fallback(
