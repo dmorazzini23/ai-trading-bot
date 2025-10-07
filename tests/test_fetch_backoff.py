@@ -15,6 +15,33 @@ def _dt_range(days: int = 3):
     return start, end
 
 
+def test_next_feed_respects_configured_fallback_window(monkeypatch):
+    monkeypatch.setattr(
+        fb,
+        "provider_priority",
+        lambda: ["alpaca_iex", "yahoo", "alpaca_sip"],
+    )
+    monkeypatch.setattr(fb, "max_data_fallbacks", lambda: 1)
+
+    assert fb._next_feed("iex") is None
+
+
+def test_next_feed_returns_sibling_within_window_or_when_missing(monkeypatch):
+    monkeypatch.setattr(fb, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
+    monkeypatch.setattr(fb, "max_data_fallbacks", lambda: 1)
+
+    assert fb._next_feed("iex") == "sip"
+
+    monkeypatch.setattr(
+        fb,
+        "provider_priority",
+        lambda: ["alpaca_iex", "yahoo"],
+        raising=False,
+    )
+
+    assert fb._next_feed("iex") == "sip"
+
+
 def test_fetch_feed_switches_to_alternate_and_shrinks_window(monkeypatch):
     start, end = _dt_range(3)
     calls: list[tuple[str, datetime, datetime]] = []
