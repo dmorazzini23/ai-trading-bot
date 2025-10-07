@@ -1,15 +1,17 @@
 from __future__ import annotations
+
+import os
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-import os
 from typing import Any
 from zoneinfo import ZoneInfo
-from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.data.fetch.normalize import normalize_ohlcv_df, REQUIRED as _OHLCV_REQUIRED
+
 from ai_trading.config import get_settings
-from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.data.fetch import get_bars, get_minute_df
 from ai_trading.data.fetch import get_bars as _raw_http_get_bars
+from ai_trading.data.fetch.normalize import normalize_ohlcv_df, REQUIRED as _OHLCV_REQUIRED
+from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.logging import get_logger
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
@@ -18,12 +20,13 @@ from ai_trading.logging.emit_once import emit_once
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import now_utc
-from .timeutils import ensure_utc_datetime, expected_regular_minutes
-from .models import StockBarsRequest, TimeFrame
+
 from ._alpaca_guard import should_import_alpaca_sdk
 from .fetch.sip_disallowed import sip_disallowed, sip_credentials_missing
-import time
+from .models import StockBarsRequest, TimeFrame
+from .timeutils import ensure_utc_datetime, expected_regular_minutes
 
 try:  # pragma: no cover - requests optional
     from requests import exceptions as _requests_exceptions
@@ -445,7 +448,7 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
                 available_set.add(normalized)
     available_has_sip = "sip" in available_set
     if available_has_sip:
-        _ENTITLE_CACHE["sip"] = True
+        _ENTITLE_CACHE["sip"] = "sip"
     req_raw = str(requested or "").strip().lower()
     normalized_req = req_raw.replace("alpaca_", "")
     current_feed = normalized_req or "iex"
@@ -472,11 +475,19 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
 
     advertised_sip = "sip" in feeds or available_has_sip
 
+    entitlements = set(getattr(client, "entitlements", []) or [])
+
+    allow_env = (
+        os.getenv("ALPACA_ALLOW_SIP") == "1"
+        or os.getenv("ALPACA_SIP_ENTITLED") == "1"
+        or os.getenv("ALPACA_HAS_SIP") == "1"
+    )
     explicit_disallow = _env_explicit_false("ALPACA_ALLOW_SIP") or _env_bool("ALPACA_SIP_ENTITLED") is False
     explicit_allow = (
         _env_bool("ALPACA_ALLOW_SIP") is True
         or _env_bool("ALPACA_SIP_ENTITLED") is True
         or _env_bool("ALPACA_HAS_SIP") is True
+        or allow_env
     )
     unauthorized_flag = str(os.getenv("ALPACA_SIP_UNAUTHORIZED", "")).strip() == "1"
     priority_blocks_sip = bool(priority_values) and "alpaca_sip" not in priority_values
@@ -509,13 +520,25 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         return None
 
     if prefer_sip:
-        if sip_allowed and (sip_entitled or advertised_sip):
+        has_account_sip = ("sip" in entitlements) or advertised_sip
+        if has_account_sip:
+            _ENTITLE_CACHE["sip"] = "sip"
             return "sip"
+        if explicit_allow or allow_env:
+            alt = _first_non_sip() or "iex"
+            _ENTITLE_CACHE["sip"] = alt
+            if alt != current_feed:
+                _log.warning(
+                    "ALPACA_FEED_UNENTITLED_SWITCH",
+                    extra={"from": "sip", "to": alt},
+                )
+            return alt
         alt = _first_non_sip() or "iex"
+        _ENTITLE_CACHE["sip"] = alt
         if alt != current_feed:
             _log.warning(
                 "ALPACA_FEED_UNENTITLED_SWITCH",
-                extra={"requested": normalized_req, "using": alt},
+                extra={"from": "sip", "to": alt},
             )
         return alt
 
@@ -523,13 +546,19 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     if resolved == "sip" and not (sip_allowed and (sip_entitled or advertised_sip)):
         resolved = _first_non_sip() or "iex"
 
-    if resolved == "sip" and (sip_allowed and (sip_entitled or advertised_sip)):
+    if resolved == "sip" and (
+        "sip" in entitlements or explicit_allow or allow_env or advertised_sip
+    ):
+        _ENTITLE_CACHE["sip"] = "sip"
         return "sip"
 
     if resolved in feeds and resolved != "sip":
         return resolved
 
-    if "sip" in feeds and sip_allowed and (sip_entitled or advertised_sip):
+    if "sip" in feeds and (
+        "sip" in entitlements or explicit_allow or allow_env or advertised_sip
+    ):
+        _ENTITLE_CACHE["sip"] = "sip"
         return "sip"
 
     alt = _first_non_sip()

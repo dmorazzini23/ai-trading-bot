@@ -8042,8 +8042,60 @@ class DataFetcher:
         timeframe_key = "1Day"
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
+        be_module = (
+            sys.modules.get("ai_trading.core.bot_engine")
+            or sys.modules.get(__name__)
+        )
+        memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
+        memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
+        memo_now = float(monotonic_fn())
+        precomputed_monotonic = float(monotonic_fn())
+
+        def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
+            if isinstance(entry, tuple) and len(entry) == 2:
+                first, second = entry
+                if isinstance(first, (int, float)):
+                    return float(first), second
+                if isinstance(second, (int, float)):
+                    return float(second), first
+                return None, None
+            if isinstance(entry, MappingABC):
+                payload = (
+                    entry.get("df")
+                    or entry.get("data")
+                    or entry.get("value")
+                )
+                ts_value = entry.get("timestamp")
+                ts_normalized = (
+                    float(ts_value)
+                    if isinstance(ts_value, (int, float))
+                    else None
+                )
+                return ts_normalized, payload
+            return None, None
+
+        def _memo_fresh(ts: float | None) -> bool:
+            return memo_ttl <= 0.0 or ts is None or (memo_now - float(ts) <= memo_ttl)
+
+        if memo_store is not None:
+            canonical_lookup = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
+            legacy_lookup = (symbol, fetch_date.isoformat())
+            for lookup_key in (canonical_lookup, legacy_lookup):
+                if lookup_key in memo_store:
+                    ts_value, memo_df = _memo_unpack(memo_store[lookup_key])
+                    if memo_df is not None and _memo_fresh(ts_value):
+                        try:
+                            memo_store[canonical_lookup] = (memo_now, memo_df)
+                        except Exception:
+                            pass
+                        try:
+                            memo_store[legacy_lookup] = (memo_now, memo_df)
+                        except Exception:
+                            pass
+                        return memo_df
+
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = float(monotonic_fn())
+        now_monotonic = precomputed_monotonic
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )

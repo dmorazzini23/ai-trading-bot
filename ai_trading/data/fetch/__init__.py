@@ -16,6 +16,7 @@ from threading import Lock
 from contextlib import suppress
 from types import GeneratorType
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time, is_generator_stop
@@ -84,6 +85,8 @@ from . import fallback_order
 from .metrics import inc_provider_fallback
 from .validators import validate_adjustment, validate_feed
 from .._alpaca_guard import should_import_alpaca_sdk
+from .http_limit import acquire_host_slot
+from .fallback_concurrency import fallback_slot
 
 logger = get_logger(__name__)
 
@@ -121,10 +124,20 @@ def _ordered_fallbacks(primary_feed: str) -> List[str]:
     return ["yahoo"]
 
 
+def _alternate_alpaca_feed(feed: str) -> str:
+    normalized = (feed or "").strip().lower()
+    if normalized == "iex":
+        return "sip"
+    if normalized == "sip":
+        return "iex"
+    return normalized
+
+
 _cycle_feed_override: Dict[str, str] = {}
 _override_set_ts: Dict[str, float] = {}
 _ALLOW_SIP: Optional[bool] | None = None
-_OVERRIDE_TTL_S = 600.0
+_OVERRIDE_MAP: dict[tuple[str, str], tuple[str, float]] = {}
+_OVERRIDE_TTL_S: float = float(globals().get("_OVERRIDE_TTL_S", 300.0))
 _ENV_STAMP: tuple[str | None, str | None] | None = None
 
 
@@ -223,16 +236,17 @@ def _safe_empty_classify(**kwargs: Any) -> int:
 
 
 def _safe_backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
-    hook = _backup_get_bars
-    if callable(hook):
-        try:
-            return hook(symbol, start, end, interval)
-        except Exception:
-            pass
-    pd_local = _ensure_pandas()
-    if pd_local is None:
-        return []  # type: ignore[return-value]
-    return pd_local.DataFrame()
+    with fallback_slot():
+        hook = _backup_get_bars
+        if callable(hook):
+            try:
+                return hook(symbol, start, end, interval)
+            except Exception:
+                pass
+        pd_local = _ensure_pandas()
+        if pd_local is None:
+            return []  # type: ignore[return-value]
+        return pd_local.DataFrame()
 
 
 def _time_now(default: float = 0.0) -> float:
@@ -271,6 +285,15 @@ def _clear_override(symbol: str) -> None:
 
 
 def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
+    primary_norm = str(primary_feed or "iex").strip().lower() or "iex"
+    entry = _OVERRIDE_MAP.get((symbol, primary_norm))
+    if entry:
+        to_feed, ts = entry
+        ttl = float(globals().get("_OVERRIDE_TTL_S", _OVERRIDE_TTL_S))
+        if time.time() - ts <= ttl:
+            return to_feed
+        _OVERRIDE_MAP.pop((symbol, primary_norm), None)
+
     now_ts = _time_now(None)
     cached = _cycle_feed_override.get(symbol)
     if cached:
@@ -300,8 +323,7 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
         return cached_feed
-    normalized_primary = str(primary_feed or "iex").strip().lower() or "iex"
-    return normalized_primary
+    return primary_norm
 
 
 def _cache_fallback(symbol: str, feed: str, timeframe: str = "1Min") -> None:
@@ -919,6 +941,15 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     if not to_norm:
         return
 
+    from_key = from_norm or _coerce_feed(str(from_feed) if from_feed is not None else None)
+    if not from_key:
+        try:
+            from_key = str(from_feed or "").strip().lower() or "iex"
+        except Exception:
+            from_key = "iex"
+
+    _OVERRIDE_MAP[(symbol, from_key)] = (to_norm, time.time())
+
     key = (symbol, tf_norm)
     _FEED_OVERRIDE_BY_TF[key] = to_norm
     _record_override(symbol, to_norm, tf_norm)
@@ -940,15 +971,7 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     if log_key not in _FEED_SWITCH_LOGGED:
         logger.info(
             "ALPACA_FEED_SWITCH",
-            extra=_norm_extra(
-                {
-                    "provider": "alpaca",
-                    "symbol": symbol,
-                    "timeframe": tf_norm,
-                    "from_feed": from_norm or from_feed,
-                    "to_feed": to_norm,
-                }
-            ),
+            extra={"symbol": symbol, "tf": tf_norm, "from": from_feed or from_key, "to": to_norm},
         )
         _FEED_SWITCH_LOGGED.add(log_key)
 
@@ -4747,7 +4770,7 @@ def _fetch_bars(
         )
         yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
         return _run_backup_fetch(yf_interval)
-    _feed = resolved_feed
+    _feed = _get_cached_or_primary(symbol, resolved_feed)
     _state["initial_feed"] = _feed
     adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
     validate_adjustment(adjustment_norm)
@@ -5016,6 +5039,8 @@ def _fetch_bars(
 
         call_attempts = _state.setdefault("fallback_feeds_attempted", set())
         skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
+        alternate_history = _state.setdefault("alternate_feed_attempts", set())
+        alternate_history.add(_feed)
 
         def _fallback_slots_remaining() -> int | None:
             try:
@@ -5146,10 +5171,12 @@ def _fetch_bars(
         prev_corr = _state.get("corr_id")
         try:
             params = _build_request_params()
-            if use_session_get:
-                resp = session.get(url, params=params, headers=headers, timeout=timeout)
-            else:
-                resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+            host = urlparse(url).netloc
+            with acquire_host_slot(host):
+                if use_session_get:
+                    resp = session.get(url, params=params, headers=headers, timeout=timeout)
+                else:
+                    resp = requests.get(url, params=params, headers=headers, timeout=timeout)
             if resp is None or not hasattr(resp, "status_code"):
                 raise ValueError("invalid_response")
             status = resp.status_code
@@ -5588,6 +5615,25 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
+            if _ENABLE_HTTP_FALLBACK and _feed in {"iex", "sip"}:
+                alt_feed = _alternate_alpaca_feed(_feed)
+                if alt_feed != _feed and alt_feed not in alternate_history:
+                    logger.info(
+                        "ALPACA_FEED_SWITCH",
+                        extra={"from": _feed, "to": alt_feed},
+                    )
+                    alternate_history.add(alt_feed)
+                    prev_feed = _feed
+                    logger.info("USING_BACKUP_PROVIDER")
+                    try:
+                        _feed = alt_feed
+                        df_alt = _req(session, None, headers=headers, timeout=timeout)
+                    finally:
+                        _feed = prev_feed
+                    if df_alt is not None and not getattr(df_alt, "empty", True):
+                        logger.warning("BACKUP_PROVIDER_USED")
+                        _record_feed_switch(symbol, _interval, prev_feed, alt_feed)
+                        return df_alt
             if not skip_empty_metrics and not _state.get("empty_metric_emitted"):
                 _state["empty_metric_emitted"] = True
                 _incr("data.fetch.empty", value=1.0, tags=_tags())

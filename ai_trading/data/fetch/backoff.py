@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import datetime as _dt
 import importlib
 import sys
 from typing import Any
@@ -25,7 +26,9 @@ from . import (
     _canon_tf,
     _fetch_bars,
     _mark_fallback,
+    _record_feed_switch,
     _resolve_backup_provider,
+    _yahoo_get_bars,
 )
 _fetch_module = sys.modules.get(__package__)
 if _fetch_module is None:  # pragma: no cover - defensive import path
@@ -131,92 +134,58 @@ def _fetch_feed(
         return _empty_df()
 
     record_attempt(symbol, timeframe)
-
-    def _maybe_http_fallback(
-        source_feed: str, fb_start: _dt.datetime, fb_end: _dt.datetime
-    ) -> Any:
-        fb_df = _http_fallback(
-            symbol,
-            fb_start,
-            fb_end,
-            timeframe,
-            from_feed=source_feed,
-        )
-        if fb_df is not None and not getattr(fb_df, "empty", True):
-            _EMPTY_BAR_COUNTS.pop(tf_key, None)
-            mark_success(symbol, timeframe)
-        return fb_df
+    tf_norm = _canon_tf(timeframe)
 
     try:
         df = _fetch_bars(symbol, start, end, timeframe, feed=feed)
     except EmptyBarsError:
-        cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0)
-        if cnt >= _EMPTY_BAR_MAX_RETRIES:
-            fallback_df = _maybe_http_fallback(feed, start, end)
-            if fallback_df is not None and not getattr(fallback_df, "empty", True):
-                return fallback_df
-            _SKIPPED_SYMBOLS.add(tf_key)
-            logger.error(
-                "ALPACA_EMPTY_BAR_MAX_RETRIES",
-                extra={"symbol": symbol, "timeframe": timeframe, "occurrences": cnt},
-            )
-            raise
-        alt_feed = _next_feed(feed)
-        if alt_feed:
-            fetch_retry_total.labels(provider=f"alpaca_{feed}").inc()
-            provider_fallback.labels(
-                from_provider=f"alpaca_{feed}", to_provider=f"alpaca_{alt_feed}"
-            ).inc()
-            provider_monitor.record_switchover(
-                f"alpaca_{feed}", f"alpaca_{alt_feed}"
-            )
-            log_backup_provider_used(
-                f"alpaca_{alt_feed}",
-                symbol=symbol,
-                timeframe=timeframe,
-                start=start,
-                end=end,
-            )
-            if end - start > _dt.timedelta(days=1):
-                start = end - _dt.timedelta(days=1)
-            try:
-                df = _fetch_bars(symbol, start, end, timeframe, feed=alt_feed)
-            except EmptyBarsError:
-                fallback_df = _maybe_http_fallback(alt_feed, start, end)
-                if fallback_df is not None and not getattr(fallback_df, "empty", True):
-                    return fallback_df
-                _SKIPPED_SYMBOLS.add(tf_key)
-                logger.warning(
-                    "ALPACA_EMPTY_BAR_SKIP",
-                    extra={"symbol": symbol, "timeframe": timeframe, "feed": alt_feed},
-                )
-                return fallback_df if fallback_df is not None else _empty_df()
-            else:
-                if df is None or getattr(df, "empty", True):
-                    fallback_df = _maybe_http_fallback(alt_feed, start, end)
-                    if fallback_df is not None and not getattr(fallback_df, "empty", True):
-                        return fallback_df
-                    return fallback_df if fallback_df is not None else df
-                _EMPTY_BAR_COUNTS.pop(tf_key, None)
-                mark_success(symbol, timeframe)
-                return df
-        fallback_df = _maybe_http_fallback(feed, start, end)
-        if fallback_df is not None and not getattr(fallback_df, "empty", True):
-            return fallback_df
-        _SKIPPED_SYMBOLS.add(tf_key)
-        logger.warning(
-            "ALPACA_EMPTY_BARS", extra={"symbol": symbol, "timeframe": timeframe, "feed": feed}
-        )
-        return fallback_df if fallback_df is not None else _empty_df()
+        df = None
+        empty_error = True
     else:
-        if df is None or getattr(df, "empty", True):
-            fallback_df = _maybe_http_fallback(feed, start, end)
-            if fallback_df is not None and not getattr(fallback_df, "empty", True):
-                return fallback_df
-            return fallback_df if fallback_df is not None else df
+        empty_error = df is None or getattr(df, "empty", True)
+        if not empty_error:
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            mark_success(symbol, timeframe)
+            return df
+
+    logger.info("USING_BACKUP_PROVIDER")
+    if feed in ("iex", "sip"):
+        alt_feed = "sip" if feed == "iex" else "iex"
+        logger.info("ALPACA_FEED_SWITCH", extra={"from": feed, "to": alt_feed})
+        shrink = _dt.timedelta(days=1) if tf_norm.endswith("Min") else _dt.timedelta(0)
+        alt_start = start
+        if shrink > _dt.timedelta(0):
+            truncated = end - shrink
+            if truncated > start:
+                alt_start = truncated
+        try:
+            df_alt = _fetch_bars(symbol, alt_start, end, timeframe, feed=alt_feed)
+        except EmptyBarsError:
+            df_alt = None
+        if df_alt is not None and not getattr(df_alt, "empty", True):
+            logger.warning("BACKUP_PROVIDER_USED")
+            _record_feed_switch(symbol, timeframe, feed, alt_feed)
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            mark_success(symbol, timeframe)
+            return df_alt
+
+    yf_map = getattr(_fetch_module, "_YF_INTERVAL_MAP", {})
+    yf_interval = yf_map.get(tf_norm, tf_norm.lower())
+    yahoo_df = _yahoo_get_bars(symbol, start, end, yf_interval)
+    _mark_fallback(
+        symbol,
+        tf_norm,
+        start,
+        end,
+        from_provider=f"alpaca_{feed}",
+        fallback_df=yahoo_df,
+        resolved_provider="yahoo",
+        resolved_feed=None,
+    )
+    if yahoo_df is not None and not getattr(yahoo_df, "empty", True):
         _EMPTY_BAR_COUNTS.pop(tf_key, None)
         mark_success(symbol, timeframe)
-        return df
+    return yahoo_df
 
 
 __all__ = [
