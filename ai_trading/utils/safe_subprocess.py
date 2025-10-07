@@ -79,6 +79,7 @@ def safe_subprocess_run(
             **popen_args,
         )
     except subprocess.TimeoutExpired as exc:
+        logger.info("SUBPROCESS_TIMEOUT")
         _prepare_timeout_exception(exc, run_timeout)
         raise
     except OSError as exc:
