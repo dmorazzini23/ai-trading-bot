@@ -46,6 +46,7 @@ from ai_trading.config.settings import (
     max_data_fallbacks,
     alpaca_feed_failover,
     alpaca_empty_to_backup,
+    broker_keys,
 )
 from ai_trading.data.empty_bar_backoff import (
     _EMPTY_BAR_COUNTS,
@@ -273,7 +274,7 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     now_ts = _time_now(None)
     cached = _cycle_feed_override.get(symbol)
     if cached:
-        if cached == "sip" and _is_sip_unauthorized():
+        if cached == "sip" and (_is_sip_unauthorized() or not _sip_allowed()):
             _clear_override(symbol)
         else:
             ts = _override_set_ts.get(symbol, 0.0)
@@ -295,7 +296,7 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         if expiry_ts and now_ts is not None and now_ts > expiry_ts:
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
-        if cached_feed == "sip" and _is_sip_unauthorized():
+        if cached_feed == "sip" and (_is_sip_unauthorized() or not _sip_allowed()):
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
         return cached_feed
@@ -785,6 +786,28 @@ def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
         return False, extra
 
     extra["feed"] = resolved_feed
+
+    key_map: dict[str, str] = {}
+    try:
+        key_map = broker_keys(settings)
+    except Exception:
+        key_map = {}
+
+    api_key = str((key_map or {}).get("ALPACA_API_KEY", "") or "").strip()
+    secret_key = str((key_map or {}).get("ALPACA_SECRET_KEY", "") or "").strip()
+
+    if api_key and secret_key:
+        extra["credentials"] = "present"
+        return False, extra
+
+    missing_keys: list[str] = []
+    if not api_key:
+        missing_keys.append("ALPACA_API_KEY")
+    if not secret_key:
+        missing_keys.append("ALPACA_SECRET_KEY")
+    if missing_keys:
+        extra["missing_keys"] = tuple(missing_keys)
+
     return True, extra
 
 
@@ -4185,6 +4208,7 @@ def _repair_rth_minute_gaps(
         tolerated = True
         missing_after = 0
         gap_ratio = 0.0
+    provider_name = provider_attr or ("yahoo" if skip_backup_fill else "alpaca")
     metadata: dict[str, object] = {
         "expected": expected_count,
         "missing_after": missing_after,
@@ -4192,20 +4216,34 @@ def _repair_rth_minute_gaps(
         "window_start": start_utc,
         "window_end": end_utc,
         "used_backup": used_backup,
+        "provider": provider_name,
+        "residual_gap": missing_after > 0,
+        "tolerated": tolerated,
     }
     if tolerated:
         logger.info(
             "MINUTE_GAPS_TOLERATED",
-            extra={"symbol": symbol, "gap_ratio": 0.0, "window_start": start.isoformat(), "window_end": end.isoformat()},
+            extra={
+                "symbol": symbol,
+                "gap_ratio": 0.0,
+                "window_start": start.isoformat(),
+                "window_end": end.isoformat(),
+            },
         )
+    elif metadata["residual_gap"]:
+        event_payload = {
+            "symbol": symbol,
+            "window_start": start.isoformat(),
+            "window_end": end.isoformat(),
+            "missing_after": missing_after,
+            "expected": expected_count,
+            "gap_ratio": gap_ratio,
+            "provider": provider_name,
+            "used_backup": used_backup,
+            "residual_gap": True,
+        }
         try:
-            record_minute_gap_event(
-                {
-                    "symbol": symbol,
-                    "window_start": start.isoformat(),
-                    "window_end": end.isoformat(),
-                }
-            )
+            record_minute_gap_event(event_payload)
         except Exception:  # pragma: no cover - defensive
             logger.debug(
                 "SAFE_MODE_EVENT_RECORD_FAILED",

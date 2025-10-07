@@ -21,6 +21,7 @@ from ai_trading.logging import get_logger
 from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
+from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -617,11 +618,34 @@ def _halt_flag_path() -> str:
     return "halt.flag"
 
 
+def _safe_mode_policy() -> tuple[bool, str]:
+    allow = bool(SAFE_MODE_ALLOW_PAPER)
+    mode_value: str | None = str(EXECUTION_MODE).strip().lower() if EXECUTION_MODE else None
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        cfg = None
+    if cfg is not None:
+        allow = bool(getattr(cfg, "safe_mode_allow_paper", allow))
+        cfg_mode = getattr(cfg, "execution_mode", None)
+        if cfg_mode not in (None, ""):
+            mode_value = str(cfg_mode).strip().lower()
+    if not mode_value:
+        env_mode = os.getenv("EXECUTION_MODE")
+        mode_value = env_mode.strip().lower() if env_mode else "paper"
+    if not allow:
+        env_flag = os.getenv("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "")
+        if env_flag:
+            allow = env_flag.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(allow), str(mode_value or "paper").strip().lower()
+
+
 def _safe_mode_guard(
     symbol: str | None = None,
     side: str | None = None,
     quantity: int | None = None,
 ) -> bool:
+    allow_paper_bypass, execution_mode = _safe_mode_policy()
     reason: str | None = None
     env_override = os.getenv("AI_TRADING_HALT", "").strip().lower()
     if env_override in {"1", "true", "yes"}:
@@ -631,7 +655,7 @@ def _safe_mode_guard(
     else:
         halt_file = _halt_flag_path()
         try:
-            if os.path.exists(halt_file):
+            if os.path.exists(halt_file) and execution_mode != "sim":
                 reason = "halt_flag"
         except OSError as exc:  # pragma: no cover - filesystem guard
             logger.info(
@@ -648,6 +672,14 @@ def _safe_mode_guard(
             extra["side"] = side
         if quantity is not None:
             extra["qty"] = quantity
+        extra["execution_mode"] = execution_mode
+        if (
+            allow_paper_bypass
+            and execution_mode == "paper"
+            and reason not in {"env_halt", "halt_flag"}
+        ):
+            logger.info("SAFE_MODE_PAPER_BYPASS", extra=extra)
+            return False
         logger.warning("ORDER_BLOCKED_SAFE_MODE", extra=extra)
         return True
     return False

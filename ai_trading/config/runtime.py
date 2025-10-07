@@ -636,8 +636,15 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="data_provider_priority",
         env=("DATA_PROVIDER_PRIORITY",),
         cast="tuple[str]",
-        default=("alpaca_iex", "alpaca_sip", "yahoo"),
+        default=("alpaca_iex", "yahoo"),
         description="Global fetch priority order for data providers.",
+    ),
+    ConfigSpec(
+        field="safe_mode_allow_paper",
+        env=("AI_TRADING_SAFE_MODE_ALLOW_PAPER",),
+        cast="bool",
+        default=False,
+        description="Allow paper execution to bypass provider safe-mode blocks.",
     ),
     ConfigSpec(
         field="max_data_fallbacks",

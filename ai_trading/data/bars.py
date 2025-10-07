@@ -451,6 +451,23 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     current_feed = normalized_req or "iex"
     allow_flag = os.getenv("ALPACA_ALLOW_SIP")
     entitled_flag = os.getenv("ALPACA_SIP_ENTITLED")
+    sip_unauthorized_flag = str(os.getenv("ALPACA_SIP_UNAUTHORIZED", "")).strip() == "1"
+    try:
+        settings = get_settings()
+    except (RuntimeError, AttributeError, ValueError, TypeError):
+        settings = None
+    priority_values: tuple[str, ...] = ()
+    if settings is not None:
+        raw_priority = getattr(settings, "data_provider_priority", ())
+        try:
+            priority_values = tuple(
+                str(item).strip().lower()
+                for item in raw_priority
+                if str(item).strip()
+            )
+        except (AttributeError, TypeError, ValueError):
+            priority_values = ()
+    priority_blocks_sip = bool(priority_values) and "alpaca_sip" not in priority_values
     env_disallow = (
         allow_flag is not None
         and allow_flag.strip() != ""
@@ -461,19 +478,31 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         and entitled_flag.strip() != ""
         and entitled_flag.strip().lower() in _FALSEY
     )
-    if current_feed == "sip" and (env_disallow or env_not_entitled):
-        if env_disallow:
-            guard_reason = "env_allow_false"
+    sip_forbidden_reason: str | None = None
+    if env_disallow:
+        sip_forbidden_reason = "env_allow_false"
+    elif env_not_entitled:
+        sip_forbidden_reason = "env_entitled_false"
+    elif sip_unauthorized_flag:
+        sip_forbidden_reason = "unauthorized"
+    elif priority_blocks_sip:
+        sip_forbidden_reason = "priority_excluded"
+
+    if current_feed == "sip" and sip_forbidden_reason:
+        if sip_forbidden_reason in {"env_allow_false", "env_entitled_false"}:
+            emit_once(
+                _log,
+                f"env_guard:{normalized_req or 'sip'}",
+                "warning",
+                "ALPACA_FEED_UNENTITLED",
+                requested=current_feed,
+                reason=sip_forbidden_reason,
+            )
         else:
-            guard_reason = "env_entitled_false"
-        emit_once(
-            _log,
-            f"env_guard:{normalized_req or 'sip'}",
-            "warning",
-            "ALPACA_FEED_UNENTITLED",
-            requested=current_feed,
-            reason=guard_reason,
-        )
+            _log.debug(
+                "ALPACA_SIP_SUPPRESSED",
+                extra={"requested": current_feed, "reason": sip_forbidden_reason},
+            )
         return "iex"
     feeds = _get_entitled_feeds(client)
     if available_set:
@@ -502,6 +531,9 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     if available_has_sip and not explicit_env_disallow:
         sip_allowed = True
 
+    if sip_forbidden_reason in {"unauthorized", "priority_excluded"}:
+        sip_allowed = False
+
     sip_entitled_flag = False
     if explicit_env_disallow:
         sip_entitled_flag = False
@@ -510,6 +542,8 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
             sip_entitled_flag = sip_allowed
     if available_has_sip and not explicit_env_disallow:
         sip_entitled_flag = True
+    if sip_forbidden_reason in {"unauthorized", "priority_excluded"}:
+        sip_entitled_flag = False
     prefer_sip = normalized_req == "sip"
     sip_return_allowed = sip_allowed and sip_entitled_flag
     if prefer_sip and sip_return_allowed and "sip" in feeds:
@@ -517,7 +551,12 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_return_allowed)
     if resolved in feeds and (resolved != "sip" or sip_return_allowed):
         return resolved
-    eligible_feeds = [feed for feed in feeds if feed != "sip" or sip_return_allowed]
+    sip_blocked = sip_forbidden_reason in {"unauthorized", "priority_excluded"}
+    eligible_feeds = [
+        feed
+        for feed in feeds
+        if feed != "sip" or (sip_return_allowed and not sip_blocked)
+    ]
     if eligible_feeds:
         alt = eligible_feeds[0]
         if resolved != alt:
@@ -527,11 +566,14 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
             )
         return alt
     if feeds:
-        if "sip" in feeds and (
+        if "sip" in feeds and not sip_blocked and (
             sip_return_allowed or (available_has_sip and not explicit_env_disallow)
         ):
             return "sip"
-        return next(iter(feeds))
+        non_sip = [feed for feed in feeds if feed != "sip"]
+        if non_sip:
+            return non_sip[0]
+        return current_feed or "iex"
     emit_once(
         _log,
         f'no_feed:{normalized_req}',
