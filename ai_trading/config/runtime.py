@@ -1389,7 +1389,13 @@ for spec in CONFIG_SPECS:
 _LIVE_ENV_VALUES = {"live", "live_prod", "prod", "production"}
 
 
-_ALLOWED_OVERRIDE_ENV_KEYS: frozenset[str] = frozenset(SPEC_BY_ENV.keys())
+_ENV_ALIAS_MAP: dict[str, str] = {
+    "DATA_PROVIDER": "DATA_PROVIDER_PRIORITY",
+    "PAPER": "EXECUTION_MODE",
+}
+
+
+_ALLOWED_OVERRIDE_ENV_KEYS: frozenset[str] = frozenset({*SPEC_BY_ENV.keys(), *_ENV_ALIAS_MAP.keys()})
 
 
 def _validate_override_keys(overrides: Mapping[str, Any]) -> None:
@@ -1688,6 +1694,18 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
             else:
                 _validate_override_keys(overrides)
                 snap.update({k.upper(): str(v) for k, v in overrides.items()})
+    for alias_key, canonical_key in _ENV_ALIAS_MAP.items():
+        raw_value = snap.get(alias_key)
+        if raw_value in (None, ""):
+            continue
+        if canonical_key == "EXECUTION_MODE":
+            normalized = str(raw_value).strip().lower()
+            if normalized in {"1", "true", "yes", "on", "paper"}:
+                snap.setdefault(canonical_key, "paper")
+            elif normalized in {"0", "false", "no", "off", "live"}:
+                snap.setdefault(canonical_key, snap.get(canonical_key, "sim"))
+        else:
+            snap.setdefault(canonical_key, str(raw_value))
     return snap
 
 

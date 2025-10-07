@@ -53,13 +53,26 @@ def _utc_today() -> date:
     return datetime.now(UTC).date()
 
 
+_LAST_MONOTONIC: float | None = None
+
+
 def _monotonic_time() -> float:
+    """Return a monotonic timestamp with graceful fallback for test shims."""
+
+    global _LAST_MONOTONIC
+
     monotonic = getattr(time, "monotonic", None)
-    if monotonic is not None:
+    if callable(monotonic):
         try:
-            return float(monotonic())
-        except RuntimeError:  # pragma: no cover - platform specific
+            value = float(monotonic())
+        except (RuntimeError, StopIteration):  # pragma: no cover - platform specific/test shims
+            if _LAST_MONOTONIC is not None:
+                return _LAST_MONOTONIC
+        except Exception:
             pass
+        else:
+            _LAST_MONOTONIC = value
+            return value
     return float(time.time())
 
 
