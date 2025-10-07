@@ -8140,6 +8140,45 @@ class DataFetcher:
                 return ts_value, None, None
             return None, None, None
 
+        def _extract_memo_payload(entry: Any) -> tuple[float | None, Any | None]:
+            if entry is None:
+                return None, None
+            if isinstance(entry, tuple):
+                entry_ts, entry_payload, normalized = _normalize_memo_entry(entry)
+                if entry_payload is not None:
+                    if entry_ts is None and entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
+                        entry_ts = float(entry[0])
+                    return entry_ts, entry_payload
+                if normalized is not None:
+                    return normalized
+                if entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
+                    return float(entry[0]), None
+                return entry_ts, None
+            if isinstance(entry, list):
+                if not entry:
+                    return None, None
+                if len(entry) >= 2:
+                    entry_ts, entry_payload, normalized = _normalize_memo_entry(tuple(entry[:2]))
+                    if entry_payload is not None:
+                        if entry_ts is None and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
+                            entry_ts = float(entry[0])
+                        return entry_ts, entry_payload
+                    if normalized is not None:
+                        return normalized
+                for item in entry:
+                    nested_ts, nested_payload = _extract_memo_payload(item)
+                    if nested_payload is not None:
+                        return nested_ts, nested_payload
+                return None, None
+            if isinstance(entry, MappingABC):
+                entry_ts, entry_payload, normalized = _normalize_memo_entry(entry)
+                if entry_payload is not None:
+                    return entry_ts, entry_payload
+                if normalized is not None:
+                    return normalized
+                return entry_ts, None
+            return None, entry
+
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
             getter = getattr(_DAILY_FETCH_MEMO, "get", None)
             if callable(getter):
@@ -8244,6 +8283,40 @@ class DataFetcher:
             return _finalize_cached_return()
 
         memo_hit = False
+
+        combined_keys = (memo_key, legacy_memo_key)
+        memo_entries: list[tuple[float | None, Any | None]] = []
+        for key in combined_keys:
+            memo_entries.append(_extract_memo_payload(_memo_get_entry(key)))
+        memo_payload: Any | None = None
+        memo_timestamp: float | None = None
+        for entry_ts, entry_payload in memo_entries:
+            if memo_payload is None and entry_payload is not None:
+                memo_payload = entry_payload
+            if entry_ts is None:
+                continue
+            if memo_timestamp is None:
+                memo_timestamp = entry_ts
+                continue
+            if entry_ts > 0.0 and (memo_timestamp <= 0.0 or entry_ts > memo_timestamp):
+                memo_timestamp = entry_ts
+            elif memo_timestamp <= 0.0 and entry_ts <= 0.0 and entry_ts > memo_timestamp:
+                memo_timestamp = entry_ts
+        if memo_payload is not None:
+            fresh: bool
+            if memo_timestamp is None:
+                fresh = True
+            elif memo_timestamp <= 0.0:
+                fresh = False
+            else:
+                age = now_monotonic - memo_timestamp
+                fresh = age <= ttl_window
+            if fresh:
+                normalized_pair = (now_monotonic, memo_payload)
+                with cache_lock:
+                    _memo_set_entry(memo_key, normalized_pair)
+                    _memo_set_entry(legacy_memo_key, normalized_pair)
+                return memo_payload
 
         memo_check_pairs = (
             (memo_key, legacy_memo_key),
