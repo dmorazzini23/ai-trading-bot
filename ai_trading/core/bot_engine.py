@@ -1934,8 +1934,15 @@ def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
 
     global _GLOBAL_INTRADAY_FALLBACK_FEED
 
-    if symbol and _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol) == "yahoo":
-        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.pop(symbol, None)
+    if symbol:
+        if _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol) == "yahoo":
+            _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.pop(symbol, None)
+        clear_override = getattr(data_fetcher_module, "_clear_override", None)
+        if callable(clear_override):
+            try:
+                clear_override(symbol)
+            except Exception:
+                pass
 
     if _GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo":
         _GLOBAL_INTRADAY_FALLBACK_FEED = None
@@ -6495,6 +6502,7 @@ class BotState:
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
+    primary_fallback_events: set[tuple[str, str]] = field(default_factory=set)
 
     # Minute data feed cache scoped to the active trading cycle
     minute_feed_cache: dict[str, str] = field(default_factory=dict)
@@ -15183,12 +15191,40 @@ def _exit_positions_if_needed(
             ctx.take_profit_targets.pop(symbol, None)
         return True
     return False
+ 
+
+def _mark_primary_provider_fallback(
+    state: BotState,
+    symbol: str,
+    *,
+    reason: str,
+    provider: str = "alpaca",
+) -> None:
+    degraded = getattr(state, "degraded_providers", None)
+    if not isinstance(degraded, set):
+        degraded = set()
+        setattr(state, "degraded_providers", degraded)
+    events = getattr(state, "primary_fallback_events", None)
+    if not isinstance(events, set):
+        events = set()
+        setattr(state, "primary_fallback_events", events)
+    event_key = (provider, symbol)
+    if event_key not in events:
+        logger.warning(
+            "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
+            extra={"symbol": symbol, "provider": provider, "reason": reason},
+        )
+        events.add(event_key)
+    degraded.add(provider)
+    degraded.add(symbol)
 
 
 def _should_skip_order_for_alpaca_unavailable(
     state: BotState,
     symbol: str,
     price_source: str,
+    *,
+    allow_fallback: bool = False,
 ) -> bool:
     """Return ``True`` if *price_source* signals Alpaca is unavailable."""
 
@@ -15197,6 +15233,9 @@ def _should_skip_order_for_alpaca_unavailable(
         "alpaca_unavailable",
         _ALPACA_DISABLED_SENTINEL,
     }:
+        _mark_primary_provider_fallback(
+            state, symbol, reason="alpaca_primary_unavailable"
+        )
         logger.warning(
             "SKIP_ORDER_ALPACA_UNAVAILABLE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -15206,6 +15245,11 @@ def _should_skip_order_for_alpaca_unavailable(
             auth_skipped.add(symbol)
         return True
     if not _is_primary_price_source(price_source):
+        if allow_fallback:
+            return False
+        _mark_primary_provider_fallback(
+            state, symbol, reason="alpaca_primary_unavailable"
+        )
         logger.warning(
             "SAFE_MODE_BLOCK",
             extra={
@@ -15680,17 +15724,14 @@ def _enter_long(
         except Exception:  # pragma: no cover - defensive guard
             provider_enabled = True
     if not provider_enabled:
+        _mark_primary_provider_fallback(
+            state, symbol, reason="primary_provider_disabled"
+        )
         logger.warning(
             "SAFE_MODE_BLOCK",
             extra={"symbol": symbol, "reason": "primary_provider_disabled"},
         )
-        degraded = getattr(state, "degraded_providers", None)
-        if degraded is None:
-            degraded = set()
-            setattr(state, "degraded_providers", degraded)
-        degraded.add("alpaca")
-        degraded.add(symbol)
-        return True
+        prefer_backup_quote = True
 
     if is_safe_mode_active():
         logger.warning(
@@ -15717,6 +15758,7 @@ def _enter_long(
     )
     quote_price: float | None
     price_source: str
+    fallback_active = False
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca_ask"
@@ -15731,18 +15773,22 @@ def _enter_long(
             or price_source == _ALPACA_DISABLED_SENTINEL
             or not _is_primary_price_source(price_source)
         )
-        if fallback_active:
-            logger.warning(
-                "SAFE_MODE_BLOCK",
-                extra={
-                    "symbol": symbol,
-                    "reason": "fallback_price_source",
-                    "price_source": price_source,
-                },
+        if price_source == _ALPACA_DISABLED_SENTINEL:
+            _mark_primary_provider_fallback(
+                state, symbol, reason="alpaca_primary_disabled"
             )
-            return True
+        allow_fallback_skip = False
+        if fallback_active and price_source not in {
+            "alpaca_auth_failed",
+            "alpaca_unavailable",
+            _ALPACA_DISABLED_SENTINEL,
+        }:
+            allow_fallback_skip = True
         if _should_skip_order_for_alpaca_unavailable(
-            state, symbol, price_source
+            state,
+            symbol,
+            price_source,
+            allow_fallback=allow_fallback_skip,
         ):
             return True
 
@@ -15752,12 +15798,13 @@ def _enter_long(
             ("_invalid", "_degraded")
         )
         if source_degraded:
-            degraded = getattr(state, "degraded_providers", None)
-            if degraded is None:
-                degraded = set()
-                setattr(state, "degraded_providers", degraded)
-            degraded.add("alpaca")
-            degraded.add(symbol)
+            _mark_primary_provider_fallback(
+                state, symbol, reason="fallback_quote_unavailable"
+            )
+            logger.warning(
+                "FALLBACK_QUOTE_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source_label},
+            )
             logger.warning(
                 "SKIP_ORDER_DEGRADED_QUOTE",
                 extra={
@@ -15777,6 +15824,10 @@ def _enter_long(
             price_source = "feature_close"
             _set_price_source(symbol, price_source)
         else:
+            logger.warning(
+                "FALLBACK_QUOTE_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source_label},
+            )
             logger.warning(
                 "SKIP_ORDER_INVALID_QUOTE",
                 extra={
@@ -15841,6 +15892,21 @@ def _enter_long(
         )
         return True
     if gate.block:
+        reasons_tuple = tuple(gate.reasons) if gate.reasons else tuple()
+        if "fallback_quote_stale" in reasons_tuple:
+            logger.warning(
+                "FALLBACK_QUOTE_STALE",
+                extra={
+                    "symbol": symbol,
+                    "price_source": price_source,
+                    "fallback_age": fallback_age,
+                },
+            )
+        if "quote_source_unavailable" in reasons_tuple:
+            logger.warning(
+                "FALLBACK_QUOTE_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source},
+            )
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
         logger.info(
             "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
@@ -15865,6 +15931,15 @@ def _enter_long(
             f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
         )
     if fallback_stale_session:
+        logger.warning(
+            "FALLBACK_QUOTE_STALE",
+            extra={
+                "symbol": symbol,
+                "price_source": price_source,
+                "fallback_error": fallback_error,
+                "fallback_age": fallback_age,
+            },
+        )
         if isinstance(fallback_error, str) and fallback_error:
             skip_reasons.append(fallback_error)
         else:
@@ -15889,6 +15964,10 @@ def _enter_long(
         skip_reason = "nbbo_missing_fallback_price"
         skip_reasons.append(skip_reason)
         reason_label = ";".join(dict.fromkeys(skip_reasons)) or skip_reason
+        logger.warning(
+            "FALLBACK_QUOTE_LAST_CLOSE_ONLY",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
         logger.info(
             "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
             symbol,
@@ -15926,12 +16005,30 @@ def _enter_long(
             },
         )
 
+    fallback_used = False
     if (fallback_active or fallback_quote_usable) and quote_price is not None:
+        price_value = float(quote_price)
+        if not _is_primary_price_source(price_source):
+            fallback_used = True
+            logger.info(
+                "FALLBACK_SOURCE",
+                extra={"symbol": symbol, "provider": price_source},
+            )
+            logger.info(
+                "FALLBACK_PRICE_USED",
+                extra={
+                    "symbol": symbol,
+                    "provider": price_source,
+                    "price": price_value,
+                },
+            )
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
         )
     current_price = float(quote_price)
+    if fallback_used:
+        _clear_cached_yahoo_fallback(symbol)
 
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
@@ -16110,17 +16207,14 @@ def _enter_short(
         except Exception:  # pragma: no cover - defensive guard
             provider_enabled = True
     if not provider_enabled:
+        _mark_primary_provider_fallback(
+            state, symbol, reason="primary_provider_disabled"
+        )
         logger.warning(
             "SAFE_MODE_BLOCK",
             extra={"symbol": symbol, "reason": "primary_provider_disabled"},
         )
-        degraded = getattr(state, "degraded_providers", None)
-        if degraded is None:
-            degraded = set()
-            setattr(state, "degraded_providers", degraded)
-        degraded.add("alpaca")
-        degraded.add(symbol)
-        return True
+        prefer_backup_quote = True
 
     if is_safe_mode_active():
         logger.warning(
@@ -16147,6 +16241,7 @@ def _enter_short(
     )
     quote_price: float | None
     price_source: str
+    fallback_active = False
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca_ask"
@@ -16158,22 +16253,27 @@ def _enter_short(
         )
         _set_price_source(symbol, price_source)
         nbbo_available = _is_primary_price_source(price_source)
-        if (
+        fallback_active = (
             prefer_backup_quote
             or price_source == _ALPACA_DISABLED_SENTINEL
             or not nbbo_available
-        ):
-            logger.warning(
-                "SAFE_MODE_BLOCK",
-                extra={
-                    "symbol": symbol,
-                    "reason": "fallback_price_source",
-                    "price_source": price_source,
-                },
+        )
+        if price_source == _ALPACA_DISABLED_SENTINEL:
+            _mark_primary_provider_fallback(
+                state, symbol, reason="alpaca_primary_disabled"
             )
-            return True
+        allow_fallback_skip = False
+        if fallback_active and price_source not in {
+            "alpaca_auth_failed",
+            "alpaca_unavailable",
+            _ALPACA_DISABLED_SENTINEL,
+        }:
+            allow_fallback_skip = True
         if _should_skip_order_for_alpaca_unavailable(
-            state, symbol, price_source
+            state,
+            symbol,
+            price_source,
+            allow_fallback=allow_fallback_skip,
         ):
             return True
     nbbo_available = _is_primary_price_source(price_source)
@@ -16184,6 +16284,27 @@ def _enter_short(
     )
 
     if quote_price is None:
+        price_source_label = str(price_source or "unknown")
+        source_degraded = prefer_backup_quote or price_source_label.endswith(
+            ("_invalid", "_degraded")
+        )
+        if source_degraded:
+            _mark_primary_provider_fallback(
+                state, symbol, reason="fallback_quote_unavailable"
+            )
+            logger.warning(
+                "FALLBACK_QUOTE_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source_label},
+            )
+            logger.warning(
+                "SKIP_ORDER_DEGRADED_QUOTE",
+                extra={
+                    "symbol": symbol,
+                    "price_source": price_source_label,
+                    "prefer_backup": prefer_backup_quote,
+                },
+            )
+            return True
         logger.warning(
             "SKIP_ORDER_NO_PRICE",
             extra={"symbol": symbol, "source": price_source},
@@ -16202,7 +16323,25 @@ def _enter_short(
         price_source,
         prefer_backup_quote=prefer_backup_quote,
     )
+    annotations = gate.annotations or {}
+    fallback_error = annotations.get("fallback_quote_error")
+    fallback_age = annotations.get("fallback_quote_age")
     if gate.block:
+        reasons_tuple = tuple(gate.reasons) if gate.reasons else tuple()
+        if "fallback_quote_stale" in reasons_tuple:
+            logger.warning(
+                "FALLBACK_QUOTE_STALE",
+                extra={
+                    "symbol": symbol,
+                    "price_source": price_source,
+                    "fallback_age": fallback_age,
+                },
+            )
+        if "quote_source_unavailable" in reasons_tuple:
+            logger.warning(
+                "FALLBACK_QUOTE_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source},
+            )
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
         logger.info(
             "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
@@ -16233,6 +16372,10 @@ def _enter_short(
     normalized_source = str(price_source or "").strip().lower()
     if not nbbo_available and normalized_source in _TERMINAL_FALLBACK_PRICE_SOURCES:
         skip_reason = "nbbo_missing_fallback_price"
+        logger.warning(
+            "FALLBACK_QUOTE_LAST_CLOSE_ONLY",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
         logger.info(
             "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
             symbol,
@@ -16247,12 +16390,32 @@ def _enter_short(
         )
         return True
 
+    fallback_used = False
     if fallback_active and quote_price is not None:
+        price_value = float(quote_price)
+        if not _is_primary_price_source(price_source):
+            fallback_used = True
+            logger.info(
+                "FALLBACK_SOURCE",
+                extra={"symbol": symbol, "provider": price_source},
+            )
+            logger.info(
+                "FALLBACK_PRICE_USED",
+                extra={
+                    "symbol": symbol,
+                    "provider": price_source,
+                    "price": price_value,
+                },
+            )
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
         )
-    current_price = float(quote_price)
+        current_price = price_value
+    else:
+        current_price = float(quote_price)
+    if fallback_used:
+        _clear_cached_yahoo_fallback(symbol)
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
     if gate.size_cap is not None and gate.size_cap < 1.0 and qty > 0:
@@ -16535,21 +16698,13 @@ def trade_logic(
             )
             provider_enabled = True
     if not provider_enabled:
+        _mark_primary_provider_fallback(
+            state, symbol, reason="primary_provider_disabled"
+        )
         logger.warning(
             "PRIMARY_PROVIDER_DEGRADED",
             extra={"symbol": symbol, "provider": "alpaca"},
         )
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={"symbol": symbol, "reason": "primary_provider_disabled"},
-        )
-        degraded = getattr(state, "degraded_providers", None)
-        if degraded is None:
-            degraded = set()
-            setattr(state, "degraded_providers", degraded)
-        degraded.add("alpaca")
-        degraded.add(symbol)
-        return False
 
     if is_safe_mode_active():
         logger.warning(
