@@ -38,7 +38,9 @@ def _coerce_cmd(cmd: Sequence[str] | str) -> list[str]:
 
 def safe_subprocess_run(
     cmd: Sequence[str] | str,
+    *,
     timeout: float | int | None = None,
+    **popen_kwargs,
 ) -> SafeSubprocessResult:
     """Run ``cmd`` safely with timeout handling.
 
@@ -50,7 +52,9 @@ def safe_subprocess_run(
         ``124`` return code.
     """
 
-    run_timeout = SUBPROCESS_TIMEOUT_S if timeout is None else float(timeout)
+    run_timeout = (
+        SUBPROCESS_TIMEOUT_S if timeout is None else max(0.0, float(timeout))
+    )
     if run_timeout <= 0:
         logger.warning(
             "safe_subprocess_run(%s) timed out immediately (timeout=%.2f seconds)",
@@ -60,14 +64,19 @@ def safe_subprocess_run(
         return SafeSubprocessResult("", "", -1, True)
 
     argv = _coerce_cmd(cmd)
+    popen_args = dict(popen_kwargs)
+    capture_output = popen_args.get("capture_output")
+    if not capture_output:
+        popen_args.setdefault("stdout", subprocess.PIPE)
+        popen_args.setdefault("stderr", subprocess.PIPE)
+    popen_args.setdefault("text", True)
+    popen_args["timeout"] = run_timeout
+    popen_args["check"] = False
+
     try:
         completed = subprocess.run(
             argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=run_timeout,
-            check=False,
+            **popen_args,
         )
     except subprocess.TimeoutExpired as exc:
         _prepare_timeout_exception(exc, run_timeout)
