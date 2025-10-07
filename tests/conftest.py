@@ -284,6 +284,19 @@ def _reset_fallback_cache(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {})
 
 
+@pytest.fixture(autouse=True)
+def _reset_provider_monitor_state():
+    """Ensure provider disable state does not leak between tests."""
+
+    from ai_trading.data.provider_monitor import provider_monitor
+
+    provider_monitor.reset()
+    try:
+        yield
+    finally:
+        provider_monitor.reset()
+
+
 @pytest.fixture
 def dummy_order():
     """Provide a minimal order-like object for tests.

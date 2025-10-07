@@ -555,6 +555,30 @@ class ProviderMonitor:
 
         self._callbacks[provider] = cb
 
+    def reset(self) -> None:
+        """Reset mutable provider state for tests and controlled call sites."""
+
+        self.fail_counts.clear()
+        self.disabled_until.clear()
+        self.disabled_since.clear()
+        self.disable_counts.clear()
+        self.outage_start.clear()
+        self.switch_counts.clear()
+        self.consecutive_switches = 0
+        self.consecutive_switches_by_provider.clear()
+        self._last_switch_time.clear()
+        self._alert_cooldown_until.clear()
+        self._switchover_disable_counts.clear()
+        self._current_switch_cooldowns.clear()
+        self._pair_states.clear()
+        self._last_switch_logged = None
+        self._last_switch_ts = None
+        self._last_switchover_provider = None
+        self._last_switchover_ts = 0.0
+        self._last_switchover_passes = 0
+        self._last_sip_warn_ts = 0.0
+        self._pair_switch_history.clear()
+
     def _refresh_runtime_limits(self) -> None:
         """Refresh cached cooldown and quiet window values from configuration."""
 

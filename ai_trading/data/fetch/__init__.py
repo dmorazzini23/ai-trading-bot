@@ -271,6 +271,16 @@ def _clear_override(symbol: str) -> None:
 
 def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     now_ts = _time_now(None)
+    cached = _cycle_feed_override.get(symbol)
+    if cached:
+        if cached == "sip" and not _sip_allowed():
+            _clear_override(symbol)
+        else:
+            ts = _override_set_ts.get(symbol, 0.0)
+            now_ts = _time_now(None)
+            if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
+                return cached
+            _clear_override(symbol)
     cache_keys: list[tuple[Any, ...]] = [(symbol,)]
     cache_keys.extend(
         key
@@ -289,16 +299,6 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
         return cached_feed
-    cached = _cycle_feed_override.get(symbol)
-    if cached:
-        if cached == "sip" and not _sip_allowed():
-            _clear_override(symbol)
-        else:
-            ts = _override_set_ts.get(symbol, 0.0)
-            now_ts = _time_now(None)
-            if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
-                return cached
-            _clear_override(symbol)
     normalized_primary = str(primary_feed or "iex").strip().lower() or "iex"
     return normalized_primary
 

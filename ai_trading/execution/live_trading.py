@@ -702,6 +702,8 @@ class ExecutionEngine:
         self.settings = None
         self.execution_mode = str(requested_mode).lower()
         self.shadow_mode = bool(shadow_mode)
+        testing_flag = os.getenv("TESTING", "")
+        self._testing_mode = str(testing_flag).strip().lower() in {"1", "true", "yes"}
         self.order_timeout_seconds = 0
         self.slippage_limit_bps = 0
         self.price_provider_order: tuple[str, ...] = ()
@@ -1544,7 +1546,8 @@ class ExecutionEngine:
                                 "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                             )
                         logger.info("SLIPPAGE_THRESHOLD_LIMIT_ORDER", extra=extra)
-                        if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}:
+                        testing_mode = getattr(self, "_testing_mode", False)
+                        if testing_mode and slippage_bps > slippage_threshold_bps:
                             raise AssertionError(
                                 "SLIPPAGE_THRESHOLD_LIMIT_ORDER: predicted slippage exceeds limit"
                             )
