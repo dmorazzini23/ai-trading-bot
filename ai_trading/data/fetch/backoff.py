@@ -49,12 +49,20 @@ def _next_feed(cur_feed: str) -> str | None:
     try:
         idx = prio.index(f"alpaca_{cur_feed}")
     except ValueError:
-        return None
+        try:
+            limit = max_data_fallbacks()
+        except Exception:
+            limit = 1
+        if limit <= 0:
+            return None
+        fallback_map = {"iex": "sip", "sip": "iex"}
+        return fallback_map.get(cur_feed)
     limit = max_data_fallbacks()
     for prov in prio[idx + 1 : idx + 1 + limit]:
         if prov.startswith("alpaca_"):
             return prov.split("_", 1)[1]
-    return None
+    fallback_map = {"iex": "sip", "sip": "iex"}
+    return fallback_map.get(cur_feed)
 
 
 def _http_fallback(
