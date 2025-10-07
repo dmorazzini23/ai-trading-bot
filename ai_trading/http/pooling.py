@@ -198,7 +198,11 @@ def _annotate_semaphore_metadata(
 
 
 def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
-    semaphore = asyncio.Semaphore(limit)
+    bounded_cls = getattr(asyncio, "BoundedSemaphore", None)
+    if bounded_cls is not None:
+        semaphore = bounded_cls(limit)
+    else:
+        semaphore = asyncio.Semaphore(limit)
     _annotate_semaphore_metadata(semaphore, limit, version)
     return semaphore
 
@@ -592,11 +596,12 @@ def refresh_host_semaphore(
 class AsyncHostLimiter(AbstractAsyncContextManager["AsyncHostLimiter"]):
     """Async context manager that bounds concurrent requests per hostname."""
 
-    __slots__ = ("_host", "_semaphore")
+    __slots__ = ("_host", "_semaphore", "_acquired")
 
     def __init__(self, host: str | None) -> None:
         self._host = _normalize_host(host)
         self._semaphore: asyncio.Semaphore | None = None
+        self._acquired = False
 
     @classmethod
     def from_url(cls, url: str) -> "AsyncHostLimiter":
@@ -607,13 +612,23 @@ class AsyncHostLimiter(AbstractAsyncContextManager["AsyncHostLimiter"]):
     async def __aenter__(self) -> "AsyncHostLimiter":
         semaphore = get_host_semaphore(self._host)
         self._semaphore = semaphore
-        await semaphore.acquire()
+        try:
+            await semaphore.acquire()
+        except BaseException:
+            self._semaphore = None
+            raise
+        else:
+            self._acquired = True
         return self
 
     async def __aexit__(self, *exc_info) -> None:
-        if self._semaphore is not None:
-            self._semaphore.release()
-            self._semaphore = None
+        if self._semaphore is not None and self._acquired:
+            try:
+                self._semaphore.release()
+            except ValueError:
+                pass
+        self._semaphore = None
+        self._acquired = False
 
 
 def limit_host(hostname: str | None = None) -> AsyncHostLimiter:
