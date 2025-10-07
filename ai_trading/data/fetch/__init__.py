@@ -273,7 +273,7 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     now_ts = _time_now(None)
     cached = _cycle_feed_override.get(symbol)
     if cached:
-        if cached == "sip" and not _sip_allowed():
+        if cached == "sip" and _is_sip_unauthorized():
             _clear_override(symbol)
         else:
             ts = _override_set_ts.get(symbol, 0.0)
@@ -295,7 +295,7 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         if expiry_ts and now_ts is not None and now_ts > expiry_ts:
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
-        if cached_feed == "sip" and not _sip_allowed():
+        if cached_feed == "sip" and _is_sip_unauthorized():
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
         return cached_feed
@@ -4724,6 +4724,7 @@ def _fetch_bars(
     else:
         window_has_session = bool(window_has_session)
     _state["window_has_session"] = window_has_session
+    no_session_window = not window_has_session
     short_circuit_empty = False
     if not window_has_session:
         tf_key = (symbol, _interval)
@@ -5587,6 +5588,34 @@ def _fetch_bars(
                 fallback_enabled = _should_use_backup_on_empty()
             retries_enabled = remaining_retries > 0 and not outside_market_hours
             if outside_market_hours and not (retries_enabled or fallback_enabled):
+                if (
+                    _feed == "iex"
+                    and _sip_configured()
+                    and not _is_sip_unauthorized()
+                    and "sip" not in call_attempts
+                ):
+                    slots_remaining = _fallback_slots_remaining()
+                    if slots_remaining is None or slots_remaining > 0:
+                        call_attempts.add("sip")
+                        sip_df = _attempt_fallback((_interval, "sip", _start, _end))
+                        if sip_df is not None and not getattr(sip_df, "empty", True):
+                            return sip_df
+                if _ENABLE_HTTP_FALLBACK:
+                    interval_map = {
+                        "1Min": "1m",
+                        "5Min": "5m",
+                        "15Min": "15m",
+                        "1Hour": "60m",
+                        "1Day": "1d",
+                    }
+                    fb_int = interval_map.get(_interval)
+                    if fb_int:
+                        http_df = _run_backup_fetch(
+                            fb_int,
+                            from_provider="alpaca_iex",
+                        )
+                        if http_df is not None and not getattr(http_df, "empty", True):
+                            return http_df
                 logger.info(
                     "ALPACA_FETCH_MARKET_CLOSED",
                     extra=_norm_extra(
@@ -6111,6 +6140,50 @@ def _fetch_bars(
             if can_retry_timeframe:
                 if _state["retries"] < max_retries:
                     if outside_market_hours:
+                        if (
+                            _feed == "iex"
+                            and _sip_configured()
+                            and not _is_sip_unauthorized()
+                            and "sip" not in call_attempts
+                        ):
+                            slots_remaining = _fallback_slots_remaining()
+                            if slots_remaining is None or slots_remaining > 0:
+                                call_attempts.add("sip")
+                                sip_df = _attempt_fallback(
+                                    (_interval, "sip", _start, _end)
+                                )
+                                if sip_df is not None:
+                                    if not getattr(sip_df, "empty", True):
+                                        return sip_df
+                                    if no_session_window:
+                                        return sip_df
+                        if _ENABLE_HTTP_FALLBACK and not no_session_window:
+                            interval_map = {
+                                "1Min": "1m",
+                                "5Min": "5m",
+                                "15Min": "15m",
+                                "1Hour": "60m",
+                                "1Day": "1d",
+                            }
+                            fb_int = interval_map.get(_interval)
+                            if fb_int:
+                                http_df = _run_backup_fetch(
+                                    fb_int,
+                                    from_provider="alpaca_iex",
+                                )
+                                if http_df is not None:
+                                    if not getattr(http_df, "empty", True):
+                                        return http_df
+                                    if no_session_window:
+                                        return http_df
+                        if no_session_window:
+                            pandas_mod = load_pandas()
+                            try:
+                                return pandas_mod.DataFrame()
+                            except Exception:
+                                import pandas as _pd  # type: ignore
+
+                                return _pd.DataFrame()
                         logger.info(
                             "ALPACA_FETCH_MARKET_CLOSED",
                             extra=_norm_extra(
@@ -6172,6 +6245,14 @@ def _fetch_bars(
                     "retries": _state["retries"],
                     "reason": reason,
                 }
+                if no_session_window:
+                    pandas_mod = load_pandas()
+                    try:
+                        return pandas_mod.DataFrame()
+                    except Exception:
+                        import pandas as _pd  # type: ignore
+
+                        return _pd.DataFrame()
                 _log_retry_limit_warning(payload)
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
@@ -6327,6 +6408,8 @@ def _fetch_bars(
     empty_attempts = 0
     for _ in range(max(1, max_retries)):
         df = _req(session, fallback, headers=headers, timeout=timeout_v)
+        if not _state.get("window_has_session", True):
+            break
         if _state.get("stop"):
             break
         # Stop immediately when SIP is unauthorized; further retries won't help.
@@ -6359,7 +6442,11 @@ def _fetch_bars(
     if df is not None and not getattr(df, "empty", True):
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
         return _finalize_frame(df)
-    if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
+    if (
+        _ENABLE_HTTP_FALLBACK
+        and _state.get("window_has_session", True)
+        and (df is None or getattr(df, "empty", True))
+    ):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
         providers_tried = set(_state["providers"])

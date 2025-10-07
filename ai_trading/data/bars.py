@@ -446,11 +446,38 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     available_has_sip = "sip" in available_set
     if available_has_sip:
         _ENTITLE_CACHE["sip"] = True
+    req_raw = str(requested or "").strip().lower()
+    normalized_req = req_raw.replace("alpaca_", "")
+    current_feed = normalized_req or "iex"
+    allow_flag = os.getenv("ALPACA_ALLOW_SIP")
+    entitled_flag = os.getenv("ALPACA_SIP_ENTITLED")
+    env_disallow = (
+        allow_flag is not None
+        and allow_flag.strip() != ""
+        and allow_flag.strip().lower() in _FALSEY
+    )
+    env_not_entitled = (
+        entitled_flag is not None
+        and entitled_flag.strip() != ""
+        and entitled_flag.strip().lower() in _FALSEY
+    )
+    if current_feed == "sip" and (env_disallow or env_not_entitled):
+        if env_disallow:
+            guard_reason = "env_allow_false"
+        else:
+            guard_reason = "env_entitled_false"
+        emit_once(
+            _log,
+            f"env_guard:{normalized_req or 'sip'}",
+            "warning",
+            "ALPACA_FEED_UNENTITLED",
+            requested=current_feed,
+            reason=guard_reason,
+        )
+        return "iex"
     feeds = _get_entitled_feeds(client)
     if available_set:
         feeds.update(available_set)
-    req_raw = str(requested or '').lower()
-    normalized_req = req_raw.replace("alpaca_", "")
     sip_capability = "sip" in feeds
 
     allow_explicit_disallow = _env_explicit_false("ALPACA_ALLOW_SIP")

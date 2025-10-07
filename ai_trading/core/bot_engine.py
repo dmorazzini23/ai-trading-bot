@@ -8232,6 +8232,35 @@ class DataFetcher:
                 except Exception:
                     pass
 
+        memo_ready = False
+        memo_payload: Any | None = None
+
+        for memo_lookup_key in (memo_key, legacy_memo_key):
+            entry_ts, entry_payload = _extract_memo_payload(
+                _memo_get_entry(memo_lookup_key)
+            )
+            if entry_payload is None:
+                continue
+            if entry_ts is None:
+                memo_ready = True
+                memo_payload = entry_payload
+                break
+            if entry_ts <= 0.0:
+                continue
+            age = now_monotonic - entry_ts
+            if age <= ttl_window:
+                memo_ready = True
+                memo_payload = entry_payload
+                break
+
+        if memo_ready and memo_payload is not None:
+            normalized_pair = (now_monotonic, memo_payload)
+            with cache_lock:
+                _memo_set_entry(memo_key, normalized_pair)
+                _memo_set_entry(legacy_memo_key, normalized_pair)
+            self._log_daily_cache_hit_once(symbol, reason="memo")
+            return memo_payload
+
         refresh_stamp: float | None = None
         refresh_df: Any | None = None
         refresh_source: str | None = None
@@ -8402,8 +8431,6 @@ class DataFetcher:
                 if counterpart_key != candidate_key:
                     _memo_set_entry(counterpart_key, normalized_pair)
             return payload
-
-        memo_ready = False
 
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window

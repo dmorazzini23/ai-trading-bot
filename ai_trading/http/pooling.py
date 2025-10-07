@@ -483,10 +483,17 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
 
     limit, version = _resolve_limit()
     cache = _LIMIT_CACHE
-    if cache is not None:
-        snapshot = HostLimitSnapshot(cache.limit, cache.version)
-    else:
-        snapshot = HostLimitSnapshot(limit, version)
+    if cache is None:
+        cache = _ResolvedLimitCache(
+            env_key=None,
+            raw_env=None,
+            limit=limit,
+            version=version,
+            config_id=None,
+            env_snapshot=env_snapshot,
+        )
+        _LIMIT_CACHE = cache
+    snapshot = HostLimitSnapshot(cache.limit, cache.version)
     _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
     _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return snapshot

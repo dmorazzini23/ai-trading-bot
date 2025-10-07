@@ -712,7 +712,11 @@ async def run_with_concurrency(
                 peak_this_run = active_workers
                 LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = peak_this_run
                 if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-                    PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+                    try:
+                        current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
+                    except (TypeError, ValueError):
+                        current_peak = 0
+                    PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
 
     async def _mark_worker_end(started: bool) -> None:
         nonlocal active_workers
@@ -778,7 +782,11 @@ async def run_with_concurrency(
             LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run
         )
         if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-            PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+            try:
+                current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
+            except (TypeError, ValueError):
+                current_peak = 0
+            PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
         raise
     for task, outcome in zip(tasks, outcomes):
         symbol = task_to_symbol.get(task)
@@ -790,7 +798,11 @@ async def run_with_concurrency(
 
     LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = max(LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run)
     if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-        PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+        try:
+            current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
+        except (TypeError, ValueError):
+            current_peak = 0
+        PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
