@@ -198,6 +198,40 @@ def _extract_value(record: Any, *names: str) -> Any:
     return None
 
 
+def _extract_error_detail(err: BaseException | None) -> str | None:
+    """Best-effort extraction of a human-readable detail from an exception."""
+
+    if err is None:
+        return None
+    try:
+        for attr in ("detail", "message", "error", "reason", "description"):
+            value = getattr(err, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if err.args:
+            parts = [str(part).strip() for part in err.args if str(part).strip()]
+            if parts:
+                return " ".join(parts)
+    except Exception:
+        return None
+    return None
+
+
+def _extract_error_code(err: BaseException | None) -> str | int | None:
+    """Return a structured error code from an exception when available."""
+
+    if err is None:
+        return None
+    try:
+        for attr in ("code", "status", "status_code", "error_code"):
+            value = getattr(err, attr, None)
+            if isinstance(value, (str, int)):
+                return value
+    except Exception:
+        return None
+    return None
+
+
 def _config_int(name: str, default: int | None) -> int | None:
     """Fetch integer configuration via get_env with os fallback."""
 
@@ -1185,22 +1219,26 @@ class ExecutionEngine:
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
+        caught_exc: BaseException | None = None
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
+            caught_exc = exc
             base_extra = {
                 "symbol": symbol,
                 "side": side.lower(),
                 "reason": str(exc),
-                "code": getattr(exc, "code", None),
+                "code": _extract_error_code(caught_exc),
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            detail_val = _extract_error_detail(caught_exc)
             logger.debug(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
-                extra=base_extra | {"detail": getattr(exc, "detail", None)},
+                extra=base_extra | {"detail": detail_val},
             )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
+            caught_exc = exc
             failure_exc = exc
             if isinstance(exc, TimeoutError):
                 failure_status = 504
@@ -1389,22 +1427,26 @@ class ExecutionEngine:
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
+        caught_exc: BaseException | None = None
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
+            caught_exc = exc
             base_extra = {
                 "symbol": symbol,
                 "side": side.lower(),
                 "reason": str(exc),
-                "code": getattr(exc, "code", None),
+                "code": _extract_error_code(caught_exc),
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            detail_val = _extract_error_detail(caught_exc)
             logger.debug(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
-                extra=base_extra | {"detail": getattr(exc, "detail", None)},
+                extra=base_extra | {"detail": detail_val},
             )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
+            caught_exc = exc
             failure_exc = exc
             if isinstance(exc, TimeoutError):
                 failure_status = 504
@@ -1429,10 +1471,11 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
             }
             if failure_exc is not None:
+                detail_val = _extract_error_detail(failure_exc)
                 extra.update(
                     {
                         "cause": failure_exc.__class__.__name__,
-                        "detail": str(failure_exc) or "submit_order failed",
+                        "detail": detail_val if detail_val is not None else (str(failure_exc) or "submit_order failed"),
                         "status_code": failure_status,
                     }
                 )
