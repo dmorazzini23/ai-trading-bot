@@ -395,6 +395,53 @@ def test_daily_fetch_canonical_and_legacy_memo_bypass_daily_cache(monkeypatch):
     assert be._DAILY_FETCH_MEMO[legacy_key][1] is memo_payload
 
 
+def test_daily_fetch_memo_mapping_get_raises(monkeypatch):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+
+    monotonic_values = iter([10.0, 11.0, 120.0, 121.0, 130.0])
+    monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    legacy_key = (symbol, fetch_date.isoformat())
+    memo_payload = {"memo": True}
+
+    class StrictCache(dict):
+        def get(self, *_args, **_kwargs):  # pragma: no cover - fails if invoked
+            raise AssertionError("daily cache should not be queried when memo is fresh")
+
+    class StrictMemo(dict):
+        def get(self, *_args, **_kwargs):  # pragma: no cover - ensure __getitem__ path is used
+            raise AssertionError("memo storage should not rely on Mapping.get")
+
+    fetcher._daily_cache = StrictCache({symbol: (fetch_date, {"cache": True})})
+
+    memo_store = StrictMemo({legacy_key: (5.0, memo_payload)})
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+
+    assert result is memo_payload
+    assert legacy_key in memo_store
+    stored = memo_store[legacy_key]
+    assert isinstance(stored, tuple)
+    assert len(stored) == 2
+    assert stored[1] is memo_payload
+
+
 def test_daily_fetch_memo_handles_generator_factory():
     from ai_trading.data import fetch as fetch_module
 

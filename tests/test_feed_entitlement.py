@@ -123,6 +123,15 @@ def test_ensure_entitled_feed_keeps_when_account_reports_sip_without_creds(monke
     assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
 
 
+def test_ensure_entitled_feed_normalizes_entitlement_case(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    for key in ("ALPACA_ALLOW_SIP", "ALPACA_SIP_ENTITLED", "ALPACA_HAS_SIP"):
+        monkeypatch.delenv(key, raising=False)
+    client = _Client(['iex'])
+    client.entitlements = ['SIP']
+    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+
+
 def test_ensure_entitled_feed_downgrades_when_allow_flag_disables(monkeypatch):
     bars._ENTITLE_CACHE.clear()
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")

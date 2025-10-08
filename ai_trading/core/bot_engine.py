@@ -8250,16 +8250,22 @@ class DataFetcher:
             return None, entry
 
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
+            try:
+                return _DAILY_FETCH_MEMO[key]  # type: ignore[index]
+            except KeyError:
+                return None
+            except Exception:
+                pass
+
             getter = getattr(_DAILY_FETCH_MEMO, "get", None)
             if callable(getter):
                 try:
                     return getter(key)
-                except TypeError:
-                    pass
-            try:
-                return _DAILY_FETCH_MEMO[key]  # type: ignore[index]
-            except Exception:
-                return None
+                except (TypeError, KeyError, AttributeError, AssertionError):
+                    return None
+                except Exception:
+                    return None
+            return None
 
         def _memo_set_entry(key: tuple[str, ...], value: tuple[float, Any]) -> None:
             try:
