@@ -149,6 +149,31 @@ def _fetch_feed(
             return df
 
     logger.info("USING_BACKUP_PROVIDER")
+    attempts = _EMPTY_BAR_COUNTS.get(tf_key, 0)
+    enable_http = bool(getattr(_fetch_module, "_ENABLE_HTTP_FALLBACK", False))
+    try:
+        fallback_budget = int(max_data_fallbacks())
+    except Exception:
+        fallback_budget = 0
+    if empty_error and attempts >= _EMPTY_BAR_MAX_RETRIES:
+        fetch_skips = getattr(_fetch_module, "_SKIPPED_SYMBOLS", None)
+        if isinstance(fetch_skips, set):
+            fetch_skips.add(tf_key)
+        if enable_http and fallback_budget > 0:
+            http_df = _http_fallback(
+                symbol,
+                start,
+                end,
+                timeframe,
+                from_feed=feed,
+            )
+            if http_df is not None and not getattr(http_df, "empty", True):
+                _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                mark_success(symbol, timeframe)
+                return http_df
+        raise EmptyBarsError(
+            f"empty_bars: symbol={symbol}, timeframe={timeframe}, max_retries={attempts}"
+        )
     if feed in ("iex", "sip"):
         alt_feed = "sip" if feed == "iex" else "iex"
         logger.info("ALPACA_FEED_SWITCH", extra={"from": feed, "to": alt_feed})
@@ -168,6 +193,19 @@ def _fetch_feed(
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             mark_success(symbol, timeframe)
             return df_alt
+
+    if enable_http and fallback_budget > 0:
+        http_df = _http_fallback(
+            symbol,
+            start,
+            end,
+            timeframe,
+            from_feed=feed,
+        )
+        if http_df is not None and not getattr(http_df, "empty", True):
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            mark_success(symbol, timeframe)
+            return http_df
 
     yf_map = getattr(_fetch_module, "_YF_INTERVAL_MAP", {})
     yf_interval = yf_map.get(tf_norm, tf_norm.lower())

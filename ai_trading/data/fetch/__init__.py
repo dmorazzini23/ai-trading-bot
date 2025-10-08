@@ -22,6 +22,22 @@ from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time, is_generator_stop
 
 
+def _now_ts() -> float:
+    """Return a timestamp resilient to patched ``time`` modules."""
+
+    try:
+        if hasattr(time, "time"):
+            return float(time.time())
+    except Exception:
+        pass
+    try:
+        if hasattr(time, "monotonic"):
+            return float(time.monotonic())
+    except Exception:
+        pass
+    return 0.0
+
+
 from ai_trading.data.timeutils import ensure_utc_datetime
 from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 from ai_trading.logging.empty_policy import classify as _empty_classify
@@ -249,12 +265,19 @@ def _safe_backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> p
         return pd_local.DataFrame()
 
 
-def _time_now(default: float = 0.0) -> float:
+def _time_now(default: float | None = 0.0) -> float:
     time_fn = getattr(time, "time", None)
-    try:
-        return float(time_fn()) if callable(time_fn) else float(default)
-    except Exception:
-        return float(default)
+    if callable(time_fn):
+        try:
+            return float(time_fn())
+        except Exception:
+            pass
+    if default is not None:
+        try:
+            return float(default)
+        except Exception:
+            pass
+    return _now_ts()
 
 
 def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
@@ -293,7 +316,7 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         ttl = float(globals().get("_OVERRIDE_TTL_S", _OVERRIDE_TTL_S))
         if normalized_feed not in {"iex", "sip"}:
             _OVERRIDE_MAP.pop((symbol, primary_norm), None)
-        elif time.time() - ts <= ttl:
+        elif _now_ts() - ts <= ttl:
             return normalized_feed
         else:
             _OVERRIDE_MAP.pop((symbol, primary_norm), None)
@@ -959,7 +982,7 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
         except Exception:
             from_key = "iex"
 
-    _OVERRIDE_MAP[(symbol, from_key)] = (to_norm, time.time())
+    _OVERRIDE_MAP[(symbol, from_key)] = (to_norm, _now_ts())
 
     key = (symbol, tf_norm)
     _FEED_OVERRIDE_BY_TF[key] = to_norm
@@ -968,15 +991,16 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
         ttl_seconds = float(_OVERRIDE_TTL_S)
     except (TypeError, ValueError):
         ttl_seconds = 0.0
-    expiry_base = float(time.time())
+    expiry_base = _now_ts()
     expiry_ts = expiry_base + ttl_seconds if ttl_seconds > 0 else expiry_base
     _FEED_SWITCH_CACHE[(symbol, tf_norm)] = (to_norm, expiry_ts)
     _FEED_SWITCH_CACHE[(symbol,)] = (to_norm, expiry_ts)
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
     attempted.add(to_norm)
     log_key = (symbol, tf_norm, to_norm)
-    if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
-        _FEED_SWITCH_HISTORY.append(log_key)
+    if to_norm != "iex":
+        if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
+            _FEED_SWITCH_HISTORY.append(log_key)
     if from_norm == "iex":
         _IEX_EMPTY_COUNTS.pop(key, None)
     if log_key not in _FEED_SWITCH_LOGGED:
@@ -4788,10 +4812,12 @@ def _fetch_bars(
                     "timeframe": _interval,
                     "symbol": symbol,
                     "fallback": "yahoo",
+                    "reason": "resolve_feed_none",
                 }
             ),
         )
         yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+        _state["resolve_feed_none"] = True
         return _run_backup_fetch(yf_interval)
     if _pytest_active():
         _feed = resolved_feed
@@ -5099,6 +5125,15 @@ def _fetch_bars(
                     _log_sip_unavailable(symbol, fb_interval, "UNAUTHORIZED_SIP")
                     return None
             from_feed = _feed
+            if not _state.get("window_has_session", True) and not skip_check:
+                attempted_pairs = _state.setdefault("no_session_fallback_pairs", set())
+                attempt_key = (from_feed, fb_feed)
+                pandas_mod = _ensure_pandas()
+                if attempt_key in attempted_pairs:
+                    return None
+                attempted_pairs.add(attempt_key)
+                if not (from_feed == "iex" and fb_feed == "sip"):
+                    return None
             _interval, _feed, _start, _end = fb
             from_provider_name = f"alpaca_{from_feed}"
             to_provider_name = f"alpaca_{fb_feed}"
@@ -5652,7 +5687,11 @@ def _fetch_bars(
                         extra={"from": _feed, "to": alt_feed},
                     )
                     alternate_history.add(alt_feed)
-                    result = _attempt_fallback((_interval, alt_feed, _start, _end), skip_check=True)
+                    skip_validation = alt_feed != "sip"
+                    result = _attempt_fallback(
+                        (_interval, alt_feed, _start, _end),
+                        skip_check=skip_validation,
+                    )
                     if result is not None and not getattr(result, "empty", True):
                         return result
             attempt = _state["retries"] + 1
@@ -5712,6 +5751,11 @@ def _fetch_bars(
                     }
                     fb_int = interval_map.get(_interval)
                     if fb_int:
+                        delay_val = _state.get("delay")
+                        if delay_val is None or delay_val <= 0:
+                            delay_val = _state.get("retry_delay")
+                        if delay_val and delay_val > 0:
+                            time.sleep(delay_val)
                         http_df = _run_backup_fetch(
                             fb_int,
                             from_provider="alpaca_iex",
@@ -5745,8 +5789,15 @@ def _fetch_bars(
                 and should_backoff_first_empty
                 and remaining_retries > 0
             ):
-                retry_delay = _state.get("delay", 0.25)
+                retry_delay = (
+                    planned_backoff
+                    if planned_backoff is not None
+                    else _state.get("delay", 0.25)
+                )
+                if retry_delay is None:
+                    retry_delay = 0.25
                 _state["delay"] = retry_delay
+                _state["retry_delay"] = retry_delay
                 log_extra["delay"] = retry_delay
                 _state["retries"] = attempt
                 try:
@@ -5796,8 +5847,9 @@ def _fetch_bars(
                 time.sleep(retry_delay)
                 return _req(session, fallback, headers=headers, timeout=timeout)
             else:
-                _state.pop("delay", None)
-                log_extra.pop("delay", None)
+                if planned_backoff is None:
+                    _state.pop("delay", None)
+                    log_extra.pop("delay", None)
             if not logged_attempt and attempt <= max_retries:
                 log_payload = {
                     **planned_retry_meta,
@@ -5816,6 +5868,34 @@ def _fetch_bars(
                     },
                 )
                 _state.pop("empty_attempts", None)
+                if (
+                    not _state.get("empty_data_logged")
+                    and _state.get("window_has_session", True)
+                ):
+                    try:
+                        market_open = is_market_open()
+                    except Exception:
+                        market_open = False
+                    if market_open:
+                        lvl = _safe_empty_classify(is_market_open=True)
+                        logger.log(
+                            lvl,
+                            "EMPTY_DATA",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "status": "empty",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "symbol": symbol,
+                                    "start": _start.isoformat(),
+                                    "end": _end.isoformat(),
+                                    "correlation_id": _state["corr_id"],
+                                }
+                            ),
+                        )
+                        _push_to_caplog("EMPTY_DATA", level=lvl)
+                        _state["empty_data_logged"] = True
                 if remaining_retries > 0:
                     payload = {
                         "provider": "alpaca",
@@ -5924,9 +6004,14 @@ def _fetch_bars(
                         "1Hour": "60m",
                         "1Day": "1d",
                     }
-                    fb_int = interval_map.get(_interval)
-                    if fb_int:
-                        return _run_backup_fetch(fb_int)
+                fb_int = interval_map.get(_interval)
+                if fb_int:
+                    delay_val = _state.get("delay")
+                    if delay_val is None or delay_val <= 0:
+                        delay_val = _state.get("retry_delay")
+                    if delay_val and delay_val > 0:
+                        time.sleep(delay_val)
+                    return _run_backup_fetch(fb_int)
                     return pd.DataFrame()
             else:
                 _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
@@ -6030,6 +6115,11 @@ def _fetch_bars(
                         }
                         fb_int = interval_map.get(base_interval)
                         if fb_int:
+                            delay_val = _state.get("delay")
+                            if delay_val is None or delay_val <= 0:
+                                delay_val = _state.get("retry_delay")
+                            if delay_val and delay_val > 0:
+                                time.sleep(delay_val)
                             http_fallback_df = _run_backup_fetch(
                                 fb_int,
                                 from_provider="alpaca_sip",
@@ -6065,6 +6155,11 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(base_interval)
                 if fb_int:
+                    delay_val = _state.get("delay")
+                    if delay_val is None or delay_val <= 0:
+                        delay_val = _state.get("retry_delay")
+                    if delay_val and delay_val > 0:
+                        time.sleep(delay_val)
                     return _run_backup_fetch(fb_int)
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:

@@ -496,18 +496,11 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     advisory_disallow = sip_disallowed()
     creds_missing = sip_credentials_missing()
 
-    sip_allowed = False
-    if explicit_disallow or unauthorized_flag or priority_blocks_sip:
-        sip_allowed = False
-    else:
-        if explicit_allow or advertised_sip:
-            sip_allowed = True
-        elif not advisory_disallow:
-            sip_allowed = True
-        elif advisory_disallow and advertised_sip:
-            sip_allowed = True
-        elif creds_missing and advertised_sip:
-            sip_allowed = True
+    sip_forbidden = explicit_disallow or unauthorized_flag or (priority_blocks_sip and not advertised_sip)
+    sip_allowed = not sip_forbidden
+    if sip_allowed and not (explicit_allow or advertised_sip):
+        if advisory_disallow and not advertised_sip:
+            sip_allowed = False
 
     sip_entitled = sip_allowed and (explicit_allow or advertised_sip)
 
