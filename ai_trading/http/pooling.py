@@ -473,7 +473,7 @@ def invalidate_host_limit_cache() -> None:
 def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
     """Refresh cached limit metadata when relevant environment variables change."""
 
-    global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE
+    global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE, _RETIRED_SEMAPHORES, _HOST_SEMAPHORES
 
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
     cache = _LIMIT_CACHE
@@ -485,7 +485,12 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
         return snapshot
 
     if env_changed:
-        _clear_all_loop_semaphores()
+        try:
+            _clear_all_loop_semaphores()
+        except Exception:
+            _HOST_SEMAPHORES.clear()
+        else:
+            _RETIRED_SEMAPHORES.clear()
         _LIMIT_CACHE = None
         cache = None
 

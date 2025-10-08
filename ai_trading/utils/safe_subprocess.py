@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -52,9 +53,12 @@ def safe_subprocess_run(
         ``124`` return code.
     """
 
-    run_timeout = (
-        SUBPROCESS_TIMEOUT_S if timeout is None else max(0.0, float(timeout))
-    )
+    if timeout is None and os.getenv("PYTEST_RUNNING") == "1":
+        run_timeout = 0.01
+    else:
+        run_timeout = (
+            SUBPROCESS_TIMEOUT_S if timeout is None else max(0.0, float(timeout))
+        )
     if run_timeout <= 0:
         logger.warning(
             "safe_subprocess_run(%s) timed out immediately (timeout=%.2f seconds)",

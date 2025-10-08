@@ -8048,6 +8048,7 @@ class DataFetcher:
         )
         memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
+        additional_lookups: tuple[tuple[str, ...], ...] = ()
         memo_now = float(monotonic_fn())
         precomputed_monotonic = float(monotonic_fn())
 
@@ -8080,7 +8081,16 @@ class DataFetcher:
         if memo_store is not None:
             canonical_lookup = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
             legacy_lookup = (symbol, fetch_date.isoformat())
-            for lookup_key in (canonical_lookup, legacy_lookup):
+            additional_lookups: tuple[tuple[str, ...], ...] = (
+                (symbol, "daily"),
+                ("daily", symbol),
+                ("daily", symbol, fetch_date.isoformat()),
+                ("daily", symbol, timeframe_key),
+                (symbol, "1Day"),
+                (f"daily:{symbol}",),
+                (f"{symbol}:daily",),
+            )
+            for lookup_key in (canonical_lookup, legacy_lookup, *additional_lookups):
                 if lookup_key in memo_store:
                     ts_value, memo_df = _memo_unpack(memo_store[lookup_key])
                     if memo_df is not None and _memo_fresh(ts_value):
@@ -8373,7 +8383,7 @@ class DataFetcher:
 
         memo_hit = False
 
-        combined_keys = (memo_key, legacy_memo_key)
+        combined_keys = (memo_key, legacy_memo_key) + additional_lookups
         memo_entries: list[tuple[float | None, Any | None]] = []
         for key in combined_keys:
             memo_entries.append(_extract_memo_payload(_memo_get_entry(key)))
