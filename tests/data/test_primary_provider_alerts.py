@@ -73,6 +73,7 @@ def test_primary_provider_missing_keys_alert(monkeypatch):
     alerts = DummyAlerts()
     monkeypatch.setattr(fetch.provider_monitor, "alert_manager", alerts)
     monkeypatch.setattr(fetch, "_ALPACA_KEYS_MISSING_LOGGED", False, raising=False)
+    monkeypatch.setattr(fetch, "_pytest_active", lambda: False)
 
     fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 

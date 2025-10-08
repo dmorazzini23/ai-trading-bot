@@ -20,6 +20,7 @@ pytestmark = pytest.mark.alpaca
 os.environ['PYTEST_RUNNING'] = '1'
 require("requests")
 require("alpaca")
+require("pytest_asyncio")
 
 from ai_trading.execution.live_trading import AlpacaExecutionEngine
 

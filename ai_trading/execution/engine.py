@@ -1893,7 +1893,10 @@ class ExecutionEngine:
                             "threshold_bps": threshold,
                         },
                     )
-                    if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}:
+                    testing_flag = os.getenv("TESTING", "").strip().lower()
+                    if testing_flag in {"1", "true", "yes"} and not (
+                        had_manual_price and order.order_type == OrderType.LIMIT
+                    ):
                         raise AssertionError(
                             "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                         )

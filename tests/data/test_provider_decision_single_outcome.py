@@ -37,14 +37,17 @@ def test_update_data_health_tracks_single_active_provider(monkeypatch, caplog):
         == backup
     )
     # First two healthy passes keep backup active while accumulating health
+    required_passes = max(int(mon.recovery_passes_required), 1)
     assert (
         mon.update_data_health(primary, backup, healthy=True, reason="recovering", severity="good")
         == backup
     )
-    assert (
-        mon.update_data_health(primary, backup, healthy=True, reason="stabilizing", severity="good")
-        == backup
-    )
+    remaining = max(required_passes - 2, 0)
+    for _ in range(remaining):
+        assert (
+            mon.update_data_health(primary, backup, healthy=True, reason="stabilizing", severity="good")
+            == backup
+        )
 
     # Third healthy pass after dwell & cooldown switches back
     state = mon._pair_states[(primary, backup)]

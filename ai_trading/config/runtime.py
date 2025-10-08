@@ -838,10 +838,10 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="float",
         default=300.0,
         description=(
-            "Interval between background health checks. Values below 30s are"
-            " allowed for testing but will be clamped at runtime."
+            "Interval between background health checks. Values below 30 seconds"
+            " are invalid and will raise during configuration parsing."
         ),
-        min_value=1.0,
+        min_value=30.0,
     ),
     ConfigSpec(
         field="hard_stop_cooldown_min",
@@ -1200,6 +1200,22 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="int",
         default=120,
         description="Lookback window in seconds when evaluating data providers.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="provider_switch_cooldown_sec",
+        env=("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC",),
+        cast="int",
+        default=900,
+        description="Minimum seconds to remain on a backup provider before recovery.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="provider_health_passes_required",
+        env=("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED",),
+        cast="int",
+        default=4,
+        description="Consecutive healthy ticks required before switching back to the primary provider.",
         min_value=1,
     ),
     ConfigSpec(

@@ -232,6 +232,42 @@ def _extract_error_code(err: BaseException | None) -> str | int | None:
     return None
 
 
+def _extract_api_error_metadata(err: BaseException | None) -> dict[str, Any]:
+    """Return provider error metadata suitable for structured logging."""
+
+    if err is None:
+        return {}
+    metadata: dict[str, Any] = {}
+    detail = _extract_error_detail(err)
+    if detail:
+        metadata["detail"] = detail
+    code = _extract_error_code(err)
+    if code is not None:
+        metadata["code"] = code
+    status_val: Any | None = None
+    for attr in ("status_code", "status"):
+        value = getattr(err, attr, None)
+        if value is not None:
+            status_val = value
+            break
+    response = getattr(err, "response", None)
+    if status_val is None and response is not None:
+        status_val = getattr(response, "status_code", None)
+    if status_val is not None and "status_code" not in metadata:
+        try:
+            metadata["status_code"] = int(status_val)
+        except (TypeError, ValueError):
+            metadata["status_code"] = status_val
+    metadata.setdefault("error_type", err.__class__.__name__)
+    try:
+        rendered = str(err)
+    except Exception:  # pragma: no cover - defensive stringification
+        rendered = None
+    if rendered:
+        metadata.setdefault("error", rendered)
+    return {key: value for key, value in metadata.items() if value not in (None, "")}
+
+
 def _config_int(name: str, default: int | None) -> int | None:
     """Fetch integer configuration via get_env with os fallback."""
 
@@ -1219,33 +1255,35 @@ class ExecutionEngine:
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
-        caught_exc: BaseException | None = None
+        error_meta: dict[str, Any] = {}
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
-            caught_exc = exc
+            metadata = _extract_api_error_metadata(exc)
             base_extra = {
                 "symbol": symbol,
                 "side": side.lower(),
                 "reason": str(exc),
-                "code": _extract_error_code(caught_exc),
+                "code": metadata.get("code"),
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            detail_val = _extract_error_detail(caught_exc)
+            detail_val = metadata.get("detail")
             logger.debug(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                 extra=base_extra | {"detail": detail_val},
             )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
-            caught_exc = exc
             failure_exc = exc
+            error_meta = _extract_api_error_metadata(exc)
             if isinstance(exc, TimeoutError):
                 failure_status = 504
             elif isinstance(exc, ConnectionError):
                 failure_status = 503
             else:
                 failure_status = getattr(exc, "status_code", None) or 500
+            if error_meta.get("status_code") is None and failure_status is not None:
+                error_meta.setdefault("status_code", failure_status)
             result = None
         execution_time = time.time() - start_time
         self.stats["total_execution_time"] += execution_time
@@ -1427,33 +1465,35 @@ class ExecutionEngine:
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
-        caught_exc: BaseException | None = None
+        error_meta: dict[str, Any] = {}
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
-            caught_exc = exc
+            metadata = _extract_api_error_metadata(exc)
             base_extra = {
                 "symbol": symbol,
                 "side": side.lower(),
                 "reason": str(exc),
-                "code": _extract_error_code(caught_exc),
+                "code": metadata.get("code"),
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            detail_val = _extract_error_detail(caught_exc)
+            detail_val = metadata.get("detail")
             logger.debug(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                 extra=base_extra | {"detail": detail_val},
             )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
-            caught_exc = exc
             failure_exc = exc
+            error_meta = _extract_api_error_metadata(exc)
             if isinstance(exc, TimeoutError):
                 failure_status = 504
             elif isinstance(exc, ConnectionError):
                 failure_status = 503
             else:
                 failure_status = getattr(exc, "status_code", None) or 500
+            if error_meta.get("status_code") is None and failure_status is not None:
+                error_meta.setdefault("status_code", failure_status)
             result = None
         execution_time = time.time() - start_time
         self.stats["total_execution_time"] += execution_time
@@ -1471,12 +1511,13 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
             }
             if failure_exc is not None:
-                detail_val = _extract_error_detail(failure_exc)
+                detail_val = error_meta.get("detail") or _extract_error_detail(failure_exc)
+                status_for_log = error_meta.get("status_code", failure_status)
                 extra.update(
                     {
                         "cause": failure_exc.__class__.__name__,
                         "detail": detail_val if detail_val is not None else (str(failure_exc) or "submit_order failed"),
-                        "status_code": failure_status,
+                        "status_code": status_for_log,
                     }
                 )
                 logger.error("ORDER_SUBMIT_RETRIES_EXHAUSTED", extra=extra)
