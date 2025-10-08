@@ -803,24 +803,84 @@ def get_bars_df(
             adjustment=adjustment,
             feed=feed,
         )
-        _start_t = monotonic_time()
-        _err: Exception | None = None
-        try:
-            call = rest.get_stock_bars
-            if retry is not None:
-                call = _with_retry(call)
-            df = call(req).df
-        except Exception as e:
-            _err = e
-            raise
-        finally:
+        df: "pd.DataFrame" | Any
+        max_attempts = 3
+        base_delay = 0.5
+        attempt = 0
+        last_error: Exception | None = None
+        while attempt < max_attempts:
+            attempt += 1
+            _start_t = monotonic_time()
+            error: Exception | None = None
             try:
-                _alpaca_calls_total.inc()
-                _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
-                if _err is not None:
-                    _alpaca_errors_total.inc()
-            except Exception:
-                pass
+                response = rest.get_stock_bars(req)
+                df = response.df
+                last_error = None
+                break
+            except APIError as api_exc:
+                error = api_exc
+                last_error = api_exc
+                status_code = getattr(api_exc, "status_code", None)
+                should_retry = bool(
+                    status_code in RETRY_HTTP_CODES and attempt < max_attempts
+                )
+                if should_retry:
+                    delay = min(base_delay * (2 ** (attempt - 1)), 4.0)
+                    _log.warning(
+                        "ALPACA_RATE_LIMIT_RETRY",
+                        extra={
+                            "symbol": symbol,
+                            "timeframe": tf_norm,
+                            "status_code": status_code,
+                            "attempt": attempt,
+                            "delay": round(delay, 3),
+                        },
+                    )
+                    try:
+                        time.sleep(delay)
+                    except Exception:
+                        pass
+                    continue
+                raise
+            except RequestException as req_exc:
+                error = req_exc
+                last_error = req_exc
+                if attempt < max_attempts:
+                    delay = min(base_delay * (2 ** (attempt - 1)), 4.0)
+                    _log.warning(
+                        "ALPACA_NETWORK_RETRY",
+                        extra={
+                            "symbol": symbol,
+                            "timeframe": tf_norm,
+                            "attempt": attempt,
+                            "delay": round(delay, 3),
+                            "error": str(req_exc),
+                        },
+                    )
+                    try:
+                        time.sleep(delay)
+                    except Exception:
+                        pass
+                    continue
+                raise
+            except Exception as exc:
+                error = exc
+                last_error = exc
+                raise
+            finally:
+                try:
+                    _alpaca_calls_total.inc()
+                    _alpaca_call_latency.observe(
+                        max(0.0, monotonic_time() - _start_t)
+                    )
+                    if error is not None:
+                        _alpaca_errors_total.inc()
+                except Exception:
+                    pass
+        else:
+            if last_error is not None:
+                raise last_error
+            return _pd.DataFrame()
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
         return _pd.DataFrame()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from typing import Any
 
 try:  # Local import to avoid cycles during docs builds
@@ -17,6 +18,8 @@ from ai_trading.core.enums import OrderSide
 logger = logging.getLogger(__name__)
 _missing_attr_warned: set[str] = set()
 _invalid_value_warned: set[str] = set()
+_GAP_RATIO_RE = re.compile(r"gap_ratio=([0-9.]+)%")
+_LIMIT_RE = re.compile(r"limit=([0-9.]+)%")
 def _resolve_allocator_eps() -> float:
     try:
         value = get_env("ALLOCATOR_EPS", None, cast=float)
@@ -53,6 +56,122 @@ class StrategyAllocator:
         self.last_direction: dict[str, str] = {}
         self.last_confidence: dict[str, float] = {}
         self.hold_protect: dict[str, int] = {}
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float | None:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _resolve_gap_ratio_limit(self) -> float:
+        candidates = (
+            getattr(self.config, "gap_ratio_limit", None),
+            getattr(self.config, "data_max_gap_ratio_intraday", None),
+        )
+        for candidate in candidates:
+            value = self._coerce_float(candidate)
+            if value is not None and value >= 0.0:
+                return value
+        try:
+            env_value = get_env("AI_TRADING_GAP_RATIO_LIMIT", None, cast=float)
+        except Exception:
+            env_value = None
+        value = self._coerce_float(env_value)
+        if value is not None and value >= 0.0:
+            return value
+        return 0.005
+
+    def _fallback_gap_limit(self, primary_limit: float) -> float:
+        fallback_candidate = self._coerce_float(
+            getattr(self.config, "data_max_gap_ratio_intraday", None)
+        )
+        candidates = [primary_limit * 1.5, primary_limit + 0.005]
+        if fallback_candidate is not None:
+            candidates.append(fallback_candidate)
+        return max(candidates)
+
+    def _extract_gap_ratio(
+        self, metadata: dict[str, Any] | None, reason: str | None
+    ) -> float | None:
+        if metadata is not None:
+            direct = self._coerce_float(metadata.get("gap_ratio"))
+            if direct is not None:
+                return direct
+            coverage = metadata.get("_coverage_meta") or metadata.get("coverage_meta")
+            if isinstance(coverage, dict):
+                coverage_ratio = self._coerce_float(coverage.get("gap_ratio"))
+                if coverage_ratio is not None:
+                    return coverage_ratio
+        if reason:
+            match = _GAP_RATIO_RE.search(reason)
+            if match:
+                try:
+                    return float(match.group(1)) / 100.0
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _extract_limit_from_reason(self, reason: str | None) -> float | None:
+        if not reason:
+            return None
+        match = _LIMIT_RE.search(reason)
+        if match:
+            try:
+                return float(match.group(1)) / 100.0
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _normalize_signal_reliability(self, signal: Any) -> None:
+        metadata_raw = getattr(signal, "metadata", None)
+        metadata = metadata_raw if isinstance(metadata_raw, dict) else None
+        if metadata is None:
+            return
+
+        reliable = metadata.get("price_reliable", getattr(signal, "price_reliable", True))
+        reason = metadata.get(
+            "price_reliable_reason", getattr(signal, "price_reliable_reason", None)
+        )
+        fallback_provider = metadata.get("fallback_provider") or metadata.get(
+            "data_provider"
+        )
+        fallback_label = None
+        if isinstance(fallback_provider, str):
+            fallback_label = fallback_provider.strip().lower() or None
+
+        gap_ratio = self._extract_gap_ratio(metadata, reason)
+        limit_from_reason = self._extract_limit_from_reason(reason)
+        primary_limit = (
+            limit_from_reason
+            if limit_from_reason is not None
+            else self._resolve_gap_ratio_limit()
+        )
+        fallback_limit = self._fallback_gap_limit(primary_limit)
+
+        fallback_gap_relaxed = bool(metadata.get("fallback_gap_relaxed"))
+        allow_fallback = fallback_gap_relaxed or (
+            fallback_label is not None and not fallback_label.startswith("alpaca")
+        )
+
+        if not reliable and allow_fallback:
+            if gap_ratio is None or gap_ratio <= fallback_limit:
+                metadata["price_reliable"] = True
+                metadata.pop("price_reliable_reason", None)
+                metadata.setdefault("price_reliable_override", True)
+                if gap_ratio is not None:
+                    metadata["gap_ratio"] = gap_ratio
+                logger.info(
+                    "FALLBACK_PRICE_ACCEPTED",
+                    extra={
+                        "symbol": getattr(signal, "symbol", "?"),
+                        "gap_ratio": gap_ratio,
+                        "limit": fallback_limit,
+                        "fallback_provider": fallback_provider,
+                    },
+                )
 
     def replace_config(self, **changes: Any) -> TradingConfig:
         """Return new TradingConfig with ``changes`` applied and set it."""
@@ -192,6 +311,8 @@ class StrategyAllocator:
                     else:
                         logger.warning("Invalid signal side: %s", getattr(s, "side", side_norm))
                         continue
+
+                self._normalize_signal_reliability(s)
 
                 try:
                     original = float(s.confidence)

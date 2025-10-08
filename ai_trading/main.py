@@ -1289,7 +1289,7 @@ def main(argv: list[str] | None = None) -> None:
                     },
                 )
                 if sleep_for > 0:
-                    time.sleep(sleep_for)
+                    _interruptible_sleep(sleep_for)
     except Exception:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps

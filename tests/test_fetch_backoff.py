@@ -88,3 +88,39 @@ def test_fetch_feed_uses_http_fallback_when_enabled(monkeypatch):
     assert isinstance(out, pd.DataFrame)
     assert not out.empty
     assert fallback_calls == [("TEST", "1m")]
+
+
+def test_fetch_feed_cooldown_skips_primary_after_fallback(monkeypatch):
+    start, end = _dt_range(1)
+    call_feeds: list[str] = []
+
+    def always_empty(symbol, s, e, timeframe, *, feed):
+        call_feeds.append(feed)
+        raise fb.EmptyBarsError("empty")
+
+    def yahoo_success(*_a, **_k):
+        return pd.DataFrame({"timestamp": [start]})
+
+    fb._EMPTY_BAR_COUNTS.clear()
+    fb._SKIPPED_SYMBOLS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+    fb._PROVIDER_COOLDOWNS.clear()
+    fb._PROVIDER_DECISION_CACHE = (0.0, 0.0)
+
+    monkeypatch.setattr(fb, "_fetch_bars", always_empty)
+    monkeypatch.setattr(fb, "_yahoo_get_bars", yahoo_success)
+    monkeypatch.setattr(fb, "_provider_decision_window", lambda: 120.0)
+    times = iter([0.0] * 12)
+    monkeypatch.setattr(fb, "monotonic_time", lambda: next(times))
+
+    first = fb._fetch_feed("COOL", start, end, "1Min", feed="iex")
+    assert isinstance(first, pd.DataFrame)
+    assert not first.empty
+
+    second = fb._fetch_feed("COOL", start, end, "1Min", feed="iex")
+    assert isinstance(second, pd.DataFrame)
+    assert not second.empty
+
+    assert call_feeds == ["iex"], "primary feed should not be retried during cooldown"
+    key = ("COOL", "1Min")
+    assert key in fb._PROVIDER_COOLDOWNS
