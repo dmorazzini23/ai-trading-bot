@@ -32,6 +32,7 @@ def test_backup_split_large_intraday_window(monkeypatch, days):
     monkeypatch.setattr(fetch_mod, "_repair_rth_minute_gaps", lambda df, **_: (df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False))
     monkeypatch.setattr(fetch_mod, "mark_success", lambda *a, **k: None)
     monkeypatch.setattr(fetch_mod, "_mark_fallback", lambda *a, **k: None)
+    monkeypatch.setattr(fetch_mod, "_pytest_active", lambda: False)
 
     calls: list[tuple[datetime, datetime]] = []
 

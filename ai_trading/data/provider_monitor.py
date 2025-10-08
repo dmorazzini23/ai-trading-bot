@@ -40,8 +40,84 @@ from ai_trading.utils.time import monotonic_time
 
 logger = get_logger(__name__)
 
-_MIN_RECOVERY_SECONDS = 600
-_MIN_RECOVERY_PASSES = 3
+def _resolve_switch_cooldown_seconds() -> int:
+    """Return the minimum cooldown before switching back to the primary feed."""
+
+    candidate: int | None = None
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        for attr in ("provider_switch_cooldown_sec", "provider_switch_cooldown_seconds"):
+            value = getattr(settings, attr, None)
+            if value is not None:
+                try:
+                    candidate = int(value)
+                except (TypeError, ValueError):
+                    candidate = None
+                else:
+                    break
+    if candidate is None:
+        try:
+            candidate = get_env("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC", None, cast=int)
+        except Exception:
+            candidate = None
+    if candidate is None:
+        raw = os.getenv("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC", "").strip()
+        if raw:
+            try:
+                candidate = int(raw)
+            except Exception:
+                candidate = None
+    if candidate is None:
+        candidate = 900
+    try:
+        return max(int(candidate), 0)
+    except Exception:
+        return 900
+
+
+def _resolve_health_passes_required() -> int:
+    """Return the number of consecutive healthy passes required for recovery."""
+
+    candidate: int | None = None
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        for attr in ("provider_health_passes_required", "provider_health_passes"):
+            value = getattr(settings, attr, None)
+            if value is not None:
+                try:
+                    candidate = int(value)
+                except (TypeError, ValueError):
+                    candidate = None
+                else:
+                    break
+    if candidate is None:
+        try:
+            candidate = get_env("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED", None, cast=int)
+        except Exception:
+            candidate = None
+    if candidate is None:
+        raw = os.getenv("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED", "").strip()
+        if raw:
+            try:
+                candidate = int(raw)
+            except Exception:
+                candidate = None
+    if candidate is None:
+        candidate = 4
+    try:
+        return max(int(candidate), 1)
+    except Exception:
+        return 4
+
+
+_MIN_RECOVERY_SECONDS = _resolve_switch_cooldown_seconds()
+_MIN_RECOVERY_PASSES = _resolve_health_passes_required()
 _DEFAULT_SWITCH_QUIET_SECONDS = 15.0
 
 _HALT_EVENT_WINDOW_SECONDS = 600.0
@@ -552,6 +628,8 @@ class ProviderMonitor:
         self._last_switchover_passes: int = 0
         self._last_sip_warn_ts: float = 0.0
         self._pair_switch_history: Dict[Tuple[str, str], Deque[float]] = defaultdict(deque)
+        self.min_recovery_seconds = _MIN_RECOVERY_SECONDS
+        self.recovery_passes_required = _MIN_RECOVERY_PASSES
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -585,6 +663,11 @@ class ProviderMonitor:
         self._last_switchover_passes = 0
         self._last_sip_warn_ts = 0.0
         self._pair_switch_history.clear()
+        global _MIN_RECOVERY_SECONDS, _MIN_RECOVERY_PASSES
+        _MIN_RECOVERY_SECONDS = _resolve_switch_cooldown_seconds()
+        _MIN_RECOVERY_PASSES = _resolve_health_passes_required()
+        self.min_recovery_seconds = _MIN_RECOVERY_SECONDS
+        self.recovery_passes_required = _MIN_RECOVERY_PASSES
 
     def _refresh_runtime_limits(self) -> None:
         """Refresh cached cooldown and quiet window values from configuration."""
@@ -595,6 +678,16 @@ class ProviderMonitor:
         configured_quiet = max(float(_resolve_switch_quiet_seconds()), 0.0)
         if configured_quiet != self.switch_quiet_seconds:
             self.switch_quiet_seconds = configured_quiet
+        configured_recovery = _resolve_switch_cooldown_seconds()
+        if configured_recovery != self.min_recovery_seconds:
+            global _MIN_RECOVERY_SECONDS
+            _MIN_RECOVERY_SECONDS = configured_recovery
+            self.min_recovery_seconds = configured_recovery
+        configured_passes = _resolve_health_passes_required()
+        if configured_passes != self.recovery_passes_required:
+            global _MIN_RECOVERY_PASSES
+            _MIN_RECOVERY_PASSES = configured_passes
+            self.recovery_passes_required = configured_passes
 
     def record_failure(
         self,
@@ -825,13 +918,15 @@ class ProviderMonitor:
                 else float("inf")
             )
             passes = self._last_switchover_passes
-            if passes < _MIN_RECOVERY_PASSES or elapsed < _MIN_RECOVERY_SECONDS:
-                reason = "insufficient_health_passes" if passes < _MIN_RECOVERY_PASSES else "cooldown_active"
+            required_passes = max(int(self.recovery_passes_required), 1)
+            required_seconds = max(float(self.min_recovery_seconds), 0.0)
+            if passes < required_passes or elapsed < required_seconds:
+                reason = "insufficient_health_passes" if passes < required_passes else "cooldown_active"
                 logger.info(
                     "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
                     from_key,
                     reason,
-                    max(self.cooldown, _MIN_RECOVERY_SECONDS),
+                    int(max(self.cooldown, required_seconds)),
                 )
                 return
         now = datetime.now(UTC)
@@ -1160,9 +1255,9 @@ class ProviderMonitor:
             consecutive += 1
             state["consecutive_passes"] = consecutive
             if using_backup:
-                allow_recovery = consecutive >= _MIN_RECOVERY_PASSES
+                allow_recovery = consecutive >= max(int(self.recovery_passes_required), 1)
                 elapsed = (now - last_switch_dt).total_seconds()
-                required_stay = max(cooldown_seconds, _MIN_RECOVERY_SECONDS)
+                required_stay = max(cooldown_seconds, int(max(float(self.min_recovery_seconds), 0.0)))
                 cooldown_ok = allow_recovery and elapsed >= required_stay
                 if window_locked and not hard_fail:
                     cooldown_ok = False
@@ -1256,7 +1351,7 @@ class ProviderMonitor:
         state["cooldown"] = cooldown_default
         stay_provider = active if not using_backup else backup
         cooldown_for_log = (
-            max(cooldown_seconds, _MIN_RECOVERY_SECONDS)
+            max(cooldown_seconds, int(max(float(self.min_recovery_seconds), 0.0)))
             if using_backup and healthy
             else cooldown_default
         )

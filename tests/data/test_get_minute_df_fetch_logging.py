@@ -88,12 +88,14 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
 
 
 def test_env_without_sip_does_not_schedule_sip(monkeypatch):
-    monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
-    monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "0")
     monkeypatch.setattr(data_fetcher, "_ALLOW_SIP", None, raising=False)
     monkeypatch.setattr(data_fetcher, "_cycle_feed_override", {}, raising=False)
     monkeypatch.setattr(data_fetcher, "_override_set_ts", {}, raising=False)
     monkeypatch.setattr(data_fetcher, "_CYCLE_FALLBACK_FEED", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_OVERRIDE_MAP", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_FEED_SWITCH_CACHE", {}, raising=False)
 
     assert data_fetcher._sip_allowed() is False
     assert "sip" not in data_fetcher._ordered_fallbacks("iex")

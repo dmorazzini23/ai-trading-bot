@@ -274,6 +274,27 @@ def dummy_data_fetcher():
     return _F()
 
 
+@pytest.fixture
+def dummy_data_fetcher_empty():
+    """Provide a data_fetcher with empty minute bars for failure simulations."""
+
+    import pandas as pd
+
+    class _F:
+        def __init__(self):
+            self._df = pd.DataFrame(
+                {"open": [], "high": [], "low": [], "close": [], "volume": []}
+            )
+
+        def get_daily_df(self, ctx, sym):  # noqa: ARG002 - tests expect method
+            return self._df.copy()
+
+        def get_minute_bars(self, sym):  # noqa: ARG002
+            return self._df.copy()
+
+    return _F()
+
+
 @pytest.fixture(autouse=True)
 def _reset_fallback_cache(monkeypatch):
     """Reset fallback cache state without eager package imports."""

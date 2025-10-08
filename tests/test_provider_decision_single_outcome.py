@@ -68,6 +68,7 @@ def test_provider_decision_single_outcome(caplog):
     assert active == backup
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_STAY"]
 
+    caplog.clear()
     active = monitor.update_data_health(
         primary,
         backup,
@@ -76,6 +77,18 @@ def test_provider_decision_single_outcome(caplog):
         severity="good",
     )
     assert active == backup
+
+    extra_passes = max(int(monitor.recovery_passes_required) - 2, 0)
+    for _ in range(extra_passes):
+        caplog.clear()
+        active = monitor.update_data_health(
+            primary,
+            backup,
+            healthy=True,
+            reason="gap_ratio=0.3%",
+            severity="good",
+        )
+        assert active == backup
 
     state = monitor._pair_states[(primary, backup)]
     state["last_switch"] = datetime.now(UTC) - timedelta(seconds=monitor_mod._MIN_RECOVERY_SECONDS + 5)
