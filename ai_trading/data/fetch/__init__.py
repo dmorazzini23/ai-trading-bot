@@ -5211,13 +5211,13 @@ def _fetch_bars(
 
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
+            from_feed = _feed
             if fb_feed == "sip" and (not skip_check):
                 if not _sip_fallback_allowed(session, headers, fb_interval):
                     _register_provider_attempt(fb_feed)
                     _log_sip_unavailable(symbol, fb_interval, "UNAUTHORIZED_SIP")
                     return None
-                from_feed = _feed
-                if not _state.get("window_has_session", True) and not skip_check:
+                if not _state.get("window_has_session", True):
                     attempted_pairs = _state.setdefault("no_session_fallback_pairs", set())
                     attempt_key = (from_feed, fb_feed)
                     if attempt_key in attempted_pairs:
@@ -5225,61 +5225,72 @@ def _fetch_bars(
                     attempted_pairs.add(attempt_key)
                     if not (from_feed == "iex" and fb_feed == "sip"):
                         return None
-                _interval, _feed, _start, _end = fb
-                from_provider_name = f"alpaca_{from_feed}"
-                to_provider_name = f"alpaca_{fb_feed}"
-                if not skip_metrics:
-                    provider_fallback.labels(
-                        from_provider=f"alpaca_{from_feed}",
-                        to_provider=f"alpaca_{fb_feed}",
-                    ).inc()
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                _state["last_fallback_feed"] = fb_feed
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info(
-                    "DATA_SOURCE_FALLBACK_ATTEMPT",
-                    extra={"provider": "alpaca", "fallback": payload},
-                )
-                prev_defer = _state.get("defer_success_metric")
+
+            _interval, _feed, _start, _end = fb
+            from_provider_name = f"alpaca_{from_feed}"
+            to_provider_name = f"alpaca_{fb_feed}"
+            if not skip_metrics:
+                provider_fallback.labels(
+                    from_provider=f"alpaca_{from_feed}",
+                    to_provider=f"alpaca_{fb_feed}",
+                ).inc()
+            _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
+            _state["last_fallback_feed"] = fb_feed
+            payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
+            logger.info(
+                "DATA_SOURCE_FALLBACK_ATTEMPT",
+                extra={"provider": "alpaca", "fallback": payload},
+            )
+
+            prev_defer = _state.get("defer_success_metric")
+            prev_allow_primary = _state.get("allow_no_session_primary", False)
+            modified_defer = False
+            modified_allow_primary = False
+            if fb_feed == "sip":
                 _state["defer_success_metric"] = True
-                prev_allow_primary = _state.get("allow_no_session_primary", False)
                 _state["allow_no_session_primary"] = True
-                try:
-                    result = _req(session, None, headers=headers, timeout=timeout)
-                except EmptyBarsError:
-                    if not _state.get("window_has_session", True):
-                        result = pd.DataFrame()
-                    else:
-                        raise
-                finally:
+                modified_defer = True
+                modified_allow_primary = True
+
+            try:
+                result = _req(session, None, headers=headers, timeout=timeout)
+            except EmptyBarsError:
+                if not _state.get("window_has_session", True):
+                    result = pd.DataFrame()
+                else:
+                    raise
+            finally:
+                if modified_allow_primary:
                     if prev_allow_primary:
                         _state["allow_no_session_primary"] = True
                     else:
                         _state.pop("allow_no_session_primary", None)
+                if modified_defer:
                     if prev_defer is None:
                         _state.pop("defer_success_metric", None)
                     else:
                         _state["defer_success_metric"] = prev_defer
-                result_has_rows = result is not None and not getattr(result, "empty", True)
-                if result_has_rows:
-                    tags = _tags()
-                    _record_fallback_success_metric(tags)
-                    _record_success_metric(tags, prefer_fallback=True)
-                if result is not None:
-                    _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
-                if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
-                    _mark_fallback(
-                        symbol,
-                        fb_interval,
-                        fb_start,
-                        fb_end,
-                        from_provider=from_provider_name,
-                        fallback_feed=fb_feed,
-                        fallback_df=result,
-                        resolved_provider=to_provider_name,
-                        resolved_feed=fb_feed,
-                    )
-                return result
+
+            result_has_rows = result is not None and not getattr(result, "empty", True)
+            if result_has_rows:
+                tags = _tags()
+                _record_fallback_success_metric(tags)
+                _record_success_metric(tags, prefer_fallback=True)
+            if result is not None:
+                _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
+            if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
+                _mark_fallback(
+                    symbol,
+                    fb_interval,
+                    fb_start,
+                    fb_end,
+                    from_provider=from_provider_name,
+                    fallback_feed=fb_feed,
+                    fallback_df=result,
+                    resolved_provider=to_provider_name,
+                    resolved_feed=fb_feed,
+                )
+            return result
 
         if (
             not _state.get("window_has_session", True)
