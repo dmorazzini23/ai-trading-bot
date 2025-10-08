@@ -432,10 +432,16 @@ def next_market_open(now: dt.datetime | None = None) -> dt.datetime:
         start = check_time.date()
         end = start + dt.timedelta(days=7)
         sched = nyse.schedule(start_date=start, end_date=end)
-        future = sched[sched["market_open"] > check_time]
-        if not future.empty:
-            return future.iloc[0]["market_open"].tz_convert(EASTERN_TZ).to_pydatetime()
-    except (ImportError, ValueError, TypeError) as exc:  # pragma: no cover - best effort
+        if "market_open" not in sched.columns:
+            logger.debug(
+                "next_market_open schedule missing column",
+                extra={"available_columns": list(sched.columns)},
+            )
+        else:
+            future = sched[sched["market_open"] > check_time]
+            if not future.empty:
+                return future.iloc[0]["market_open"].tz_convert(EASTERN_TZ).to_pydatetime()
+    except (ImportError, ValueError, TypeError, KeyError) as exc:  # pragma: no cover - best effort
         logger.debug("next_market_open calendar lookup failed: %s", exc)
 
     candidate = check_time

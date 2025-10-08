@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as _dt
 import datetime as _dt
 import importlib
+import os
 import sys
 from typing import Any
 
@@ -16,9 +17,11 @@ from ai_trading.data.empty_bar_backoff import (
 )
 from ai_trading.data.metrics import provider_fallback, fetch_retry_total
 from ai_trading.config.settings import provider_priority, max_data_fallbacks
+from ai_trading.config.management import get_env
 from ai_trading.logging import log_backup_provider_used, get_logger
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.data.provider_monitor import provider_monitor
+from ai_trading.utils.time import monotonic_time
 
 from . import (
     EmptyBarsError,
@@ -38,6 +41,76 @@ pd = load_pandas()
 logger = get_logger(__name__)
 
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
+_PROVIDER_COOLDOWNS: dict[tuple[str, str], float] = {}
+_PROVIDER_DECISION_CACHE: tuple[float, float] = (120.0, 0.0)
+
+
+def _provider_decision_window() -> float:
+    """Return provider decision cooldown window in seconds."""
+
+    global _PROVIDER_DECISION_CACHE
+    cached_value, cached_at = _PROVIDER_DECISION_CACHE
+    now = monotonic_time()
+    if now - cached_at < 60.0:
+        return cached_value
+
+    window: float | None = None
+    try:
+        window = get_env("AI_TRADING_PROVIDER_DECISION_SECS", None, cast=float)
+    except Exception:
+        window = None
+    if window is None:
+        raw = os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", "").strip()
+        if raw:
+            try:
+                window = float(raw)
+            except Exception:
+                window = None
+    if window is None:
+        window = 120.0
+
+    value = max(float(window), 0.0)
+    _PROVIDER_DECISION_CACHE = (value, now)
+    return value
+
+
+def _primary_on_cooldown(key: tuple[str, str]) -> tuple[bool, float]:
+    expiry = _PROVIDER_COOLDOWNS.get(key)
+    if expiry is None:
+        return False, 0.0
+    now = monotonic_time()
+    if now >= expiry:
+        _PROVIDER_COOLDOWNS.pop(key, None)
+        return False, 0.0
+    remaining = max(0.0, expiry - now)
+    return True, remaining
+
+
+def _apply_provider_cooldown(
+    key: tuple[str, str],
+    *,
+    symbol: str,
+    timeframe: str,
+    provider: str,
+    fallback_provider: str | None = None,
+) -> None:
+    window = _provider_decision_window()
+    if window <= 0.0:
+        return
+    expiry = monotonic_time() + window
+    previous = _PROVIDER_COOLDOWNS.get(key)
+    if previous is not None and previous >= expiry:
+        return
+    _PROVIDER_COOLDOWNS[key] = expiry
+    extra = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "provider": provider,
+        "cooldown_seconds": round(window, 3),
+    }
+    if fallback_provider:
+        extra["fallback_provider"] = fallback_provider
+    logger.info("PRIMARY_PROVIDER_COOLDOWN_SET", extra=extra)
 
 
 def _empty_df() -> Any:
@@ -136,17 +209,31 @@ def _fetch_feed(
     record_attempt(symbol, timeframe)
     tf_norm = _canon_tf(timeframe)
 
+    cooldown_active, cooldown_remaining = _primary_on_cooldown(tf_key)
     try:
-        df = _fetch_bars(symbol, start, end, timeframe, feed=feed)
+        if cooldown_active:
+            logger.info(
+                "PRIMARY_PROVIDER_IN_COOLDOWN",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "provider": f"alpaca_{feed}",
+                    "cooldown_remaining": round(cooldown_remaining, 3),
+                },
+            )
+            df = None
+            empty_error = True
+        else:
+            df = _fetch_bars(symbol, start, end, timeframe, feed=feed)
+            empty_error = df is None or getattr(df, "empty", True)
+            if not empty_error:
+                _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                _PROVIDER_COOLDOWNS.pop(tf_key, None)
+                mark_success(symbol, timeframe)
+                return df
     except EmptyBarsError:
         df = None
         empty_error = True
-    else:
-        empty_error = df is None or getattr(df, "empty", True)
-        if not empty_error:
-            _EMPTY_BAR_COUNTS.pop(tf_key, None)
-            mark_success(symbol, timeframe)
-            return df
 
     logger.info("USING_BACKUP_PROVIDER")
     attempts = _EMPTY_BAR_COUNTS.get(tf_key, 0)
@@ -170,6 +257,13 @@ def _fetch_feed(
             if http_df is not None and not getattr(http_df, "empty", True):
                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                 mark_success(symbol, timeframe)
+                _apply_provider_cooldown(
+                    tf_key,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    provider=f"alpaca_{feed}",
+                    fallback_provider="yahoo",
+                )
                 return http_df
         raise EmptyBarsError(
             f"empty_bars: symbol={symbol}, timeframe={timeframe}, max_retries={attempts}"
@@ -191,6 +285,7 @@ def _fetch_feed(
             logger.warning("BACKUP_PROVIDER_USED")
             _record_feed_switch(symbol, timeframe, feed, alt_feed)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            _PROVIDER_COOLDOWNS.pop(tf_key, None)
             mark_success(symbol, timeframe)
             return df_alt
 
@@ -205,6 +300,13 @@ def _fetch_feed(
         if http_df is not None and not getattr(http_df, "empty", True):
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             mark_success(symbol, timeframe)
+            _apply_provider_cooldown(
+                tf_key,
+                symbol=symbol,
+                timeframe=timeframe,
+                provider=f"alpaca_{feed}",
+                fallback_provider="yahoo",
+            )
             return http_df
 
     yf_map = getattr(_fetch_module, "_YF_INTERVAL_MAP", {})
@@ -219,6 +321,13 @@ def _fetch_feed(
         fallback_df=yahoo_df,
         resolved_provider="yahoo",
         resolved_feed=None,
+    )
+    _apply_provider_cooldown(
+        tf_key,
+        symbol=symbol,
+        timeframe=timeframe,
+        provider=f"alpaca_{feed}",
+        fallback_provider="yahoo",
     )
     if yahoo_df is not None and not getattr(yahoo_df, "empty", True):
         _EMPTY_BAR_COUNTS.pop(tf_key, None)

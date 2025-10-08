@@ -40,3 +40,25 @@ def test_allocator():
 
     alloc.update_reward("s1", 0.5)
     force_coverage(strategy_allocator)
+
+
+def test_allocator_accepts_fallback_gap_signal():
+    alloc = strategy_allocator.StrategyAllocator()
+    alloc.replace_config(
+        signal_confirmation_bars=1,
+        min_confidence=0.0,
+        delta_threshold=0.0,
+    )
+    meta = {
+        "price_reliable": False,
+        "price_reliable_reason": "gap_ratio=0.70%>limit=0.50%",
+        "gap_ratio": 0.007,
+        "fallback_provider": "yahoo",
+    }
+    sig = TradeSignal(symbol="MSFT", side="buy", confidence=0.9, metadata=meta)
+
+    out = alloc.select_signals({"s": [sig]})
+    assert out, "expected allocator to keep signal when fallback data acceptable"
+    kept = out[0]
+    assert kept.symbol == "MSFT"
+    assert kept.metadata.get("price_reliable_override") is True

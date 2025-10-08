@@ -18023,6 +18023,20 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     close = frame["close"].astype(float)
     hl = frame[["high", "low"]].astype(float)
 
+    def _numeric_eps(default: float = 1e-12) -> float:
+        """Return a positive epsilon value even when numpy stubs are in use."""
+
+        finfo = getattr(np, "finfo", None)
+        if callable(finfo):
+            try:
+                candidate = float(finfo(float).eps)
+            except (TypeError, ValueError, AttributeError):
+                candidate = default
+            else:
+                if candidate > 0:
+                    return max(default, candidate)
+        return default
+
     def _manual_rsi(series: pd.Series) -> pd.Series:
         delta = series.diff()
         gain = delta.clip(lower=0)
@@ -18030,29 +18044,22 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         avg_gain = gain.rolling(14).mean()
         avg_loss = loss.rolling(14).mean()
 
-        # Use numpy division to avoid propagating inf/NaN when the rolling
-        # averages are zero. Treat the "no movement" windows (both gain and
-        # loss equal to zero) as neutral RSI values of 50 instead of NaN.
         neutral_mask = (avg_gain == 0) & (avg_loss == 0)
+        rs = pd.Series(float("nan"), index=avg_gain.index, dtype=float)
 
-        avg_gain_arr = avg_gain.to_numpy(dtype=float, copy=True)
-        avg_loss_arr = avg_loss.to_numpy(dtype=float, copy=True)
-        rs_values = np.full_like(avg_gain_arr, np.nan)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rs_values = np.divide(
-                avg_gain_arr,
-                avg_loss_arr,
-                out=rs_values,
-                where=avg_loss_arr != 0,
+        nonzero_loss = avg_loss != 0
+        if nonzero_loss.any():
+            rs.loc[nonzero_loss] = (
+                avg_gain.loc[nonzero_loss] / avg_loss.loc[nonzero_loss]
             )
 
-        # Infinite RS corresponds to RSI of 100 when there were gains but no
-        # losses. Preserve that behaviour, while forcing neutral windows to 1
-        # (RS=1 -> RSI=50).
-        rs_values[(avg_loss_arr == 0) & (avg_gain_arr > 0)] = np.inf
-        rs_values[neutral_mask.to_numpy()] = 1.0
+        positive_gain_no_loss = (avg_loss == 0) & (avg_gain > 0)
+        if positive_gain_no_loss.any():
+            rs.loc[positive_gain_no_loss] = float("inf")
 
-        rs = pd.Series(rs_values, index=avg_gain.index)
+        if neutral_mask.any():
+            rs.loc[neutral_mask] = 1.0
+
         manual_rsi = 100 - (100 / (1 + rs))
         return manual_rsi.where(~neutral_mask, 50.0)
 
@@ -18073,9 +18080,12 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         # Detect degenerate RSI outputs (all NaN or zero variance) which occur
         # on flat price histories. These windows should fall back to the manual
         # computation that seeds neutral values of 50.
-        if np.isclose(valid_rsi.var(ddof=0), 0.0):
+        var_value = float(valid_rsi.var(ddof=0))
+        tol = _numeric_eps()
+        if abs(var_value) <= tol:
             close_delta = close.diff().abs()
-            if np.isclose(close_delta.max(skipna=True), 0.0):
+            max_delta = float(close_delta.max(skipna=True))
+            if abs(max_delta) <= tol:
                 raise ValueError
     except (AttributeError, TypeError, ValueError):
         rsi = _manual_rsi(close)
@@ -18096,7 +18106,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     # stochastic RSI column becomes entirely NaN and the subsequent ``dropna``
     # removes all rows, causing downstream feature extraction to fall back to raw
     # data.
-    eps = np.finfo(float).eps
+    eps = _numeric_eps()
     stoch_denominator = stoch_denominator.where(stoch_denominator != 0.0, eps)
     frame["stochrsi"] = (rsi - rsi_bounds["min"]) / stoch_denominator
 
@@ -18108,14 +18118,17 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         "stochrsi",
     ]
     subset = [col for col in indicator_cols if col in frame.columns]
-    frame.dropna(subset=subset, inplace=True)
-    if frame.empty:
+    active_subset = [col for col in subset if frame[col].notna().any()]
+    cleaned = frame
+    if active_subset:
+        cleaned = frame.dropna(subset=active_subset)
+    if cleaned.empty:
         logger.warning(
             "prepare_indicators produced empty dataframe after dropping NaNs.",
             extra={"reason": "insufficient_indicator_history"},
         )
         return frame
-    return frame
+    return cleaned
 
 
 # --- Back-compat path for tests that expect this symbol at module scope ---
