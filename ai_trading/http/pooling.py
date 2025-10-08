@@ -211,6 +211,11 @@ def _clear_all_loop_semaphores() -> None:
     """Remove cached host semaphores for all tracked event loops."""
 
     for loop, host_map in list(_HOST_SEMAPHORES.items()):
+        records = list(host_map.values())
+        if records:
+            _RETIRED_SEMAPHORES.extend(record.semaphore for record in records)
+            if len(_RETIRED_SEMAPHORES) > 8:
+                del _RETIRED_SEMAPHORES[:-8]
         try:
             host_map.clear()
         except Exception:
@@ -472,14 +477,17 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
 
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
     cache = _LIMIT_CACHE
-    if cache is not None and cache.env_snapshot == env_snapshot:
+    env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
+    if cache is not None and cache.env_snapshot == env_snapshot and not env_changed:
         _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
         _set_pooling_limit_state(snapshot.limit, snapshot.version)
         return snapshot
 
-    if cache is not None and cache.env_snapshot != env_snapshot:
+    if env_changed:
         _clear_all_loop_semaphores()
+        _LIMIT_CACHE = None
+        cache = None
 
     limit, version = _resolve_limit()
     cache = _LIMIT_CACHE

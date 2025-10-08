@@ -521,7 +521,7 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
 
     if prefer_sip:
         has_account_sip = ("sip" in entitlements) or advertised_sip
-        if has_account_sip:
+        if has_account_sip and sip_allowed:
             _ENTITLE_CACHE["sip"] = "sip"
             return "sip"
         if explicit_allow or allow_env:
@@ -577,6 +577,11 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         "ALPACA_FEED_UNENTITLED",
         requested=normalized_req,
     )
+    if normalized_req == "sip" and not (sip_allowed and (sip_entitled or advertised_sip)):
+        fallback = _first_non_sip()
+        if fallback is not None:
+            return fallback
+        return "iex"
     return current_feed or "iex"
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
