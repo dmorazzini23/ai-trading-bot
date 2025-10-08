@@ -469,13 +469,28 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         except (AttributeError, TypeError, ValueError):
             priority_values = ()
 
+    raw_entitlements = getattr(client, "entitlements", None) or []
+    entitlements: set[str] = set()
+    for value in raw_entitlements:
+        if value is None:
+            continue
+        if isinstance(value, bytes):
+            try:
+                normalized = value.decode("utf-8", "ignore").strip().lower()
+            except UnicodeDecodeError:
+                normalized = value.decode("latin-1", "ignore").strip().lower()
+        else:
+            normalized = str(value).strip().lower()
+        if normalized:
+            entitlements.add(normalized)
+
     feeds = _get_entitled_feeds(client)
     if available_set:
         feeds.update(available_set)
 
     advertised_sip = "sip" in feeds or available_has_sip
-
-    entitlements = set(getattr(client, "entitlements", []) or [])
+    if "sip" in entitlements:
+        advertised_sip = True
 
     allow_env = (
         os.getenv("ALPACA_ALLOW_SIP") == "1"
@@ -489,6 +504,8 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         or _env_bool("ALPACA_HAS_SIP") is True
         or allow_env
     )
+    if "sip" in entitlements:
+        explicit_allow = True
     unauthorized_flag = str(os.getenv("ALPACA_SIP_UNAUTHORIZED", "")).strip() == "1"
     priority_blocks_sip = bool(priority_values) and "alpaca_sip" not in priority_values
     if advertised_sip:
