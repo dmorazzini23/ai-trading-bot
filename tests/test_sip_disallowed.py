@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from ai_trading.data.fetch import _sip_fallback_allowed, logger
+from ai_trading.data.fetch import _sip_fallback_allowed
 from ai_trading.data.fetch.sip_disallowed import sip_disallowed
 
 
@@ -36,20 +36,16 @@ def test_sip_disallowed_when_entitlement_missing(monkeypatch):
     assert sip_disallowed() is True
 
 
-def test_no_unauthorized_log_when_sip_disabled(monkeypatch):
+def test_no_unauthorized_log_when_sip_disabled(monkeypatch, caplog):
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
     monkeypatch.setattr("ai_trading.data.fetch._ALLOW_SIP", False)
     monkeypatch.setattr("ai_trading.data.fetch._SIP_DISALLOWED_WARNED", False)
-    captured: list[str] = []
-
-    def _capture(message: str, *args, **kwargs):
-        captured.append(message)
-
-    monkeypatch.setattr(logger, "warning", _capture)
+    caplog.set_level("INFO")
     session = SimpleNamespace(get=lambda *a, **k: SimpleNamespace(status_code=401))
     allowed = _sip_fallback_allowed(session, {}, "1Min")
     assert allowed is False
-    assert all(msg != "UNAUTHORIZED_SIP" for msg in captured)
+    messages = [record.message for record in caplog.records]
+    assert "UNAUTHORIZED_SIP" not in messages
 
 
 def test_sip_disallowed_with_explicit_entitlement_false(monkeypatch):

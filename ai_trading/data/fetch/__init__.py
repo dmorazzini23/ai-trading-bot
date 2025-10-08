@@ -754,6 +754,9 @@ _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
 # Configurable backoff parameters for retry logic
 _FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
 _FETCH_BARS_BACKOFF_CAP = float(os.getenv("FETCH_BARS_BACKOFF_CAP", "5"))
+_MINUTE_GAP_WARNING_THRESHOLD = max(
+    0, int(os.getenv("MINUTE_GAP_WARNING_THRESHOLD", "3"))
+)
 _http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
 if _http_fallback_env is None:
     _ENABLE_HTTP_FALLBACK = True
@@ -1138,6 +1141,55 @@ def _frame_has_rows(candidate: Any | None) -> bool:
         return len(candidate) > 0  # type: ignore[arg-type]
     except Exception:
         return False
+
+
+def _fallback_frame_is_usable(
+    frame: Any,
+    start_dt: _dt.datetime,
+    end_dt: _dt.datetime,
+) -> bool:
+    """Best-effort validation that backup OHLCV data is usable."""
+
+    if frame is None:
+        return False
+    pd_local = _ensure_pandas()
+    if pd_local is None or not isinstance(frame, pd.DataFrame):
+        return True
+    if frame.empty:
+        return False
+    if "close" in frame.columns:
+        try:
+            if frame["close"].dropna().empty:
+                return False
+        except Exception:
+            return False
+    if "timestamp" in frame.columns:
+        try:
+            ts_index = pd_local.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        except Exception:
+            return False
+        if getattr(ts_index, "isna", None) and ts_index.isna().all():
+            return False
+        try:
+            last_ts = ts_index.max()
+        except Exception:
+            return False
+        if getattr(pd_local, "isna", None) and pd_local.isna(last_ts):
+            return False
+        if getattr(last_ts, "tzinfo", None) is None:
+            try:
+                last_ts = last_ts.tz_localize("UTC")
+            except Exception:
+                last_ts = ensure_utc_datetime(last_ts)
+        start_utc = ensure_utc_datetime(start_dt)
+        end_utc = ensure_utc_datetime(end_dt)
+        tolerance = getattr(pd_local, "Timedelta", _dt.timedelta)(minutes=5)
+        try:
+            if last_ts < (start_utc - tolerance) or last_ts > (end_utc + tolerance):
+                return False
+        except TypeError:
+            return False
+    return True
 
 
 def _mark_fallback(
@@ -3094,16 +3146,21 @@ def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZE
     extra = {"provider": "alpaca", "feed": "sip", "symbol": symbol, "timeframe": timeframe}
     if reason == "UNAUTHORIZED_SIP":
         extra["status"] = "unauthorized"
-    logger.warning(reason, extra=_norm_extra(extra))
+    level = logging.INFO if (reason == "UNAUTHORIZED_SIP" and not _sip_allowed()) else logging.WARNING
+    logger.log(level, reason, extra=_norm_extra(extra))
     _SIP_UNAVAILABLE_LOGGED.add(key)
 
 
 def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], timeframe: str) -> bool:
     """Return True if SIP fallback should be attempted."""
+
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")
+
     global _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
+
     allow_sip = _sip_allowed()
+
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
@@ -3115,8 +3172,10 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
             return True
         _SIP_PRECHECK_DONE = True
         return True
+
     if not allow_sip:
         return False
+
     if not _sip_configured():
         if not allow_sip and not _SIP_DISALLOWED_WARNED:
             logger.warning(
@@ -3125,10 +3184,13 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
             )
             _SIP_DISALLOWED_WARNED = True
         return False
+
     if _is_sip_unauthorized():
         return False
+
     if _SIP_PRECHECK_DONE:
         return True
+
     _SIP_PRECHECK_DONE = True
     url = "https://data.alpaca.markets/v2/stocks/bars"
     params = {"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"}
@@ -3140,6 +3202,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
             extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe, "error": str(e)}),
         )
         return True
+
     if getattr(resp, "status_code", None) in (401, 403):
         _incr(
             "data.fetch.unauthorized",
@@ -3155,6 +3218,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
         )
         _mark_sip_unauthorized()
         return False
+
     return True
 
 
@@ -4108,10 +4172,13 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
         return df
 
     gap_count = int(len(missing))
+    severity = logging.WARNING
+    if gap_count <= _MINUTE_GAP_WARNING_THRESHOLD:
+        severity = logging.INFO
     log_throttled_event(
         logger,
         "MINUTE_GAPS_DETECTED",
-        level=logging.WARNING,
+        level=severity,
         extra=_norm_extra({"symbol": symbol, "gap_count": gap_count}),
     )
     if not backfill:
@@ -4761,6 +4828,31 @@ def _fetch_bars(
             feed=normalized_provider or None,
         )
         frame_has_rows = _frame_has_rows(annotated_df)
+        if frame_has_rows and not _fallback_frame_is_usable(annotated_df, _start, _end):
+            logger.warning(
+                "BACKUP_DATA_REJECTED",
+                extra=_norm_extra(
+                    {
+                        "provider": resolved_provider,
+                        "feed": normalized_provider or provider_str,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "reason": "invalid_payload",
+                    }
+                ),
+            )
+            pd_local = _ensure_pandas()
+            replacement = _empty_ohlcv_frame(pd_local)
+            if isinstance(replacement, pd.DataFrame):
+                annotated_df = replacement
+            elif pd_local is not None:
+                annotated_df = pd_local.DataFrame()
+            else:
+                try:
+                    annotated_df = pd.DataFrame()
+                except Exception:  # pragma: no cover - pandas unavailable
+                    annotated_df = []  # type: ignore[assignment]
+            frame_has_rows = False
         if frame_has_rows:
             _record_fallback_success_metric(tags)
             try:
@@ -5124,71 +5216,70 @@ def _fetch_bars(
                     _register_provider_attempt(fb_feed)
                     _log_sip_unavailable(symbol, fb_interval, "UNAUTHORIZED_SIP")
                     return None
-            from_feed = _feed
-            if not _state.get("window_has_session", True) and not skip_check:
-                attempted_pairs = _state.setdefault("no_session_fallback_pairs", set())
-                attempt_key = (from_feed, fb_feed)
-                pandas_mod = _ensure_pandas()
-                if attempt_key in attempted_pairs:
-                    return None
-                attempted_pairs.add(attempt_key)
-                if not (from_feed == "iex" and fb_feed == "sip"):
-                    return None
-            _interval, _feed, _start, _end = fb
-            from_provider_name = f"alpaca_{from_feed}"
-            to_provider_name = f"alpaca_{fb_feed}"
-            if not skip_metrics:
-                provider_fallback.labels(
-                    from_provider=f"alpaca_{from_feed}",
-                    to_provider=f"alpaca_{fb_feed}",
-                ).inc()
-            _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-            _state["last_fallback_feed"] = fb_feed
-            payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-            logger.info(
-                "DATA_SOURCE_FALLBACK_ATTEMPT",
-                extra={"provider": "alpaca", "fallback": payload},
-            )
-            prev_defer = _state.get("defer_success_metric")
-            _state["defer_success_metric"] = True
-            prev_allow_primary = _state.get("allow_no_session_primary", False)
-            _state["allow_no_session_primary"] = True
-            try:
-                result = _req(session, None, headers=headers, timeout=timeout)
-            except EmptyBarsError:
-                if not _state.get("window_has_session", True):
-                    result = pd.DataFrame()
-                else:
-                    raise
-            finally:
-                if prev_allow_primary:
-                    _state["allow_no_session_primary"] = True
-                else:
-                    _state.pop("allow_no_session_primary", None)
-                if prev_defer is None:
-                    _state.pop("defer_success_metric", None)
-                else:
-                    _state["defer_success_metric"] = prev_defer
-            result_has_rows = result is not None and not getattr(result, "empty", True)
-            if result_has_rows:
-                tags = _tags()
-                _record_fallback_success_metric(tags)
-                _record_success_metric(tags, prefer_fallback=True)
-            if result is not None:
-                _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
-            if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
-                _mark_fallback(
-                    symbol,
-                    fb_interval,
-                    fb_start,
-                    fb_end,
-                    from_provider=from_provider_name,
-                    fallback_feed=fb_feed,
-                    fallback_df=result,
-                    resolved_provider=to_provider_name,
-                    resolved_feed=fb_feed,
+                from_feed = _feed
+                if not _state.get("window_has_session", True) and not skip_check:
+                    attempted_pairs = _state.setdefault("no_session_fallback_pairs", set())
+                    attempt_key = (from_feed, fb_feed)
+                    if attempt_key in attempted_pairs:
+                        return None
+                    attempted_pairs.add(attempt_key)
+                    if not (from_feed == "iex" and fb_feed == "sip"):
+                        return None
+                _interval, _feed, _start, _end = fb
+                from_provider_name = f"alpaca_{from_feed}"
+                to_provider_name = f"alpaca_{fb_feed}"
+                if not skip_metrics:
+                    provider_fallback.labels(
+                        from_provider=f"alpaca_{from_feed}",
+                        to_provider=f"alpaca_{fb_feed}",
+                    ).inc()
+                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
+                _state["last_fallback_feed"] = fb_feed
+                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": payload},
                 )
-            return result
+                prev_defer = _state.get("defer_success_metric")
+                _state["defer_success_metric"] = True
+                prev_allow_primary = _state.get("allow_no_session_primary", False)
+                _state["allow_no_session_primary"] = True
+                try:
+                    result = _req(session, None, headers=headers, timeout=timeout)
+                except EmptyBarsError:
+                    if not _state.get("window_has_session", True):
+                        result = pd.DataFrame()
+                    else:
+                        raise
+                finally:
+                    if prev_allow_primary:
+                        _state["allow_no_session_primary"] = True
+                    else:
+                        _state.pop("allow_no_session_primary", None)
+                    if prev_defer is None:
+                        _state.pop("defer_success_metric", None)
+                    else:
+                        _state["defer_success_metric"] = prev_defer
+                result_has_rows = result is not None and not getattr(result, "empty", True)
+                if result_has_rows:
+                    tags = _tags()
+                    _record_fallback_success_metric(tags)
+                    _record_success_metric(tags, prefer_fallback=True)
+                if result is not None:
+                    _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
+                if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
+                    _mark_fallback(
+                        symbol,
+                        fb_interval,
+                        fb_start,
+                        fb_end,
+                        from_provider=from_provider_name,
+                        fallback_feed=fb_feed,
+                        fallback_df=result,
+                        resolved_provider=to_provider_name,
+                        resolved_feed=fb_feed,
+                    )
+                return result
 
         if (
             not _state.get("window_has_session", True)
@@ -5403,8 +5494,9 @@ def _fetch_bars(
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
             _incr("data.fetch.error", value=1.0, tags=_tags())
-            if fallback:
-                result = _attempt_fallback(fallback, skip_check=True)
+            fallback_target = fallback
+            if fallback_target:
+                result = _attempt_fallback(fallback_target, skip_check=True)
                 if result is not None:
                     return result
             if attempt >= max_retries:
@@ -8165,6 +8257,7 @@ __all__ = [
     "_ALLOW_SIP",
     "_HAS_SIP",
     "_SIP_UNAUTHORIZED",
+    "_fallback_frame_is_usable",
     "_sip_allowed",
     "_ordered_fallbacks",
     "_is_sip_unauthorized",

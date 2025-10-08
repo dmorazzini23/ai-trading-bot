@@ -4,7 +4,7 @@ os.environ.setdefault("ENV_IMPORT_GUARD", "0")
 
 import pytest
 
-from ai_trading.execution.live_trading import CapacityCheck, ExecutionEngine
+from ai_trading.execution.live_trading import APIError, CapacityCheck, ExecutionEngine
 
 
 class _DummySettings:
@@ -75,4 +75,46 @@ def test_transient_retry_uses_stable_client_id(caplog):
     assert scheduled[0].attempt == 2
     assert scheduled[0].reason == "timeout"
 
+    assert all(rec.message != "ORDER_RETRY_GAVE_UP" for rec in caplog.records)
+
+
+def test_price_out_of_range_retry(caplog):
+    engine = ExecutionEngine(shadow_mode=False)
+    engine.is_initialized = True
+    engine.trading_client = object()
+
+    attempts: list[str] = []
+
+    class _PriceError(APIError):
+        def __init__(self):
+            super().__init__("price must be between bid and ask")
+            object.__setattr__(
+                self,
+                "_error",
+                '{"code": "price_out_of_range", "message": "price must be between bid and ask"}',
+            )
+
+    def fake_submit(order_data):
+        attempts.append(order_data["client_order_id"])
+        if len(attempts) < 3:
+            raise _PriceError()
+        return {
+            "id": "order-ok",
+            "client_order_id": order_data["client_order_id"],
+            "status": "accepted",
+            "symbol": order_data["symbol"],
+            "qty": order_data["quantity"],
+        }
+
+    engine._submit_order_to_alpaca = fake_submit  # type: ignore[assignment]
+
+    caplog.set_level("WARNING")
+    result = engine.submit_limit_order("AAPL", "buy", 5, limit_price=101.0)
+
+    assert len(attempts) == 3
+    assert result["status"] == "accepted"
+    assert engine.stats["retry_count"] == 2
+
+    retry_records = [rec for rec in caplog.records if rec.message == "ORDER_RETRY_SCHEDULED"]
+    assert any(getattr(rec, "reason", None) == "invalid_price" for rec in retry_records)
     assert all(rec.message != "ORDER_RETRY_GAVE_UP" for rec in caplog.records)

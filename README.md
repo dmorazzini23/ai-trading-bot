@@ -820,10 +820,12 @@ times. Once exhausted, the bot logs `EMPTY_RETRIES_EXHAUSTED` and will either
 fall back to another feed or skip the symbol to avoid infinite loops.
 
   Unauthorized SIP requests return an empty DataFrame and automatically
-  disable further SIP retries.  Set `ALPACA_SIP_UNAUTHORIZED=1` to skip SIP
-  requests when your account lacks access.  The fetcher performs a small
-  pre-check for SIP entitlement and logs `UNAUTHORIZED_SIP` when the
-  subscription is missing.
+  disable further SIP retries. Free-tier deployments that lack SIP now log
+  `SIP_FALLBACK_DISABLED` instead of `UNAUTHORIZED_SIP`, preventing repeated
+  warning spam while continuing to rely on IEX or Yahoo data. Set
+  `ALPACA_SIP_UNAUTHORIZED=1` to skip SIP requests when your account lacks
+  access. The fetcher performs a small pre-check for SIP entitlement and logs
+  `UNAUTHORIZED_SIP` when the subscription is missing.
 
   Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH. Do not set both.
 
