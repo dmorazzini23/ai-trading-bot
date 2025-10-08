@@ -2141,6 +2141,24 @@ class ExecutionEngine:
                 status_int = None
             if status_int is not None and 500 <= status_int < 600:
                 return f"status_{status_int}"
+            detail = getattr(exc, "message", None)
+            if isinstance(detail, dict):
+                detail = detail.get("message") or detail.get("detail")
+            message_str = str(detail or exc)
+            normalized = message_str.lower()
+            price_tokens = {
+                "price must be between",
+                "limit price must be",
+                "outside the acceptable range",
+                "quote is not yet available",
+                "bid price is not available",
+                "ask price is not available",
+            }
+            if (
+                (status_int == 422 and "price" in normalized)
+                or any(token in normalized for token in price_tokens)
+            ):
+                return "invalid_price"
 
         if isinstance(exc, ConnectionResetError):
             return "connection_reset"
