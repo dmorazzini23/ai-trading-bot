@@ -702,6 +702,69 @@ async def run_with_concurrency(
 
         return _HostPermit(host_semaphore)
 
+    async def _drain_cancelled_tasks(
+        pending_tasks: list[asyncio.Task[None]], *, timeout: float = 1.0
+    ) -> list[BaseException | None]:
+        """Wait for ``pending_tasks`` to finish after cancellation.
+
+        When tasks ignore cancellation or deadlock on foreign event-loop
+        primitives we should not hang indefinitely.  This helper therefore
+        waits up to ``timeout`` seconds before treating the task as timed out
+        and detaching a completion callback that drains its exception.
+        """
+
+        if not pending_tasks:
+            return []
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+
+        outcomes: dict[asyncio.Task[None], BaseException | None] = {}
+
+        def _record_result(task: asyncio.Task[None]) -> None:
+            try:
+                result = task.result()
+            except BaseException as exc:
+                outcomes[task] = exc
+            else:
+                outcomes[task] = result  # ``None`` for ``run_with_concurrency``
+
+        for task in pending_tasks:
+            if task.done():
+                _record_result(task)
+
+        remaining = {task for task in pending_tasks if not task.done()}
+        while remaining:
+            timeout_left = deadline - loop.time()
+            if timeout_left <= 0:
+                break
+            wait_timeout = min(timeout_left, 0.2)
+            done, still_pending = await asyncio.wait(
+                remaining, timeout=wait_timeout
+            )
+            for task in done:
+                _record_result(task)
+            remaining = still_pending
+
+        if remaining:
+            for task in remaining:
+                if task.cancelled() and task not in outcomes:
+                    outcomes[task] = asyncio.CancelledError()
+                else:
+                    outcomes[task] = asyncio.TimeoutError(
+                        "Task did not finish after cancellation"
+                    )
+
+                def _drain(task: asyncio.Task[None]) -> None:
+                    try:
+                        task.exception()
+                    except BaseException:
+                        return
+
+                task.add_done_callback(_drain)
+
+        return [outcomes.get(task) for task in pending_tasks]
+
     async def _mark_worker_start() -> None:
         nonlocal active_workers, peak_this_run
         global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
@@ -773,11 +836,11 @@ async def run_with_concurrency(
     except asyncio.TimeoutError:
         for task in tasks:
             task.cancel()
-        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        outcomes = await _drain_cancelled_tasks(tasks)
     except asyncio.CancelledError:
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await _drain_cancelled_tasks(tasks)
         LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = max(
             LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run
         )

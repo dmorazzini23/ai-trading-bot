@@ -2845,12 +2845,12 @@ def _has_alpaca_keys() -> bool:
 
     global _ALPACA_CREDS_CACHE
     now = monotonic_time()
-    if _pytest_active():
-        _ALPACA_CREDS_CACHE = None
-        return True
     if is_data_feed_downgraded():
         _ALPACA_CREDS_CACHE = (False, now)
         return False
+    if _pytest_active():
+        _ALPACA_CREDS_CACHE = None
+        return True
 
     if _ALPACA_CREDS_CACHE is not None:
         cached_value, cached_ts = _ALPACA_CREDS_CACHE
@@ -6096,15 +6096,15 @@ def _fetch_bars(
                         "1Hour": "60m",
                         "1Day": "1d",
                     }
-                fb_int = interval_map.get(_interval)
-                if fb_int:
-                    delay_val = _state.get("delay")
-                    if delay_val is None or delay_val <= 0:
-                        delay_val = _state.get("retry_delay")
-                    if delay_val and delay_val > 0:
-                        time.sleep(delay_val)
-                    return _run_backup_fetch(fb_int)
-                    return pd.DataFrame()
+                    fb_int = interval_map.get(_interval)
+                    if fb_int:
+                        delay_val = _state.get("delay")
+                        if delay_val is None or delay_val <= 0:
+                            delay_val = _state.get("retry_delay")
+                        if delay_val and delay_val > 0:
+                            time.sleep(delay_val)
+                        return _run_backup_fetch(fb_int)
+                    return load_pandas().DataFrame()
             else:
                 _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
             if fallback:
