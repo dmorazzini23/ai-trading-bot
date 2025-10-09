@@ -187,6 +187,27 @@ def test_ensure_entitled_feed_blocks_direct_sip_when_explicit_entitlement_false(
     assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
 
 
+def test_ensure_entitled_feed_skips_sip_when_unauthorized(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
+    client = _Client(['sip'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+
+
+def test_ensure_entitled_feed_respects_provider_priority_opt_out(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+
+    class _Settings:
+        def __init__(self):
+            self.alpaca_feed_failover = ("sip",)
+            self.data_provider_priority = ("alpaca_iex", "yahoo")
+            self.model_fields_set = {"data_provider_priority"}
+
+    monkeypatch.setattr(bars, "get_settings", lambda: _Settings())
+    client = _Client(['sip'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+
+
 def test_sip_authorized_rejects_failover_without_entitlement(monkeypatch):
     monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
     monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
