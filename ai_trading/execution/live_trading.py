@@ -1123,22 +1123,27 @@ class ExecutionEngine:
         return self.initialize()
 
     def _is_broker_locked(self) -> bool:
-        if self._broker_locked_until <= 0.0:
+        locked_until = getattr(self, "_broker_locked_until", 0.0)
+        if not hasattr(self, "_broker_locked_until"):
+            setattr(self, "_broker_locked_until", locked_until)
+        if locked_until <= 0.0:
             return False
         now = monotonic_time()
-        if now >= self._broker_locked_until:
-            self._broker_locked_until = 0.0
-            self._broker_lock_reason = None
-            self._broker_lock_logged = False
+        if now >= locked_until:
+            setattr(self, "_broker_locked_until", 0.0)
+            setattr(self, "_broker_lock_reason", None)
+            setattr(self, "_broker_lock_logged", False)
             return False
         return True
 
     def _broker_lock_suppressed(self, *, symbol: str | None, side: str | None, order_type: str) -> bool:
         if not self._is_broker_locked():
             return False
-        remaining = max(self._broker_locked_until - monotonic_time(), 0.0)
+        locked_until = getattr(self, "_broker_locked_until", 0.0)
+        setattr(self, "_broker_locked_until", locked_until)
+        remaining = max(locked_until - monotonic_time(), 0.0)
         extra: dict[str, object] = {
-            "reason": self._broker_lock_reason or "broker_lock",
+            "reason": getattr(self, "_broker_lock_reason", None) or "broker_lock",
             "order_type": order_type,
             "retry_after": round(remaining, 1),
         }
@@ -1146,9 +1151,10 @@ class ExecutionEngine:
             extra["symbol"] = symbol
         if side:
             extra["side"] = side
-        if not self._broker_lock_logged:
+        if not getattr(self, "_broker_lock_logged", False):
+            setattr(self, "_broker_lock_logged", False)
             logger.warning("BROKER_SUBMIT_SUPPRESSED", extra=extra)
-            self._broker_lock_logged = True
+            setattr(self, "_broker_lock_logged", True)
         self.stats.setdefault("skipped_orders", 0)
         self.stats["skipped_orders"] += 1
         return True
@@ -1169,12 +1175,14 @@ class ExecutionEngine:
         duration = max(duration, 60.0)
         now = monotonic_time()
         new_until = now + duration
-        if self._broker_locked_until > now:
-            self._broker_locked_until = max(self._broker_locked_until, new_until)
+        locked_until = getattr(self, "_broker_locked_until", 0.0)
+        setattr(self, "_broker_locked_until", locked_until)
+        if locked_until > now:
+            setattr(self, "_broker_locked_until", max(locked_until, new_until))
         else:
-            self._broker_locked_until = new_until
-        self._broker_lock_reason = reason
-        self._broker_lock_logged = False
+            setattr(self, "_broker_locked_until", new_until)
+        setattr(self, "_broker_lock_reason", reason)
+        setattr(self, "_broker_lock_logged", False)
         extra: dict[str, object] = {
             "reason": reason,
             "cooldown": round(duration, 1),
