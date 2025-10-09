@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from dataclasses import dataclass
 from typing import cast
 
 try:
@@ -104,11 +105,29 @@ class TimeoutSession(_SessionBase):
 HTTPSession = TimeoutSession
 
 
+DEFAULT_HOST_LIMIT = 8
+
+
+@dataclass(frozen=True)
+class HostLimitSnapshot:
+    limit: int
+    version: int
+
+
+_HOST_LIMIT_ENV_KEYS: tuple[str, ...] = (
+    "AI_TRADING_HTTP_HOST_LIMIT",
+    "AI_TRADING_HOST_LIMIT",
+    "HTTP_MAX_PER_HOST",
+)
+
+
 class HostLimitController:
     """Manage HTTPAdapter pool sizing based on environment overrides."""
 
-    def __init__(self) -> None:
-        self._last_limit: int | None = None
+    def __init__(self, *, default_limit: int = DEFAULT_HOST_LIMIT) -> None:
+        self.limit: int | None = max(int(default_limit), 1)
+        self.version: int = 0
+        self.max_retries: Retry | int | None = Retry(total=0)
 
     @staticmethod
     def _parse_limit(value: str | None) -> int | None:
@@ -123,38 +142,66 @@ class HostLimitController:
     def current_limit(self) -> int | None:
         """Return the active pool limit honoring legacy environment names."""
 
-        for env_var in ("HTTP_MAX_PER_HOST", "AI_TRADING_HTTP_HOST_LIMIT", "AI_TRADING_HOST_LIMIT"):
+        for env_var in _HOST_LIMIT_ENV_KEYS:
             raw = os.getenv(env_var)
             parsed = self._parse_limit(raw)
             if parsed is not None:
                 return parsed
         return None
 
-    def apply(self, session: TimeoutSession) -> None:
+    def _resolve_limit(self) -> tuple[int, tuple[str | None, ...]]:
+        env_snapshot = tuple(os.getenv(key) for key in _HOST_LIMIT_ENV_KEYS)
         limit = self.current_limit()
-        if limit is None or HTTPAdapter is object:  # pragma: no cover - requests missing
+        if limit is None:
+            limit = DEFAULT_HOST_LIMIT
+        return max(limit, 1), env_snapshot
+
+    def apply(self, session: TimeoutSession) -> None:
+        if HTTPAdapter is object:  # pragma: no cover - requests missing
             return
+        if not self.limit:
+            limit, _ = self._resolve_limit()
+            self.limit = limit
+        else:
+            limit, env_snapshot = self._resolve_limit()
+            if limit != self.limit or _HOST_LIMIT_ENV_SNAPSHOT != env_snapshot:
+                self.limit = limit
         existing_https = session.adapters.get("https://") if hasattr(session, "adapters") else None
-        max_retries = getattr(existing_https, "max_retries", Retry(total=0))
+        max_retries = getattr(existing_https, "max_retries", None)
+        if max_retries is not None:
+            self.max_retries = max_retries
+        elif self.max_retries is None:
+            self.max_retries = Retry(total=0)
         adapter = HTTPAdapter(
-            max_retries=max_retries,
-            pool_connections=limit,
-            pool_maxsize=limit,
+            max_retries=self.max_retries,
+            pool_connections=self.limit,
+            pool_maxsize=self.limit,
         )
         session.mount("http://", adapter)
         session.mount("https://", adapter)
 
-    def reload_if_changed(self, session: TimeoutSession) -> None:
-        limit = self.current_limit()
-        if limit == self._last_limit:
-            return
-        self._last_limit = limit
+    def reload_if_changed(self, session: TimeoutSession | None) -> HostLimitSnapshot:
+        global _HOST_LIMIT_SNAPSHOT, _HOST_LIMIT_ENV_SNAPSHOT
+
+        limit, env_snapshot = self._resolve_limit()
+        if self.limit == limit and _HOST_LIMIT_ENV_SNAPSHOT == env_snapshot:
+            return _HOST_LIMIT_SNAPSHOT
+
+        self.limit = limit
+        self.version = self.version + 1 if self.version > 0 else 1
         if session is not None:
             self.apply(session)
+
+        snapshot = HostLimitSnapshot(limit, self.version)
+        _HOST_LIMIT_SNAPSHOT = snapshot
+        _HOST_LIMIT_ENV_SNAPSHOT = env_snapshot
+        return snapshot
 
 
 _GLOBAL_SESSION: TimeoutSession | None = None
 _HOST_LIMIT_CONTROLLER = HostLimitController()
+_HOST_LIMIT_SNAPSHOT: HostLimitSnapshot = HostLimitSnapshot(DEFAULT_HOST_LIMIT, 0)
+_HOST_LIMIT_ENV_SNAPSHOT: tuple[str | None, ...] | None = None
 
 
 def build_retrying_session(
@@ -256,12 +303,15 @@ def get_http_session() -> HTTPSession:
     return get_global_session()
 
 
-def reload_host_limit_if_env_changed(session: TimeoutSession | None = None) -> None:
+def reload_host_limit_if_env_changed(
+    session: TimeoutSession | None = None,
+) -> HostLimitSnapshot:
     """Reapply host connection limits when the environment override changes."""
 
     target = session or _GLOBAL_SESSION
     if target is None:
-        return
+        snapshot = _HOST_LIMIT_CONTROLLER.reload_if_changed(None)
+        return snapshot
     try:
         from ai_trading.http import pooling as _pooling
     except Exception:  # pragma: no cover - pooling optional during stubbed tests
@@ -271,7 +321,7 @@ def reload_host_limit_if_env_changed(session: TimeoutSession | None = None) -> N
             _pooling.reload_host_limit_if_env_changed()
         except Exception:
             pass
-    _HOST_LIMIT_CONTROLLER.reload_if_changed(target)
+    return _HOST_LIMIT_CONTROLLER.reload_if_changed(target)
 
 
 __all__ = [
@@ -284,4 +334,5 @@ __all__ = [
     "mount_host_retry_profile",
     "ensure_urllib3_disable_warnings",
     "reload_host_limit_if_env_changed",
+    "HostLimitSnapshot",
 ]
