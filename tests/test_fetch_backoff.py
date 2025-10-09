@@ -121,6 +121,6 @@ def test_fetch_feed_cooldown_skips_primary_after_fallback(monkeypatch):
     assert isinstance(second, pd.DataFrame)
     assert not second.empty
 
-    assert call_feeds == ["iex"], "primary feed should not be retried during cooldown"
+    assert call_feeds == ["iex", "sip"], "cooldown should route to the alternate feed instead of retrying the primary"
     key = ("COOL", "1Min")
     assert key in fb._PROVIDER_COOLDOWNS

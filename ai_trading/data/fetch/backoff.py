@@ -270,7 +270,7 @@ def _fetch_feed(
         raise EmptyBarsError(
             f"empty_bars: symbol={symbol}, timeframe={timeframe}, max_retries={attempts}"
         )
-    if feed in ("iex", "sip") and attempted_primary:
+    if feed in ("iex", "sip") and (attempted_primary or cooldown_active):
         alt_feed = "sip" if feed == "iex" else "iex"
         logger.info("ALPACA_FEED_SWITCH", extra={"from": feed, "to": alt_feed})
         shrink = _dt.timedelta(days=1) if tf_norm.endswith("Min") else _dt.timedelta(0)
