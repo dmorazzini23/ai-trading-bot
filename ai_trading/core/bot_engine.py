@@ -15444,9 +15444,10 @@ def _fallback_gap_ratio_limit_cached(signature: tuple[str | None, ...]) -> float
     base_limit_bps = max(_gap_ratio_gate_limit() * 10000.0, 500.0)
     raw = signature[0] if signature else None
     try:
-        bps = float(raw) if raw not in (None, "") else base_limit_bps
+        parsed = float(raw) if raw not in (None, "") else base_limit_bps
     except (TypeError, ValueError):
-        bps = base_limit_bps
+        parsed = base_limit_bps
+    bps = max(base_limit_bps, parsed)
     return max(0.0, bps) / 10000.0
 
 

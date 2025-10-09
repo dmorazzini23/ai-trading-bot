@@ -102,6 +102,49 @@ def test_gap_ratio_relaxed_for_fallback(monkeypatch):
     assert quality.get("fallback_gap_relaxed") is True
 
 
+def test_fallback_gap_floor_relaxes_price_reliability(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
+    monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "50")
+    monkeypatch.setenv("AI_TRADING_FALLBACK_GAP_LIMIT_BPS", "200")
+    state = _fresh_state()
+    state.price_reliability["XYZ"] = (
+        False,
+        "gap_ratio=2.00%>limit=0.50%",
+    )
+    state.data_quality["XYZ"] = {
+        "gap_ratio": 0.02,
+        "price_reliable": False,
+        "price_reliable_reason": "gap_ratio=2.00%>limit=0.50%",
+    }
+    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    monkeypatch.setattr(
+        bot_engine,
+        "_check_fallback_quote_age",
+        lambda *_, **__: (True, 0.25, None),
+    )
+
+    decision = bot_engine._evaluate_data_gating(
+        ctx,
+        state,
+        "XYZ",
+        "yahoo_close",
+        prefer_backup_quote=True,
+    )
+
+    assert bot_engine._gap_ratio_gate_limit() == pytest.approx(0.005)
+    assert bot_engine._fallback_gap_ratio_limit() == pytest.approx(0.05)
+    assert not decision.block
+    assert decision.annotations.get("gap_limit") == pytest.approx(0.05)
+    assert decision.annotations.get("gap_limit_primary") == pytest.approx(0.005)
+    assert decision.annotations.get("gap_limit_relaxed") == pytest.approx(0.05)
+    assert decision.annotations.get("gap_ratio_relaxed") is True
+    assert decision.annotations.get("fallback_quote_ok") is True
+    quality = state.data_quality["XYZ"]
+    assert quality["price_reliable"] is True
+    assert quality.get("price_reliable_reason") is None
+    assert quality.get("fallback_gap_relaxed") is True
+
+
 def test_missing_ohlcv_blocks(monkeypatch):
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
     state = _fresh_state()
