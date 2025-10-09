@@ -58,6 +58,17 @@ from ai_trading.logging import (
 )
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
+
+# --- SAFETY: Provide a module-level default for `_state` ------------------------------------
+# Some nested helper functions in this module (e.g., `_record_minute_fallback`) were designed
+# to close over a local `_state` dict defined inside `get_minute_df(...)`. In certain runtime
+# paths and refactors, those helpers may be invoked without the closure in scope, which would
+# previously raise `NameError: name '_state' is not defined`. We define a benign, empty
+# module-level `_state` as a fallback so those helpers can still execute and simply omit
+# optional tags/flags when the richer state is unavailable. When the closure _is_ present,
+# Python’s normal name resolution prefers the closer binding, so the outer `_state` continues
+# to be used with no change in behavior.
+_state: dict[str, Any] = {}
 from ai_trading.config.settings import (
     provider_priority,
     max_data_fallbacks,
