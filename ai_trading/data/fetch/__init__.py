@@ -157,6 +157,20 @@ _OVERRIDE_TTL_S: float = float(globals().get("_OVERRIDE_TTL_S", 300.0))
 _ENV_STAMP: tuple[str | None, str | None] | None = None
 
 
+def _provider_switch_cooldown_seconds() -> float:
+    """Return the cooldown interval applied after a provider switchover."""
+
+    try:
+        candidate = getattr(provider_monitor, "min_recovery_seconds", None)
+        if candidate is None:
+            candidate = getattr(provider_monitor, "cooldown", None)
+        if candidate is None:
+            return 0.0
+        return max(float(candidate), 0.0)
+    except Exception:
+        return 0.0
+
+
 def _env_signature() -> tuple[str | None, str | None]:
     return (
         os.getenv("ALPACA_DATA_FEED"),
@@ -4776,6 +4790,7 @@ def _fetch_bars(
         "providers": [],
         "empty_metric_emitted": False,
         "allow_no_session_primary": False,
+        "skip_backup_after_fallback": False,
     }
 
     def _register_provider_attempt(feed_name: str) -> None:
@@ -4885,13 +4900,9 @@ def _fetch_bars(
             _record_success_metric(tags, prefer_fallback=True)
         return annotated_df
     resolved_feed = resolve_alpaca_feed(_feed)
-    if resolved_feed is None and (
-        explicit_feed_request and _feed in {"iex", "sip"}
-    ):
-        resolved_feed = _feed
     if resolved_feed is None and _pytest_active():
         downgrade_reason = get_data_feed_downgrade_reason()
-        if downgrade_reason in {None, "missing_credentials"}:
+        if downgrade_reason == "missing_credentials":
             resolved_feed = _feed
     if resolved_feed is None:
         provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
@@ -5211,12 +5222,12 @@ def _fetch_bars(
 
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
+            from_feed = _feed
             if fb_feed == "sip" and (not skip_check):
                 if not _sip_fallback_allowed(session, headers, fb_interval):
                     _register_provider_attempt(fb_feed)
                     _log_sip_unavailable(symbol, fb_interval, "UNAUTHORIZED_SIP")
                     return None
-                from_feed = _feed
                 if not _state.get("window_has_session", True) and not skip_check:
                     attempted_pairs = _state.setdefault("no_session_fallback_pairs", set())
                     attempt_key = (from_feed, fb_feed)
@@ -5225,61 +5236,76 @@ def _fetch_bars(
                     attempted_pairs.add(attempt_key)
                     if not (from_feed == "iex" and fb_feed == "sip"):
                         return None
-                _interval, _feed, _start, _end = fb
-                from_provider_name = f"alpaca_{from_feed}"
-                to_provider_name = f"alpaca_{fb_feed}"
-                if not skip_metrics:
-                    provider_fallback.labels(
-                        from_provider=f"alpaca_{from_feed}",
-                        to_provider=f"alpaca_{fb_feed}",
-                    ).inc()
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                _state["last_fallback_feed"] = fb_feed
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info(
-                    "DATA_SOURCE_FALLBACK_ATTEMPT",
-                    extra={"provider": "alpaca", "fallback": payload},
+            elif fb_feed not in {"iex", "sip"}:
+                return None
+            _interval, _feed, _start, _end = fb
+            from_provider_name = f"alpaca_{from_feed}"
+            to_provider_name = f"alpaca_{fb_feed}"
+            if not skip_metrics:
+                provider_fallback.labels(
+                    from_provider=f"alpaca_{from_feed}",
+                    to_provider=f"alpaca_{fb_feed}",
+                ).inc()
+            _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
+            _state["last_fallback_feed"] = fb_feed
+            payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
+            logger.info(
+                "DATA_SOURCE_FALLBACK_ATTEMPT",
+                extra={"provider": "alpaca", "fallback": payload},
+            )
+            prev_defer = _state.get("defer_success_metric")
+            _state["defer_success_metric"] = True
+            prev_allow_primary = _state.get("allow_no_session_primary", False)
+            _state["allow_no_session_primary"] = True
+            try:
+                result = _req(session, None, headers=headers, timeout=timeout)
+            except EmptyBarsError:
+                if not _state.get("window_has_session", True):
+                    result = pd.DataFrame()
+                else:
+                    raise
+            finally:
+                if prev_allow_primary:
+                    _state["allow_no_session_primary"] = True
+                else:
+                    _state.pop("allow_no_session_primary", None)
+                if prev_defer is None:
+                    _state.pop("defer_success_metric", None)
+                else:
+                    _state["defer_success_metric"] = prev_defer
+            result_has_rows = result is not None and not getattr(result, "empty", True)
+            if result_has_rows:
+                tags = _tags()
+                _record_fallback_success_metric(tags)
+                _record_success_metric(tags, prefer_fallback=True)
+                _state["skip_backup_after_fallback"] = True
+                if from_feed != fb_feed:
+                    try:
+                        cooldown_seconds = _provider_switch_cooldown_seconds()
+                    except Exception:
+                        cooldown_seconds = 0.0
+                    if cooldown_seconds > 0.0:
+                        try:
+                            provider_monitor.disable(
+                                f"alpaca_{from_feed}", duration=cooldown_seconds
+                            )
+                        except Exception:
+                            pass
+            if result is not None:
+                _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
+            if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
+                _mark_fallback(
+                    symbol,
+                    fb_interval,
+                    fb_start,
+                    fb_end,
+                    from_provider=from_provider_name,
+                    fallback_feed=fb_feed,
+                    fallback_df=result,
+                    resolved_provider=to_provider_name,
+                    resolved_feed=fb_feed,
                 )
-                prev_defer = _state.get("defer_success_metric")
-                _state["defer_success_metric"] = True
-                prev_allow_primary = _state.get("allow_no_session_primary", False)
-                _state["allow_no_session_primary"] = True
-                try:
-                    result = _req(session, None, headers=headers, timeout=timeout)
-                except EmptyBarsError:
-                    if not _state.get("window_has_session", True):
-                        result = pd.DataFrame()
-                    else:
-                        raise
-                finally:
-                    if prev_allow_primary:
-                        _state["allow_no_session_primary"] = True
-                    else:
-                        _state.pop("allow_no_session_primary", None)
-                    if prev_defer is None:
-                        _state.pop("defer_success_metric", None)
-                    else:
-                        _state["defer_success_metric"] = prev_defer
-                result_has_rows = result is not None and not getattr(result, "empty", True)
-                if result_has_rows:
-                    tags = _tags()
-                    _record_fallback_success_metric(tags)
-                    _record_success_metric(tags, prefer_fallback=True)
-                if result is not None:
-                    _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
-                if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
-                    _mark_fallback(
-                        symbol,
-                        fb_interval,
-                        fb_start,
-                        fb_end,
-                        from_provider=from_provider_name,
-                        fallback_feed=fb_feed,
-                        fallback_df=result,
-                        resolved_provider=to_provider_name,
-                        resolved_feed=fb_feed,
-                    )
-                return result
+            return result
 
         if (
             not _state.get("window_has_session", True)
@@ -5373,7 +5399,7 @@ def _fetch_bars(
                 fallback_target = (_interval, "sip", _start, _end)
             if fallback_target:
                 result = _attempt_fallback(fallback_target, skip_check=True)
-                if result is not None:
+                if result is not None and not getattr(result, "empty", True):
                     return result
             if attempt >= max_retries:
                 logger.error(
@@ -5654,7 +5680,12 @@ def _fetch_bars(
             provider_id = "alpaca"
             if _feed in {"sip", "iex"}:
                 provider_id = f"alpaca_{_feed}"
-            provider_monitor.record_failure(provider_id, "rate_limit")
+            retry_after = 0
+            try:
+                retry_after = int(float(resp.headers.get("Retry-After", "0")))
+            except Exception:
+                retry_after = 0
+            provider_monitor.record_failure(provider_id, "rate_limit", retry_after=retry_after or None)
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
@@ -5663,12 +5694,6 @@ def _fetch_bars(
                     {"provider": "alpaca", "status": "rate_limited", "feed": _feed, "timeframe": _interval}
                 ),
             )
-            retry_after = 0
-            try:
-                retry_after = int(float(resp.headers.get("Retry-After", "0")))
-            except Exception:
-                retry_after = 0
-
             if retry_after > 0:
                 already_disabled = provider_monitor.is_disabled("alpaca")
                 if not already_disabled and _alpaca_disabled_until:
@@ -5693,58 +5718,27 @@ def _fetch_bars(
                     return _run_backup_fetch(fb_int)
                 return pd.DataFrame()
             fallback_target = fallback
-            if (
-                fallback_target is None
-                and requested_feed == "iex"
-                and _sip_allowed()
-                and not sip_locked
-            ):
-                try:
-                    remaining_fallbacks = max_data_fallbacks()
-                except Exception:
-                    remaining_fallbacks = 1
-                if remaining_fallbacks > 0:
-                    fallback_target = (_interval, "sip", _start, _end)
-            if fallback_target:
-                result = _attempt_fallback(fallback_target)
-                if result is not None:
-                    return result
-                raise ValueError("rate_limited")
-            attempt = _state["retries"] + 1
-            if requested_feed == "iex" and (sip_locked or _SIP_UNAUTHORIZED):
-                fallback_viable = False
+            if requested_feed == "sip":
+                if fallback_target is None:
+                    fallback_target = (_interval, "iex", _start, _end)
                 if fallback_target:
-                    _, fb_feed, _, _ = fallback_target
-                    if fb_feed != "sip":
-                        fallback_viable = True
-                    elif _sip_configured() and not sip_locked:
-                        fallback_viable = True
-                if not fallback_viable:
-                    raise ValueError("rate_limited")
-            if attempt >= max_retries:
-                if fallback:
-                    result = _attempt_fallback(fallback)
+                    result = _attempt_fallback(fallback_target)
                     if result is not None:
                         return result
                 raise ValueError("rate_limited")
-            _state["retries"] = attempt
-            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
-            logger.debug(
-                "RETRY_AFTER_RATE_LIMIT",
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "retry_delay": backoff,
-                        "attempt": _state["retries"],
-                        "remaining_retries": max_retries - _state["retries"],
-                    }
-                ),
-            )
-            time.sleep(backoff)
-            return _req(session, fallback, headers=headers, timeout=timeout)
+            if (
+                requested_feed == "iex"
+                and not sip_locked
+                and not _SIP_UNAUTHORIZED
+                and _sip_allowed()
+            ):
+                if fallback_target is None:
+                    fallback_target = (_interval, "sip", _start, _end)
+                if fallback_target:
+                    result = _attempt_fallback(fallback_target)
+                    if result is not None:
+                        return result
+            raise ValueError("rate_limited")
         df = pd.DataFrame(data)
         _attach_payload_metadata(
             df,
@@ -5951,6 +5945,16 @@ def _fetch_bars(
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
             persistent_empty = empty_attempts >= 2
             if persistent_empty:
+                fb_candidate = fallback
+                if fb_candidate is None:
+                    if _feed == "iex" and _sip_allowed() and not _is_sip_unauthorized():
+                        fb_candidate = (_interval, "sip", _start, _end)
+                    elif _feed == "sip":
+                        fb_candidate = (_interval, "iex", _start, _end)
+                if fb_candidate:
+                    result = _attempt_fallback(fb_candidate, skip_check=True)
+                    if result is not None and not getattr(result, "empty", True):
+                        return result
                 logger.warning(
                     "PERSISTENT_EMPTY_ABORT",
                     extra={
@@ -6664,28 +6668,12 @@ def _fetch_bars(
     )
     fallback_allowed = window_has_session or explicit_sip_override
     if max_fb >= 1 and fallback_allowed:
-        if priority:
-            try:
-                idx = priority.index(f"alpaca_{_feed}")
-            except ValueError:
-                idx = -1
-            # Consider both subsequent and preceding providers to find an Alpaca alt feed
-            scan = list(priority[idx + 1 :]) + list(reversed(priority[: max(0, idx)]))
-            for prov in scan:
-                if prov == "alpaca_sip":
-                    if allow_sip and _sip_configured() and not sip_locked_initial and _feed != "sip":
-                        alt_feed = "sip"
-                        break
-                    continue
-                if prov == "alpaca_iex" and _feed != "iex":
-                    alt_feed = "iex"
-                    break
+        if _feed == "sip":
+            alt_feed = "iex"
+        elif _feed == "iex" and allow_sip and _sip_configured() and not sip_locked_initial:
+            alt_feed = "sip"
         if alt_feed is not None:
             fallback = (_interval, alt_feed, _start, _end)
-        elif _feed == "iex" and allow_sip and _sip_configured() and not sip_locked_initial:
-            # Ensure a SIP fallback candidate exists for tests even when
-            # provider priority is customized or empty.
-            fallback = (_interval, "sip", _start, _end)
     if (not window_has_session) and fallback is None and not _ENABLE_HTTP_FALLBACK:
         return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
@@ -6735,6 +6723,7 @@ def _fetch_bars(
         _ENABLE_HTTP_FALLBACK
         and _state.get("window_has_session", True)
         and (df is None or getattr(df, "empty", True))
+        and not _state.get("skip_backup_after_fallback")
     ):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
