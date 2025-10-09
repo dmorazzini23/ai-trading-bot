@@ -74,6 +74,27 @@ def _provider_decision_window() -> float:
     return value
 
 
+def _provider_switch_cooldown_seconds() -> float:
+    getter = getattr(_fetch_module, "_provider_switch_cooldown_seconds", None)
+    if not callable(getter):
+        return 0.0
+    try:
+        value = float(getter())
+    except Exception:
+        return 0.0
+    return max(value, 0.0)
+
+
+def _disable_primary_provider() -> None:
+    duration = _provider_switch_cooldown_seconds()
+    if duration <= 0:
+        return
+    try:
+        provider_monitor.disable("alpaca", duration=duration)
+    except Exception:
+        pass
+
+
 def _primary_on_cooldown(key: tuple[str, str]) -> tuple[bool, float]:
     expiry = _PROVIDER_COOLDOWNS.get(key)
     if expiry is None:
@@ -232,6 +253,7 @@ def _fetch_feed(
                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                 _PROVIDER_COOLDOWNS.pop(tf_key, None)
                 mark_success(symbol, timeframe)
+                _disable_primary_provider()
                 return df
     except EmptyBarsError:
         df = None
@@ -266,6 +288,7 @@ def _fetch_feed(
                     provider=f"alpaca_{feed}",
                     fallback_provider="yahoo",
                 )
+                _disable_primary_provider()
                 return http_df
         raise EmptyBarsError(
             f"empty_bars: symbol={symbol}, timeframe={timeframe}, max_retries={attempts}"
@@ -289,6 +312,7 @@ def _fetch_feed(
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _PROVIDER_COOLDOWNS.pop(tf_key, None)
             mark_success(symbol, timeframe)
+            _disable_primary_provider()
             return df_alt
 
     if enable_http and fallback_budget > 0:
@@ -309,6 +333,7 @@ def _fetch_feed(
                 provider=f"alpaca_{feed}",
                 fallback_provider="yahoo",
             )
+            _disable_primary_provider()
             return http_df
 
     yf_map = getattr(_fetch_module, "_YF_INTERVAL_MAP", {})
@@ -334,6 +359,7 @@ def _fetch_feed(
     if yahoo_df is not None and not getattr(yahoo_df, "empty", True):
         _EMPTY_BAR_COUNTS.pop(tf_key, None)
         mark_success(symbol, timeframe)
+        _disable_primary_provider()
     return yahoo_df
 
 

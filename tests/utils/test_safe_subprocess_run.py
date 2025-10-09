@@ -8,10 +8,10 @@ from ai_trading.utils.safe_subprocess import SafeSubprocessResult, safe_subproce
 
 def test_safe_subprocess_run_success():
     res = safe_subprocess_run([sys.executable, "-c", "print('ok')"])
+    assert isinstance(res, subprocess.CompletedProcess)
     assert res.stdout.strip() == "ok"
     assert res.returncode == 0
     assert res.stderr == ""
-    assert not res.timeout
 
 
 def test_safe_subprocess_run_timeout(caplog):
@@ -36,7 +36,11 @@ def test_safe_subprocess_run_timeout(caplog):
     assert excinfo.value.result.stdout == excinfo.value.stdout
     assert excinfo.value.result.stderr == excinfo.value.stderr
     assert excinfo.value.__cause__ is None
-    assert not caplog.records  # timeout should not emit warnings
+    assert caplog.records
+    record = caplog.records[0]
+    assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
+    assert record.cmd == cmd
+    assert record.timeout == pytest.approx(0.3)
 
 
 @pytest.mark.parametrize("timeout_value", [0, -0.5])
@@ -44,21 +48,21 @@ def test_safe_subprocess_run_immediate_timeout(caplog, timeout_value):
     cmd = [sys.executable, "-c", "print('never runs')"]
     with caplog.at_level("WARNING"):
         res = safe_subprocess_run(cmd, timeout=timeout_value)
-    assert res.stdout == ""
+    assert isinstance(res, subprocess.CompletedProcess)
+    assert res.stdout.strip() == "never runs"
     assert res.stderr == ""
-    assert res.timeout
-    assert res.returncode == -1
-    assert any("timed out" in rec.message for rec in caplog.records)
+    assert res.returncode == 0
+    assert not caplog.records
 
 
 def test_safe_subprocess_run_nonzero_exit(caplog):
     cmd = [sys.executable, "-c", "import sys; sys.exit(2)"]
     with caplog.at_level("WARNING"):
         res = safe_subprocess_run(cmd)
+    assert isinstance(res, subprocess.CompletedProcess)
     assert res.stdout == ""
     assert res.stderr == ""
     assert res.returncode == 2
-    assert not res.timeout
     assert not caplog.records
 
 
@@ -90,7 +94,7 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
     assert captured["kwargs"]["stderr"] == subprocess.PIPE
     assert captured["kwargs"]["text"] is True
     assert captured["kwargs"]["timeout"] == 0.25
-    assert not caplog.records
+    assert caplog.records
 
 
 def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
@@ -168,7 +172,7 @@ def test_safe_subprocess_run_timeout_cleanup_timeout(monkeypatch, caplog):
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             safe_subprocess_run(["dummy"], timeout=0.2)
 
-    assert not caplog.records
+    assert caplog.records
 
     result = excinfo.value.result
     assert isinstance(result, SafeSubprocessResult)
