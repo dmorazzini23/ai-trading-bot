@@ -66,6 +66,21 @@ def test_safe_subprocess_run_nonzero_exit(caplog):
     assert not caplog.records
 
 
+def test_safe_subprocess_run_missing_command(caplog):
+    cmd = ["definitely-not-a-real-binary"]
+    with caplog.at_level("WARNING"):
+        res = safe_subprocess_run(cmd)
+
+    assert isinstance(res, subprocess.CompletedProcess)
+    assert res.returncode == 127
+    assert "definitely-not-a-real-binary" in res.stderr
+    assert caplog.records
+    record = caplog.records[0]
+    assert record.message == "SAFE_SUBPROCESS_ERROR"
+    assert record.cmd == cmd
+    assert record.returncode == 127
+
+
 def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog):
     captured: dict[str, object] = {}
 

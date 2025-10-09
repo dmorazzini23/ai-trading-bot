@@ -75,6 +75,18 @@ def safe_subprocess_run(
         )
         _prepare_timeout_exception(exc, run_timeout)
         raise
+    except (OSError, subprocess.SubprocessError) as exc:
+        completed = _coerce_exception_result(exc, argv)
+        logger.warning(
+            "SAFE_SUBPROCESS_ERROR",
+            extra={
+                "cmd": argv,
+                "returncode": completed.returncode,
+                "error": str(exc),
+                "exc_type": type(exc).__name__,
+            },
+        )
+        return completed
 
     completed.stdout = _normalize_stream(completed.stdout)
     completed.stderr = _normalize_stream(completed.stderr)
@@ -101,3 +113,30 @@ def _prepare_timeout_exception(exc: subprocess.TimeoutExpired, run_timeout: floa
     exc.stdout = stdout_text
     exc.stderr = stderr_text
     exc.result = result
+
+
+def _coerce_exception_result(
+    exc: OSError | subprocess.SubprocessError, argv: Sequence[str] | str
+) -> subprocess.CompletedProcess[str]:
+    """Return a ``CompletedProcess`` representing an execution failure."""
+
+    if isinstance(exc, subprocess.CalledProcessError):
+        stdout_text = _normalize_stream(getattr(exc, "stdout", None))
+        stderr_text = _normalize_stream(getattr(exc, "stderr", None))
+        cmd = exc.cmd if exc.cmd is not None else argv
+        return subprocess.CompletedProcess(cmd, exc.returncode, stdout_text, stderr_text)
+
+    stdout_text = _normalize_stream(getattr(exc, "stdout", None))
+    stderr_value = getattr(exc, "stderr", None)
+    stderr_text = _normalize_stream(stderr_value) if stderr_value is not None else str(exc)
+
+    returncode = getattr(exc, "returncode", None)
+    if returncode is None:
+        if isinstance(exc, FileNotFoundError):
+            returncode = 127
+        elif isinstance(exc, OSError) and getattr(exc, "errno", None):
+            returncode = exc.errno or 1
+        else:
+            returncode = 1
+
+    return subprocess.CompletedProcess(argv, returncode, stdout_text, stderr_text)
