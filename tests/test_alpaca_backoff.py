@@ -32,7 +32,7 @@ def test_get_bars_df_retries_rate_limit(monkeypatch):
             raise FakeAPIError(429)
         frame = pd.DataFrame(
             {"close": [1.0]},
-            index=pd.date_range("2024-01-01", periods=1, freq="T", tz="UTC"),
+            index=pd.date_range("2024-01-01", periods=1, freq="min", tz="UTC"),
         )
         return types.SimpleNamespace(df=frame)
 

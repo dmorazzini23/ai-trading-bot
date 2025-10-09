@@ -24,7 +24,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import now_utc
 
 from ._alpaca_guard import should_import_alpaca_sdk
-from .fetch.sip_disallowed import sip_disallowed, sip_credentials_missing
+from .fetch.sip_disallowed import sip_disallowed, sip_credentials_missing  # noqa: F401
 from .models import StockBarsRequest, TimeFrame
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
 
@@ -367,232 +367,122 @@ def _extract_generation(snapshot: Any, default: float) -> float:
     return default
 
 
-def _get_entitled_feeds(client: Any) -> set[str]:
-    """Return set of feeds the account is entitled to."""
+def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]:
+    """Return the set of Alpaca feeds the account can access."""
+
+    def _collect_tokens(source: Any) -> set[str]:
+        tokens: set[str] = set()
+        if source is None:
+            return tokens
+        if isinstance(source, (str, bytes)):
+            iterable = [source]
+        else:
+            try:
+                iterable = list(source)
+            except TypeError:
+                iterable = [source]
+        for item in iterable:
+            if item is None:
+                continue
+            if isinstance(item, bytes):
+                try:
+                    value = item.decode("utf-8", "ignore")
+                except UnicodeDecodeError:
+                    value = item.decode("latin-1", "ignore")
+            else:
+                value = str(item)
+            normalized = value.strip().lower()
+            if normalized:
+                tokens.add(normalized)
+        return tokens
 
     now = time.time()
-    key = id(client)
-    cached_entry = _ENTITLE_CACHE.get(key)
-    cache_age_ok = False
-    if cached_entry is not None:
-        cache_age_ok = (now - cached_entry.cached_at) < _ENTITLE_TTL
+    cache_key = id(client)
+    cached_entry = _ENTITLE_CACHE.get(cache_key)
+    cache_valid = cached_entry is not None and (now - cached_entry.cached_at) < _ENTITLE_TTL
 
-    feeds: set[str] = {"iex"}
+    account_feeds: set[str] = set()
+    account_entitlements: set[str] = set()
     generation = now
-    get_acct = getattr(client, "get_account", None)
-    if callable(get_acct):
-        try:
-            acct = get_acct()
-        except COMMON_EXC as e:  # pragma: no cover - network
-            _log.debug('FEED_ENTITLE_CHECK_FAIL', extra={'error': str(e)})
-            if cached_entry is not None:
-                if cache_age_ok:
-                    return set(cached_entry.feeds)
-                feeds = set(cached_entry.feeds)
-                generation = cached_entry.generation
-        else:
-            sub = getattr(acct, "market_data_subscription", None) or getattr(acct, "data_feed", None)
-            if isinstance(sub, str):
-                feeds = {sub.lower()}
-            elif isinstance(sub, (set, list, tuple)):
-                feeds = {str(x).lower() for x in sub}
-            generation = _extract_generation(acct, now)
-    else:
-        if cached_entry is not None:
-            if cache_age_ok:
-                return set(cached_entry.feeds)
-            feeds = set(cached_entry.feeds)
-            generation = cached_entry.generation
 
-    entry = _EntitlementCacheEntry(
-        cached_at=now,
-        generation=generation,
-        feeds=frozenset(feeds),
-    )
-    if cached_entry is None or not cache_age_ok:
-        _ENTITLE_CACHE[key] = entry
-    else:
-        cached_feeds = cached_entry.feeds
-        feeds_changed = entry.feeds != cached_feeds
-        generation_changed = entry.generation != cached_entry.generation
-        sip_upgrade = "sip" in entry.feeds and "sip" not in cached_feeds
-        if feeds_changed or generation_changed or sip_upgrade:
-            _ENTITLE_CACHE[key] = entry
+    get_account = getattr(client, "get_account", None)
+    if callable(get_account):
+        try:
+            account = get_account()
+        except COMMON_EXC as exc:  # pragma: no cover - network best-effort
+            _log.debug("FEED_ENTITLE_CHECK_FAIL", extra={"error": str(exc)})
+            if cache_valid:
+                return set(cached_entry.feeds)
         else:
-            entry = cached_entry
+            account_entitlements = _collect_tokens(getattr(account, "entitlements", None))
+            account_feeds = _collect_tokens(
+                getattr(account, "market_data_subscription", None)
+                or getattr(account, "data_feed", None)
+                or getattr(account, "feeds", None)
+            )
+            generation = _extract_generation(account, now)
+
+    entitlement_tokens = _collect_tokens(getattr(client, "entitlements", None))
+    entitlement_tokens.update(account_entitlements)
+    client_tokens = _collect_tokens(getattr(client, "feeds", None))
+
+    env_entitled = _env_bool("ALPACA_SIP_ENTITLED")
+    env_has_sip = _env_bool("ALPACA_HAS_SIP")
+    allow_flag = _env_bool("ALPACA_ALLOW_SIP")
+    allow_sip = _env_bool("ALLOW_SIP") if prioritize_env else None
+
+    env_positive = any(flag is True for flag in (env_entitled, env_has_sip))
+    env_negative = any(flag is False for flag in (allow_flag, env_entitled, allow_sip))
+
+    base_feeds = (account_feeds | client_tokens) & {"iex", "sip"}
+    if not base_feeds:
+        base_feeds = {token for token in entitlement_tokens if token in {"iex", "sip"}}
+
+    feeds: set[str] = set(base_feeds)
+    account_advertises_sip = (
+        "sip" in entitlement_tokens
+        or "sip" in account_feeds
+        or "sip" in client_tokens
+        or env_has_sip is True
+    )
+
+    if env_negative:
+        feeds.discard("sip")
+        sip_allowed = False
+    else:
+        sip_allowed = env_positive or account_advertises_sip
+        if sip_allowed:
+            feeds.add("sip")
+
+    feeds &= {"iex", "sip"}
+    if not feeds:
+        feeds = {"iex"}
+
+    if generation is None and cached_entry is not None:
+        generation = cached_entry.generation
+
+    entry = _EntitlementCacheEntry(cached_at=now, generation=generation or now, feeds=frozenset(feeds))
+    previous = _ENTITLE_CACHE.get(cache_key)
+    if previous is None or previous.feeds != entry.feeds or previous.generation != entry.generation:
+        _ENTITLE_CACHE[cache_key] = entry
+    else:
+        entry = previous
     return set(entry.feeds)
 
 def _ensure_entitled_feed(client: Any, requested: str) -> str:
-    """Return a feed we are entitled to, falling back when necessary."""
-    available_raw = getattr(client, "available_feeds", None)
-    available_set: set[str] = set()
-    if available_raw is not None:
-        if isinstance(available_raw, (str, bytes)):
-            candidates = [available_raw]
-        else:
-            try:
-                candidates = list(available_raw)
-            except TypeError:
-                candidates = [available_raw]
-        for value in candidates:
-            if value is None:
-                continue
-            if isinstance(value, bytes):
-                try:
-                    normalized = value.decode("utf-8", "ignore").strip().lower()
-                except UnicodeDecodeError:
-                    normalized = value.decode("latin-1", "ignore").strip().lower()
-            else:
-                normalized = str(value).strip().lower()
-            if normalized:
-                available_set.add(normalized)
-    available_has_sip = "sip" in available_set
-    if available_has_sip:
-        _ENTITLE_CACHE["sip"] = "sip"
-    req_raw = str(requested or "").strip().lower()
-    normalized_req = req_raw.replace("alpaca_", "")
-    current_feed = normalized_req or "iex"
-    try:
-        settings = get_settings()
-    except (RuntimeError, AttributeError, ValueError, TypeError):
-        settings = None
+    """Ensure ``requested`` is an entitled Alpaca feed for *client*."""
 
-    priority_values: tuple[str, ...] = ()
-    if settings is not None:
-        raw_priority = getattr(settings, "data_provider_priority", ())
-        try:
-            priority_values = tuple(
-                str(item).strip().lower()
-                for item in raw_priority
-                if str(item).strip()
-            )
-        except (AttributeError, TypeError, ValueError):
-            priority_values = ()
-
-    raw_entitlements = getattr(client, "entitlements", None) or []
-    entitlements: set[str] = set()
-    for value in raw_entitlements:
-        if value is None:
-            continue
-        if isinstance(value, bytes):
-            try:
-                normalized = value.decode("utf-8", "ignore").strip().lower()
-            except UnicodeDecodeError:
-                normalized = value.decode("latin-1", "ignore").strip().lower()
-        else:
-            normalized = str(value).strip().lower()
-        if normalized:
-            entitlements.add(normalized)
+    normalized = str(requested or "").strip().lower()
+    normalized = normalized.replace("alpaca_", "")
+    if normalized != "sip":
+        return normalized or "iex"
 
     feeds = _get_entitled_feeds(client)
-    if available_set:
-        feeds.update(available_set)
 
-    advertised_sip = "sip" in feeds or available_has_sip
-    if "sip" in entitlements:
-        advertised_sip = True
-
-    allow_env = (
-        os.getenv("ALPACA_ALLOW_SIP") == "1"
-        or os.getenv("ALPACA_SIP_ENTITLED") == "1"
-        or os.getenv("ALPACA_HAS_SIP") == "1"
-    )
-    explicit_disallow = _env_explicit_false("ALPACA_ALLOW_SIP") or _env_bool("ALPACA_SIP_ENTITLED") is False
-    explicit_allow = (
-        _env_bool("ALPACA_ALLOW_SIP") is True
-        or _env_bool("ALPACA_SIP_ENTITLED") is True
-        or _env_bool("ALPACA_HAS_SIP") is True
-        or allow_env
-    )
-    if "sip" in entitlements:
-        explicit_allow = True
-    unauthorized_flag = str(os.getenv("ALPACA_SIP_UNAUTHORIZED", "")).strip() == "1"
-    priority_blocks_sip = bool(priority_values) and "alpaca_sip" not in priority_values
-    if advertised_sip:
-        priority_blocks_sip = False
-    advisory_disallow = sip_disallowed()
-    creds_missing = sip_credentials_missing()
-
-    sip_forbidden = explicit_disallow or unauthorized_flag or (priority_blocks_sip and not advertised_sip)
-    sip_allowed = not sip_forbidden
-    if sip_allowed and not (explicit_allow or advertised_sip):
-        if advisory_disallow and not advertised_sip:
-            sip_allowed = False
-
-    sip_entitled = sip_allowed and (explicit_allow or advertised_sip)
-
-    prefer_sip = normalized_req == "sip"
-
-    def _first_non_sip() -> str | None:
-        for feed in feeds:
-            if feed != "sip":
-                return feed
-        return None
-
-    if prefer_sip:
-        has_account_sip = ("sip" in entitlements) or advertised_sip
-        if has_account_sip and sip_allowed:
-            _ENTITLE_CACHE["sip"] = "sip"
-            return "sip"
-        if explicit_allow or allow_env:
-            alt = _first_non_sip() or "iex"
-            _ENTITLE_CACHE["sip"] = alt
-            if alt != current_feed:
-                _log.warning(
-                    "ALPACA_FEED_UNENTITLED_SWITCH",
-                    extra={"from": "sip", "to": alt},
-                )
-            return alt
-        alt = _first_non_sip() or "iex"
-        _ENTITLE_CACHE["sip"] = alt
-        if alt != current_feed:
-            _log.warning(
-                "ALPACA_FEED_UNENTITLED_SWITCH",
-                extra={"from": "sip", "to": alt},
-            )
-        return alt
-
-    resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_entitled)
-    if resolved == "sip" and not (sip_allowed and (sip_entitled or advertised_sip)):
-        resolved = _first_non_sip() or "iex"
-
-    if resolved == "sip" and (
-        "sip" in entitlements or explicit_allow or allow_env or advertised_sip
-    ):
-        _ENTITLE_CACHE["sip"] = "sip"
+    if "sip" in feeds:
         return "sip"
 
-    if resolved in feeds and resolved != "sip":
-        return resolved
-
-    if "sip" in feeds and (
-        "sip" in entitlements or explicit_allow or allow_env or advertised_sip
-    ):
-        _ENTITLE_CACHE["sip"] = "sip"
-        return "sip"
-
-    alt = _first_non_sip()
-    if alt is not None:
-        if alt != resolved:
-            _log.warning(
-                "ALPACA_FEED_UNENTITLED_SWITCH",
-                extra={"requested": normalized_req, "using": alt},
-            )
-        return alt
-
-    emit_once(
-        _log,
-        f"no_feed:{normalized_req}",
-        "error",
-        "ALPACA_FEED_UNENTITLED",
-        requested=normalized_req,
-    )
-    if normalized_req == "sip" and not (sip_allowed and (sip_entitled or advertised_sip)):
-        fallback = _first_non_sip()
-        if fallback is not None:
-            return fallback
-        return "iex"
-    return current_feed or "iex"
+    return "iex"
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""
