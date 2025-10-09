@@ -205,6 +205,47 @@ def _env_explicit_false(name: str) -> bool:
     return raw.strip().lower() in _FALSEY
 
 
+def _sip_unauthorized_flag() -> bool:
+    raw = os.getenv("ALPACA_SIP_UNAUTHORIZED")
+    if raw is None:
+        return False
+    return raw.strip().lower() in _TRUTHY
+
+
+def _prefers_sip_feed() -> bool:
+    feed = os.getenv("ALPACA_DATA_FEED", "iex").strip().lower()
+    if "sip" in feed:
+        return True
+
+    failover_env = os.getenv("ALPACA_FEED_FAILOVER")
+    if failover_env is not None:
+        parts = [part.strip().lower() for part in failover_env.split(",") if part.strip()]
+        if "sip" in parts:
+            return True
+
+    settings = get_settings()
+
+    failover_tuple = getattr(settings, "alpaca_feed_failover", ()) or ()
+    return any(str(part).strip().lower() == "sip" for part in failover_tuple)
+
+
+def _provider_priority_disallows_sip() -> bool:
+    priority_env = os.getenv("DATA_PROVIDER_PRIORITY")
+    if priority_env is not None:
+        normalized = {part.strip().lower() for part in priority_env.split(",") if part.strip()}
+        return "alpaca_sip" not in normalized
+
+    settings = get_settings()
+
+    fields_set = getattr(settings, "model_fields_set", set())
+    if isinstance(fields_set, set) and "data_provider_priority" not in fields_set:
+        return False
+
+    priority = getattr(settings, "data_provider_priority", ()) or ()
+    normalized = {str(part).strip().lower() for part in priority if str(part).strip()}
+    return "alpaca_sip" not in normalized
+
+
 def _default_sip_entitled() -> bool:
     explicit = _env_bool("ALPACA_SIP_ENTITLED")
     if explicit is not None:
@@ -480,6 +521,12 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     feeds = _get_entitled_feeds(client)
 
     if "sip" in feeds:
+        if _sip_unauthorized_flag():
+            return "iex"
+        if _provider_priority_disallows_sip():
+            return "iex"
+        if not _prefers_sip_feed():
+            return "iex"
         return "sip"
 
     return "iex"
