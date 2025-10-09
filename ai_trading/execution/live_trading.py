@@ -59,6 +59,9 @@ class NonRetryableBrokerError(Exception):
         self.detail = detail
 
 
+_BROKER_UNAUTHORIZED_BACKOFF_SECONDS = 120.0
+
+
 _CREDENTIAL_STATE: dict[str, Any] = {
     "has_key": False,
     "has_secret": False,
@@ -842,6 +845,9 @@ class ExecutionEngine:
         self._api_secret: str | None = None
         self._cred_error: Exception | None = None
         self._pending_orders: dict[str, dict[str, Any]] = {}
+        self._broker_locked_until: float = 0.0
+        self._broker_lock_reason: str | None = None
+        self._broker_lock_logged: bool = False
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -1116,6 +1122,71 @@ class ExecutionEngine:
             return True
         return self.initialize()
 
+    def _is_broker_locked(self) -> bool:
+        if self._broker_locked_until <= 0.0:
+            return False
+        now = monotonic_time()
+        if now >= self._broker_locked_until:
+            self._broker_locked_until = 0.0
+            self._broker_lock_reason = None
+            self._broker_lock_logged = False
+            return False
+        return True
+
+    def _broker_lock_suppressed(self, *, symbol: str | None, side: str | None, order_type: str) -> bool:
+        if not self._is_broker_locked():
+            return False
+        remaining = max(self._broker_locked_until - monotonic_time(), 0.0)
+        extra: dict[str, object] = {
+            "reason": self._broker_lock_reason or "broker_lock",
+            "order_type": order_type,
+            "retry_after": round(remaining, 1),
+        }
+        if symbol:
+            extra["symbol"] = symbol
+        if side:
+            extra["side"] = side
+        if not self._broker_lock_logged:
+            logger.warning("BROKER_SUBMIT_SUPPRESSED", extra=extra)
+            self._broker_lock_logged = True
+        self.stats.setdefault("skipped_orders", 0)
+        self.stats["skipped_orders"] += 1
+        return True
+
+    def _lock_broker_submissions(
+        self,
+        *,
+        reason: str,
+        status: int | None = None,
+        code: Any | None = None,
+        detail: str | None = None,
+        cooldown: float | None = None,
+    ) -> None:
+        try:
+            duration = float(cooldown) if cooldown is not None else _BROKER_UNAUTHORIZED_BACKOFF_SECONDS
+        except Exception:
+            duration = _BROKER_UNAUTHORIZED_BACKOFF_SECONDS
+        duration = max(duration, 60.0)
+        now = monotonic_time()
+        new_until = now + duration
+        if self._broker_locked_until > now:
+            self._broker_locked_until = max(self._broker_locked_until, new_until)
+        else:
+            self._broker_locked_until = new_until
+        self._broker_lock_reason = reason
+        self._broker_lock_logged = False
+        extra: dict[str, object] = {
+            "reason": reason,
+            "cooldown": round(duration, 1),
+        }
+        if status is not None:
+            extra["status"] = status
+        if code is not None:
+            extra["code"] = code
+        if detail:
+            extra["detail"] = detail
+        logger.error("BROKER_UNAUTHORIZED", extra=extra)
+
     def submit_market_order(self, symbol: str, side: str, quantity: int, **kwargs) -> dict | None:
         """
         Submit a market order with comprehensive error handling.
@@ -1146,6 +1217,9 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             return None
+        side_lower = str(side).lower()
+        if self._broker_lock_suppressed(symbol=symbol, side=side_lower, order_type="market"):
+            return None
         closing_position = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
@@ -1157,7 +1231,7 @@ class ExecutionEngine:
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
-            "side": side.lower(),
+            "side": side_lower,
             "quantity": quantity,
             "type": "market",
             "time_in_force": kwargs.get("time_in_force", "day"),
@@ -1358,6 +1432,9 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             return None
+        side_lower = str(side).lower()
+        if self._broker_lock_suppressed(symbol=symbol, side=side_lower, order_type="limit"):
+            return None
         closing_position = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
@@ -1366,7 +1443,7 @@ class ExecutionEngine:
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
-            "side": side.lower(),
+            "side": side_lower,
             "quantity": quantity,
             "type": "limit",
             "limit_price": limit_price,
@@ -1583,6 +1660,13 @@ class ExecutionEngine:
             order_type_normalized = "market"
         elif resolved_limit_price is not None:
             order_type_normalized = "limit"
+
+        if self._broker_lock_suppressed(
+            symbol=symbol,
+            side=mapped_side,
+            order_type=order_type_normalized,
+        ):
+            return None
 
         order_kwargs: dict[str, Any] = {}
         time_in_force = kwargs.get("time_in_force")
@@ -2070,6 +2154,21 @@ class ExecutionEngine:
             self.stats["skipped_orders"] += 1
             return NonRetryableBrokerError(
                 short_reason,
+                code=code,
+                status=status_val,
+                symbol=symbol,
+                detail=message_str,
+            )
+
+        if status_val in (401, 403):
+            self._lock_broker_submissions(
+                reason="unauthorized",
+                status=status_val,
+                code=code,
+                detail=message_str,
+            )
+            return NonRetryableBrokerError(
+                "broker_unauthorized",
                 code=code,
                 status=status_val,
                 symbol=symbol,
