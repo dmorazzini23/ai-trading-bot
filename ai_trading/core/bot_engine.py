@@ -15441,10 +15441,17 @@ _gap_ratio_gate_limit.cache_info = _gap_ratio_gate_limit_cached.cache_info  # ty
 def _fallback_gap_ratio_limit_cached(signature: tuple[str | None, ...]) -> float:
     """Return relaxed gap ratio threshold (in ratio form) for fallback providers."""
 
-    base_limit_bps = max(_gap_ratio_gate_limit() * 10000.0, 500.0)
-    raw = signature[0] if signature else None
+    primary_raw = signature[0] if signature else None
+    fallback_raw = signature[1] if len(signature) > 1 else None
+
+    if signature:
+        primary_limit_ratio = _gap_ratio_gate_limit_cached((primary_raw,))
+    else:
+        primary_limit_ratio = _gap_ratio_gate_limit()
+
+    base_limit_bps = max(primary_limit_ratio * 10000.0, 500.0)
     try:
-        parsed = float(raw) if raw not in (None, "") else base_limit_bps
+        parsed = float(fallback_raw) if fallback_raw not in (None, "") else base_limit_bps
     except (TypeError, ValueError):
         parsed = base_limit_bps
     bps = max(base_limit_bps, parsed)
@@ -15453,7 +15460,10 @@ def _fallback_gap_ratio_limit_cached(signature: tuple[str | None, ...]) -> float
 
 def _fallback_gap_ratio_limit() -> float:
     return _fallback_gap_ratio_limit_cached(
-        _env_signature("AI_TRADING_FALLBACK_GAP_LIMIT_BPS")
+        _env_signature(
+            "AI_TRADING_GAP_LIMIT_BPS",
+            "AI_TRADING_FALLBACK_GAP_LIMIT_BPS",
+        )
     )
 
 
