@@ -388,6 +388,27 @@ def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
     }
 
 
+def test_execute_order_new_instance_no_attr_error(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine.stats = {}
+
+    def fake_market(self, symbol, side, quantity, **_):
+        return {
+            "id": "test-order",
+            "status": "filled",
+            "filled_qty": quantity,
+            "qty": quantity,
+        }
+
+    monkeypatch.setattr(engine, "submit_market_order", types.MethodType(fake_market, engine))
+
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is not None
+    status = getattr(result.status, "value", result.status)
+    assert status == "filled"
+
+
 def test_execute_order_routes_market(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
     calls: dict[str, dict[str, object]] = {}
