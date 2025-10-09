@@ -10,6 +10,8 @@ _DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
 
 _CANONICAL_KEY = "ALPACA_API_KEY"
 _CANONICAL_SECRET = "ALPACA_SECRET_KEY"
+_LEGACY_KEY = "APCA_API_KEY_ID"
+_LEGACY_SECRET = "APCA_API_SECRET_KEY"
 
 
 @dataclass(slots=True)
@@ -43,16 +45,25 @@ class AlpacaCredentials:
 def resolve_alpaca_credentials(env: Mapping[str, str] | None = None) -> AlpacaCredentials:
     """Return Alpaca credentials resolved from the environment."""
 
-    env_map = dict(env or os.environ)
+    env_map = {str(k): v for k, v in dict(env or os.environ).items() if isinstance(v, str)}
 
-    api_key = env_map.get(_CANONICAL_KEY)
-    secret_key = env_map.get(_CANONICAL_SECRET)
+    def _first(*keys: str) -> str | None:
+        for key in keys:
+            value = env_map.get(key)
+            if value:
+                stripped = value.strip()
+                if stripped:
+                    return stripped
+        return None
 
-    if not (api_key and secret_key):
-        api_key = None
-        secret_key = None
+    api_key = _first(_CANONICAL_KEY, _LEGACY_KEY)
+    secret_key = _first(_CANONICAL_SECRET, _LEGACY_SECRET)
 
-    base_url = env_map.get("ALPACA_BASE_URL") or env_map.get("ALPACA_API_URL") or _DEFAULT_BASE_URL
+    if not api_key or not secret_key:
+        api_key = api_key or None
+        secret_key = secret_key or None
+
+    base_url = _first("ALPACA_API_URL", "ALPACA_BASE_URL") or _DEFAULT_BASE_URL
     return AlpacaCredentials(api_key, secret_key, base_url)
 
 

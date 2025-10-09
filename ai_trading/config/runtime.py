@@ -23,14 +23,16 @@ _LEGACY_BROKER_PREFIX = "AP" "CA_"
 
 
 def _reject_legacy_apca_env() -> None:
-    """Abort startup when legacy Alpaca env vars using the old AP+CA_ prefix are present."""
+    """Abort startup when unsupported APCA_* environment variables are present."""
 
-    legacy_keys = sorted(key for key in os.environ if key.startswith(_LEGACY_BROKER_PREFIX))
-    if not legacy_keys:
+    allowlisted = {"APCA_API_KEY_ID", "APCA_API_SECRET_KEY"}
+    legacy_keys = [key for key in os.environ if key.startswith(_LEGACY_BROKER_PREFIX)]
+    filtered = sorted(key for key in legacy_keys if key not in allowlisted)
+    if not filtered:
         return
 
-    preview = ", ".join(legacy_keys[:5])
-    if len(legacy_keys) > 5:
+    preview = ", ".join(filtered[:5])
+    if len(filtered) > 5:
         preview += " ..."
 
     raise RuntimeError(

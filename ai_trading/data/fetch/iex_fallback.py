@@ -18,6 +18,7 @@ isolation for unit tests without pulling in the entire ``fetch`` module.
 from datetime import datetime
 from typing import Any
 
+from ai_trading.utils.env import get_alpaca_data_base_url, get_alpaca_http_headers
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import get_logger
 from .metrics import inc_empty_payload, mark_skipped, inc_unauthorized_sip
@@ -94,7 +95,9 @@ def fetch_bars(
             "feed": feed,
             "timeframe": tf,
         }
-        resp = session.get("https://data.alpaca.markets/v2/stocks/bars", params=params)
+        data_base = get_alpaca_data_base_url()
+        headers = get_alpaca_http_headers()
+        resp = session.get(f"{data_base}/v2/stocks/bars", params=params, headers=headers)
         payload = resp.json()
         bars = payload.get("bars") or []
         if bars:

@@ -303,11 +303,15 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
         if canonical_env is None or canonical_env.strip() == "":
             os.environ["ALPACA_API_URL"] = base_url
 
-    api_key = (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None) or os.getenv(
-        "ALPACA_API_KEY"
+    api_key = (
+        (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None)
+        or os.getenv("ALPACA_API_KEY")
+        or os.getenv("APCA_API_KEY_ID")
     )
-    secret = (getattr(cfg, "alpaca_secret_key", None) if cfg is not None else None) or os.getenv(
-        "ALPACA_SECRET_KEY"
+    secret = (
+        (getattr(cfg, "alpaca_secret_key", None) if cfg is not None else None)
+        or os.getenv("ALPACA_SECRET_KEY")
+        or os.getenv("APCA_API_SECRET_KEY")
     )
 
     sanitized_key = api_key or None

@@ -1,14 +1,12 @@
 """Test ALPACA_* credential handling."""
 
-import importlib
-import importlib.util
 import logging
 import os
-import sys
 from unittest.mock import patch
 
 import pytest
 from ai_trading.config.management import _resolve_alpaca_env, validate_alpaca_credentials
+from ai_trading.utils.env import get_alpaca_http_headers
 
 
 class TestAlpacaCredentials:
@@ -38,36 +36,26 @@ class TestAlpacaCredentials:
             assert secret_key == "alias_secret"
             assert base_url == "https://alias-api.alpaca.markets"
 
-    def test_runtime_rejects_legacy_apca_env(self) -> None:
-        runtime = importlib.import_module("ai_trading.config.runtime")
-        runtime_path = runtime.__file__
-        assert runtime_path is not None
+    def test_resolve_legacy_apca_env(self) -> None:
+        env_vars = {
+            "APCA_API_KEY_ID": "legacy_key",
+            "APCA_API_SECRET_KEY": "legacy_secret",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            api_key, secret_key, base_url = _resolve_alpaca_env()
+        assert api_key == "legacy_key"
+        assert secret_key == "legacy_secret"
+        assert base_url == "https://paper-api.alpaca.markets"
 
-        with patch.dict(os.environ, {"APCA_API_KEY_ID": "abc123"}, clear=True):
-            spec = importlib.util.spec_from_file_location("runtime_under_test", runtime_path)
-            assert spec and spec.loader
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            try:
-                with pytest.raises(RuntimeError) as excinfo:
-                    spec.loader.exec_module(module)  # type: ignore[union-attr]
-            finally:
-                sys.modules.pop(spec.name, None)
-
-        message = str(excinfo.value)
-        assert "APCA_*" in message
-        assert "ALPACA_*" in message
-
-        # Clean re-import to ensure global module cache unaffected for subsequent tests
-        with patch.dict(os.environ, {}, clear=True):
-            spec = importlib.util.spec_from_file_location("runtime_under_test", runtime_path)
-            assert spec and spec.loader
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            try:
-                spec.loader.exec_module(module)  # type: ignore[union-attr]
-            finally:
-                sys.modules.pop(spec.name, None)
+    def test_http_headers_include_apca_fallback(self) -> None:
+        env_vars = {
+            "APCA_API_KEY_ID": "legacy_key",
+            "APCA_API_SECRET_KEY": "legacy_secret",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            headers = get_alpaca_http_headers()
+        assert headers["APCA-API-KEY-ID"] == "legacy_key"
+        assert headers["APCA-API-SECRET-KEY"] == "legacy_secret"
 
     def test_default_base_url_when_missing(self) -> None:
         env_vars = {

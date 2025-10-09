@@ -146,7 +146,9 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     alpaca_rate_limit_per_min: int = Field(200, alias="ALPACA_RATE_LIMIT_PER_MIN")
     finnhub_api_key: str | None = Field(default=None, alias="FINNHUB_API_KEY")
     backup_data_provider: Literal["yahoo", "none", "finnhub", "finnhub_low_latency"] = Field(
-        "yahoo", alias="BACKUP_DATA_PROVIDER"
+        "yahoo",
+        alias="BACKUP_DATA_PROVIDER",
+        validation_alias=AliasChoices("BACKUP_DATA_PROVIDER", "BACKUP_PROVIDER"),
     )
     alpaca_base_url: str = Field(
         default="https://paper-api.alpaca.markets",
@@ -438,6 +440,31 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         if isinstance(v, str):
             return tuple(i.strip() for i in v.split(",") if i.strip())
         return tuple(v)
+
+    @field_validator("data_provider_priority")
+    @classmethod
+    def _normalize_priority_entries(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        for entry in v:
+            candidate = str(entry).strip().lower()
+            if not candidate:
+                continue
+            if candidate == "yfinance":
+                candidate = "yahoo"
+            normalized.append(candidate)
+        return tuple(normalized)
+
+    @field_validator("backup_data_provider", mode="before")
+    @classmethod
+    def _normalize_backup_provider(cls, value):
+        if value is None:
+            return "yahoo"
+        candidate = str(value).strip().lower()
+        if not candidate:
+            return "yahoo"
+        if candidate == "yfinance":
+            return "yahoo"
+        return candidate
 
     @field_validator("capital_cap", mode="before")
     @classmethod

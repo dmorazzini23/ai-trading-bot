@@ -91,6 +91,8 @@ from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils import safe_to_datetime
 from ai_trading.utils.env import (
     alpaca_credential_status,
+    get_alpaca_data_base_url,
+    get_alpaca_http_headers,
     resolve_alpaca_feed,
     is_data_feed_downgraded,
     get_data_feed_override,
@@ -1217,6 +1219,7 @@ def _mark_fallback(
     fallback_df: Any | None = None,
     resolved_provider: str | None = None,
     resolved_feed: str | None = None,
+    reason: str | None = None,
 ) -> None:
     """Record usage of the configured backup provider.
 
@@ -1257,6 +1260,13 @@ def _mark_fallback(
                 attrs.get("data_provider") or attrs.get("fallback_provider")
             )
             feed_from_df = _normalize(attrs.get("data_feed") or attrs.get("fallback_feed"))
+            if reason:
+                try:
+                    normalized_reason = str(reason).strip()
+                except Exception:
+                    normalized_reason = None
+                if normalized_reason:
+                    attrs.setdefault("fallback_reason", normalized_reason)
 
     provider_hint = _normalize(resolved_provider) or provider_from_df
     if provider_hint is None:
@@ -1307,6 +1317,14 @@ def _mark_fallback(
     fallback_order.register_fallback(provider_for_register, symbol)
     metadata: dict[str, str] = {"fallback_provider": provider_for_register}
     log_extra: dict[str, str] = dict(metadata)
+    if reason:
+        try:
+            normalized_reason = str(reason).strip()
+        except Exception:
+            normalized_reason = None
+        if normalized_reason:
+            metadata["fallback_reason"] = normalized_reason
+            log_extra["fallback_reason"] = normalized_reason
     if configured_provider and _normalize(configured_provider) != provider_for_register:
         metadata["configured_fallback_provider"] = _normalize(configured_provider) or configured_provider
     if from_provider:
@@ -2635,6 +2653,12 @@ def _resolve_backup_provider() -> tuple[str, str]:
     provider_val = getattr(get_settings(), "backup_data_provider", "yahoo")
     provider_str = str(provider_val).strip()
     normalized = provider_str.lower()
+    if not normalized:
+        provider_str = "yahoo"
+        normalized = "yahoo"
+    elif normalized == "yfinance":
+        provider_str = "yahoo"
+        normalized = "yahoo"
     return provider_str, normalized
 
 
@@ -2771,9 +2795,11 @@ def get_fallback_metadata(
 
 def _symbol_exists(symbol: str) -> bool:
     """Return True if the symbol exists according to Alpaca or the local list."""
-    url = f"https://data.alpaca.markets/v2/stocks/{symbol}/meta"
+    base_url = get_alpaca_data_base_url()
+    url = f"{base_url}/v2/stocks/{symbol}/meta"
+    headers = get_alpaca_http_headers()
     try:
-        resp = _HTTP_SESSION.get(url, timeout=clamp_request_timeout(2.0))
+        resp = _HTTP_SESSION.get(url, headers=headers, timeout=clamp_request_timeout(2.0))
         if resp.status_code == 200:
             try:
                 data = resp.json()
@@ -2971,16 +2997,20 @@ def refresh_default_feed(feed: str | None = None) -> str:
     global _DEFAULT_FEED, _DATA_FEED_OVERRIDE, _LAST_OVERRIDE_LOGGED
 
     if feed is None:
-        try:
-            cfg_default = get_settings()
-        except Exception:  # pragma: no cover - defensive fallback
-            candidate = None
+        env_source = os.getenv("MINUTE_SOURCE")
+        if env_source:
+            candidate = env_source
         else:
-            candidate = (
-                getattr(cfg_default, "data_feed", None)
-                or getattr(cfg_default, "alpaca_data_feed", "iex")
-                or "iex"
-            )
+            try:
+                cfg_default = get_settings()
+            except Exception:  # pragma: no cover - defensive fallback
+                candidate = None
+            else:
+                candidate = (
+                    getattr(cfg_default, "data_feed", None)
+                    or getattr(cfg_default, "alpaca_data_feed", "iex")
+                    or "iex"
+                )
     else:
         candidate = feed
 
@@ -3206,7 +3236,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
         return True
 
     _SIP_PRECHECK_DONE = True
-    url = "https://data.alpaca.markets/v2/stocks/bars"
+    url = f"{get_alpaca_data_base_url()}/v2/stocks/bars"
     params = {"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"}
     try:
         resp = session.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
@@ -4398,6 +4428,50 @@ def _repair_rth_minute_gaps(
     return (work_df if mutated else df), metadata, used_backup
 
 
+def _read_env_float(key: str) -> float | None:
+    raw = os.getenv(key, "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+    try:
+        value = get_env(key, None, cast=float)
+    except Exception:
+        value = None
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _resolve_gap_ratio_limit(*, default_ratio: float = 0.005) -> float:
+    ratio = _read_env_float("AI_TRADING_GAP_RATIO_LIMIT")
+    if ratio is not None:
+        try:
+            return max(float(ratio), 0.0)
+        except (TypeError, ValueError):
+            pass
+    for env_key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
+        bps_value = _read_env_float(env_key)
+        if bps_value is None:
+            continue
+        try:
+            return max(float(bps_value) / 10000.0, 0.0)
+        except (TypeError, ValueError):
+            continue
+    try:
+        return max(float(default_ratio), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_gap_ratio_reason(ratio: float, limit: float) -> str:
+    return f"gap_ratio={ratio * 100:.2f}% > limit={limit * 100:.2f}%"
+
+
 _SKIP_LOGGED: set[tuple[str, _dt.date]] = set()
 
 
@@ -4791,6 +4865,7 @@ def _fetch_bars(
         "empty_metric_emitted": False,
         "allow_no_session_primary": False,
         "skip_backup_after_fallback": False,
+        "fallback_reason": None,
     }
 
     def _register_provider_attempt(feed_name: str) -> None:
@@ -4895,7 +4970,9 @@ def _fetch_bars(
             fallback_df=annotated_df,
             resolved_provider=resolved_provider,
             resolved_feed=normalized_provider or None,
+            reason=_state.get("fallback_reason"),
         )
+        _state["fallback_reason"] = None
         if frame_has_rows:
             _record_success_metric(tags, prefer_fallback=True)
         return annotated_df
@@ -4996,7 +5073,7 @@ def _fetch_bars(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
                         "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
-                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
+                        "hint": "Set ALPACA_API_KEY (or APCA_API_KEY_ID), ALPACA_SECRET_KEY (or APCA_API_SECRET_KEY), and ALPACA_BASE_URL to use Alpaca data",
                     },
                 )
                 provider_monitor.alert_manager.create_alert(
@@ -5144,15 +5221,17 @@ def _fetch_bars(
             return _finalize_frame(_run_backup_fetch(fb_int))
         return _finalize_frame(pd.DataFrame())
 
-    headers = {
-        "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
-        "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
-    }
+    headers = get_alpaca_http_headers()
+    if "APCA-API-KEY-ID" not in headers:
+        headers["APCA-API-KEY-ID"] = ""
+    if "APCA-API-SECRET-KEY" not in headers:
+        headers["APCA-API-SECRET-KEY"] = ""
     timeout_v = clamp_request_timeout(10)
 
     # Track request start time for retry/backoff telemetry
     start_time = monotonic_time()
     max_retries = _FETCH_BARS_MAX_RETRIES
+    data_base_url = get_alpaca_data_base_url()
 
     def _push_to_caplog(
         message: str,
@@ -5304,7 +5383,9 @@ def _fetch_bars(
                     fallback_df=result,
                     resolved_provider=to_provider_name,
                     resolved_feed=fb_feed,
+                    reason=_state.get("fallback_reason"),
                 )
+                _state["fallback_reason"] = None
             return result
 
         if (
@@ -5331,7 +5412,7 @@ def _fetch_bars(
             }
 
         params: dict[str, Any] = {}
-        url = "https://data.alpaca.markets/v2/stocks/bars"
+        url = f"{data_base_url}/v2/stocks/bars"
         # Prefer an instance-level patched ``session.get`` when present (tests);
         # otherwise route through the module-level ``requests.get`` so tests
         # that monkeypatch ``df.requests.get`` can intercept deterministically.
@@ -5358,12 +5439,16 @@ def _fetch_bars(
             if resp is None or not hasattr(resp, "status_code"):
                 raise ValueError("invalid_response")
             status = resp.status_code
-            text = (resp.text or "").strip()
-            ctype = (resp.headers.get("Content-Type") or "").lower()
+            text_attr = getattr(resp, "text", "")
+            text = str(text_attr or "").strip()
+            headers_map = getattr(resp, "headers", {}) or {}
+            if not isinstance(headers_map, Mapping):
+                headers_map = {}
+            ctype = str(headers_map.get("Content-Type") or "").lower()
             corr_id = (
-                resp.headers.get("x-request-id")
-                or resp.headers.get("apca-request-id")
-                or resp.headers.get("x-correlation-id")
+                headers_map.get("x-request-id")
+                or headers_map.get("apca-request-id")
+                or headers_map.get("x-correlation-id")
             )
             _state["corr_id"] = corr_id
             if status < 400:
@@ -5563,8 +5648,13 @@ def _fetch_bars(
             time.sleep(backoff)
             return _req(session, None, headers=headers, timeout=timeout)
         payload: dict[str, Any] | list[Any] = {}
-        if status != 400 and text:
+        if status != 400:
+            should_parse_json = False
             if "json" in ctype:
+                should_parse_json = True
+            elif not text and hasattr(resp, "json"):
+                should_parse_json = True
+            if should_parse_json:
                 try:
                     payload = resp.json()
                 except ValueError:
@@ -5628,6 +5718,10 @@ def _fetch_bars(
                 return _run_backup_fetch(yf_interval)
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
+            reason_tag = "alpaca_unauthorized"
+            if _feed == "sip":
+                reason_tag = "alpaca_sip_unauthorized"
+            _state["fallback_reason"] = reason_tag
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
             provider_id = "alpaca"
@@ -6757,7 +6851,9 @@ def _fetch_bars(
                     fallback_df=annotated_df,
                     resolved_provider="yahoo",
                     resolved_feed="yahoo",
+                    reason=_state.get("fallback_reason"),
                 )
+                _state["fallback_reason"] = None
                 if _state.get("window_has_session", True):
                     return _finalize_frame(annotated_df)
                 http_fallback_frame = annotated_df
@@ -7061,7 +7157,9 @@ def get_minute_df(
             fallback_df=frame,
             resolved_provider=resolved_backup_provider,
             resolved_feed=resolved_backup_feed,
+            reason=_state.get("fallback_reason"),
         )
+        _state["fallback_reason"] = None
     if normalized_feed is None:
         cached_cycle_feed = _fallback_cache_for_cycle(_get_cycle_id(), symbol, "1Min")
         if cached_cycle_feed:
@@ -7762,30 +7860,7 @@ def get_minute_df(
 
     _apply_last_complete_meta(df)
 
-    def _gap_ratio_setting() -> float:
-        try:
-            env_ratio = get_env("AI_TRADING_GAP_RATIO_LIMIT", None, cast=float)
-        except Exception:
-            env_ratio = None
-        if env_ratio is not None:
-            try:
-                return max(float(env_ratio) * 10000.0, 0.0)
-            except (TypeError, ValueError):
-                pass
-        for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
-            try:
-                value = get_env(key, None, cast=float)
-            except Exception:
-                continue
-            if value is not None:
-                try:
-                    return max(float(value), 0.0)
-                except (TypeError, ValueError):
-                    continue
-        return 50.0
-
-    max_gap_bps = _gap_ratio_setting()
-    max_gap_ratio = max(0.0, max_gap_bps / 10000.0)
+    max_gap_ratio = _resolve_gap_ratio_limit()
     gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
     healthy_gap = gap_ratio <= max_gap_ratio
     severity = "good" if healthy_gap else "degraded"
@@ -7828,7 +7903,7 @@ def get_minute_df(
         ratio_value = 0.0
     if ratio_value > gap_limit:
         price_reliable = False
-        unreliable_reason = f"gap_ratio={ratio_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+        unreliable_reason = _format_gap_ratio_reason(ratio_value, gap_limit)
     _set_price_reliability(df, reliable=price_reliable, reason=unreliable_reason)
     if df is None or getattr(df, "empty", False):
         fallback_candidate = fallback_frame
@@ -8169,7 +8244,7 @@ def get_bars(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
                         "provider": backup_provider,
-                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
+                        "hint": "Set ALPACA_API_KEY (or APCA_API_KEY_ID), ALPACA_SECRET_KEY (or APCA_API_SECRET_KEY), and ALPACA_BASE_URL to use Alpaca data",
                     },
                 )
                 provider_monitor.alert_manager.create_alert(

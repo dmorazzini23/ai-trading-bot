@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+from typing import Mapping
 
 from ai_trading.broker.alpaca_credentials import (
     AlpacaCredentials,
     resolve_alpaca_credentials,
     reset_alpaca_credential_state,
 )
+
+_DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 
 _DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None] | None = None
 
@@ -42,6 +45,13 @@ def get_resolved_alpaca_credentials() -> AlpacaCredentials:
     return resolve_alpaca_credentials()
 
 
+def resolve_alpaca_creds(env: Mapping[str, str] | None = None) -> tuple[str | None, str | None]:
+    """Return Alpaca credentials preferring canonical env vars with APCA_* fallback."""
+
+    creds = resolve_alpaca_credentials(env)
+    return creds.api_key, creds.secret_key
+
+
 def get_alpaca_creds() -> tuple[str, str]:
     """Return Alpaca API credentials using canonical precedence."""
 
@@ -61,6 +71,29 @@ def get_alpaca_base_url() -> str:
 
     creds = resolve_alpaca_credentials()
     return creds.base_url
+
+
+def get_alpaca_data_base_url() -> str:
+    """Return the Alpaca market data base URL with optional override."""
+
+    override = os.getenv("ALPACA_DATA_BASE_URL", "").strip()
+    if override:
+        normalized = override.rstrip("/")
+        if normalized.lower().startswith(("http://", "https://")):
+            return normalized
+    return _DEFAULT_DATA_BASE_URL
+
+
+def get_alpaca_http_headers() -> dict[str, str]:
+    """Return HTTP headers including Alpaca credentials when available."""
+
+    api_key, secret_key = resolve_alpaca_creds()
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["APCA-API-KEY-ID"] = api_key
+    if secret_key:
+        headers["APCA-API-SECRET-KEY"] = secret_key
+    return headers
 
 
 def resolve_alpaca_feed(requested: str | None) -> str | None:
@@ -118,9 +151,12 @@ def get_data_feed_downgrade_reason() -> str | None:
 __all__ = [
     "get_alpaca_creds",
     "get_alpaca_base_url",
+    "get_alpaca_data_base_url",
+    "get_alpaca_http_headers",
     "resolve_alpaca_feed",
     "alpaca_credential_status",
     "get_resolved_alpaca_credentials",
+    "resolve_alpaca_creds",
     "is_data_feed_downgraded",
     "get_data_feed_override",
     "get_data_feed_downgrade_reason",
