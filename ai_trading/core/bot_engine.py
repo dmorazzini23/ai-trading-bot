@@ -86,6 +86,7 @@ except (ImportError, AttributeError):
     def update_if_present(_ctx, _equity):
         return 1.0
 from ai_trading.utils.datetime import ensure_datetime
+import ai_trading.data.market_calendar as market_calendar
 from ai_trading.data.timeutils import (
     ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
     nyse_session_utc as _nyse_session_utc,  # AI-AGENT-REF: derive NYSE RTH in UTC
@@ -164,6 +165,64 @@ _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
 _PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
 _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
+
+_EASTERN_TZ = ZoneInfo("America/New_York")
+
+
+def _count_trading_minutes(start_dt: datetime, end_dt: datetime) -> int:
+    """Return the number of in-session minutes within ``[start_dt, end_dt)``."""
+
+    try:
+        start = _ensure_utc_dt(start_dt)
+        end = _ensure_utc_dt(end_dt)
+    except Exception:
+        return 0
+
+    if end <= start:
+        return 0
+
+    total_minutes = 0
+    current_date = start.astimezone(_EASTERN_TZ).date()
+    final_date = end.astimezone(_EASTERN_TZ).date()
+
+    while current_date <= final_date:
+        try:
+            if not market_calendar.is_trading_day(current_date):
+                current_date += timedelta(days=1)
+                continue
+        except Exception:
+            current_date += timedelta(days=1)
+            continue
+
+        try:
+            session = market_calendar.session_info(current_date)
+        except Exception:
+            current_date += timedelta(days=1)
+            continue
+
+        session_start = _ensure_utc_dt(session.start_utc)
+        session_end = _ensure_utc_dt(session.end_utc)
+        if session_end <= session_start:
+            current_date += timedelta(days=1)
+            continue
+
+        if session_end <= start or session_start >= end:
+            current_date += timedelta(days=1)
+            continue
+
+        overlap_start = max(session_start, start)
+        overlap_end = min(session_end, end)
+        if overlap_end > overlap_start:
+            try:
+                minutes = int((overlap_end - overlap_start).total_seconds() // 60)
+            except Exception:
+                minutes = 0
+            if minutes > 0:
+                total_minutes += minutes
+
+        current_date += timedelta(days=1)
+
+    return total_minutes
 def _normalize_broker_order_status(value: Any) -> str:
     """Return a lowercase order status regardless of enum/string input."""
 
@@ -4929,7 +4988,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     else:
         df = get_minute_df(symbol, start_dt, end_dt, **_initial_fetch_kwargs())
 
-    expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
+    expected_bars = _count_trading_minutes(start_dt, end_dt)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
 
     if df is not None:
@@ -5172,7 +5231,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         coverage_window_start = fallback_start_dt
         fallback_expected_bars = max(
-            int((end_dt - fallback_start_dt).total_seconds() // 60), 1
+            _count_trading_minutes(fallback_start_dt, end_dt),
+            1,
         )
 
         sip_bars = 0
@@ -5518,7 +5578,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         else:
             df, end_dt, staleness_reference, now_utc, active_feed = recovery_payload
 
-    expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
+    expected_bars = _count_trading_minutes(start_dt, end_dt)
     coverage = _coverage_metrics(
         df,
         expected=expected_bars,

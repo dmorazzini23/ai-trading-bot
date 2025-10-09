@@ -1,7 +1,7 @@
 import logging
 import sys
 import types
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from ai_trading.utils.lazy_imports import load_pandas
@@ -263,6 +263,132 @@ def test_fetch_minute_df_safe_raises_when_exceeding_configured_tolerance(monkeyp
 
     detail = getattr(excinfo.value, "detail", "")
     assert "age=130s" in detail
+
+
+def test_fetch_minute_df_safe_multi_session_window(monkeypatch):
+    pd = load_pandas()
+    base_now = datetime(2024, 1, 3, 20, 0, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    session_map = {
+        date(2024, 1, 2): market_calendar.Session(
+            datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
+            datetime(2024, 1, 2, 21, 0, tzinfo=UTC),
+        ),
+        date(2024, 1, 3): market_calendar.Session(
+            datetime(2024, 1, 3, 14, 30, tzinfo=UTC),
+            datetime(2024, 1, 3, 21, 0, tzinfo=UTC),
+        ),
+    }
+
+    def fake_is_trading_day(target_date: date) -> bool:
+        return target_date in session_map
+
+    def fake_session_info(target_date: date) -> market_calendar.Session:
+        if target_date in session_map:
+            return session_map[target_date]
+        raise RuntimeError("no session")
+
+    def fake_rth_session_utc(target_date: date) -> tuple[datetime, datetime]:
+        if target_date == date(2024, 1, 3):
+            session = session_map[date(2024, 1, 2)]
+            return session.start_utc, base_now
+        session = session_map.get(target_date)
+        if session is None:
+            raise RuntimeError("no session")
+        return session.start_utc, session.end_utc
+
+    monkeypatch.setattr(market_calendar, "is_trading_day", fake_is_trading_day, raising=False)
+    monkeypatch.setattr(market_calendar, "session_info", fake_session_info, raising=False)
+    monkeypatch.setattr(market_calendar, "rth_session_utc", fake_rth_session_utc, raising=False)
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: date(2024, 1, 2),
+        raising=False,
+    )
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True, raising=False)
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        intraday_lookback_minutes=60,
+        intraday_indicator_window_minutes=0,
+        minute_gap_backfill=None,
+        data_feed="iex",
+        alpaca_feed_failover=(),
+        market_cache_ttl=0,
+    )
+
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+
+    session_one = session_map[date(2024, 1, 2)]
+    session_two = session_map[date(2024, 1, 3)]
+    idx_first = pd.date_range(
+        session_one.start_utc,
+        session_one.end_utc,
+        freq="min",
+        tz="UTC",
+        inclusive="left",
+    )
+    idx_second = pd.date_range(
+        session_two.start_utc,
+        base_now,
+        freq="min",
+        tz="UTC",
+        inclusive="left",
+    )
+    combined_idx = idx_first.append(idx_second)
+
+    df = pd.DataFrame(
+        {
+            "timestamp": combined_idx,
+            "open": [1.0] * len(combined_idx),
+            "high": [1.0] * len(combined_idx),
+            "low": [1.0] * len(combined_idx),
+            "close": [1.0] * len(combined_idx),
+            "volume": [100] * len(combined_idx),
+        }
+    )
+    df.attrs["_coverage_meta"] = {
+        "expected": len(combined_idx),
+        "missing_after": 0,
+        "gap_ratio": 0.0,
+        "window_start": session_one.start_utc,
+        "window_end": base_now,
+    }
+
+    call_args: dict[str, datetime] = {}
+
+    def fake_get_minute_df(symbol: str, start: datetime, end: datetime, **_):
+        call_args["start"] = start
+        call_args["end"] = end
+        return df.copy()
+
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda *a, **k: None)
+
+    result = bot_engine.fetch_minute_df_safe("MSFT")
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == len(combined_idx)
+    assert call_args["start"] == session_one.start_utc
+    assert call_args["end"] == base_now
+    assert len(result) == bot_engine._count_trading_minutes(call_args["start"], base_now)
+    meta = result.attrs.get("_coverage_meta")
+    assert isinstance(meta, dict)
+    assert meta.get("gap_ratio") == pytest.approx(0.0)
 
 
 def test_fetch_minute_df_safe_recovers_from_single_stale(monkeypatch, caplog):
