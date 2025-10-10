@@ -5873,7 +5873,13 @@ def _fetch_bars(
                 ),
             )
             time.sleep(sleep_for)
-            return _req(session, None, headers=headers, timeout=timeout)
+            try:
+                result = _req(session, None, headers=headers, timeout=timeout)
+            except ValueError as exc:
+                if str(exc) != "rate_limited":
+                    raise
+            else:
+                return result
             fallback_target = fallback
             if requested_feed == "sip":
                 if fallback_target is None:
