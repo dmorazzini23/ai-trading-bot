@@ -1883,6 +1883,7 @@ class ExecutionEngine:
         )
 
         order_type_normalized = order_type_initial
+        downgraded_to_market_initial = False
         if resolved_limit_price is None and order_type_normalized == "limit":
             order_type_normalized = "market"
         elif resolved_limit_price is not None:
@@ -1894,6 +1895,7 @@ class ExecutionEngine:
             and order_type_normalized in {"limit", "stop_limit"}
         ):
             order_type_normalized = "market"
+            downgraded_to_market_initial = True
 
         if self._broker_lock_suppressed(
             symbol=symbol,
@@ -1941,6 +1943,10 @@ class ExecutionEngine:
 
         order_kwargs["using_fallback_price"] = using_fallback_price
         order_kwargs["price_hint"] = price_hint
+
+        if downgraded_to_market_initial:
+            order_kwargs.pop("limit_price", None)
+            order_kwargs.pop("stop_price", None)
 
         price_for_slippage = price_for_limit if price_for_limit is not None else resolved_limit_price
         if price_for_slippage is not None:
@@ -1993,8 +1999,23 @@ class ExecutionEngine:
         asset_class_for_log = order_kwargs.get("asset_class")
         price_hint_str = str(price_hint) if price_hint is not None else None
 
+        if downgraded_to_market_initial:
+            logger.warning(
+                "ORDER_DOWNGRADED_TO_MARKET",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "quantity": qty,
+                    "client_order_id": client_order_id,
+                    "price_hint": price_hint_str,
+                    "using_fallback_price": True,
+                },
+            )
+
+        order_type_submitted = order_type_normalized
+        order: Any | None = None
         try:
-            if order_type_normalized == "market":
+            if order_type_submitted == "market":
                 order_kwargs.pop("price", None)
                 order = self.submit_market_order(symbol, mapped_side, qty, **order_kwargs)
             else:
@@ -2008,7 +2029,9 @@ class ExecutionEngine:
                     **order_kwargs,
                 )
         except NonRetryableBrokerError as exc:
-            metadata = _extract_api_error_metadata(exc)
+            metadata = _extract_api_error_metadata(exc) or {}
+            code = metadata.get("code")
+            detail_val = metadata.get("detail")
             base_extra = {
                 "symbol": symbol,
                 "side": mapped_side,
@@ -2016,19 +2039,58 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": asset_class_for_log,
                 "price_hint": price_hint_str,
-                "order_type": order_type_normalized,
+                "order_type": order_type_submitted,
                 "using_fallback_price": using_fallback_price,
             }
             logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE",
-                extra=base_extra
-                | {
-                    "reason": str(exc),
-                    "code": getattr(exc, "code", None),
-                    "detail": metadata.get("detail"),
-                },
+                "ALPACA_ORDER_REJECTED_PRIMARY",
+                extra=base_extra | {"code": code, "detail": detail_val},
             )
-            return None
+
+            retry_allowed = using_fallback_price and order_type_submitted in {"limit", "stop_limit"}
+            msg = (str(exc) or "") + " " + (detail_val or "")
+            looks_price_related = any(
+                keyword in msg.lower()
+                for keyword in ("price", "band", "nbbo", "quote", "limit", "outside")
+            )
+            if retry_allowed and looks_price_related:
+                retry_kwargs = dict(order_kwargs)
+                retry_kwargs.pop("limit_price", None)
+                retry_kwargs.pop("stop_price", None)
+                retry_kwargs.pop("price", None)
+                logger.warning("ORDER_DOWNGRADED_TO_MARKET", extra=base_extra)
+                try:
+                    order = self.submit_market_order(symbol, mapped_side, qty, **retry_kwargs)
+                except NonRetryableBrokerError as exc2:
+                    md2 = _extract_api_error_metadata(exc2) or {}
+                    logger.warning(
+                        "ALPACA_ORDER_REJECTED_RETRY",
+                        extra=base_extra
+                        | {"code": md2.get("code"), "detail": md2.get("detail")},
+                    )
+                    logger.info(
+                        "ORDER_SKIPPED_NONRETRYABLE",
+                        extra=base_extra | {"reason": "retry_failed"},
+                    )
+                    logger.warning(
+                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                        extra=base_extra | {"detail": md2.get("detail")},
+                    )
+                    return None
+                else:
+                    order_type_submitted = "market"
+                    order_kwargs = retry_kwargs
+            else:
+                logger.info(
+                    "ORDER_SKIPPED_NONRETRYABLE",
+                    extra=base_extra | {"reason": str(exc), "code": code},
+                )
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                    extra=base_extra | {"detail": detail_val},
+                )
+                return None
+
         except (APIError, TimeoutError, ConnectionError) as exc:
             status_code = getattr(exc, "status_code", None)
             if not status_code:
@@ -2050,6 +2112,7 @@ class ExecutionEngine:
             )
             return None
 
+        order_type_normalized = order_type_submitted
         if order is None:
             logger.warning(
                 "EXEC_ORDER_NO_RESULT",
