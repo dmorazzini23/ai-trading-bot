@@ -781,6 +781,7 @@ _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
 # Configurable backoff parameters for retry logic
 _FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
 _FETCH_BARS_BACKOFF_CAP = float(os.getenv("FETCH_BARS_BACKOFF_CAP", "5"))
+_MIN_RATE_LIMIT_SLEEP_SECONDS = 1.0
 _MINUTE_GAP_WARNING_THRESHOLD = max(
     0, int(os.getenv("MINUTE_GAP_WARNING_THRESHOLD", "3"))
 )
@@ -5514,6 +5515,15 @@ def _fetch_bars(
                 raise
             _state["retries"] = attempt
             backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            sleep_for = backoff
+            if isinstance(e, ValueError) and str(e) == "rate_limited":
+                if _state.pop("rate_limit_retry_floor", False):
+                    sleep_for = max(_MIN_RATE_LIMIT_SLEEP_SECONDS, backoff)
+                else:
+                    _state.pop("rate_limit_retry_floor", None)
+            else:
+                _state.pop("rate_limit_retry_floor", None)
+            _state["retry_delay"] = sleep_for
             logger.debug(
                 "RETRY_FETCH_ERROR",
                 extra=_norm_extra(
@@ -5525,14 +5535,14 @@ def _fetch_bars(
                         "start": _start.isoformat(),
                         "end": _end.isoformat(),
                         "correlation_id": _state["corr_id"],
-                        "retry_delay": backoff,
+                        "retry_delay": sleep_for,
                         "attempt": _state["retries"],
                         "remaining_retries": max_retries - _state["retries"],
                         "previous_correlation_id": prev_corr,
                     }
                 ),
             )
-            time.sleep(backoff)
+            time.sleep(sleep_for)
             return _req(session, None, headers=headers, timeout=timeout)
         except ConnectionError as e:
             log_extra = {
@@ -5800,6 +5810,7 @@ def _fetch_bars(
                 ),
             )
             if retry_after > 0:
+                _state.pop("rate_limit_retry_floor", None)
                 already_disabled = provider_monitor.is_disabled("alpaca")
                 if not already_disabled and _alpaca_disabled_until:
                     try:
@@ -5822,6 +5833,53 @@ def _fetch_bars(
                     )
                     return _run_backup_fetch(fb_int)
                 return pd.DataFrame()
+            _state["rate_limit_retry_floor"] = True
+            attempt = _state["retries"] + 1
+            if attempt > max_retries:
+                logger.error(
+                    "FETCH_RETRIES_EXHAUSTED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "error": "rate_limited",
+                            "correlation_id": _state.get("corr_id"),
+                        }
+                    ),
+                )
+                raise ValueError("rate_limited")
+            _state["retries"] = attempt
+            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            sleep_for = max(_MIN_RATE_LIMIT_SLEEP_SECONDS, backoff)
+            _state["retry_delay"] = sleep_for
+            logger.debug(
+                "RETRY_FETCH_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state.get("corr_id"),
+                        "retry_delay": sleep_for,
+                        "attempt": _state["retries"],
+                        "remaining_retries": max_retries - _state["retries"],
+                        "previous_correlation_id": prev_corr,
+                    }
+                ),
+            )
+            time.sleep(sleep_for)
+            try:
+                result = _req(session, None, headers=headers, timeout=timeout)
+            except ValueError as exc:
+                if str(exc) != "rate_limited":
+                    raise
+            else:
+                return result
             fallback_target = fallback
             if requested_feed == "sip":
                 if fallback_target is None:

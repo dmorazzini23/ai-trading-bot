@@ -390,6 +390,7 @@ def test_rate_limit_backoff(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
     monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", False, raising=False)
     monkeypatch.setattr(df, "max_data_fallbacks", lambda: 0)
     monkeypatch.setattr(df, "provider_priority", lambda: ["alpaca_iex"])
     sleep_calls: list[float] = []
@@ -410,7 +411,7 @@ def test_rate_limit_backoff(monkeypatch: pytest.MonkeyPatch):
     start, end = _dt_range(2)
     out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
     assert isinstance(out, pd.DataFrame) and not out.empty
-    assert sleep_calls and sleep_calls[0] >= 1.0
+    assert sleep_calls and sleep_calls[0] == pytest.approx(df._MIN_RATE_LIMIT_SLEEP_SECONDS)
     assert feeds == ["iex", "iex"]
 
 
