@@ -16118,7 +16118,27 @@ def _enter_long(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
-    if (
+    fallback_in_use = bool(annotations.get("using_fallback_price"))
+    if not fallback_in_use and using_fallback_candidate:
+        annotations["using_fallback_price"] = True
+        fallback_in_use = True
+    if gap_exceeds and fallback_in_use:
+        annotations["gap_gate_bypassed"] = True
+        logger.info(
+            "GAP_GATE_BYPASSED_FOR_FALLBACK",
+            extra={
+                "symbol": symbol,
+                "gap_ratio": gap_value if gap_value is not None else 0.0,
+                "limit": gap_limit,
+            },
+        )
+        skip_reasons = [
+            reason
+            for reason in skip_reasons
+            if not (isinstance(reason, str) and reason.startswith("gap_ratio="))
+        ]
+        gap_exceeds = False
+    elif (
         gap_exceeds
         and fallback_env_allowed
         and using_fallback_candidate
@@ -16590,6 +16610,37 @@ def _enter_short(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
+    fallback_in_use = bool(annotations.get("using_fallback_price"))
+    if not fallback_in_use and using_fallback_candidate:
+        annotations["using_fallback_price"] = True
+        fallback_in_use = True
+    if gap_exceeds and fallback_in_use:
+        annotations["gap_gate_bypassed"] = True
+        logger.info(
+            "GAP_GATE_BYPASSED_FOR_FALLBACK",
+            extra={
+                "symbol": symbol,
+                "gap_ratio": float(gap_ratio) if isinstance(gap_ratio, (int, float, np.floating)) else 0.0,
+                "limit": gap_limit,
+            },
+        )
+        gap_exceeds = False
+    elif (
+        gap_exceeds
+        and fallback_env_allowed
+        and using_fallback_candidate
+        and not fallback_stale_session
+    ):
+        annotations["gap_gate_bypassed"] = True
+        logger.info(
+            "GAP_GATE_BYPASSED_FOR_FALLBACK",
+            extra={
+                "symbol": symbol,
+                "gap_ratio": float(gap_ratio) if isinstance(gap_ratio, (int, float, np.floating)) else 0.0,
+                "limit": gap_limit,
+            },
+        )
+        gap_exceeds = False
     gate_block_override = (
         gate.block
         and gap_exceeds

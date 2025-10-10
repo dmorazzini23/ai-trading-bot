@@ -1298,7 +1298,8 @@ class ExecutionEngine:
         kwargs.pop("closing_position", None)
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
-        using_fallback_price = _safe_bool(kwargs.pop("using_fallback_price", False))
+        using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
+        kwargs.pop("using_fallback_price", None)
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         asset_class = kwargs.get("asset_class")
@@ -1418,31 +1419,30 @@ class ExecutionEngine:
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
-            metadata = _extract_api_error_metadata(exc)
+            metadata_raw = _extract_api_error_metadata(exc)
+            metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
             detail_val = metadata.get("detail")
-            base_extra = {
+            alpaca_extra = {
                 "symbol": symbol,
                 "side": side_lower,
                 "quantity": quantity,
                 "client_order_id": client_order_id,
-                "asset_class": asset_class,
-                "price_hint": str(price_hint) if price_hint is not None else None,
-                "order_type": "market",
+                "order_type": order_data.get("type"),
                 "using_fallback_price": using_fallback_price,
+                "code": metadata.get("code"),
+                "detail": detail_val,
             }
-            logger.warning(
-                "ALPACA_ORDER_REJECTED_PRIMARY",
-                extra=base_extra
-                | {"code": metadata.get("code"), "detail": detail_val, "reason": str(exc)},
-            )
-            logger.info(
-                "ORDER_SKIPPED_NONRETRYABLE",
-                extra=base_extra | {"reason": str(exc), "code": metadata.get("code")},
-            )
-            logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
-                extra=base_extra | {"detail": detail_val, "reason": str(exc)},
-            )
+            logger.warning("ALPACA_ORDER_REJECTED_PRIMARY", extra=alpaca_extra)
+            skipped_extra = dict(alpaca_extra)
+            skipped_extra["reason"] = str(exc)
+            if asset_class:
+                skipped_extra["asset_class"] = asset_class
+            if price_hint is not None:
+                skipped_extra["price_hint"] = str(price_hint)
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_extra)
+            detail_extra = dict(skipped_extra)
+            detail_extra["detail"] = detail_val or str(exc)
+            logger.warning("ORDER_SKIPPED_NONRETRYABLE_DETAIL", extra=detail_extra)
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
@@ -1540,7 +1540,7 @@ class ExecutionEngine:
         kwargs.pop("closing_position", None)
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
-        using_fallback_price = _safe_bool(kwargs.pop("using_fallback_price", False))
+        using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         asset_class = kwargs.get("asset_class")
@@ -1653,116 +1653,138 @@ class ExecutionEngine:
             quantity = capacity.suggested_qty
             order_data["quantity"] = quantity
         start_time = time.time()
+        explicit_limit = ("limit_price" in order_data) or ("stop_price" in order_data)
+        downgraded_logged = False
+        if using_fallback_price and not explicit_limit:
+            order_data["type"] = "market"
+            order_data.pop("limit_price", None)
+            order_data.pop("stop_price", None)
+            logger.warning(
+                "ORDER_DOWNGRADED_TO_MARKET",
+                extra={
+                    "symbol": symbol,
+                    "side": side_lower,
+                    "quantity": quantity,
+                    "client_order_id": client_order_id,
+                    "using_fallback_price": True,
+                },
+            )
+            downgraded_logged = True
         logger.info(
             "Submitting limit order",
             extra={
                 "side": side,
                 "quantity": quantity,
                 "symbol": symbol,
-                "limit_price": limit_price,
+                "limit_price": order_data.get("limit_price"),
                 "client_order_id": client_order_id,
+                "order_type": order_data.get("type"),
             },
         )
         failure_exc: Exception | None = None
         failure_status: int | None = None
         error_meta: dict[str, Any] = {}
         order_type_initial = str(order_data.get("type", "limit")).lower()
+        result: dict[str, Any] | None = None
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
-            metadata_primary = _extract_api_error_metadata(exc)
+            metadata_raw = _extract_api_error_metadata(exc)
+            metadata_primary = metadata_raw if isinstance(metadata_raw, dict) else {}
             detail_primary = metadata_primary.get("detail")
-            base_extra_common = {
+            alpaca_extra = {
                 "symbol": symbol,
                 "side": side_lower,
                 "quantity": quantity,
                 "client_order_id": client_order_id,
-                "asset_class": asset_class,
-                "price_hint": str(price_hint) if price_hint is not None else None,
                 "order_type": order_type_initial,
                 "using_fallback_price": using_fallback_price,
+                "code": metadata_primary.get("code"),
+                "detail": detail_primary,
             }
-            logger.warning(
-                "ALPACA_ORDER_REJECTED_PRIMARY",
-                extra=base_extra_common
-                | {
-                    "code": metadata_primary.get("code"),
-                    "detail": detail_primary,
-                    "reason": str(exc),
-                },
+            logger.warning("ALPACA_ORDER_REJECTED_PRIMARY", extra=alpaca_extra)
+
+            error_tokens = ("price", "band", "nbbo", "quote", "limit", "outside")
+            detail_search = " ".join(
+                part
+                for part in (
+                    str(detail_primary or "").lower(),
+                    str(metadata_primary.get("error") or "").lower(),
+                    str(exc).lower(),
+                )
+                if part
+            )
+            should_retry_market = (
+                using_fallback_price
+                and order_type_initial in {"limit", "stop_limit"}
+                and any(token in detail_search for token in error_tokens)
             )
 
-            final_exc: NonRetryableBrokerError = exc
-            final_metadata = metadata_primary
-            final_order_type = order_type_initial
-
-            should_retry_market = _should_retry_limit_as_market(
-                metadata_primary, using_fallback_price=using_fallback_price
-            ) and order_type_initial in {"limit", "stop_limit"}
-
             if should_retry_market:
-                order_data_retry = dict(order_data)
-                previous_type = str(order_data_retry.get("type", "limit"))
-                order_data_retry["_downgraded_from"] = previous_type
-                order_data_retry["type"] = "market"
-                order_data_retry.pop("limit_price", None)
-                order_data_retry.pop("stop_price", None)
-                logger.warning(
-                    "ORDER_DOWNGRADED_TO_MARKET",
-                    extra={
+                retry_order = dict(order_data)
+                retry_order["type"] = "market"
+                retry_order.pop("limit_price", None)
+                retry_order.pop("stop_price", None)
+                if not downgraded_logged:
+                    logger.warning(
+                        "ORDER_DOWNGRADED_TO_MARKET",
+                        extra={
+                            "symbol": symbol,
+                            "side": side_lower,
+                            "quantity": quantity,
+                            "client_order_id": client_order_id,
+                            "using_fallback_price": True,
+                        },
+                    )
+                    downgraded_logged = True
+                try:
+                    result = self._execute_with_retry(
+                        self._submit_order_to_alpaca, retry_order
+                    )
+                except NonRetryableBrokerError as retry_exc:
+                    metadata_retry_raw = _extract_api_error_metadata(retry_exc)
+                    metadata_retry = (
+                        metadata_retry_raw if isinstance(metadata_retry_raw, dict) else {}
+                    )
+                    detail_retry = metadata_retry.get("detail")
+                    retry_extra = {
                         "symbol": symbol,
                         "side": side_lower,
                         "quantity": quantity,
                         "client_order_id": client_order_id,
-                        "asset_class": asset_class,
-                        "price_hint": str(price_hint) if price_hint is not None else None,
                         "order_type": "market",
-                        "using_fallback_price": using_fallback_price,
-                    },
-                )
-                retry_payload = {
-                    key: value for key, value in order_data_retry.items() if not str(key).startswith("_")
-                }
-                try:
-                    result = self._execute_with_retry(self._submit_order_to_alpaca, retry_payload)
-                except NonRetryableBrokerError as retry_exc:
-                    final_exc = retry_exc
-                    final_metadata = _extract_api_error_metadata(retry_exc)
-                    final_order_type = "market"
+                        "using_fallback_price": True,
+                        "code": metadata_retry.get("code"),
+                        "detail": detail_retry,
+                    }
+                    logger.warning("ALPACA_ORDER_REJECTED_RETRY", extra=retry_extra)
+                    skipped_retry = dict(retry_extra)
+                    skipped_retry["reason"] = "retry_failed"
+                    if asset_class:
+                        skipped_retry["asset_class"] = asset_class
+                    if price_hint is not None:
+                        skipped_retry["price_hint"] = str(price_hint)
+                    logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_retry)
+                    detail_retry_extra = dict(skipped_retry)
+                    detail_retry_extra["detail"] = detail_retry or str(retry_exc)
                     logger.warning(
-                        "ALPACA_ORDER_REJECTED_RETRY",
-                        extra=base_extra_common
-                        | {
-                            "order_type": "market",
-                            "code": final_metadata.get("code"),
-                            "detail": final_metadata.get("detail"),
-                            "reason": str(retry_exc),
-                        },
+                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL", extra=detail_retry_extra
                     )
+                    return None
                 else:
-                    return result
-
-            final_detail = final_metadata.get("detail")
-            final_code = final_metadata.get("code")
-            final_extra = {
-                "symbol": symbol,
-                "side": side_lower,
-                "quantity": quantity,
-                "client_order_id": client_order_id,
-                "asset_class": asset_class,
-                "price_hint": str(price_hint) if price_hint is not None else None,
-                "order_type": final_order_type,
-                "using_fallback_price": using_fallback_price,
-            }
-            logger.info(
-                "ORDER_SKIPPED_NONRETRYABLE",
-                extra=final_extra | {"reason": str(final_exc), "code": final_code},
-            )
-            logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
-                extra=final_extra | {"detail": final_detail, "reason": str(final_exc)},
-            )
-            return None
+                    order_type_initial = "market"
+            else:
+                skipped_extra = dict(alpaca_extra)
+                skipped_extra["reason"] = str(exc)
+                if asset_class:
+                    skipped_extra["asset_class"] = asset_class
+                if price_hint is not None:
+                    skipped_extra["price_hint"] = str(price_hint)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_extra)
+                detail_extra = dict(skipped_extra)
+                detail_extra["detail"] = detail_primary or str(exc)
+                logger.warning("ORDER_SKIPPED_NONRETRYABLE_DETAIL", extra=detail_extra)
+                return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
             error_meta = _extract_api_error_metadata(exc)
