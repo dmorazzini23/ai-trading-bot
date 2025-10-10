@@ -16122,7 +16122,12 @@ def _enter_long(
     if not fallback_in_use and using_fallback_candidate:
         annotations["using_fallback_price"] = True
         fallback_in_use = True
-    if gap_exceeds and fallback_in_use:
+    if (
+        gap_exceeds
+        and fallback_in_use
+        and fallback_env_allowed
+        and not fallback_stale_session
+    ):
         annotations["gap_gate_bypassed"] = True
         logger.info(
             "GAP_GATE_BYPASSED_FOR_FALLBACK",
@@ -16614,7 +16619,12 @@ def _enter_short(
     if not fallback_in_use and using_fallback_candidate:
         annotations["using_fallback_price"] = True
         fallback_in_use = True
-    if gap_exceeds and fallback_in_use:
+    if (
+        gap_exceeds
+        and fallback_in_use
+        and fallback_env_allowed
+        and not fallback_stale_session
+    ):
         annotations["gap_gate_bypassed"] = True
         logger.info(
             "GAP_GATE_BYPASSED_FOR_FALLBACK",
