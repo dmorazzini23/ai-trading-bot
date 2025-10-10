@@ -16115,23 +16115,6 @@ def _enter_long(
         skip_reasons.append(
             f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
         )
-    using_fallback_price = bool(annotations.get("using_fallback_price"))
-    if using_fallback_price and fallback_env_allowed:
-        annotations["gap_gate_bypassed"] = True
-        logger.info(
-            "GAP_GATE_BYPASSED_FOR_FALLBACK",
-            extra={
-                "symbol": symbol,
-                "gap_ratio": gap_value if gap_value is not None else 0.0,
-                "limit": gap_limit,
-            },
-        )
-        gap_exceeds = False
-        skip_reasons = [
-            reason
-            for reason in skip_reasons
-            if not (isinstance(reason, str) and reason.startswith("gap_ratio="))
-        ]
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
@@ -16141,6 +16124,15 @@ def _enter_long(
         and using_fallback_candidate
         and not fallback_stale_session
     ):
+        annotations["gap_gate_bypassed"] = True
+        logger.info(
+            "GAP_GATE_BYPASSED_FOR_FALLBACK",
+            extra={
+                "symbol": symbol,
+                "gap_ratio": gap_value if gap_value is not None else 0.0,
+                "limit": gap_limit,
+            },
+        )
         skip_reasons = [
             reason
             for reason in skip_reasons
