@@ -16106,14 +16106,32 @@ def _enter_long(
         return True
     nbbo_available = _is_primary_price_source(price_source)
     gap_exceeds = False
+    gap_value: float | None = None
     if isinstance(gap_ratio, (int, float, np.floating)):
         gap_value = float(gap_ratio)
         gap_exceeds = gap_value > gap_limit
     skip_reasons: list[str] = []
-    if gap_exceeds:
+    if gap_exceeds and gap_value is not None:
         skip_reasons.append(
             f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
         )
+    using_fallback_price = bool(annotations.get("using_fallback_price"))
+    if using_fallback_price and fallback_env_allowed:
+        annotations["gap_gate_bypassed"] = True
+        logger.info(
+            "GAP_GATE_BYPASSED_FOR_FALLBACK",
+            extra={
+                "symbol": symbol,
+                "gap_ratio": gap_value if gap_value is not None else 0.0,
+                "limit": gap_limit,
+            },
+        )
+        gap_exceeds = False
+        skip_reasons = [
+            reason
+            for reason in skip_reasons
+            if not (isinstance(reason, str) and reason.startswith("gap_ratio="))
+        ]
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
