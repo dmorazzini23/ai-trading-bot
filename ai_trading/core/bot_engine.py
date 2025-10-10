@@ -13927,7 +13927,13 @@ def adjust_trailing_stop(position, new_stop: float) -> None:
     retry=retry_if_exception_type(APIError),
 )
 def submit_order(
-    ctx: BotContext, symbol: str, qty: int, side: str, *, price: float | None = None
+    ctx: BotContext,
+    symbol: str,
+    qty: int,
+    side: str,
+    *,
+    price: float | None = None,
+    **exec_kwargs: Any,
 ) -> Order | None:
     """Submit an order using the institutional execution engine."""
     if not market_is_open():
@@ -13987,6 +13993,7 @@ def submit_order(
             core_side,
             qty,
             price=price,
+            **exec_kwargs,
         )
     except (APIError, TimeoutError, ConnectionError, AlpacaOrderHTTPError) as e:
         logger.error(
@@ -16023,12 +16030,23 @@ def _enter_long(
         price_source,
         prefer_backup_quote=prefer_backup_quote,
     )
-    annotations = gate.annotations or {}
+    annotations = dict(gate.annotations) if gate.annotations else {}
     gap_ratio = annotations.get("gap_ratio")
     gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
     fallback_ok = annotations.get("fallback_quote_ok")
     fallback_age = annotations.get("fallback_quote_age")
     fallback_error = annotations.get("fallback_quote_error")
+    try:
+        fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", "0")
+    except Exception:
+        fallback_env_raw = "0"
+    fallback_env_allowed = str(fallback_env_raw or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "enabled",
+    }
     now_utc = datetime.now(UTC)
     fallback_ts: datetime | None = None
     if isinstance(fallback_age, (int, float, np.floating)):
@@ -16096,6 +16114,21 @@ def _enter_long(
         skip_reasons.append(
             f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
         )
+    using_fallback_candidate = (
+        not nbbo_available and (fallback_quote_usable or fallback_active)
+    )
+    if (
+        gap_exceeds
+        and fallback_env_allowed
+        and using_fallback_candidate
+        and not fallback_stale_session
+    ):
+        skip_reasons = [
+            reason
+            for reason in skip_reasons
+            if not (isinstance(reason, str) and reason.startswith("gap_ratio="))
+        ]
+        gap_exceeds = False
     if fallback_stale_session:
         logger.warning(
             "FALLBACK_QUOTE_STALE",
@@ -16192,6 +16225,7 @@ def _enter_long(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
         )
+    annotations["using_fallback_price"] = fallback_used
     current_price = float(quote_price)
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
@@ -16311,7 +16345,16 @@ def _enter_long(
             extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price},
         )
         return True
-    order_id = submit_order(ctx, symbol, adj_qty, "buy", price=current_price)
+    order_id = submit_order(
+        ctx,
+        symbol,
+        adj_qty,
+        "buy",
+        price=current_price,
+        using_fallback_price=fallback_used,
+        annotations=dict(annotations),
+        price_hint=current_price,
+    )
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
@@ -16489,10 +16532,62 @@ def _enter_short(
         price_source,
         prefer_backup_quote=prefer_backup_quote,
     )
-    annotations = gate.annotations or {}
+    annotations = dict(gate.annotations) if gate.annotations else {}
     fallback_error = annotations.get("fallback_quote_error")
     fallback_age = annotations.get("fallback_quote_age")
-    if gate.block:
+    gap_ratio = annotations.get("gap_ratio")
+    gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
+    fallback_ok = annotations.get("fallback_quote_ok")
+    try:
+        fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", "0")
+    except Exception:
+        fallback_env_raw = "0"
+    fallback_env_allowed = str(fallback_env_raw or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "enabled",
+    }
+    now_utc = datetime.now(UTC)
+    fallback_ts: datetime | None = None
+    if isinstance(fallback_age, (int, float, np.floating)):
+        try:
+            fallback_ts = now_utc - timedelta(seconds=float(fallback_age))
+        except Exception:
+            fallback_ts = None
+    fallback_checked = (
+        fallback_ok is not None or fallback_error is not None or fallback_ts is not None
+    )
+    fallback_after_last_close = False
+    if fallback_ok is True:
+        fallback_after_last_close = True
+    elif fallback_ts is not None:
+        fallback_after_last_close = _fallback_quote_newer_than_last_close(
+            fallback_ts, now_utc
+        )
+    fallback_has_quote = bool(fallback_ok) or fallback_ts is not None
+    fallback_stale_session = False
+    if fallback_checked:
+        fallback_stale_session = not (fallback_after_last_close and fallback_has_quote)
+    fallback_quote_usable = fallback_has_quote and not fallback_stale_session
+    if fallback_checked and annotations.get("fallback_quote_error") in _TRANSIENT_FALLBACK_REASONS:
+        fallback_stale_session = False
+        fallback_quote_usable = True
+    gap_exceeds = False
+    if isinstance(gap_ratio, (int, float, np.floating)):
+        gap_exceeds = float(gap_ratio) > gap_limit
+    using_fallback_candidate = (
+        not nbbo_available and (fallback_quote_usable or fallback_active)
+    )
+    gate_block_override = (
+        gate.block
+        and gap_exceeds
+        and fallback_env_allowed
+        and using_fallback_candidate
+        and not fallback_stale_session
+    )
+    if gate.block and not gate_block_override:
         reasons_tuple = tuple(gate.reasons) if gate.reasons else tuple()
         if "fallback_quote_stale" in reasons_tuple:
             logger.warning(
@@ -16523,7 +16618,7 @@ def _enter_short(
         return True
     if (
         gate.reasons
-        and not gate.block
+        and (not gate.block or gate_block_override)
         and any(reason != "liquidity_fallback" for reason in gate.reasons)
     ):
         logger.info(
@@ -16580,6 +16675,7 @@ def _enter_short(
         current_price = price_value
     else:
         current_price = float(quote_price)
+    annotations["using_fallback_price"] = fallback_used
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
     atr = feat_df["atr"].iloc[-1]
@@ -16635,7 +16731,14 @@ def _enter_short(
         )
         return True
     order_id = submit_order(
-        ctx, symbol, adj_qty, "sell_short", price=current_price
+        ctx,
+        symbol,
+        adj_qty,
+        "sell_short",
+        price=current_price,
+        using_fallback_price=fallback_used,
+        annotations=dict(annotations),
+        price_hint=current_price,
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
