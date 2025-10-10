@@ -1237,6 +1237,15 @@ class ExecutionEngine:
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
+        asset_class = kwargs.get("asset_class")
+        price_hint = kwargs.get("price") or kwargs.get("limit_price")
+        if price_hint in (None, ""):
+            raw_notional = kwargs.get("notional")
+            if raw_notional not in (None, "") and quantity:
+                try:
+                    price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
+                except Exception:
+                    price_hint = None
         order_data = {
             "symbol": symbol,
             "side": side_lower,
@@ -1254,8 +1263,8 @@ class ExecutionEngine:
                 order_data["take_profit"] = {"limit_price": float(tp)}
             if sl is not None:
                 order_data["stop_loss"] = {"stop_price": float(sl)}
-        if kwargs.get("asset_class"):
-            order_data["asset_class"] = kwargs["asset_class"]
+        if asset_class:
+            order_data["asset_class"] = asset_class
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -1278,9 +1287,17 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
-            base_extra = {"symbol": symbol, "side": side.lower(), "reason": pdt_reason}
+            base_extra = {
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "asset_class": asset_class,
+                "price_hint": str(price_hint) if price_hint is not None else None,
+                "reason": pdt_reason,
+            }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            logger.debug(
+            logger.warning(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                 extra=base_extra | {"context": pdt_context},
             )
@@ -1305,14 +1322,6 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": kwargs.get("asset_class"),
             }
-        price_hint = kwargs.get("price") or kwargs.get("limit_price")
-        if price_hint in (None, ""):
-            raw_notional = kwargs.get("notional")
-            if raw_notional not in (None, "") and quantity:
-                try:
-                    price_hint = (_safe_decimal(raw_notional) / Decimal(quantity))
-                except Exception:
-                    price_hint = None
         capacity = _call_preflight_capacity(
             symbol,
             side.lower(),
@@ -1342,18 +1351,23 @@ class ExecutionEngine:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
             metadata = _extract_api_error_metadata(exc)
+            detail_val = metadata.get("detail")
             base_extra = {
                 "symbol": symbol,
-                "side": side.lower(),
+                "side": side_lower,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "asset_class": asset_class,
+                "price_hint": str(price_hint) if price_hint is not None else None,
                 "reason": str(exc),
                 "code": metadata.get("code"),
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            detail_val = metadata.get("detail")
-            logger.debug(
+            logger.warning(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                 extra=base_extra | {"detail": detail_val},
             )
+            logger.warning("ALPACA_ORDER_REJECTED", extra=base_extra | {"detail": detail_val})
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
@@ -1449,6 +1463,15 @@ class ExecutionEngine:
             or kwargs.get("reduce_only")
         )
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
+        asset_class = kwargs.get("asset_class")
+        price_hint = kwargs.get("price") or limit_price
+        if price_hint in (None, ""):
+            raw_notional = kwargs.get("notional")
+            if raw_notional not in (None, "") and quantity:
+                try:
+                    price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
+                except Exception:
+                    price_hint = None
         order_data = {
             "symbol": symbol,
             "side": side_lower,
@@ -1467,8 +1490,8 @@ class ExecutionEngine:
                 order_data["take_profit"] = {"limit_price": float(tp)}
             if sl is not None:
                 order_data["stop_loss"] = {"stop_price": float(sl)}
-        if kwargs.get("asset_class"):
-            order_data["asset_class"] = kwargs["asset_class"]
+        if asset_class:
+            order_data["asset_class"] = asset_class
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -1491,9 +1514,17 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
-            base_extra = {"symbol": symbol, "side": side.lower(), "reason": pdt_reason}
+            base_extra = {
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "asset_class": asset_class,
+                "price_hint": str(price_hint) if price_hint is not None else None,
+                "reason": pdt_reason,
+            }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            logger.debug(
+            logger.warning(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                 extra=base_extra | {"context": pdt_context},
             )
@@ -1555,18 +1586,23 @@ class ExecutionEngine:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
             metadata = _extract_api_error_metadata(exc)
+            detail_val = metadata.get("detail")
             base_extra = {
                 "symbol": symbol,
-                "side": side.lower(),
+                "side": side_lower,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "asset_class": asset_class,
+                "price_hint": str(price_hint) if price_hint is not None else None,
                 "reason": str(exc),
                 "code": metadata.get("code"),
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            detail_val = metadata.get("detail")
-            logger.debug(
+            logger.warning(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
                 extra=base_extra | {"detail": detail_val},
             )
+            logger.warning("ALPACA_ORDER_REJECTED", extra=base_extra | {"detail": detail_val})
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
