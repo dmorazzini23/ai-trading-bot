@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
+import hashlib
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
+from ai_trading.config.management import get_env
 from ai_trading.data.fetch import get_bars, get_minute_df
 from ai_trading.data.fetch import get_bars as _raw_http_get_bars
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df, REQUIRED as _OHLCV_REQUIRED
@@ -313,8 +315,56 @@ class _EntitlementCacheEntry:
     feeds: frozenset[str]
 
 
-_ENTITLE_CACHE: dict[int, _EntitlementCacheEntry] = {}
+_ENTITLE_CACHE: dict[object, _EntitlementCacheEntry] = {}
+_LAST_ENTITLE_KEY: tuple[str, str, str] | None = None
 _ENTITLE_TTL = 300
+
+
+def _resolve_account_identifier(account: Any) -> str:
+    for attr in ("id", "account_number", "account_id", "number"):
+        value = getattr(account, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, (int, float)):
+            try:
+                return str(int(value))
+            except (TypeError, ValueError):
+                continue
+    return "default"
+
+
+def _resolve_client_token(client: Any) -> str | None:
+    for attr in ("api_key", "api_key_id", "key_id", "key"):
+        token = getattr(client, attr, None)
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+    for env_key in ("ALPACA_API_KEY", "APCA_API_KEY_ID"):
+        try:
+            candidate = get_env(env_key)  # type: ignore[arg-type]
+        except Exception:
+            continue
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _entitlement_cache_key(
+    account_id: str | None,
+    generation: float | None,
+    token: str | None,
+) -> tuple[str, str, str]:
+    normalized_id = account_id.strip() if isinstance(account_id, str) and account_id.strip() else "default"
+    normalized_generation = "0"
+    if isinstance(generation, (int, float)):
+        try:
+            normalized_generation = str(int(generation))
+        except (TypeError, ValueError):
+            normalized_generation = "0"
+    token_hash = "none"
+    if isinstance(token, str) and token:
+        digest = hashlib.sha256(token.encode("utf-8", "ignore"))
+        token_hash = digest.hexdigest()
+    return normalized_id, normalized_generation, token_hash
 
 
 def _coerce_generation(value: Any) -> float | None:
@@ -397,13 +447,14 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
         return tokens
 
     now = time.time()
-    cache_key = id(client)
-    cached_entry = _ENTITLE_CACHE.get(cache_key)
+    global _LAST_ENTITLE_KEY
+    cached_entry = _ENTITLE_CACHE.get(_LAST_ENTITLE_KEY) if _LAST_ENTITLE_KEY else None
     cache_valid = cached_entry is not None and (now - cached_entry.cached_at) < _ENTITLE_TTL
 
     account_feeds: set[str] = set()
     account_entitlements: set[str] = set()
     generation = now
+    account_snapshot: Any | None = None
 
     get_account = getattr(client, "get_account", None)
     if callable(get_account):
@@ -414,6 +465,7 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
             if cache_valid:
                 return set(cached_entry.feeds)
         else:
+            account_snapshot = account
             account_entitlements = _collect_tokens(getattr(account, "entitlements", None))
             account_feeds = _collect_tokens(
                 getattr(account, "market_data_subscription", None)
@@ -421,6 +473,17 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
                 or getattr(account, "feeds", None)
             )
             generation = _extract_generation(account, now)
+
+    account_id = _resolve_account_identifier(account_snapshot) if account_snapshot is not None else "default"
+    token_source = _resolve_client_token(client)
+    cache_key = _entitlement_cache_key(account_id, generation, token_source)
+    cached_entry = _ENTITLE_CACHE.get(cache_key) or _ENTITLE_CACHE.get(id(client))
+    cached_feeds = set(cached_entry.feeds) if cached_entry is not None else set()
+    cache_valid = (
+        cached_entry is not None
+        and (now - cached_entry.cached_at) < _ENTITLE_TTL
+        and _LAST_ENTITLE_KEY == cache_key
+    )
 
     entitlement_tokens = _collect_tokens(getattr(client, "entitlements", None))
     entitlement_tokens.update(account_entitlements)
@@ -458,15 +521,18 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
     if not feeds:
         feeds = {"iex"}
 
+    if cache_valid and cached_feeds == feeds:
+        return set(cached_entry.feeds)
+
     if generation is None and cached_entry is not None:
         generation = cached_entry.generation
 
     entry = _EntitlementCacheEntry(cached_at=now, generation=generation or now, feeds=frozenset(feeds))
-    previous = _ENTITLE_CACHE.get(cache_key)
-    if previous is None or previous.feeds != entry.feeds or previous.generation != entry.generation:
-        _ENTITLE_CACHE[cache_key] = entry
-    else:
-        entry = previous
+    _ENTITLE_CACHE.clear()
+    id_key = id(client)
+    _ENTITLE_CACHE[id_key] = entry
+    _ENTITLE_CACHE[cache_key] = entry
+    _LAST_ENTITLE_KEY = cache_key
     return set(entry.feeds)
 
 def _ensure_entitled_feed(client: Any, requested: str) -> str:

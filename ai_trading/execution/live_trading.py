@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from functools import lru_cache
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Optional
 
 from ai_trading.logging import get_logger
 from ai_trading.market.symbol_specs import get_tick_size
@@ -105,6 +105,19 @@ if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from ai_trading.core.enums import OrderSide as CoreOrderSide
 
 logger = get_logger(__name__)
+
+
+def _broker_kwargs_for_route(route: str, extra: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return broker-safe keyword arguments for *route* without diagnostics."""
+
+    if not extra:
+        return {}
+    sanitized: dict[str, Any] = {}
+    for key, value in extra.items():
+        if key in {"using_fallback_price", "price_hint"}:
+            continue
+        sanitized[key] = value
+    return sanitized
 
 try:  # pragma: no cover - defensive import guard for optional extras
     from ai_trading.config.management import get_env as _config_get_env
@@ -2039,16 +2052,18 @@ class ExecutionEngine:
         try:
             if order_type_submitted == "market":
                 order_kwargs.pop("price", None)
-                order = self.submit_market_order(symbol, mapped_side, qty, **order_kwargs)
+                submit_kwargs = _broker_kwargs_for_route(order_type_submitted, order_kwargs)
+                order = self.submit_market_order(symbol, mapped_side, qty, **submit_kwargs)
             else:
                 if price_for_limit is not None:
                     order_kwargs.setdefault("price", price_for_limit)
+                submit_kwargs = _broker_kwargs_for_route(order_type_submitted, order_kwargs)
                 order = self.submit_limit_order(
                     symbol,
                     mapped_side,
                     qty,
                     limit_price=resolved_limit_price,
-                    **order_kwargs,
+                    **submit_kwargs,
                 )
         except NonRetryableBrokerError as exc:
             metadata = _extract_api_error_metadata(exc) or {}
@@ -2080,9 +2095,15 @@ class ExecutionEngine:
                 retry_kwargs.pop("limit_price", None)
                 retry_kwargs.pop("stop_price", None)
                 retry_kwargs.pop("price", None)
+                submit_retry_kwargs = _broker_kwargs_for_route("market", retry_kwargs)
                 logger.warning("ORDER_DOWNGRADED_TO_MARKET", extra=base_extra)
                 try:
-                    order = self.submit_market_order(symbol, mapped_side, qty, **retry_kwargs)
+                    order = self.submit_market_order(
+                        symbol,
+                        mapped_side,
+                        qty,
+                        **submit_retry_kwargs,
+                    )
                 except NonRetryableBrokerError as exc2:
                     md2 = _extract_api_error_metadata(exc2) or {}
                     logger.warning(
@@ -2101,7 +2122,7 @@ class ExecutionEngine:
                     return None
                 else:
                     order_type_submitted = "market"
-                    order_kwargs = retry_kwargs
+                    order_kwargs = submit_retry_kwargs
             else:
                 logger.info(
                     "ORDER_SKIPPED_NONRETRYABLE",

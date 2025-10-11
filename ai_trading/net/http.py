@@ -105,7 +105,7 @@ class TimeoutSession(_SessionBase):
 HTTPSession = TimeoutSession
 
 
-DEFAULT_HOST_LIMIT = 8
+DEFAULT_HOST_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -142,19 +142,31 @@ class HostLimitController:
     def current_limit(self) -> int | None:
         """Return the active pool limit honoring legacy environment names."""
 
-        for env_var in _HOST_LIMIT_ENV_KEYS:
-            raw = os.getenv(env_var)
+        for raw in self._collect_env_values():
             parsed = self._parse_limit(raw)
             if parsed is not None:
                 return parsed
         return None
 
     def _resolve_limit(self) -> tuple[int, tuple[str | None, ...]]:
-        env_snapshot = tuple(os.getenv(key) for key in _HOST_LIMIT_ENV_KEYS)
+        env_snapshot = self._collect_env_values()
         limit = self.current_limit()
         if limit is None:
             limit = DEFAULT_HOST_LIMIT
         return max(limit, 1), env_snapshot
+
+    def _collect_env_values(self) -> tuple[str | None, ...]:
+        values: list[str | None] = []
+        for env_var in _HOST_LIMIT_ENV_KEYS:
+            raw: str | None
+            if env_var == "AI_TRADING_HTTP_HOST_LIMIT":
+                raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT") or os.getenv("ALPACA_HOST_LIMIT")
+            elif env_var == "AI_TRADING_HOST_LIMIT":
+                raw = os.getenv("AI_TRADING_HOST_LIMIT") or os.getenv("HTTP_HOST_LIMIT")
+            else:
+                raw = os.getenv(env_var)
+            values.append(raw)
+        return tuple(values)
 
     def apply(self, session: TimeoutSession) -> None:
         if HTTPAdapter is object:  # pragma: no cover - requests missing
