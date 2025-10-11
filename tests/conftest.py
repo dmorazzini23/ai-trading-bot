@@ -4,7 +4,6 @@ import os
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
 
-import os
 import sys as _sys
 
 import asyncio
