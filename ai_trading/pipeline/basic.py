@@ -17,9 +17,12 @@ class SimpleTransformer:
     """A no-op transformer used for tests and examples."""
 
     def fit(self, X, y=None):  # pragma: no cover - trivial
+        self._fitted = True
         return self
 
     def transform(self, X):
+        if not getattr(self, "_fitted", False):  # pragma: no cover - defensive
+            raise RuntimeError("SimpleTransformer must be fitted before transform")
         return np.asarray(X, dtype=float)
 
 

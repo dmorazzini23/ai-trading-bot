@@ -1294,7 +1294,7 @@ def submit_order(
 
     _record_client_order_id(client, idempotency_key)
 
-    if do_shadow and client is None:
+    if do_shadow:
         oid = f"shadow-{uuid.uuid4().hex[:16]}"
         return {
             "id": oid,
