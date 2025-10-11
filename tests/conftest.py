@@ -1,6 +1,10 @@
 """Test configuration and shared fixtures."""
 
 import os
+
+os.environ.setdefault("PYTEST_RUNNING", "1")
+
+import os
 import sys as _sys
 
 import asyncio
@@ -345,21 +349,29 @@ def dummy_data_fetcher_empty():
 
 
 @pytest.fixture(autouse=True)
-def _reset_fallback_cache(monkeypatch):
+def _reset_fallback_cache():
     """Reset fallback cache state without eager package imports."""
 
     import ai_trading.data.fetch as data_fetcher  # local import to avoid test import side effects
 
-    monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
-    monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {})
-    monkeypatch.setattr(data_fetcher, "_CYCLE_FALLBACK_FEED", {}, raising=False)
-    monkeypatch.setattr(data_fetcher, "_DATA_FEED_OVERRIDE", None, raising=False)
-    monkeypatch.setattr(data_fetcher, "_LAST_OVERRIDE_LOGGED", None, raising=False)
-    monkeypatch.setattr(data_fetcher, "_SIP_PRECHECK_DONE", False, raising=False)
-    if hasattr(data_fetcher, "_reset_provider_auth_state_for_tests"):
-        data_fetcher._reset_provider_auth_state_for_tests()
-    if hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):
-        data_fetcher._clear_sip_lockout_for_tests()
+    def _reset() -> None:
+        data_fetcher._FALLBACK_WINDOWS.clear()
+        data_fetcher._FALLBACK_UNTIL.clear()
+        if hasattr(data_fetcher, "_CYCLE_FALLBACK_FEED"):
+            data_fetcher._CYCLE_FALLBACK_FEED.clear()
+        data_fetcher._DATA_FEED_OVERRIDE = None
+        data_fetcher._LAST_OVERRIDE_LOGGED = None
+        data_fetcher._SIP_PRECHECK_DONE = False
+        if hasattr(data_fetcher, "_reset_provider_auth_state_for_tests"):
+            data_fetcher._reset_provider_auth_state_for_tests()
+        elif hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):
+            data_fetcher._clear_sip_lockout_for_tests()
+
+    _reset()
+    try:
+        yield
+    finally:
+        _reset()
 
 
 @pytest.fixture(autouse=True)
@@ -373,6 +385,33 @@ def _reset_provider_monitor_state():
         yield
     finally:
         provider_monitor.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_bot_engine_state():
+    """Clear mutable caches in core bot engine between tests."""
+
+    import ai_trading.core.bot_engine as bot_engine  # local import to avoid circulars
+
+    def _reset() -> None:
+        bot_engine._GLOBAL_CYCLE_ID = None
+        bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED = None
+        bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
+        bot_engine._cycle_feature_cache.clear()
+        bot_engine._cycle_feature_cache_cycle = None
+        bot_engine._cycle_budget_context = None
+        bot_engine._EMPTY_TRADE_LOG_INFO_EMITTED = False
+        bot_engine._TRADE_LOG_CACHE = None
+        bot_engine._TRADE_LOG_CACHE_LOADED = False
+        bot_engine._TRADE_LOGGER_SINGLETON = None
+        bot_engine._TRADE_LOG_FALLBACK_PATH = None
+        bot_engine.TRADE_LOG_FILE = bot_engine.default_trade_log_path()
+
+    _reset()
+    try:
+        yield
+    finally:
+        _reset()
 
 
 @pytest.fixture
