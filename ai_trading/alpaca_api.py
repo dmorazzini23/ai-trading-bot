@@ -1275,6 +1275,7 @@ def submit_order(
     """
     # AI-AGENT-REF: expose deterministic submit_order with shadow + HTTP fallback
     cfg = _AlpacaConfig.from_env()
+    explicit_shadow = shadow if shadow is not None else None
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
     q_int = _as_int(qty)
     timeout = clamp_request_timeout(timeout)
@@ -1294,7 +1295,7 @@ def submit_order(
 
     _record_client_order_id(client, idempotency_key)
 
-    if do_shadow:
+    if do_shadow and (client is None or explicit_shadow is not None):
         oid = f"shadow-{uuid.uuid4().hex[:16]}"
         return {
             "id": oid,

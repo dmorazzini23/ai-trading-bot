@@ -17,11 +17,13 @@ class SimpleTransformer:
     """A no-op transformer used for tests and examples."""
 
     def fit(self, X, y=None):  # pragma: no cover - trivial
-        self._fitted = True
+        # scikit-learn expects fitted estimators to expose trailing-underscore attributes
+        # when pipelines run ``check_is_fitted``. Store a sentinel accordingly.
+        self.is_fitted_ = True
         return self
 
     def transform(self, X):
-        if not getattr(self, "_fitted", False):  # pragma: no cover - defensive
+        if not getattr(self, "is_fitted_", False):  # pragma: no cover - defensive
             raise RuntimeError("SimpleTransformer must be fitted before transform")
         return np.asarray(X, dtype=float)
 
