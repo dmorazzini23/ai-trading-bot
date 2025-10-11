@@ -495,6 +495,7 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
     allow_sip = _env_bool("ALLOW_SIP") if prioritize_env else None
 
     env_positive = any(flag is True for flag in (env_entitled, env_has_sip))
+    # Only explicit False disables SIP; unset/None should not remove client-advertised feeds.
     env_negative = any(flag is False for flag in (allow_flag, env_entitled, allow_sip))
 
     base_feeds = (account_feeds | client_tokens) & {"iex", "sip"}
