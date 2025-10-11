@@ -803,6 +803,12 @@ def get_bars_df(
             adjustment=adjustment,
             feed=feed,
         )
+        # Some lightweight SDK stubs normalise timezone-aware datetimes to naive UTC.
+        # Restore the explicit UTC tzinfo so downstream code can rely on aware values.
+        if isinstance(req.start, dt.datetime) and req.start.tzinfo is None and isinstance(req_start, dt.datetime) and req_start.tzinfo is not None:
+            req.start = req_start
+        if isinstance(req.end, dt.datetime) and req.end.tzinfo is None and isinstance(req_end, dt.datetime) and req_end.tzinfo is not None:
+            req.end = req_end
         df: "pd.DataFrame" | Any
         max_attempts = 3
         base_delay = 0.5

@@ -28,8 +28,19 @@ class _LazyModule(ModuleType):
 
 @lru_cache(maxsize=None)
 def load_pandas() -> ModuleType:
-    """Return a proxy for :mod:`pandas` loaded on first use."""
-    return _LazyModule("pandas")
+    """Return the canonical :mod:`pandas` module, importing eagerly once."""
+
+    module = sys.modules.get("pandas")
+    if module is not None and getattr(module, "DataFrame", None) is not None:
+        return module
+    try:
+        module = importlib.import_module("pandas")
+    except ModuleNotFoundError:
+        if module is not None:
+            return module
+        raise
+    sys.modules["pandas"] = module
+    return module
 
 @lru_cache(maxsize=None)
 def load_pandas_market_calendars() -> ModuleType | None:
@@ -95,4 +106,3 @@ def load_sklearn_ensemble() -> ModuleType | None:
 def load_sklearn_metrics() -> ModuleType | None:
     """Return :mod:`sklearn.metrics` lazily."""
     return _load_sklearn_submodule("metrics")
-

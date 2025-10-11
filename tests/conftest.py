@@ -63,6 +63,25 @@ for _name in _ESSENTIAL:
         continue
 
 _SNAPSHOT_MODULES = dict(sys.modules)
+try:  # Ensure real pandas module is loaded before tests that set stubs conditionally
+    import pandas  # type: ignore  # noqa: F401
+except ModuleNotFoundError:  # pragma: no cover - environment without pandas
+    pandas = None  # noqa: F841
+
+for _module_name in (
+    "ai_trading.portfolio",
+    "sklearn",
+    "sklearn.linear_model",
+    "sklearn.metrics",
+    "sklearn.model_selection",
+    "sklearn.preprocessing",
+    "sklearn.pipeline",
+    "sklearn.ensemble",
+):
+    try:  # Pre-load selected modules so setdefault stubs used by tests do not replace them.
+        importlib.import_module(_module_name)
+    except Exception:  # pragma: no cover - optional dependency may be unavailable
+        continue
 
 
 def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # pragma: no cover - test helper
@@ -198,6 +217,40 @@ def _block_network(monkeypatch):
 def _env_defaults(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "dummy")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+
+
+@pytest.fixture(autouse=True)
+def _restore_third_party_modules():
+    """Ensure third-party module stubs installed by tests do not leak globally."""
+
+    yield
+    restore_targets = (
+        (
+            "pandas",
+            lambda m: getattr(m, "DataFrame", None) is not None,
+            (),
+        ),
+        (
+            "ai_trading.portfolio",
+            lambda m: hasattr(m, "compute_portfolio_weights"),
+            ("ai_trading.portfolio.core", "ai_trading.portfolio.optimizer"),
+        ),
+        (
+            "sklearn",
+            lambda m: getattr(m, "__file__", None) is not None,
+            ("sklearn.linear_model", "sklearn.metrics", "sklearn.pipeline", "sklearn.preprocessing"),
+        ),
+    )
+    for module_name, validator, extra_modules in restore_targets:
+        module = sys.modules.get(module_name)
+        if module is not None and not validator(module):
+            sys.modules.pop(module_name, None)
+            for extra in extra_modules:
+                sys.modules.pop(extra, None)
+            try:
+                importlib.import_module(module_name)
+            except ModuleNotFoundError:
+                continue
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("TZ", "UTC")
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")

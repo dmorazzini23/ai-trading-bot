@@ -52,10 +52,12 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-if importlib.util.find_spec("sklearn") is not None:  # pragma: no cover - heavy
+try:  # pragma: no cover - optional heavy dependency
     from sklearn.base import BaseEstimator
     from sklearn.metrics import mean_squared_error
-else:  # pragma: no cover
+    _SKLEARN_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _SKLEARN_AVAILABLE = False
 
     class BaseEstimator:  # minimal fallback
         def __init__(self, *args, **kwargs) -> None:
@@ -67,12 +69,11 @@ else:  # pragma: no cover
 
     logger.warning("scikit-learn not available; using fallback implementations")
 
-if (
-    importlib.util.find_spec("sklearn") is not None
-    and importlib.util.find_spec("sklearn.linear_model") is not None
-):  # pragma: no cover - heavy
+try:  # pragma: no cover - optional heavy dependency
+    if not _SKLEARN_AVAILABLE:
+        raise ImportError("sklearn unavailable")
     from sklearn.linear_model import LinearRegression
-else:  # pragma: no cover
+except Exception:  # pragma: no cover
 
     class LinearRegression:  # minimal fallback
         def fit(self, X, y):
@@ -333,4 +334,3 @@ __all__ = [
     "train_xgboost_with_optuna",
     "ensure_default_models",
 ]
-
