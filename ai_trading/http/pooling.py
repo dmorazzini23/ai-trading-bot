@@ -489,7 +489,6 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
             _clear_all_loop_semaphores()
         except Exception:
             _HOST_SEMAPHORES.clear()
-        else:
             _RETIRED_SEMAPHORES.clear()
         _LIMIT_CACHE = None
         cache = None

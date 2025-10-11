@@ -3257,8 +3257,6 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     pytest_active = bool(os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"))
     if pytest_active:
         if not allow_sip:
-            allow_sip = True
-        if not allow_sip:
             return False
         if _is_sip_unauthorized():
             return False

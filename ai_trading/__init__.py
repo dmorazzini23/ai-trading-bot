@@ -115,7 +115,7 @@ if _modules_ref is None:  # pragma: no cover - defensive for patched environment
 
 try:
     _PIPELINE_AVAILABLE = importlib.util.find_spec("sklearn.pipeline") is not None
-except ModuleNotFoundError:  # pragma: no cover - optional dependency missing
+except (ModuleNotFoundError, ImportError):  # pragma: no cover - optional dependency missing
     _PIPELINE_AVAILABLE = False
 
 if not _PIPELINE_AVAILABLE:

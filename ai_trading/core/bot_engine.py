@@ -14054,6 +14054,70 @@ def submit_order(
         raise
 
 
+def _call_submit_order(
+    ctx: BotContext,
+    symbol: str,
+    qty: int,
+    side: str,
+    *,
+    price: float,
+    annotations: Mapping[str, Any] | None = None,
+    price_hint: float | None = None,
+) -> Order | None:
+    """Invoke ``submit_order`` while tolerating monkeypatched call-sites."""
+
+    submit_fn = submit_order
+    extra_kwargs: dict[str, Any] = {}
+
+    fallback_flag = False
+    if isinstance(annotations, MappingABC):
+        fallback_flag = bool(annotations.get("using_fallback_price"))
+        if annotations:
+            extra_kwargs["annotations"] = annotations
+    elif annotations is not None:
+        extra_kwargs["annotations"] = annotations
+
+    if price_hint is not None:
+        extra_kwargs["price_hint"] = price_hint
+
+    if fallback_flag:
+        extra_kwargs["using_fallback_price"] = True
+
+    signature = None
+    try:
+        signature = inspect.signature(submit_fn)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None:
+        has_var_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
+        if not has_var_kwargs:
+            allowed = {
+                name
+                for name, param in signature.parameters.items()
+                if param.kind
+                in (
+                    inspect.Parameter.KEYWORD_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            }
+            for key in list(extra_kwargs):
+                if key not in allowed:
+                    extra_kwargs.pop(key)
+
+    return submit_fn(
+        ctx,
+        symbol,
+        qty,
+        side,
+        price=price,
+        **extra_kwargs,
+    )
+
+
 def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Order | None:
     """Submit an order while guarding against closed-market submissions.
 
@@ -16305,7 +16369,10 @@ def _enter_long(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
         )
-    annotations["using_fallback_price"] = fallback_used
+    if fallback_used:
+        annotations["using_fallback_price"] = True
+    else:
+        annotations.pop("using_fallback_price", None)
     current_price = float(quote_price)
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
@@ -16425,14 +16492,15 @@ def _enter_long(
             extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price},
         )
         return True
-    order_id = submit_order(
+    order_annotations = dict(annotations)
+
+    order_id = _call_submit_order(
         ctx,
         symbol,
         adj_qty,
         "buy",
         price=current_price,
-        using_fallback_price=fallback_used,
-        annotations=dict(annotations),
+        annotations=order_annotations,
         price_hint=current_price,
     )
     if order_id is None:
@@ -16791,7 +16859,10 @@ def _enter_short(
         current_price = price_value
     else:
         current_price = float(quote_price)
-    annotations["using_fallback_price"] = fallback_used
+    if fallback_used:
+        annotations["using_fallback_price"] = True
+    else:
+        annotations.pop("using_fallback_price", None)
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
     atr = feat_df["atr"].iloc[-1]
@@ -16846,14 +16917,15 @@ def _enter_short(
             extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price},
         )
         return True
-    order_id = submit_order(
+    order_annotations = dict(annotations)
+
+    order_id = _call_submit_order(
         ctx,
         symbol,
         adj_qty,
         "sell_short",
         price=current_price,
-        using_fallback_price=fallback_used,
-        annotations=dict(annotations),
+        annotations=order_annotations,
         price_hint=current_price,
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order_id is None:
