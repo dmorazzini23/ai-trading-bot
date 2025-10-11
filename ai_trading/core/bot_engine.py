@@ -23848,8 +23848,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             last_source = source
         _mark_primary_attempt(source, provider)
         if source == "alpaca_auth_failed":
-            if alpaca_feed:
-                _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+            if symbol:
+                cached_cycle_feed = _CYCLE_FEED_CACHE.get(symbol)
+                override_feed = _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
+                preserved_feed = cached_cycle_feed or override_feed
+                if preserved_feed in _ALPACA_COMPATIBLE_FALLBACK_FEEDS or not preserved_feed:
+                    _cache_cycle_fallback_feed_helper(None, symbol=symbol)
             price_source = source
             _set_price_source(symbol, price_source)
             return None
