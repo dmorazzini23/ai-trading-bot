@@ -251,10 +251,6 @@ def _restore_third_party_modules():
                 importlib.import_module(module_name)
             except ModuleNotFoundError:
                 continue
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    monkeypatch.setenv("TZ", "UTC")
-    monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")
-    monkeypatch.setenv("MAX_POSITION_SIZE", "1000")
 
 
 @pytest.fixture(autouse=True)

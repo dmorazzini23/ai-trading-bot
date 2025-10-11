@@ -12,7 +12,26 @@ except Exception:  # ImportError
     class APIError(Exception):
         """Fallback when Alpaca SDK is absent."""
 from ai_trading.config import get_settings
-from ai_trading.portfolio import compute_portfolio_weights
+import importlib
+
+def _resolve_portfolio_callable(name: str):
+    module = importlib.import_module("ai_trading.portfolio")
+    attr = getattr(module, name)
+    if not callable(attr):
+        raise AttributeError(f"ai_trading.portfolio.{name} is not callable")
+    return attr
+
+try:  # pragma: no cover - allow tests to inject stubs
+    _compute_portfolio_weights = _resolve_portfolio_callable("compute_portfolio_weights")
+except Exception:
+    _compute_portfolio_weights = None
+
+def compute_portfolio_weights(*args, **kwargs):
+    """Call ``ai_trading.portfolio.compute_portfolio_weights`` with lazy resolution."""
+    global _compute_portfolio_weights
+    if _compute_portfolio_weights is None:
+        _compute_portfolio_weights = _resolve_portfolio_callable("compute_portfolio_weights")
+    return _compute_portfolio_weights(*args, **kwargs)
 from ai_trading.settings import get_rebalance_interval_min
 from ai_trading.utils.time import safe_utcnow
 
@@ -40,7 +59,17 @@ def apply_no_trade_bands(current: dict[str, float], target: dict[str, float], ba
             out[sym] = tgt
     return out
 from ai_trading.core.constants import RISK_PARAMETERS
-from ai_trading.portfolio import create_portfolio_optimizer
+try:  # pragma: no cover - allow tests to inject stubs
+    _create_portfolio_optimizer = _resolve_portfolio_callable("create_portfolio_optimizer")
+except Exception:
+    _create_portfolio_optimizer = None
+
+def create_portfolio_optimizer(*args, **kwargs):
+    """Return the portfolio optimizer, ensuring the real module is loaded."""
+    global _create_portfolio_optimizer
+    if _create_portfolio_optimizer is None:
+        _create_portfolio_optimizer = _resolve_portfolio_callable("create_portfolio_optimizer")
+    return _create_portfolio_optimizer(*args, **kwargs)
 from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
 from ai_trading.strategies.regime_detector import create_regime_detector
 
