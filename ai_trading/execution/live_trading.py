@@ -2095,9 +2095,15 @@ class ExecutionEngine:
                 retry_kwargs.pop("limit_price", None)
                 retry_kwargs.pop("stop_price", None)
                 retry_kwargs.pop("price", None)
+                submit_retry_kwargs = _broker_kwargs_for_route("market", retry_kwargs)
                 logger.warning("ORDER_DOWNGRADED_TO_MARKET", extra=base_extra)
                 try:
-                    order = self.submit_market_order(symbol, mapped_side, qty, **retry_kwargs)
+                    order = self.submit_market_order(
+                        symbol,
+                        mapped_side,
+                        qty,
+                        **submit_retry_kwargs,
+                    )
                 except NonRetryableBrokerError as exc2:
                     md2 = _extract_api_error_metadata(exc2) or {}
                     logger.warning(
@@ -2116,7 +2122,7 @@ class ExecutionEngine:
                     return None
                 else:
                     order_type_submitted = "market"
-                    order_kwargs = retry_kwargs
+                    order_kwargs = submit_retry_kwargs
             else:
                 logger.info(
                     "ORDER_SKIPPED_NONRETRYABLE",
