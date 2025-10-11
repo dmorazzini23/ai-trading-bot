@@ -1,3 +1,4 @@
+# ruff: noqa: E501  # legacy module retains long lines; suppress length lint locally
 from __future__ import annotations
 import asyncio
 import math
