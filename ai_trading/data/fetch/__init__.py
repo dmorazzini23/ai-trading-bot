@@ -4198,6 +4198,11 @@ def _post_process(
     if pd is None:
         return df
     if df is None or getattr(df, "empty", True):
+        slots = _fallback_slots_remaining()
+        if (slots is not None and slots <= 0) and not _ENABLE_HTTP_FALLBACK:
+            raise EmptyBarsError(
+                f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=empty_final"
+            )
         return None
     candidate = df if _is_normalized_ohlcv_frame(df, pd) else _flatten_and_normalize_ohlcv(df, symbol, timeframe)
     try:
@@ -4916,6 +4921,17 @@ def _fetch_bars(
         "fallback_reason": None,
     }
 
+    try:
+        _max_fallbacks_raw = max_data_fallbacks()
+    except Exception:
+        _max_fallbacks_raw = None
+    try:
+        _max_fallbacks_config = (
+            None if _max_fallbacks_raw is None else int(_max_fallbacks_raw)
+        )
+    except (TypeError, ValueError):
+        _max_fallbacks_config = None
+
     def _register_provider_attempt(feed_name: str) -> None:
         providers = _state.setdefault("providers", [])
         providers.append(feed_name)
@@ -5072,23 +5088,27 @@ def _fetch_bars(
         if downgrade_reason == "missing_credentials":
             resolved_feed = _feed
     if resolved_feed is None:
-        provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
-        logger.warning(
-            "ALPACA_FEED_SWITCHOVER",
-            extra=_norm_extra(
-                {
-                    "provider": "alpaca",
-                    "requested_feed": _feed,
-                    "timeframe": _interval,
-                    "symbol": symbol,
-                    "fallback": "yahoo",
-                    "reason": "resolve_feed_none",
-                }
-            ),
-        )
-        yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
-        _state["resolve_feed_none"] = True
-        return _run_backup_fetch(yf_interval)
+        fallback_prohibited = (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK
+        if fallback_prohibited:
+            resolved_feed = _feed
+        else:
+            provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
+            logger.warning(
+                "ALPACA_FEED_SWITCHOVER",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "requested_feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "fallback": "yahoo",
+                        "reason": "resolve_feed_none",
+                    }
+                ),
+            )
+            yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+            _state["resolve_feed_none"] = True
+            return _run_backup_fetch(yf_interval)
     if _pytest_active():
         _feed = resolved_feed
     else:
@@ -5178,9 +5198,15 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
+            if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+                raise EmptyBarsError(
+                    f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
+                )
             fallback_df = _run_backup_fetch(fb_int)
             return _finalize_frame(fallback_df)
-        return _finalize_frame(pd.DataFrame())
+        raise EmptyBarsError(
+            f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
+        )
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
@@ -5223,10 +5249,17 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
+                if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+                    raise EmptyBarsError(
+                        f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled"
+                    )
                 fallback_df = _run_backup_fetch(fb_int)
                 return _finalize_frame(fallback_df)
             if short_circuit_empty:
                 return _finalize_frame(None)
+            raise EmptyBarsError(
+                f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled"
+            )
         else:
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
@@ -5376,16 +5409,10 @@ def _fetch_bars(
         alternate_history = _state.setdefault("alternate_feed_attempts", set())
         alternate_history.add(_feed)
 
-        def _fallback_slots_remaining() -> int | None:
-            try:
-                max_slots = max_data_fallbacks()
-            except Exception:
-                return None
-            try:
-                max_slots_int = int(max_slots)
-            except (TypeError, ValueError):
-                return None
-            return max(0, max_slots_int - len(call_attempts))
+    def _fallback_slots_remaining() -> int | None:
+        if _max_fallbacks_config is None:
+            return None
+        return max(0, _max_fallbacks_config - len(call_attempts))
 
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False
@@ -7038,7 +7065,13 @@ def _fetch_bars(
     allow_sip = _sip_allowed()
     if not allow_sip:
         priority = [p for p in priority if p != "alpaca_sip"]
-    max_fb = max_data_fallbacks()
+    if _max_fallbacks_config is not None:
+        max_fb = _max_fallbacks_config
+    else:
+        try:
+            max_fb = int(max_data_fallbacks())
+        except Exception:
+            max_fb = 0
     alt_feed = None
     fallback = None
     sip_locked_initial = _is_sip_unauthorized()
