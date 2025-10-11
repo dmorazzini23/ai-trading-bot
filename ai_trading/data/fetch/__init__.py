@@ -5417,6 +5417,11 @@ def _fetch_bars(
                         return None
             elif fb_feed not in {"iex", "sip"}:
                 return None
+            pair_key = (from_feed, fb_feed)
+            attempted_pairs = _state.setdefault("fallback_pairs", set())
+            if pair_key in attempted_pairs:
+                return None
+            attempted_pairs.add(pair_key)
             _interval, _feed, _start, _end = fb
             from_provider_name = f"alpaca_{from_feed}"
             to_provider_name = f"alpaca_{fb_feed}"
@@ -5936,7 +5941,7 @@ def _fetch_bars(
                 ),
             )
             fallback_target = fallback
-            if requested_feed == "sip":
+            if requested_feed == "sip" and retry_after == 0:
                 if fallback_target is None:
                     fallback_target = (_interval, "iex", _start, _end)
                 if fallback_target:
@@ -5949,6 +5954,7 @@ def _fetch_bars(
                 and not sip_locked
                 and not _SIP_UNAUTHORIZED
                 and _sip_allowed()
+                and retry_after == 0
             ):
                 if fallback_target is None:
                     fallback_target = (_interval, "sip", _start, _end)
