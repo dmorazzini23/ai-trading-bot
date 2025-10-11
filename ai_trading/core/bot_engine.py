@@ -1,4 +1,5 @@
 # fmt: off
+# ruff: noqa: E501  # legacy module exceeds line length; limit edits to focused fixes
 """Trading bot core engine.
 
 This module uses ``pickle`` for regime model persistence; model paths are
@@ -223,6 +224,32 @@ def _count_trading_minutes(start_dt: datetime, end_dt: datetime) -> int:
         current_date += timedelta(days=1)
 
     return total_minutes
+
+
+def _expected_minute_bars_window(start_dt: datetime, end_dt: datetime) -> int:
+    """Return the naive minute count for the requested window."""
+
+    try:
+        delta = (end_dt - start_dt).total_seconds()
+    except COMMON_EXC:
+        return 0
+    return max(0, int(delta // 60))
+
+
+def _frame_is_sparse(frame: Any | None, expected: int) -> bool:
+    """Return ``True`` when *frame* lacks the expected minute coverage."""
+
+    if frame is None:
+        return True
+    if expected <= 0:
+        return False
+    try:
+        actual = int(len(frame))
+    except COMMON_EXC:
+        return True
+    return actual < expected
+
+
 def _normalize_broker_order_status(value: Any) -> str:
     """Return a lowercase order status regardless of enum/string input."""
 
@@ -1045,7 +1072,7 @@ _ALPACA_TERMINAL_PRICE_SOURCES = frozenset(
         "alpaca_minute_close",
     }
 )
-_TERMINAL_FALLBACK_PRICE_SOURCES = frozenset({"last_close"})
+_TERMINAL_FALLBACK_PRICE_SOURCES = frozenset({"last_close", "latest_close_used"})
 _PRICE_PROVIDER_ORDER_CACHE: tuple[str, ...] | None = None
 _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
@@ -1642,13 +1669,21 @@ def _attempt_alpaca_trade(
         cache['trade_price'] = None
         return None, cache['trade_source']
     except AlpacaOrderHTTPError as exc:
-        _log_price_warning(
-            'ALPACA_TRADE_HTTP_ERROR',
-            provider='alpaca_trade',
-            symbol=symbol,
-            extra={'status': getattr(exc, 'status_code', None), 'error': str(exc)},
-        )
-        cache['trade_source'] = 'alpaca_trade_http_error'
+        status = getattr(exc, 'status_code', None)
+        if status in {401, 403}:
+            logger.error(
+                'ALPACA_AUTH_PREFLIGHT_FAILED',
+                extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
+            )
+            cache['trade_source'] = 'alpaca_auth_failed'
+        else:
+            _log_price_warning(
+                'ALPACA_TRADE_HTTP_ERROR',
+                provider='alpaca_trade',
+                symbol=symbol,
+                extra={'status': status, 'error': str(exc)},
+            )
+            cache['trade_source'] = 'alpaca_trade_http_error'
         cache['trade_price'] = None
         return None, cache['trade_source']
     except COMMON_EXC as exc:  # pragma: no cover - defensive
@@ -1705,13 +1740,21 @@ def _attempt_alpaca_quote(
         cache['quote_price'] = None
         return None, cache['quote_source']
     except AlpacaOrderHTTPError as exc:
-        _log_price_warning(
-            'ALPACA_PRICE_HTTP_ERROR',
-            provider='alpaca_quote',
-            symbol=symbol,
-            extra={'status': getattr(exc, 'status_code', None), 'error': str(exc)},
-        )
-        cache['quote_source'] = 'alpaca_http_error'
+        status = getattr(exc, 'status_code', None)
+        if status in {401, 403}:
+            logger.error(
+                'ALPACA_AUTH_PREFLIGHT_FAILED',
+                extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
+            )
+            cache['quote_source'] = 'alpaca_auth_failed'
+        else:
+            _log_price_warning(
+                'ALPACA_PRICE_HTTP_ERROR',
+                provider='alpaca_quote',
+                symbol=symbol,
+                extra={'status': status, 'error': str(exc)},
+            )
+            cache['quote_source'] = 'alpaca_http_error'
         cache['quote_price'] = None
         return None, cache['quote_source']
     except (
@@ -1827,7 +1870,7 @@ def _attempt_bars_price(symbol: str) -> tuple[float | None, str]:
         df = get_bars_df(symbol)
         price = _normalize_price(get_latest_close(df), 'bars', symbol)
         if price is not None:
-            return price, 'bars'
+            return price, 'latest_close_used'
         return None, 'bars_invalid'
     except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as exc:  # pragma: no cover - defensive
         logger.error('LATEST_PRICE_FALLBACK_FAILED', extra={'symbol': symbol, 'error': str(exc)})
@@ -1838,6 +1881,7 @@ def _attempt_bars_price(symbol: str) -> tuple[float | None, str]:
 _GLOBAL_CYCLE_ID: int | None = None
 _GLOBAL_INTRADAY_FALLBACK_FEED: str | None = None
 _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE: dict[str, str] = {}
+_CYCLE_FEED_CACHE: dict[str, str] = {}
 _SIP_UNAUTHORIZED_LOGGED = False
 
 
@@ -1909,13 +1953,17 @@ def _cache_cycle_fallback_feed_internal(
     if symbol:
         if canonical_value:
             _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = canonical_value
+            _CYCLE_FEED_CACHE[symbol] = canonical_value
         else:
             _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.pop(symbol, None)
+            _CYCLE_FEED_CACHE.pop(symbol, None)
 
     if canonical_value in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         _GLOBAL_INTRADAY_FALLBACK_FEED = canonical_value
     elif canonical_value is None and feed is None:
         _GLOBAL_INTRADAY_FALLBACK_FEED = None
+        if symbol:
+            _CYCLE_FEED_CACHE.pop(symbol, None)
 
     return sanitized, normalized_raw, canonical_value
 
@@ -1928,6 +1976,7 @@ def _reset_cycle_cache() -> None:
     _GLOBAL_CYCLE_ID = int(now.timestamp())
     _GLOBAL_INTRADAY_FALLBACK_FEED = None
     _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
+    _CYCLE_FEED_CACHE.clear()
     with _cycle_feature_cache_lock:
         _cycle_feature_cache.clear()
         _cycle_feature_cache_cycle = _GLOBAL_CYCLE_ID
@@ -1937,6 +1986,9 @@ def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
     """Return cached intraday fallback feed for the active cycle."""
 
     if symbol:
+        cached = _CYCLE_FEED_CACHE.get(symbol)
+        if cached:
+            return cached
         override = _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
         if override:
             return override
@@ -1996,6 +2048,19 @@ def _cache_cycle_fallback_feed_helper(
                 raise exc
 
     return sanitized, normalized_raw, cached_value
+
+
+def _record_coverage_provider(provider: str) -> None:
+    """Track coverage recovery providers for diagnostics/tests."""
+
+    try:
+        providers = getattr(state, "coverage_recovery_providers", None)
+    except COMMON_EXC:
+        providers = None
+    if not isinstance(providers, list):
+        providers = []
+        setattr(state, "coverage_recovery_providers", providers)
+    providers.append(provider)
 
 
 def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
@@ -4981,7 +5046,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     current_feed = primary_feed
     cache_key_candidates: list[str] = []
     cycle_pref = _prefer_feed_this_cycle_helper(symbol)
-    if cycle_pref:
+    if cycle_pref and cycle_pref in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         current_feed = cycle_pref
     # Avoid inheriting per-symbol feed overrides from the lower-level fetch module so
     # we can re-evaluate coverage on each invocation before switching feeds.
@@ -5025,6 +5090,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         df = get_minute_df(symbol, start_dt, end_dt, **_initial_fetch_kwargs())
 
     expected_bars = _count_trading_minutes(start_dt, end_dt)
+    if expected_bars <= 0:
+        expected_bars = _expected_minute_bars_window(start_dt, end_dt)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
 
     if df is not None:
@@ -5243,6 +5310,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             and not sip_flagged
         )
 
+        cached_cycle_feed = _CYCLE_FEED_CACHE.get(symbol)
+        if cached_cycle_feed == "yahoo":
+            sip_available = False
+
         sip_disabled = False
         if sip_available:
             try:
@@ -5308,10 +5379,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_start_dt = session_start_dt
 
         coverage_window_start = fallback_start_dt
-        fallback_expected_bars = max(
-            _count_trading_minutes(fallback_start_dt, end_dt),
-            1,
-        )
+        fallback_expected_bars = _count_trading_minutes(fallback_start_dt, end_dt)
+        if fallback_expected_bars <= 0:
+            fallback_expected_bars = _expected_minute_bars_window(
+                fallback_start_dt, end_dt
+            )
+        fallback_expected_bars = max(fallback_expected_bars, 1)
 
         sip_bars = 0
 
@@ -5431,6 +5504,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     if cache_feed:
                         _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
                         data_fetcher_module._cache_fallback(symbol, cache_feed)
+                        _record_coverage_provider(cache_feed)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -5530,6 +5604,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 if fallback_feed_used and fallback_feed_used not in cache_key_candidates:
                     cache_key_candidates.append(fallback_feed_used)
                 data_fetcher_module._cache_fallback(symbol, "yahoo")
+                _record_coverage_provider("yahoo")
                 coverage_window_start = fallback_start_dt
             else:
                 logger.warning(
@@ -5638,20 +5713,27 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             end_dt=end_dt,
         )
         if recovery_payload is None:
-                detail_text = "; ".join(stale_details)
-                logger.warning(
-                    "FETCH_MINUTE_STALE_USING_ORIGINAL",
-                    extra={
-                        "symbol": symbol,
-                        "detail": detail_text,
-                        "timeframe": "1Min",
-                    },
-                )
-                return df
+            detail_text = "; ".join(stale_details)
+            logger.warning(
+                "FETCH_MINUTE_STALE_USING_ORIGINAL",
+                extra={
+                    "symbol": symbol,
+                    "detail": detail_text,
+                    "timeframe": "1Min",
+                },
+            )
+            err = DataFetchError("stale_minute_data")
+            setattr(err, "fetch_reason", "stale_minute_data")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            setattr(err, "detail", detail_text)
+            raise err
         else:
             df, end_dt, staleness_reference, now_utc, active_feed = recovery_payload
 
     expected_bars = _count_trading_minutes(start_dt, end_dt)
+    if expected_bars <= 0:
+        expected_bars = _expected_minute_bars_window(start_dt, end_dt)
     coverage = _coverage_metrics(
         df,
         expected=expected_bars,
@@ -5706,6 +5788,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
             if sip_feed_normalized:
                 data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
+                _record_coverage_provider(sip_feed_normalized)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
@@ -6639,6 +6722,7 @@ class BotState:
 
     # Minute data feed cache scoped to the active trading cycle
     minute_feed_cache: dict[str, str] = field(default_factory=dict)
+    coverage_recovery_providers: list[str] = field(default_factory=list)
 
     # Intraday price reliability metadata populated from fetch_minute_df_safe
     price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
@@ -15545,7 +15629,7 @@ def _exit_positions_if_needed(
             ctx.take_profit_targets.pop(symbol, None)
         return True
     return False
- 
+
 
 def _mark_primary_provider_fallback(
     state: BotState,
@@ -23764,6 +23848,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             last_source = source
         _mark_primary_attempt(source, provider)
         if source == "alpaca_auth_failed":
+            if symbol:
+                cached_cycle_feed = _CYCLE_FEED_CACHE.get(symbol)
+                override_feed = _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
+                preserved_feed = cached_cycle_feed or override_feed
+                if preserved_feed in _ALPACA_COMPATIBLE_FALLBACK_FEEDS or not preserved_feed:
+                    _cache_cycle_fallback_feed_helper(None, symbol=symbol)
             price_source = source
             _set_price_source(symbol, price_source)
             return None

@@ -168,11 +168,8 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
     assert price == 95.1
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
     assert captured["params"].get("feed") in {"iex", "sip"}
-    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {"iex", "sip"}
-    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {
-        "iex",
-        "sip",
-    }
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo"
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") == "yahoo"
 
 
 def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
