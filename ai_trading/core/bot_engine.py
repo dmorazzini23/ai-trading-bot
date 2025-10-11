@@ -7519,6 +7519,30 @@ def is_high_vol_regime() -> bool:
 
 
 _last_fh_prefetch_date: date | None = None
+
+
+def _memo_is_fresh(entry: Any, *, now: float, ttl: float) -> tuple[bool, Any | None]:
+    """Return ``(is_fresh, value)`` for memoized daily fetch entries."""
+
+    try:
+        if isinstance(entry, MappingABC):
+            ts_raw = entry.get("ts") or entry.get("timestamp") or entry.get("time")
+            if ts_raw is not None:
+                ts = float(ts_raw)
+                if ttl <= 0 or (now - ts) <= ttl:
+                    return True, entry.get("value") or entry.get("df") or entry.get("data")
+            return False, entry.get("value") or entry.get("df") or entry.get("data")
+        if isinstance(entry, tuple) and len(entry) >= 2:
+            ts = float(entry[0])
+            value = entry[1]
+            if ttl <= 0 or (now - ts) <= ttl:
+                return True, value
+            return False, value
+    except Exception:
+        return False, None
+    return False, None
+
+
 @dataclass
 class DataFetcher:
     prefer: str | None = None
@@ -8111,6 +8135,27 @@ class DataFetcher:
         additional_lookups: tuple[tuple[str, ...], ...] = ()
         memo_now = float(monotonic_fn())
         precomputed_monotonic = float(monotonic_fn())
+
+        if memo_store is not None:
+            direct_entries: list[Any] = []
+            for candidate_key in (memo_key, legacy_memo_key):
+                try:
+                    direct_entries.append(memo_store.get(candidate_key))
+                except Exception:
+                    direct_entries.append(None)
+            effective_ttl = memo_ttl if memo_ttl > 0 else 300.0
+            for entry in direct_entries:
+                fresh, memo_df = _memo_is_fresh(entry, now=memo_now, ttl=effective_ttl)
+                if fresh and memo_df is not None:
+                    try:
+                        memo_store[memo_key] = (memo_now, memo_df)
+                    except Exception:
+                        pass
+                    try:
+                        memo_store[legacy_memo_key] = (memo_now, memo_df)
+                    except Exception:
+                        pass
+                    return memo_df
 
         def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
             if isinstance(entry, tuple) and len(entry) == 2:
