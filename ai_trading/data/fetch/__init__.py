@@ -14,7 +14,7 @@ import weakref
 from datetime import UTC, datetime
 from threading import Lock
 from contextlib import suppress
-from types import GeneratorType
+from types import GeneratorType, SimpleNamespace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -5092,23 +5092,27 @@ def _fetch_bars(
         if fallback_prohibited:
             resolved_feed = _feed
         else:
-            provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
-            logger.warning(
-                "ALPACA_FEED_SWITCHOVER",
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "requested_feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "fallback": "yahoo",
-                        "reason": "resolve_feed_none",
-                    }
-                ),
-            )
-            yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+            downgrade_reason = get_data_feed_downgrade_reason()
             _state["resolve_feed_none"] = True
-            return _run_backup_fetch(yf_interval)
+            if downgrade_reason == "missing_credentials" and _pytest_active():
+                resolved_feed = _feed
+            else:
+                provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
+                logger.warning(
+                    "ALPACA_FEED_SWITCHOVER",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "requested_feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "fallback": "yahoo",
+                            "reason": "resolve_feed_none",
+                        }
+                    ),
+                )
+                yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+                return _run_backup_fetch(yf_interval)
     if _pytest_active():
         _feed = resolved_feed
     else:
@@ -5409,10 +5413,27 @@ def _fetch_bars(
         alternate_history = _state.setdefault("alternate_feed_attempts", set())
         alternate_history.add(_feed)
 
-    def _fallback_slots_remaining() -> int | None:
-        if _max_fallbacks_config is None:
-            return None
-        return max(0, _max_fallbacks_config - len(call_attempts))
+        def _record_session_last_request(
+            session_obj: HTTPSession,
+            method: str,
+            url: str,
+            params: Mapping[str, Any] | None,
+            headers: Mapping[str, Any] | None,
+        ) -> None:
+            try:
+                session_obj.last_request = SimpleNamespace(
+                    method=method,
+                    url=url,
+                    params=dict(params or {}),
+                    headers=dict(headers or {}),
+                )
+            except Exception:
+                pass
+
+        def _fallback_slots_remaining() -> int | None:
+            if _max_fallbacks_config is None:
+                return None
+            return max(0, _max_fallbacks_config - len(call_attempts))
 
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False
@@ -5604,8 +5625,10 @@ def _fetch_bars(
             with acquire_host_slot(host):
                 if use_session_get:
                     resp = session.get(url, params=params, headers=headers, timeout=timeout)
+                    _record_session_last_request(session, "GET", url, params, headers)
                 else:
                     resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+                    _record_session_last_request(session, "GET", url, params, headers)
             if resp is None or not hasattr(resp, "status_code"):
                 raise ValueError("invalid_response")
             status = resp.status_code
@@ -5938,6 +5961,25 @@ def _fetch_bars(
                         {"provider": "alpaca", "status": "unauthorized", "feed": _feed, "timeframe": _interval}
                     ),
                 )
+            if _state.get("resolve_feed_none") and _ENABLE_HTTP_FALLBACK:
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                fb_int = interval_map.get(_interval)
+                if fb_int:
+                    _state["fallback_reason"] = "resolve_feed_none"
+                    logger.warning(
+                        "ALPACA_FEED_SWITCHOVER",
+                        extra=_norm_extra(
+                            {
+                                "provider": "alpaca",
+                                "requested_feed": _feed,
+                                "timeframe": _interval,
+                                "symbol": symbol,
+                                "fallback": "yahoo",
+                                "reason": "resolve_feed_none",
+                            }
+                        ),
+                    )
+                    return _run_backup_fetch(fb_int)
             if fallback:
                 result = _attempt_fallback(fallback)
                 if result is not None:
