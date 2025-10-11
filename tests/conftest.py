@@ -352,6 +352,14 @@ def _reset_fallback_cache(monkeypatch):
 
     monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
     monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {})
+    monkeypatch.setattr(data_fetcher, "_CYCLE_FALLBACK_FEED", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_DATA_FEED_OVERRIDE", None, raising=False)
+    monkeypatch.setattr(data_fetcher, "_LAST_OVERRIDE_LOGGED", None, raising=False)
+    monkeypatch.setattr(data_fetcher, "_SIP_PRECHECK_DONE", False, raising=False)
+    if hasattr(data_fetcher, "_reset_provider_auth_state_for_tests"):
+        data_fetcher._reset_provider_auth_state_for_tests()
+    if hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):
+        data_fetcher._clear_sip_lockout_for_tests()
 
 
 @pytest.fixture(autouse=True)
