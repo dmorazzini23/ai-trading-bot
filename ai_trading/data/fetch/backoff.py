@@ -246,9 +246,9 @@ def _fetch_feed(
             df = None
             empty_error = True
         else:
+            attempted_primary = True
             df = _fetch_bars(symbol, start, end, timeframe, feed=feed)
             empty_error = df is None or getattr(df, "empty", True)
-            attempted_primary = True
             if not empty_error:
                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                 _PROVIDER_COOLDOWNS.pop(tf_key, None)
@@ -293,7 +293,7 @@ def _fetch_feed(
         raise EmptyBarsError(
             f"empty_bars: symbol={symbol}, timeframe={timeframe}, max_retries={attempts}"
         )
-    if feed in ("iex", "sip") and (attempted_primary or cooldown_active):
+    if feed in ("iex", "sip") and attempted_primary:
         alt_feed = "sip" if feed == "iex" else "iex"
         logger.info("ALPACA_FEED_SWITCH", extra={"from": feed, "to": alt_feed})
         shrink = _dt.timedelta(days=1) if tf_norm.endswith("Min") else _dt.timedelta(0)

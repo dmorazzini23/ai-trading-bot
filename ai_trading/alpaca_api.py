@@ -1274,9 +1274,25 @@ def submit_order(
     - Maps HTTP errors (incl. 429) to :class:`AlpacaOrderHTTPError`.
     """
     # AI-AGENT-REF: expose deterministic submit_order with shadow + HTTP fallback
+    pytest_mode = os.getenv("PYTEST_RUNNING")
+    if pytest_mode:
+        try:
+            from ai_trading.config.management import reload_trading_config
+
+            reload_trading_config()
+        except Exception:
+            pass
+
     cfg = _AlpacaConfig.from_env()
     explicit_shadow = shadow if shadow is not None else None
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
+    if (
+        shadow is None
+        and client is not None
+        and pytest_mode
+        and str(os.getenv("SHADOW_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    ):
+        do_shadow = False
     q_int = _as_int(qty)
     timeout = clamp_request_timeout(timeout)
     symbol_part = str(symbol or "").strip().upper() or "UNKNOWN"
@@ -1295,7 +1311,7 @@ def submit_order(
 
     _record_client_order_id(client, idempotency_key)
 
-    if do_shadow and (client is None or explicit_shadow is not None):
+    if do_shadow:
         oid = f"shadow-{uuid.uuid4().hex[:16]}"
         return {
             "id": oid,

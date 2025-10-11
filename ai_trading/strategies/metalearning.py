@@ -23,7 +23,10 @@ from ai_trading.utils.lazy_imports import (
 from ai_trading.data.fetch import get_minute_df
 from ..core.enums import OrderSide, RiskLevel
 from .base import BaseStrategy, StrategySignal
-ML_AVAILABLE = bool(find_spec("sklearn"))
+try:
+    ML_AVAILABLE = bool(find_spec("sklearn"))
+except (ImportError, ValueError):
+    ML_AVAILABLE = False
 
 class MetaLearning(BaseStrategy):
     """

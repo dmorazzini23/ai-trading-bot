@@ -312,7 +312,6 @@ def send_exit_order(
     LimitOrderRequest = _bot_engine.LimitOrderRequest
     OrderSide = _bot_engine.OrderSide
     TimeInForce = _bot_engine.TimeInForce
-    safe_submit_order = _bot_engine.safe_submit_order
 
     logger.info(
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
@@ -339,9 +338,9 @@ def send_exit_order(
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
         )
-        safe_submit_order(ctx.api, req)
+        _bot_engine.safe_submit_order(ctx.api, req)
         return
-    limit_order = safe_submit_order(
+    limit_order = _bot_engine.safe_submit_order(
         ctx.api,
         LimitOrderRequest(
             symbol=symbol,
@@ -356,7 +355,7 @@ def send_exit_order(
         o2 = ctx.api.get_order(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order(limit_order.id)
-            safe_submit_order(
+            _bot_engine.safe_submit_order(
                 ctx.api,
                 MarketOrderRequest(
                     symbol=symbol,

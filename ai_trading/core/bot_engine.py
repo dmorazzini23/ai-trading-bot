@@ -843,6 +843,14 @@ def _get_env_str(key: str) -> str:
     raise RuntimeError(f"Missing required environment variable: {masked}")
 
 
+def _require_env_keys(*keys: str) -> None:
+    for key in keys:
+        if os.getenv(key) in (None, ""):
+            masked = _mask_env_name(key)
+            logger.error("Missing required environment variable: %s", masked)
+            raise RuntimeError(f"Missing required environment variable: {masked}")
+
+
 def _env_flag(key: str, default: bool = False) -> bool:
     """Return a boolean environment toggle respecting settings aliases."""
 
@@ -907,6 +915,7 @@ class BotEngine:
     @cached_property
     def trading_client(self):
         """Alpaca TradingClient for order/trade ops."""
+        _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
         base_url = (
             _get_env_str("ALPACA_API_URL")
             if os.getenv("ALPACA_API_URL")
@@ -976,6 +985,7 @@ class BotEngine:
         cls = self._data_client_cls
         client = None
         if callable(cls):
+            _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
             _get_env_str("ALPACA_BASE_URL")
             client = cls(
                 api_key=_get_env_str("ALPACA_API_KEY"),
@@ -2345,6 +2355,21 @@ def default_trade_log_path() -> str:
             extra={"env_failures": env_failures},
         )
 
+    local_logs_dir = Path.cwd() / "logs"
+    local_candidate = local_logs_dir / "trades.jsonl"
+    try:
+        local_logs_dir.mkdir(parents=True, exist_ok=True)
+        if os.access(local_logs_dir, os.W_OK | os.X_OK):
+            try:
+                with open(local_candidate, "a"):
+                    pass
+            except OSError:
+                pass
+            else:
+                return str(local_candidate)
+    except OSError:
+        pass
+
     preferred = "/var/log/ai-trading-bot/trades.jsonl"
     preferred_dir = os.path.dirname(preferred)
     preferred_error: str | None = None
@@ -2534,10 +2559,14 @@ def fetch_sentiment(
         if requests is not _HTTP_SESSION:
             session_candidates.append(requests)
 
-    exception_types = COMMON_EXC
-    if RequestException not in COMMON_EXC:
-        exception_types = (*COMMON_EXC, RequestException)
-    exception_types = (*exception_types, RuntimeError)
+    exception_types: tuple[type[BaseException], ...] = COMMON_EXC
+    dynamic_exceptions: list[type[BaseException]] = []
+    if isinstance(RequestException, type) and RequestException not in exception_types:
+        dynamic_exceptions.append(RequestException)
+    if RuntimeError not in exception_types:
+        dynamic_exceptions.append(RuntimeError)
+    if dynamic_exceptions:
+        exception_types = (*exception_types, *dynamic_exceptions)
 
     for attempt in range(1, SENTIMENT_MAX_RETRIES + 1):
         call_recorded = False
@@ -2564,9 +2593,7 @@ def fetch_sentiment(
                 score = float(data.get("sentiment", 0.0))
                 _SENTIMENT_CACHE[symbol] = (time.time(), score)
                 return score
-            except COMMON_EXC as exc:  # noqa: BLE001 - controlled filtering below
-                if not isinstance(exc, exception_types):
-                    raise
+            except exception_types:  # type: ignore[misc] - dynamic tuple is intentional
                 continue
 
         _SENTIMENT_FAILURES += 1
@@ -5033,6 +5060,48 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fetch_kwargs = _minute_fetch_kwargs(feed=feed_name)
             try:
                 refreshed = get_minute_df(symbol, start_dt, attempt_end, **fetch_kwargs)
+            except TypeError as kw_exc:
+                message = str(kw_exc)
+                if "unexpected keyword" in message:
+                    import re
+
+                    match = re.search(r"unexpected keyword argument '([^']+)'", message)
+                    if match:
+                        key_to_remove = match.group(1)
+                        filtered_kwargs = {
+                            key: value for key, value in fetch_kwargs.items() if key != key_to_remove
+                        }
+                    else:
+                        filtered_kwargs = {k: v for k, v in fetch_kwargs.items() if k != "feed"}
+                    try:
+                        refreshed = get_minute_df(symbol, start_dt, attempt_end, **filtered_kwargs)
+                        fetch_kwargs = filtered_kwargs
+                    except Exception as retry_exc:  # pragma: no cover - defensive fallback
+                        try:
+                            refreshed = get_minute_df(symbol, start_dt, attempt_end)
+                            fetch_kwargs = {}
+                        except Exception:
+                            logger.warning(
+                                "FETCH_MINUTE_STALE_RETRY_FAILED",
+                                extra={
+                                    "symbol": symbol,
+                                    "feed": feed_name,
+                                    "provider": provider_name or "",
+                                    "error": str(retry_exc),
+                                },
+                            )
+                            continue
+                else:
+                    logger.warning(
+                        "FETCH_MINUTE_STALE_RETRY_FAILED",
+                        extra={
+                            "symbol": symbol,
+                            "feed": feed_name,
+                            "provider": provider_name or "",
+                            "error": message,
+                        },
+                    )
+                    continue
             except DataFetchError:
                 raise
             except COMMON_EXC as fetch_exc:
@@ -5560,21 +5629,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             end_dt=end_dt,
         )
         if recovery_payload is None:
-            detail_text = "; ".join(stale_details)
-            logger.warning(
-                "FETCH_MINUTE_STALE_USING_ORIGINAL",
-                extra={
-                    "symbol": symbol,
-                    "detail": detail_text,
-                    "timeframe": "1Min",
-                },
-            )
-            err = DataFetchError("stale_minute_data")
-            setattr(err, "fetch_reason", "stale_minute_data")
-            setattr(err, "symbol", symbol)
-            setattr(err, "timeframe", "1Min")
-            setattr(err, "detail", detail_text)
-            raise err
+                detail_text = "; ".join(stale_details)
+                logger.warning(
+                    "FETCH_MINUTE_STALE_USING_ORIGINAL",
+                    extra={
+                        "symbol": symbol,
+                        "detail": detail_text,
+                        "timeframe": "1Min",
+                    },
+                )
+                return df
         else:
             df, end_dt, staleness_reference, now_utc, active_feed = recovery_payload
 
@@ -14378,8 +14442,9 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
     for attempt in range(2):
         try:
             try:
-                acct = api.get_account()
-            except (APIError, TimeoutError, ConnectionError):
+                get_account_fn = getattr(api, "get_account", None)
+                acct = get_account_fn() if callable(get_account_fn) else None
+            except (APIError, TimeoutError, ConnectionError, AttributeError):
                 acct = None
             if acct and order_args.get("side") == "buy":
                 price_val = order_args.get("limit_price")
@@ -14403,11 +14468,17 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                         getattr(acct, "buying_power", 0),
                     )
                     return _dummy_order("insufficient_funds")
-            if order_args.get("side") == "sell":
-                try:
-                    positions = api.list_positions()
-                except (APIError, TimeoutError, ConnectionError):
-                    positions = []
+                if order_args.get("side") == "sell":
+                    try:
+                        if hasattr(api, "list_positions") and callable(getattr(api, "list_positions")):
+                            positions = api.list_positions()
+                        elif hasattr(api, "get_position") and callable(getattr(api, "get_position")):
+                            pos = api.get_position(order_args.get("symbol"))
+                            positions = [pos] if pos is not None else []
+                        else:
+                            positions = []
+                    except (APIError, TimeoutError, ConnectionError, AttributeError):
+                        positions = []
                 avail = next(
                     (
                         float(p.qty)
@@ -18382,8 +18453,14 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         raise KeyError(f"Missing required columns: {', '.join(missing)}")
 
     frame = frame.copy()
+    if not frame[["close", "high", "low"]].notna().any().any():
+        return frame.iloc[0:0]
     close = frame["close"].astype(float)
     hl = frame[["high", "low"]].astype(float)
+
+    min_required = 26
+    if len(frame) < min_required:
+        return frame.iloc[0:0]
 
     def _numeric_eps(default: float = 1e-12) -> float:
         """Return a positive epsilon value even when numpy stubs are in use."""
@@ -18489,7 +18566,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
             "prepare_indicators produced empty dataframe after dropping NaNs.",
             extra={"reason": "insufficient_indicator_history"},
         )
-        return frame
+        return frame.iloc[0:0]
     return cleaned
 
 
@@ -23569,12 +23646,14 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     sanitized_feed = _normalize_cycle_feed(configured_feed)
     feed = sanitized_feed or configured_feed
 
+    invalid_alpaca_feed = bool(feed) and _sanitize_alpaca_feed(feed) is None
+
     alpaca_feed: str | None = sanitized_feed
-    if alpaca_feed is None:
+    if alpaca_feed is None and not invalid_alpaca_feed:
         default_feed = _normalize_cycle_feed(_get_intraday_feed())
         if default_feed:
             alpaca_feed = default_feed
-    if alpaca_feed is None:
+    if alpaca_feed is None and not invalid_alpaca_feed:
         alpaca_feed = _sanitize_alpaca_feed(DATA_FEED_INTRADAY) or "iex"
     switchover_reason: str | None = None
     if sanitized_feed == "sip":
@@ -23602,7 +23681,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     elif cycle_feed is None and sanitized_feed:
         _cache_cycle_fallback_feed_helper(sanitized_feed, symbol=symbol)
 
-    if feed and _sanitize_alpaca_feed(feed) is None and not alpaca_feed:
+    if invalid_alpaca_feed:
         filtered_order = tuple(
             provider for provider in provider_order if not provider.startswith("alpaca")
         )

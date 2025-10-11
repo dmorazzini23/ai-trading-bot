@@ -14,7 +14,11 @@ from ai_trading.utils.lazy_imports import (
     load_sklearn_preprocessing,
 )
 from importlib.util import find_spec
-sklearn_available = bool(find_spec("sklearn"))
+
+try:
+    sklearn_available = bool(find_spec("sklearn"))
+except (ImportError, ValueError):
+    sklearn_available = False
 from ai_trading.logging import logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

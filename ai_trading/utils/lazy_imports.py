@@ -73,7 +73,11 @@ def _load_sklearn_submodule(name: str) -> ModuleType | None:
     mod_name = f"sklearn.{name}"
     if mod_name in sys.modules:
         return sys.modules[mod_name]
-    if find_spec(mod_name) is None:
+    try:
+        spec = find_spec(mod_name)
+    except ValueError:
+        return None
+    if spec is None:
         return None
     return _LazyModule(mod_name)
 

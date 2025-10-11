@@ -14,8 +14,8 @@ from importlib import import_module
 from types import ModuleType
 
 from ai_trading.logging import get_logger, logger_once
+import ai_trading.alpaca_api as _alpaca_api
 from ai_trading.alpaca_api import (
-    ALPACA_AVAILABLE,
     TradingClientAdapter,
     get_trading_client_cls,
     get_data_client_cls,
@@ -89,7 +89,7 @@ def _validate_trading_api(api: Any) -> bool:
             return False
 
     if api is None:
-        if ALPACA_AVAILABLE and not is_shadow_mode():
+        if _alpaca_api.ALPACA_AVAILABLE and not is_shadow_mode():
             log_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
         else:
             log_once.warning("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
@@ -302,15 +302,20 @@ def ensure_alpaca_attached(ctx) -> None:
         raise RuntimeError("Missing Alpaca API credentials")
     if getattr(ctx, "api", None) is not None:
         return
-    if not ALPACA_AVAILABLE:
-        return
+    if not _alpaca_api.ALPACA_AVAILABLE:
+        try:
+            get_trading_client_cls()
+        except RuntimeError:
+            return
+        if not _alpaca_api.ALPACA_AVAILABLE:
+            return
     if not _initialize_alpaca_clients():
         return
     # Mirror the global singleton in bot_engine for compatibility
     be = _get_bot_engine_module()
     api = getattr(be, "trading_client", None)
     if api is None:
-        if ALPACA_AVAILABLE and not is_shadow_mode():
+        if _alpaca_api.ALPACA_AVAILABLE and not is_shadow_mode():
             log_once.error(
                 "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
             )
@@ -356,7 +361,7 @@ def _initialize_alpaca_clients() -> bool:
 
     if getattr(be, "trading_client", None) is not None:
         return True
-    if not ALPACA_AVAILABLE:
+    if not _alpaca_api.ALPACA_AVAILABLE:
         be.trading_client = None
         be.data_client = None
         return False

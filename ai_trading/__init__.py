@@ -115,7 +115,7 @@ if _modules_ref is None:  # pragma: no cover - defensive for patched environment
 
 try:
     _PIPELINE_AVAILABLE = importlib.util.find_spec("sklearn.pipeline") is not None
-except (ModuleNotFoundError, ImportError):  # pragma: no cover - optional dependency missing
+except (ModuleNotFoundError, ImportError, ValueError):  # pragma: no cover - optional dependency missing
     _PIPELINE_AVAILABLE = False
 
 if not _PIPELINE_AVAILABLE:
@@ -139,6 +139,8 @@ if not _PIPELINE_AVAILABLE:
     class _PipelineMissingFinder(importlib.abc.MetaPathFinder):  # pragma: no cover - import hook
         def find_spec(self, fullname, path=None, target=None):
             if fullname.startswith("ai_trading.pipeline"):
+                if "sklearn.pipeline" in sys.modules:
+                    return None
                 return importlib.machinery.ModuleSpec(fullname, _PipelineMissingLoader())
             return None
 

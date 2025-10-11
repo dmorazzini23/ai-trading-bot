@@ -13,7 +13,10 @@ from importlib.util import find_spec
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
 from ai_trading.utils.lazy_imports import load_sklearn_linear_model
-sklearn_available = bool(find_spec("sklearn"))
+try:
+    sklearn_available = bool(find_spec("sklearn"))
+except (ImportError, ValueError):
+    sklearn_available = False
 from .base import StrategySignal
 
 class SignalAggregator:
