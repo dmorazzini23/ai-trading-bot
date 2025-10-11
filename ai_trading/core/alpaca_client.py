@@ -27,6 +27,8 @@ from ai_trading.exc import COMMON_EXC
 
 logger = get_logger(__name__)
 
+ALPACA_AVAILABLE = getattr(_alpaca_api, "ALPACA_AVAILABLE", False)
+
 
 _shared_logger_once: Any | None = None
 
