@@ -175,7 +175,7 @@ def _count_trading_minutes(start_dt: datetime, end_dt: datetime) -> int:
     try:
         start = _ensure_utc_dt(start_dt)
         end = _ensure_utc_dt(end_dt)
-    except Exception:
+    except COMMON_EXC:
         return 0
 
     if end <= start:
@@ -190,13 +190,13 @@ def _count_trading_minutes(start_dt: datetime, end_dt: datetime) -> int:
             if not market_calendar.is_trading_day(current_date):
                 current_date += timedelta(days=1)
                 continue
-        except Exception:
+        except COMMON_EXC:
             current_date += timedelta(days=1)
             continue
 
         try:
             session = market_calendar.session_info(current_date)
-        except Exception:
+        except COMMON_EXC:
             current_date += timedelta(days=1)
             continue
 
@@ -215,7 +215,7 @@ def _count_trading_minutes(start_dt: datetime, end_dt: datetime) -> int:
         if overlap_end > overlap_start:
             try:
                 minutes = int((overlap_end - overlap_start).total_seconds() // 60)
-            except Exception:
+            except COMMON_EXC:
                 minutes = 0
             if minutes > 0:
                 total_minutes += minutes
@@ -233,7 +233,7 @@ def _normalize_broker_order_status(value: Any) -> str:
         return status_value.lower()
     try:
         return str(status_value).lower()
-    except Exception:
+    except COMMON_EXC:
         return ""
 
 
@@ -252,7 +252,7 @@ def _refresh_broker_order(
         return order, status, False
     try:
         refreshed = get_order(order_id)
-    except Exception as exc:  # pragma: no cover - network/API failure
+    except COMMON_EXC as exc:  # pragma: no cover - network/API failure
         if log_on_failure:
             logger.debug(
                 "PENDING_ORDER_REFRESH_FAILED",
@@ -287,7 +287,7 @@ def get_confirmed_pending_orders(
     if orders is None:
         try:
             orders = list_open_orders(api)
-        except Exception as exc:  # pragma: no cover - defensive
+        except COMMON_EXC as exc:  # pragma: no cover - defensive
             logger.debug(
                 "PENDING_ORDER_LIST_FAILED",
                 extra={
@@ -344,7 +344,7 @@ def _ensure_runtime_state(runtime: Any | None) -> dict[str, Any]:
         state = {}
         try:
             setattr(runtime, "state", state)
-        except Exception:  # pragma: no cover - defensive
+        except COMMON_EXC:  # pragma: no cover - defensive
             return state
     return state
 
@@ -848,7 +848,7 @@ def _env_flag(key: str, default: bool = False) -> bool:
 
     try:
         value = get_env(key, None)
-    except Exception:
+    except COMMON_EXC:
         value = None
     if value is None:
         value = os.getenv(key)
@@ -858,7 +858,7 @@ def _env_flag(key: str, default: bool = False) -> bool:
         return default
     try:
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
+    except COMMON_EXC:
         return default
 
 
@@ -1172,7 +1172,7 @@ def _resolve_cycle_feature_key(symbol: str, df: pd.DataFrame | None) -> tuple[st
         return None
     try:
         marker = index[-1]
-    except Exception:
+    except COMMON_EXC:
         return None
     return (symbol, marker)
 
@@ -1232,7 +1232,7 @@ def _get_intraday_feed() -> str:
     try:
         settings = get_execution_settings()
         feed = settings.data_feed_intraday
-    except Exception:
+    except COMMON_EXC:
         feed = DATA_FEED_INTRADAY
     normalized = str(feed or DATA_FEED_INTRADAY).strip().lower() or "iex"
     _INTRADAY_FEED_CACHE = normalized
@@ -1258,7 +1258,7 @@ def _canonicalize_fallback_feed(feed: object | None) -> str | None:
         return None
     try:
         normalized = str(feed).strip().lower()
-    except Exception:
+    except COMMON_EXC:
         return None
     if normalized in _CANONICAL_FALLBACK_FEEDS:
         return normalized
@@ -1268,7 +1268,7 @@ def _canonicalize_fallback_feed(feed: object | None) -> str | None:
             return suffix
     try:
         normalized_fetch = data_fetcher_module._normalize_feed_value(normalized)
-    except Exception:
+    except COMMON_EXC:
         normalized_fetch = None
     if normalized_fetch:
         sanitized_fetch = _sanitize_alpaca_feed(normalized_fetch) or normalized_fetch
@@ -1291,7 +1291,7 @@ def _set_price_source(symbol: str, source: object | None) -> None:
         return
     try:
         _PRICE_SOURCE[symbol] = str(source)
-    except Exception:
+    except COMMON_EXC:
         _PRICE_SOURCE[symbol] = "unknown"
 
 
@@ -1305,7 +1305,7 @@ def _normalize_cycle_feed(feed: str | None) -> str | None:
         return sanitized
     try:
         normalized = data_fetcher_module._normalize_feed_value(feed)
-    except Exception:
+    except COMMON_EXC:
         return None
     return _sanitize_alpaca_feed(normalized)
 
@@ -1319,7 +1319,7 @@ def _get_price_provider_order() -> tuple[str, ...]:
     try:
         settings = get_execution_settings()
         order_seq = tuple(settings.price_provider_order)
-    except Exception:
+    except COMMON_EXC:
         order_seq = tuple(PRICE_PROVIDER_ORDER)
     if not order_seq:
         order_seq = tuple(PRICE_PROVIDER_ORDER)
@@ -1428,7 +1428,7 @@ def _log_skipped_unreliable_price(
             None if price is None else f"{float(price):.6f}",
             reason or "unspecified",
         )
-    except Exception:  # pragma: no cover - defensive logging guard
+    except COMMON_EXC:  # pragma: no cover - defensive logging guard
         logger.warning("ORDER_SKIPPED_UNRELIABLE_PRICE", extra={"symbol": symbol})
 
 
@@ -1583,7 +1583,7 @@ def _log_delayed_quote_slippage(
                 "last_unusable": bool(cache.get("quote_last_unusable")),
             },
         )
-    except Exception:
+    except COMMON_EXC:
         logger.warning(
             "DELAYED_QUOTE_SLIPPAGE_FLAGGED",
             extra={"symbol": symbol, "fallback_source": price_source},
@@ -1615,7 +1615,7 @@ def _attempt_alpaca_trade(
         return None, cache['trade_source']
     try:
         alpaca_get, _ = _alpaca_symbols()
-    except Exception as exc:  # pragma: no cover - network availability guard
+    except COMMON_EXC as exc:  # pragma: no cover - network availability guard
         _log_price_warning('ALPACA_TRADE_FETCH_FAILED', provider='alpaca_trade', symbol=symbol, extra={'error': str(exc)})
         cache['trade_source'] = 'alpaca_trade_error'
         cache['trade_price'] = None
@@ -1641,7 +1641,7 @@ def _attempt_alpaca_trade(
         cache['trade_source'] = 'alpaca_trade_http_error'
         cache['trade_price'] = None
         return None, cache['trade_source']
-    except Exception as exc:  # pragma: no cover - defensive
+    except COMMON_EXC as exc:  # pragma: no cover - defensive
         _log_price_warning('ALPACA_TRADE_FETCH_FAILED', provider='alpaca_trade', symbol=symbol, extra={'error': str(exc)})
         cache['trade_source'] = 'alpaca_trade_error'
         cache['trade_price'] = None
@@ -1678,7 +1678,7 @@ def _attempt_alpaca_quote(
         return None, cache['quote_source']
     try:
         alpaca_get, _ = _alpaca_symbols()
-    except Exception as exc:  # pragma: no cover - defensive guard
+    except COMMON_EXC as exc:  # pragma: no cover - defensive guard
         _log_price_warning('ALPACA_PRICE_ERROR', provider='alpaca_quote', symbol=symbol, extra={'error': str(exc)})
         cache['quote_source'] = 'alpaca_quote_error'
         cache['quote_price'] = None
@@ -1757,7 +1757,7 @@ def _attempt_alpaca_minute_close(
         return None, cache['minute_source']
     try:
         alpaca_get, _ = _alpaca_symbols()
-    except Exception as exc:  # pragma: no cover - defensive guard
+    except COMMON_EXC as exc:  # pragma: no cover - defensive guard
         _log_price_warning('ALPACA_MINUTE_FETCH_FAILED', provider='alpaca_minute_close', symbol=symbol, extra={'error': str(exc)})
         cache['minute_source'] = 'alpaca_minute_error'
         cache['minute_price'] = None
@@ -1777,7 +1777,7 @@ def _attempt_alpaca_minute_close(
         cache['minute_source'] = 'alpaca_minute_error'
         cache['minute_price'] = None
         return None, cache['minute_source']
-    except Exception as exc:  # pragma: no cover - defensive
+    except COMMON_EXC as exc:  # pragma: no cover - defensive
         _log_price_warning('ALPACA_MINUTE_FETCH_FAILED', provider='alpaca_minute_close', symbol=symbol, extra={'error': str(exc)})
         cache['minute_source'] = 'alpaca_minute_error'
         cache['minute_price'] = None
@@ -1871,7 +1871,7 @@ def _cycle_fallback_feed_values(
     else:
         try:
             base_feed = str(feed)
-        except Exception:  # pragma: no cover - defensive
+        except COMMON_EXC:  # pragma: no cover - defensive
             base_feed = None
 
     sanitized = _normalize_cycle_feed(base_feed)
@@ -1879,7 +1879,7 @@ def _cycle_fallback_feed_values(
     if base_feed is not None:
         try:
             normalized_raw = base_feed.strip().lower() or None
-        except Exception:  # pragma: no cover - defensive
+        except COMMON_EXC:  # pragma: no cover - defensive
             normalized_raw = None
 
     cached_value = sanitized or normalized_raw
@@ -2000,7 +2000,7 @@ def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
         if callable(clear_override):
             try:
                 clear_override(symbol)
-            except Exception:
+            except COMMON_EXC:
                 pass
 
     if _GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo":
@@ -2025,7 +2025,7 @@ def _sip_authorized() -> bool:
         until = getattr(data_fetcher_module, "_SIP_UNAUTHORIZED_UNTIL", None)
         try:
             lockout_expired = until is not None and monotonic_time() >= float(until)
-        except Exception:
+        except COMMON_EXC:
             lockout_expired = False
         if lockout_expired:
             setattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
@@ -2061,7 +2061,7 @@ def _sip_authorized() -> bool:
             cfg = get_trading_config()
             has_key = bool(getattr(cfg, "alpaca_api_key", None))
             has_secret = bool(getattr(cfg, "alpaca_secret_key", None))
-        except Exception:  # pragma: no cover
+        except COMMON_EXC:  # pragma: no cover
             pass
 
     has_entitlement: bool | None = None
@@ -2086,7 +2086,7 @@ def _sip_authorized() -> bool:
 
     try:
         cfg = get_trading_config()
-    except Exception:  # pragma: no cover - diagnostics only
+    except COMMON_EXC:  # pragma: no cover - diagnostics only
         cfg = None
 
     if cfg is not None:
@@ -2105,14 +2105,14 @@ def _sip_authorized() -> bool:
             candidates = (failover,)
         else:
             candidates = tuple(failover or ())  # type: ignore[arg-type]
-    except Exception:  # pragma: no cover - defensive
+    except COMMON_EXC:  # pragma: no cover - defensive
         candidates = ()
 
     if any(str(feed).lower() == "sip" for feed in candidates):
         sip_allowed = False
         try:
             sip_allowed = bool(getattr(data_fetcher_module, "_sip_allowed")())
-        except Exception:  # pragma: no cover - defensive
+        except COMMON_EXC:  # pragma: no cover - defensive
             sip_allowed = False
         if sip_allowed:
             return True
@@ -2458,7 +2458,7 @@ def _emit_pytest_capture(level: int, message: str) -> None:
                     records = getattr(handler, "records", None)
                     if isinstance(records, list):
                         records.append(record)
-    except Exception:
+    except COMMON_EXC:
         # Avoid interfering with production logging if pytest internals change.
         pass
 
@@ -2564,7 +2564,7 @@ def fetch_sentiment(
                 score = float(data.get("sentiment", 0.0))
                 _SENTIMENT_CACHE[symbol] = (time.time(), score)
                 return score
-            except Exception as exc:  # noqa: BLE001 - controlled filtering below
+            except COMMON_EXC as exc:  # noqa: BLE001 - controlled filtering below
                 if not isinstance(exc, exception_types):
                     raise
                 continue
@@ -2596,7 +2596,7 @@ def _placeholder_len(samples: Any) -> int:
         return 1
     try:
         length = len(samples)  # type: ignore[arg-type]
-    except Exception:  # pragma: no cover - defensive fallback
+    except COMMON_EXC:  # pragma: no cover - defensive fallback
         return 1
     return max(1, int(length))
 
@@ -2838,7 +2838,7 @@ def _order_pending_age_seconds(order: Any, *, now: datetime | None = None) -> fl
         try:
             timestamp = _ensure_utc_dt(raw_value)
             break
-        except Exception:
+        except COMMON_EXC:
             continue
     if timestamp is None:
         return 0.0
@@ -3038,7 +3038,7 @@ from ai_trading.settings import (
 _reload_env()
 try:
     CFG = get_settings()
-except Exception:  # pragma: no cover - defensive fallback
+except (RuntimeError, ValueError, AttributeError):  # pragma: no cover - defensive fallback
     CFG = None
 if CFG is None:
     CFG = types.SimpleNamespace(
@@ -3687,7 +3687,7 @@ def _ensure_alpaca_classes() -> None:
 
     try:  # pragma: no cover - independent imports with fallbacks
         from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
-    except Exception as exc:  # pragma: no cover - missing optional dependency
+    except COMMON_EXC as exc:  # pragma: no cover - missing optional dependency
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass, field
@@ -3721,7 +3721,7 @@ def _ensure_alpaca_classes() -> None:
             StopOrderRequest as _StopOrderRequest,
             StopLimitOrderRequest as _StopLimitOrderRequest,
         )
-    except Exception as exc:
+    except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass
@@ -3769,7 +3769,7 @@ def _ensure_alpaca_classes() -> None:
             OrderStatus as _OrderStatus,
             TimeInForce as _TimeInForce,
         )
-    except Exception as exc:
+    except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from enum import Enum
@@ -3791,7 +3791,7 @@ def _ensure_alpaca_classes() -> None:
             GTC = "gtc"
     try:
         from alpaca.data.models import Quote as _Quote  # type: ignore
-    except Exception as exc:
+    except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass
@@ -3802,7 +3802,7 @@ def _ensure_alpaca_classes() -> None:
             ask_price: float | None = None
     try:
         from alpaca.trading.models import Order as _Order  # type: ignore
-    except Exception as exc:
+    except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass
@@ -4440,7 +4440,7 @@ def _is_minute_stale(frame: Any, *, symbol: Optional[str] = None) -> bool:
         return False
     except RuntimeError:
         return True
-    except Exception:
+    except COMMON_EXC:
         return False
 
 
@@ -4470,7 +4470,7 @@ def _call_provider_factory(factory: Any, symbol: str):
         if len(sig.parameters) == 0:
             return factory()
         return factory(symbol)
-    except Exception:
+    except COMMON_EXC:
         return factory() if callable(factory) else factory
 
 
@@ -4606,7 +4606,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             return None, True
         try:
             normalized = str(value).strip().lower()
-        except Exception:
+        except COMMON_EXC:
             return None, True
         if not normalized or normalized in {"none", "off", "false"}:
             return None, False
@@ -4638,7 +4638,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if effective_feed is not None:
             try:
                 normalized_feed = str(effective_feed).strip().lower()
-            except Exception:
+            except COMMON_EXC:
                 normalized_feed = None
             else:
                 if normalized_feed and "_" in normalized_feed:
@@ -4703,7 +4703,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 data_fetcher_module._sip_configured()
                 and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
             )
-        except Exception:  # pragma: no cover - defensive
+        except COMMON_EXC:  # pragma: no cover - defensive
             sip_allowed = False
         if sip_allowed and current_feed != "sip":
             fallback_feed = "sip"
@@ -4715,7 +4715,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
 
             providers = list(_provider_priority())
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except COMMON_EXC as exc:  # pragma: no cover - defensive logging
             providers = []
             logger.debug(
                 "PROVIDER_PRIORITY_LOOKUP_FAILED",
@@ -4750,13 +4750,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     ) -> pd.DataFrame:
         try:
             raw_attrs = dict(getattr(raw_df, "attrs", {}) or {})
-        except Exception:
+        except COMMON_EXC:
             raw_attrs = {}
         df = raw_df.copy()
         if raw_attrs:
             try:
                 df.attrs.update(raw_attrs)
-            except Exception:  # pragma: no cover - metadata best-effort only
+            except COMMON_EXC:  # pragma: no cover - metadata best-effort only
                 pass
         # Drop bars with zero volume or from the current (incomplete) minute
         try:
@@ -4788,7 +4788,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 volume_series = volume_series.loc[df.index]
                 try:
                     df.loc[:, "volume"] = volume_series
-                except Exception:
+                except COMMON_EXC:
                     df["volume"] = volume_series.to_numpy()
         except (*COMMON_EXC, AttributeError) as exc:  # pragma: no cover - defensive
             logger.debug("minute bar filtering failed: %s", exc)
@@ -4819,7 +4819,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             if col in df.columns:
                 try:
                     df.loc[:, col] = pd.to_numeric(df[col], errors="coerce")
-                except Exception as exc:  # pragma: no cover - defensive fallback
+                except COMMON_EXC as exc:  # pragma: no cover - defensive fallback
                     logger.debug("minute bar %s coercion failed: %s", col, exc)
 
         close_series = df["close"]
@@ -4844,17 +4844,17 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 setattr(err, "symbol", symbol)
                 setattr(err, "timeframe", "1Min")
                 raise err
-        except Exception as exc:  # pragma: no cover - defensive fallback
+        except COMMON_EXC as exc:  # pragma: no cover - defensive fallback
             logger.debug("close filter failed: %s", exc)
         close_series = df["close"]
         try:
             non_null_count = int(close_series.count())
-        except Exception:  # pragma: no cover - defensive fallback
+        except COMMON_EXC:  # pragma: no cover - defensive fallback
             try:
                 non_null_count = int(
                     close_series.dropna().shape[0]
                 )  # type: ignore[attr-defined]
-            except Exception:
+            except COMMON_EXC:
                 non_null_count = 0
         if non_null_count == 0:
             logger.error(
@@ -4877,7 +4877,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             try:
                 df = df.copy()
                 df.index.name = None
-            except Exception:  # pragma: no cover - defensive
+            except COMMON_EXC:  # pragma: no cover - defensive
                 pass
         return df
 
@@ -4898,7 +4898,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     def _normalize_feed_name(value: object) -> str:
         try:
             feed_val = str(value).strip().lower()
-        except Exception:
+        except COMMON_EXC:
             return data_fetcher_module.get_default_feed()
         if "sip" in feed_val:
             return "sip"
@@ -4951,7 +4951,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     # we can re-evaluate coverage on each invocation before switching feeds.
     try:
         cached_feeds = getattr(state, "minute_feed_cache", None)
-    except Exception:
+    except COMMON_EXC:
         cached_feeds = None
 
     def _initial_fetch_kwargs() -> dict[str, object]:
@@ -5035,7 +5035,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 refreshed = get_minute_df(symbol, start_dt, attempt_end, **fetch_kwargs)
             except DataFetchError:
                 raise
-            except Exception as fetch_exc:
+            except COMMON_EXC as fetch_exc:
                 logger.warning(
                     "FETCH_MINUTE_STALE_RETRY_FAILED",
                     extra={
@@ -5104,7 +5104,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if frame is not None:
             try:
                 actual = int(len(frame))
-            except Exception:
+            except COMMON_EXC:
                 actual = 0
         threshold = max(1, int(expected * 0.5)) if expected > 0 else 0
         materially_short_local = expected > 0 and actual < threshold
@@ -5155,7 +5155,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         sip_authorized = _sip_authorized()
         try:
             sip_configured = bool(data_fetcher_module._sip_configured())
-        except Exception:  # pragma: no cover - defensive guard
+        except COMMON_EXC:  # pragma: no cover - defensive guard
             sip_configured = False
         sip_flagged = bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
         sip_available = (
@@ -5169,7 +5169,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if sip_available:
             try:
                 sip_disabled = provider_monitor.is_disabled("alpaca_sip")
-            except Exception:  # pragma: no cover - defensive guard
+            except COMMON_EXC:  # pragma: no cover - defensive guard
                 sip_disabled = False
             if sip_disabled and not (
                 os.getenv("PYTEST_RUNNING")
@@ -5247,7 +5247,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     end_dt,
                     **_minute_fetch_kwargs(feed="sip"),
                 )
-            except Exception as exc:  # pragma: no cover - diagnostics only
+            except COMMON_EXC as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
                     "SIP_RECOVERY_FAILED",
                     extra={
@@ -5260,7 +5260,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 if sip_df is not None and not getattr(sip_df, "empty", True):
                     try:
                         sip_bars = int(len(sip_df))
-                    except Exception:
+                    except COMMON_EXC:
                         sip_bars = 0
                 else:
                     sip_df = None
@@ -5287,13 +5287,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                             end_dt,
                             **_minute_fetch_kwargs(feed=resolved_feed),
                         )
-                    except Exception:  # pragma: no cover - fall back to existing frame
+                    except COMMON_EXC:  # pragma: no cover - fall back to existing frame
                         override_df = None
                     else:
                         if override_df is not None and not getattr(override_df, "empty", True):
                             try:
                                 override_count = int(len(override_df))
-                            except Exception:
+                            except COMMON_EXC:
                                 override_count = 0
                             if override_count >= sip_bars:
                                 sip_df = override_df
@@ -5399,7 +5399,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     end_dt,
                     **_minute_fetch_kwargs(feed="yahoo"),
                 )
-            except Exception as exc:  # pragma: no cover - diagnostics only
+            except COMMON_EXC as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
                     "BACKUP_PROVIDER_FAILED",
                     extra={"provider": "yahoo", "symbol": symbol, "error": str(exc)},
@@ -5414,7 +5414,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 )
                 try:
                     yahoo_bars = int(len(yahoo_df))
-                except Exception:
+                except COMMON_EXC:
                     yahoo_bars = 0
             else:
                 yahoo_bars = 0
@@ -5744,7 +5744,7 @@ def cancel_all_open_orders(runtime) -> None:
             if not isinstance(status, str):
                 try:
                     status = str(status)
-                except Exception:
+                except COMMON_EXC:
                     status = ""
             if status.lower() not in cancelable_statuses:
                 continue
@@ -6736,7 +6736,7 @@ def _minute_frame_attrs(frame: Any) -> dict[str, str]:
         return {}
     try:
         attrs = getattr(frame, "attrs", None)
-    except Exception:
+    except COMMON_EXC:
         return {}
     if not isinstance(attrs, dict):
         return {}
@@ -6757,7 +6757,7 @@ def _minute_frame_attrs(frame: Any) -> dict[str, str]:
             continue
         try:
             text = str(value).strip()
-        except Exception:
+        except COMMON_EXC:
             continue
         if text:
             sanitized[key] = text[:128]
@@ -6840,7 +6840,7 @@ def _minute_data_freshness_limit() -> int:
         return _MINUTE_STALE_TOLERANCE_OVERRIDE
     try:
         value = int(minute_data_freshness_tolerance())
-    except Exception:
+    except COMMON_EXC:
         return 900
     return value if value > 0 else 900
 
@@ -6907,7 +6907,7 @@ def initialize_runtime_config() -> None:
 
     try:
         cfg = TradingConfig.from_env(allow_missing_drawdown=True)
-    except Exception as exc:  # pragma: no cover - import-time tolerance
+    except COMMON_EXC as exc:  # pragma: no cover - import-time tolerance
         logger.debug("TRADING_CONFIG_DEFERRED", extra={"error": repr(exc)})
         return
     # Align defaults at runtime
@@ -7036,7 +7036,7 @@ except (TypeError, ValueError):
     _DAILY_FETCH_MEMO_TTL = 60.0
 try:
     _PROVIDER_DECISION_WINDOW = float(get_env("AI_TRADING_PROVIDER_DECISION_SECS", "120", cast=float))
-except Exception:
+except COMMON_EXC:
     try:
         _PROVIDER_DECISION_WINDOW = float(os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", "120") or 120.0)
     except (TypeError, ValueError):
@@ -7259,7 +7259,7 @@ def _has_alpaca_credentials() -> bool:
 
     try:
         key_present, secret_present = alpaca_credential_status()
-    except Exception:  # pragma: no cover - defensive guard around env access
+    except COMMON_EXC:  # pragma: no cover - defensive guard around env access
         return False
     return bool(key_present and secret_present)
 
@@ -7278,7 +7278,7 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
 
     try:
         ensure_alpaca_attached(ctx)
-    except Exception as exc:  # pragma: no cover - defensive against shim failures
+    except COMMON_EXC as exc:  # pragma: no cover - defensive against shim failures
         logger_once.error(
             "FAILED_TO_ATTACH_ALPACA_CLIENT",
             key="alpaca_attach_failed",
@@ -7538,7 +7538,7 @@ def _memo_is_fresh(entry: Any, *, now: float, ttl: float) -> tuple[bool, Any | N
             if ttl <= 0 or (now - ts) <= ttl:
                 return True, value
             return False, value
-    except Exception:
+    except COMMON_EXC:
         return False, None
     return False, None
 
@@ -7591,7 +7591,7 @@ class DataFetcher:
             return None
         try:
             normalized = str(value).strip().lower()
-        except Exception:  # pragma: no cover - defensive
+        except COMMON_EXC:  # pragma: no cover - defensive
             return None
         return normalized or None
 
@@ -7968,7 +7968,7 @@ class DataFetcher:
             candidate = getattr(self.settings, "data_feed", "iex")
         try:
             normalized = str(candidate).strip().lower()
-        except Exception:  # pragma: no cover - defensive normalization
+        except COMMON_EXC:  # pragma: no cover - defensive normalization
             normalized = "iex"
         if normalized.startswith("alpaca_"):
             normalized = normalized.split("_", 1)[1]
@@ -7989,7 +7989,7 @@ class DataFetcher:
                     if normalized == "alpaca_yahoo":
                         return "yahoo"
                     return normalized
-        except Exception:  # pragma: no cover - defensive metadata parse
+        except COMMON_EXC:  # pragma: no cover - defensive metadata parse
             return default
         return default
 
@@ -8063,11 +8063,11 @@ class DataFetcher:
             df = df.copy()
             try:
                 ts_series = _pd.Series(idx, index=df.index, name="timestamp")
-            except Exception:  # pragma: no cover - defensive fallback
+            except COMMON_EXC:  # pragma: no cover - defensive fallback
                 ts_series = idx
             try:
                 df.insert(0, "timestamp", ts_series)
-            except Exception:  # pragma: no cover - final fallback to assignment
+            except COMMON_EXC:  # pragma: no cover - final fallback to assignment
                 df["timestamp"] = ts_series
         return df
 
@@ -8141,7 +8141,7 @@ class DataFetcher:
             for candidate_key in (memo_key, legacy_memo_key):
                 try:
                     direct_entries.append(memo_store.get(candidate_key))
-                except Exception:
+                except COMMON_EXC:
                     direct_entries.append(None)
             effective_ttl = memo_ttl if memo_ttl > 0 else 300.0
             for entry in direct_entries:
@@ -8149,11 +8149,11 @@ class DataFetcher:
                 if fresh and memo_df is not None:
                     try:
                         memo_store[memo_key] = (memo_now, memo_df)
-                    except Exception:
+                    except COMMON_EXC:
                         pass
                     try:
                         memo_store[legacy_memo_key] = (memo_now, memo_df)
-                    except Exception:
+                    except COMMON_EXC:
                         pass
                     return memo_df
 
@@ -8201,11 +8201,11 @@ class DataFetcher:
                     if memo_df is not None and _memo_fresh(ts_value):
                         try:
                             memo_store[canonical_lookup] = (memo_now, memo_df)
-                        except Exception:
+                        except COMMON_EXC:
                             pass
                         try:
                             memo_store[legacy_lookup] = (memo_now, memo_df)
-                        except Exception:
+                        except COMMON_EXC:
                             pass
                         return memo_df
 
@@ -8359,7 +8359,7 @@ class DataFetcher:
                 return _DAILY_FETCH_MEMO[key]  # type: ignore[index]
             except KeyError:
                 return None
-            except Exception:
+            except COMMON_EXC:
                 pass
 
             getter = getattr(_DAILY_FETCH_MEMO, "get", None)
@@ -8368,7 +8368,7 @@ class DataFetcher:
                     return getter(key)
                 except (TypeError, KeyError, AttributeError, AssertionError):
                     return None
-                except Exception:
+                except COMMON_EXC:
                     return None
             return None
 
@@ -8392,9 +8392,9 @@ class DataFetcher:
                     try:
                         popper(key)
                         return
-                    except Exception:
+                    except COMMON_EXC:
                         pass
-                except Exception:
+                except COMMON_EXC:
                     return
             deleter = getattr(_DAILY_FETCH_MEMO, "__delitem__", None)
             if callable(deleter):
@@ -8402,7 +8402,7 @@ class DataFetcher:
                     deleter(key)
                 except KeyError:
                     pass
-                except Exception:
+                except COMMON_EXC:
                     pass
 
         memo_ready = False
@@ -8841,7 +8841,7 @@ class DataFetcher:
                 fallback_result = _apply_fallback_entry()
                 if fallback_result is not None:
                     return fallback_result
-            except Exception:
+            except COMMON_EXC:
                 direct_df = None
 
         df: pd.DataFrame | None
@@ -8912,7 +8912,7 @@ class DataFetcher:
 
         try:
             df = self._prepare_daily_dataframe(df, symbol)
-        except Exception as exc:  # pragma: no cover - defensive normalization
+        except COMMON_EXC as exc:  # pragma: no cover - defensive normalization
             logger.warning(
                 "DAILY_FETCH_PREPARE_FAILED",
                 extra={"symbol": symbol, "error": str(exc)},
@@ -9169,7 +9169,7 @@ class DataFetcher:
                         continue
                     try:
                         candidate_lc = str(candidate).strip().lower()
-                    except Exception:
+                    except COMMON_EXC:
                         continue
                     if not candidate_lc or candidate_lc in normalized_candidates:
                         continue
@@ -9378,7 +9378,7 @@ class DataFetcher:
                     try:
                         frame = frame.copy()
                         frame.index = idx.rename("timestamp")
-                    except Exception:  # pragma: no cover - defensive normalization
+                    except COMMON_EXC:  # pragma: no cover - defensive normalization
                         return frame
                 return frame
 
@@ -9386,7 +9386,7 @@ class DataFetcher:
                 try:
                     frame = frame.copy()
                     frame.index = idx.rename(None)
-                except Exception:  # pragma: no cover - defensive normalization
+                except COMMON_EXC:  # pragma: no cover - defensive normalization
                     return frame
 
             return frame
@@ -9401,7 +9401,7 @@ class DataFetcher:
             try:
                 df = df.copy()
                 df.index = df.index.rename("timestamp")
-            except Exception:  # pragma: no cover - defensive normalization
+            except COMMON_EXC:  # pragma: no cover - defensive normalization
                 pass
 
         with cache_lock:
@@ -9591,7 +9591,7 @@ def _try_sip_recovery(
             start=start,
             end=end,
         )
-    except Exception as exc:  # pragma: no cover - defensive
+    except COMMON_EXC as exc:  # pragma: no cover - defensive
         logger.warning(
             "COVERAGE_RECOVERY_FAILED",
             extra={
@@ -10096,7 +10096,7 @@ class TradeLogger:
                 )
                 try:
                     trigger_meta_learning_conversion(trade_record)
-                except Exception as exc:  # noqa: BLE001
+                except COMMON_EXC as exc:  # noqa: BLE001
                     logger.exception(
                         "METALEARN_CONVERSION_FAILED",
                         exc_info=exc,
@@ -11112,7 +11112,7 @@ logger = get_logger(__name__)
 if os.getenv("AI_TRADING_BOOTSTRAP_TRADE_LOG", "1") != "0":
     try:
         get_trade_logger()
-    except Exception as exc:  # pragma: no cover - defensive bootstrap
+    except COMMON_EXC as exc:  # pragma: no cover - defensive bootstrap
         logger.debug(
             "TRADE_LOG_BOOTSTRAP_SKIPPED",
             extra={"detail": str(exc)},
@@ -11464,7 +11464,7 @@ def _emit_test_capture(message: str, level: int = logging.WARNING) -> None:
         if handler.__class__.__name__ == "LogCaptureHandler":
             try:
                 handler.emit(record)
-            except Exception:
+            except COMMON_EXC:
                 pass
 # IMPORTANT: do not initialize Alpaca clients at import time.
 # They will be initialized on-demand by the functions that need them.
@@ -12713,7 +12713,7 @@ def check_pdt_rule(runtime) -> bool:
     if runtime_api is None:
         try:
             initialized = _initialize_alpaca_clients()
-        except Exception as exc:  # pragma: no cover - defensive guard
+        except COMMON_EXC as exc:  # pragma: no cover - defensive guard
             _log_pdt_skip()
             logger.debug("PDT_INIT_FAILED", extra={"cause": exc.__class__.__name__})
             return False
@@ -13470,7 +13470,7 @@ def scaled_atr_stop(
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     try:
         default_factor = float(getattr(get_settings(), "default_liquidity_factor", 1.0))
-    except Exception:
+    except COMMON_EXC:
         default_factor = 1.0
     if default_factor <= 0:
         default_factor = 0.1
@@ -13500,7 +13500,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
             avg_vol = 0.0
         try:
             last_row = df.iloc[-1]
-        except Exception:
+        except COMMON_EXC:
             last_row = None
         if last_row is not None:
             for field in ("high", "low", "close", "volume"):
@@ -13510,7 +13510,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
                 if value is None:
                     try:
                         value = last_row[field]
-                    except Exception:
+                    except COMMON_EXC:
                         value = None
                 try:
                     if value is not None:
@@ -13522,7 +13522,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         try:
             ctx_bars = getattr(ctx, "last_bar_by_symbol", {})
             last_bar = ctx_bars.get(symbol) if isinstance(ctx_bars, dict) else None
-        except Exception:
+        except COMMON_EXC:
             last_bar = None
         if last_bar is not None:
             for field in ("high", "low", "close", "volume"):
@@ -13540,7 +13540,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         annotations = {}
         try:
             setattr(ctx, "liquidity_annotations", annotations)
-        except Exception:
+        except COMMON_EXC:
             pass
 
     data_client = getattr(ctx, "data_client", None)
@@ -13564,7 +13564,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
             except APIError as exc:
                 fallback_reason = "api_error"
                 fallback_error = str(exc)
-            except Exception as exc:
+            except COMMON_EXC as exc:
                 fallback_reason = exc.__class__.__name__
                 fallback_error = str(exc)
             else:
@@ -14167,7 +14167,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             return
         try:
             setattr(target, name, value)
-        except Exception:
+        except COMMON_EXC:
             pass
 
     def _coerce_enum(enum_cls: Any, value: Any) -> Any:
@@ -14177,10 +14177,10 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             return value
         try:
             return enum_cls(value)
-        except Exception:
+        except COMMON_EXC:
             try:
                 return getattr(enum_cls, str(value).upper())
-            except Exception:
+            except COMMON_EXC:
                 return value
 
     def _build_order_request_from_args(args: dict[str, Any]):
@@ -14285,14 +14285,14 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             from ai_trading.core.order_ids import generate_client_order_id as _gen_id
 
             client_order_id = _gen_id(prefix)
-        except Exception:
+        except COMMON_EXC:
             client_order_id = None
         if not client_order_id:
             client_order_id = _stable_client_order_id(prefix)
         order_args["client_order_id"] = client_order_id
         try:
             setattr(req, "client_order_id", client_order_id)
-        except Exception:
+        except COMMON_EXC:
             pass
         ids_attr = getattr(api, "client_order_ids", None)
         appended = False
@@ -14302,14 +14302,14 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         elif hasattr(ids_attr, "append"):
             try:
                 ids_attr.append(client_order_id)  # type: ignore[attr-defined]
-            except Exception:
+            except COMMON_EXC:
                 pass
             else:
                 appended = True
         elif hasattr(ids_attr, "add"):
             try:
                 ids_attr.add(client_order_id)  # type: ignore[attr-defined]
-            except Exception:
+            except COMMON_EXC:
                 pass
             else:
                 appended = True
@@ -14325,7 +14325,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 else:
                     ids_list = [client_order_id]
                 setattr(api, "client_order_ids", ids_list)
-            except Exception:
+            except COMMON_EXC:
                 pass
 
     if not skip_market_check and not market_is_open():
@@ -14465,7 +14465,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     return status_value.lower()
                 try:
                     return str(status_value).lower()
-                except Exception:
+                except COMMON_EXC:
                     return ""
 
             pending_new_attr = getattr(OrderStatus, "PENDING_NEW", "pending_new")
@@ -14480,14 +14480,14 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
                 try:
                     next_order = api.get_order(last_order.id)
-                except Exception:
+                except COMMON_EXC:
                     break
                 if next_order is None:
                     break
                 if getattr(next_order, "symbol", None) in (None, "") and getattr(last_order, "symbol", None):
                     try:
                         setattr(next_order, "symbol", getattr(last_order, "symbol", ""))
-                    except Exception:
+                    except COMMON_EXC:
                         pass
                 last_order = next_order
             order = last_order
@@ -15107,7 +15107,7 @@ def _record_price_reliability(
         if reason_val not in (None, ""):
             try:
                 reason = str(reason_val)
-            except Exception:
+            except COMMON_EXC:
                 reason = None
         coverage_meta = attrs.get("_coverage_meta")
         if isinstance(coverage_meta, dict):
@@ -15240,7 +15240,7 @@ def _fetch_feature_data(
             validation_df = validation_df.copy()
             validation_df.insert(0, "timestamp", validation_df.index)
             timestamp_added = True
-        except Exception as exc:  # pragma: no cover - defensive
+        except COMMON_EXC as exc:  # pragma: no cover - defensive
             logger.debug("failed to add timestamp column: %s", exc)
             validation_df = raw_df
 
@@ -15546,7 +15546,7 @@ def _price_reliability(state: BotState, symbol: str) -> tuple[bool, str | None]:
             if reason_val not in (None, ""):
                 try:
                     reason = str(reason_val)
-                except Exception:
+                except COMMON_EXC:
                     reason = None
                 else:
                     return reliable, reason
@@ -15678,11 +15678,11 @@ def _fallback_quote_newer_than_last_close(
         return True
     try:
         now_ts = pd.Timestamp(now)
-    except Exception:
+    except COMMON_EXC:
         return True
     try:
         session = last_market_session(now_ts)
-    except Exception:
+    except COMMON_EXC:
         session = None
     if session is None or getattr(session, "close", None) is None:
         return True
@@ -15724,7 +15724,7 @@ def _coerce_quote_timestamp(value: Any) -> datetime | None:
             return None
     try:
         dt_val = ensure_datetime(value)
-    except Exception:
+    except COMMON_EXC:
         return None
     if dt_val.tzinfo is None:
         dt_val = dt_val.replace(tzinfo=UTC)
@@ -15792,7 +15792,7 @@ def _check_fallback_quote_age(
     try:
         req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quote = data_client.get_stock_latest_quote(req)
-    except Exception as exc:  # noqa: BLE001 - defensive around SDK variations
+    except COMMON_EXC as exc:  # noqa: BLE001 - defensive around SDK variations
         logger.warning(
             "FALLBACK_QUOTE_CHECK_FAILED",
             extra={"symbol": symbol, "cause": exc.__class__.__name__, "detail": str(exc)},
@@ -16003,7 +16003,7 @@ def _enter_long(
     if callable(primary_provider_fn):
         try:
             provider_enabled = bool(primary_provider_fn())
-        except Exception:  # pragma: no cover - defensive guard
+        except COMMON_EXC:  # pragma: no cover - defensive guard
             provider_enabled = True
     if not provider_enabled:
         _mark_primary_provider_fallback(
@@ -16147,7 +16147,7 @@ def _enter_long(
     fallback_error = annotations.get("fallback_quote_error")
     try:
         fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", "0")
-    except Exception:
+    except COMMON_EXC:
         fallback_env_raw = "0"
     fallback_env_allowed = str(fallback_env_raw or "").strip().lower() in {
         "1",
@@ -16161,7 +16161,7 @@ def _enter_long(
     if isinstance(fallback_age, (int, float, np.floating)):
         try:
             fallback_ts = now_utc - timedelta(seconds=float(fallback_age))
-        except Exception:
+        except COMMON_EXC:
             fallback_ts = None
     fallback_checked = fallback_ok is not None or fallback_error is not None or fallback_ts is not None
     fallback_after_last_close = False
@@ -16561,7 +16561,7 @@ def _enter_short(
     if callable(primary_provider_fn):
         try:
             provider_enabled = bool(primary_provider_fn())
-        except Exception:  # pragma: no cover - defensive guard
+        except COMMON_EXC:  # pragma: no cover - defensive guard
             provider_enabled = True
     if not provider_enabled:
         _mark_primary_provider_fallback(
@@ -16688,7 +16688,7 @@ def _enter_short(
     fallback_ok = annotations.get("fallback_quote_ok")
     try:
         fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", "0")
-    except Exception:
+    except COMMON_EXC:
         fallback_env_raw = "0"
     fallback_env_allowed = str(fallback_env_raw or "").strip().lower() in {
         "1",
@@ -16702,7 +16702,7 @@ def _enter_short(
     if isinstance(fallback_age, (int, float, np.floating)):
         try:
             fallback_ts = now_utc - timedelta(seconds=float(fallback_age))
-        except Exception:
+        except COMMON_EXC:
             fallback_ts = None
     fallback_checked = (
         fallback_ok is not None or fallback_error is not None or fallback_ts is not None
@@ -17093,7 +17093,7 @@ def _evaluate_trade_signal(
         raise ValueError("Invalid or empty signal")
     try:
         hold_eps = float(get_env("AI_TRADING_SIGNAL_HOLD_EPS", "0.01", cast=float))
-    except Exception:
+    except COMMON_EXC:
         hold_eps = 1e-2
     if not np.isfinite(final_score) or abs(final_score) <= hold_eps:
         final_score = 0.0
@@ -17148,7 +17148,7 @@ def trade_logic(
     if callable(primary_provider_fn):
         try:
             provider_enabled = bool(primary_provider_fn())
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except COMMON_EXC as exc:  # pragma: no cover - defensive logging
             logger.warning(
                 "PRIMARY_PROVIDER_STATUS_ERROR",
                 extra={"symbol": symbol, "detail": str(exc)},
@@ -18793,7 +18793,7 @@ _SCREEN_CACHE: dict[str, float] = {}
 def _safe_env_int(key: str, default: int) -> int:
     try:
         value = int(get_env(key, str(default), cast=int))
-    except Exception:
+    except COMMON_EXC:
         return default
     return value if value > 0 else default
 
@@ -19048,17 +19048,17 @@ def _screen_schema_marker(frame: Any) -> str | None:
                 iso = getattr(last_value, "isoformat", None)
                 if callable(iso):
                     return iso()
-            except Exception:
+            except COMMON_EXC:
                 pass
             try:
                 return str(last_value)
-            except Exception:
+            except COMMON_EXC:
                 return None
-    except Exception:
+    except COMMON_EXC:
         pass
     try:
         attrs = getattr(frame, "attrs", None)
-    except Exception:
+    except COMMON_EXC:
         attrs = None
     if isinstance(attrs, Mapping):
         raw_cols = attrs.get("raw_payload_columns")
@@ -19191,7 +19191,7 @@ def screen_universe(
                     if callable(minute_loader) and not _screen_schema_recent(sym, "1Min", "alpaca_iex"):
                         try:
                             minute_frame = minute_loader(runtime, sym, lookback_minutes=5)
-                        except Exception as exc:  # pragma: no cover - warm-up best effort
+                        except COMMON_EXC as exc:  # pragma: no cover - warm-up best effort
                             _update_screen_schema_cache(sym, "1Min", "alpaca_iex", None)
                             logger.debug(
                                 "MINUTE_SCHEMA_WARMUP_FAILED",
@@ -19208,7 +19208,7 @@ def screen_universe(
                 if missing_symbols:
                     try:
                         backup_frames = fetch_daily_backup(missing_symbols)
-                    except Exception as exc:  # pragma: no cover - network surface
+                    except COMMON_EXC as exc:  # pragma: no cover - network surface
                         logger.debug(
                             "YF_BACKUP_BATCH_FAILED",
                             extra={"count": len(missing_symbols), "error": str(exc)},
@@ -20031,7 +20031,7 @@ def _resolve_exec_price(
     if minute_df is not None and len(minute_df):
         try:
             price = float(minute_df["close"].iloc[-1])
-        except Exception:
+        except COMMON_EXC:
             price = 0.0
         if pd_mod is not None:
             try:
@@ -20043,7 +20043,7 @@ def _resolve_exec_price(
                     pd_mod.Timestamp.utcnow().tz_localize("UTC")
                     - last_ts.tz_convert("UTC")
                 ).total_seconds()
-            except Exception:  # pragma: no cover - defensive
+            except COMMON_EXC:  # pragma: no cover - defensive
                 age = 0.0
             if age > stale_sec_limit:
                 logger.warning(
@@ -20070,11 +20070,11 @@ def _quote_to_mid(quote: Any | None) -> tuple[float | None, float, float]:
         return None, 0.0, 0.0
     try:
         bid = float(getattr(quote, "bid_price", 0) or 0)
-    except Exception:
+    except COMMON_EXC:
         bid = 0.0
     try:
         ask = float(getattr(quote, "ask_price", 0) or 0)
-    except Exception:
+    except COMMON_EXC:
         ask = 0.0
     if bid > 0 and ask > 0:
         return (bid + ask) / 2.0, bid, ask
@@ -20139,7 +20139,7 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
         # mimic the production response shape as ``quote.quote`` so walk the
         # nesting chain until a leaf object is reached.
         return _unwrap_quote_payload(quote)
-    except Exception as exc:  # pragma: no cover - best effort logging
+    except COMMON_EXC as exc:  # pragma: no cover - best effort logging
         logger.debug(
             "QUOTE_FETCH_FAILED",
             extra={
@@ -20199,7 +20199,7 @@ def _resolve_limit_price(
         for key in ("PRICE_SLIPPAGE_BPS", "SLIPPAGE_BPS"):
             try:
                 value = get_env(key, None, cast=float)
-            except Exception:
+            except COMMON_EXC:
                 continue
             if value is not None:
                 try:
@@ -20524,7 +20524,7 @@ def run_multi_strategy(ctx) -> None:
         try:
             quote_price = get_latest_price(sig.symbol)
             quote_source = get_price_source(sig.symbol)
-        except Exception:
+        except COMMON_EXC:
             quote_price = None
             quote_source = None
 
@@ -20570,7 +20570,7 @@ def run_multi_strategy(ctx) -> None:
                     for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
                         try:
                             value = get_env(key, None, cast=float)
-                        except Exception:
+                        except COMMON_EXC:
                             continue
                         if value is not None:
                             try:
@@ -20690,11 +20690,11 @@ def run_multi_strategy(ctx) -> None:
             # Wire ATR-based bracket targets when available on context
             try:
                 sl = getattr(getattr(ctx, 'stop_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
-            except Exception:
+            except COMMON_EXC:
                 sl = None
             try:
                 tp = getattr(getattr(ctx, 'take_profit_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
-            except Exception:
+            except COMMON_EXC:
                 tp = None
             if isinstance(sl, (int, float)) and sl > 0:
                 order_kwargs['stop_loss'] = float(sl)
@@ -20747,15 +20747,15 @@ def run_multi_strategy(ctx) -> None:
             from dataclasses import replace
 
             filled_signal = replace(sig, weight=filled_weight)
-        except Exception:
+        except COMMON_EXC:
             try:
                 filled_signal = sig.__class__(**{**getattr(sig, "__dict__", {}), "weight": filled_weight})
-            except Exception:
+            except COMMON_EXC:
                 continue
         ctx.risk_engine.register_fill(filled_signal)
         try:
             ctx.execution_engine.mark_fill_reported(str(result), int(filled_qty))
-        except Exception:
+        except COMMON_EXC:
             logger.debug("MARK_FILL_REPORTED_FAILED", exc_info=True)
 
     # At the end of the strategy cycle, trigger trailing-stop checks if an ExecutionEngine is present.
@@ -21181,10 +21181,10 @@ def _process_symbols(
             if close_series is not None:
                 try:
                     non_null_count = int(close_series.count())
-                except Exception:  # pragma: no cover - defensive fallback
+                except COMMON_EXC:  # pragma: no cover - defensive fallback
                     try:
                         non_null_count = int(close_series.dropna().shape[0])  # type: ignore[attr-defined]
-                    except Exception:
+                    except COMMON_EXC:
                         non_null_count = 0
                 if non_null_count == 0:
                     _halt("empty_frame")
@@ -21252,7 +21252,7 @@ def _process_symbols(
             continue
         try:
             f.result()
-        except Exception:
+        except COMMON_EXC:
             logger.exception("PROCESS_SYMBOL_ERROR | skipping failed symbol")
 
     with data_stats_lock:
@@ -21505,7 +21505,7 @@ def _ensure_execution_engine(runtime) -> None:
                     return self._delegate_instance
                 try:
                     self._delegate_instance = self._delegate_cls(self.ctx)
-                except Exception as exc:  # pragma: no cover - delegate optional in tests
+                except COMMON_EXC as exc:  # pragma: no cover - delegate optional in tests
                     self._delegate_failed = True
                     logger.debug(
                         "EXECUTION_ENGINE_STUB_DELEGATE_FAILED",
@@ -21844,7 +21844,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
 
     try:
         cancel_all_open_orders(runtime)
-    except Exception as exc:  # pragma: no cover - network/API failure
+    except COMMON_EXC as exc:  # pragma: no cover - network/API failure
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
         logger.warning(
             "PENDING_ORDERS_CLEANUP_FAILED",
@@ -23485,7 +23485,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     if callable(primary_provider_fn):
         try:
             provider_enabled = bool(primary_provider_fn())
-        except Exception:  # pragma: no cover - defensive guard
+        except COMMON_EXC:  # pragma: no cover - defensive guard
             provider_enabled = True
         if not provider_enabled:
             provider_disabled = True

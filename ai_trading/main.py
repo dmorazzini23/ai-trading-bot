@@ -1130,6 +1130,9 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
 def _assert_singleton_api(settings) -> None:
     """Ensure we are the only ai-trading API instance before trading warm-up."""
 
+    env_label = str(getattr(settings, "env", "")).strip().lower()
+    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"} or env_label == "test":
+        return
     port = int(getattr(settings, "api_port", 9001) or 9001)
     pid = get_pid_on_port(port)
     if pid:

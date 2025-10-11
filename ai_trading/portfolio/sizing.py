@@ -59,16 +59,16 @@ def _fetch_equity(ctx, *, force_refresh: bool = False, ttl_seconds: int = 3600) 
         try:  # set paper flag if available
             base = getattr(ctx, "alpaca_base_url", None) or getattr(api, "base_url", "")
             api.paper = "paper" in str(base).lower()
-        except Exception:  # noqa: BLE001 - best effort only
+        except AttributeError:  # best effort only
             pass
         try:  # reset global disabled alert
             import ai_trading.data.fetch as _df
 
             _df._ALPACA_DISABLED_ALERTED = False
-        except Exception:  # pragma: no cover - defensive
+        except ImportError:  # pragma: no cover - defensive
             pass
         return eq
-    except Exception:
+    except (AttributeError, RequestException, TimeoutError, TypeError, ValueError):
         _equity_cache.equity = 0.0
         _equity_cache.ts = now
         logger_once.warning("EQUITY_MISSING", key="equity_missing")
