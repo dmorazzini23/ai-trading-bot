@@ -3222,24 +3222,33 @@ if not os.getenv("PYTEST_RUNNING"):
         ensure_columns,
     )
 else:
-    # AI-AGENT-REF: mock feature functions for test environments to avoid slow imports
-    def compute_macd(*args, **kwargs):
-        return [0.0] * 20  # Mock MACD values
+    from ai_trading.features.indicators import (
+        compute_macd as _delegate_compute_macd,
+        compute_atr as _delegate_compute_atr,
+        compute_sma as _delegate_compute_sma,
+        compute_vwap as _delegate_compute_vwap,
+        compute_macds as _delegate_compute_macds,
+        ensure_columns as _delegate_ensure_columns,
+    )
 
-    def compute_atr(*args, **kwargs):
-        return [1.0] * 20  # Mock ATR values
+    # AI-AGENT-REF: test environment delegates keep pandas DataFrame pipeline intact
+    def compute_macd(df, *args, **kwargs):
+        return _delegate_compute_macd(df, *args, **kwargs)
 
-    def compute_sma(*args, **kwargs):
-        return [1.0] * 20  # Mock SMA values
+    def compute_atr(df, *args, **kwargs):
+        return _delegate_compute_atr(df, *args, **kwargs)
 
-    def compute_vwap(*args, **kwargs):
-        return [100.0] * 20  # Mock VWAP values
+    def compute_sma(df, *args, **kwargs):
+        return _delegate_compute_sma(df, *args, **kwargs)
 
-    def compute_macds(*args, **kwargs):
-        return [0.0] * 20  # Mock MACD signal values
+    def compute_vwap(df, *args, **kwargs):
+        return _delegate_compute_vwap(df, *args, **kwargs)
 
-    def ensure_columns(*args, **kwargs):
-        return args[0] if args else {}  # Mock column ensurer
+    def compute_macds(df, *args, **kwargs):
+        return _delegate_compute_macds(df, *args, **kwargs)
+
+    def ensure_columns(df, required, symbol):
+        return _delegate_ensure_columns(df, required, symbol)
 
 
 warnings.filterwarnings(
@@ -8204,7 +8213,10 @@ class DataFetcher:
             direct_entries: list[Any] = []
             for candidate_key in (memo_key, legacy_memo_key):
                 try:
-                    direct_entries.append(memo_store.get(candidate_key))
+                    if candidate_key in memo_store:
+                        direct_entries.append(memo_store[candidate_key])
+                    else:
+                        direct_entries.append(None)
                 except COMMON_EXC:
                     direct_entries.append(None)
             effective_ttl = memo_ttl if memo_ttl > 0 else 300.0
