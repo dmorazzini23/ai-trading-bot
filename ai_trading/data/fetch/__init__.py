@@ -120,6 +120,39 @@ from .fallback_concurrency import fallback_slot
 logger = get_logger(__name__)
 
 
+def _log_fallback_skip(
+    feed_name: str,
+    *,
+    symbol: str,
+    timeframe: str,
+    reason: str,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    """Emit a structured log when an Alpaca fallback is intentionally skipped."""
+
+    normalized_feed = (feed_name or "").strip().lower()
+    provider_name = f"alpaca_{normalized_feed}" if normalized_feed else "alpaca"
+    payload: dict[str, Any] = {
+        "provider": provider_name,
+        "feed": normalized_feed or None,
+        "timeframe": timeframe,
+        "symbol": symbol,
+        "reason": reason,
+    }
+    if details:
+        try:
+            payload.update(dict(details))
+        except Exception:
+            pass
+    try:
+        logger.info(
+            "DATA_SOURCE_FALLBACK_SKIPPED",
+            extra=_norm_extra(payload),
+        )
+    except Exception:
+        pass
+
+
 def _sip_allowed() -> bool:
     """Return ``True`` when SIP access is permitted for the current process."""
 
@@ -4923,6 +4956,27 @@ def _fetch_bars(
         tags = _tags(provider=resolved_provider, feed=feed_tag)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         _state["last_fallback_feed"] = feed_tag
+        from_provider_name = from_provider or f"alpaca_{_feed}"
+        attempt_payload = {
+            "provider": resolved_provider,
+            "from_provider": from_provider_name,
+            "feed": normalized_provider or feed_tag,
+            "timeframe": _interval,
+            "symbol": symbol,
+            "interval": interval_code,
+        }
+        try:
+            attempt_payload["start"] = _start.isoformat()
+            attempt_payload["end"] = _end.isoformat()
+        except Exception:
+            pass
+        try:
+            logger.info(
+                "DATA_SOURCE_FALLBACK_ATTEMPT",
+                extra=_norm_extra(attempt_payload),
+            )
+        except Exception:
+            pass
         fallback_df = _safe_backup_get_bars(symbol, _start, _end, interval=interval_code)
         annotated_df = _annotate_df_source(
             fallback_df,
@@ -4971,6 +5025,27 @@ def _fetch_bars(
                     from_feed = str(_feed).strip().lower() or None
                 except Exception:
                     from_feed = None
+            success_payload = {
+                "provider": resolved_provider,
+                "from_provider": from_provider_name,
+                "from_feed": from_feed,
+                "feed": normalized_provider or feed_tag,
+                "timeframe": _interval,
+                "symbol": symbol,
+            }
+            try:
+                success_payload["start"] = _start.isoformat()
+                success_payload["end"] = _end.isoformat()
+            except Exception:
+                pass
+            try:
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_SUCCESS",
+                    extra=_norm_extra(success_payload),
+                )
+            except Exception:
+                pass
+            _state.pop("empty_attempts", None)
             if from_feed and to_feed and to_feed != from_feed:
                 _record_feed_switch(symbol, _interval, from_feed, to_feed)
         _mark_fallback(
@@ -4978,7 +5053,7 @@ def _fetch_bars(
             _interval,
             _start,
             _end,
-            from_provider=from_provider or f"alpaca_{_feed}",
+            from_provider=from_provider_name,
             fallback_df=annotated_df,
             resolved_provider=resolved_provider,
             resolved_feed=normalized_provider or None,
@@ -5284,6 +5359,7 @@ def _fetch_bars(
         sip_intraday = _intraday_feed_prefers_sip()
 
         call_attempts = _state.setdefault("fallback_feeds_attempted", set())
+
         skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
         alternate_history = _state.setdefault("alternate_feed_attempts", set())
         alternate_history.add(_feed)
@@ -5340,10 +5416,27 @@ def _fetch_bars(
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             _state["last_fallback_feed"] = fb_feed
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-            logger.info(
-                "DATA_SOURCE_FALLBACK_ATTEMPT",
-                extra={"provider": "alpaca", "fallback": payload},
-            )
+            attempt_extra = {
+                "provider": to_provider_name,
+                "from_provider": from_provider_name,
+                "from_feed": from_feed,
+                "feed": fb_feed,
+                "timeframe": _interval,
+                "symbol": symbol,
+                "fallback": payload,
+            }
+            try:
+                attempt_extra["start"] = fb_start.isoformat()
+                attempt_extra["end"] = fb_end.isoformat()
+            except Exception:
+                pass
+            try:
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra=_norm_extra(attempt_extra),
+                )
+            except Exception:
+                pass
             prev_defer = _state.get("defer_success_metric")
             _state["defer_success_metric"] = True
             prev_allow_primary = _state.get("allow_no_session_primary", False)
@@ -5370,6 +5463,27 @@ def _fetch_bars(
                 _record_fallback_success_metric(tags)
                 _record_success_metric(tags, prefer_fallback=True)
                 _state["skip_backup_after_fallback"] = True
+                success_payload = {
+                    "provider": to_provider_name,
+                    "from_provider": from_provider_name,
+                    "from_feed": from_feed,
+                    "feed": fb_feed,
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                }
+                try:
+                    success_payload["start"] = fb_start.isoformat()
+                    success_payload["end"] = fb_end.isoformat()
+                except Exception:
+                    pass
+                try:
+                    logger.info(
+                        "DATA_SOURCE_FALLBACK_SUCCESS",
+                        extra=_norm_extra(success_payload),
+                    )
+                except Exception:
+                    pass
+                _state.pop("empty_attempts", None)
                 if from_feed != fb_feed:
                     try:
                         cooldown_seconds = _provider_switch_cooldown_seconds()
@@ -5982,14 +6096,21 @@ def _fetch_bars(
                     _feed == "iex"
                     and _sip_configured()
                     and not _is_sip_unauthorized()
-                    and "sip" not in call_attempts
                 ):
-                    slots_remaining = _fallback_slots_remaining()
-                    if slots_remaining is None or slots_remaining > 0:
-                        call_attempts.add("sip")
-                        sip_df = _attempt_fallback((_interval, "sip", _start, _end))
-                        if sip_df is not None and not getattr(sip_df, "empty", True):
-                            return sip_df
+                    if "sip" in call_attempts:
+                        _log_fallback_skip(
+                            "sip",
+                            symbol=symbol,
+                            timeframe=_interval,
+                            reason="already_attempted",
+                        )
+                    else:
+                        slots_remaining = _fallback_slots_remaining()
+                        if slots_remaining is None or slots_remaining > 0:
+                            call_attempts.add("sip")
+                            sip_df = _attempt_fallback((_interval, "sip", _start, _end))
+                            if sip_df is not None and not getattr(sip_df, "empty", True):
+                                return sip_df
                 if _ENABLE_HTTP_FALLBACK:
                     interval_map = {
                         "1Min": "1m",
@@ -6114,6 +6235,50 @@ def _fetch_bars(
                         fb_candidate = (_interval, "sip", _start, _end)
                     elif _feed == "sip":
                         fb_candidate = (_interval, "iex", _start, _end)
+                market_open = True
+                if fb_candidate:
+                    _, fb_feed, _, _ = fb_candidate
+                    providers_attempted = _state.get("providers", [])
+                    if fb_feed in call_attempts or fb_feed in providers_attempted:
+                        _log_fallback_skip(
+                            fb_feed,
+                            symbol=symbol,
+                            timeframe=_interval,
+                            reason="already_attempted",
+                            details={"providers_attempted": list(providers_attempted)},
+                        )
+                        fb_candidate = None
+                    else:
+                        if outside_market_hours and not _state.get("allow_no_session_primary", False):
+                            try:
+                                market_open = is_market_open()
+                            except Exception:
+                                market_open = False
+                            if not market_open:
+                                try:
+                                    logger.info(
+                                        "FALLBACK_SKIPPED_MARKET_CLOSED",
+                                        extra=_norm_extra(
+                                            {
+                                                "provider": "alpaca",
+                                                "feed": fb_feed,
+                                                "timeframe": _interval,
+                                                "symbol": symbol,
+                                            }
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
+                                _log_fallback_skip(
+                                    fb_feed,
+                                    symbol=symbol,
+                                    timeframe=_interval,
+                                    reason="market_closed",
+                                )
+                                fb_candidate = None
+                        if fb_candidate:
+                            call_attempts.add(fb_feed)
+                            _register_provider_attempt(fb_feed)
                 if fb_candidate:
                     result = _attempt_fallback(fb_candidate, skip_check=True)
                     if result is not None and not getattr(result, "empty", True):
@@ -6189,19 +6354,26 @@ def _fetch_bars(
                     base_feed == "iex"
                     and _sip_configured()
                     and not _is_sip_unauthorized()
-                    and "sip" not in call_attempts
                 ):
-                    slots_remaining = _fallback_slots_remaining()
-                    if slots_remaining is None or slots_remaining > 0:
-                        call_attempts.add("sip")
-                        sip_result = _attempt_fallback(
-                            (base_interval, "sip", base_start, base_end)
+                    if "sip" in call_attempts:
+                        _log_fallback_skip(
+                            "sip",
+                            symbol=symbol,
+                            timeframe=_interval,
+                            reason="already_attempted",
                         )
-                        if sip_result is not None and not getattr(
-                            sip_result, "empty", True
-                        ):
-                            _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                            return sip_result
+                    else:
+                        slots_remaining = _fallback_slots_remaining()
+                        if slots_remaining is None or slots_remaining > 0:
+                            call_attempts.add("sip")
+                            sip_result = _attempt_fallback(
+                                (base_interval, "sip", base_start, base_end)
+                            )
+                            if sip_result is not None and not getattr(
+                                sip_result, "empty", True
+                            ):
+                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                                return sip_result
                 fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
                 if not _state.get("window_has_session", True):
                     filtered: list[str] = []
@@ -6223,9 +6395,22 @@ def _fetch_bars(
                         fallback_candidates.insert(0, "sip")
                 for alt_feed in fallback_candidates:
                     if alt_feed in call_attempts:
+                        _log_fallback_skip(
+                            alt_feed,
+                            symbol=symbol,
+                            timeframe=_interval,
+                            reason="already_attempted",
+                        )
                         continue
                     slots = _fallback_slots_remaining()
                     if slots is not None and slots <= 0:
+                        _log_fallback_skip(
+                            alt_feed,
+                            symbol=symbol,
+                            timeframe=_interval,
+                            reason="slots_exhausted",
+                            details={"slots_remaining": slots},
+                        )
                         break
                     fallback_attempted = True
                     call_attempts.add(alt_feed)
@@ -6277,10 +6462,23 @@ def _fetch_bars(
             if fallback:
                 fb_interval, fb_feed, fb_start, fb_end = fallback
                 if fb_feed in call_attempts:
+                    _log_fallback_skip(
+                        fb_feed,
+                        symbol=symbol,
+                        timeframe=_interval,
+                        reason="already_attempted",
+                    )
                     fallback = None
                 else:
                     slots = _fallback_slots_remaining()
                     if slots is not None and slots <= 0:
+                        _log_fallback_skip(
+                            fb_feed,
+                            symbol=symbol,
+                            timeframe=_interval,
+                            reason="slots_exhausted",
+                            details={"slots_remaining": slots},
+                        )
                         fallback = None
             if fallback:
                 fb_interval, fb_feed, fb_start, fb_end = fallback
@@ -6600,19 +6798,26 @@ def _fetch_bars(
                             _feed == "iex"
                             and _sip_configured()
                             and not _is_sip_unauthorized()
-                            and "sip" not in call_attempts
                         ):
-                            slots_remaining = _fallback_slots_remaining()
-                            if slots_remaining is None or slots_remaining > 0:
-                                call_attempts.add("sip")
-                                sip_df = _attempt_fallback(
-                                    (_interval, "sip", _start, _end)
+                            if "sip" in call_attempts:
+                                _log_fallback_skip(
+                                    "sip",
+                                    symbol=symbol,
+                                    timeframe=_interval,
+                                    reason="already_attempted",
                                 )
-                                if sip_df is not None:
-                                    if not getattr(sip_df, "empty", True):
-                                        return sip_df
-                                    if no_session_window:
-                                        return sip_df
+                            else:
+                                slots_remaining = _fallback_slots_remaining()
+                                if slots_remaining is None or slots_remaining > 0:
+                                    call_attempts.add("sip")
+                                    sip_df = _attempt_fallback(
+                                        (_interval, "sip", _start, _end)
+                                    )
+                                    if sip_df is not None:
+                                        if not getattr(sip_df, "empty", True):
+                                            return sip_df
+                                        if no_session_window:
+                                            return sip_df
                         if _ENABLE_HTTP_FALLBACK and not no_session_window:
                             interval_map = {
                                 "1Min": "1m",
