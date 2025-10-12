@@ -62,16 +62,9 @@ def safe_subprocess_run(
     try:
         completed = subprocess.run(argv, **popen_args)
     except subprocess.TimeoutExpired as exc:
-        stdout_text = _normalize_stream(getattr(exc, "output", None))
-        stderr_text = _normalize_stream(getattr(exc, "stderr", None))
         logger.warning(
-            "SAFE_SUBPROCESS_TIMEOUT",
-            extra={
-                "cmd": argv,
-                "timeout": run_timeout,
-                "stdout": stdout_text,
-                "stderr": stderr_text,
-            },
+            "SUBPROCESS_TIMEOUT",
+            extra={"cmd": argv, "timeout": run_timeout},
         )
         _prepare_timeout_exception(exc, run_timeout)
         raise

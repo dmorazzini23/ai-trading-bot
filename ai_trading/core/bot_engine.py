@@ -8303,7 +8303,7 @@ class DataFetcher:
                         direct_entries.append(None)
                 except COMMON_EXC:
                     direct_entries.append(None)
-            effective_ttl = memo_ttl if memo_ttl > 0 else 300.0
+            effective_ttl = memo_ttl if memo_ttl > 0 else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
             for entry in direct_entries:
                 fresh, memo_df = _memo_is_fresh(entry, now=memo_now, ttl=effective_ttl)
                 if fresh and memo_df is not None:
@@ -23713,9 +23713,15 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             _log_delayed_quote_slippage(symbol, price_source, price, cache)
         _set_price_source(symbol, price_source)
         if _is_usable_alpaca_source(price_source):
+            should_update_cycle_feed = False
             if alpaca_feed:
+                if isinstance(price_source, str) and price_source.endswith("_degraded"):
+                    should_update_cycle_feed = True
+                elif price_source in {"alpaca_bid"}:
+                    should_update_cycle_feed = True
+            if should_update_cycle_feed and alpaca_feed:
                 _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
-            _clear_cached_yahoo_fallback(symbol)
+                _clear_cached_yahoo_fallback(symbol)
         return price
 
     def _use_cached_primary_success() -> bool:
@@ -23775,7 +23781,9 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             feed = fallback_feed
             _cache_cycle_fallback_feed_helper(fallback_feed, symbol=symbol)
     elif cycle_feed is None and sanitized_feed:
-        _cache_cycle_fallback_feed_helper(sanitized_feed, symbol=symbol)
+        existing_global = _GLOBAL_INTRADAY_FALLBACK_FEED
+        if existing_global not in {"yahoo"}:
+            _cache_cycle_fallback_feed_helper(sanitized_feed, symbol=symbol)
 
     if invalid_alpaca_feed:
         filtered_order = tuple(
@@ -23793,6 +23801,77 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         provider_order = ("yahoo", "bars")
 
     has_primary_providers = any(_is_primary_price_source(p) for p in provider_order)
+
+    if not skip_primary:
+        _, quote_source = _attempt_alpaca_quote(symbol, alpaca_feed, cache)
+        if quote_source == "alpaca_auth_failed":
+            if alpaca_feed:
+                _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                _clear_cached_yahoo_fallback(symbol)
+            price_source = "alpaca_auth_failed"
+            _set_price_source(symbol, price_source)
+            return None
+        quote_values = cache.get("quote_values") or {}
+        ask_price = quote_values.get("alpaca_ask")
+        if ask_price is not None and ask_price > 0:
+            price = float(ask_price)
+            price_source = "alpaca_ask"
+            winning_provider = price_source
+            return _finalize_return()
+
+        trade_price: float | None = None
+        trade_source = ""
+        last_price = quote_values.get("alpaca_last")
+        if last_price is not None and last_price > 0:
+            trade_price = float(last_price)
+            trade_source = "alpaca_last"
+        else:
+            trade_price, trade_source = _attempt_alpaca_trade(symbol, alpaca_feed, cache)
+            if trade_source == "alpaca_auth_failed":
+                if alpaca_feed:
+                    _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    _clear_cached_yahoo_fallback(symbol)
+                price_source = "alpaca_auth_failed"
+                _set_price_source(symbol, price_source)
+                return None
+        if trade_price is not None and trade_price > 0:
+            price = float(trade_price)
+            price_source = trade_source or "alpaca_last"
+            winning_provider = price_source
+            return _finalize_return()
+
+        bid_choice = _resolve_cached_quote_bid(symbol, cache)
+        if bid_choice is None:
+            bid_value = quote_values.get("alpaca_bid")
+            if bid_value is not None and bid_value > 0:
+                bid_choice = (float(bid_value), "alpaca_bid")
+        if bid_choice is not None:
+            bid_price, bid_source = bid_choice
+            if bid_price is not None and bid_price > 0:
+                price = float(bid_price)
+                price_source = bid_source
+                winning_provider = price_source
+                return _finalize_return()
+
+        yahoo_price, yahoo_source = _attempt_yahoo_price(symbol)
+        if yahoo_price is not None and yahoo_price > 0:
+            price = yahoo_price
+            price_source = "yahoo"
+            winning_provider = price_source
+            return _finalize_return()
+        if yahoo_source == "yahoo_invalid" or (yahoo_price is not None and yahoo_price <= 0):
+            price_source = "yahoo_invalid"
+            _set_price_source(symbol, price_source)
+
+        bars_price, bars_source = _attempt_bars_price(symbol)
+        if bars_price is not None and bars_price > 0:
+            price = bars_price
+            price_source = bars_source or "latest_close_used"
+            winning_provider = price_source
+            return _finalize_return()
+
+        if price_source == "yahoo_invalid":
+            return None
 
     def _record_primary_failure(source_label: str | None) -> None:
         nonlocal primary_failure_source, primary_failure_labels

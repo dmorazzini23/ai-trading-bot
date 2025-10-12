@@ -319,6 +319,8 @@ _ENTITLE_CACHE: dict[object, _EntitlementCacheEntry] = {}
 _LAST_ENTITLE_KEY: tuple[str, str, str] | None = None
 _ENTITLE_TTL = 300
 
+_CacheEntry = _EntitlementCacheEntry
+
 
 def _resolve_account_identifier(account: Any) -> str:
     for attr in ("id", "account_number", "account_id", "number"):
@@ -448,93 +450,84 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
 
     now = time.time()
     global _LAST_ENTITLE_KEY
-    cached_entry = _ENTITLE_CACHE.get(_LAST_ENTITLE_KEY) if _LAST_ENTITLE_KEY else None
-    cache_valid = cached_entry is not None and (now - cached_entry.cached_at) < _ENTITLE_TTL
+    last_entry = _ENTITLE_CACHE.get(_LAST_ENTITLE_KEY) if _LAST_ENTITLE_KEY else None
+    last_valid = last_entry is not None and (now - last_entry.cached_at) < _ENTITLE_TTL
 
-    account_feeds: set[str] = set()
-    account_entitlements: set[str] = set()
-    generation = now
     account_snapshot: Any | None = None
-
+    account: Any | None = None
     get_account = getattr(client, "get_account", None)
     if callable(get_account):
         try:
             account = get_account()
         except COMMON_EXC as exc:  # pragma: no cover - network best-effort
             _log.debug("FEED_ENTITLE_CHECK_FAIL", extra={"error": str(exc)})
-            if cache_valid:
-                return set(cached_entry.feeds)
+            if last_valid:
+                return set(last_entry.feeds)
         else:
             account_snapshot = account
-            account_entitlements = _collect_tokens(getattr(account, "entitlements", None))
-            account_feeds = _collect_tokens(
-                getattr(account, "market_data_subscription", None)
-                or getattr(account, "data_feed", None)
-                or getattr(account, "feeds", None)
-            )
-            generation = _extract_generation(account, now)
-
-    account_id = _resolve_account_identifier(account_snapshot) if account_snapshot is not None else "default"
-    token_source = _resolve_client_token(client)
-    cache_key = _entitlement_cache_key(account_id, generation, token_source)
-    cached_entry = _ENTITLE_CACHE.get(cache_key) or _ENTITLE_CACHE.get(id(client))
-    cached_feeds = set(cached_entry.feeds) if cached_entry is not None else set()
-    cache_valid = (
-        cached_entry is not None
-        and (now - cached_entry.cached_at) < _ENTITLE_TTL
-        and _LAST_ENTITLE_KEY == cache_key
-    )
 
     entitlement_tokens = _collect_tokens(getattr(client, "entitlements", None))
-    entitlement_tokens.update(account_entitlements)
     client_tokens = _collect_tokens(getattr(client, "feeds", None))
-
-    env_entitled = _env_bool("ALPACA_SIP_ENTITLED")
-    env_has_sip = _env_bool("ALPACA_HAS_SIP")
-    allow_flag = _env_bool("ALPACA_ALLOW_SIP")
-    allow_sip = _env_bool("ALLOW_SIP") if prioritize_env else None
-
-    env_positive = any(flag is True for flag in (env_entitled, env_has_sip))
-    # Only explicit False disables SIP; unset/None should not remove client-advertised feeds.
-    env_negative = any(flag is False for flag in (allow_flag, env_entitled, allow_sip))
-
-    base_feeds = (account_feeds | client_tokens) & {"iex", "sip"}
-    if not base_feeds:
-        base_feeds = {token for token in entitlement_tokens if token in {"iex", "sip"}}
-
-    feeds: set[str] = set(base_feeds)
-    account_advertises_sip = (
-        "sip" in entitlement_tokens
-        or "sip" in account_feeds
-        or "sip" in client_tokens
-        or env_has_sip is True
+    account_tokens = _collect_tokens(getattr(account_snapshot, "entitlements", None))
+    account_feed_tokens = _collect_tokens(
+        getattr(account_snapshot, "market_data_subscription", None)
+        or getattr(account_snapshot, "data_feed", None)
+        or getattr(account_snapshot, "feeds", None)
     )
 
-    if env_negative:
-        feeds.discard("sip")
-        sip_allowed = False
+    advertised = entitlement_tokens | client_tokens | account_tokens | account_feed_tokens
+
+    account_id = (
+        _resolve_account_identifier(account_snapshot) if account_snapshot is not None else "default"
+    )
+    token_source = _resolve_client_token(client)
+    generation_raw = _extract_generation(account, now) if account is not None else now
+    try:
+        generation = float(generation_raw) if generation_raw is not None else float(now)
+    except (TypeError, ValueError):
+        generation = float(now)
+
+    stable_key = _entitlement_cache_key(account_id, generation, token_source)
+    legacy_key = id(client)
+
+    def _env_false(name: str) -> bool:
+        v = os.getenv(name)
+        if v is None:
+            return False
+        return str(v).strip().lower() in {"0", "false", "no", "off"}
+
+    def _env_true(name: str) -> bool:
+        v = os.getenv(name)
+        return v is not None and str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+    sip_positive = _env_true("ALPACA_SIP_ENTITLED") or _env_true("ALPACA_HAS_SIP")
+    if prioritize_env:
+        sip_negative = _env_false("ALPACA_ALLOW_SIP") or _env_false("ALPACA_SIP_ENTITLED")
     else:
-        sip_allowed = env_positive or account_advertises_sip
-        if sip_allowed:
-            feeds.add("sip")
+        sip_negative = _env_false("ALPACA_SIP_ENTITLED")
+
+    base = (advertised & {"iex", "sip"}) or ({"iex"} if "iex" in advertised else set())
+
+    feeds: set[str] = set(base)
+    if ("sip" in advertised) or sip_positive:
+        feeds.add("sip")
+    if sip_negative:
+        feeds.discard("sip")
 
     feeds &= {"iex", "sip"}
     if not feeds:
         feeds = {"iex"}
 
-    if cache_valid and cached_feeds == feeds:
-        return set(cached_entry.feeds)
+    entry_obj = _CacheEntry(
+        cached_at=now,
+        generation=generation,
+        feeds=frozenset(feeds),
+    )
+    _ENTITLE_CACHE[stable_key] = entry_obj
+    _ENTITLE_CACHE[legacy_key] = entry_obj
+    _LAST_ENTITLE_KEY = stable_key
 
-    if generation is None and cached_entry is not None:
-        generation = cached_entry.generation
-
-    entry = _EntitlementCacheEntry(cached_at=now, generation=generation or now, feeds=frozenset(feeds))
-    _ENTITLE_CACHE.clear()
-    id_key = id(client)
-    _ENTITLE_CACHE[id_key] = entry
-    _ENTITLE_CACHE[cache_key] = entry
-    _LAST_ENTITLE_KEY = cache_key
-    return set(entry.feeds)
+    return set(entry_obj.feeds)
 
 def _ensure_entitled_feed(client: Any, requested: str) -> str:
     """Ensure ``requested`` is an entitled Alpaca feed for *client*."""
