@@ -49,15 +49,17 @@ def safe_subprocess_run(
     if resolved_timeout <= 0:
         resolved_timeout = SUBPROCESS_TIMEOUT_S
 
+    run_kwargs = {
+        "check": False,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "timeout": resolved_timeout,
+        "env": dict(env) if env is not None else None,
+    }
+
     try:
-        completed = subprocess.run(
-            argv,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=resolved_timeout,
-            env=dict(env) if env is not None else None,
-        )
+        completed = subprocess.run(argv, **run_kwargs)
     except subprocess.TimeoutExpired as exc:
         _prepare_timeout_exception(exc, resolved_timeout)
         logger.warning(
