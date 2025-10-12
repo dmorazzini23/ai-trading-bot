@@ -7072,8 +7072,9 @@ def _fetch_bars(
                     extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                 )
                 _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT", level=logging.WARNING)
+                slots_remaining = _fallback_slots_remaining(_state)
                 fallback_available = (
-                    (_max_fallbacks_config is None or (_max_fallbacks_config or 0) > 0)
+                    (slots_remaining is None or slots_remaining > 0)
                     or _ENABLE_HTTP_FALLBACK
                     or alpaca_empty_to_backup()
                 )
@@ -7212,8 +7213,9 @@ def _fetch_bars(
                     extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                 )
                 _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT", level=logging.WARNING)
+                slots_remaining = _fallback_slots_remaining(_state)
                 fallback_available = (
-                    (_max_fallbacks_config is None or (_max_fallbacks_config or 0) > 0)
+                    (slots_remaining is None or slots_remaining > 0)
                     or _ENABLE_HTTP_FALLBACK
                     or alpaca_empty_to_backup()
                 )
@@ -7265,8 +7267,9 @@ def _fetch_bars(
                 "remaining_retries": remaining_retries,
                 "reason": reason,
             }
+            slots_remaining = _fallback_slots_remaining(_state)
             fallback_available = (
-                (_max_fallbacks_config is None or (_max_fallbacks_config or 0) > 0)
+                (slots_remaining is None or slots_remaining > 0)
                 or _ENABLE_HTTP_FALLBACK
                 or alpaca_empty_to_backup()
             )
