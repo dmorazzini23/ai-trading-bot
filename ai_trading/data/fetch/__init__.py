@@ -2999,7 +2999,7 @@ def _symbol_exists(symbol: str) -> bool:
     """Return True if the symbol exists according to Alpaca or the local list."""
     base_url = get_alpaca_data_base_url()
     url = f"{base_url}/v2/stocks/{symbol}/meta"
-    headers = get_alpaca_http_headers()
+    headers = alpaca_auth_headers()
     try:
         resp = _HTTP_SESSION.get(url, headers=headers, timeout=clamp_request_timeout(2.0))
         if resp.status_code == 200:
@@ -5300,13 +5300,14 @@ def _fetch_bars(
     no_session_window = not window_has_session
     short_circuit_empty = False
     _state["skip_empty_metrics"] = False
-    if not window_has_session:
+    if no_session_window:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
-        _state["empty_metric_emitted"] = True
         _state["skip_empty_metrics"] = True
-        _incr_empty_metric(symbol, _feed, _interval)
+        if not _state.get("empty_metric_emitted"):
+            _incr_empty_metric(symbol, _feed, _interval)
+            _state["empty_metric_emitted"] = True
         logger.info(
             "DATA_WINDOW_NO_SESSION",
             extra=_norm_extra(
@@ -5320,10 +5321,7 @@ def _fetch_bars(
                 }
             ),
         )
-        empty_df = _empty_ohlcv_frame(pd)
-        if isinstance(empty_df, pd.DataFrame):
-            return empty_df
-        return pd.DataFrame()
+        short_circuit_empty = True
 
     def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
         if candidate is None:
@@ -5560,8 +5558,6 @@ def _fetch_bars(
             if pandas_mod is not None:
                 return pandas_mod.DataFrame()
             raise ValueError("empty_result_unavailable")
-
-        sip_intraday = _intraday_feed_prefers_sip()
 
         call_attempts = _state.setdefault("fallback_feeds_attempted", set())
 
@@ -7334,10 +7330,8 @@ def _fetch_bars(
     if (not window_has_session) and fallback is None and not _ENABLE_HTTP_FALLBACK:
         return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
-    normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     df = None
     http_fallback_frame: pd.DataFrame | None = None
-    last_empty_error: EmptyBarsError | None = None
 
     empty_attempts = 0
     for _ in range(max(1, max_retries)):
