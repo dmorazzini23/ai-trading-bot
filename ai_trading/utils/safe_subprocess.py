@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from ai_trading.logging import get_logger
 
@@ -39,41 +39,36 @@ def _coerce_cmd(cmd: Sequence[str] | str) -> list[str]:
 def safe_subprocess_run(
     cmd: Sequence[str] | str,
     *,
-    timeout: float | int | None = None,
-    **popen_kwargs,
+    timeout: float | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``cmd`` with a defensive timeout and structured logging."""
 
     argv = _coerce_cmd(cmd)
-    popen_args = dict(popen_kwargs)
-
-    raw_timeout = popen_args.pop("timeout", timeout)
-    run_timeout = SUBPROCESS_TIMEOUT_S if raw_timeout is None else float(raw_timeout)
-    if run_timeout <= 0:
-        run_timeout = SUBPROCESS_TIMEOUT_S
-
-    capture_output = popen_args.get("capture_output")
-    if not capture_output:
-        popen_args.setdefault("stdout", subprocess.PIPE)
-        popen_args.setdefault("stderr", subprocess.PIPE)
-    popen_args.setdefault("text", True)
-    popen_args["timeout"] = run_timeout
+    resolved_timeout = SUBPROCESS_TIMEOUT_S if timeout is None else float(timeout)
+    if resolved_timeout <= 0:
+        resolved_timeout = SUBPROCESS_TIMEOUT_S
 
     try:
-        completed = subprocess.run(argv, **popen_args)
+        completed = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=resolved_timeout,
+            env=dict(env) if env is not None else None,
+        )
     except subprocess.TimeoutExpired as exc:
-        stdout_text = _normalize_stream(getattr(exc, "output", None))
-        stderr_text = _normalize_stream(getattr(exc, "stderr", None))
+        _prepare_timeout_exception(exc, resolved_timeout)
         logger.warning(
             "SAFE_SUBPROCESS_TIMEOUT",
             extra={
                 "cmd": argv,
-                "timeout": run_timeout,
-                "stdout": stdout_text,
-                "stderr": stderr_text,
+                "timeout": resolved_timeout,
+                "stdout": exc.stdout or "",
+                "stderr": exc.stderr or "",
             },
         )
-        _prepare_timeout_exception(exc, run_timeout)
         raise
     except (OSError, subprocess.SubprocessError) as exc:
         completed = _coerce_exception_result(exc, argv)

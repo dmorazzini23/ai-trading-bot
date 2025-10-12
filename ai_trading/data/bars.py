@@ -518,14 +518,18 @@ def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]
     if not feeds:
         feeds = {"iex"}
 
-    entry_obj = _CacheEntry(
-        cached_at=now,
-        generation=generation,
-        feeds=frozenset(feeds),
-    )
-    _ENTITLE_CACHE[stable_key] = entry_obj
+    feeds_frozen = frozenset(feeds)
+    entry_obj = _ENTITLE_CACHE.get(stable_key)
+    should_replace = entry_obj is None or entry_obj.feeds != feeds_frozen or entry_obj.generation < generation
+    if should_replace:
+        entry_obj = _CacheEntry(
+            cached_at=now,
+            generation=generation,
+            feeds=feeds_frozen,
+        )
+        _ENTITLE_CACHE[stable_key] = entry_obj
+        _LAST_ENTITLE_KEY = stable_key
     _ENTITLE_CACHE[legacy_key] = entry_obj
-    _LAST_ENTITLE_KEY = stable_key
 
     return set(entry_obj.feeds)
 
@@ -534,14 +538,15 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
 
     normalized = str(requested or "").strip().lower()
     normalized = normalized.replace("alpaca_", "")
-    if normalized != "sip":
-        return normalized or "iex"
-
     feeds = _get_entitled_feeds(client)
-
+    if not normalized:
+        normalized = "iex"
+    if normalized in feeds:
+        return normalized
     if "sip" in feeds:
         return "sip"
-
+    if "iex" in feeds:
+        return "iex"
     return "iex"
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):

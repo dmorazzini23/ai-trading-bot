@@ -6,7 +6,9 @@ from typing import Mapping
 
 from ai_trading.broker.alpaca_credentials import (
     AlpacaCredentials,
+    alpaca_auth_headers,
     resolve_alpaca_credentials,
+    resolve_alpaca_credentials_with_base,
     reset_alpaca_credential_state,
 )
 
@@ -24,7 +26,7 @@ def _resolve_data_feed_override() -> tuple[str | None, str | None]:
     creds = resolve_alpaca_credentials()
     override: str | None = None
     reason: str | None = None
-    if not creds.has_execution_credentials():
+    if not creds.key or not creds.secret:
         override = "yahoo"
         reason = "missing_credentials"
     _DATA_FEED_OVERRIDE_CACHE = (override, reason)
@@ -42,34 +44,34 @@ def refresh_alpaca_credentials_cache() -> None:
 def get_resolved_alpaca_credentials() -> AlpacaCredentials:
     """Return the resolved Alpaca credentials with source metadata."""
 
-    return resolve_alpaca_credentials()
+    return resolve_alpaca_credentials_with_base()
 
 
 def resolve_alpaca_creds(env: Mapping[str, str] | None = None) -> tuple[str | None, str | None]:
     """Return Alpaca credentials preferring canonical env vars with APCA_* fallback."""
 
     creds = resolve_alpaca_credentials(env)
-    return creds.api_key, creds.secret_key
+    return creds.key, creds.secret
 
 
 def get_alpaca_creds() -> tuple[str, str]:
     """Return Alpaca API credentials using canonical precedence."""
 
     creds = resolve_alpaca_credentials()
-    if not creds.api_key or not creds.secret_key:
+    if not creds.key or not creds.secret:
         missing: list[str] = []
-        if not creds.api_key:
+        if not creds.key:
             missing.append("ALPACA_API_KEY")
-        if not creds.secret_key:
+        if not creds.secret:
             missing.append("ALPACA_SECRET_KEY")
         raise RuntimeError(f"Missing Alpaca credentials: {', '.join(missing)}")
-    return creds.api_key, creds.secret_key
+    return creds.key, creds.secret
 
 
 def get_alpaca_base_url() -> str:
     """Return the configured Alpaca base URL with sensible defaults."""
 
-    creds = resolve_alpaca_credentials()
+    creds = resolve_alpaca_credentials_with_base()
     return creds.base_url
 
 
@@ -87,13 +89,7 @@ def get_alpaca_data_base_url() -> str:
 def get_alpaca_http_headers() -> dict[str, str]:
     """Return HTTP headers including Alpaca credentials when available."""
 
-    api_key, secret_key = resolve_alpaca_creds()
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["APCA-API-KEY-ID"] = api_key
-    if secret_key:
-        headers["APCA-API-SECRET-KEY"] = secret_key
-    return headers
+    return alpaca_auth_headers()
 
 
 def resolve_alpaca_feed(requested: str | None) -> str | None:
@@ -124,7 +120,7 @@ def alpaca_credential_status() -> tuple[bool, bool]:
     """Return boolean flags for Alpaca credential presence."""
 
     creds = resolve_alpaca_credentials()
-    return bool(creds.api_key), bool(creds.secret_key)
+    return bool(creds.key), bool(creds.secret)
 
 
 def is_data_feed_downgraded() -> bool:

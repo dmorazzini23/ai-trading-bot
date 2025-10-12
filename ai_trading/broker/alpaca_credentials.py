@@ -1,40 +1,54 @@
-"""Helpers for working with Alpaca API credentials."""
+"""Helpers for resolving Alpaca API credentials."""
 
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Mapping
 
 _DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
-
 _CANONICAL_KEY = "ALPACA_API_KEY"
 _CANONICAL_SECRET = "ALPACA_SECRET_KEY"
 _LEGACY_KEY = "APCA_API_KEY_ID"
 _LEGACY_SECRET = "APCA_API_SECRET_KEY"
 
 
+@dataclass(frozen=True)
+class AlpacaCreds:
+    """Minimal Alpaca credentials container."""
+
+    key: str | None
+    secret: str | None
+    _base_url: str | None = None
+
+    @property
+    def api_key(self) -> str | None:  # Backwards compat
+        return self.key
+
+    @property
+    def secret_key(self) -> str | None:  # Backwards compat
+        return self.secret
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url or _DEFAULT_BASE_URL
+
+
 @dataclass(slots=True)
 class AlpacaCredentials:
-    """Typed container for Alpaca API credentials."""
+    """Extended credential payload that includes the trading base URL."""
 
     api_key: str | None = None
     secret_key: str | None = None
     base_url: str = _DEFAULT_BASE_URL
 
     def has_data_credentials(self) -> bool:
-        """Return ``True`` when canonical credentials are present."""
-
         return bool(self.api_key and self.secret_key)
 
     def has_execution_credentials(self) -> bool:
-        """Return ``True`` when canonical credentials are present."""
-
         return bool(self.api_key and self.secret_key)
 
     def as_dict(self) -> dict[str, str | None]:
-        """Return a mapping representation for structured logging/tests."""
-
         return {
             "api_key": self.api_key,
             "secret_key": self.secret_key,
@@ -42,41 +56,79 @@ class AlpacaCredentials:
         }
 
 
-def resolve_alpaca_credentials(env: Mapping[str, str] | None = None) -> AlpacaCredentials:
-    """Return Alpaca credentials resolved from the environment."""
+def _coerce_env(env: Mapping[str, str] | None) -> dict[str, str]:
+    source = env if env is not None else os.environ
+    result: dict[str, str] = {}
+    for raw_key, raw_value in source.items():
+        if not isinstance(raw_value, str):
+            continue
+        key = str(raw_key)
+        value = raw_value.strip()
+        if value:
+            result[key] = value
+    return result
 
-    env_map = {str(k): v for k, v in dict(env or os.environ).items() if isinstance(v, str)}
 
-    def _first(*keys: str) -> str | None:
-        for key in keys:
-            value = env_map.get(key)
+def _resolve_value(env: Mapping[str, str], *keys: str) -> str | None:
+    for key in keys:
+        raw = env.get(key)
+        if raw:
+            value = raw.strip()
             if value:
-                stripped = value.strip()
-                if stripped:
-                    return stripped
-        return None
+                return value
+    return None
 
-    api_key = _first(_CANONICAL_KEY, _LEGACY_KEY)
-    secret_key = _first(_CANONICAL_SECRET, _LEGACY_SECRET)
 
-    if not api_key or not secret_key:
-        api_key = api_key or None
-        secret_key = secret_key or None
+def _resolve_base_url(env: Mapping[str, str]) -> str:
+    override = _resolve_value(env, "ALPACA_API_URL", "ALPACA_BASE_URL")
+    if override:
+        normalized = override.rstrip("/")
+        if normalized.lower().startswith(("http://", "https://")):
+            return normalized
+        return f"https://{normalized}"
+    return _DEFAULT_BASE_URL
 
-    base_url = _first("ALPACA_API_URL", "ALPACA_BASE_URL") or _DEFAULT_BASE_URL
-    return AlpacaCredentials(api_key, secret_key, base_url)
+
+def resolve_alpaca_credentials(env: Mapping[str, str] | None = None) -> AlpacaCreds:
+    """Return Alpaca credentials preferring canonical env vars."""
+
+    env_map = _coerce_env(env)
+    key = _resolve_value(env_map, _CANONICAL_KEY) or _resolve_value(env_map, _LEGACY_KEY)
+    secret = _resolve_value(env_map, _CANONICAL_SECRET) or _resolve_value(env_map, _LEGACY_SECRET)
+    base_url = _resolve_base_url(env_map)
+    return AlpacaCreds(key=key, secret=secret, _base_url=base_url)
+
+
+def resolve_alpaca_credentials_with_base(env: Mapping[str, str] | None = None) -> AlpacaCredentials:
+    """Return credentials including the trading base URL."""
+
+    env_map = _coerce_env(env)
+    creds = resolve_alpaca_credentials(env_map)
+    return AlpacaCredentials(api_key=creds.key, secret_key=creds.secret, base_url=creds.base_url)
+
+
+def alpaca_auth_headers() -> dict[str, str]:
+    """Return HTTP headers populated with resolved Alpaca credentials."""
+
+    creds = resolve_alpaca_credentials()
+    headers: dict[str, str] = {}
+    if creds.key:
+        headers["APCA-API-KEY-ID"] = creds.key
+    if creds.secret:
+        headers["APCA-API-SECRET-KEY"] = creds.secret
+    return headers
 
 
 def reset_alpaca_credential_state() -> None:
-    """No-op retained for compatibility."""
+    """Placeholder for compatibility; credentials are resolved per-call."""
 
     return None
 
 
 def check_alpaca_available() -> bool:
-    """Return ``True`` if the :mod:`alpaca` SDK is importable."""
+    """Return ``True`` if the Alpaca SDK can be imported."""
 
-    try:  # pragma: no cover - purely a presence check
+    try:  # pragma: no cover - presence check only
         from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     except ModuleNotFoundError:
         return False
@@ -84,14 +136,9 @@ def check_alpaca_available() -> bool:
 
 
 def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
-    """Return an :class:`alpaca.trading.client.TradingClient` instance.
+    """Return an ``alpaca.trading.client.TradingClient`` instance."""
 
-    If the SDK is missing and *shadow* is ``True``, a simple ``object`` stub is
-    returned. Otherwise, a :class:`RuntimeError` is raised when the ``alpaca``
-    package cannot be imported.
-    """
-
-    creds = resolve_alpaca_credentials(env)
+    creds = resolve_alpaca_credentials_with_base(env)
     try:  # pragma: no cover - optional dependency
         __import__("alpaca")
         from alpaca.trading.client import TradingClient  # type: ignore
@@ -108,10 +155,12 @@ def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
 
 
 __all__ = [
+    "AlpacaCreds",
     "AlpacaCredentials",
     "resolve_alpaca_credentials",
+    "resolve_alpaca_credentials_with_base",
+    "alpaca_auth_headers",
     "check_alpaca_available",
     "initialize",
     "reset_alpaca_credential_state",
 ]
-

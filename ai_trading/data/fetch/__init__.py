@@ -16,7 +16,7 @@ import weakref
 from datetime import UTC, datetime
 from threading import Lock
 from contextlib import suppress, contextmanager
-from types import GeneratorType
+from types import GeneratorType, SimpleNamespace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -105,12 +105,12 @@ from ai_trading.utils import safe_to_datetime
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_data_base_url,
-    get_alpaca_http_headers,
     resolve_alpaca_feed,
     is_data_feed_downgraded,
     get_data_feed_override,
     get_data_feed_downgrade_reason,
 )
+from ai_trading.broker.alpaca_credentials import alpaca_auth_headers
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
 from .metrics import inc_provider_fallback
@@ -119,21 +119,13 @@ from .._alpaca_guard import should_import_alpaca_sdk
 from .fallback_concurrency import fallback_slot
 
 # --- AI-AGENT: request bookkeeping for tests ---
-try:
-    from types import SimpleNamespace as _SimpleNS  # may already exist
-except Exception:  # pragma: no cover
-    class _SimpleNS:  # fallback
-        def __init__(self, **kw):
-            self.__dict__.update(kw)
-
-
-def _record_session_last_request(_sess, method, url, params, headers):
-    """Attach .last_request on session-like object for endpoint tests."""
+def _record_session_last_request(session_obj, method, url, params, headers):
+    """Attach ``last_request`` metadata to *session_obj*."""
 
     try:
-        if _sess is None:
+        if session_obj is None:
             return
-        _sess.last_request = _SimpleNS(
+        session_obj.last_request = SimpleNamespace(
             method=method,
             url=url,
             params=dict(params or {}),
@@ -810,6 +802,24 @@ def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None
     try:
         metrics.incr(metric, value=value, tags=tags)  # type: ignore[attr-defined]
     except Exception:  # pragma: no cover - metrics optional
+        pass
+
+
+def _incr_empty_metric(symbol: str, feed: str, timeframe: str) -> None:
+    """Increment the empty-window metric safely."""
+
+    try:
+        _incr(
+            "data.fetch.empty",
+            value=1.0,
+            tags={
+                "provider": "alpaca",
+                "symbol": symbol,
+                "feed": feed,
+                "timeframe": timeframe,
+            },
+        )
+    except Exception:
         pass
 
 
@@ -4342,11 +4352,18 @@ def _post_process(
     timeframe: str | None = None,
 ) -> pd.DataFrame | None:
     """Normalize OHLCV DataFrame while preserving explicit empties."""
+
+    def _fallback_slots_remaining_local():
+        try:
+            return _fallback_slots_remaining()
+        except Exception:
+            return None
+
     pd = _ensure_pandas()
     if pd is None:
         return df
     if df is None or getattr(df, "empty", True):
-        slots = _fallback_slots_remaining()
+        slots = _fallback_slots_remaining_local()
         if (slots is not None and slots <= 0) and not _ENABLE_HTTP_FALLBACK:
             tf_label = timeframe or "unknown"
             raise EmptyBarsError(
@@ -5281,62 +5298,15 @@ def _fetch_bars(
         window_has_session = bool(window_has_session)
     _state["window_has_session"] = window_has_session
     no_session_window = not window_has_session
-    # --- AI-AGENT: probe once even if no RTH session, to satisfy endpoint tests ---
-    if not window_has_session:
-        try:
-            url_probe = f"{get_alpaca_data_base_url()}/v2/stocks/bars"
-            params_probe = {
-                "symbols": symbol,
-                "timeframe": _interval,
-                "start": _start.isoformat(),
-                "end": _end.isoformat(),
-                "limit": 10000,
-                "feed": _feed,
-                "adjustment": adjustment,
-            }
-            headers_probe = get_alpaca_http_headers()
-            host_probe = urlparse(url_probe).netloc
-            timeout_probe = clamp_request_timeout(10)
-            with acquire_host_slot(host_probe):
-                session_get = getattr(session, "get", None)
-                if callable(session_get):
-                    _ = session_get(
-                        url_probe,
-                        params=params_probe,
-                        headers=headers_probe,
-                        timeout=timeout_probe,
-                    )
-                    _record_session_last_request(
-                        session,
-                        "GET",
-                        url_probe,
-                        params_probe,
-                        headers_probe,
-                    )
-                else:
-                    _ = requests.get(
-                        url_probe,
-                        params=params_probe,
-                        headers=headers_probe,
-                        timeout=timeout_probe,
-                    )
-                    _record_session_last_request(
-                        _HTTP_SESSION,
-                        "GET",
-                        url_probe,
-                        params_probe,
-                        headers_probe,
-                    )
-        except Exception:
-            pass
     short_circuit_empty = False
+    _state["skip_empty_metrics"] = False
     if not window_has_session:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
-        if not _state.get("empty_metric_emitted"):
-            _incr("data.fetch.empty", value=1.0, tags=_tags())
-            _state["empty_metric_emitted"] = True
+        _state["empty_metric_emitted"] = True
+        _state["skip_empty_metrics"] = True
+        _incr_empty_metric(symbol, _feed, _interval)
         logger.info(
             "DATA_WINDOW_NO_SESSION",
             extra=_norm_extra(
@@ -5350,14 +5320,10 @@ def _fetch_bars(
                 }
             ),
         )
-        # Treat the window as empty but continue through the standard
-        # fallback machinery so alternative feeds/backups get a chance to
-        # populate data.  The final response is normalised via
-        # ``short_circuit_empty`` if all providers return nothing.
-        short_circuit_empty = True
-        _state["skip_empty_metrics"] = True
-    else:
-        _state["skip_empty_metrics"] = False
+        empty_df = _empty_ohlcv_frame(pd)
+        if isinstance(empty_df, pd.DataFrame):
+            return empty_df
+        return pd.DataFrame()
 
     def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
         if candidate is None:
@@ -5545,17 +5511,16 @@ def _fetch_bars(
             return _finalize_frame(_run_backup_fetch(fb_int))
         return _finalize_frame(pd.DataFrame())
 
-    headers = get_alpaca_http_headers()
-    if "APCA-API-KEY-ID" not in headers:
-        headers["APCA-API-KEY-ID"] = ""
-    if "APCA-API-SECRET-KEY" not in headers:
-        headers["APCA-API-SECRET-KEY"] = ""
+    headers = dict(alpaca_auth_headers())
     timeout_v = clamp_request_timeout(10)
 
     # Track request start time for retry/backoff telemetry
     start_time = monotonic_time()
     max_retries = _FETCH_BARS_MAX_RETRIES
-    data_base_url = get_alpaca_data_base_url()
+    data_base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets") or "https://data.alpaca.markets"
+    data_base_url = data_base_url.rstrip("/")
+    if not data_base_url:
+        data_base_url = "https://data.alpaca.markets"
 
     def _push_to_caplog(
         message: str,
