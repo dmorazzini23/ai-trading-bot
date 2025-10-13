@@ -3862,6 +3862,9 @@ def _flatten_and_normalize_ohlcv(
             "mean_price",
             "last",
             "last_price",
+            "open",
+            "high",
+            "low",
         )
         for candidate in fallback_candidates:
             if candidate not in getattr(frame, "columns", []):
@@ -3944,6 +3947,36 @@ def _flatten_and_normalize_ohlcv(
                 all_nan = bool(close_series.isna().all())  # type: ignore[attr-defined]
             except Exception:
                 all_nan = False
+        recovered_from_normalized: str | None = None
+        if all_nan:
+            for candidate in ("adj_close", "open", "high", "low"):
+                if candidate not in df.columns or candidate == "close":
+                    continue
+                try:
+                    candidate_series = pd.to_numeric(df[candidate], errors="coerce")
+                except Exception:
+                    continue
+                try:
+                    has_valid = bool(candidate_series.notna().any())
+                except Exception:
+                    has_valid = False
+                if not has_valid:
+                    continue
+                try:
+                    df["close"] = candidate_series
+                except Exception:
+                    continue
+                recovered_from_normalized = candidate
+                close_series = df.get("close")
+                try:
+                    all_nan = bool(pd.isna(close_series).all())
+                except Exception:  # pragma: no cover - defensive fallback
+                    try:
+                        all_nan = bool(close_series.isna().all())  # type: ignore[attr-defined]
+                    except Exception:
+                        all_nan = False
+                if not all_nan:
+                    break
         if all_nan:
             extra = {
                 "symbol": symbol,
@@ -3957,13 +3990,13 @@ def _flatten_and_normalize_ohlcv(
             setattr(err, "symbol", symbol)
             setattr(err, "timeframe", timeframe)
             raise err
-        if recovered_from is not None:
+        if recovered_from is not None or recovered_from_normalized is not None:
             logger.info(
                 "OHLCV_CLOSE_RECOVERED",
                 extra={
                     "symbol": symbol,
                     "timeframe": timeframe,
-                    "source": recovered_from,
+                    "source": recovered_from or recovered_from_normalized,
                 },
             )
 
