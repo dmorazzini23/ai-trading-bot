@@ -19,7 +19,7 @@ pytestmark = pytest.mark.integration
 
 from ai_trading.config.management import TradingConfig
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
-from ai_trading.settings import get_daily_loss_limit, get_max_drawdown_threshold
+from ai_trading.settings import get_daily_loss_limit, get_max_drawdown_threshold, get_settings
 
 
 class TestDrawdownIntegration(unittest.TestCase):
@@ -29,6 +29,17 @@ class TestDrawdownIntegration(unittest.TestCase):
         """Set up test fixtures."""
         self.max_drawdown = 0.15  # 15%
         self.initial_equity = 10000.0
+        self._prev_drawdown_env = os.environ.get("MAX_DRAWDOWN_THRESHOLD")
+        os.environ["MAX_DRAWDOWN_THRESHOLD"] = str(self.max_drawdown)
+        get_settings.cache_clear()
+
+    def tearDown(self):
+        """Restore environment overrides."""
+        if self._prev_drawdown_env is None:
+            os.environ.pop("MAX_DRAWDOWN_THRESHOLD", None)
+        else:
+            os.environ["MAX_DRAWDOWN_THRESHOLD"] = self._prev_drawdown_env
+        get_settings.cache_clear()
 
     def test_drawdown_circuit_breaker_initialization(self):
         """Test that DrawdownCircuitBreaker initializes correctly."""

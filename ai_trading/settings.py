@@ -288,7 +288,10 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         ),
     )
     daily_loss_limit: float = Field(default=0.05, env="AI_TRADING_DAILY_LOSS_LIMIT")
-    max_drawdown_threshold: float = Field(default=0.08, env="AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+    max_drawdown_threshold: float = Field(
+        default=0.08,
+        env=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD", "MAX_DRAWDOWN_THRESHOLD"),
+    )
     portfolio_drift_threshold: float = Field(default=0.15, env="AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD")
     capital_cap: float = Field(
         0.25,
@@ -655,6 +658,15 @@ def get_portfolio_drift_threshold() -> float:
 
 
 def get_max_drawdown_threshold() -> float:
+    raw = os.getenv("MAX_DRAWDOWN_THRESHOLD") or os.getenv("AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+    if raw not in (None, ""):
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "INVALID_MAX_DRAWDOWN_THRESHOLD",
+                extra={"value": raw},
+            )
     return _to_float(getattr(get_settings(), "max_drawdown_threshold", 0.08), 0.08)
 
 

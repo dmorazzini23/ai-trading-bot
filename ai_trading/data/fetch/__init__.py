@@ -8520,6 +8520,7 @@ def get_minute_df(
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
     if used_backup:
         _register_backup_skip()
+        mark_success(symbol, "1Min")
     if backup_label and not used_backup:
         _clear_minute_fallback_state(
             symbol,
