@@ -2519,7 +2519,7 @@ from ai_trading.logging import (
     info_kv,
     warning_kv,
 )  # AI-AGENT-REF: structured logging helper
-from ai_trading.utils.safe_cast import as_float, as_int
+from ai_trading.utils.safe_cast import as_int
 from ai_trading.utils.universe import load_universe as load_universe_from_path
 
 from ai_trading.config.settings import (
@@ -12983,12 +12983,19 @@ def check_pdt_rule(runtime) -> bool:
         acct, "pattern_day_trades_count", None
     )
     api_buying_pw_raw = (
-        getattr(acct, "daytrade_buying_power", None)
+        getattr(acct, "daytrading_buying_power", None)
+        or getattr(acct, "daytrade_buying_power", None)
         or getattr(acct, "day_trade_buying_power", None)
         or getattr(acct, "buying_power", None)
     )
     api_day_trades = as_int(api_day_trades_raw, 0)
-    api_buying_pw = as_float(api_buying_pw_raw, 0.0)
+    if api_buying_pw_raw in (None, ""):
+        resolved_dtbp: float | None = None
+    else:
+        try:
+            resolved_dtbp = float(api_buying_pw_raw)
+        except (TypeError, ValueError):
+            resolved_dtbp = None
 
     def _bool_from_account(*names: str) -> bool:
         for name in names:
@@ -13021,6 +13028,8 @@ def check_pdt_rule(runtime) -> bool:
         return default
 
     pattern_flag = _bool_from_account("pattern_day_trader", "is_pattern_day_trader", "pdt")
+    trading_blocked = _bool_from_account("trading_blocked", "is_trading_blocked")
+    account_blocked = _bool_from_account("account_blocked", "is_account_blocked")
     daytrade_count = _int_from_account(
         "daytrade_count",
         "day_trade_count",
@@ -13042,51 +13051,70 @@ def check_pdt_rule(runtime) -> bool:
         "daytrade_count": daytrade_count,
         "daytrade_limit": resolved_limit if resolved_limit > 0 else int(PDT_DAY_TRADE_LIMIT or 0),
         "legacy_pattern_day_trades": legacy_count,
+        "trading_blocked": trading_blocked,
+        "account_blocked": account_blocked,
+        "equity": equity,
+        "daytrading_buying_power": resolved_dtbp,
     }
-    setattr(runtime, "_pdt_last_context", dict(pdt_context))
+
+    def _store_context(reason: str | None = None) -> None:
+        context_copy = dict(pdt_context)
+        if reason is not None:
+            context_copy["block_reason"] = reason
+        setattr(runtime, "_pdt_last_context", context_copy)
+
+    _store_context()
 
     logger.info(
         "PDT_CHECK",
         extra={
             "equity": equity,
             "api_day_trades": legacy_count,
-            "api_buying_pw": api_buying_pw,
+            "api_buying_pw": resolved_dtbp,
             "pattern_day_trader": bool(pattern_flag),
             "daytrade_count": daytrade_count,
             "daytrade_limit": pdt_context["daytrade_limit"],
+            "trading_blocked": trading_blocked,
+            "account_blocked": account_blocked,
         },
     )
-
-    limit_reached = False
-    limit_value = pdt_context["daytrade_limit"]
-    if limit_value > 0:
-        if pattern_flag and daytrade_count >= limit_value:
-            limit_reached = True
-        elif legacy_count >= limit_value:
-            limit_reached = True
-    if limit_reached:
-        logger.warning("PDT_LIMIT_REACHED_PRE_EXEC", extra=pdt_context)
-        logger.info(
-            "SKIP_PDT_RULE",
+    if trading_blocked or account_blocked:
+        logger.warning(
+            "PDT_BLOCK_BROKER_FLAG",
             extra={
-                "reason": "limit_reached",
-                "limit": limit_value,
-                "count": legacy_count,
+                "trading_blocked": trading_blocked,
+                "account_blocked": account_blocked,
             },
         )
+        _store_context("broker_flag")
         return True
 
-    if equity < PDT_EQUITY_THRESHOLD:
-        if api_buying_pw and float(api_buying_pw) > 0:
+    if pattern_flag:
+        if equity < PDT_EQUITY_THRESHOLD:
             logger.warning(
-                "PDT_EQUITY_LOW", extra={"equity": equity, "buying_pw": api_buying_pw}
+                "PDT_BLOCK_EQUITY_LT_MIN",
+                extra={"equity": equity, "min_equity": PDT_EQUITY_THRESHOLD},
             )
-        else:
-            logger.warning(
-                "PDT_EQUITY_LOW_NO_BP",
-                extra={"equity": equity, "buying_pw": api_buying_pw},
-            )
+            _store_context("equity_lt_min")
             return True
+
+        if resolved_dtbp is not None and resolved_dtbp <= 0:
+            logger.warning(
+                "PDT_BLOCK_NO_DTBP",
+                extra={"daytrading_buying_power": resolved_dtbp},
+            )
+            _store_context("no_daytrading_buying_power")
+            return True
+
+        logger.info(
+            "PDT_ELIGIBLE_EQ_OK",
+            extra={
+                "equity": equity,
+                "min_equity": PDT_EQUITY_THRESHOLD,
+                "daytrading_buying_power": resolved_dtbp,
+            },
+        )
+        return False
 
     return False
 
@@ -22664,31 +22692,17 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
             pdt_context = getattr(runtime, "_pdt_last_context", {}) or {}
-            try:
-                pattern_flag = bool(pdt_context.get("pattern_day_trader", False))
-            except Exception:
-                pattern_flag = False
-            try:
-                daytrade_count_val = int(pdt_context.get("daytrade_count", 0))
-            except (TypeError, ValueError):
-                daytrade_count_val = 0
-            try:
-                limit_val = int(pdt_context.get("daytrade_limit", PDT_DAY_TRADE_LIMIT))
-            except (TypeError, ValueError):
-                limit_val = int(PDT_DAY_TRADE_LIMIT or 0)
-            try:
-                symbol_count = len(getattr(runtime, "tickers", []) or [])
-            except Exception:
-                symbol_count = 0
-            logger.info(
-                "ORDERS_SUPPRESSED_BY_PDT",
-                extra={
-                    "symbol_count": symbol_count,
-                    "pattern_day_trader": pattern_flag,
-                    "daytrade_count": daytrade_count_val,
-                    "daytrade_limit": limit_val,
-                },
-            )
+            extra = {
+                "reason": pdt_context.get("block_reason", "pdt_gate"),
+                "pattern_day_trader": bool(pdt_context.get("pattern_day_trader", False)),
+                "daytrade_count": pdt_context.get("daytrade_count"),
+                "daytrade_limit": pdt_context.get("daytrade_limit"),
+                "equity": pdt_context.get("equity"),
+                "daytrading_buying_power": pdt_context.get("daytrading_buying_power"),
+                "trading_blocked": bool(pdt_context.get("trading_blocked", False)),
+                "account_blocked": bool(pdt_context.get("account_blocked", False)),
+            }
+            logger.info("ORDERS_SUPPRESSED_BY_PDT", extra=extra)
             return
         feed_cache = getattr(state, "minute_feed_cache", None)
         if isinstance(feed_cache, dict):
