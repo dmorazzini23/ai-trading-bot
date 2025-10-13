@@ -13090,6 +13090,21 @@ def check_pdt_rule(runtime) -> bool:
         return True
 
     if pattern_flag:
+        if (
+            pdt_context["daytrade_limit"] > 0
+            and daytrade_count is not None
+            and int(daytrade_count) >= pdt_context["daytrade_limit"]
+        ):
+            logger.warning(
+                "PDT_BLOCK_DAYTRADE_LIMIT",
+                extra={
+                    "daytrade_count": daytrade_count,
+                    "daytrade_limit": pdt_context["daytrade_limit"],
+                },
+            )
+            _store_context("daytrade_limit")
+            return True
+
         if equity < PDT_EQUITY_THRESHOLD:
             logger.warning(
                 "PDT_BLOCK_EQUITY_LT_MIN",
@@ -22701,6 +22716,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 "daytrading_buying_power": pdt_context.get("daytrading_buying_power"),
                 "trading_blocked": bool(pdt_context.get("trading_blocked", False)),
                 "account_blocked": bool(pdt_context.get("account_blocked", False)),
+                "symbol_count": len(getattr(runtime, "tickers", []) or []),
             }
             logger.info("ORDERS_SUPPRESSED_BY_PDT", extra=extra)
             return
