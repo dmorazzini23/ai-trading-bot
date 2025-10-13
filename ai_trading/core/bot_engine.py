@@ -13570,6 +13570,24 @@ def _safe_float(value: Any | None) -> float | None:
     return candidate if math.isfinite(candidate) else None
 
 
+def _safe_bool(value: Any) -> bool:
+    """Return a defensive boolean conversion."""
+
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    if isinstance(value, (int, float, np.floating)):
+        return bool(value)
+    try:
+        normalized = str(value).strip().lower()
+    except Exception:
+        return False
+    if not normalized:
+        return False
+    return normalized in {"1", "true", "yes", "y", "on", "enabled"}
+
+
 def _enforce_buying_power_limit(
     ctx: BotContext,
     account: Any | None,
@@ -16335,6 +16353,14 @@ def _enter_long(
     strat: str,
 ) -> bool:
     prefer_backup_quote = False
+    account_obj: Any | None = None
+    api_obj = getattr(ctx, "api", None)
+    get_account = getattr(api_obj, "get_account", None)
+    if callable(get_account):
+        try:
+            account_obj = get_account()
+        except (APIError, TimeoutError, ConnectionError, RequestException, AttributeError, ValueError):
+            account_obj = None
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     provider_enabled = True
     if callable(primary_provider_fn):
@@ -16929,6 +16955,29 @@ def _enter_short(
     strat: str,
 ) -> bool:
     prefer_backup_quote = False
+    account_obj: Any | None = None
+    api_obj = getattr(ctx, "api", None)
+    get_account = getattr(api_obj, "get_account", None)
+    if callable(get_account):
+        try:
+            account_obj = get_account()
+        except (APIError, TimeoutError, ConnectionError, RequestException, AttributeError, ValueError):
+            account_obj = None
+
+    if account_obj is not None:
+        shorting_power = _safe_float(getattr(account_obj, "shorting_power", None))
+        shorting_enabled = _safe_bool(getattr(account_obj, "shorting_enabled", True))
+        if (shorting_power is not None and shorting_power <= 0) or not shorting_enabled:
+            logger.info(
+                "SKIP_SHORTING_UNAVAILABLE",
+                extra={
+                    "symbol": symbol,
+                    "shorting_power": None if shorting_power is None else round(shorting_power, 2),
+                    "shorting_enabled": shorting_enabled,
+                },
+            )
+            return True
+
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     provider_enabled = True
     if callable(primary_provider_fn):
@@ -17282,7 +17331,7 @@ def _enter_short(
     # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
     adj_qty = _apply_sector_cap_qty(ctx, symbol, qty, current_price)
     requested_qty = adj_qty
-    adj_qty, available_bp = _enforce_buying_power_limit(ctx, None, "sell_short", current_price, adj_qty)
+    adj_qty, available_bp = _enforce_buying_power_limit(ctx, account_obj, "sell_short", current_price, adj_qty)
     if adj_qty <= 0:
         logger.warning(
             "SKIP_INSUFFICIENT_BUYING_POWER",

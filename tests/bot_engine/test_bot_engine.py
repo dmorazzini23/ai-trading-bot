@@ -671,6 +671,14 @@ def _build_dummy_short_context(pd, symbol):
             assert sym == symbol
             return types.SimpleNamespace(shortable=True, shortable_shares=50)
 
+        def get_account(self):
+            return types.SimpleNamespace(
+                equity=100000.0,
+                portfolio_value=100000.0,
+                shorting_power=50000.0,
+                shorting_enabled=True,
+            )
+
     class _Logger:
         def log_entry(self, *args, **kwargs):
             return (args, kwargs)
@@ -692,6 +700,54 @@ def _build_dummy_short_context(pd, symbol):
     state = bot_engine.BotState()
 
     return ctx, state, feat_df
+
+
+def test_enter_short_skips_when_shorting_unavailable(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    ctx, state, feat_df = _build_dummy_short_context(pd, symbol)
+
+    class _NoShortAPI:
+        def get_asset(self, sym):
+            return types.SimpleNamespace(shortable=True, shortable_shares=100)
+
+        def get_account(self):
+            return types.SimpleNamespace(
+                equity=100000.0,
+                portfolio_value=100000.0,
+                shorting_power=0.0,
+                shorting_enabled=False,
+            )
+
+    ctx.api = _NoShortAPI()
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(bot_engine, "_resolve_order_quote", lambda *_a, **_k: (100.0, "alpaca_ask"))
+    monkeypatch.setattr(bot_engine, "_apply_sector_cap_qty", lambda _ctx, _sym, qty, _price: qty)
+    monkeypatch.setattr(bot_engine, "calculate_entry_size", lambda *_a, **_k: 10)
+    monkeypatch.setattr(bot_engine, "scaled_atr_stop", lambda **_k: (95.0, 105.0))
+    monkeypatch.setattr(bot_engine, "is_high_vol_regime", lambda: False)
+    monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
+    monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
+
+    caplog.set_level("INFO")
+
+    result = bot_engine._enter_short(
+        ctx,
+        state,
+        symbol,
+        feat_df=feat_df,
+        final_score=-1.0,
+        conf=-0.5,
+        strat="short_guard",
+    )
+
+    assert result is True
+    assert any(record.message == "SKIP_SHORTING_UNAVAILABLE" for record in caplog.records)
 
 
 def test_enter_long_skips_fallback_log_for_alpaca_sources(monkeypatch, caplog):

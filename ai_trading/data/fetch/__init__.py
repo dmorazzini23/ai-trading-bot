@@ -1558,10 +1558,23 @@ def _mark_fallback(
             extra=log_extra,
         )
         logger.warning("BACKUP_PROVIDER_USED", extra=payload)
-        provider_monitor.record_switchover(
-            from_provider or "alpaca",
-            provider_for_register,
-        )
+        should_register_switchover = True
+        fallback_reason = log_extra.get("fallback_reason")
+        if fallback_reason == "close_column_all_nan":
+            feed_for_guard: str | None = None
+            if from_provider and from_provider.startswith("alpaca_"):
+                feed_for_guard = from_provider.split("_", 1)[1]
+            if feed_for_guard is None and feed_hint is not None:
+                feed_for_guard = feed_hint
+            if feed_for_guard is None and resolved_feed:
+                feed_for_guard = resolved_feed
+            if not _should_disable_alpaca_on_empty(feed_for_guard):
+                should_register_switchover = False
+        if should_register_switchover:
+            provider_monitor.record_switchover(
+                from_provider or "alpaca",
+                provider_for_register,
+            )
     _FALLBACK_WINDOWS.add(key)
     fallback_name: str | None = None
     if feed_hint:
