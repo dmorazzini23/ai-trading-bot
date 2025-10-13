@@ -12990,17 +12990,90 @@ def check_pdt_rule(runtime) -> bool:
     api_day_trades = as_int(api_day_trades_raw, 0)
     api_buying_pw = as_float(api_buying_pw_raw, 0.0)
 
+    def _bool_from_account(*names: str) -> bool:
+        for name in names:
+            raw = getattr(acct, name, None)
+            if raw is None:
+                continue
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, (int, float)):
+                return bool(raw)
+            if isinstance(raw, str):
+                normalized = raw.strip().lower()
+                if normalized in {"1", "true", "yes", "y", "on"}:
+                    return True
+                if normalized in {"0", "false", "no", "n", "off"}:
+                    return False
+        return False
+
+    def _int_from_account(*names: str, default: int = 0) -> int:
+        for name in names:
+            raw = getattr(acct, name, None)
+            if raw in (None, ""):
+                continue
+            coerced = as_int(raw, None)
+            if coerced is not None:
+                try:
+                    return int(coerced)
+                except (TypeError, ValueError):
+                    continue
+        return default
+
+    pattern_flag = _bool_from_account("pattern_day_trader", "is_pattern_day_trader", "pdt")
+    daytrade_count = _int_from_account(
+        "daytrade_count",
+        "day_trade_count",
+        "pattern_day_trades",
+        "pattern_day_trades_count",
+        default=0,
+    )
+    account_limit = _int_from_account(
+        "daytrade_limit",
+        "day_trade_limit",
+        "pattern_day_trade_limit",
+        default=0,
+    )
+    resolved_limit = account_limit if account_limit > 0 else int(PDT_DAY_TRADE_LIMIT or 0)
+    legacy_count = int(api_day_trades or 0)
+
+    pdt_context = {
+        "pattern_day_trader": bool(pattern_flag),
+        "daytrade_count": daytrade_count,
+        "daytrade_limit": resolved_limit if resolved_limit > 0 else int(PDT_DAY_TRADE_LIMIT or 0),
+        "legacy_pattern_day_trades": legacy_count,
+    }
+    setattr(runtime, "_pdt_last_context", dict(pdt_context))
+
     logger.info(
         "PDT_CHECK",
         extra={
             "equity": equity,
-            "api_day_trades": api_day_trades,
+            "api_day_trades": legacy_count,
             "api_buying_pw": api_buying_pw,
+            "pattern_day_trader": bool(pattern_flag),
+            "daytrade_count": daytrade_count,
+            "daytrade_limit": pdt_context["daytrade_limit"],
         },
     )
 
-    if api_day_trades is not None and api_day_trades >= PDT_DAY_TRADE_LIMIT:
-        logger.info("SKIP_PDT_RULE", extra={"api_day_trades": api_day_trades})
+    limit_reached = False
+    limit_value = pdt_context["daytrade_limit"]
+    if limit_value > 0:
+        if pattern_flag and daytrade_count >= limit_value:
+            limit_reached = True
+        elif legacy_count >= limit_value:
+            limit_reached = True
+    if limit_reached:
+        logger.warning("PDT_LIMIT_REACHED_PRE_EXEC", extra=pdt_context)
+        logger.info(
+            "SKIP_PDT_RULE",
+            extra={
+                "reason": "limit_reached",
+                "limit": limit_value,
+                "count": legacy_count,
+            },
+        )
         return True
 
     if equity < PDT_EQUITY_THRESHOLD:
@@ -16519,6 +16592,8 @@ def _enter_long(
         "on",
         "enabled",
     }
+    if not fallback_env_allowed:
+        annotations.pop("using_fallback_price", None)
     now_utc = datetime.now(UTC)
     fallback_ts: datetime | None = None
     if isinstance(fallback_age, (int, float, np.floating)):
@@ -16590,8 +16665,38 @@ def _enter_long(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
+    if using_fallback_candidate and not fallback_env_allowed:
+        skip_reason = "fallback_price_disabled"
+        skip_reasons.append(skip_reason)
+        logger.warning(
+            "FALLBACK_PRICE_DISABLED",
+            extra={
+                "symbol": symbol,
+                "price_source": price_source,
+                "fallback_checked": fallback_checked,
+            },
+        )
+        reason_label = ";".join(dict.fromkeys(skip_reasons)) or skip_reason
+        logger.info(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+            symbol,
+            reason_label,
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+                "skip_reason": skip_reason,
+            },
+        )
+        return True
     fallback_in_use = bool(annotations.get("using_fallback_price"))
-    if not fallback_in_use and using_fallback_candidate:
+    if (
+        not fallback_in_use
+        and using_fallback_candidate
+        and fallback_env_allowed
+        and not fallback_stale_session
+    ):
         annotations["using_fallback_price"] = True
         fallback_in_use = True
     if (
@@ -17150,8 +17255,36 @@ def _enter_short(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
+    if using_fallback_candidate and not fallback_env_allowed:
+        skip_reason = "fallback_price_disabled"
+        logger.warning(
+            "FALLBACK_PRICE_DISABLED",
+            extra={
+                "symbol": symbol,
+                "price_source": price_source,
+                "fallback_checked": fallback_checked,
+            },
+        )
+        logger.info(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+            symbol,
+            skip_reason,
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+                "skip_reason": skip_reason,
+            },
+        )
+        return True
     fallback_in_use = bool(annotations.get("using_fallback_price"))
-    if not fallback_in_use and using_fallback_candidate:
+    if (
+        not fallback_in_use
+        and using_fallback_candidate
+        and fallback_env_allowed
+        and not fallback_stale_session
+    ):
         annotations["using_fallback_price"] = True
         fallback_in_use = True
     if (
@@ -22530,6 +22663,32 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             return
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
+            pdt_context = getattr(runtime, "_pdt_last_context", {}) or {}
+            try:
+                pattern_flag = bool(pdt_context.get("pattern_day_trader", False))
+            except Exception:
+                pattern_flag = False
+            try:
+                daytrade_count_val = int(pdt_context.get("daytrade_count", 0))
+            except (TypeError, ValueError):
+                daytrade_count_val = 0
+            try:
+                limit_val = int(pdt_context.get("daytrade_limit", PDT_DAY_TRADE_LIMIT))
+            except (TypeError, ValueError):
+                limit_val = int(PDT_DAY_TRADE_LIMIT or 0)
+            try:
+                symbol_count = len(getattr(runtime, "tickers", []) or [])
+            except Exception:
+                symbol_count = 0
+            logger.info(
+                "ORDERS_SUPPRESSED_BY_PDT",
+                extra={
+                    "symbol_count": symbol_count,
+                    "pattern_day_trader": pattern_flag,
+                    "daytrade_count": daytrade_count_val,
+                    "daytrade_limit": limit_val,
+                },
+            )
             return
         feed_cache = getattr(state, "minute_feed_cache", None)
         if isinstance(feed_cache, dict):

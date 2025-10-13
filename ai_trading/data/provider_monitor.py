@@ -40,6 +40,8 @@ from ai_trading.utils.time import monotonic_time
 
 logger = get_logger(__name__)
 
+_PROVIDER_CONFIG_LOGGED: bool = False
+
 def _resolve_switch_cooldown_seconds() -> int:
     """Return the minimum cooldown before switching back to the primary feed."""
 
@@ -623,6 +625,32 @@ class ProviderMonitor:
         self._last_switch_logged: tuple[str, str] | None = None
         self._last_switch_ts: float | None = None
         self.decision_window_seconds = _decision_window_seconds()
+        global _PROVIDER_CONFIG_LOGGED
+        if not _PROVIDER_CONFIG_LOGGED:
+            _PROVIDER_CONFIG_LOGGED = True
+            try:
+                decision_secs = int(self.decision_window_seconds)
+            except (TypeError, ValueError):
+                decision_secs = 0
+            try:
+                switch_cd = int(float(self.cooldown))
+            except (TypeError, ValueError):
+                switch_cd = 0
+            try:
+                max_cd = int(float(self.max_cooldown))
+            except (TypeError, ValueError):
+                max_cd = switch_cd
+            try:
+                logger.info(
+                    "PROVIDER_MONITOR_CONFIG",
+                    extra={
+                        "decision_window_secs": decision_secs,
+                        "switch_cooldown_secs": switch_cd,
+                        "max_cooldown_secs": max_cd,
+                    },
+                )
+            except Exception:
+                pass
         self._last_switchover_provider: str | None = None
         self._last_switchover_ts: float = 0.0
         self._last_switchover_passes: int = 0
