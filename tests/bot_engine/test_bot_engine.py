@@ -479,9 +479,40 @@ def test_enter_long_skips_when_primary_disabled(monkeypatch, caplog):
     assert any(
         record.message == "SKIP_ORDER_ALPACA_UNAVAILABLE" for record in caplog.records
     )
+
+
     assert not any(
         record.message == "FALLBACK_TO_FEATURE_CLOSE" for record in caplog.records
     )
+
+
+class TestBuyingPowerEnforcement:
+    def test_enforce_buying_power_allows_full_quantity(self):
+        account = types.SimpleNamespace(buying_power="10000")
+        ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
+
+        qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "buy", 100.0, 50)
+
+        assert qty == 50
+        assert available == pytest.approx(10000.0)
+
+    def test_enforce_buying_power_downsizes_quantity(self):
+        account = types.SimpleNamespace(buying_power=900)
+        ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
+
+        qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "buy", 100.0, 15)
+
+        assert qty == 9  # floor division of available // price
+        assert available == pytest.approx(900.0)
+
+    def test_enforce_buying_power_returns_zero_when_unavailable(self):
+        account = types.SimpleNamespace(shorting_power=0)
+        ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
+
+        qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "sell_short", 50.0, 10)
+
+        assert qty == 0
+        assert available == 0.0
 
 
 def test_enter_long_skips_when_alpaca_auth_failed(monkeypatch, caplog):

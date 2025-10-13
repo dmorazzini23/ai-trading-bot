@@ -13554,6 +13554,79 @@ def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) 
     return max(0, max_qty if max_qty < qty else qty)
 
 
+# --------------------------------------------------------------------------- #
+# Buying power enforcement helpers
+
+
+def _safe_float(value: Any | None) -> float | None:
+    """Return a finite float or ``None`` when conversion fails."""
+
+    if value in (None, "", float("inf"), float("-inf")):
+        return None
+    try:
+        candidate = float(value)
+    except (TypeError, ValueError):
+        return None
+    return candidate if math.isfinite(candidate) else None
+
+
+def _enforce_buying_power_limit(
+    ctx: BotContext,
+    account: Any | None,
+    side: str,
+    price: float,
+    qty: int,
+) -> tuple[int, float | None]:
+    """Clamp *qty* so required notional does not exceed available buying power.
+
+    Returns the adjusted quantity along with the available notional that was
+    considered (``None`` when unavailable). When the adjusted quantity is zero
+    the caller should skip submitting the order.
+    """
+
+    qty = max(0, int(qty))
+    if qty == 0 or price <= 0:
+        return 0, None
+
+    acct = account
+    if acct is None:
+        api = getattr(ctx, "api", None)
+        get_account = getattr(api, "get_account", None)
+        if callable(get_account):
+            try:
+                acct = get_account()
+            except (APIError, RequestException, AttributeError, ValueError):
+                acct = None
+
+    if acct is None:
+        return qty, None
+
+    available: float | None = None
+    side_norm = str(side).strip().lower()
+    if side_norm in {"buy", "long"}:
+        for attr in ("buying_power", "cash", "portfolio_cash", "non_marginable_buying_power"):
+            available = _safe_float(getattr(acct, attr, None))
+            if available is not None:
+                break
+    else:
+        for attr in ("shorting_power", "short_market_value", "buying_power"):
+            available = _safe_float(getattr(acct, attr, None))
+            if available is not None:
+                break
+
+    if available is None:
+        return qty, None
+    if available <= 0:
+        return 0, available
+
+    max_qty = int(available // price)
+    if max_qty <= 0:
+        return 0, available
+    if max_qty >= qty:
+        return qty, available
+    return max_qty, available
+
+
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
@@ -16682,10 +16755,13 @@ def _enter_long(
             target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
 
     # Use account equity for weight-based sizing to avoid multiplying by buying power
+    account_obj: Any | None = None
     try:
-        account_equity = float(ctx.api.get_account().equity)
+        account_obj = ctx.api.get_account()
+        account_equity = float(getattr(account_obj, "equity"))
     except (APIError, RequestException, AttributeError, ValueError):
         account_equity = float(balance)
+        account_obj = None
     raw_qty = int(account_equity * target_weight / current_price) if current_price > 0 else 0
     if gate.size_cap is not None and gate.size_cap < 1.0 and raw_qty > 0:
         capped_qty = int(math.floor(raw_qty * gate.size_cap))
@@ -16709,7 +16785,13 @@ def _enter_long(
         try:
             from ai_trading.portfolio import sizing as _sizing
 
-            account_equity = float(ctx.api.get_account().equity) if ctx.api else balance
+            sizing_account = account_obj
+            if sizing_account is None and ctx.api:
+                try:
+                    sizing_account = ctx.api.get_account()
+                except (APIError, RequestException, AttributeError, ValueError):
+                    sizing_account = None
+            account_equity = float(getattr(sizing_account, "equity")) if sizing_account is not None else balance
             optimized_qty = _sizing.position_size(
                 symbol,
                 final_score,
@@ -16747,6 +16829,33 @@ def _enter_long(
             return True
     # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
     adj_qty = _apply_sector_cap_qty(ctx, symbol, raw_qty, current_price)
+    requested_qty = adj_qty
+    adj_qty, available_bp = _enforce_buying_power_limit(ctx, account_obj, "buy", current_price, adj_qty)
+    if adj_qty <= 0:
+        logger.warning(
+            "SKIP_INSUFFICIENT_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "buy",
+                "requested_qty": requested_qty,
+                "price": current_price,
+                "available_buying_power": None if available_bp is None else round(available_bp, 2),
+            },
+        )
+        return True
+    if adj_qty < requested_qty:
+        logger.info(
+            "ORDER_DOWNSIZED_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "buy",
+                "requested_qty": requested_qty,
+                "adjusted_qty": adj_qty,
+                "price": current_price,
+                "available_buying_power": None if available_bp is None else round(available_bp, 2),
+            },
+        )
+        raw_qty = adj_qty
     logger.info(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
@@ -17172,6 +17281,33 @@ def _enter_short(
         return True
     # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
     adj_qty = _apply_sector_cap_qty(ctx, symbol, qty, current_price)
+    requested_qty = adj_qty
+    adj_qty, available_bp = _enforce_buying_power_limit(ctx, None, "sell_short", current_price, adj_qty)
+    if adj_qty <= 0:
+        logger.warning(
+            "SKIP_INSUFFICIENT_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "sell_short",
+                "requested_qty": requested_qty,
+                "price": current_price,
+                "available_short_capacity": None if available_bp is None else round(available_bp, 2),
+            },
+        )
+        return True
+    if adj_qty < requested_qty:
+        logger.info(
+            "ORDER_DOWNSIZED_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "sell_short",
+                "requested_qty": requested_qty,
+                "adjusted_qty": adj_qty,
+                "price": current_price,
+                "available_short_capacity": None if available_bp is None else round(available_bp, 2),
+            },
+        )
+        qty = adj_qty
     logger.info(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
