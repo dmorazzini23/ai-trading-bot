@@ -3396,6 +3396,28 @@ def _sip_configured() -> bool:
     return any(str(feed).strip().lower() == "sip" for feed in feeds)
 
 
+def _should_disable_alpaca_on_empty(feed: str | None) -> bool:
+    """Return False when empty-frame failures should not disable Alpaca."""
+
+    normalized: str | None = None
+    if feed not in (None, ""):
+        try:
+            normalized = _normalize_feed_value(feed)  # type: ignore[arg-type]
+        except Exception:
+            try:
+                normalized = str(feed).strip().lower()
+            except Exception:
+                normalized = None
+    if normalized == "iex":
+        try:
+            sip_ready = _sip_configured()
+        except Exception:
+            sip_ready = False
+        if not sip_ready:
+            return False
+    return True
+
+
 def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZED_SIP") -> None:
     key = (symbol, timeframe)
     if key in _SIP_UNAVAILABLE_LOGGED:
@@ -6686,9 +6708,24 @@ def _fetch_bars(
                     provider_fallback.labels(
                         from_provider=f"alpaca_{_feed}", to_provider=resolved_provider
                     ).inc()
-                    provider_monitor.record_switchover(
-                        f"alpaca_{_feed}", resolved_provider
-                    )
+                    if _should_disable_alpaca_on_empty(_feed):
+                        provider_monitor.record_switchover(
+                            f"alpaca_{_feed}", resolved_provider
+                        )
+                    else:
+                        logger.debug(
+                            "ALPACA_EMPTY_SUPPRESSED",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "symbol": symbol,
+                                    "reason": "close_column_all_nan",
+                                    "action": "prefer_backup_only",
+                                }
+                            ),
+                        )
                     if not skip_empty_metrics:
                         metrics.empty_fallback += 1
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
@@ -7005,21 +7042,36 @@ def _fetch_bars(
                             already_disabled = False
                     if not already_disabled:
                         _incr("data.fetch.provider_disabled", value=1.0, tags=_tags())
-                    provider_monitor.disable("alpaca", duration=300)
-                    _ALPACA_DISABLED_ALERTED = True
-                    try:
-                        provider_monitor.alert_manager.create_alert(
-                            AlertType.SYSTEM,
-                            AlertSeverity.CRITICAL,
-                            "Primary data provider alpaca disabled",
-                            metadata={
-                                "provider": "alpaca",
-                                "disabled_until": _alpaca_disabled_until.isoformat() if _alpaca_disabled_until else "",
-                                "reason": "empty",
-                            },
+                    if _should_disable_alpaca_on_empty(_feed):
+                        provider_monitor.disable("alpaca", duration=300)
+                        _ALPACA_DISABLED_ALERTED = True
+                        try:
+                            provider_monitor.alert_manager.create_alert(
+                                AlertType.SYSTEM,
+                                AlertSeverity.CRITICAL,
+                                "Primary data provider alpaca disabled",
+                                metadata={
+                                    "provider": "alpaca",
+                                    "disabled_until": _alpaca_disabled_until.isoformat() if _alpaca_disabled_until else "",
+                                    "reason": "empty",
+                                },
+                            )
+                        except Exception:  # pragma: no cover - alerting best effort
+                            logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
+                    else:
+                        logger.debug(
+                            "ALPACA_DISABLE_SUPPRESSED",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "symbol": symbol,
+                                    "reason": "empty",
+                                    "action": "skip_disable_for_iex",
+                                }
+                            ),
                         )
-                    except Exception:  # pragma: no cover - alerting best effort
-                        logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                 remaining_retries = max_retries - _state["retries"]
                 payload = {
                     "provider": "alpaca",
