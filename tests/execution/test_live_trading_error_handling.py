@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Any
 from types import SimpleNamespace
 
 import pytest
@@ -76,3 +77,27 @@ def test_submit_limit_order_unexpected_exception_propagates(engine_factory):
 
     with pytest.raises(RuntimeError):
         engine.submit_limit_order("AAPL", "buy", 2, 55.0)
+
+
+def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch):
+    monkeypatch.setenv("EXECUTION_FALLBACK_LIMIT_BUFFER_BPS", "100")
+
+    captured: dict[str, Any] = {}
+
+    def _capture(order_data: dict[str, Any]) -> dict[str, Any]:
+        captured["order_data"] = dict(order_data)
+        return {"id": "ok", **order_data}
+
+    engine = engine_factory(_capture)
+
+    engine.execute_order(
+        "AAPL",
+        "buy",
+        5,
+        price=100.0,
+        annotations={"using_fallback_price": True},
+    )
+
+    submitted = captured["order_data"]
+    assert submitted["type"] == "limit"
+    assert submitted.get("limit_price") == pytest.approx(101.0)

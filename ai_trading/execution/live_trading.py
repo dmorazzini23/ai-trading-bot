@@ -1979,10 +1979,46 @@ class ExecutionEngine:
         elif resolved_limit_price is not None:
             order_type_normalized = "limit"
 
+        fallback_buffer_bps = 0
+        if using_fallback_price and not manual_limit_requested:
+            fallback_buffer_bps = _fallback_limit_buffer_bps()
+            if fallback_buffer_bps > 0:
+                base_price_candidate = price_for_limit or price_hint or resolved_limit_price or price_alias
+                adjusted_price: float | None = None
+                base_price_value: float | None = None
+                if base_price_candidate is not None:
+                    try:
+                        base_price_value = float(base_price_candidate)
+                    except (TypeError, ValueError):
+                        base_price_value = None
+                    if base_price_value is not None and math.isfinite(base_price_value) and base_price_value > 0:
+                        direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
+                        multiplier = 1.0 + direction * (fallback_buffer_bps / 10000.0)
+                        adjusted_price = max(base_price_value * multiplier, 0.01)
+                if adjusted_price is not None:
+                    resolved_limit_price = adjusted_price
+                    price_for_limit = adjusted_price
+                    kwargs["price"] = adjusted_price
+                    if price_hint is None:
+                        price_hint = adjusted_price
+                    logger.info(
+                        "FALLBACK_LIMIT_APPLIED",
+                        extra={
+                            "symbol": symbol,
+                            "side": mapped_side,
+                            "buffer_bps": fallback_buffer_bps,
+                            "base_price": None if base_price_value is None else round(base_price_value, 6),
+                            "adjusted_price": round(adjusted_price, 6),
+                        },
+                    )
+                else:
+                    fallback_buffer_bps = 0
+
         if (
             using_fallback_price
             and not manual_limit_requested
             and order_type_normalized in {"limit", "stop_limit"}
+            and fallback_buffer_bps <= 0
         ):
             order_type_normalized = "market"
             downgraded_to_market_initial = True
@@ -2998,3 +3034,10 @@ __all__ = [
     "LiveTradingExecutionEngine",
     "AlpacaExecutionEngine",
 ]
+def _fallback_limit_buffer_bps() -> int:
+    """Return extra BPS to widen limit price when using fallback quotes."""
+
+    buffer = _config_int("EXECUTION_FALLBACK_LIMIT_BUFFER_BPS", 75) or 0
+    if buffer < 0:
+        buffer = 0
+    return buffer
