@@ -23,7 +23,7 @@ except RecursionError as exc:
         "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
     ) from exc
 
-if _sklearn_pipeline is None:
+if _sklearn_pipeline is None or not hasattr(_sklearn_pipeline, "Pipeline"):
     raise ImportError(
         "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
     )
@@ -99,6 +99,17 @@ class _LazyPipeline:
             skl_pipeline = load_sklearn_pipeline()
             skl_pre = load_sklearn_preprocessing()
             skl_linear = load_sklearn_linear_model()
+            if (
+                skl_pipeline is None
+                or not hasattr(skl_pipeline, "Pipeline")
+                or skl_pre is None
+                or not hasattr(skl_pre, "StandardScaler")
+                or skl_linear is None
+                or not hasattr(skl_linear, "SGDRegressor")
+            ):
+                raise ImportError(
+                    "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
+                )
             Pipeline = skl_pipeline.Pipeline
             StandardScaler = skl_pre.StandardScaler
             SGDRegressor = skl_linear.SGDRegressor

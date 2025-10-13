@@ -3,6 +3,7 @@
 import builtins
 import importlib
 import sys
+import types
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -17,11 +18,35 @@ class TestBotEngineImports:
     @staticmethod
     @contextmanager
     def _safe_patch_modules(values: dict[str, object], *, clear: bool = False):
+        class _MissingSklearnModule(types.ModuleType):
+            def __getattr__(self, item):
+                raise ModuleNotFoundError(self.__name__)
+
+        try:
+            from ai_trading.utils.lazy_imports import _load_sklearn_submodule
+        except Exception:  # pragma: no cover - import guard
+            _load_sklearn_submodule = None
+
         with patch.dict(sys.modules, values, clear=clear) as ctx:
             if clear:
                 for name, module in TestBotEngineImports._original_modules.items():
                     if module is not None and name not in sys.modules:
                         sys.modules[name] = module
+                for missing in (
+                    "ai_trading.pipeline",
+                    "ai_trading.pipeline.basic",
+                    "sklearn",
+                    "sklearn.pipeline",
+                    "sklearn.linear_model",
+                    "sklearn.preprocessing",
+                ):
+                    sys.modules.pop(missing, None)
+                if _load_sklearn_submodule is not None:
+                    _load_sklearn_submodule.cache_clear()
+                sys.modules["sklearn"] = _MissingSklearnModule("sklearn")
+                sys.modules["sklearn.pipeline"] = _MissingSklearnModule("sklearn.pipeline")
+                sys.modules["sklearn.linear_model"] = _MissingSklearnModule("sklearn.linear_model")
+                sys.modules["sklearn.preprocessing"] = _MissingSklearnModule("sklearn.preprocessing")
             yield ctx
 
     def test_model_pipeline_import(self):

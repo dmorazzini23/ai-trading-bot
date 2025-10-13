@@ -234,6 +234,17 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
     limit_order_ids = []
     market_calls = []
 
+    def submit_order(**kwargs):
+        if not limit_order_ids and kwargs.get("limit_price") is not None:
+            order = SimpleNamespace(id="limit-001")
+            api.orders[order.id] = SimpleNamespace(id=order.id, status="new")
+            limit_order_ids.append(order.id)
+            return order
+        market_calls.append(kwargs.get("symbol"))
+        return SimpleNamespace(id="market-001")
+
+    api.submit_order = submit_order  # type: ignore[attr-defined]
+
     def fake_safe_submit_order(_api, _req):
         if not limit_order_ids:
             order = SimpleNamespace(id="limit-001")
@@ -244,6 +255,7 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
         return SimpleNamespace(id="market-001")
 
     monkeypatch.setattr(bot_engine, "safe_submit_order", fake_safe_submit_order)
+    monkeypatch.setattr(execution_flow, "safe_submit_order", fake_safe_submit_order)
     monkeypatch.setattr(execution_flow.pytime, "sleep", lambda _secs: None)
 
     execution_flow.send_exit_order(runtime, "AAPL", 5, 150.0, "manual_exit")

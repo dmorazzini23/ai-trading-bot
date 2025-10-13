@@ -151,7 +151,8 @@ class TestOrderExecutionTracking(unittest.TestCase):
         partial_order.qty = "100"
 
         with patch.object(self.mock_ctx.api, 'submit_order', return_value=partial_order), \
-             patch.object(self.mock_ctx.api, 'get_order', return_value=partial_order):
+             patch.object(self.mock_ctx.api, 'get_order', return_value=partial_order), \
+             patch.object(bot_engine, 'market_is_open', return_value=True):
 
             if hasattr(bot_engine, 'safe_submit_order'):
                 result = bot_engine.safe_submit_order(self.mock_ctx.api, mock_req)

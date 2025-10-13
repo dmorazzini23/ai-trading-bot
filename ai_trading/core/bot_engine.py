@@ -2624,15 +2624,14 @@ def fetch_sentiment(
         if now - cached[0] < cache_ttl:
             return cached[1]
     if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD or not SENTIMENT_API_KEY:
-        return 0.0
+        return _cache_sentiment_score(symbol, 0.0)
 
     if SENTIMENT_MAX_CALLS_PER_MIN > 0:
         cutoff = now - 60
         while _SENTIMENT_CALL_TIMES and _SENTIMENT_CALL_TIMES[0] < cutoff:
             _SENTIMENT_CALL_TIMES.popleft()
         if len(_SENTIMENT_CALL_TIMES) >= SENTIMENT_MAX_CALLS_PER_MIN:
-            _SENTIMENT_CACHE[symbol] = (now, cached[1] if cached else 0.0)
-            return cached[1] if cached else 0.0
+            return _cache_sentiment_score(symbol, cached[1] if cached else 0.0)
 
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
     session_candidates: list[Any] = []
@@ -2670,13 +2669,11 @@ def fetch_sentiment(
                 )
                 # fmt: on
                 if resp.status_code in {429, 500, 502, 503, 504}:
-                    _SENTIMENT_CACHE[symbol] = (time.time(), 0.0)
-                    return 0.0
+                    return _cache_sentiment_score(symbol, 0.0)
                 resp.raise_for_status()
                 data = resp.json()
                 score = float(data.get("sentiment", 0.0))
-                _SENTIMENT_CACHE[symbol] = (time.time(), score)
-                return score
+                return _cache_sentiment_score(symbol, score)
             except exception_types:  # type: ignore[misc] - dynamic tuple is intentional
                 continue
 
@@ -2685,8 +2682,7 @@ def fetch_sentiment(
             _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD
             or attempt == SENTIMENT_MAX_RETRIES
         ):
-            _SENTIMENT_CACHE[symbol] = (time.time(), 0.0)
-            return 0.0
+            return _cache_sentiment_score(symbol, 0.0)
         sleep_s = SENTIMENT_BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, SENTIMENT_BACKOFF_BASE)
         time.sleep(sleep_s)
 
@@ -24160,3 +24156,6 @@ if __name__ == "__main__":
         ) as exc:  # AI-AGENT-REF: narrow exception
             logger.exception("Scheduler loop error: %s", exc)
         time.sleep(CFG.scheduler_sleep_seconds)
+def _cache_sentiment_score(symbol: str, score: float) -> float:
+    _SENTIMENT_CACHE[symbol] = (time.time(), score)
+    return score

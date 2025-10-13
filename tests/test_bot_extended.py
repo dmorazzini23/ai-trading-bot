@@ -239,7 +239,10 @@ def test_fetch_minute_df_safe_market_closed(monkeypatch):
 
 def test_fetch_minute_df_safe_open(monkeypatch):
     """DataFrame is returned when the market is open."""
-    df = pd.DataFrame({"close": [1]}, index=[pd.Timestamp("2024-01-01")])
+    df = pd.DataFrame({"close": [1]}, index=[pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1)])
     monkeypatch.setattr(bot, "get_minute_df", lambda symbol, start_date, end_date: df)
+    monkeypatch.setattr(bot, "_count_trading_minutes", lambda *a, **k: 1)
+    monkeypatch.setattr(bot, "_expected_minute_bars_window", lambda *a, **k: 1)
+    monkeypatch.setattr(bot.staleness, "_ensure_data_fresh", lambda *a, **k: None)
     result = bot.fetch_minute_df_safe("AAPL")
     pd.testing.assert_frame_equal(result, df)
