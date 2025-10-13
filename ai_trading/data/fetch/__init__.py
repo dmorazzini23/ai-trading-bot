@@ -4006,10 +4006,33 @@ def _flatten_and_normalize_ohlcv(
                 if not all_nan:
                     break
         if all_nan:
+            close_snapshot: list[Any] = []
+            close_series_log = df.get("close")
+            if close_series_log is not None:
+                try:
+                    head_values = getattr(close_series_log, "head", lambda n: close_series_log[:n])(5)
+                except Exception:
+                    head_values = close_series_log
+                try:
+                    iterator = list(head_values)
+                except Exception:
+                    iterator = []
+                for value in iterator:
+                    try:
+                        if pd is not None and pd.isna(value):  # type: ignore[attr-defined]
+                            close_snapshot.append(None)
+                        elif isinstance(value, (int, float)):
+                            close_snapshot.append(float(value))
+                        else:
+                            close_snapshot.append(value)
+                    except Exception:
+                        close_snapshot.append(value)
             extra = {
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "rows": int(getattr(df, "shape", (0, 0))[0]),
+                "close_snapshot": close_snapshot,
+                "columns": [str(col) for col in getattr(df, "columns", [])],
             }
             extra = {k: v for k, v in extra.items() if v is not None}
             logger.error("OHLCV_CLOSE_ALL_NAN", extra=extra)
