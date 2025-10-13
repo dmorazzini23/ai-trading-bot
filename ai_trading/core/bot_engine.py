@@ -1404,6 +1404,25 @@ def _normalize_price(raw_value: Any, provider: str, symbol: str) -> float | None
     if raw_value is None:
         _log_price_warning("PRICE_PROVIDER_NONE", provider=provider, symbol=symbol)
         return None
+    if isinstance(raw_value, Mapping):
+        extracted = None
+        for key in ("price", "p", "trade_price", "last_price", "value", "close", "c"):
+            if key in raw_value and raw_value[key] not in (None, ""):
+                extracted = raw_value[key]
+                break
+        if extracted is None:
+            _log_price_warning(
+                "PRICE_PROVIDER_INVALID",
+                provider=provider,
+                symbol=symbol,
+                extra={'raw': raw_value},
+            )
+            return None
+        raw_value = extracted
+    elif hasattr(raw_value, "price"):
+        candidate = getattr(raw_value, "price", None)
+        if candidate is not None:
+            raw_value = candidate
     try:
         value = float(raw_value)
     except (TypeError, ValueError):
@@ -23651,10 +23670,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
 
-    global _GLOBAL_INTRADAY_FALLBACK_FEED
-    if _GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo":
-        _GLOBAL_INTRADAY_FALLBACK_FEED = None
-
     provider_disabled = False
     primary_provider_fn = getattr(
         data_fetcher_module, "is_primary_provider_enabled", None
@@ -23717,15 +23732,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             _log_delayed_quote_slippage(symbol, price_source, price, cache)
         _set_price_source(symbol, price_source)
         if _is_usable_alpaca_source(price_source):
-            should_update_cycle_feed = False
-            if alpaca_feed:
-                if isinstance(price_source, str) and price_source.endswith("_degraded"):
-                    should_update_cycle_feed = True
-                elif price_source in {"alpaca_bid"}:
-                    should_update_cycle_feed = True
-            if should_update_cycle_feed and alpaca_feed:
-                _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
-                _clear_cached_yahoo_fallback(symbol)
+            if alpaca_feed and alpaca_feed in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+                price_label = str(price_source)
+                if alpaca_feed == "sip" or price_label.startswith("alpaca_bid"):
+                    _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                if price_label.startswith("alpaca_bid"):
+                    _clear_cached_yahoo_fallback(symbol)
         return price
 
     def _use_cached_primary_success() -> bool:
@@ -23812,8 +23824,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         primary_requires_quote = any(
             provider in {"alpaca_quote", "alpaca_ask", "alpaca_bid"} for provider in provider_order
         )
-        primary_requires_trade = any(provider == "alpaca_trade" for provider in provider_order)
-
         quote_values = cache.get("quote_values") or {}
         if primary_requires_quote and not cache.get("quote_attempted"):
             _, quote_source = _attempt_alpaca_quote(symbol, alpaca_feed, cache)
@@ -23837,8 +23847,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
         trade_price: float | None = None
         trade_source: str | None = None
-        need_trade = primary_requires_trade or last_price is None or (last_price is not None and last_price <= 0)
-        if need_trade:
+        if last_price is None or last_price <= 0:
             trade_price, trade_source = _attempt_alpaca_trade(symbol, alpaca_feed, cache)
             if trade_source == "alpaca_auth_failed":
                 if alpaca_feed:
@@ -23862,6 +23871,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if bid_price is not None and bid_price > 0:
             price = float(bid_price)
             price_source = "alpaca_bid"
+            if cache.get("quote_ask_unusable") or cache.get("quote_last_unusable"):
+                price_source = "alpaca_bid_degraded"
             winning_provider = price_source
             return _finalize_return()
 

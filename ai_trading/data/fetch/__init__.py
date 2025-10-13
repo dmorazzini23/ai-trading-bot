@@ -311,6 +311,17 @@ def _sip_allowed() -> bool:
             if normalized:
                 return normalized in {"1", "true", "yes", "on"}
             return False
+    try:
+        priority = provider_priority()
+    except Exception:
+        priority = ()
+    for entry in priority or ():
+        try:
+            provider_name = str(entry).strip().lower()
+        except Exception:
+            continue
+        if provider_name in {"alpaca_sip", "sip"}:
+            return True
     return False
 
 
