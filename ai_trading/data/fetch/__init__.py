@@ -3841,6 +3841,27 @@ def _flatten_and_normalize_ohlcv(
     elif "adj_close" in df.columns:
         close_like = df["adj_close"]
 
+    if "open" not in df.columns and "o" in df.columns:
+        try:
+            df["open"] = pd.to_numeric(df["o"], errors="coerce")
+        except Exception:
+            df["open"] = df["o"]
+    if "high" not in df.columns and "h" in df.columns:
+        try:
+            df["high"] = pd.to_numeric(df["h"], errors="coerce")
+        except Exception:
+            df["high"] = df["h"]
+    if "low" not in df.columns and "l" in df.columns:
+        try:
+            df["low"] = pd.to_numeric(df["l"], errors="coerce")
+        except Exception:
+            df["low"] = df["l"]
+    if "volume" not in df.columns and "v" in df.columns:
+        try:
+            df["volume"] = pd.to_numeric(df["v"], errors="coerce")
+        except Exception:
+            df["volume"] = df["v"]
+
     if close_like is not None:
         for column in ("open", "high", "low"):
             if column not in df.columns:
@@ -3956,7 +3977,7 @@ def _flatten_and_normalize_ohlcv(
                 all_nan = False
         recovered_from_normalized: str | None = None
         if all_nan:
-            for candidate in ("adj_close", "open", "high", "low"):
+            for candidate in ("adj_close", "open", "high", "low", "c"):
                 if candidate not in df.columns or candidate == "close":
                     continue
                 try:

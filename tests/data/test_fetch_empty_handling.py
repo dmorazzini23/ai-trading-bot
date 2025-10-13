@@ -108,4 +108,12 @@ def test_post_process_handles_compact_column_names(caplog):
     assert result is not None
     assert "close" in result.columns
     assert result["close"].tolist() == pytest.approx([10.1, 10.6, 11.1])
+    assert "open" in result.columns
+    assert "high" in result.columns
+    assert "low" in result.columns
+    assert "volume" in result.columns
+    assert result["open"].tolist() == pytest.approx([10.0, 10.5, 11.0])
+    assert result["high"].tolist() == pytest.approx([10.2, 10.7, 11.2])
+    assert result["low"].tolist() == pytest.approx([9.9, 10.3, 10.8])
+    assert result["volume"].tolist() == pytest.approx([1_000, 1_100, 1_050])
     # no recovery log is necessary; ensure data parsed without raising
