@@ -3851,8 +3851,15 @@ def _flatten_and_normalize_ohlcv(
             except Exception:
                 df["volume"] = 0
 
+    if "close" not in df.columns and "c" in df.columns:
+        try:
+            df["close"] = pd.to_numeric(df["c"], errors="coerce")
+        except Exception:
+            df["close"] = df["c"]
+
     def _recover_close_column(frame: pd.DataFrame) -> str | None:
         fallback_candidates: tuple[str, ...] = (
+            "c",
             "vw",
             "vwap",
             "average",
