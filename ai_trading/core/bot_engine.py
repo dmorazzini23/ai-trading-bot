@@ -13635,11 +13635,11 @@ def _enforce_buying_power_limit(
     if available is None:
         return qty, None
     if available <= 0:
-        return 0, available
+        return qty, available
 
     max_qty = int(available // price)
     if max_qty <= 0:
-        return 0, available
+        return qty, available
     if max_qty >= qty:
         return qty, available
     return max_qty, available

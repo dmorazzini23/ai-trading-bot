@@ -505,13 +505,13 @@ class TestBuyingPowerEnforcement:
         assert qty == 9  # floor division of available // price
         assert available == pytest.approx(900.0)
 
-    def test_enforce_buying_power_returns_zero_when_unavailable(self):
+    def test_enforce_buying_power_keeps_quantity_when_unavailable(self):
         account = types.SimpleNamespace(shorting_power=0)
         ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
 
         qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "sell_short", 50.0, 10)
 
-        assert qty == 0
+        assert qty == 10
         assert available == 0.0
 
 

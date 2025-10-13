@@ -9,17 +9,19 @@ from ai_trading.data import fetch as data_fetch
 
 
 @pytest.mark.parametrize(
-    ("feed", "sip_configured", "expected"),
+    ("feed", "sip_configured", "sip_unauthorized", "expected"),
     [
-        ("iex", False, False),
-        ("iex", True, True),
-        ("sip", False, True),
-        ("yahoo", False, True),
-        (None, False, True),
+        ("iex", False, False, False),
+        ("iex", True, False, True),
+        ("iex", True, True, False),
+        ("sip", False, False, True),
+        ("yahoo", False, False, True),
+        (None, False, False, True),
     ],
 )
-def test_should_disable_alpaca_on_empty(feed, sip_configured, expected, monkeypatch):
+def test_should_disable_alpaca_on_empty(feed, sip_configured, sip_unauthorized, expected, monkeypatch):
     monkeypatch.setattr(data_fetch, "_sip_configured", lambda: sip_configured, raising=False)
+    monkeypatch.setattr(data_fetch, "_is_sip_unauthorized", lambda: sip_unauthorized, raising=False)
     assert data_fetch._should_disable_alpaca_on_empty(feed) is expected
 
 

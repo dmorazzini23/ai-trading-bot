@@ -3422,11 +3422,13 @@ def _should_disable_alpaca_on_empty(feed: str | None) -> bool:
             except Exception:
                 normalized = None
     if normalized == "iex":
+        sip_ready = False
         try:
             sip_ready = _sip_configured()
         except Exception:
             sip_ready = False
-        if not sip_ready:
+        sip_authorized = not _is_sip_unauthorized()
+        if not (sip_ready and sip_authorized):
             return False
     return True
 
@@ -7085,6 +7087,7 @@ def _fetch_bars(
                                 }
                             ),
                         )
+                        _alpaca_empty_streak = 0
                 remaining_retries = max_retries - _state["retries"]
                 payload = {
                     "provider": "alpaca",
