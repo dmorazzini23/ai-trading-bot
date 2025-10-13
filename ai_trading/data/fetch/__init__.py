@@ -8520,7 +8520,9 @@ def get_minute_df(
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
     if used_backup:
         _register_backup_skip()
-        mark_success(symbol, "1Min")
+        http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+        if not http_fallback_env or http_fallback_env.strip().lower() in {"0", "false", "no", "off"}:
+            mark_success(symbol, "1Min")
     if backup_label and not used_backup:
         _clear_minute_fallback_state(
             symbol,

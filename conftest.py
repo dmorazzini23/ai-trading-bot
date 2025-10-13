@@ -49,12 +49,11 @@ setattr(_dummy_mod, "get_model", _get_model)
 setattr(_dummy_mod, "_DummyModel", _DummyModel)
 sys.modules["dummy_model"] = _dummy_mod
 os.environ.setdefault("AI_TRADING_MODEL_MODULE", "dummy_model")
-os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
+os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.1")
 os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("ALPACA_API_KEY", "test-key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test-secret")
 os.environ.setdefault("ALPACA_ALLOW_SIP", "1")
-os.environ.setdefault("DOLLAR_RISK_LIMIT", "0.05")
 
 
 def _missing(mod: str) -> bool:
