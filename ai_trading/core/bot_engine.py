@@ -5171,11 +5171,15 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     try:
                         refreshed = get_minute_df(symbol, start_dt, attempt_end, **filtered_kwargs)
                         fetch_kwargs = filtered_kwargs
-                    except Exception as retry_exc:  # pragma: no cover - defensive fallback
+                    except DataFetchError:
+                        raise
+                    except COMMON_EXC as retry_exc:  # pragma: no cover - defensive fallback
                         try:
                             refreshed = get_minute_df(symbol, start_dt, attempt_end)
                             fetch_kwargs = {}
-                        except Exception:
+                        except DataFetchError:
+                            raise
+                        except COMMON_EXC:
                             logger.warning(
                                 "FETCH_MINUTE_STALE_RETRY_FAILED",
                                 extra={
