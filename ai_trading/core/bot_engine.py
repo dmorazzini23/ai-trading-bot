@@ -8312,6 +8312,47 @@ class DataFetcher:
         memo_now = float(monotonic_fn())
         precomputed_monotonic = float(monotonic_fn())
 
+        result_logged = False
+
+        def _emit_daily_fetch_result(df: Any | None, *, cache: bool) -> Any | None:
+            nonlocal result_logged
+            if not result_logged:
+                rows = 0 if df is None else len(df)  # len(None) guarded
+                logger.info(
+                    "DAILY_FETCH_RESULT",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": timeframe_key,
+                        "start": start_ts.isoformat(),
+                        "end": end_ts.isoformat(),
+                        "rows": rows,
+                        "cache": cache,
+                    },
+                )
+                result_logged = True
+            return df
+
+        def _emit_cache_hit(df: Any | None, *, reason: str | None) -> Any | None:
+            if df is None:
+                return None
+            if daily_cache_hit:
+                try:
+                    daily_cache_hit.inc()
+                except (
+                    FileNotFoundError,
+                    PermissionError,
+                    IsADirectoryError,
+                    JSONDecodeError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    OSError,
+                ) as exc:  # AI-AGENT-REF: narrow exception
+                    logger.exception("bot.py unexpected", exc_info=exc)
+                    raise
+            self._log_daily_cache_hit_once(symbol, reason=reason)
+            return _emit_daily_fetch_result(df, cache=True)
+
         if memo_store is not None:
             direct_entries: list[Any] = []
             for candidate_key in (memo_key, legacy_memo_key):
@@ -8334,7 +8375,9 @@ class DataFetcher:
                         memo_store[legacy_memo_key] = (memo_now, memo_df)
                     except COMMON_EXC:
                         pass
-                    return memo_df
+                    with cache_lock:
+                        self._daily_cache[symbol] = (fetch_date, memo_df)
+                    return _emit_cache_hit(memo_df, reason="memo")
 
         def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
             if isinstance(entry, tuple) and len(entry) == 2:
@@ -8386,7 +8429,9 @@ class DataFetcher:
                             memo_store[legacy_lookup] = (memo_now, memo_df)
                         except COMMON_EXC:
                             pass
-                        return memo_df
+                        with cache_lock:
+                            self._daily_cache[symbol] = (fetch_date, memo_df)
+                        return _emit_cache_hit(memo_df, reason="memo")
 
         min_interval = self._daily_fetch_min_interval(ctx)
         now_monotonic = precomputed_monotonic
@@ -8610,8 +8655,8 @@ class DataFetcher:
             with cache_lock:
                 _memo_set_entry(memo_key, normalized_pair)
                 _memo_set_entry(legacy_memo_key, normalized_pair)
-            self._log_daily_cache_hit_once(symbol, reason="memo")
-            return memo_payload
+                self._daily_cache[symbol] = (fetch_date, memo_payload)
+            return _emit_cache_hit(memo_payload, reason="memo")
 
         refresh_stamp: float | None = None
         refresh_df: Any | None = None
@@ -8638,23 +8683,10 @@ class DataFetcher:
                             refresh_df,
                             refresh_stamp,
                         )
-            if daily_cache_hit:
-                try:
-                    daily_cache_hit.inc()
-                except (
-                    FileNotFoundError,
-                    PermissionError,
-                    IsADirectoryError,
-                    JSONDecodeError,
-                    ValueError,
-                    KeyError,
-                    TypeError,
-                    OSError,
-                ) as exc:  # AI-AGENT-REF: narrow exception
-                    logger.exception("bot.py unexpected", exc_info=exc)
-                    raise
-            self._log_daily_cache_hit_once(symbol, reason=cached_reason)
-            return cached_df
+            if refresh_df is not None and refresh_source != "provider_session":
+                with cache_lock:
+                    self._daily_cache[symbol] = (fetch_date, refresh_df)
+            return _emit_cache_hit(cached_df, reason=cached_reason)
 
         def _apply_fallback_entry() -> Any:
             nonlocal cached_df, cached_reason, refresh_stamp, refresh_df, refresh_source, refresh_provider_key
@@ -8705,7 +8737,8 @@ class DataFetcher:
                 with cache_lock:
                     _memo_set_entry(memo_key, normalized_pair)
                     _memo_set_entry(legacy_memo_key, normalized_pair)
-                return memo_payload
+                    self._daily_cache[symbol] = (fetch_date, memo_payload)
+                return _emit_cache_hit(memo_payload, reason="memo")
 
         memo_check_pairs = (
             (memo_key, legacy_memo_key),
@@ -8782,7 +8815,8 @@ class DataFetcher:
                 _memo_set_entry(candidate_key, normalized_pair)
                 if counterpart_key != candidate_key:
                     _memo_set_entry(counterpart_key, normalized_pair)
-            return payload
+                self._daily_cache[symbol] = (fetch_date, payload)
+            return _emit_cache_hit(payload, reason="memo")
 
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window
@@ -9087,7 +9121,8 @@ class DataFetcher:
                 ) from backup_exc
 
         if df is None:
-            return bars._create_empty_bars_dataframe(timeframe_key)
+            empty_df = bars._create_empty_bars_dataframe(timeframe_key)
+            return _emit_daily_fetch_result(empty_df, cache=False)
 
         try:
             df = self._prepare_daily_dataframe(df, symbol)
@@ -9124,18 +9159,7 @@ class DataFetcher:
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
 
-        logger.info(
-            "DAILY_FETCH_RESULT",
-            extra={
-                "symbol": symbol,
-                "timeframe": timeframe_key,
-                "start": start_ts.isoformat(),
-                "end": end_ts.isoformat(),
-                "rows": 0 if df is None else len(df),
-                "cache": False,
-            },
-        )
-        return df
+        return _emit_daily_fetch_result(df, cache=False)
 
     def get_minute_df(
         self, ctx: BotContext, symbol: str, lookback_minutes: int = 30

@@ -398,17 +398,19 @@ def pov_submit(
     import random
 
     import os as _os
-    test_mode = _os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+    pytest_running = _bot_engine._truthy_env(_os.getenv("PYTEST_RUNNING"))
 
     def _sleep(seconds: float) -> None:
-        if not test_mode and seconds > 0:
-            pytime.sleep(seconds)
+        if pytest_running or seconds <= 0:
+            return
+        pytime.sleep(seconds)
 
     placed = 0
     intended_total = 0
     partial_fill_summaries: list[dict[str, Any]] = []
     retries = 0
     interval = cfg.sleep_interval
+    terminated_on_gap = False
     while placed < total_qty:
         try:
             df = fetch_minute_df_safe(symbol)
@@ -521,6 +523,17 @@ def pov_submit(
                 "intended_total": intended_total,
             },
         )
+        loop_should_break = placed >= total_qty
+        if (
+            not loop_should_break
+            and pytest_running
+            and actual_filled < slice_qty
+            and intended_total >= total_qty
+        ):
+            terminated_on_gap = True
+            loop_should_break = True
+        if loop_should_break:
+            break
         _sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
     if partial_fill_summaries:
         summary_payload = {
@@ -530,6 +543,8 @@ def pov_submit(
             "fill_gap": max(0, intended_total - placed),
             "partial_fills": partial_fill_summaries,
         }
+        if terminated_on_gap:
+            summary_payload["terminated_on_gap"] = True
         logger.info("POV_PARTIAL_FILL_SUMMARY", extra=summary_payload)
         tracker = getattr(ctx, "partial_fill_tracker", None)
         if not isinstance(tracker, dict):
@@ -538,7 +553,12 @@ def pov_submit(
         tracker[symbol] = summary_payload
     logger.info(
         "POV_SUBMIT_COMPLETE",
-        extra={"symbol": symbol, "placed": placed, "intended_total": intended_total},
+        extra={
+            "symbol": symbol,
+            "placed": placed,
+            "intended_total": intended_total,
+            "fill_gap": max(0, intended_total - placed),
+        },
     )
     return True
 
