@@ -3851,6 +3851,60 @@ def _flatten_and_normalize_ohlcv(
             except Exception:
                 df["volume"] = 0
 
+    def _recover_close_column(frame: pd.DataFrame) -> str | None:
+        fallback_candidates: tuple[str, ...] = (
+            "vw",
+            "vwap",
+            "average",
+            "avg_price",
+            "avg",
+            "average_price",
+            "mean_price",
+            "last",
+            "last_price",
+        )
+        for candidate in fallback_candidates:
+            if candidate not in getattr(frame, "columns", []):
+                continue
+            try:
+                candidate_series = pd.to_numeric(frame[candidate], errors="coerce")
+            except Exception:
+                continue
+            try:
+                has_valid = bool(candidate_series.notna().any())
+            except Exception:
+                has_valid = False
+            if not has_valid:
+                continue
+            try:
+                frame["close"] = candidate_series
+            except Exception:
+                continue
+            return candidate
+        return None
+
+    recovered_from: str | None = None
+    close_series_initial = df.get("close")
+    if close_series_initial is not None:
+        try:
+            close_all_nan_initial = bool(pd.isna(close_series_initial).all())
+        except Exception:  # pragma: no cover - defensive fallback
+            try:
+                close_all_nan_initial = bool(close_series_initial.isna().all())  # type: ignore[attr-defined]
+            except Exception:
+                close_all_nan_initial = False
+        if close_all_nan_initial:
+            recovered_from = _recover_close_column(df)
+            if recovered_from is not None:
+                close_series_initial = df.get("close")
+                try:
+                    close_all_nan_initial = bool(pd.isna(close_series_initial).all())
+                except Exception:  # pragma: no cover - defensive fallback
+                    try:
+                        close_all_nan_initial = bool(close_series_initial.isna().all())  # type: ignore[attr-defined]
+                    except Exception:
+                        close_all_nan_initial = False
+
     normalize_ohlcv_columns(df)
     df = normalize_ohlcv_df(df, include_columns=("timestamp",))
 
@@ -3903,6 +3957,15 @@ def _flatten_and_normalize_ohlcv(
             setattr(err, "symbol", symbol)
             setattr(err, "timeframe", timeframe)
             raise err
+        if recovered_from is not None:
+            logger.info(
+                "OHLCV_CLOSE_RECOVERED",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "source": recovered_from,
+                },
+            )
 
     df_out = df
 
@@ -4419,6 +4482,18 @@ def _post_process(
             )
         return None
     candidate = df if _is_normalized_ohlcv_frame(df, pd) else _flatten_and_normalize_ohlcv(df, symbol, timeframe)
+    if candidate is df and isinstance(candidate, pd.DataFrame):
+        close_candidate = candidate.get("close")
+        if close_candidate is not None:
+            try:
+                close_all_nan_candidate = bool(pd.isna(close_candidate).all())
+            except Exception:  # pragma: no cover - defensive fallback
+                try:
+                    close_all_nan_candidate = bool(close_candidate.isna().all())  # type: ignore[attr-defined]
+                except Exception:
+                    close_all_nan_candidate = False
+            if close_all_nan_candidate:
+                candidate = _flatten_and_normalize_ohlcv(candidate, symbol, timeframe)
     try:
         normalized = normalize_ohlcv_df(candidate, include_columns=("timestamp",))
     except Exception:

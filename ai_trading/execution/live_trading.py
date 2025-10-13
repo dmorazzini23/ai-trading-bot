@@ -1435,7 +1435,8 @@ class ExecutionEngine:
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
             logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
+                pdt_context,
                 extra=base_extra | {"context": pdt_context},
             )
             return None
@@ -1510,7 +1511,11 @@ class ExecutionEngine:
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_extra)
             detail_extra = dict(skipped_extra)
             detail_extra["detail"] = detail_val or str(exc)
-            logger.warning("ORDER_SKIPPED_NONRETRYABLE_DETAIL", extra=detail_extra)
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s",
+                detail_val or str(exc),
+                extra=detail_extra,
+            )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
@@ -1677,7 +1682,8 @@ class ExecutionEngine:
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
             logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
+                pdt_context,
                 extra=base_extra | {"context": pdt_context},
             )
             return None
@@ -1836,7 +1842,9 @@ class ExecutionEngine:
                     detail_retry_extra = dict(skipped_retry)
                     detail_retry_extra["detail"] = detail_retry or str(retry_exc)
                     logger.warning(
-                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL", extra=detail_retry_extra
+                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s",
+                        detail_retry or str(retry_exc),
+                        extra=detail_retry_extra,
                     )
                     return None
                 else:
@@ -1851,7 +1859,11 @@ class ExecutionEngine:
                 logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_extra)
                 detail_extra = dict(skipped_extra)
                 detail_extra["detail"] = detail_primary or str(exc)
-                logger.warning("ORDER_SKIPPED_NONRETRYABLE_DETAIL", extra=detail_extra)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s",
+                    detail_primary or str(exc),
+                    extra=detail_extra,
+                )
                 return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             failure_exc = exc
@@ -2207,7 +2219,8 @@ class ExecutionEngine:
                         extra=base_extra | {"reason": "retry_failed"},
                     )
                     logger.warning(
-                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s",
+                        md2.get("detail"),
                         extra=base_extra | {"detail": md2.get("detail")},
                     )
                     return None
@@ -2220,7 +2233,8 @@ class ExecutionEngine:
                     extra=base_extra | {"reason": str(exc), "code": code},
                 )
                 logger.warning(
-                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s",
+                    detail_val,
                     extra=base_extra | {"detail": detail_val},
                 )
                 return None
