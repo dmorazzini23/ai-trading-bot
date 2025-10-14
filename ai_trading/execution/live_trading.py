@@ -1339,10 +1339,6 @@ class ExecutionEngine:
             Order details if successful, None if failed
         """
         self._refresh_settings()
-        if not self.is_initialized and not self._ensure_initialized():
-            return None
-        if not self._pre_execution_checks():
-            return None
         try:
             symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
@@ -1381,6 +1377,30 @@ class ExecutionEngine:
                     price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
                 except Exception:
                     price_hint = None
+
+        precheck_order = {
+            "symbol": symbol,
+            "side": side_lower,
+            "quantity": quantity,
+            "client_order_id": client_order_id,
+            "asset_class": asset_class,
+            "price_hint": str(price_hint) if price_hint is not None else None,
+            "order_type": "market",
+            "using_fallback_price": using_fallback_price,
+            "closing_position": closing_position,
+            "account_snapshot": getattr(self, "_cycle_account", None),
+        }
+
+        if precheck_order["account_snapshot"] is None:
+            if not self.is_initialized and not self._ensure_initialized():
+                return None
+            precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
+
+        if not self._pre_execution_checks(precheck_order):
+            return None
+
+        if not self._pre_execution_checks():
+            return None
         order_data = {
             "symbol": symbol,
             "side": side_lower,
@@ -1571,10 +1591,6 @@ class ExecutionEngine:
             Order details if successful, None if failed
         """
         self._refresh_settings()
-        if not self.is_initialized and not self._ensure_initialized():
-            return None
-        if not self._pre_execution_checks():
-            return None
         try:
             symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
@@ -1627,6 +1643,26 @@ class ExecutionEngine:
                     price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
                 except Exception:
                     price_hint = None
+
+        precheck_order = {
+            "symbol": symbol,
+            "side": side_lower,
+            "quantity": quantity,
+            "client_order_id": client_order_id,
+            "asset_class": asset_class,
+            "price_hint": str(price_hint) if price_hint is not None else None,
+            "order_type": "limit",
+            "using_fallback_price": using_fallback_price,
+            "closing_position": closing_position,
+            "account_snapshot": getattr(self, "_cycle_account", None),
+        }
+        if not self._pre_execution_checks(precheck_order):
+            return None
+
+        if not self.is_initialized and not self._ensure_initialized():
+            return None
+        if not self._pre_execution_checks():
+            return None
         order_data = {
             "symbol": symbol,
             "side": side_lower,
@@ -2496,14 +2532,62 @@ class ExecutionEngine:
         self.circuit_breaker["last_failure"] = None
         logger.info("Circuit breaker manually reset")
 
-    def _pre_execution_checks(self) -> bool:
+    def _pre_execution_checks(self, order: Mapping[str, Any] | None = None) -> bool:
         """Perform pre-execution validation checks."""
-        if not self.is_initialized:
+
+        require_initialized = order is None
+        if require_initialized and not self.is_initialized:
             logger.error("Execution engine not initialized")
             return False
+
         if self._is_circuit_breaker_open():
             logger.error("Circuit breaker is open - execution blocked")
             return False
+
+        if order is None:
+            return True
+
+        closing_position = bool(order.get("closing_position"))
+        if closing_position:
+            return True
+
+        account_snapshot = order.get("account_snapshot")
+        if account_snapshot is None:
+            account_snapshot = getattr(self, "_cycle_account", None)
+
+        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
+        if skip_pdt:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            symbol = order.get("symbol")
+            side = order.get("side")
+            quantity = order.get("quantity")
+            client_order_id = order.get("client_order_id")
+            asset_class = order.get("asset_class")
+            price_hint = order.get("price_hint")
+            order_type = order.get("order_type", "unknown")
+            using_fallback_price = bool(order.get("using_fallback_price"))
+            base_extra = {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "asset_class": asset_class,
+                "price_hint": price_hint,
+                "order_type": order_type,
+                "using_fallback_price": using_fallback_price,
+                "reason": pdt_reason,
+            }
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
+                pdt_context,
+                extra=base_extra | {"context": pdt_context},
+            )
+            return False
+
         return True
 
     def _validate_connection(self) -> bool:

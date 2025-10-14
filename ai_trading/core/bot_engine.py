@@ -13065,17 +13065,6 @@ def check_pdt_rule(runtime) -> bool:
     if not pattern_day_trader:
         return False
 
-    if equity >= PDT_EQUITY_THRESHOLD:
-        logger.info(
-            "PDT_ELIGIBLE_EQ_OK",
-            extra={
-                "equity": equity,
-                "min_equity": PDT_EQUITY_THRESHOLD,
-                "daytrading_buying_power": dtbp,
-            },
-        )
-        return False
-
     if dtbp <= 0.0:
         logger.warning(
             "PDT_BLOCK_NO_DTBP",
@@ -13088,6 +13077,27 @@ def check_pdt_rule(runtime) -> bool:
         _store_context("dtbp_exhausted")
         return True
 
+    if equity < PDT_EQUITY_THRESHOLD:
+        logger.warning(
+            "PDT_BLOCK_LOW_EQUITY",
+            extra={
+                "equity": equity,
+                "min_equity": PDT_EQUITY_THRESHOLD,
+                "daytrading_buying_power": dtbp,
+                "reason": "equity_below_threshold",
+            },
+        )
+        _store_context("equity_below_threshold")
+        return True
+
+    logger.info(
+        "PDT_ELIGIBLE_EQ_OK",
+        extra={
+            "equity": equity,
+            "min_equity": PDT_EQUITY_THRESHOLD,
+            "daytrading_buying_power": dtbp,
+        },
+    )
     return False
 
 
