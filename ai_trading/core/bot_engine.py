@@ -16571,7 +16571,9 @@ def _enter_long(
         "on",
         "enabled",
     }
-    if not fallback_env_allowed:
+    fallback_forced = not provider_enabled
+    fallback_allowed = fallback_env_allowed or fallback_forced
+    if not fallback_allowed:
         annotations.pop("using_fallback_price", None)
     now_utc = datetime.now(UTC)
     fallback_ts: datetime | None = None
@@ -16644,7 +16646,7 @@ def _enter_long(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
-    if using_fallback_candidate and not fallback_env_allowed:
+    if using_fallback_candidate and not fallback_allowed:
         skip_reason = "fallback_price_disabled"
         skip_reasons.append(skip_reason)
         logger.warning(
@@ -16673,7 +16675,7 @@ def _enter_long(
     if (
         not fallback_in_use
         and using_fallback_candidate
-        and fallback_env_allowed
+        and fallback_allowed
         and not fallback_stale_session
     ):
         annotations["using_fallback_price"] = True
@@ -16681,7 +16683,7 @@ def _enter_long(
     if (
         gap_exceeds
         and fallback_in_use
-        and fallback_env_allowed
+        and fallback_allowed
         and not fallback_stale_session
     ):
         annotations["gap_gate_bypassed"] = True
@@ -16701,7 +16703,7 @@ def _enter_long(
         gap_exceeds = False
     elif (
         gap_exceeds
-        and fallback_env_allowed
+        and fallback_allowed
         and using_fallback_candidate
         and not fallback_stale_session
     ):
@@ -17203,6 +17205,8 @@ def _enter_short(
         "on",
         "enabled",
     }
+    fallback_forced = not provider_enabled
+    fallback_allowed = fallback_env_allowed or fallback_forced
     now_utc = datetime.now(UTC)
     fallback_ts: datetime | None = None
     if isinstance(fallback_age, (int, float, np.floating)):
@@ -17234,7 +17238,7 @@ def _enter_short(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
-    if using_fallback_candidate and not fallback_env_allowed:
+    if using_fallback_candidate and not fallback_allowed:
         skip_reason = "fallback_price_disabled"
         logger.warning(
             "FALLBACK_PRICE_DISABLED",
@@ -17261,7 +17265,7 @@ def _enter_short(
     if (
         not fallback_in_use
         and using_fallback_candidate
-        and fallback_env_allowed
+        and fallback_allowed
         and not fallback_stale_session
     ):
         annotations["using_fallback_price"] = True
@@ -17269,7 +17273,7 @@ def _enter_short(
     if (
         gap_exceeds
         and fallback_in_use
-        and fallback_env_allowed
+        and fallback_allowed
         and not fallback_stale_session
     ):
         annotations["gap_gate_bypassed"] = True
@@ -17284,7 +17288,7 @@ def _enter_short(
         gap_exceeds = False
     elif (
         gap_exceeds
-        and fallback_env_allowed
+        and fallback_allowed
         and using_fallback_candidate
         and not fallback_stale_session
     ):
@@ -17301,7 +17305,7 @@ def _enter_short(
     gate_block_override = (
         gate.block
         and gap_exceeds
-        and fallback_env_allowed
+        and fallback_allowed
         and using_fallback_candidate
         and not fallback_stale_session
     )
