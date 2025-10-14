@@ -10,12 +10,23 @@ import pytest
 from ai_trading.core import bot_engine
 
 
-def _pdt_account(pattern_trader: bool = True, count: int = 6, limit: int = 3) -> SimpleNamespace:
+def _pdt_account(
+    pattern_trader: bool = True,
+    count: int = 6,
+    limit: int = 3,
+    *,
+    equity: str = "30000",
+    buying_power: str = "150000",
+    daytrading_buying_power: str | None = None,
+) -> SimpleNamespace:
     """Create a minimal Alpaca account stub for PDT checks."""
 
     return SimpleNamespace(
-        equity="30000",
-        buying_power="150000",
+        equity=equity,
+        buying_power=buying_power,
+        daytrading_buying_power=daytrading_buying_power
+        if daytrading_buying_power is not None
+        else buying_power,
         pattern_day_trader=pattern_trader,
         daytrade_count=str(count),
         daytrade_limit=str(limit),
@@ -24,8 +35,10 @@ def _pdt_account(pattern_trader: bool = True, count: int = 6, limit: int = 3) ->
     )
 
 
-def test_check_pdt_rule_blocks_pattern_day_traders(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ensure engine-side PDT gate mirrors execution semantics."""
+def test_check_pdt_rule_allows_high_equity_pattern_day_trader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """High-equity PDT accounts should pass when buying power remains."""
 
     runtime = SimpleNamespace(api=SimpleNamespace())
     account = _pdt_account()
@@ -35,11 +48,36 @@ def test_check_pdt_rule_blocks_pattern_day_traders(monkeypatch: pytest.MonkeyPat
 
     blocked = bot_engine.check_pdt_rule(runtime)
 
-    assert blocked is True
+    assert blocked is False
     context = getattr(runtime, "_pdt_last_context")
     assert context["pattern_day_trader"] is True
     assert context["daytrade_count"] == 6
     assert context["daytrade_limit"] == 3
+    assert context.get("block_reason") is None
+
+
+def test_check_pdt_rule_blocks_when_dtbp_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Below-threshold equity with no DTBP must block orders."""
+
+    runtime = SimpleNamespace(api=SimpleNamespace())
+    account = _pdt_account(
+        equity="20000",
+        buying_power="0",
+        daytrading_buying_power="0",
+    )
+    monkeypatch.setattr(bot_engine, "ensure_alpaca_attached", lambda _rt: None)
+    monkeypatch.setattr(bot_engine, "safe_alpaca_get_account", lambda _rt: account)
+    monkeypatch.setattr(bot_engine, "PDT_DAY_TRADE_LIMIT", 3, raising=False)
+
+    blocked = bot_engine.check_pdt_rule(runtime)
+
+    assert blocked is True
+    context = getattr(runtime, "_pdt_last_context")
+    assert context["block_reason"] == "dtbp_exhausted"
+    assert context["equity"] == pytest.approx(20000.0)
+    assert context["daytrading_buying_power"] == pytest.approx(0.0)
 
 
 def test_run_all_trades_logs_single_pdt_suppression(
@@ -54,7 +92,11 @@ def test_run_all_trades_logs_single_pdt_suppression(
     )
     state = bot_engine.BotState()
 
-    account = _pdt_account()
+    account = _pdt_account(
+        equity="20000",
+        buying_power="0",
+        daytrading_buying_power="0",
+    )
 
     monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: None)
     monkeypatch.setattr(bot_engine, "_ALPACA_IMPORT_ERROR", None, raising=False)
@@ -83,3 +125,4 @@ def test_run_all_trades_logs_single_pdt_suppression(
     assert record.daytrade_count == 6
     assert record.daytrade_limit == 3
     assert record.symbol_count == 2
+    assert record.reason == "dtbp_exhausted"
