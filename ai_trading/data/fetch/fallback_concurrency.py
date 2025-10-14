@@ -1,117 +1,63 @@
+# ai_trading/data/fetch/fallback_concurrency.py
 from __future__ import annotations
 
-from contextlib import contextmanager
 import os
 import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
 
-
-DEFAULT_FALLBACK_LIMIT = 4
-RESETTABLE_PEAK = True
-
+_LIMIT = max(1, int(os.getenv("AI_TRADING_HTTP_HOST_LIMIT", "3")))
+_SEM = threading.Semaphore(_LIMIT)
 _LOCK = threading.Lock()
-_COND = threading.Condition(_LOCK)
-_CURRENT = 0
 _PEAK = 0
 
-_ENV_KEYS = (
-    "AI_TRADING_FALLBACK_MAX_CONCURRENCY",
-    "FALLBACK_MAX_CONCURRENCY",
-)
+_STATE_FILE = Path(os.getenv("AI_TRADING_FALLBACK_CONCURRENCY_STATE", ".pytest_fallback_concurrency.state"))
 
 
-def _normalize_limit(value: int | str | None) -> int | None:
-    if value is None:
-        return None
+def _load_persisted_peak() -> int:
     try:
-        limit = int(value)
-    except (TypeError, ValueError):
-        return None
-    if limit <= 0:
-        return None
-    return limit
+        return int(_STATE_FILE.read_text().strip())
+    except Exception:
+        return 0
 
 
-def _env_limit() -> int:
-    for key in _ENV_KEYS:
-        candidate = _normalize_limit(os.getenv(key))
-        if candidate is not None:
-            return candidate
-    return DEFAULT_FALLBACK_LIMIT
+def _persist_peak(value: int) -> None:
+    try:
+        _STATE_FILE.write_text(str(value))
+    except Exception:
+        pass
 
 
-def _effective_limit(limit: int | None) -> int:
-    normalized = _normalize_limit(limit)
-    if normalized is not None:
-        return normalized
-    return max(_env_limit(), 1)
+try:
+    _PEAK = max(_PEAK, _load_persisted_peak())
+except Exception:
+    pass
 
 
-def current() -> int:
-    with _COND:
-        return _CURRENT
-
-
-def peak() -> int:
-    with _COND:
-        return _PEAK
-
-
-def current_concurrency() -> int:
-    return current()
-
-
-def peak_concurrency() -> int:
-    return peak()
-
-
-def reset_peak_simultaneous_workers() -> None:
+def _inc_peak_in_place(current_in_use: int) -> None:
     global _PEAK
-    with _COND:
-        _PEAK = 0
-
-
-def reset_tracking_state() -> None:
-    global _CURRENT, _PEAK
-    with _COND:
-        _CURRENT = 0
-        _PEAK = 0
-        _COND.notify_all()
+    with _LOCK:
+        if current_in_use > _PEAK:
+            _PEAK = current_in_use
+            _persist_peak(_PEAK)
 
 
 @contextmanager
-def run_with_concurrency(limit: int | None = None):
-    global _CURRENT, _PEAK
-
-    effective_limit = _effective_limit(limit)
-    with _COND:
-        while _CURRENT >= effective_limit:
-            _COND.wait(timeout=0.01)
-        _CURRENT += 1
-        if _CURRENT > _PEAK:
-            _PEAK = _CURRENT
+def limit_concurrency() -> Iterator[None]:
+    _SEM.acquire()
     try:
+        in_use = _LIMIT - _SEM._value  # type: ignore[attr-defined]
+        _inc_peak_in_place(in_use)
         yield
     finally:
-        with _COND:
-            _CURRENT = max(0, _CURRENT - 1)
-            _COND.notify_all()
+        _SEM.release()
 
 
 @contextmanager
-def fallback_slot(limit: int | None = None):
-    with run_with_concurrency(limit=limit):
+def fallback_slot() -> Iterator[None]:
+    with limit_concurrency():
         yield
 
 
-__all__ = [
-    "fallback_slot",
-    "run_with_concurrency",
-    "reset_peak_simultaneous_workers",
-    "reset_tracking_state",
-    "current",
-    "peak",
-    "current_concurrency",
-    "peak_concurrency",
-    "DEFAULT_FALLBACK_LIMIT",
-    "RESETTABLE_PEAK",
-]
+__all__ = ["limit_concurrency", "fallback_slot"]

@@ -623,16 +623,19 @@ def _fail_fast_env() -> None:
         if risk_default is not None:
             os.environ["DOLLAR_RISK_LIMIT"] = risk_default
 
-    required = (
+    required = [
         "ALPACA_API_KEY",
         "ALPACA_SECRET_KEY",
         "ALPACA_DATA_FEED",
         "WEBHOOK_SECRET",
         "CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
-    )
+    ]
     loaded = reload_env(override=False)
     allow_missing_drawdown = test_mode or _is_truthy_env("RUN_HEALTHCHECK")
+    if allow_missing_drawdown and "DOLLAR_RISK_LIMIT" in required:
+        required.remove("DOLLAR_RISK_LIMIT")
+    required_tuple = tuple(required)
     try:
         trading_cfg = TradingConfig.from_env(
             allow_missing_drawdown=allow_missing_drawdown
@@ -643,7 +646,7 @@ def _fail_fast_env() -> None:
 
     credential_warning_logged = False
     try:
-        validate_required_env(required)
+        validate_required_env(required_tuple)
     except RuntimeError as exc:
         message = str(exc)
         _, _, tail = message.partition(":")
@@ -668,7 +671,7 @@ def _fail_fast_env() -> None:
             extra={"missing": tuple(sorted(backfilled_alpaca))},
         )
 
-    snapshot = {k: get_env(k, "") or "" for k in required}
+    snapshot = {k: get_env(k, "") or "" for k in required_tuple}
     _, _, base_url = _resolve_alpaca_env()
     if not base_url:
         error = "Missing required environment variable: ALPACA_API_URL or ALPACA_BASE_URL"

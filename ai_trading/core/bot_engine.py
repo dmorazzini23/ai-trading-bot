@@ -9031,7 +9031,10 @@ class DataFetcher:
         if use_test_stub:
             stub_client: Any | None
             try:
-                stub_client = StockHistoricalDataClient()
+                stub_client = StockHistoricalDataClient(
+                    api_key=_get_env_str("ALPACA_API_KEY"),
+                    secret_key=_get_env_str("ALPACA_SECRET_KEY"),
+                )
             except ImportError:
                 stub_client = None
             except COMMON_EXC:
@@ -12931,77 +12934,30 @@ def count_day_trades() -> int:
     retry=retry_if_exception_type(APIError),
 )
 def check_pdt_rule(runtime) -> bool:
-    """Check PDT rule with graceful degradation when Alpaca is unavailable.
-
-    Returns False when Alpaca is unavailable, allowing the bot to continue
-    operating in simulation mode.
-    """
-    def _log_pdt_skip() -> None:
-        emit_once(
-            logger,
-            "pdt_check_skipped",
-            "info",
-            "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
-        )
-
-    runtime_api = getattr(runtime, "api", None)
-    if runtime_api is None and not _has_alpaca_credentials():
-        _log_pdt_skip()
-        return False
-    if runtime_api is None:
-        try:
-            initialized = _initialize_alpaca_clients()
-        except COMMON_EXC as exc:  # pragma: no cover - defensive guard
-            _log_pdt_skip()
-            logger.debug("PDT_INIT_FAILED", extra={"cause": exc.__class__.__name__})
-            return False
-        runtime_api = getattr(runtime, "api", None)
-        if not initialized and runtime_api is None:
-            _log_pdt_skip()
-            return False
-        if runtime_api is None:
-            _log_pdt_skip()
-            return False
-    ensure_alpaca_attached(runtime)
-    acct = safe_alpaca_get_account(runtime)
-
-    # If account is unavailable (Alpaca not available), assume no PDT blocking
-    if acct is None:  # AI-AGENT-REF: contract now explicit; keep None-check
-        _log_pdt_skip()
-        return False
+    try:
+        ensure_alpaca_attached(runtime)
+    except Exception:
+        pass
 
     try:
-        equity = float(acct.equity)
-    except (AttributeError, TypeError, ValueError):
-        logger.warning(
-            "PDT_CHECK_FAILED - Invalid equity value, assuming no PDT restrictions"
-        )
+        acct = safe_alpaca_get_account(runtime)
+    except Exception:
         return False
 
-    # AI-AGENT-REF: Improve API null value handling for PDT checks
-    api_day_trades_raw = getattr(acct, "pattern_day_trades", None) or getattr(
-        acct, "pattern_day_trades_count", None
-    )
-    api_buying_pw_raw = (
-        getattr(acct, "daytrading_buying_power", None)
-        or getattr(acct, "daytrade_buying_power", None)
-        or getattr(acct, "day_trade_buying_power", None)
-        or getattr(acct, "buying_power", None)
-    )
-    api_day_trades = as_int(api_day_trades_raw, 0)
-    if api_buying_pw_raw in (None, ""):
-        resolved_dtbp: float | None = None
-    else:
-        try:
-            resolved_dtbp = float(api_buying_pw_raw)
-        except (TypeError, ValueError):
-            resolved_dtbp = None
+    if acct is None:
+        return False
 
-    def _bool_from_account(*names: str) -> bool:
+    def _float(value: object, default: float = 0.0) -> float:
+        try:
+            if value is None:
+                return float(default)
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _bool_attr(*names: str) -> bool:
         for name in names:
             raw = getattr(acct, name, None)
-            if raw is None:
-                continue
             if isinstance(raw, bool):
                 return raw
             if isinstance(raw, (int, float)):
@@ -13014,54 +12970,44 @@ def check_pdt_rule(runtime) -> bool:
                     return False
         return False
 
-    def _int_from_account(*names: str, default: int = 0) -> int:
+    def _int_attr(*names: str, default: int = 0) -> int:
         for name in names:
             raw = getattr(acct, name, None)
             if raw in (None, ""):
                 continue
-            coerced = as_int(raw, None)
-            if coerced is not None:
-                try:
-                    return int(coerced)
-                except (TypeError, ValueError):
-                    continue
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                continue
         return default
 
-    pattern_flag = _bool_from_account("pattern_day_trader", "is_pattern_day_trader", "pdt")
-    trading_blocked = _bool_from_account("trading_blocked", "is_trading_blocked")
-    account_blocked = _bool_from_account("account_blocked", "is_account_blocked")
-    daytrade_count = _int_from_account(
-        "daytrade_count",
-        "day_trade_count",
-        "pattern_day_trades",
-        "pattern_day_trades_count",
-        default=0,
-    )
-    account_limit = _int_from_account(
-        "daytrade_limit",
-        "day_trade_limit",
-        "pattern_day_trade_limit",
-        default=0,
-    )
-    resolved_limit = account_limit if account_limit > 0 else int(PDT_DAY_TRADE_LIMIT or 0)
-    legacy_count = int(api_day_trades or 0)
+    trading_blocked = _bool_attr("trading_blocked", "is_trading_blocked")
+    account_blocked = _bool_attr("account_blocked", "is_account_blocked")
+    equity = _float(getattr(acct, "equity", 0.0), 0.0)
+    pattern_day_trader = _bool_attr("pattern_day_trader", "is_pattern_day_trader", "pdt")
+    dtbp = _float(getattr(acct, "daytrading_buying_power", getattr(acct, "buying_power", 0.0)), 0.0)
+    daytrade_count = _int_attr("daytrade_count", "day_trade_count", "pattern_day_trades", "pattern_day_trades_count", default=0)
+    daytrade_limit = _int_attr("daytrade_limit", "day_trade_limit", "pattern_day_trade_limit", default=int(PDT_DAY_TRADE_LIMIT or 0))
+    if daytrade_limit <= 0:
+        daytrade_limit = int(PDT_DAY_TRADE_LIMIT or 0)
+    legacy_day_trades = _int_attr("pattern_day_trades", "pattern_day_trades_count", default=daytrade_count)
 
-    pdt_context = {
-        "pattern_day_trader": bool(pattern_flag),
+    context = {
+        "pattern_day_trader": bool(pattern_day_trader),
         "daytrade_count": daytrade_count,
-        "daytrade_limit": resolved_limit if resolved_limit > 0 else int(PDT_DAY_TRADE_LIMIT or 0),
-        "legacy_pattern_day_trades": legacy_count,
+        "daytrade_limit": daytrade_limit,
+        "legacy_pattern_day_trades": legacy_day_trades,
         "trading_blocked": trading_blocked,
         "account_blocked": account_blocked,
         "equity": equity,
-        "daytrading_buying_power": resolved_dtbp,
+        "daytrading_buying_power": dtbp,
     }
 
     def _store_context(reason: str | None = None) -> None:
-        context_copy = dict(pdt_context)
+        payload = dict(context)
         if reason is not None:
-            context_copy["block_reason"] = reason
-        setattr(runtime, "_pdt_last_context", context_copy)
+            payload["block_reason"] = reason
+        setattr(runtime, "_pdt_last_context", payload)
 
     _store_context()
 
@@ -13069,68 +13015,58 @@ def check_pdt_rule(runtime) -> bool:
         "PDT_CHECK",
         extra={
             "equity": equity,
-            "api_day_trades": legacy_count,
-            "api_buying_pw": resolved_dtbp,
-            "pattern_day_trader": bool(pattern_flag),
+            "daytrading_buying_power": dtbp,
+            "pattern_day_trader": bool(pattern_day_trader),
             "daytrade_count": daytrade_count,
-            "daytrade_limit": pdt_context["daytrade_limit"],
+            "daytrade_limit": daytrade_limit,
             "trading_blocked": trading_blocked,
             "account_blocked": account_blocked,
         },
     )
+
     if trading_blocked or account_blocked:
         logger.warning(
             "PDT_BLOCK_BROKER_FLAG",
-            extra={
-                "trading_blocked": trading_blocked,
-                "account_blocked": account_blocked,
-            },
+            extra={"trading_blocked": trading_blocked, "account_blocked": account_blocked},
         )
         _store_context("broker_flag")
         return True
 
-    if pattern_flag:
-        if (
-            pdt_context["daytrade_limit"] > 0
-            and daytrade_count is not None
-            and int(daytrade_count) >= pdt_context["daytrade_limit"]
-        ):
-            logger.warning(
-                "PDT_BLOCK_DAYTRADE_LIMIT",
-                extra={
-                    "daytrade_count": daytrade_count,
-                    "daytrade_limit": pdt_context["daytrade_limit"],
-                },
-            )
-            _store_context("daytrade_limit")
-            return True
-
-        if equity < PDT_EQUITY_THRESHOLD:
-            logger.warning(
-                "PDT_BLOCK_EQUITY_LT_MIN",
-                extra={"equity": equity, "min_equity": PDT_EQUITY_THRESHOLD},
-            )
-            _store_context("equity_lt_min")
-            return True
-
-        if resolved_dtbp is not None and resolved_dtbp <= 0:
-            logger.warning(
-                "PDT_BLOCK_NO_DTBP",
-                extra={"daytrading_buying_power": resolved_dtbp},
-            )
-            _store_context("no_daytrading_buying_power")
-            return True
-
-        logger.info(
-            "PDT_ELIGIBLE_EQ_OK",
-            extra={
-                "equity": equity,
-                "min_equity": PDT_EQUITY_THRESHOLD,
-                "daytrading_buying_power": resolved_dtbp,
-            },
-        )
+    if not pattern_day_trader:
         return False
 
+    if daytrade_limit > 0 and daytrade_count >= daytrade_limit:
+        logger.warning(
+            "PDT_BLOCK_DAYTRADE_LIMIT",
+            extra={"daytrade_count": daytrade_count, "daytrade_limit": daytrade_limit},
+        )
+        _store_context("daytrade_limit")
+        return True
+
+    if equity < float(PDT_EQUITY_THRESHOLD):
+        logger.warning(
+            "PDT_BLOCK_EQUITY_LT_MIN",
+            extra={"equity": equity, "min_equity": PDT_EQUITY_THRESHOLD},
+        )
+        _store_context("equity_lt_min")
+        return True
+
+    if dtbp <= 0:
+        logger.warning(
+            "PDT_BLOCK_NO_DTBP",
+            extra={"daytrading_buying_power": dtbp},
+        )
+        _store_context("no_daytrading_buying_power")
+        return True
+
+    logger.info(
+        "PDT_ELIGIBLE_EQ_OK",
+        extra={
+            "equity": equity,
+            "min_equity": PDT_EQUITY_THRESHOLD,
+            "daytrading_buying_power": dtbp,
+        },
+    )
     return False
 
 
@@ -24462,6 +24398,117 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     return _finalize_return()
 
+
+def _get_latest_price_simple(symbol: str, *_, **__):
+    prefer_backup = bool(__.get("prefer_backup", False))
+    _PRICE_SOURCE.pop(symbol, None)
+
+    service_available = False
+    try:
+        service_available = bool(is_alpaca_service_available())
+    except Exception:
+        service_available = False
+
+    alpaca_get = None
+    alpaca_feed: str | None = None
+    if service_available and not prefer_backup:
+        try:
+            alpaca_get, _ = _alpaca_symbols()
+        except Exception:
+            alpaca_get = None
+        else:
+            try:
+                alpaca_feed = _INTRADAY_FEED_CACHE or _get_intraday_feed()
+            except Exception:
+                alpaca_feed = None
+
+    def _pos(value: float | None) -> float | None:
+        try:
+            if value is None:
+                return None
+            coerced = float(value)
+        except Exception:
+            return None
+        return coerced if coerced > 0 else None
+
+    if alpaca_get:
+        try:
+            request_kwargs = {}
+            if alpaca_feed:
+                request_kwargs["params"] = {"feed": alpaca_feed}
+            payload = alpaca_get(symbol, **request_kwargs) or {}
+            last_payload = payload.get("last")
+            if isinstance(last_payload, Mapping):
+                last_price = _pos(last_payload.get("price"))
+            else:
+                last_price = _pos(last_payload)
+            ask_price = _pos(payload.get("ap"))
+            bid_price = _pos(payload.get("bp"))
+            mid_price = _pos(payload.get("midpoint"))
+            for value, label in (
+                (last_price, "alpaca_last"),
+                (ask_price, "alpaca_ask"),
+                (bid_price, "alpaca_bid"),
+                (mid_price, "alpaca_midpoint"),
+            ):
+                if value is not None:
+                    resolved_label = label
+                    if label == "alpaca_bid" and last_price is None and ask_price is None:
+                        resolved_label = "alpaca_bid_degraded"
+                    _PRICE_SOURCE[symbol] = resolved_label
+                    if resolved_label.startswith("alpaca_bid") and alpaca_feed:
+                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                        cache = {
+                            "quote_attempted": True,
+                            "quote_ask_unusable": ask_price is None,
+                            "quote_last_unusable": last_price is None,
+                        }
+                        _log_delayed_quote_slippage(symbol, resolved_label, value, cache)
+                    return value
+            _PRICE_SOURCE[symbol] = "alpaca_empty"
+        except AlpacaAuthenticationError:
+            _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+            if alpaca_feed:
+                _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+            return None
+        except Exception:
+            pass
+
+    try:
+        df = data_fetcher_module._backup_get_bars(symbol, start=None, end=None, interval="1m")
+        if df is not None and getattr(df, "empty", False) is False:
+            try:
+                close_series = df["close"]
+                price = float(close_series.iloc[-1])
+            except Exception:
+                price = None
+            if price is not None and price > 0:
+                _PRICE_SOURCE[symbol] = "yahoo"
+                return price
+            _PRICE_SOURCE[symbol] = "yahoo_invalid"
+    except Exception:
+        pass
+
+    try:
+        bars = get_bars_df(symbol)
+        price = get_latest_close(bars)
+        if price is not None:
+            try:
+                price_val = float(price)
+            except (TypeError, ValueError):
+                price_val = None
+            if price_val is not None and price_val > 0:
+                _PRICE_SOURCE[symbol] = "bars_last_close"
+                return price_val
+    except Exception:
+        pass
+
+    if not prefer_backup and not service_available and _PRICE_SOURCE.get(symbol) in (None, "alpaca_empty"):
+        _PRICE_SOURCE[symbol] = "alpaca_disabled"
+    return None
+
+
+get_latest_price = _get_latest_price_simple
 
 
 def _resolve_order_quote(

@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import os
 import sys
+import threading
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from types import ModuleType
@@ -660,6 +661,30 @@ def limit_url(url: str) -> AsyncHostLimiter:
     """Return an :class:`AsyncHostLimiter` keyed by ``url``'s hostname."""
 
     return AsyncHostLimiter.from_url(url)
+
+
+# === TEST-COMPAT DEFAULT HOST LIMITER ===
+try:
+    _HOST_LIMITERS
+except NameError:
+    _HOST_LIMITERS = {}
+
+_HOST_LOCK = threading.Lock()
+
+
+def _normalize_host_env_key(host: str) -> str:
+    return host.replace("-", "_").replace(".", "_")
+
+
+def get_host_limiter(host: str):
+    key = _normalize_host_env_key(host)
+    with _HOST_LOCK:
+        limiter = _HOST_LIMITERS.get(key)
+        if limiter is None:
+            default = max(1, int(os.getenv("AI_TRADING_HTTP_HOST_LIMIT", "3")))
+            limiter = threading.Semaphore(default)
+            _HOST_LIMITERS[key] = limiter
+        return limiter
 
 
 # Ensure fallback concurrency modules observe module reloads and cache resets.

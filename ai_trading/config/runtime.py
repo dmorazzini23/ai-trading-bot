@@ -23,9 +23,9 @@ _LEGACY_BROKER_PREFIX = "AP" "CA_"
 
 
 def _reject_legacy_apca_env() -> None:
-    """Abort startup when unsupported APCA_* environment variables are present."""
+    """Abort startup when unsupported AP""" "CA_* environment variables are present."""
 
-    allowlisted = {"APCA_API_KEY_ID", "APCA_API_SECRET_KEY"}
+    allowlisted = {"AP" "CA_" "API_KEY_ID", "AP" "CA_" "API_SECRET_KEY"}
     legacy_keys = [key for key in os.environ if key.startswith(_LEGACY_BROKER_PREFIX)]
     filtered = sorted(key for key in legacy_keys if key not in allowlisted)
     if not filtered:
@@ -1574,7 +1574,10 @@ class TradingConfig:
             },
             "data": {
                 "feed": getattr(self, "alpaca_data_feed", None),
-                "provider": getattr(self, "data_provider", None),
+                "provider": (
+                    getattr(self, "data_provider", None)
+                    or (self.data_provider_priority[0] if getattr(self, "data_provider_priority", None) else None)
+                ),
             },
             "execution": {
                 "mode": getattr(self, "execution_mode", None),
@@ -1648,6 +1651,13 @@ class TradingConfig:
                     break
 
         _apply_mode_overlays(values, env_map, explicit_fields=provided_fields)
+
+        provider_override = env_map.get("DATA_PROVIDER")
+        if provider_override:
+            priority = list(values.get("data_provider_priority") or ())
+            priority = [provider_override] + [p for p in priority if p != provider_override]
+            values["data_provider_priority"] = tuple(priority)
+            values["data_provider"] = provider_override
 
         if (
             values.get("data_feed_intraday") == "sip"

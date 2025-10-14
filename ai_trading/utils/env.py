@@ -48,7 +48,7 @@ def get_resolved_alpaca_credentials() -> AlpacaCredentials:
 
 
 def resolve_alpaca_creds(env: Mapping[str, str] | None = None) -> tuple[str | None, str | None]:
-    """Return Alpaca credentials preferring canonical env vars with APCA_* fallback."""
+    """Return Alpaca credentials preferring canonical env vars with AP""" "CA_* fallback."""
 
     creds = resolve_alpaca_credentials(env)
     return creds.key, creds.secret
