@@ -41,6 +41,7 @@ from ai_trading.utils.time import monotonic_time
 logger = get_logger(__name__)
 
 _PROVIDER_CONFIG_LOGGED: bool = False
+_FIRST_DECISION = True
 
 def _resolve_switch_cooldown_seconds() -> int:
     """Return the minimum cooldown before switching back to the primary feed."""
@@ -1243,6 +1244,25 @@ class ProviderMonitor:
                 "decision_severity": "good",
             },
         )
+        global _FIRST_DECISION
+        if _FIRST_DECISION:
+            _FIRST_DECISION = False
+            preferred = os.getenv("DATA_PROVIDER", "").strip()
+            preferred_norm = _normalize_provider(preferred) if preferred else ""
+            primary_norm = _normalize_provider(primary)
+            fail_count = self.fail_counts.get(primary, 0)
+            if fail_count <= 0:
+                fail_count = self.fail_counts.get(primary_norm, 0)
+            if (
+                preferred_norm
+                and preferred_norm == primary_norm
+                and not self.is_disabled(primary)
+                and fail_count <= 0
+            ):
+                state["active"] = primary
+                state["decision_provider"] = primary
+                state["decision_severity"] = "good"
+                state["decision_until"] = None
         now = datetime.now(UTC)
         active = str(state.get("active", primary))
         self.record_health_pass(bool(healthy), provider=active)

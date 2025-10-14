@@ -12934,6 +12934,8 @@ def count_day_trades() -> int:
     retry=retry_if_exception_type(APIError),
 )
 def check_pdt_rule(runtime) -> bool:
+    """Return ``True`` when PDT rules suppress new orders."""
+
     try:
         ensure_alpaca_attached(runtime)
     except Exception:
@@ -12984,13 +12986,37 @@ def check_pdt_rule(runtime) -> bool:
     trading_blocked = _bool_attr("trading_blocked", "is_trading_blocked")
     account_blocked = _bool_attr("account_blocked", "is_account_blocked")
     equity = _float(getattr(acct, "equity", 0.0), 0.0)
-    pattern_day_trader = _bool_attr("pattern_day_trader", "is_pattern_day_trader", "pdt")
-    dtbp = _float(getattr(acct, "daytrading_buying_power", getattr(acct, "buying_power", 0.0)), 0.0)
-    daytrade_count = _int_attr("daytrade_count", "day_trade_count", "pattern_day_trades", "pattern_day_trades_count", default=0)
-    daytrade_limit = _int_attr("daytrade_limit", "day_trade_limit", "pattern_day_trade_limit", default=int(PDT_DAY_TRADE_LIMIT or 0))
+    pattern_day_trader = _bool_attr(
+        "pattern_day_trader", "is_pattern_day_trader", "pdt"
+    )
+    dtbp = _float(
+        getattr(
+            acct,
+            "daytrading_buying_power",
+            getattr(acct, "buying_power", 0.0),
+        ),
+        0.0,
+    )
+    daytrade_count = _int_attr(
+        "daytrade_count",
+        "day_trade_count",
+        "pattern_day_trades",
+        "pattern_day_trades_count",
+        default=0,
+    )
+    daytrade_limit = _int_attr(
+        "daytrade_limit",
+        "day_trade_limit",
+        "pattern_day_trade_limit",
+        default=int(PDT_DAY_TRADE_LIMIT or 0),
+    )
     if daytrade_limit <= 0:
         daytrade_limit = int(PDT_DAY_TRADE_LIMIT or 0)
-    legacy_day_trades = _int_attr("pattern_day_trades", "pattern_day_trades_count", default=daytrade_count)
+    legacy_day_trades = _int_attr(
+        "pattern_day_trades",
+        "pattern_day_trades_count",
+        default=daytrade_count,
+    )
 
     context = {
         "pattern_day_trader": bool(pattern_day_trader),
@@ -13027,46 +13053,41 @@ def check_pdt_rule(runtime) -> bool:
     if trading_blocked or account_blocked:
         logger.warning(
             "PDT_BLOCK_BROKER_FLAG",
-            extra={"trading_blocked": trading_blocked, "account_blocked": account_blocked},
+            extra={
+                "trading_blocked": trading_blocked,
+                "account_blocked": account_blocked,
+                "reason": "broker_blocked",
+            },
         )
-        _store_context("broker_flag")
+        _store_context("broker_blocked")
         return True
 
     if not pattern_day_trader:
         return False
 
-    if daytrade_limit > 0 and daytrade_count >= daytrade_limit:
-        logger.warning(
-            "PDT_BLOCK_DAYTRADE_LIMIT",
-            extra={"daytrade_count": daytrade_count, "daytrade_limit": daytrade_limit},
+    if equity >= 25_000:
+        logger.info(
+            "PDT_ELIGIBLE_EQ_OK",
+            extra={
+                "equity": equity,
+                "min_equity": PDT_EQUITY_THRESHOLD,
+                "daytrading_buying_power": dtbp,
+            },
         )
-        _store_context("daytrade_limit")
-        return True
+        return False
 
-    if equity < float(PDT_EQUITY_THRESHOLD):
-        logger.warning(
-            "PDT_BLOCK_EQUITY_LT_MIN",
-            extra={"equity": equity, "min_equity": PDT_EQUITY_THRESHOLD},
-        )
-        _store_context("equity_lt_min")
-        return True
-
-    if dtbp <= 0:
+    if dtbp <= 0.0:
         logger.warning(
             "PDT_BLOCK_NO_DTBP",
-            extra={"daytrading_buying_power": dtbp},
+            extra={
+                "daytrading_buying_power": dtbp,
+                "equity": equity,
+                "reason": "dtbp_exhausted",
+            },
         )
-        _store_context("no_daytrading_buying_power")
+        _store_context("dtbp_exhausted")
         return True
 
-    logger.info(
-        "PDT_ELIGIBLE_EQ_OK",
-        extra={
-            "equity": equity,
-            "min_equity": PDT_EQUITY_THRESHOLD,
-            "daytrading_buying_power": dtbp,
-        },
-    )
     return False
 
 
@@ -22645,7 +22666,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             _log_loop_heartbeat(loop_id, loop_start)
             return
         state.pdt_blocked = check_pdt_rule(runtime)
-        if state.pdt_blocked:
+        if state.pdt_blocked is True:
             pdt_context = getattr(runtime, "_pdt_last_context", {}) or {}
             extra = {
                 "reason": pdt_context.get("block_reason", "pdt_gate"),

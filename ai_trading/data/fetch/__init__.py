@@ -71,6 +71,42 @@ from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
 # Python’s normal name resolution prefers the closer binding, so the outer `_state` continues
 # to be used with no change in behavior.
 _state: dict[str, Any] = {}
+
+# --- Boot-time primary provider override bookkeeping ----------------------
+_BOOTSTRAP_PRIMARY_ONCE = True
+_BOOTSTRAP_BACKUP_REASON: dict[str, object] | None = None
+
+
+def _should_bootstrap_primary_first() -> bool:
+    raw = os.getenv("AI_TRADING_BOOTSTRAP_PRIMARY_ONLY", "1").strip()
+    return raw.lower() not in {"0", "false"}
+
+
+def _configured_primary_provider() -> str | None:
+    provider = os.getenv("DATA_PROVIDER", "").strip()
+    return provider or None
+
+
+def _set_bootstrap_backup_reason(
+    reason: str,
+    *,
+    primary: str | None = None,
+    detail: str | None = None,
+) -> None:
+    payload: dict[str, object] = {"reason": reason}
+    if primary:
+        payload["primary"] = primary
+    if detail:
+        payload["detail"] = detail
+    global _BOOTSTRAP_BACKUP_REASON
+    _BOOTSTRAP_BACKUP_REASON = payload
+
+
+def _consume_bootstrap_backup_reason() -> dict[str, object] | None:
+    global _BOOTSTRAP_BACKUP_REASON
+    payload = _BOOTSTRAP_BACKUP_REASON
+    _BOOTSTRAP_BACKUP_REASON = None
+    return payload
 from ai_trading.config.settings import (
     provider_priority,
     max_data_fallbacks,
@@ -4416,11 +4452,15 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 cur_start = cur_end
         _, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         key = (str(symbol).upper(), str(interval))
+        reason_extra = _consume_bootstrap_backup_reason()
         if key not in bucket:
             dedupe_key = f"USING_BACKUP_PROVIDER:{normalized}:{str(symbol).upper()}"
             ttl = getattr(settings, "logging_dedupe_ttl_s", 0)
             if provider_log_deduper.should_log(dedupe_key, int(ttl)):
-                logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+                extra = {"provider": provider, "symbol": symbol}
+                if reason_extra:
+                    extra.update(reason_extra)
+                logger.info("USING_BACKUP_PROVIDER", extra=extra)
             else:
                 record_provider_log_suppressed("USING_BACKUP_PROVIDER")
             bucket.add(key)
@@ -8813,6 +8853,9 @@ def get_daily_df(
             normalized_feed = _normalize_feed_value(override)
 
     df: Any = None
+    bootstrap_attempted = False
+    bootstrap_reason: str | None = None
+    bootstrap_primary: str | None = None
     if not use_alpaca:
         start_dt = ensure_datetime(start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10))
         end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
@@ -8846,18 +8889,54 @@ def get_daily_df(
 
     fetch_error: MissingOHLCVColumnsError | None = None
     if use_alpaca:
-        try:
-            df = _get_bars_df(
-                symbol,
-                timeframe="1Day",
-                start=start,
-                end=end,
-                feed=normalized_feed,
-                adjustment=adjustment,
+        global _BOOTSTRAP_PRIMARY_ONCE
+        if _BOOTSTRAP_PRIMARY_ONCE and _should_bootstrap_primary_first():
+            _BOOTSTRAP_PRIMARY_ONCE = False
+            bootstrap_attempted = True
+            bootstrap_primary = _configured_primary_provider() or "alpaca"
+            try:
+                df = _get_bars_df(
+                    symbol,
+                    timeframe="1Day",
+                    start=start,
+                    end=end,
+                    feed=normalized_feed,
+                    adjustment=adjustment,
+                )
+            except MissingOHLCVColumnsError as exc:
+                fetch_error = exc
+                df = None
+                bootstrap_reason = "missing_columns"
+            except Exception as exc:  # pragma: no cover - defensive bootstrap attempt
+                df = None
+                bootstrap_reason = f"error:{type(exc).__name__}"
+            else:
+                if df is None or getattr(df, "empty", False):
+                    bootstrap_reason = "empty"
+                    df = None
+        if df is None:
+            try:
+                df = _get_bars_df(
+                    symbol,
+                    timeframe="1Day",
+                    start=start,
+                    end=end,
+                    feed=normalized_feed,
+                    adjustment=adjustment,
+                )
+            except MissingOHLCVColumnsError as exc:
+                fetch_error = exc
+                df = None
+        else:
+            fetch_error = None
+        if df is not None:
+            bootstrap_reason = None
+        if bootstrap_attempted and df is None and bootstrap_reason is not None:
+            _set_bootstrap_backup_reason(
+                "primary_bootstrap_failed",
+                primary=bootstrap_primary,
+                detail=bootstrap_reason,
             )
-        except MissingOHLCVColumnsError as exc:
-            fetch_error = exc
-            df = None
 
     pd_mod = _ensure_pandas()
     if pd_mod is None:
@@ -8890,6 +8969,20 @@ def get_daily_df(
                 df = df.loc[:, ~df.columns.duplicated()]
             except Exception:  # pragma: no cover - defensive guard
                 pass
+    if df is not None and bootstrap_attempted:
+        try:
+            attrs = getattr(df, "attrs", {}) or {}
+        except Exception:
+            attrs = {}
+        provider_attr = str(
+            attrs.get("data_provider")
+            or attrs.get("fallback_provider")
+            or attrs.get("data_feed")
+            or attrs.get("provider")
+            or ""
+        ).strip().lower()
+        if provider_attr.startswith("alpaca"):
+            _consume_bootstrap_backup_reason()
     primary_source_hint = normalized_feed or "alpaca"
 
     def _normalize_daily_frame(frame: Any, source_hint: str) -> Any:
