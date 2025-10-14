@@ -1169,6 +1169,14 @@ _FEED_SWITCH_CACHE: dict[tuple[Any, ...], tuple[str, float]] = {}
 _FEED_SWITCH_LOGGED: set[tuple[str, str, str]] = set()
 _FEED_SWITCH_HISTORY: list[tuple[str, str, str]] = []
 _FEED_FAILOVER_ATTEMPTS: dict[tuple[str, str], set[str]] = {}
+# Prefer a specific Alpaca feed during no-session windows once it succeeds.
+_NO_SESSION_ALPACA_OVERRIDE: str | None = None
+
+
+def _reset_state() -> None:
+    """Test helper: clear transient module overrides."""
+
+    globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
 
 
 def _preferred_feed_failover() -> tuple[str, ...]:
@@ -4294,6 +4302,10 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     if pd_local is None:
         return []  # type: ignore[return-value]
 
+    if start is None:
+        raise ValueError("start_required")
+    if end is None:
+        raise ValueError("end_required")
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     interval_norm = str(interval).lower()
@@ -5312,14 +5324,157 @@ def _fetch_bars(
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
     _ensure_requests()
+    global _NO_SESSION_ALPACA_OVERRIDE
     if pd is None:
         raise RuntimeError("pandas not available")
-    if start is None:
-        raise ValueError("start_required")
-    if end is None:
-        raise ValueError("end_required")
-    _start = ensure_datetime(start)
-    _end = ensure_datetime(end)
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    has_session = _window_has_trading_session(start_dt, end_dt)
+    if not has_session:
+        logger.info("DATA_WINDOW_NO_SESSION")
+        tf_norm = _canon_tf(timeframe)
+        tf_key = (symbol, tf_norm)
+        if _NO_SESSION_ALPACA_OVERRIDE and not _FEED_OVERRIDE_BY_TF:
+            _NO_SESSION_ALPACA_OVERRIDE = None
+
+        def _normalize_feed_name(value: Any) -> str | None:
+            try:
+                candidate = str(value).strip().lower()
+            except Exception:
+                return None
+            if candidate == "sip":
+                return "sip"
+            if candidate == "iex":
+                return "iex"
+            return None
+
+        requested_norm = _normalize_feed_name(feed) or "iex"
+        try:
+            fallback_raw = alpaca_feed_failover() or ()
+        except Exception:
+            fallback_raw = ()
+        fallback_candidates = [
+            name for name in (_normalize_feed_name(item) for item in fallback_raw) if name
+        ]
+
+        order: list[str] = []
+        if _NO_SESSION_ALPACA_OVERRIDE:
+            order.append(_NO_SESSION_ALPACA_OVERRIDE)
+        order.append(requested_norm)
+        order.extend(fallback_candidates)
+        seen: set[str] = set()
+        alpaca_order = [
+            name for name in order if name in {"iex", "sip"} and not (name in seen or seen.add(name))
+        ]
+        if not alpaca_order:
+            alpaca_order = [requested_norm]
+
+        session = _HTTP_SESSION if _HTTP_SESSION is not None and hasattr(_HTTP_SESSION, "get") else None
+        headers: dict[str, str] = {}
+        timeout_value = 5.0
+        data_base_url: str | None = None
+        if session is not None:
+            try:
+                headers = dict(alpaca_auth_headers())
+            except Exception:
+                headers = {}
+            try:
+                timeout_value = clamp_request_timeout(5)
+            except Exception:
+                timeout_value = 5.0
+            try:
+                data_base_url = get_alpaca_data_base_url()
+            except Exception:
+                data_base_url = None
+            if not data_base_url:
+                data_base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+            if not data_base_url:
+                data_base_url = "https://data.alpaca.markets"
+            data_base_url = data_base_url.rstrip("/")
+
+        def _tags(feed_name: str) -> dict[str, str]:
+            return {
+                "provider": "alpaca",
+                "symbol": symbol,
+                "feed": feed_name,
+                "timeframe": tf_norm,
+            }
+
+        fallback_attempted: set[str] = set()
+
+        for feed_candidate in alpaca_order:
+            is_requested = feed_candidate == requested_norm
+            if not is_requested:
+                attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set())
+                attempted.add(feed_candidate)
+                _record_feed_switch(symbol, tf_norm, requested_norm, feed_candidate)
+                if feed_candidate not in fallback_attempted:
+                    _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags(feed_candidate))
+                    fallback_attempted.add(feed_candidate)
+
+            resp: Any | None = None
+            if session is not None:
+                params = {
+                    "symbols": symbol,
+                    "timeframe": tf_norm,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "limit": 10000,
+                    "feed": feed_candidate,
+                    "adjustment": adjustment,
+                }
+                url = f"{data_base_url}/v2/stocks/bars" if data_base_url else "https://data.alpaca.markets/v2/stocks/bars"
+                try:
+                    resp = session.get(url, params=params, headers=headers or None, timeout=timeout_value)
+                    _record_session_last_request(session, "GET", url, params, headers)
+                except Exception:
+                    resp = None
+
+            payload: Any | None = None
+            if resp is not None:
+                if hasattr(resp, "json"):
+                    try:
+                        payload = resp.json()
+                    except Exception:
+                        payload = None
+                elif isinstance(resp, dict):
+                    payload = resp
+            bars = payload.get("bars") if isinstance(payload, dict) else None
+            if bars:
+                try:
+                    df_candidate = pd.DataFrame(bars)
+                except Exception:
+                    df_candidate = pd.DataFrame()
+                normalized_df = _flatten_and_normalize_ohlcv(df_candidate, symbol, tf_norm)
+                annotated_df = _annotate_df_source(normalized_df, provider="alpaca", feed=feed_candidate)
+                if not is_requested:
+                    _incr("data.fetch.fallback_success", value=1.0, tags=_tags(feed_candidate))
+                    _incr("data.fetch.success", value=1.0, tags=_tags(feed_candidate))
+                    _NO_SESSION_ALPACA_OVERRIDE = feed_candidate
+                else:
+                    _incr("data.fetch.success", value=1.0, tags=_tags(feed_candidate))
+                    _NO_SESSION_ALPACA_OVERRIDE = None
+                return annotated_df
+
+            if not is_requested:
+                logger.info(
+                    "EMPTY_BARS_DETECTED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": feed_candidate,
+                            "timeframe": tf_norm,
+                            "symbol": symbol,
+                        }
+                    ),
+                )
+
+        _incr_empty_metric(symbol, "no_session", tf_norm)
+        return _empty_ohlcv_frame(pd)
+    if _NO_SESSION_ALPACA_OVERRIDE:
+        _NO_SESSION_ALPACA_OVERRIDE = None
+    _start = start_dt
+    _end = end_dt
     # Normalize timestamps to the minute to avoid querying empty slices
     _start = _start.replace(second=0, microsecond=0)
     _end = _end.replace(second=0, microsecond=0)
@@ -5598,7 +5753,7 @@ def _fetch_bars(
             except Exception:
                 frame = pd.DataFrame()
         if short_circuit_empty and not _frame_has_rows(frame):
-            return None
+            return _empty_ohlcv_frame(pd)
         return frame
 
     if not _has_alpaca_keys() and not _pytest_active():
