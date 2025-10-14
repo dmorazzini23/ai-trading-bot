@@ -4071,7 +4071,18 @@ def _flatten_and_normalize_ohlcv(
                 "columns": [str(col) for col in getattr(df, "columns", [])],
             }
             extra = {k: v for k, v in extra.items() if v is not None}
-            logger.error("OHLCV_CLOSE_ALL_NAN", extra=extra)
+            fetch_state = globals().get("_state")
+            benign_close = False
+            if isinstance(fetch_state, dict):
+                short_circuit_flag = bool(fetch_state.get("short_circuit_empty"))
+                outside_window = bool(fetch_state.get("outside_market_hours"))
+                window_has_session = bool(fetch_state.get("window_has_session", True))
+                fallback_allowed = bool(fetch_state.get("fallback_enabled")) or (
+                    not window_has_session and bool(_ENABLE_HTTP_FALLBACK)
+                )
+                benign_close = short_circuit_flag or (outside_window and fallback_allowed)
+            log_level = logging.WARNING if benign_close else logging.ERROR
+            logger.log(log_level, "OHLCV_CLOSE_ALL_NAN", extra=extra)
             err = DataFetchError("close_column_all_nan")
             setattr(err, "fetch_reason", "close_column_all_nan")
             setattr(err, "symbol", symbol)
@@ -5332,7 +5343,11 @@ def _fetch_bars(
         "allow_no_session_primary": False,
         "skip_backup_after_fallback": False,
         "fallback_reason": None,
+        "short_circuit_empty": False,
+        "outside_market_hours": False,
+        "fallback_enabled": False,
     }
+    globals()["_state"] = _state
 
     try:
         _max_fallbacks_raw = max_data_fallbacks()
@@ -5547,6 +5562,7 @@ def _fetch_bars(
     no_session_window = not window_has_session
     short_circuit_empty = False
     _state["skip_empty_metrics"] = False
+    _state["short_circuit_empty"] = False
     if no_session_window:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -5569,8 +5585,9 @@ def _fetch_bars(
             ),
         )
         short_circuit_empty = True
+        _state["short_circuit_empty"] = True
 
-    def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
+    def _finalize_frame(candidate: Any | None) -> pd.DataFrame | None:
         if candidate is None:
             frame = pd.DataFrame()
         elif isinstance(candidate, pd.DataFrame):
@@ -5581,10 +5598,7 @@ def _fetch_bars(
             except Exception:
                 frame = pd.DataFrame()
         if short_circuit_empty and not _frame_has_rows(frame):
-            empty_df = _empty_ohlcv_frame(pd)
-            if isinstance(empty_df, pd.DataFrame):
-                return empty_df
-            return pd.DataFrame()
+            return None
         return frame
 
     if not _has_alpaca_keys() and not _pytest_active():
@@ -6548,6 +6562,7 @@ def _fetch_bars(
             planned_retry_meta: dict[str, Any] = {}
             planned_backoff: float | None = None
             outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
+            _state["outside_market_hours"] = bool(outside_market_hours)
             if attempt <= max_retries and can_retry_timeframe and _state["retries"] < max_retries:
                 if not outside_market_hours:
                     planned_backoff = min(
@@ -6575,6 +6590,7 @@ def _fetch_bars(
             fallback_enabled = bool(fallback) or bool(_ENABLE_HTTP_FALLBACK)
             if not fallback_enabled:
                 fallback_enabled = _should_use_backup_on_empty()
+            _state["fallback_enabled"] = bool(fallback_enabled)
             retries_enabled = remaining_retries > 0 and not outside_market_hours
             if outside_market_hours and not (retries_enabled or fallback_enabled):
                 if (
