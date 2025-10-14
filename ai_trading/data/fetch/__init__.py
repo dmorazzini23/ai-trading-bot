@@ -5370,6 +5370,27 @@ def _fetch_bars(
             alpaca_order = [requested_norm]
 
         session = _HTTP_SESSION if _HTTP_SESSION is not None and hasattr(_HTTP_SESSION, "get") else None
+        headers: dict[str, str] = {}
+        timeout_value = 5.0
+        data_base_url: str | None = None
+        if session is not None:
+            try:
+                headers = dict(alpaca_auth_headers())
+            except Exception:
+                headers = {}
+            try:
+                timeout_value = clamp_request_timeout(5)
+            except Exception:
+                timeout_value = 5.0
+            try:
+                data_base_url = get_alpaca_data_base_url()
+            except Exception:
+                data_base_url = None
+            if not data_base_url:
+                data_base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+            if not data_base_url:
+                data_base_url = "https://data.alpaca.markets"
+            data_base_url = data_base_url.rstrip("/")
 
         def _tags(feed_name: str) -> dict[str, str]:
             return {
@@ -5393,9 +5414,19 @@ def _fetch_bars(
 
             resp: Any | None = None
             if session is not None:
-                params = {"feed": feed_candidate}
+                params = {
+                    "symbols": symbol,
+                    "timeframe": tf_norm,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "limit": 10000,
+                    "feed": feed_candidate,
+                    "adjustment": adjustment,
+                }
+                url = f"{data_base_url}/v2/stocks/bars" if data_base_url else "https://data.alpaca.markets/v2/stocks/bars"
                 try:
-                    resp = session.get("/v2/stocks/bars", params=params)
+                    resp = session.get(url, params=params, headers=headers or None, timeout=timeout_value)
+                    _record_session_last_request(session, "GET", url, params, headers)
                 except Exception:
                     resp = None
 
