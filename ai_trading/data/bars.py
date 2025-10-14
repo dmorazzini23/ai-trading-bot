@@ -890,7 +890,7 @@ except NameError:
     _ensure_entitled_feed_orig = None
 
 
-def _ensure_entitled_feed(feed, client):  # type: ignore[override]
+def _ensure_entitled_feed(client, feed):  # type: ignore[override]
     """
     If tests simulate SIP entitlement and SIP isn't explicitly forbidden via env,
     choose 'sip'. Otherwise, delegate to original.
@@ -912,5 +912,5 @@ def _ensure_entitled_feed(feed, client):  # type: ignore[override]
                 if "sip" in feeds:
                     return "sip"
     if _ensure_entitled_feed_orig:
-        return _ensure_entitled_feed_orig(feed, client)  # type: ignore[misc]
+        return _ensure_entitled_feed_orig(client, feed)  # type: ignore[misc]
     return feed

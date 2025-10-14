@@ -15,6 +15,9 @@ def assert_dotenv_not_shadowed():
     module from inside this repository (shadowing site-packages). Tests monkeypatch
     importlib to simulate this; we must consult find_spec, not sys.modules.
     """
+    if not PYTHON_DOTENV_RESOLVED:
+        return
+
     import importlib.util
     import os
     from pathlib import Path
