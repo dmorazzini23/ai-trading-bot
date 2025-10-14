@@ -13065,7 +13065,7 @@ def check_pdt_rule(runtime) -> bool:
     if not pattern_day_trader:
         return False
 
-    if equity >= 25_000:
+    if equity >= PDT_EQUITY_THRESHOLD:
         logger.info(
             "PDT_ELIGIBLE_EQ_OK",
             extra={
