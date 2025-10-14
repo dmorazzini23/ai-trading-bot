@@ -1396,7 +1396,7 @@ class ExecutionEngine:
                 return None
             precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
 
-        if not self._pre_execution_checks(precheck_order):
+        if not self._pre_execution_order_checks(precheck_order):
             return None
 
         if not self._pre_execution_checks():
@@ -1656,7 +1656,7 @@ class ExecutionEngine:
             "closing_position": closing_position,
             "account_snapshot": getattr(self, "_cycle_account", None),
         }
-        if not self._pre_execution_checks(precheck_order):
+        if not self._pre_execution_order_checks(precheck_order):
             return None
 
         if not self.is_initialized and not self._ensure_initialized():
@@ -2532,17 +2532,21 @@ class ExecutionEngine:
         self.circuit_breaker["last_failure"] = None
         logger.info("Circuit breaker manually reset")
 
-    def _pre_execution_checks(self, order: Mapping[str, Any] | None = None) -> bool:
-        """Perform pre-execution validation checks."""
+    def _pre_execution_checks(self) -> bool:
+        """Perform global pre-execution validation checks."""
 
-        require_initialized = order is None
-        if require_initialized and not self.is_initialized:
+        if not self.is_initialized and not self._ensure_initialized():
             logger.error("Execution engine not initialized")
             return False
 
         if self._is_circuit_breaker_open():
             logger.error("Circuit breaker is open - execution blocked")
             return False
+
+        return True
+
+    def _pre_execution_order_checks(self, order: Mapping[str, Any] | None = None) -> bool:
+        """Run order-specific pre-execution checks."""
 
         if order is None:
             return True

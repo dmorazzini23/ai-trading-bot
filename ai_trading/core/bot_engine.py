@@ -1055,6 +1055,7 @@ _PRICE_SOURCE: dict[str, str] = {}
 _CANONICAL_FALLBACK_FEEDS = frozenset({"iex", "sip", "yahoo", "finnhub"})
 _ALPACA_COMPATIBLE_FALLBACK_FEEDS = frozenset({"iex", "sip"})
 _ALPACA_DISABLED_SENTINEL = "alpaca_disabled"
+ALPACA_DATA_BASE = "https://data.alpaca.markets/v2"
 _PRIMARY_PRICE_SOURCES = frozenset(
     {
         "alpaca",
@@ -1679,7 +1680,7 @@ def _attempt_alpaca_trade(
         return None, cache['trade_source']
     params = {'feed': sanitized_feed} if sanitized_feed else None
     try:
-        payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", params=params)
+        payload = alpaca_get(f"{ALPACA_DATA_BASE}/stocks/{symbol}/trades/latest", params=params)
     except AlpacaAuthenticationError as exc:
         logger.error(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
@@ -1750,7 +1751,7 @@ def _attempt_alpaca_quote(
         return None, cache['quote_source']
     params = {'feed': sanitized_feed} if sanitized_feed else None
     try:
-        data = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest", params=params)
+        data = alpaca_get(f"{ALPACA_DATA_BASE}/stocks/{symbol}/quotes/latest", params=params)
     except AlpacaAuthenticationError as exc:
         logger.error(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
@@ -24438,107 +24439,115 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     prefer_backup = bool(__.get("prefer_backup", False))
     _PRICE_SOURCE.pop(symbol, None)
 
-    service_available = False
     try:
         service_available = bool(is_alpaca_service_available())
     except Exception:
         service_available = False
 
-    alpaca_get = None
-    alpaca_feed: str | None = None
-    if service_available and not prefer_backup:
+    provider_disabled = False
+    primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    if callable(primary_provider_fn):
         try:
-            alpaca_get, _ = _alpaca_symbols()
+            provider_disabled = not bool(primary_provider_fn())
         except Exception:
-            alpaca_get = None
-        else:
-            try:
-                alpaca_feed = _INTRADAY_FEED_CACHE or _get_intraday_feed()
-            except Exception:
-                alpaca_feed = None
+            provider_disabled = False
+    if provider_disabled and not prefer_backup:
+        _PRICE_SOURCE[symbol] = _ALPACA_DISABLED_SENTINEL
+        return None
 
-    def _pos(value: float | None) -> float | None:
-        try:
-            if value is None:
+    prefer = _prefer_feed_this_cycle()
+    feed_candidate = prefer if prefer in {"iex", "sip"} else _get_intraday_feed()
+    env_feed = os.getenv("ALPACA_DATA_FEED")
+    if env_feed:
+        feed_candidate = env_feed
+    alpaca_feed = _sanitize_alpaca_feed(feed_candidate)
+    invalid_alpaca_feed = bool(feed_candidate) and alpaca_feed not in {"iex", "sip"}
+
+    pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
+    sip_locked = False
+    if alpaca_feed == "sip":
+        sip_locked = bool(
+            getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False) or os.getenv("ALPACA_SIP_UNAUTHORIZED")
+        )
+        if pytest_running:
+            sip_locked = False
+
+    use_alpaca = (
+        not prefer_backup
+        and service_available
+        and alpaca_feed in {"iex", "sip"}
+        and not provider_disabled
+        and not (alpaca_feed == "sip" and sip_locked)
+    )
+
+    if invalid_alpaca_feed and alpaca_feed is None:
+        logger_once.warning(
+            "ALPACA_INVALID_FEED_SKIPPED",
+            key=f"alpaca_invalid_feed_skipped:{feed_candidate}",
+            extra={"provider": "alpaca", "requested_feed": feed_candidate, "symbol": symbol},
+        )
+
+    provider_order = _get_price_provider_order()
+    cache: dict[str, Any] = {}
+    attempted_alpaca = False
+
+    for provider in provider_order:
+        if provider.startswith("alpaca"):
+            if not use_alpaca:
+                continue
+            attempted_alpaca = True
+            try:
+                if provider == "alpaca_trade":
+                    price, source = _attempt_alpaca_trade(symbol, alpaca_feed, cache)
+                elif provider == "alpaca_quote":
+                    price, source = _attempt_alpaca_quote(symbol, alpaca_feed, cache)
+                else:
+                    continue
+            except AlpacaAuthenticationError:
+                _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+                if alpaca_feed:
+                    _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
                 return None
-            coerced = float(value)
-        except Exception:
-            return None
-        return coerced if coerced > 0 else None
-
-    if alpaca_get:
-        try:
-            request_kwargs = {}
-            if alpaca_feed:
-                request_kwargs["params"] = {"feed": alpaca_feed}
-            payload = alpaca_get(symbol, **request_kwargs) or {}
-            last_payload = payload.get("last")
-            if isinstance(last_payload, Mapping):
-                last_price = _pos(last_payload.get("price"))
+            except AlpacaOrderHTTPError:
+                price, source = None, None
+            except COMMON_EXC:
+                price, source = None, None
             else:
-                last_price = _pos(last_payload)
-            ask_price = _pos(payload.get("ap"))
-            bid_price = _pos(payload.get("bp"))
-            mid_price = _pos(payload.get("midpoint"))
-            for value, label in (
-                (last_price, "alpaca_last"),
-                (ask_price, "alpaca_ask"),
-                (bid_price, "alpaca_bid"),
-                (mid_price, "alpaca_midpoint"),
-            ):
-                if value is not None:
-                    resolved_label = label
-                    if label == "alpaca_bid" and last_price is None and ask_price is None:
-                        resolved_label = "alpaca_bid_degraded"
-                    _PRICE_SOURCE[symbol] = resolved_label
-                    if resolved_label.startswith("alpaca_bid") and alpaca_feed:
+                if price is not None:
+                    resolved_source = str(source or provider)
+                    _PRICE_SOURCE[symbol] = resolved_source
+                    if resolved_source.startswith("alpaca_bid") and cache.get("quote_ask_unusable"):
+                        _log_delayed_quote_slippage(symbol, resolved_source, price, cache)
+                    if alpaca_feed:
                         _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
-                        cache = {
-                            "quote_attempted": True,
-                            "quote_ask_unusable": ask_price is None,
-                            "quote_last_unusable": last_price is None,
-                        }
-                        _log_delayed_quote_slippage(symbol, resolved_label, value, cache)
-                    return value
-            _PRICE_SOURCE[symbol] = "alpaca_empty"
-        except AlpacaAuthenticationError:
-            _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
-            if alpaca_feed:
-                _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
-            return None
-        except Exception:
-            pass
+                    return price
+            if source:
+                _PRICE_SOURCE[symbol] = str(source)
+            continue
 
-    try:
-        df = data_fetcher_module._backup_get_bars(symbol, start=None, end=None, interval="1m")
-        if df is not None and getattr(df, "empty", False) is False:
+        if provider == "yahoo":
             try:
-                close_series = df["close"]
-                price = float(close_series.iloc[-1])
-            except Exception:
-                price = None
-            if price is not None and price > 0:
-                _PRICE_SOURCE[symbol] = "yahoo"
+                price, source = _attempt_yahoo_price(symbol)
+            except COMMON_EXC:
+                price, source = None, None
+            if price is not None:
+                _PRICE_SOURCE[symbol] = str(source or provider)
                 return price
-            _PRICE_SOURCE[symbol] = "yahoo_invalid"
-    except Exception:
-        pass
+            continue
 
-    try:
-        bars = get_bars_df(symbol)
-        price = get_latest_close(bars)
-        if price is not None:
+        if provider == "bars":
             try:
-                price_val = float(price)
-            except (TypeError, ValueError):
-                price_val = None
-            if price_val is not None and price_val > 0:
-                _PRICE_SOURCE[symbol] = "bars_last_close"
-                return price_val
-    except Exception:
-        pass
+                price, source = _attempt_bars_price(symbol)
+            except COMMON_EXC:
+                price, source = None, None
+            if price is not None:
+                _PRICE_SOURCE[symbol] = str(source or provider)
+                return price
+            continue
 
-    if not prefer_backup and not service_available and _PRICE_SOURCE.get(symbol) in (None, "alpaca_empty"):
+    if attempted_alpaca and _PRICE_SOURCE.get(symbol) in (None, "unknown"):
+        _PRICE_SOURCE[symbol] = "alpaca_empty"
+    elif not attempted_alpaca and not service_available and not prefer_backup and _PRICE_SOURCE.get(symbol) in (None, "unknown"):
         _PRICE_SOURCE[symbol] = "alpaca_disabled"
     return None
 
