@@ -1,98 +1,87 @@
-"""Utilities for running subprocesses with safety guards."""
-
+# ai_trading/utils/safe_subprocess.py
 from __future__ import annotations
 
-import shlex
+import logging
 import subprocess
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Optional, Sequence
 
-from ai_trading.logging import get_logger
-
-logger = get_logger(__name__)
-
-# Default timeout for subprocess operations in seconds
-SUBPROCESS_TIMEOUT_S = 0.3
-
-# Back-compat alias expected by callers
-SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
+log = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class SafeSubprocessResult:
-    """Lightweight result container for ``safe_subprocess_run`` timeouts."""
-
     stdout: str
     stderr: str
     returncode: int
     timeout: bool
 
 
-def _coerce_cmd(cmd: Sequence[str] | str) -> list[str]:
-    if isinstance(cmd, (list, tuple)):
-        return [str(part) for part in cmd]
-    if isinstance(cmd, str):
-        return shlex.split(cmd)
-    raise TypeError("cmd must be a sequence or string")
+SUBPROCESS_TIMEOUT_S = 0.3
+SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
 
 
 def safe_subprocess_run(
-    cmd: Sequence[str] | str,
+    cmd: Sequence[str],
     *,
-    timeout: float | None = None,
-    env: Mapping[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run ``cmd`` with a defensive timeout and structured logging."""
+    timeout: Optional[float] = None,
+    check: bool = False,
+    capture_output: bool = True,
+    text: bool = True,
+    **popen_kwargs,
+) -> subprocess.CompletedProcess:
+    """
+    Run a subprocess with a hard timeout that surfaces subprocess.TimeoutExpired
+    to callers (tests expect this). Never swallow TimeoutExpired.
 
-    argv = _coerce_cmd(cmd)
-    resolved_timeout = SUBPROCESS_TIMEOUT_S if timeout is None else float(timeout)
-    if resolved_timeout <= 0:
-        resolved_timeout = SUBPROCESS_TIMEOUT_S
+    - If timeout is given and the child hangs, kill it, read remaining IO,
+      log a WARNING, and re-raise TimeoutExpired.
+    - Mirrors subprocess.run behavior for 'check', 'capture_output', 'text'.
+    """
 
-    run_kwargs = {
-        "check": False,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "text": True,
-        "timeout": resolved_timeout,
-        "env": dict(env) if env is not None else None,
-    }
+    if capture_output:
+        popen_kwargs.setdefault("stdout", subprocess.PIPE)
+        popen_kwargs.setdefault("stderr", subprocess.PIPE)
+
+    resolved_timeout = None
+    if timeout is not None and timeout > 0:
+        resolved_timeout = timeout
+
+    run_kwargs = dict(popen_kwargs)
+    run_kwargs.setdefault("check", False)
+    run_kwargs.setdefault("text", text)
+    run_kwargs["timeout"] = resolved_timeout
 
     try:
-        completed = subprocess.run(argv, **run_kwargs)
+        completed = subprocess.run(cmd, **run_kwargs)
     except subprocess.TimeoutExpired as exc:
-        _prepare_timeout_exception(exc, resolved_timeout)
-        logger.warning(
-            "SAFE_SUBPROCESS_TIMEOUT",
-            extra={
-                "cmd": argv,
-                "timeout": resolved_timeout,
-                "stdout": exc.stdout or "",
-                "stderr": exc.stderr or "",
-            },
-        )
+        stdout = _normalize_stream(getattr(exc, "output", None))
+        stderr = _normalize_stream(getattr(exc, "stderr", None))
+        log.warning("SAFE_SUBPROCESS_TIMEOUT", extra={"cmd": cmd, "timeout": timeout if timeout is not None else resolved_timeout})
+        result = SafeSubprocessResult(stdout, stderr, 124, True)
+        exc.stdout = stdout
+        exc.stderr = stderr
+        exc.result = result
+        if timeout is not None:
+            exc.timeout = timeout
         raise
     except (OSError, subprocess.SubprocessError) as exc:
-        completed = _coerce_exception_result(exc, argv)
-        logger.warning(
+        result = _coerce_exception_result(exc, cmd)
+        log.warning(
             "SAFE_SUBPROCESS_ERROR",
-            extra={
-                "cmd": argv,
-                "returncode": completed.returncode,
-                "error": str(exc),
-                "exc_type": type(exc).__name__,
-            },
+            extra={"cmd": cmd, "returncode": result.returncode, "error": str(exc), "exc_type": type(exc).__name__},
         )
-        return completed
+        return result
 
-    completed.stdout = _normalize_stream(completed.stdout)
-    completed.stderr = _normalize_stream(completed.stderr)
-    return completed
+    stdout = _normalize_stream(completed.stdout)
+    stderr = _normalize_stream(completed.stderr)
+    ret = subprocess.CompletedProcess(cmd, completed.returncode, stdout, stderr)
+    if check and ret.returncode != 0:
+        raise subprocess.CalledProcessError(ret.returncode, cmd, ret.stdout, ret.stderr)
+    return ret
 
 
-def _normalize_stream(stream: str | bytes | None) -> str:
-    """Return a safe string representation of subprocess output."""
-
+def _normalize_stream(stream: Optional[str | bytes]) -> str:
     if stream is None:
         return ""
     if isinstance(stream, bytes):
@@ -100,32 +89,13 @@ def _normalize_stream(stream: str | bytes | None) -> str:
     return stream
 
 
-def _prepare_timeout_exception(exc: subprocess.TimeoutExpired, run_timeout: float) -> None:
-    """Attach ``SafeSubprocessResult`` metadata to ``TimeoutExpired``."""
-
-    stdout_text = _normalize_stream(getattr(exc, "output", None))
-    stderr_text = _normalize_stream(getattr(exc, "stderr", None))
-    result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
-    exc.timeout = run_timeout
-    exc.stdout = stdout_text
-    exc.stderr = stderr_text
-    exc.result = result
-
-
-def _coerce_exception_result(
-    exc: OSError | subprocess.SubprocessError, argv: Sequence[str] | str
-) -> subprocess.CompletedProcess[str]:
-    """Return a ``CompletedProcess`` representing an execution failure."""
-
-    if isinstance(exc, subprocess.CalledProcessError):
-        stdout_text = _normalize_stream(getattr(exc, "stdout", None))
-        stderr_text = _normalize_stream(getattr(exc, "stderr", None))
-        cmd = exc.cmd if exc.cmd is not None else argv
-        return subprocess.CompletedProcess(cmd, exc.returncode, stdout_text, stderr_text)
-
-    stdout_text = _normalize_stream(getattr(exc, "stdout", None))
+def _coerce_exception_result(exc: OSError | subprocess.SubprocessError, cmd: Sequence[str]) -> subprocess.CompletedProcess:
+    stdout = _normalize_stream(getattr(exc, "stdout", None))
     stderr_value = getattr(exc, "stderr", None)
-    stderr_text = _normalize_stream(stderr_value) if stderr_value is not None else str(exc)
+    if stderr_value is None:
+        stderr = str(exc)
+    else:
+        stderr = _normalize_stream(stderr_value)
 
     returncode = getattr(exc, "returncode", None)
     if returncode is None:
@@ -136,4 +106,4 @@ def _coerce_exception_result(
         else:
             returncode = 1
 
-    return subprocess.CompletedProcess(argv, returncode, stdout_text, stderr_text)
+    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)

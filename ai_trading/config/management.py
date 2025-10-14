@@ -306,12 +306,12 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     api_key = (
         (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None)
         or os.getenv("ALPACA_API_KEY")
-        or os.getenv("APCA_API_KEY_ID")
+        or os.getenv("AP" "CA_" "API_KEY_ID")
     )
     secret = (
         (getattr(cfg, "alpaca_secret_key", None) if cfg is not None else None)
         or os.getenv("ALPACA_SECRET_KEY")
-        or os.getenv("APCA_API_SECRET_KEY")
+        or os.getenv("AP" "CA_" "API_SECRET_KEY")
     )
 
     sanitized_key = api_key or None

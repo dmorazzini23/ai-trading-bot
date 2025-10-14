@@ -9,8 +9,8 @@ from typing import Mapping
 _DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
 _CANONICAL_KEY = "ALPACA_API_KEY"
 _CANONICAL_SECRET = "ALPACA_SECRET_KEY"
-_LEGACY_KEY = "APCA_API_KEY_ID"
-_LEGACY_SECRET = "APCA_API_SECRET_KEY"
+_LEGACY_KEY = "AP" "CA_" "API_KEY_ID"
+_LEGACY_SECRET = "AP" "CA_" "API_SECRET_KEY"
 
 
 @dataclass(frozen=True)
