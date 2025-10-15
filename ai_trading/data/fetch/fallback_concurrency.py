@@ -71,13 +71,15 @@ def _inc_peak_in_place(current_in_use: int) -> None:
 
 @contextmanager
 def limit_concurrency() -> Iterator[None]:
-    _ensure_limit_updated()
     with _LIMIT_CONDITION:
         global _CURRENT_IN_USE
-        while _CURRENT_IN_USE >= _LIMIT:
+        while True:
+            _ensure_limit_updated()
+            if _CURRENT_IN_USE < _LIMIT:
+                _CURRENT_IN_USE += 1
+                in_use = _CURRENT_IN_USE
+                break
             _LIMIT_CONDITION.wait()
-        _CURRENT_IN_USE += 1
-        in_use = _CURRENT_IN_USE
     _inc_peak_in_place(in_use)
     try:
         yield

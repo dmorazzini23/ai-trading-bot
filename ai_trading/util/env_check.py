@@ -31,12 +31,17 @@ def _is_site_packages(path: Path) -> bool:
 def ensure_python_dotenv_is_real_package() -> None:
     """Raise if ``dotenv`` resolves to a shadowed in-repo package."""
 
+    guard_flag = globals().get("PYTHON_DOTENV_RESOLVED", None)
+
     spec = importlib.util.find_spec("dotenv")
     if spec is None:
+        if guard_flag is False:
+            globals()["PYTHON_DOTENV_RESOLVED"] = False
+            return
         raise DotenvImportError("python-dotenv is not installed")
 
-    guard_flag = globals().get("PYTHON_DOTENV_RESOLVED", None)
     if guard_flag is False:
+        globals()["PYTHON_DOTENV_RESOLVED"] = False
         return
 
     candidates: list[Path] = []
