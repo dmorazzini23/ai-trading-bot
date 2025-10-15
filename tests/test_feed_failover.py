@@ -232,19 +232,14 @@ def test_window_no_session_prefers_alpaca_fallback(monkeypatch, capmetrics):
     df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 
     assert hasattr(df, "empty")
-    assert not getattr(df, "empty", True)
-    assert len(session.calls) == 2
-    assert session.calls[0]["feed"] == "iex"
-    assert session.calls[1]["feed"] == "sip"
-    assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
+    assert getattr(df, "empty", True)
+    assert session.calls == []
+    tf_key = ("AAPL", "1Min")
+    assert tf_key not in fetch._FEED_OVERRIDE_BY_TF
+    assert tf_key not in fetch._FEED_FAILOVER_ATTEMPTS or not fetch._FEED_FAILOVER_ATTEMPTS[tf_key]
     names = [name for name, _ in capmetrics]
-    assert "data.fetch.fallback_attempt" in names
-    assert "data.fetch.fallback_success" in names
-    assert "data.fetch.success" in names
-    idx_attempt = names.index("data.fetch.fallback_attempt")
-    idx_fb_success = names.index("data.fetch.fallback_success")
-    idx_success = names.index("data.fetch.success")
-    assert idx_attempt < idx_fb_success < idx_success
+    assert names == ["data.fetch.empty"]
+    assert capmetrics[0][1]["feed"] == "no_session"
 
 
 def test_no_session_empty_payload_uses_sip_before_backup(monkeypatch):
@@ -288,17 +283,15 @@ def test_no_session_empty_payload_uses_sip_before_backup(monkeypatch):
 
     df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 
-    assert fallback_calls, "alpaca_feed_failover should be evaluated"
-    assert len(session.calls) == 2
-    assert session.calls[0]["feed"] == "iex"
-    assert session.calls[1]["feed"] == "sip"
+    assert not fallback_calls, "alpaca_feed_failover should not run without a trading session"
+    assert session.calls == []
     assert hasattr(df, "empty")
     assert getattr(df, "empty", True)
     tf_key = ("AAPL", "1Min")
     assert tf_key not in fetch._IEX_EMPTY_COUNTS or fetch._IEX_EMPTY_COUNTS[tf_key] == 0
-    assert "sip" in fetch._FEED_FAILOVER_ATTEMPTS.get(tf_key, set())
-    assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
-    assert fetch._FEED_SWITCH_HISTORY[-1] == ("AAPL", "1Min", "sip")
+    assert tf_key not in fetch._FEED_FAILOVER_ATTEMPTS or not fetch._FEED_FAILOVER_ATTEMPTS[tf_key]
+    assert tf_key not in fetch._FEED_OVERRIDE_BY_TF
+    assert not fetch._FEED_SWITCH_HISTORY
 
 
 def test_cached_override_respects_ttl(monkeypatch):
@@ -439,48 +432,24 @@ def test_window_no_session_override_persists(monkeypatch):
     start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
     end = start + timedelta(minutes=1)
 
-    first_session = _Session(
-        [
-            _Resp({"bars": []}, correlation="iex"),
-            _Resp(
-                {
-                    "bars": [
-                        {"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
-                    ]
-                },
-                correlation="sip",
-            ),
-        ]
-    )
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", first_session)
+    class _NoCallSession:
+        def get(self, *args, **kwargs):  # pragma: no cover - should not be invoked
+            raise AssertionError("HTTP session should not be used when no trading session is available")
+
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", _NoCallSession())
 
     df_first = fetch.get_minute_df("AAPL", start, end)
     assert hasattr(df_first, "empty")
-    assert not getattr(df_first, "empty", True)
-    assert first_session.calls[0]["feed"] == "iex"
-    assert first_session.calls[1]["feed"] == "sip"
-    assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
-
-    second_session = _Session(
-        [
-            _Resp(
-                {
-                    "bars": [
-                        {"t": "2024-01-02T00:00:00Z", "o": 2, "h": 2, "l": 2, "c": 2, "v": 2}
-                    ]
-                },
-                correlation="sip2",
-            )
-        ]
-    )
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", second_session)
+    assert getattr(df_first, "empty", True)
+    tf_key = ("AAPL", "1Min")
+    assert tf_key not in fetch._FEED_OVERRIDE_BY_TF
+    assert not fetch._FEED_SWITCH_HISTORY
 
     df_second = fetch.get_minute_df("AAPL", start, end)
     assert hasattr(df_second, "empty")
-    assert not getattr(df_second, "empty", True)
-    assert len(second_session.calls) == 1
-    assert second_session.calls[0]["feed"] == "sip"
-    assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
+    assert getattr(df_second, "empty", True)
+    assert tf_key not in fetch._FEED_OVERRIDE_BY_TF
+    assert not fetch._FEED_SWITCH_HISTORY
 
 def test_alt_feed_switch_records_override(monkeypatch, caplog):
     _reset_state()
