@@ -1709,8 +1709,16 @@ def _attempt_alpaca_trade(
             normalized_msg = str(payload_msg).strip().lower() if payload_msg is not None else None
         except COMMON_EXC:
             normalized_msg = None
-        if status == 404 or normalized_msg == 'not found':
-            raise
+        if status == 404 or normalized_msg in {'not found', 'trade not found'}:
+            _log_price_warning(
+                'ALPACA_TRADE_NOT_FOUND',
+                provider='alpaca_trade',
+                symbol=symbol,
+                extra={'status': status, 'message': payload_msg, 'error': str(exc)},
+            )
+            cache['trade_source'] = 'alpaca_trade_not_found'
+            cache['trade_price'] = None
+            return None, cache['trade_source']
         if status in {401, 403}:
             logger.error(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
