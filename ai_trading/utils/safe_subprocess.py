@@ -43,21 +43,20 @@ def safe_subprocess_run(
         popen_kwargs.setdefault("stdout", subprocess.PIPE)
         popen_kwargs.setdefault("stderr", subprocess.PIPE)
 
-    resolved_timeout = None
-    if timeout is not None and timeout > 0:
-        resolved_timeout = timeout
+    popen_kwargs.setdefault("check", check)
+    popen_kwargs.setdefault("text", text)
 
-    run_kwargs = dict(popen_kwargs)
-    run_kwargs.setdefault("check", False)
-    run_kwargs.setdefault("text", text)
-    run_kwargs["timeout"] = resolved_timeout
+    effective_timeout = timeout if (timeout is None or timeout > 0) else None
 
     try:
-        completed = subprocess.run(cmd, **run_kwargs)
+        completed = subprocess.run(cmd, timeout=effective_timeout, **popen_kwargs)
     except subprocess.TimeoutExpired as exc:
         stdout = _normalize_stream(getattr(exc, "output", None))
         stderr = _normalize_stream(getattr(exc, "stderr", None))
-        log.warning("SAFE_SUBPROCESS_TIMEOUT", extra={"cmd": cmd, "timeout": timeout if timeout is not None else resolved_timeout})
+        log.warning(
+            "SAFE_SUBPROCESS_TIMEOUT",
+            extra={"cmd": cmd, "timeout": timeout if timeout is not None else effective_timeout},
+        )
         result = SafeSubprocessResult(stdout, stderr, 124, True)
         exc.stdout = stdout
         exc.stderr = stderr

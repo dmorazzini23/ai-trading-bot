@@ -1,42 +1,29 @@
 import importlib
 import importlib.machinery
 import pathlib
-import sys
-
-from ai_trading.env import PYTHON_DOTENV_RESOLVED
-
-
-class DotenvImportError(ImportError): ...
+import importlib.util
+from pathlib import Path
 
 
-def assert_dotenv_not_shadowed():
-    """
-    Raise DotenvImportError if the import resolver would load a 'dotenv'
-    module from inside this repository (shadowing site-packages). Tests monkeypatch
-    importlib to simulate this; we must consult find_spec, not sys.modules.
-    """
-    if not PYTHON_DOTENV_RESOLVED:
-        return
+class DotenvImportError(ImportError):
+    pass
 
-    import importlib.util
-    import os
-    from pathlib import Path
 
-    repo_root = Path(__file__).resolve().parents[2]
+PYTHON_DOTENV_RESOLVED = False
+
+
+def ensure_python_dotenv_is_real_package() -> None:
+    """Raise if ``dotenv`` resolves to a shadowed in-repo package."""
+
     spec = importlib.util.find_spec("dotenv")
-    if spec is None or not getattr(spec, "origin", None):
+    if not spec or not getattr(spec, "origin", None):
         return
+
     origin = Path(spec.origin).resolve()
+    repo_root = Path(__file__).resolve().parents[2]
+    if repo_root in origin.parents:
+        raise DotenvImportError(f"Refusing to import shadowed dotenv at {origin}")
 
-    # Accept typical virtualenv/site-packages paths
-    allow = ("site-packages", "dist-packages", ".venv", "venv", "env")
-    if any(part in origin.parts for part in allow):
-        return
 
-    # If origin sits under the repository root, fail fast
-    try:
-        origin.relative_to(repo_root)
-        raise DotenvImportError(f"dotenv import resolves inside repo: {origin}")
-    except ValueError:
-        # Different tree; OK
-        return
+def assert_dotenv_not_shadowed() -> None:
+    ensure_python_dotenv_is_real_package()
