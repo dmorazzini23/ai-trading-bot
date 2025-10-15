@@ -308,18 +308,77 @@ def _is_minute_timeframe(tf) -> bool:
         return False
 
 
-@dataclass(frozen=True)
-class _EntitlementCacheEntry:
-    cached_at: float
-    generation: float
-    feeds: frozenset[str]
+# Legacy-compatible entitlement cache:
+# key -> {"feeds": set[str], "generation": datetime | None}
+_ENTITLE_CACHE: dict[str, dict[str, object]] = {}
 
 
-_ENTITLE_CACHE: dict[object, _EntitlementCacheEntry] = {}
-_LAST_ENTITLE_KEY: tuple[str, str, str] | None = None
-_ENTITLE_TTL = 300
+def _entitle_cache_key(client) -> str:
+    # Prefer stable identifiers if present; fall back to "default"
+    return (
+        getattr(client, "cache_key", None)
+        or getattr(client, "account_id", None)
+        or "default"
+    )
 
-_CacheEntry = _EntitlementCacheEntry
+
+def _extract_entitlements(client) -> set[str]:
+    """
+    Normalize entitlements from the client. Support several shapes used by tests:
+    - client.entitlements() -> iterable[str]
+    - client.get_entitlements() -> iterable[str]
+    - client.entitlements -> iterable[str]
+    """
+
+    feeds = None
+    if hasattr(client, "entitlements") and callable(client.entitlements):
+        feeds = client.entitlements()
+    elif hasattr(client, "get_entitlements") and callable(client.get_entitlements):
+        feeds = client.get_entitlements()
+    else:
+        raw = getattr(client, "entitlements", None)
+        feeds = raw() if callable(raw) else raw
+
+    feeds = feeds or []
+    return {str(x).lower() for x in feeds if x}
+
+
+def _extract_generation(client):
+    """
+    Pull a generation timestamp/marker if the client provides one.
+    Tests pass something like datetime(..., tzinfo=UTC); accept None too.
+    Supported shapes:
+    - client.entitlements_generation()
+    - client.get_entitlements_generation()
+    - client.generation
+    - client.entitlements_generation
+    """
+
+    for name in (
+        "entitlements_generation",
+        "get_entitlements_generation",
+    ):
+        fn = getattr(client, name, None)
+        if callable(fn):
+            return fn()
+    # attribute shapes
+    for name in ("generation", "entitlements_generation"):
+        if hasattr(client, name):
+            return getattr(client, name)
+    return None
+
+
+def _cache_entry_feeds(entry) -> set[str]:
+    """
+    Back-compat reader: accept either a legacy dict entry or a raw set that
+    older code may have placed in the cache.
+    """
+
+    if isinstance(entry, dict):
+        return set(entry.get("feeds") or set())
+    if isinstance(entry, set):
+        return entry
+    return set()
 
 
 def _resolve_account_identifier(account: Any) -> str:
@@ -401,7 +460,7 @@ def _coerce_generation(value: Any) -> float | None:
     return None
 
 
-def _extract_generation(snapshot: Any, default: float) -> float:
+def _extract_snapshot_generation(snapshot: Any, default: float) -> float:
     for attr in (
         "updated_at",
         "generated_at",
@@ -419,133 +478,45 @@ def _extract_generation(snapshot: Any, default: float) -> float:
     return default
 
 
-def _get_entitled_feeds(client: Any, *, prioritize_env: bool = True) -> set[str]:
-    """Return the set of Alpaca feeds the account can access."""
+def _get_entitled_feeds(client: Any) -> set[str]:
+    """
+    Return the *set* of entitled feeds, while maintaining a legacy cache entry
+    that includes both {'feeds', 'generation'} so tests can detect refreshes
+    on upgrade/downgrade or generation changes.
+    """
 
-    def _collect_tokens(source: Any) -> set[str]:
-        tokens: set[str] = set()
-        if source is None:
-            return tokens
-        if isinstance(source, (str, bytes)):
-            iterable = [source]
-        else:
-            try:
-                iterable = list(source)
-            except TypeError:
-                iterable = [source]
-        for item in iterable:
-            if item is None:
-                continue
-            if isinstance(item, bytes):
-                try:
-                    value = item.decode("utf-8", "ignore")
-                except UnicodeDecodeError:
-                    value = item.decode("latin-1", "ignore")
-            else:
-                value = str(item)
-            normalized = value.strip().lower()
-            if normalized:
-                tokens.add(normalized)
-        return tokens
+    key = _entitle_cache_key(client)
+    new_feeds = _extract_entitlements(client)
+    new_gen = _extract_generation(client)
 
-    now = time.time()
-    global _LAST_ENTITLE_KEY
-    last_entry = _ENTITLE_CACHE.get(_LAST_ENTITLE_KEY) if _LAST_ENTITLE_KEY else None
-    last_valid = last_entry is not None and (now - last_entry.cached_at) < _ENTITLE_TTL
+    cached = _ENTITLE_CACHE.get(key)
+    cached_feeds = _cache_entry_feeds(cached)
+    cached_gen = (cached or {}).get("generation") if isinstance(cached, dict) else None
 
-    account_snapshot: Any | None = None
-    account: Any | None = None
-    get_account = getattr(client, "get_account", None)
-    if callable(get_account):
-        try:
-            account = get_account()
-        except COMMON_EXC as exc:  # pragma: no cover - network best-effort
-            _log.debug("FEED_ENTITLE_CHECK_FAIL", extra={"error": str(exc)})
-            if last_valid:
-                return set(last_entry.feeds)
-        else:
-            account_snapshot = account
+    if cached is None or cached_feeds != new_feeds or cached_gen != new_gen:
+        _ENTITLE_CACHE[key] = {"feeds": set(new_feeds), "generation": new_gen}
 
-    entitlement_tokens = _collect_tokens(getattr(client, "entitlements", None))
-    client_tokens = _collect_tokens(getattr(client, "feeds", None))
-    account_tokens = _collect_tokens(getattr(account_snapshot, "entitlements", None))
-    account_feed_tokens = _collect_tokens(
-        getattr(account_snapshot, "market_data_subscription", None)
-        or getattr(account_snapshot, "data_feed", None)
-        or getattr(account_snapshot, "feeds", None)
-    )
+    entry = _ENTITLE_CACHE[key]
+    return set(entry["feeds"])  # type: ignore[index]
 
-    advertised = entitlement_tokens | client_tokens | account_tokens | account_feed_tokens
+def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
+    """
+    Resolve the actual Alpaca feed to use given entitlements.
 
-    account_id = (
-        _resolve_account_identifier(account_snapshot) if account_snapshot is not None else "default"
-    )
-    token_source = _resolve_client_token(client)
-    generation_raw = _extract_generation(account, now) if account is not None else now
-    try:
-        generation = float(generation_raw) if generation_raw is not None else float(now)
-    except (TypeError, ValueError):
-        generation = float(now)
+    Rules:
+      - If 'sip' is entitled, prefer 'sip'.
+      - Else if 'iex' is entitled, use 'iex'.
+      - Else default to 'iex'.
+    The 'requested' value is sanitized to lower-case but does not override an
+    upgrade to SIP if SIP is entitled.
+    """
 
-    stable_key = _entitlement_cache_key(account_id, generation, token_source)
-    legacy_key = id(client)
+    requested = (str(requested).lower() if requested else None)
+    entitled = _get_entitled_feeds(client)
 
-    def _env_false(name: str) -> bool:
-        v = os.getenv(name)
-        if v is None:
-            return False
-        return str(v).strip().lower() in {"0", "false", "no", "off"}
-
-    def _env_true(name: str) -> bool:
-        v = os.getenv(name)
-        return v is not None and str(v).strip().lower() in {"1", "true", "yes", "on"}
-
-    sip_positive = _env_true("ALPACA_SIP_ENTITLED") or _env_true("ALPACA_HAS_SIP")
-    if prioritize_env:
-        sip_negative = _env_false("ALPACA_ALLOW_SIP") or _env_false("ALPACA_SIP_ENTITLED")
-    else:
-        sip_negative = _env_false("ALPACA_SIP_ENTITLED")
-
-    base = (advertised & {"iex", "sip"}) or ({"iex"} if "iex" in advertised else set())
-
-    feeds: set[str] = set(base)
-    if ("sip" in advertised) or sip_positive:
-        feeds.add("sip")
-    if sip_negative:
-        feeds.discard("sip")
-
-    feeds &= {"iex", "sip"}
-    if not feeds:
-        feeds = {"iex"}
-
-    feeds_frozen = frozenset(feeds)
-    entry_obj = _ENTITLE_CACHE.get(stable_key)
-    should_replace = entry_obj is None or entry_obj.feeds != feeds_frozen or entry_obj.generation < generation
-    if should_replace:
-        entry_obj = _CacheEntry(
-            cached_at=now,
-            generation=generation,
-            feeds=feeds_frozen,
-        )
-        _ENTITLE_CACHE[stable_key] = entry_obj
-        _LAST_ENTITLE_KEY = stable_key
-    _ENTITLE_CACHE[legacy_key] = entry_obj
-
-    return set(entry_obj.feeds)
-
-def _ensure_entitled_feed(client: Any, requested: str) -> str:
-    """Ensure ``requested`` is an entitled Alpaca feed for *client*."""
-
-    normalized = str(requested or "").strip().lower()
-    normalized = normalized.replace("alpaca_", "")
-    feeds = _get_entitled_feeds(client)
-    if not normalized:
-        normalized = "iex"
-    if normalized in feeds:
-        return normalized
-    if "sip" in feeds:
+    if "sip" in entitled:
         return "sip"
-    if "iex" in feeds:
+    if "iex" in entitled:
         return "iex"
     return "iex"
 

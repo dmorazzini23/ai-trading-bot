@@ -2006,14 +2006,18 @@ def _reset_cycle_cache() -> None:
 def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
     """Return cached intraday fallback feed for the active cycle."""
 
+    candidate: str | None = None
     if symbol:
-        cached = _CYCLE_FEED_CACHE.get(symbol)
-        if cached:
-            return cached
-        override = _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
-        if override:
-            return override
-    return _GLOBAL_INTRADAY_FALLBACK_FEED
+        candidate = _CYCLE_FEED_CACHE.get(symbol) or _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
+    if candidate is None:
+        candidate = _GLOBAL_INTRADAY_FALLBACK_FEED
+    if candidate in {"alpaca_iex", "iex"}:
+        return "iex"
+    if candidate in {"alpaca_sip", "sip"}:
+        return "sip"
+    if candidate == "yahoo":
+        return "yahoo"
+    return None
 
 
 def _prefer_feed_this_cycle_helper(symbol: str | None = None) -> str | None:
@@ -24456,12 +24460,31 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         return None
 
     prefer = _prefer_feed_this_cycle()
-    feed_candidate = prefer if prefer in {"iex", "sip"} else _get_intraday_feed()
     env_feed = os.getenv("ALPACA_DATA_FEED")
-    if env_feed:
-        feed_candidate = env_feed
-    alpaca_feed = _sanitize_alpaca_feed(feed_candidate)
-    invalid_alpaca_feed = bool(feed_candidate) and alpaca_feed not in {"iex", "sip"}
+    feed_candidate = env_feed or prefer or _get_intraday_feed()
+
+    alpaca_feed = None
+    configured_feed: str | None = None
+    feed_lower = None
+    if isinstance(feed_candidate, str):
+        feed_lower = feed_candidate.strip().lower() or None
+    sanitized_candidate = _sanitize_alpaca_feed(feed_candidate) if feed_candidate else None
+
+    if sanitized_candidate in {"iex", "sip"}:
+        alpaca_feed = sanitized_candidate
+        configured_feed = sanitized_candidate
+    elif feed_lower == "yahoo" or prefer == "yahoo":
+        configured_feed = "yahoo"
+    elif prefer in {"iex", "sip"}:
+        alpaca_feed = prefer
+        configured_feed = prefer
+    elif sanitized_candidate in {"iex", "sip"}:
+        alpaca_feed = sanitized_candidate
+        configured_feed = sanitized_candidate
+    elif feed_lower:
+        configured_feed = feed_lower
+
+    invalid_alpaca_feed = configured_feed not in {None, "iex", "sip", "yahoo"}
 
     pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
     sip_locked = False
@@ -24479,6 +24502,9 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         and not provider_disabled
         and not (alpaca_feed == "sip" and sip_locked)
     )
+
+    if configured_feed == "yahoo":
+        use_alpaca = False
 
     if invalid_alpaca_feed and alpaca_feed is None:
         logger_once.warning(
@@ -24512,8 +24538,13 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 price, source = None, None
             except COMMON_EXC:
                 price, source = None, None
-            else:
-                if price is not None:
+            if provider == "alpaca_quote":
+                if source == "alpaca_auth_failed":
+                    _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+                    if alpaca_feed:
+                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    return None
+                if price is not None and price > 0:
                     resolved_source = str(source or provider)
                     _PRICE_SOURCE[symbol] = resolved_source
                     if resolved_source.startswith("alpaca_bid") and cache.get("quote_ask_unusable"):
@@ -24521,6 +24552,40 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                     if alpaca_feed:
                         _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
                     return price
+                degraded = _resolve_cached_quote_bid(symbol, cache)
+                if degraded is not None:
+                    bid_price, bid_source = degraded
+                    _PRICE_SOURCE[symbol] = bid_source
+                    if alpaca_feed:
+                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    return bid_price
+                values = cache.get("quote_values") or {}
+                for label in ("alpaca_bid", "alpaca_ask", "alpaca_last"):
+                    candidate = values.get(label)
+                    if candidate is None:
+                        continue
+                    try:
+                        candidate_value = float(candidate)
+                    except (TypeError, ValueError):
+                        continue
+                    if candidate_value <= 0:
+                        continue
+                    _PRICE_SOURCE[symbol] = label
+                    if alpaca_feed:
+                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    return candidate_value
+                if source:
+                    _PRICE_SOURCE[symbol] = str(source)
+                continue
+
+            if price is not None and price > 0:
+                resolved_source = str(source or provider)
+                _PRICE_SOURCE[symbol] = resolved_source
+                if resolved_source.startswith("alpaca_bid") and cache.get("quote_ask_unusable"):
+                    _log_delayed_quote_slippage(symbol, resolved_source, price, cache)
+                if alpaca_feed:
+                    _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                return price
             if source:
                 _PRICE_SOURCE[symbol] = str(source)
             continue
