@@ -21,6 +21,13 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
 
 
+def _is_site_packages(path: Path) -> bool:
+    """Return True if ``path`` resides in a site-packages/dist-packages directory."""
+
+    site_dirs = {"site-packages", "dist-packages"}
+    return any(part.lower() in site_dirs for part in path.resolve().parts)
+
+
 def ensure_python_dotenv_is_real_package() -> None:
     """Raise if ``dotenv`` resolves to a shadowed in-repo package."""
 
@@ -29,7 +36,7 @@ def ensure_python_dotenv_is_real_package() -> None:
         return
 
     origin = Path(spec.origin).resolve()
-    if _is_under(origin, _repo_root()):
+    if _is_under(origin, _repo_root()) and not _is_site_packages(origin):
         raise DotenvImportError(f"Refusing to import shadowed dotenv at {origin}")
 
     globals()["PYTHON_DOTENV_RESOLVED"] = True
