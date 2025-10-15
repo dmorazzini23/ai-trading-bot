@@ -364,7 +364,7 @@ def _extract_entitlements(client) -> set[str]:
         if isinstance(obj, (set, list, tuple, frozenset)):
             iterable: Iterable[Any] = obj  # type: ignore[assignment]
         elif isinstance(obj, dict):
-            iterable = obj.values()
+            iterable = obj.keys()
         else:
             iterable = (obj,)
         for token in iterable:
