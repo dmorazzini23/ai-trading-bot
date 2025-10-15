@@ -1339,14 +1339,23 @@ def _normalize_cycle_feed(feed: str | None) -> str | None:
 
     if feed is None:
         return None
+    canonical = _canonicalize_fallback_feed(feed)
+    if canonical in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+        return canonical
     sanitized = _sanitize_alpaca_feed(feed)
-    if sanitized:
+    if sanitized in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         return sanitized
     try:
         normalized = data_fetcher_module._normalize_feed_value(feed)
     except COMMON_EXC:
         return None
-    return _sanitize_alpaca_feed(normalized)
+    canonical_normalized = _canonicalize_fallback_feed(normalized)
+    if canonical_normalized in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+        return canonical_normalized
+    sanitized_normalized = _sanitize_alpaca_feed(normalized)
+    if sanitized_normalized in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+        return sanitized_normalized
+    return None
 
 
 def _get_price_provider_order() -> tuple[str, ...]:
@@ -1679,8 +1688,9 @@ def _attempt_alpaca_trade(
         cache['trade_price'] = None
         return None, cache['trade_source']
     params = {'feed': sanitized_feed} if sanitized_feed else None
+    url = f"{ALPACA_DATA_BASE}/stocks/{symbol}/trades/latest"
     try:
-        payload = alpaca_get(f"{ALPACA_DATA_BASE}/stocks/{symbol}/trades/latest", params=params)
+        payload = alpaca_get(url, params=params)
     except AlpacaAuthenticationError as exc:
         logger.error(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
@@ -1691,6 +1701,16 @@ def _attempt_alpaca_trade(
         return None, cache['trade_source']
     except AlpacaOrderHTTPError as exc:
         status = getattr(exc, 'status_code', None)
+        payload = getattr(exc, 'payload', None)
+        payload_msg = None
+        if isinstance(payload, Mapping):
+            payload_msg = payload.get('msg') or payload.get('message')
+        try:
+            normalized_msg = str(payload_msg).strip().lower() if payload_msg is not None else None
+        except COMMON_EXC:
+            normalized_msg = None
+        if status == 404 or normalized_msg == 'not found':
+            raise
         if status in {401, 403}:
             logger.error(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
@@ -1750,8 +1770,9 @@ def _attempt_alpaca_quote(
         cache['quote_price'] = None
         return None, cache['quote_source']
     params = {'feed': sanitized_feed} if sanitized_feed else None
+    url = f"{ALPACA_DATA_BASE}/stocks/{symbol}/quotes/latest"
     try:
-        data = alpaca_get(f"{ALPACA_DATA_BASE}/stocks/{symbol}/quotes/latest", params=params)
+        data = alpaca_get(url, params=params)
     except AlpacaAuthenticationError as exc:
         logger.error(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
@@ -1805,12 +1826,34 @@ def _attempt_alpaca_quote(
         if isinstance(symbol_payload, dict):
             payloads.append(symbol_payload)
     price, source, pending_bid, ask_unusable, last_unusable, values = _extract_quote_price(payloads, symbol)
+    resolved_price = None
+    resolved_source = 'alpaca_quote_invalid'
+    ask_price = values.get('alpaca_ask')
+    bid_price = values.get('alpaca_bid')
+    last_price = values.get('alpaca_last')
+    if ask_price is not None and ask_price > 0:
+        resolved_price = ask_price
+        resolved_source = 'alpaca_ask'
+    elif last_price is not None and last_price > 0:
+        resolved_price = last_price
+        resolved_source = 'alpaca_last'
+    elif bid_price is not None and bid_price > 0:
+        resolved_price = bid_price
+        resolved_source = 'alpaca_bid_degraded' if (ask_unusable or last_unusable) else 'alpaca_bid'
+    price = resolved_price
+    source = resolved_source
     cache['quote_price'] = price
     cache['quote_source'] = source
     cache['quote_pending_bid'] = pending_bid
     cache['quote_ask_unusable'] = ask_unusable
     cache['quote_last_unusable'] = last_unusable
     cache['quote_values'] = values
+    if source.startswith('alpaca_bid') and price is not None:
+        cache['quote_degraded_source'] = source
+        cache['quote_degraded_price'] = price
+    else:
+        cache.pop('quote_degraded_source', None)
+        cache.pop('quote_degraded_price', None)
     return price, source
 
 
@@ -1878,7 +1921,7 @@ def _attempt_yahoo_price(symbol: str) -> tuple[float | None, str]:
         end = datetime.now(UTC)
         df = _yahoo_get_bars(symbol, start, end, interval="1d")
         price = _normalize_price(get_latest_close(df), 'yahoo', symbol)
-        if price is not None:
+        if price is not None and price > 0:
             return price, 'yahoo'
         return None, 'yahoo_invalid'
     except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as exc:  # pragma: no cover - defensive
@@ -1889,8 +1932,16 @@ def _attempt_yahoo_price(symbol: str) -> tuple[float | None, str]:
 def _attempt_bars_price(symbol: str) -> tuple[float | None, str]:
     try:
         df = get_bars_df(symbol)
+        if df is None:
+            return None, 'bars_invalid'
+        try:
+            is_empty = bool(getattr(df, 'empty'))
+        except COMMON_EXC:
+            is_empty = False
+        if is_empty:
+            return None, 'bars_invalid'
         price = _normalize_price(get_latest_close(df), 'bars', symbol)
-        if price is not None:
+        if price is not None and price > 0:
             return price, 'latest_close_used'
         return None, 'bars_invalid'
     except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as exc:  # pragma: no cover - defensive
@@ -2011,12 +2062,9 @@ def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
         candidate = _CYCLE_FEED_CACHE.get(symbol) or _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
     if candidate is None:
         candidate = _GLOBAL_INTRADAY_FALLBACK_FEED
-    if candidate in {"alpaca_iex", "iex"}:
-        return "iex"
-    if candidate in {"alpaca_sip", "sip"}:
-        return "sip"
-    if candidate == "yahoo":
-        return "yahoo"
+    canonical = _canonicalize_fallback_feed(candidate)
+    if canonical in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+        return canonical
     return None
 
 
@@ -24490,14 +24538,16 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     elif feed_lower:
         configured_feed = feed_lower
 
-    invalid_alpaca_feed = configured_feed not in {None, "iex", "sip", "yahoo"}
+    invalid_alpaca_feed = configured_feed not in {None, "iex", "sip"}
 
     pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
+    sip_flagged = bool(
+        getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+        or os.getenv("ALPACA_SIP_UNAUTHORIZED")
+    )
     sip_locked = False
     if alpaca_feed == "sip":
-        sip_locked = bool(
-            getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False) or os.getenv("ALPACA_SIP_UNAUTHORIZED")
-        )
+        sip_locked = sip_flagged
         if pytest_running:
             sip_locked = False
 
@@ -24506,11 +24556,14 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         and service_available
         and alpaca_feed in {"iex", "sip"}
         and not provider_disabled
-        and not (alpaca_feed == "sip" and sip_locked)
+        and not sip_locked
+        and not invalid_alpaca_feed
     )
 
     if configured_feed == "yahoo":
         use_alpaca = False
+
+    skip_alpaca = not use_alpaca
 
     if invalid_alpaca_feed and alpaca_feed is None:
         logger_once.warning(
@@ -24520,8 +24573,22 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         )
 
     provider_order = _get_price_provider_order()
+    if skip_alpaca:
+        provider_order = tuple(p for p in provider_order if not p.startswith("alpaca"))
     cache: dict[str, Any] = {}
     attempted_alpaca = False
+
+    def _cache_feed_if_allowed(*, force: bool = False) -> None:
+        if not alpaca_feed:
+            return
+        if not force and alpaca_feed == "iex":
+            symbol_override = _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
+            if (
+                _GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo"
+                or symbol_override == "yahoo"
+            ):
+                return
+        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
 
     for provider in provider_order:
         if provider.startswith("alpaca"):
@@ -24537,8 +24604,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                     continue
             except AlpacaAuthenticationError:
                 _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
-                if alpaca_feed:
-                    _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                _cache_feed_if_allowed(force=True)
                 return None
             except AlpacaOrderHTTPError:
                 price, source = None, None
@@ -24547,23 +24613,20 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             if provider == "alpaca_quote":
                 if source == "alpaca_auth_failed":
                     _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
-                    if alpaca_feed:
-                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    _cache_feed_if_allowed(force=True)
                     return None
                 if price is not None and price > 0:
                     resolved_source = str(source or provider)
                     _PRICE_SOURCE[symbol] = resolved_source
                     if resolved_source.startswith("alpaca_bid") and cache.get("quote_ask_unusable"):
                         _log_delayed_quote_slippage(symbol, resolved_source, price, cache)
-                    if alpaca_feed:
-                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    _cache_feed_if_allowed(force=resolved_source.startswith("alpaca_bid"))
                     return price
                 degraded = _resolve_cached_quote_bid(symbol, cache)
                 if degraded is not None:
                     bid_price, bid_source = degraded
                     _PRICE_SOURCE[symbol] = bid_source
-                    if alpaca_feed:
-                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    _cache_feed_if_allowed(force=True)
                     return bid_price
                 values = cache.get("quote_values") or {}
                 for label in ("alpaca_bid", "alpaca_ask", "alpaca_last"):
@@ -24577,8 +24640,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                     if candidate_value <= 0:
                         continue
                     _PRICE_SOURCE[symbol] = label
-                    if alpaca_feed:
-                        _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                    _cache_feed_if_allowed(force=label.startswith("alpaca_bid"))
                     return candidate_value
                 if source:
                     _PRICE_SOURCE[symbol] = str(source)
@@ -24589,8 +24651,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 _PRICE_SOURCE[symbol] = resolved_source
                 if resolved_source.startswith("alpaca_bid") and cache.get("quote_ask_unusable"):
                     _log_delayed_quote_slippage(symbol, resolved_source, price, cache)
-                if alpaca_feed:
-                    _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
+                _cache_feed_if_allowed(force=resolved_source.startswith("alpaca_bid"))
                 return price
             if source:
                 _PRICE_SOURCE[symbol] = str(source)
@@ -24604,6 +24665,8 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             if price is not None:
                 _PRICE_SOURCE[symbol] = str(source or provider)
                 return price
+            if source:
+                _PRICE_SOURCE[symbol] = str(source)
             continue
 
         if provider == "bars":
