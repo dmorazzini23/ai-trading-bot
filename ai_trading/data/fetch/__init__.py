@@ -5323,7 +5323,7 @@ def retry_empty_fetch_once(
     }
 
 
-_ALLOWED_FEEDS = {"iex", "sip", "yahoo", None}
+_ALLOWED_FEEDS = {"iex", "sip", None}
 _ALLOWED_ADJUSTMENTS = {"all", "raw", "split", None}
 
 
@@ -5342,19 +5342,14 @@ def _validate_fetch_params(
     feed: str | None,
     adjustment: str | None,
 ) -> tuple[str | None, str | None]:
-    del symbol, timeframe
-    if start is None or end is None:
-        raise ValueError("start and end must be provided")
-    _to_datetime_utc(start)
-    _to_datetime_utc(end)
-
-    norm_feed = str(feed).lower() if feed is not None else None
+    del symbol, timeframe, start, end
+    norm_feed = None if feed in {None, ""} else str(feed).lower()
     if norm_feed not in _ALLOWED_FEEDS:
-        raise ValueError(f"invalid feed: {feed}")
+        raise ValueError("invalid feed")
 
-    norm_adj = str(adjustment).lower() if adjustment is not None else None
+    norm_adj = None if adjustment in {None, ""} else str(adjustment).lower()
     if norm_adj not in _ALLOWED_ADJUSTMENTS:
-        raise ValueError(f"invalid adjustment: {adjustment}")
+        raise ValueError("invalid adjustment")
 
     if norm_feed in {"iex", "sip"} and _HTTP_SESSION is None:
         raise ValueError("HTTP session not initialized for Alpaca fetch")
@@ -5363,7 +5358,14 @@ def _validate_fetch_params(
 
 
 def _fetch_bars(
-    symbol: str, start: Any, end: Any, timeframe: str, *, feed: str = _DEFAULT_FEED, adjustment: str = "raw"
+    symbol: str,
+    start: Any,
+    end: Any,
+    timeframe: str,
+    *,
+    feed: str = _DEFAULT_FEED,
+    adjustment: str = "raw",
+    _from_get_bars: bool = False,
 ) -> pd.DataFrame | None:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
@@ -5371,10 +5373,24 @@ def _fetch_bars(
     global _NO_SESSION_ALPACA_OVERRIDE
     if pd is None:
         raise RuntimeError("pandas not available")
+    if start is None:
+        raise ValueError("start is required")
+    if end is None:
+        raise ValueError("end is required")
+    try:
+        start_dt = ensure_datetime(start)
+    except Exception as exc:
+        raise ValueError("start must be a timezone-aware datetime") from exc
+    if start_dt.tzinfo is None or start_dt.tzinfo.utcoffset(start_dt) is None:
+        raise ValueError("start must be a timezone-aware datetime")
+    try:
+        end_dt = ensure_datetime(end)
+    except Exception as exc:
+        raise ValueError("end must be a timezone-aware datetime") from exc
+    if end_dt.tzinfo is None or end_dt.tzinfo.utcoffset(end_dt) is None:
+        raise ValueError("end must be a timezone-aware datetime")
     feed = feed if feed not in ("",) else None
-    feed, adjustment = _validate_fetch_params(symbol, start, end, timeframe, feed, adjustment)
-    start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
+    feed, adjustment = _validate_fetch_params(symbol, start_dt, end_dt, timeframe, feed, adjustment)
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
@@ -5389,105 +5405,7 @@ def _fetch_bars(
                 "timeframe": tf_norm,
             },
         )
-        requested = feed if feed in {"iex", "sip"} else None
-        if not requested:
-            globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-            return _empty_ohlcv_frame(pd)
-
-        session = _HTTP_SESSION if _HTTP_SESSION is not None else None
-        if session is None or not hasattr(session, "get"):
-            return _empty_ohlcv_frame(pd)
-
-        try:
-            fallback_seq = tuple(alpaca_feed_failover() or ())
-        except Exception:
-            fallback_seq = ()
-
-        sip_allowed = bool(_sip_allowed() and not _SIP_UNAUTHORIZED)
-        order: list[str] = []
-        seen: set[str] = set()
-
-        def _add_feed(name: str | None) -> None:
-            if not name:
-                return
-            normalized = "sip" if str(name).lower() == "sip" else "iex"
-            if normalized not in seen:
-                seen.add(normalized)
-                order.append(normalized)
-
-        _add_feed(requested)
-        if _NO_SESSION_ALPACA_OVERRIDE:
-            override_feed = "sip" if str(_NO_SESSION_ALPACA_OVERRIDE).lower() == "sip" else "iex"
-            if override_feed != "sip" or sip_allowed:
-                _add_feed(override_feed)
-
-        for candidate in fallback_seq:
-            try:
-                normalized = _to_feed_str(candidate)
-            except ValueError:
-                continue
-            if normalized not in {"iex", "sip"}:
-                continue
-            if normalized == "sip" and not sip_allowed:
-                continue
-            _add_feed(normalized)
-
-        if requested == "iex" and sip_allowed:
-            _add_feed("sip")
-
-        if not order:
-            return _empty_ohlcv_frame(pd)
-
-        start_iso = _to_datetime_utc(start_dt).isoformat()
-        end_iso = _to_datetime_utc(end_dt).isoformat()
-
-        for idx, feed_name in enumerate(order):
-            tags = {
-                "provider": "alpaca",
-                "feed": feed_name,
-                "symbol": symbol,
-                "timeframe": tf_norm,
-            }
-            if idx > 0:
-                from_feed = order[idx - 1]
-                _record_feed_switch(symbol, tf_norm, from_feed, feed_name)
-                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(feed_name)
-                _incr("data.fetch.fallback_attempt", tags=dict(tags))
-                logger.info("ALPACA_FEED_SWITCH")
-                globals()["_NO_SESSION_ALPACA_OVERRIDE"] = feed_name
-            params = {
-                "symbols": symbol,
-                "timeframe": tf_norm,
-                "start": start_iso,
-                "end": end_iso,
-                "limit": 10000,
-                "adjustment": adjustment or "all",
-                "feed": feed_name,
-            }
-            try:
-                response = session.get("https://data.alpaca.markets/v2/stocks/bars", params=params)
-            except Exception:
-                response = None
-
-            payload = getattr(response, "json", lambda: response)()
-            bars = (payload or {}).get("bars") if isinstance(payload, dict) else None
-
-            if bars:
-                try:
-                    df_candidate = pd.DataFrame(bars)
-                except Exception:
-                    df_candidate = pd.DataFrame()
-                normalized_df = _flatten_and_normalize_ohlcv(df_candidate, symbol, tf_norm)
-                annotated_df = _annotate_df_source(normalized_df, provider="alpaca", feed=feed_name)
-                if idx > 0:
-                    _incr("data.fetch.fallback_success", tags=dict(tags))
-                else:
-                    globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-                _incr("data.fetch.success", tags=dict(tags))
-                return annotated_df
-
-            logger.info("EMPTY_BARS_DETECTED")
-
+        globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
         return _empty_ohlcv_frame(pd)
     if _NO_SESSION_ALPACA_OVERRIDE:
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
@@ -5519,6 +5437,7 @@ def _fetch_bars(
         "short_circuit_empty": False,
         "outside_market_hours": False,
         "fallback_enabled": False,
+        "from_get_bars": _from_get_bars,
     }
     globals()["_state"] = _state
 
@@ -6497,9 +6416,28 @@ def _fetch_bars(
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             if _feed == "sip":
-                _mark_sip_unauthorized()
+                retry_after_header = None
+                headers_obj = getattr(resp, "headers", None)
+                if isinstance(headers_obj, Mapping):
+                    retry_after_header = headers_obj.get("Retry-After")
+                    if retry_after_header is None:
+                        retry_after_header = headers_obj.get("retry-after")
+                cooldown_override: float | None = None
+                if retry_after_header is not None:
+                    try:
+                        candidate = float(retry_after_header)
+                    except (TypeError, ValueError):
+                        candidate = math.nan
+                    if math.isfinite(candidate) and candidate > 0:
+                        cooldown_override = candidate
+                if cooldown_override is not None:
+                    _mark_sip_unauthorized(cooldown_override)
+                else:
+                    _mark_sip_unauthorized()
                 if _sip_allowed():
                     _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
+                if _state.get("from_get_bars"):
+                    return _empty_ohlcv_frame(pd)
                 is_fallback_request = any(p != "sip" for p in _state.get("providers", [])[:-1])
                 if is_fallback_request:
                     raise ValueError("rate_limited")
@@ -9354,8 +9292,24 @@ def get_bars(
             return _safe_backup_get_bars(symbol, ensure_datetime(start), ensure_datetime(end), interval=y_int)
         except Exception:
             # Defer to Alpaca path (will return None) to preserve behavior
-            return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
-    return _fetch_bars(symbol, start, end, timeframe, feed=normalized_feed, adjustment=adjustment)
+            return _fetch_bars(
+                symbol,
+                start,
+                end,
+                timeframe,
+                feed=feed,
+                adjustment=adjustment,
+                _from_get_bars=True,
+            )
+    return _fetch_bars(
+        symbol,
+        start,
+        end,
+        timeframe,
+        feed=normalized_feed,
+        adjustment=adjustment,
+        _from_get_bars=True,
+    )
 
 
 def get_bars_batch(

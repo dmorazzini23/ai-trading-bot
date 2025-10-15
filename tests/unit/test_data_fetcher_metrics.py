@@ -245,35 +245,19 @@ def test_window_no_session_metrics(monkeypatch: pytest.MonkeyPatch, capmetrics: 
     monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
     monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
     start, end = _ts_window()
-    responses: dict[str, list[Resp]] = {
-        "iex": [Resp(200, {"bars": []})],
-        "sip": [Resp(200, _bars_payload(start))],
-    }
+    call_count = {"total": 0}
 
     def fake_get(*args, **kwargs):
-        params = kwargs.get("params") or {}
-        feed = params.get("feed", "iex")
-        queue = responses.get(feed)
-        if not queue:
-            raise AssertionError(f"unexpected feed request: {feed}")
-        return queue.pop(0)
+        call_count["total"] += 1
+        raise AssertionError("HTTP session should not be called when no trading session is available")
 
     monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
     monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert out is not None and not out.empty
+    assert isinstance(out, pd.DataFrame)
+    assert out.empty
+    assert call_count["total"] == 0
     names = [r.name for r in capmetrics]
-    assert names == [
-        "data.fetch.empty",
-        "data.fetch.fallback_attempt",
-        "data.fetch.fallback_success",
-        "data.fetch.success",
-    ]
-    idx_attempt = names.index("data.fetch.fallback_attempt")
-    idx_fb_success = names.index("data.fetch.fallback_success")
-    idx_success = names.index("data.fetch.success")
-    assert idx_attempt < idx_fb_success < idx_success
-    assert capmetrics[idx_attempt].tags["feed"] == "sip"
-    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
-    assert capmetrics[idx_success].tags["feed"] == "sip"
+    assert names == ["data.fetch.empty"]
+    assert capmetrics[0].tags["feed"] == "no_session"
 
