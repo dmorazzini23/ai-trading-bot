@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 import hashlib
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
@@ -310,61 +310,208 @@ def _is_minute_timeframe(tf) -> bool:
 
 # Legacy-compatible entitlement cache:
 # key -> {"feeds": set[str], "generation": datetime | None}
-_ENTITLE_CACHE: dict[str, dict[str, object]] = {}
 
 
-def _entitle_cache_key(client) -> str:
-    # Prefer stable identifiers if present; fall back to "default"
-    return (
-        getattr(client, "cache_key", None)
-        or getattr(client, "account_id", None)
-        or "default"
-    )
+@dataclass(slots=True)
+class _EntitlementCacheEntry:
+    feeds: set[str]
+    generation: datetime | None
+
+
+_CALLABLE_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError)
+
+
+_ENTITLE_CACHE: dict[int, _EntitlementCacheEntry] = {}
+
+
+def _entitle_cache_key(client: Any) -> int:
+    """Return a stable cache key for *client* entitlements."""
+
+    for attr in ("cache_key", "account_id", "id", "account"):
+        value = getattr(client, attr, None)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.isdigit():
+                try:
+                    return int(stripped)
+                except ValueError:
+                    continue
+    return id(client)
+
+
+def _normalize_feed_token(token: Any) -> str | None:
+    if token is None:
+        return None
+    try:
+        text = str(token).strip().lower()
+    except (TypeError, ValueError):
+        return None
+    if text in {"iex", "sip"}:
+        return text
+    return None
 
 
 def _extract_entitlements(client) -> set[str]:
-    """
-    Normalize entitlements from the client. Support several shapes used by tests:
-    - client.entitlements() -> iterable[str]
-    - client.get_entitlements() -> iterable[str]
-    - client.entitlements -> iterable[str]
-    """
+    """Collect normalized entitlement feeds from *client*."""
 
-    feeds = None
-    if hasattr(client, "entitlements") and callable(client.entitlements):
-        feeds = client.entitlements()
-    elif hasattr(client, "get_entitlements") and callable(client.get_entitlements):
-        feeds = client.get_entitlements()
-    else:
-        raw = getattr(client, "entitlements", None)
-        feeds = raw() if callable(raw) else raw
+    feeds: set[str] = set()
 
-    feeds = feeds or []
-    return {str(x).lower() for x in feeds if x}
+    def _add_from(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, (set, list, tuple, frozenset)):
+            iterable: Iterable[Any] = obj  # type: ignore[assignment]
+        elif isinstance(obj, dict):
+            iterable = obj.keys()
+        else:
+            iterable = (obj,)
+        for token in iterable:
+            normalized = _normalize_feed_token(token)
+            if normalized:
+                feeds.add(normalized)
+
+    sources: list[Any] = []
+
+    ent_attr = getattr(client, "entitlements", None)
+    if callable(ent_attr):
+        try:
+            sources.append(ent_attr())
+        except _CALLABLE_ERRORS:
+            pass
+    elif ent_attr is not None:
+        sources.append(ent_attr)
+
+    getter = getattr(client, "get_entitlements", None)
+    if callable(getter):
+        try:
+            sources.append(getter())
+        except _CALLABLE_ERRORS:
+            pass
+
+    for attr_name in ("data_feeds", "permitted_feeds", "market_data_subscription"):
+        attr_val = getattr(client, attr_name, None)
+        if callable(attr_val):
+            try:
+                sources.append(attr_val())
+            except _CALLABLE_ERRORS:
+                continue
+        elif attr_val is not None:
+            sources.append(attr_val)
+
+    private_feeds = getattr(client, "_feeds", None)
+    if private_feeds is not None:
+        sources.append(private_feeds)
+
+    account_obj = None
+    account_getter = getattr(client, "get_account", None)
+    if callable(account_getter):
+        try:
+            account_obj = account_getter()
+        except _CALLABLE_ERRORS:
+            account_obj = None
+    if account_obj is not None:
+        for attr_name in ("market_data_subscription", "data_feeds", "permitted_feeds"):
+            account_val = getattr(account_obj, attr_name, None)
+            if account_val is not None:
+                sources.append(account_val)
+
+    for source in sources:
+        _add_from(source)
+
+    bool_sources: tuple[tuple[str, str], ...] = (
+        ("has_sip", "sip"),
+        ("has_iex", "iex"),
+    )
+    for attr_name, feed_name in bool_sources:
+        flag = getattr(client, attr_name, None)
+        if callable(flag):
+            try:
+                flag = flag()
+            except _CALLABLE_ERRORS:
+                flag = None
+        if isinstance(flag, bool) and flag:
+            feeds.add(feed_name)
+    if account_obj is not None:
+        for attr_name, feed_name in bool_sources:
+            flag = getattr(account_obj, attr_name, None)
+            if isinstance(flag, bool) and flag:
+                feeds.add(feed_name)
+
+    if not feeds:
+        feeds.add("iex")
+    return {feed for feed in feeds if feed in {"iex", "sip"}}
 
 
-def _extract_generation(client):
-    """
-    Pull a generation timestamp/marker if the client provides one.
-    Tests pass something like datetime(..., tzinfo=UTC); accept None too.
-    Supported shapes:
-    - client.entitlements_generation()
-    - client.get_entitlements_generation()
-    - client.generation
-    - client.entitlements_generation
-    """
+def _normalize_generation(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError, TypeError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return None
 
-    for name in (
+
+def _extract_generation(client) -> datetime | None:
+    """Return a normalized entitlement generation marker for *client*."""
+
+    for attr_name in (
+        "entitlement_generation",
+        "get_entitlement_generation",
         "entitlements_generation",
         "get_entitlements_generation",
     ):
-        fn = getattr(client, name, None)
-        if callable(fn):
-            return fn()
-    # attribute shapes
-    for name in ("generation", "entitlements_generation"):
-        if hasattr(client, name):
-            return getattr(client, name)
+        attr = getattr(client, attr_name, None)
+        if callable(attr):
+            try:
+                value = attr()
+            except _CALLABLE_ERRORS:
+                continue
+        else:
+            value = attr
+        normalized = _normalize_generation(value)
+        if normalized is not None:
+            return normalized
+
+    for attr_name in ("generation", "_generation", "entitlements_generation"):
+        if hasattr(client, attr_name):
+            normalized = _normalize_generation(getattr(client, attr_name))
+            if normalized is not None:
+                return normalized
+
+    account_obj = None
+    account_getter = getattr(client, "get_account", None)
+    if callable(account_getter):
+        try:
+            account_obj = account_getter()
+        except _CALLABLE_ERRORS:
+            account_obj = None
+    if account_obj is not None:
+        for attr_name in ("updated_at", "generation", "entitlement_generation"):
+            if hasattr(account_obj, attr_name):
+                normalized = _normalize_generation(getattr(account_obj, attr_name))
+                if normalized is not None:
+                    return normalized
     return None
 
 
@@ -374,6 +521,8 @@ def _cache_entry_feeds(entry) -> set[str]:
     older code may have placed in the cache.
     """
 
+    if isinstance(entry, _EntitlementCacheEntry):
+        return set(entry.feeds)
     if isinstance(entry, dict):
         return set(entry.get("feeds") or set())
     if isinstance(entry, set):
@@ -486,18 +635,22 @@ def _get_entitled_feeds(client: Any) -> set[str]:
     """
 
     key = _entitle_cache_key(client)
-    new_feeds = _extract_entitlements(client)
-    new_gen = _extract_generation(client)
+    fresh_feeds = _extract_entitlements(client)
+    fresh_generation = _extract_generation(client)
 
     cached = _ENTITLE_CACHE.get(key)
     cached_feeds = _cache_entry_feeds(cached)
-    cached_gen = (cached or {}).get("generation") if isinstance(cached, dict) else None
+    cached_generation = getattr(cached, "generation", None)
 
-    if cached is None or cached_feeds != new_feeds or cached_gen != new_gen:
-        _ENTITLE_CACHE[key] = {"feeds": set(new_feeds), "generation": new_gen}
+    if (
+        cached is None
+        or cached_feeds != fresh_feeds
+        or cached_generation != fresh_generation
+    ):
+        _ENTITLE_CACHE[key] = _EntitlementCacheEntry(set(fresh_feeds), fresh_generation)
 
     entry = _ENTITLE_CACHE[key]
-    return set(entry["feeds"])  # type: ignore[index]
+    return set(entry.feeds)
 
 def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     """
@@ -511,9 +664,16 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     upgrade to SIP if SIP is entitled.
     """
 
-    requested = (str(requested).lower() if requested else None)
+    requested_norm = (str(requested).strip().lower() if requested else None)
     entitled = _get_entitled_feeds(client)
 
+    if _env_explicit_false("ALPACA_ALLOW_SIP") or _env_explicit_false("ALPACA_SIP_ENTITLED"):
+        entitled.discard("sip")
+    if _env_explicit_false("ALPACA_HAS_SIP"):
+        entitled.discard("sip")
+
+    if requested_norm in entitled:
+        return requested_norm or "iex"
     if "sip" in entitled:
         return "sip"
     if "iex" in entitled:
@@ -873,7 +1033,13 @@ def _ensure_entitled_feed(client, feed):  # type: ignore[override]
         allow = os.getenv("ALPACA_ALLOW_SIP")
         unauthorized = os.getenv("ALPACA_SIP_UNAUTHORIZED")
         has_sip = os.getenv("ALPACA_HAS_SIP")
-        if (allow is None or allow == "1") and unauthorized not in ("1", "true", "True"):
+        if (
+            not _env_explicit_false("ALPACA_ALLOW_SIP")
+            and not _env_explicit_false("ALPACA_SIP_ENTITLED")
+            and not _env_explicit_false("ALPACA_HAS_SIP")
+            and (allow is None or allow == "1")
+            and unauthorized not in ("1", "true", "True")
+        ):
             getter = globals().get("_get_entitled_feeds")
             if callable(getter):
                 try:

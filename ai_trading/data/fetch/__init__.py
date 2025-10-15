@@ -2907,13 +2907,15 @@ def _normalize_ohlcv_df(df, _pd: Any | None = None):
 # --- END: universal OHLCV normalization helper ---
 
 
-def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame | None:
+def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame:
     """Return an empty, normalized OHLCV DataFrame."""
 
     if pd_local is None:
         pd_local = _ensure_pandas()
     if pd_local is None:
-        return None
+        pd_local = load_pandas()
+    if pd_local is None:
+        raise RuntimeError("pandas is required for OHLCV operations")
     cols = ["timestamp", "open", "high", "low", "close", "volume"]
     base = pd_local.DataFrame({col: [] for col in cols})
     return normalize_ohlcv_df(base, include_columns=("timestamp",))
@@ -5373,62 +5375,95 @@ def _fetch_bars(
     feed, adjustment = _validate_fetch_params(symbol, start, end, timeframe, feed, adjustment)
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    has_session = _window_has_trading_session(start_dt, end_dt, timeframe)
+    has_session = _window_has_trading_session(start_dt, end_dt)
+    tf_norm = _canon_tf(timeframe)
+    tf_key = (symbol, tf_norm)
     if not has_session:
         logger.info("DATA_WINDOW_NO_SESSION")
-        tf_norm = _canon_tf(timeframe)
-        tf_key = (symbol, tf_norm)
-
-        if (feed not in {"iex", "sip"}) and not _NO_SESSION_ALPACA_OVERRIDE:
-            _incr(
-                "data.fetch.empty",
-                tags={
-                    "provider": "no_session",
-                    "feed": "none",
-                    "symbol": symbol,
-                    "timeframe": tf_norm,
-                },
-            )
-            return _empty_ohlcv_frame(pd)
-
-        requested = feed if feed in {"iex", "sip"} else None
-        try:
-            fallback_seq = alpaca_feed_failover() or ()
-        except Exception:
-            fallback_seq = ()
-        fallbacks = tuple(
-            candidate
-            for candidate in fallback_seq
-            if candidate in {"iex", "sip"} and candidate != requested
+        _incr(
+            "data.fetch.empty",
+            tags={
+                "provider": "alpaca",
+                "feed": "no_session",
+                "symbol": symbol,
+                "timeframe": tf_norm,
+            },
         )
-        order: list[str] = []
-        if _NO_SESSION_ALPACA_OVERRIDE and _NO_SESSION_ALPACA_OVERRIDE != requested:
-            order.append(_NO_SESSION_ALPACA_OVERRIDE)
-        if requested:
-            order.append(requested)
-        order.extend(fallbacks)
-        seen: set[str] = set()
-        alpaca_order = [name for name in order if not (name in seen or seen.add(name))]
+        requested = feed if feed in {"iex", "sip"} else None
+        if not requested:
+            globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
+            return _empty_ohlcv_frame(pd)
 
         session = _HTTP_SESSION if _HTTP_SESSION is not None else None
-        if session is None:
+        if session is None or not hasattr(session, "get"):
             return _empty_ohlcv_frame(pd)
 
-        first_empty_recorded = False
+        try:
+            fallback_seq = tuple(alpaca_feed_failover() or ())
+        except Exception:
+            fallback_seq = ()
 
-        for feed_name in alpaca_order:
+        sip_allowed = bool(_sip_allowed() and not _SIP_UNAUTHORIZED)
+        order: list[str] = []
+        seen: set[str] = set()
+
+        def _add_feed(name: str | None) -> None:
+            if not name:
+                return
+            normalized = "sip" if str(name).lower() == "sip" else "iex"
+            if normalized not in seen:
+                seen.add(normalized)
+                order.append(normalized)
+
+        _add_feed(requested)
+        if _NO_SESSION_ALPACA_OVERRIDE:
+            override_feed = "sip" if str(_NO_SESSION_ALPACA_OVERRIDE).lower() == "sip" else "iex"
+            if override_feed != "sip" or sip_allowed:
+                _add_feed(override_feed)
+
+        for candidate in fallback_seq:
+            try:
+                normalized = _to_feed_str(candidate)
+            except ValueError:
+                continue
+            if normalized not in {"iex", "sip"}:
+                continue
+            if normalized == "sip" and not sip_allowed:
+                continue
+            _add_feed(normalized)
+
+        if requested == "iex" and sip_allowed:
+            _add_feed("sip")
+
+        if not order:
+            return _empty_ohlcv_frame(pd)
+
+        start_iso = _to_datetime_utc(start_dt).isoformat()
+        end_iso = _to_datetime_utc(end_dt).isoformat()
+
+        for idx, feed_name in enumerate(order):
+            tags = {
+                "provider": "alpaca",
+                "feed": feed_name,
+                "symbol": symbol,
+                "timeframe": tf_norm,
+            }
+            if idx > 0:
+                from_feed = order[idx - 1]
+                _record_feed_switch(symbol, tf_norm, from_feed, feed_name)
+                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(feed_name)
+                _incr("data.fetch.fallback_attempt", tags=dict(tags))
+                logger.info("ALPACA_FEED_SWITCH")
+                globals()["_NO_SESSION_ALPACA_OVERRIDE"] = feed_name
             params = {
                 "symbols": symbol,
                 "timeframe": tf_norm,
-                "start": _to_datetime_utc(start_dt).isoformat(),
-                "end": _to_datetime_utc(end_dt).isoformat(),
+                "start": start_iso,
+                "end": end_iso,
                 "limit": 10000,
                 "adjustment": adjustment or "all",
                 "feed": feed_name,
             }
-            if feed_name != requested:
-                _record_feed_switch(symbol, tf_norm, requested or feed_name, feed_name)
-                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(feed_name)
             try:
                 response = session.get("https://data.alpaca.markets/v2/stocks/bars", params=params)
             except Exception:
@@ -5444,48 +5479,14 @@ def _fetch_bars(
                     df_candidate = pd.DataFrame()
                 normalized_df = _flatten_and_normalize_ohlcv(df_candidate, symbol, tf_norm)
                 annotated_df = _annotate_df_source(normalized_df, provider="alpaca", feed=feed_name)
-                if feed_name != requested:
-                    logger.info("ALPACA_FEED_SWITCH")
-                    globals()["_NO_SESSION_ALPACA_OVERRIDE"] = feed_name
-                    _incr(
-                        "data.fetch.fallback_success",
-                        tags={
-                            "provider": "alpaca",
-                            "feed": feed_name,
-                            "symbol": symbol,
-                            "timeframe": tf_norm,
-                        },
-                    )
+                if idx > 0:
+                    _incr("data.fetch.fallback_success", tags=dict(tags))
                 else:
                     globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-                _incr(
-                    "data.fetch.success",
-                    tags={
-                        "provider": "alpaca",
-                        "feed": feed_name,
-                        "symbol": symbol,
-                        "timeframe": tf_norm,
-                    },
-                )
+                _incr("data.fetch.success", tags=dict(tags))
                 return annotated_df
 
-            if not first_empty_recorded:
-                _incr(
-                    "data.fetch.empty",
-                    tags={
-                        "provider": "alpaca",
-                        "feed": requested or "override",
-                        "symbol": symbol,
-                        "timeframe": tf_norm,
-                    },
-                )
-                _incr(
-                    "data.fetch.fallback_attempt",
-                    tags={"provider": "alpaca", "from": requested or "override"},
-                )
-                first_empty_recorded = True
             logger.info("EMPTY_BARS_DETECTED")
-            logger.info("ALPACA_FEED_SWITCH")
 
         return _empty_ohlcv_frame(pd)
     if _NO_SESSION_ALPACA_OVERRIDE:
