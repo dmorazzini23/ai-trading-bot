@@ -43,13 +43,19 @@ def safe_subprocess_run(
         popen_kwargs.setdefault("stdout", subprocess.PIPE)
         popen_kwargs.setdefault("stderr", subprocess.PIPE)
 
-    popen_kwargs.setdefault("check", check)
-    popen_kwargs.setdefault("text", text)
+    requested_check = popen_kwargs.pop("check", check)
+    text_mode = popen_kwargs.pop("text", text)
 
     effective_timeout = timeout if (timeout is None or timeout > 0) else None
 
     try:
-        completed = subprocess.run(cmd, timeout=effective_timeout, **popen_kwargs)
+        completed = subprocess.run(
+            cmd,
+            timeout=effective_timeout,
+            check=False,
+            text=text_mode,
+            **popen_kwargs,
+        )
     except subprocess.TimeoutExpired as exc:
         stdout = _normalize_stream(getattr(exc, "output", None))
         stderr = _normalize_stream(getattr(exc, "stderr", None))
@@ -75,7 +81,7 @@ def safe_subprocess_run(
     stdout = _normalize_stream(completed.stdout)
     stderr = _normalize_stream(completed.stderr)
     ret = subprocess.CompletedProcess(cmd, completed.returncode, stdout, stderr)
-    if check and ret.returncode != 0:
+    if requested_check and ret.returncode != 0:
         raise subprocess.CalledProcessError(ret.returncode, cmd, ret.stdout, ret.stderr)
     return ret
 

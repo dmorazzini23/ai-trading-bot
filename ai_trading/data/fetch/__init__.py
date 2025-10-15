@@ -5441,7 +5441,7 @@ def _fetch_bars(
                 try:
                     df_candidate = pd.DataFrame(bars)
                 except Exception:
-                    df_candidate = pd.DataFrame(bars)
+                    df_candidate = pd.DataFrame()
                 normalized_df = _flatten_and_normalize_ohlcv(df_candidate, symbol, tf_norm)
                 annotated_df = _annotate_df_source(normalized_df, provider="alpaca", feed=feed_name)
                 if feed_name != requested:
