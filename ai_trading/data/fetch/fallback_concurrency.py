@@ -7,12 +7,38 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-_LIMIT = max(1, int(os.getenv("AI_TRADING_HTTP_HOST_LIMIT", "3")))
-_SEM = threading.Semaphore(_LIMIT)
+_DEFAULT_LIMIT = 3
+_LIMIT_CONDITION = threading.Condition(threading.RLock())
+_ENV_SNAPSHOT: tuple[str | None, int] | None = None
+_LIMIT: int = _DEFAULT_LIMIT
+_CURRENT_IN_USE = 0
 _LOCK = threading.Lock()
 _PEAK = 0
 
 _STATE_FILE = Path(os.getenv("AI_TRADING_FALLBACK_CONCURRENCY_STATE", ".pytest_fallback_concurrency.state"))
+
+
+def _resolve_limit() -> tuple[str | None, int]:
+    raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
+    try:
+        parsed = int(str(raw).strip()) if raw is not None else None
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is None or parsed <= 0:
+        parsed = _DEFAULT_LIMIT
+    return raw, max(1, parsed)
+
+
+def _ensure_limit_updated() -> None:
+    raw, limit = _resolve_limit()
+    with _LIMIT_CONDITION:
+        global _ENV_SNAPSHOT, _LIMIT
+        previous = _ENV_SNAPSHOT
+        if previous is not None and previous[0] == raw and previous[1] == limit:
+            return
+        _ENV_SNAPSHOT = (raw, limit)
+        _LIMIT = limit
+        _LIMIT_CONDITION.notify_all()
 
 
 def _load_persisted_peak() -> int:
@@ -45,19 +71,35 @@ def _inc_peak_in_place(current_in_use: int) -> None:
 
 @contextmanager
 def limit_concurrency() -> Iterator[None]:
-    _SEM.acquire()
+    with _LIMIT_CONDITION:
+        global _CURRENT_IN_USE
+        while True:
+            _ensure_limit_updated()
+            if _CURRENT_IN_USE < _LIMIT:
+                _CURRENT_IN_USE += 1
+                in_use = _CURRENT_IN_USE
+                break
+            _LIMIT_CONDITION.wait()
+    _inc_peak_in_place(in_use)
     try:
-        in_use = _LIMIT - _SEM._value  # type: ignore[attr-defined]
-        _inc_peak_in_place(in_use)
         yield
     finally:
-        _SEM.release()
+        with _LIMIT_CONDITION:
+            if _CURRENT_IN_USE > 0:
+                _CURRENT_IN_USE -= 1
+            _LIMIT_CONDITION.notify_all()
 
 
 @contextmanager
 def fallback_slot() -> Iterator[None]:
     with limit_concurrency():
         yield
+
+
+try:
+    _ensure_limit_updated()
+except Exception:
+    pass
 
 
 __all__ = ["limit_concurrency", "fallback_slot"]
