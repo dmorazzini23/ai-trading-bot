@@ -16597,16 +16597,19 @@ def _enter_long(
     fallback_age = annotations.get("fallback_quote_age")
     fallback_error = annotations.get("fallback_quote_error")
     try:
-        fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", "0")
+        fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", None)
     except COMMON_EXC:
-        fallback_env_raw = "0"
-    fallback_env_allowed = str(fallback_env_raw or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "enabled",
-    }
+        fallback_env_raw = None
+    fallback_env_value = (
+        str(fallback_env_raw)
+        if fallback_env_raw is not None
+        else None
+    )
+    fallback_env_allowed = (
+        True
+        if fallback_env_value is None
+        else _truthy_env(fallback_env_value)
+    )
     fallback_forced = not provider_enabled
     fallback_allowed = fallback_env_allowed or fallback_forced
     if not fallback_allowed:
@@ -17231,16 +17234,19 @@ def _enter_short(
     gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
     fallback_ok = annotations.get("fallback_quote_ok")
     try:
-        fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", "0")
+        fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", None)
     except COMMON_EXC:
-        fallback_env_raw = "0"
-    fallback_env_allowed = str(fallback_env_raw or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "enabled",
-    }
+        fallback_env_raw = None
+    fallback_env_value = (
+        str(fallback_env_raw)
+        if fallback_env_raw is not None
+        else None
+    )
+    fallback_env_allowed = (
+        True
+        if fallback_env_value is None
+        else _truthy_env(fallback_env_value)
+    )
     fallback_forced = not provider_enabled
     fallback_allowed = fallback_env_allowed or fallback_forced
     now_utc = datetime.now(UTC)
