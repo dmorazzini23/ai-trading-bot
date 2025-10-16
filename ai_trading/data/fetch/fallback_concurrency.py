@@ -36,23 +36,11 @@ def _read_env_limit(default: int) -> int:
 
 
 _HOST_LIMIT: int = _initial_host_limit()
-_limiter: threading.BoundedSemaphore = threading.BoundedSemaphore(value=_HOST_LIMIT)
 _peak_concurrency: int = 0
 _active: int = 0
 _pending_limit: int | None = None
-_lock = threading.Lock()
-
-
-def _swap_limiter_locked(limit: int) -> None:
-    """Replace the limiter while preserving currently active slots."""
-
-    global _limiter
-
-    active = _active
-    limiter = threading.BoundedSemaphore(value=limit)
-    for _ in range(active):
-        limiter.acquire()
-    _limiter = limiter
+_lock = threading.RLock()
+_condition = threading.Condition(_lock)
 
 
 def _apply_pending_limit_locked() -> None:
@@ -62,8 +50,8 @@ def _apply_pending_limit_locked() -> None:
         return
     pending = _pending_limit
     if _active <= pending:
-        _swap_limiter_locked(pending)
         _pending_limit = None
+        _condition.notify_all()
 
 
 def begin_fallback_submission_wave() -> None:
@@ -74,13 +62,14 @@ def begin_fallback_submission_wave() -> None:
     limit = _read_env_limit(_HOST_LIMIT)
     if limit == _HOST_LIMIT:
         return
-    with _lock:
+    with _condition:
         _HOST_LIMIT = limit
         if _active <= limit:
-            _swap_limiter_locked(limit)
             _pending_limit = None
+            _condition.notify_all()
         else:
             _pending_limit = limit
+            _condition.notify_all()
 
 
 def _maybe_refresh_limit_for_new_wave() -> None:
@@ -93,8 +82,9 @@ def _maybe_refresh_limit_for_new_wave() -> None:
 def _acquire_slot() -> None:
     global _active, _peak_concurrency
 
-    _limiter.acquire()
-    with _lock:
+    with _condition:
+        while _active >= _HOST_LIMIT:
+            _condition.wait()
         _active += 1
         if _active > _peak_concurrency:
             _peak_concurrency = _active
@@ -103,19 +93,13 @@ def _acquire_slot() -> None:
 def _release_slot() -> None:
     global _active
 
-    try:
-        with _lock:
-            if _active > 0:
-                _active -= 1
-            else:
-                _active = 0
-            _apply_pending_limit_locked()
-    finally:
-        try:
-            _limiter.release()
-        except ValueError:
-            # Should not happen, but avoid crashing production fallbacks.
-            pass
+    with _condition:
+        if _active > 0:
+            _active -= 1
+        else:
+            _active = 0
+        _apply_pending_limit_locked()
+        _condition.notify_all()
 
 
 @contextmanager
