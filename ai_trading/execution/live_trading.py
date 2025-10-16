@@ -2546,17 +2546,23 @@ class ExecutionEngine:
             account_snapshot = getattr(self, "_cycle_account", None)
 
         skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
-        if skip_pdt:
-            symbol = order.get("symbol")
-            side_raw = order.get("side")
-            side = str(side_raw).lower() if side_raw is not None else None
-            quantity = order.get("quantity")
-            client_order_id = order.get("client_order_id")
-            asset_class = order.get("asset_class")
-            price_hint = order.get("price_hint")
-            order_type = order.get("order_type", "unknown")
-            using_fallback_price = bool(order.get("using_fallback_price"))
 
+        symbol = order.get("symbol")
+        side_raw = order.get("side")
+        side = str(side_raw).lower() if side_raw is not None else None
+        quantity = order.get("quantity")
+        client_order_id = order.get("client_order_id")
+        asset_class = order.get("asset_class")
+        price_hint = order.get("price_hint")
+        order_type = order.get("order_type", "unknown")
+        using_fallback_price = bool(order.get("using_fallback_price"))
+
+        allow: bool | None = None
+        manager_reason: str | None = None
+        manager_context: dict[str, Any] | None = None
+        swing_mode: Any | None = None
+
+        if account_snapshot is not None:
             from ai_trading.execution.pdt_manager import PDTManager
             from ai_trading.execution.swing_mode import get_swing_mode
 
@@ -2579,29 +2585,15 @@ class ExecutionEngine:
                 force_swing_mode=swing_mode.enabled,
             )
 
-            if allow:
-                if swing_mode.enabled and manager_reason == "swing_mode_entry" and symbol:
-                    swing_mode.record_entry(symbol)
-                    log_side = side if side is not None else side_raw
-                    logger.info(
-                        "SWING_MODE_ENTRY_RECORDED",
-                        extra={
-                            "symbol": symbol,
-                            "side": log_side,
-                            "quantity": quantity,
-                            "reason": "pdt_safe_trading",
-                        },
-                    )
-                return True
-
+        def _log_skip(reason: str | None, context: dict[str, Any]) -> None:
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
-            skip_reason = manager_reason or pdt_reason or "pdt_limit_reached"
+            skip_reason = reason or "pdt_limit_reached"
             detail_context: dict[str, Any] = dict(pdt_context or {})
-            if manager_context:
-                detail_context["pdt_manager"] = manager_context
+            if context:
+                detail_context["pdt_manager"] = context
             log_side = side if side is not None else side_raw
             base_extra = {
                 "symbol": symbol,
@@ -2620,7 +2612,27 @@ class ExecutionEngine:
                 detail_context,
                 extra=base_extra | {"context": detail_context},
             )
+
+        if allow is False:
+            _log_skip(manager_reason or pdt_reason, manager_context or {})
             return False
+
+        if skip_pdt and allow is not True:
+            _log_skip(pdt_reason or manager_reason, manager_context or {})
+            return False
+
+        if allow and swing_mode is not None and swing_mode.enabled and manager_reason == "swing_mode_entry" and symbol:
+            swing_mode.record_entry(symbol)
+            log_side = side if side is not None else side_raw
+            logger.info(
+                "SWING_MODE_ENTRY_RECORDED",
+                extra={
+                    "symbol": symbol,
+                    "side": log_side,
+                    "quantity": quantity,
+                    "reason": "pdt_safe_trading",
+                },
+            )
 
         return True
 
