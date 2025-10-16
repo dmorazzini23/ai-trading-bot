@@ -339,6 +339,13 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # noqa: BLE001 - broad to guard optional deps
     ProductionExecutionCoordinator = None
 
+try:  # pragma: no cover - optional dependency
+    from .pdt_manager import PDTManager
+    from .swing_mode import SwingTradingMode, get_swing_mode, enable_swing_mode, disable_swing_mode
+except Exception:  # noqa: BLE001 - broad to guard optional deps
+    PDTManager = SwingTradingMode = None
+    get_swing_mode = enable_swing_mode = disable_swing_mode = None
+
 __all__ = [
     "Order",
     "ExecutionAlgorithm",
@@ -380,5 +387,10 @@ __all__ = [
     "PnLSource",
     "PnLEvent",
     "estimate_cost",
+    "PDTManager",
+    "SwingTradingMode",
+    "get_swing_mode",
+    "enable_swing_mode",
+    "disable_swing_mode",
 ]
 
