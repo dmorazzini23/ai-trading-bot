@@ -5146,6 +5146,19 @@ def _ensure_requests():
     return requests
 
 
+def _get_alpaca_data_base_url() -> str:
+    """Return the normalized Alpaca data base URL."""
+
+    try:
+        base_url = get_alpaca_data_base_url()
+    except Exception:
+        base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+    base_url = (base_url or "https://data.alpaca.markets").strip()
+    if not base_url:
+        base_url = "https://data.alpaca.markets"
+    return base_url.rstrip("/") or "https://data.alpaca.markets"
+
+
 def _parse_bars(symbol: str, content_type: str, body: bytes) -> pd.DataFrame:
     """Parse raw bar data into a normalized DataFrame.
 
@@ -5366,7 +5379,7 @@ def _fetch_bars(
     feed: str = _DEFAULT_FEED,
     adjustment: str = "raw",
     _from_get_bars: bool = False,
-) -> pd.DataFrame | None:
+) -> pd.DataFrame:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
     _ensure_requests()
@@ -5394,8 +5407,25 @@ def _fetch_bars(
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
+    force_no_session_attempts = False
+    prelogged_empty_metric = False
+    no_session_feeds: tuple[str, ...] = ()
     if not has_session:
-        logger.info("DATA_WINDOW_NO_SESSION")
+        try:
+            logger.info(
+                "DATA_WINDOW_NO_SESSION",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "symbol": symbol,
+                        "timeframe": tf_norm,
+                        "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),
+                    }
+                ),
+            )
+        except Exception:
+            logger.info("DATA_WINDOW_NO_SESSION")
         _incr(
             "data.fetch.empty",
             tags={
@@ -5405,8 +5435,67 @@ def _fetch_bars(
                 "timeframe": tf_norm,
             },
         )
+        prelogged_empty_metric = True
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-        return _empty_ohlcv_frame(pd)
+        allow_sip_combo = bool(_ALLOW_SIP) and bool(_HAS_SIP) and not bool(_SIP_UNAUTHORIZED)
+        sip_in_failover = False
+        if not allow_sip_combo:
+            try:
+                failover_sequence = alpaca_feed_failover()
+            except Exception:
+                failover_sequence = ()
+            for raw_feed in failover_sequence or ():
+                try:
+                    normalized_feed = _normalize_feed_value(raw_feed)
+                except ValueError:
+                    try:
+                        normalized_feed = str(raw_feed).strip().lower()
+                    except Exception:
+                        continue
+                if normalized_feed == "sip":
+                    sip_in_failover = True
+                    break
+        sip_in_priority = False
+        if not (allow_sip_combo or sip_in_failover):
+            try:
+                priority_list = provider_priority()
+            except Exception:
+                priority_list = ()
+            for entry in priority_list or ():
+                try:
+                    normalized_entry = str(entry).strip().lower()
+                except Exception:
+                    continue
+                if normalized_entry in {"alpaca_sip", "sip"}:
+                    sip_in_priority = True
+                    break
+        if allow_sip_combo or sip_in_failover or sip_in_priority:
+            feeds_to_try: list[str] = []
+
+            def _append_feed(candidate: object, *, allow_duplicate: bool = False) -> None:
+                try:
+                    normalized_candidate = _normalize_feed_value(candidate)
+                except ValueError:
+                    try:
+                        normalized_candidate = str(candidate).strip().lower()
+                    except Exception:
+                        return
+                if normalized_candidate not in {"iex", "sip"}:
+                    return
+                if not allow_duplicate and normalized_candidate in feeds_to_try:
+                    return
+                feeds_to_try.append(normalized_candidate)
+
+            requested_feed = feed or _DEFAULT_FEED
+            if requested_feed:
+                _append_feed(requested_feed)
+            if "iex" not in feeds_to_try:
+                _append_feed("iex")
+            _append_feed("sip", allow_duplicate=requested_feed == "sip")
+            force_no_session_attempts = True
+            no_session_feeds = tuple(feeds_to_try)
+        else:
+            return _empty_ohlcv_frame(pd)
     if _NO_SESSION_ALPACA_OVERRIDE:
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
     _start = start_dt
@@ -5430,7 +5519,7 @@ def _fetch_bars(
         "corr_id": None,
         "retries": 0,
         "providers": [],
-        "empty_metric_emitted": False,
+        "empty_metric_emitted": bool(prelogged_empty_metric),
         "allow_no_session_primary": False,
         "skip_backup_after_fallback": False,
         "fallback_reason": None,
@@ -5438,6 +5527,8 @@ def _fetch_bars(
         "outside_market_hours": False,
         "fallback_enabled": False,
         "from_get_bars": _from_get_bars,
+        "no_session_forced": bool(force_no_session_attempts),
+        "no_session_feeds": no_session_feeds,
     }
     globals()["_state"] = _state
 
@@ -5679,7 +5770,7 @@ def _fetch_bars(
         short_circuit_empty = True
         _state["short_circuit_empty"] = True
 
-    def _finalize_frame(candidate: Any | None) -> pd.DataFrame | None:
+    def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
         if candidate is None:
             frame = pd.DataFrame()
         elif isinstance(candidate, pd.DataFrame):
@@ -5868,10 +5959,7 @@ def _fetch_bars(
     # Track request start time for retry/backoff telemetry
     start_time = monotonic_time()
     max_retries = _FETCH_BARS_MAX_RETRIES
-    data_base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets") or "https://data.alpaca.markets"
-    data_base_url = data_base_url.rstrip("/")
-    if not data_base_url:
-        data_base_url = "https://data.alpaca.markets"
+    data_base_url = _get_alpaca_data_base_url()
 
     def _push_to_caplog(
         message: str,
@@ -6062,6 +6150,8 @@ def _fetch_bars(
                 _state["fallback_reason"] = None
             return result
 
+        _state.setdefault("attempt_fallback_fn", _attempt_fallback)
+
         if (
             not _state.get("window_has_session", True)
             and fallback is None
@@ -6076,42 +6166,23 @@ def _fetch_bars(
 
         def _build_request_params() -> dict[str, Any]:
             return {
-                "symbols": symbol,
-                "timeframe": _interval,
                 "start": _start.isoformat(),
                 "end": _end.isoformat(),
-                "limit": 10000,
+                "timeframe": _interval,
                 "feed": _feed,
                 "adjustment": adjustment,
+                "limit": 10000,
             }
 
         params: dict[str, Any] = {}
-        url = f"{data_base_url}/v2/stocks/bars"
-        # Prefer an instance-level patched ``session.get`` when present (tests);
-        # otherwise route through the module-level ``requests.get`` so tests
-        # that monkeypatch ``df.requests.get`` can intercept deterministically.
-        session_get = getattr(session, "get", None)
-        use_session_get = callable(session_get)
-        if use_session_get:
-            default_session_get = getattr(HTTPSession, "get", None)
-            bound_func = getattr(session_get, "__func__", None)
-            if (
-                isinstance(session, HTTPSession)
-                and default_session_get is not None
-                and bound_func is default_session_get
-            ):
-                use_session_get = False
+        url = f"{data_base_url}/v2/stocks/{symbol}/bars"
         prev_corr = _state.get("corr_id")
         try:
             params = _build_request_params()
             host = urlparse(url).netloc
             with acquire_host_slot(host):
-                if use_session_get:
-                    resp = session.get(url, params=params, headers=headers, timeout=timeout)
-                    _record_session_last_request(session, "GET", url, params, headers)
-                else:
-                    resp = requests.get(url, params=params, headers=headers, timeout=timeout)
-                    _record_session_last_request(session, "GET", url, params, headers)
+                resp = session.get(url, params=params, headers=headers, timeout=timeout)
+                _record_session_last_request(session, "GET", url, params, headers)
             if resp is None or not hasattr(resp, "status_code"):
                 raise ValueError("invalid_response")
             status = resp.status_code
@@ -6650,9 +6721,11 @@ def _fetch_bars(
                     (_interval, "sip", _start, _end),
                     skip_metrics=False,
                 )
-                if fb_df is not None:
+                _state["stop"] = True
+                if fb_df is not None and not getattr(fb_df, "empty", True):
                     return fb_df
-            if _ENABLE_HTTP_FALLBACK and _feed in {"iex", "sip"}:
+                # Allow downstream HTTP fallbacks to execute when SIP returns empty.
+            if _feed in {"iex", "sip"}:
                 alt_feed = _alternate_alpaca_feed(_feed)
                 if alt_feed != _feed and alt_feed not in alternate_history:
                     logger.info(
@@ -7732,6 +7805,75 @@ def _fetch_bars(
             alt_feed = "sip"
         if alt_feed is not None:
             fallback = (_interval, alt_feed, _start, _end)
+    if (
+        no_session_window
+        and force_no_session_attempts
+        and no_session_feeds
+    ):
+        prev_allow_primary = _state.get("allow_no_session_primary", False)
+        _state["allow_no_session_primary"] = True
+        try:
+            prev_feed: str | None = None
+            for index, candidate in enumerate(no_session_feeds):
+                try:
+                    candidate_norm = _normalize_feed_value(candidate)
+                except ValueError:
+                    try:
+                        candidate_norm = str(candidate).strip().lower()
+                    except Exception:
+                        continue
+                if candidate_norm not in {"iex", "sip"}:
+                    continue
+                if index == 0:
+                    _feed = candidate_norm
+                    _state["initial_feed"] = candidate_norm
+                    try:
+                        result = _req(session, None, headers=headers, timeout=timeout_v)
+                    except EmptyBarsError:
+                        result = pd.DataFrame()
+                    except ValueError as exc:
+                        if str(exc) == "rate_limited":
+                            raise
+                        result = pd.DataFrame()
+                else:
+                    attempt_fallback = _state.get("attempt_fallback_fn")
+                    skip_guard = not (prev_feed == "iex" and candidate_norm == "sip")
+                    if callable(attempt_fallback):
+                        result = attempt_fallback(
+                            (_interval, candidate_norm, _start, _end),
+                            skip_check=skip_guard,
+                        )
+                    else:
+                        _feed = candidate_norm
+                        try:
+                            result = _req(session, None, headers=headers, timeout=timeout_v)
+                        except EmptyBarsError:
+                            result = pd.DataFrame()
+                prev_feed = candidate_norm
+                if isinstance(result, pd.DataFrame) and not result.empty:
+                    return _finalize_frame(result)
+                if result is not None and not isinstance(result, pd.DataFrame):
+                    try:
+                        result_df = pd.DataFrame(result)
+                    except Exception:
+                        result_df = pd.DataFrame()
+                else:
+                    result_df = result if isinstance(result, pd.DataFrame) else pd.DataFrame()
+                if result_df is not None and not getattr(result_df, "empty", True):
+                    return _finalize_frame(result_df)
+            if _ENABLE_HTTP_FALLBACK and _should_use_backup_on_empty():
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                backup_interval = interval_map.get(_interval)
+                if backup_interval:
+                    backup_df = _run_backup_fetch(backup_interval)
+                    if backup_df is not None and not getattr(backup_df, "empty", True):
+                        return _finalize_frame(backup_df)
+            return _finalize_frame(pd.DataFrame())
+        finally:
+            if prev_allow_primary:
+                _state["allow_no_session_primary"] = True
+            else:
+                _state.pop("allow_no_session_primary", None)
     if (not window_has_session) and fallback is None and not _ENABLE_HTTP_FALLBACK:
         return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
