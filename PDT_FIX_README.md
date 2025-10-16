@@ -111,6 +111,9 @@ This fix includes:
 4. **Dependency Fix**
    - Added `pydantic-settings` to requirements
    - Created deployment script to install it
+5. **Runtime Day-Trade Guard**
+   - Automatically enforces PDT day-trade ceilings for live and brokered sessions
+   - Blocks new orders once the account hits its configured day-trade limit
 
 ### How It Works
 
