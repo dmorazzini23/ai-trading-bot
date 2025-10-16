@@ -5,8 +5,7 @@ while maximizing trading opportunities within regulatory constraints.
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -27,18 +26,9 @@ class PDTStatus:
 class PDTManager:
     """Manages PDT compliance and provides trading strategy recommendations."""
     
-    def __init__(self):
-        self.last_check_time: Optional[datetime] = None
-        self.cached_status: Optional[PDTStatus] = None
-        self.cache_ttl_seconds = 60  # Cache for 1 minute
-    
     def get_pdt_status(self, account: Any) -> PDTStatus:
         """Get current PDT status from account."""
-        
-        # Check cache
-        if self._is_cache_valid():
-            return self.cached_status
-        
+
         # Extract PDT info from account
         is_pdt = self._extract_bool(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
         
@@ -81,11 +71,7 @@ class PDTManager:
             remaining_daytrades=remaining,
             strategy_recommendation=strategy
         )
-        
-        # Update cache
-        self.cached_status = status
-        self.last_check_time = datetime.now()
-        
+
         return status
     
     def should_allow_order(
@@ -167,15 +153,6 @@ class PDTManager:
             return "conservative_swing"  # Prefer swing trades, day trade only if critical
         
         return "mixed"  # Can do both
-    
-    def _is_cache_valid(self) -> bool:
-        """Check if cached status is still valid."""
-        
-        if self.cached_status is None or self.last_check_time is None:
-            return False
-        
-        age = (datetime.now() - self.last_check_time).total_seconds()
-        return age < self.cache_ttl_seconds
     
     def _extract_bool(self, obj: Any, *attrs: str) -> bool:
         """Extract boolean value from object attributes."""
