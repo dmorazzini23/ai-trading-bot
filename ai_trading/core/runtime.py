@@ -88,8 +88,12 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
         BotRuntime with fully populated params dict
     """
     impl_raw = os.getenv("AI_TRADING_EXECUTION_IMPL", os.getenv("EXECUTION_IMPL", ""))
-    impl = (impl_raw or "").lower()
-    if impl in {"live", "broker", "alpaca"}:
+    impl = (impl_raw or "").strip().lower()
+    cfg_mode_raw = getattr(cfg, "execution_mode", None)
+    cfg_mode = str(cfg_mode_raw).strip().lower() if cfg_mode_raw not in (None, "") else ""
+    execution_label = cfg_mode or impl
+    live_execution_modes = {"live", "live_prod", "prod", "production", "broker", "alpaca"}
+    if execution_label in live_execution_modes:
         missing = [
             key
             for key in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
@@ -215,7 +219,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     enforce_cfg = getattr(cfg, "enforce_daytrade_limit", None)
     runtime.enforce_daytrade_limit = bool(enforce_cfg)
-    if impl in {"live", "broker", "alpaca"}:
+    if execution_label in live_execution_modes:
         runtime.enforce_daytrade_limit = bool(enforce_cfg) if enforce_cfg else True
     runtime.model = NullAlphaModel()
     return runtime

@@ -162,6 +162,23 @@ def test_build_runtime_respects_mode_presets(monkeypatch):
         assert runtime.params["MAX_POSITION_SIZE"] == pytest.approx(expected["max_position_size"])
 
 
+def test_build_runtime_enforces_daytrade_for_live_mode(monkeypatch):
+    """Live execution configs should force PDT enforcement even without env toggles."""
+    from ai_trading.config.management import TradingConfig
+    from ai_trading.core.runtime import build_runtime
+
+    for key in ("AI_TRADING_EXECUTION_IMPL", "EXECUTION_IMPL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    cfg = TradingConfig(execution_mode="live")
+    runtime = build_runtime(cfg)
+
+    assert runtime.enforce_daytrade_limit is True
+
+
 def test_param_helper_fallback_logic():
     """Test that _param helper function provides proper fallback logic."""
     from ai_trading.config.management import TradingConfig
