@@ -16153,6 +16153,29 @@ def _mark_primary_provider_fallback(
         setattr(state, "prefer_backup_quotes", True)
 
 
+def _clear_primary_provider_fallback(
+    state: BotState,
+    symbol: str,
+    *,
+    provider: str = "alpaca",
+) -> None:
+    """Clear fallback bookkeeping for *symbol* when *provider* has recovered."""
+
+    events = getattr(state, "primary_fallback_events", None)
+    if isinstance(events, set):
+        events.discard((provider, symbol))
+    degraded = getattr(state, "degraded_providers", None)
+    if isinstance(degraded, set):
+        degraded.discard(symbol)
+    provider_active = False
+    if isinstance(events, set):
+        provider_active = any(event_provider == provider for event_provider, _ in events)
+    if isinstance(degraded, set) and not provider_active:
+        degraded.discard(provider)
+    if not provider_active and getattr(state, "prefer_backup_quotes", False):
+        setattr(state, "prefer_backup_quotes", False)
+
+
 def _should_skip_order_for_alpaca_unavailable(
     state: BotState,
     symbol: str,
@@ -16704,6 +16727,8 @@ def _enter_long(
             extra={"symbol": symbol, "reason": "primary_provider_disabled"},
         )
         prefer_backup_quote = True
+    else:
+        _clear_primary_provider_fallback(state, symbol, provider="alpaca")
 
     if is_safe_mode_active():
         logger.warning(
@@ -17373,6 +17398,8 @@ def _enter_short(
             extra={"symbol": symbol, "reason": "primary_provider_disabled"},
         )
         prefer_backup_quote = True
+    else:
+        _clear_primary_provider_fallback(state, symbol, provider="alpaca")
 
     if is_safe_mode_active():
         logger.warning(
@@ -18037,6 +18064,8 @@ def trade_logic(
             "PRIMARY_PROVIDER_DEGRADED",
             extra={"symbol": symbol, "provider": "alpaca"},
         )
+    else:
+        _clear_primary_provider_fallback(state, symbol, provider="alpaca")
 
     if is_safe_mode_active():
         logger.warning(
