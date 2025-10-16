@@ -1687,7 +1687,7 @@ def _attempt_alpaca_trade(
         cache['trade_source'] = 'alpaca_trade_error'
         cache['trade_price'] = None
         return None, cache['trade_source']
-    params = {'feed': sanitized_feed} if sanitized_feed else None
+    params = {'feed': feed} if feed else None
     url = f"{ALPACA_DATA_BASE}/stocks/{symbol}/trades/latest"
     try:
         payload = alpaca_get(url, params=params)
@@ -1777,7 +1777,7 @@ def _attempt_alpaca_quote(
         cache['quote_source'] = 'alpaca_quote_error'
         cache['quote_price'] = None
         return None, cache['quote_source']
-    params = {'feed': sanitized_feed} if sanitized_feed else None
+    params = {'feed': feed} if feed else None
     url = f"{ALPACA_DATA_BASE}/stocks/{symbol}/quotes/latest"
     try:
         data = alpaca_get(url, params=params)
@@ -1842,12 +1842,12 @@ def _attempt_alpaca_quote(
     if ask_price is not None and ask_price > 0:
         resolved_price = ask_price
         resolved_source = 'alpaca_ask'
-    elif last_price is not None and last_price > 0:
-        resolved_price = last_price
-        resolved_source = 'alpaca_last'
     elif bid_price is not None and bid_price > 0:
         resolved_price = bid_price
         resolved_source = 'alpaca_bid_degraded' if (ask_unusable or last_unusable) else 'alpaca_bid'
+    elif last_price is not None and last_price > 0:
+        resolved_price = last_price
+        resolved_source = 'alpaca_last'
     price = resolved_price
     source = resolved_source
     cache['quote_price'] = price
@@ -2030,6 +2030,11 @@ def _cache_cycle_fallback_feed_internal(
 
     sanitized, normalized_raw, canonical_value = _cycle_fallback_feed_values(feed)
 
+    if canonical_value not in {None, "yahoo", "finnhub"}:
+        canonical_sanitized = _sanitize_alpaca_feed(canonical_value)
+        if canonical_sanitized in {"iex", "sip"}:
+            canonical_value = canonical_sanitized
+
     if symbol:
         if canonical_value:
             _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = canonical_value
@@ -2073,6 +2078,9 @@ def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
     canonical = _canonicalize_fallback_feed(candidate)
     if canonical in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         return canonical
+    sanitized = _sanitize_alpaca_feed(canonical)
+    if sanitized in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+        return sanitized
     return None
 
 
@@ -24521,64 +24529,47 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         _PRICE_SOURCE[symbol] = _ALPACA_DISABLED_SENTINEL
         return None
 
-    prefer = _prefer_feed_this_cycle()
-    env_feed = os.getenv("ALPACA_DATA_FEED")
-    feed_candidate = env_feed or prefer or _get_intraday_feed()
+    preferred_feed = _prefer_feed_this_cycle()
+    configured_env = os.getenv("ALPACA_DATA_FEED")
+    if configured_env:
+        configured_env = configured_env.strip() or None
+    configured_raw = configured_env if configured_env is not None else _get_intraday_feed()
+    configured_feed = _sanitize_alpaca_feed(configured_raw)
+    alpaca_feed = preferred_feed or configured_feed
 
-    alpaca_feed = None
-    configured_feed: str | None = None
-    feed_lower = None
-    if isinstance(feed_candidate, str):
-        feed_lower = feed_candidate.strip().lower() or None
-    sanitized_candidate = _sanitize_alpaca_feed(feed_candidate) if feed_candidate else None
-
-    if sanitized_candidate in {"iex", "sip"}:
-        alpaca_feed = sanitized_candidate
-        configured_feed = sanitized_candidate
-    elif feed_lower == "yahoo" or prefer == "yahoo":
-        configured_feed = "yahoo"
-    elif prefer in {"iex", "sip"}:
-        alpaca_feed = prefer
-        configured_feed = prefer
-    elif sanitized_candidate in {"iex", "sip"}:
-        alpaca_feed = sanitized_candidate
-        configured_feed = sanitized_candidate
-    elif feed_lower:
-        configured_feed = feed_lower
-
-    invalid_alpaca_feed = configured_feed not in {None, "iex", "sip"}
+    invalid_alpaca_feed = alpaca_feed not in {"iex", "sip"}
 
     pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
     sip_flagged = bool(
         getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
         or os.getenv("ALPACA_SIP_UNAUTHORIZED")
     )
-    sip_locked = False
-    if alpaca_feed == "sip":
-        sip_locked = sip_flagged
-        if pytest_running:
-            sip_locked = False
-
-    use_alpaca = (
-        not prefer_backup
-        and service_available
-        and alpaca_feed in {"iex", "sip"}
-        and not provider_disabled
-        and not sip_locked
-        and not invalid_alpaca_feed
+    sip_locked = (
+        alpaca_feed == "sip"
+        and sip_flagged
+        and not pytest_running
     )
 
-    if configured_feed == "yahoo":
-        use_alpaca = False
+    skip_alpaca = (
+        prefer_backup
+        or not service_available
+        or provider_disabled
+        or invalid_alpaca_feed
+        or sip_locked
+    )
 
-    skip_alpaca = not use_alpaca
-
-    if invalid_alpaca_feed and alpaca_feed is None:
+    if invalid_alpaca_feed:
         logger_once.warning(
             "ALPACA_INVALID_FEED_SKIPPED",
-            key=f"alpaca_invalid_feed_skipped:{feed_candidate}",
-            extra={"provider": "alpaca", "requested_feed": feed_candidate, "symbol": symbol},
+            key=f"alpaca_invalid_feed_skipped:{configured_raw}",
+            extra={"provider": "alpaca", "requested_feed": configured_raw, "symbol": symbol},
         )
+        alpaca_feed = None
+
+    if sip_locked:
+        alpaca_feed = None
+
+    use_alpaca = not skip_alpaca
 
     provider_order = _get_price_provider_order()
     if skip_alpaca:
