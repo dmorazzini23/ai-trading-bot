@@ -5,8 +5,12 @@ import pytest
 import ai_trading.core.bot_engine as bot_engine
 
 
-def _runtime_with_account(monkeypatch: pytest.MonkeyPatch, **account_fields):
-    runtime = SimpleNamespace(api=object())
+def _runtime_with_account(
+    monkeypatch: pytest.MonkeyPatch,
+    enforce_daytrade_limit: bool = False,
+    **account_fields,
+):
+    runtime = SimpleNamespace(api=object(), enforce_daytrade_limit=enforce_daytrade_limit)
     monkeypatch.setattr(bot_engine, "ensure_alpaca_attached", lambda _ctx: None)
     monkeypatch.setattr(
         bot_engine,
@@ -59,6 +63,21 @@ def test_pdt_blocks_when_dtbp_exhausted(monkeypatch: pytest.MonkeyPatch):
         pattern_day_trader=True,
         equity=str(bot_engine.PDT_EQUITY_THRESHOLD + 1000),
         daytrading_buying_power="0",
+        trading_blocked=False,
+        account_blocked=False,
+    )
+    assert bot_engine.check_pdt_rule(runtime) is True
+
+
+def test_pdt_blocks_when_daytrade_limit_exhausted(monkeypatch: pytest.MonkeyPatch):
+    runtime = _runtime_with_account(
+        monkeypatch,
+        enforce_daytrade_limit=True,
+        pattern_day_trader=True,
+        equity=str(bot_engine.PDT_EQUITY_THRESHOLD + 1000),
+        daytrade_count=4,
+        daytrade_limit=4,
+        daytrading_buying_power="100000",
         trading_blocked=False,
         account_blocked=False,
     )

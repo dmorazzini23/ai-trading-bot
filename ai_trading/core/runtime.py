@@ -72,6 +72,7 @@ class BotRuntime:
     model: Any = None
     allocator: AllocatorProtocol | None = None
     state: dict[str, Any] = field(default_factory=dict)
+    enforce_daytrade_limit: bool = False
 
 def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     """
@@ -212,6 +213,10 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     else:
         logger.info("POSITION_SIZING_RESOLVED", extra={**sizing_meta, "resolved": resolved})
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
+    enforce_cfg = getattr(cfg, "enforce_daytrade_limit", None)
+    runtime.enforce_daytrade_limit = bool(enforce_cfg)
+    if impl in {"live", "broker", "alpaca"}:
+        runtime.enforce_daytrade_limit = bool(enforce_cfg) if enforce_cfg else True
     runtime.model = NullAlphaModel()
     return runtime
 
