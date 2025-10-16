@@ -7772,12 +7772,35 @@ def _memo_is_fresh(entry: Any, *, now: float, ttl: float) -> tuple[bool, Any | N
 
     try:
         if isinstance(entry, MappingABC):
-            ts_raw = entry.get("ts") or entry.get("timestamp") or entry.get("time")
+            ts_raw = None
+            for ts_key in ("ts", "timestamp", "time", "monotonic"):
+                try:
+                    ts_raw = entry.get(ts_key)  # type: ignore[call-arg]
+                except Exception:  # noqa: BLE001 - tolerate custom mappings
+                    ts_raw = None
+                if ts_raw is not None:
+                    break
             if ts_raw is not None:
                 ts = float(ts_raw)
                 if ttl <= 0 or (now - ts) <= ttl:
-                    return True, entry.get("value") or entry.get("df") or entry.get("data")
-            return False, entry.get("value") or entry.get("df") or entry.get("data")
+                    try:
+                        value = (
+                            entry.get("value")
+                            or entry.get("df")
+                            or entry.get("data")
+                        )
+                    except Exception:  # noqa: BLE001 - tolerate custom mappings
+                        value = None
+                    return True, value
+            try:
+                fallback_value = (
+                    entry.get("value")
+                    or entry.get("df")
+                    or entry.get("data")
+                )
+            except Exception:  # noqa: BLE001 - tolerate custom mappings
+                fallback_value = None
+            return False, fallback_value
         if isinstance(entry, tuple) and len(entry) >= 2:
             ts = float(entry[0])
             value = entry[1]
@@ -8372,6 +8395,7 @@ class DataFetcher:
         timeframe_key = "1Day"
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
+        canonical_memo_key = (symbol, timeframe_key)
         be_module = (
             sys.modules.get("ai_trading.core.bot_engine")
             or sys.modules.get(__name__)
@@ -8384,7 +8408,9 @@ class DataFetcher:
 
         result_logged = False
 
-        def _emit_daily_fetch_result(df: Any | None, *, cache: bool) -> Any | None:
+        def _emit_daily_fetch_result(
+            df: Any | None, *, cache: bool | Mapping[str, bool]
+        ) -> Any | None:
             nonlocal result_logged
             if not result_logged:
                 rows = 0 if df is None else len(df)  # len(None) guarded
@@ -8421,30 +8447,37 @@ class DataFetcher:
                     logger.exception("bot.py unexpected", exc_info=exc)
                     raise
             self._log_daily_cache_hit_once(symbol, reason=reason)
-            return _emit_daily_fetch_result(df, cache=True)
+            provenance: bool | dict[str, bool]
+            if reason:
+                provenance_key = reason.split(":", 1)[0]
+                provenance = {provenance_key: True}
+            else:
+                provenance = True
+            return _emit_daily_fetch_result(df, cache=provenance)
 
         if memo_store is not None:
-            direct_entries: list[Any] = []
-            for candidate_key in (memo_key, legacy_memo_key):
+            direct_entries: list[tuple[tuple[str, ...], Any | None]] = []
+            for candidate_key in (canonical_memo_key, memo_key, legacy_memo_key):
                 try:
                     if candidate_key in memo_store:
-                        direct_entries.append(memo_store[candidate_key])
+                        direct_entries.append((candidate_key, memo_store[candidate_key]))
                     else:
-                        direct_entries.append(None)
+                        direct_entries.append((candidate_key, None))
                 except COMMON_EXC:
-                    direct_entries.append(None)
+                    direct_entries.append((candidate_key, None))
             effective_ttl = memo_ttl if memo_ttl > 0 else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
-            for entry in direct_entries:
+            for lookup_key, entry in direct_entries:
                 fresh, memo_df = _memo_is_fresh(entry, now=memo_now, ttl=effective_ttl)
                 if fresh and memo_df is not None:
-                    try:
-                        memo_store[memo_key] = (memo_now, memo_df)
-                    except COMMON_EXC:
-                        pass
-                    try:
-                        memo_store[legacy_memo_key] = (memo_now, memo_df)
-                    except COMMON_EXC:
-                        pass
+                    for target_key, payload in (
+                        (canonical_memo_key, {"ts": memo_now, "data": memo_df}),
+                        (memo_key, (memo_now, memo_df)),
+                        (legacy_memo_key, (memo_now, memo_df)),
+                    ):
+                        try:
+                            memo_store[target_key] = payload
+                        except COMMON_EXC:
+                            continue
                     return _emit_cache_hit(memo_df, reason="memo")
 
         def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
@@ -8456,17 +8489,32 @@ class DataFetcher:
                     return float(second), first
                 return None, None
             if isinstance(entry, MappingABC):
-                payload = (
-                    entry.get("df")
-                    or entry.get("data")
-                    or entry.get("value")
-                )
-                ts_value = entry.get("timestamp")
-                ts_normalized = (
-                    float(ts_value)
-                    if isinstance(ts_value, (int, float))
-                    else None
-                )
+                payload: Any | None = None
+                ts_value: Any | None = None
+                for ts_key in ("ts", "timestamp", "time", "monotonic"):
+                    try:
+                        ts_candidate = entry.get(ts_key)  # type: ignore[call-arg]
+                    except Exception:  # noqa: BLE001 - tolerate custom mappings
+                        ts_candidate = None
+                    if ts_candidate is not None:
+                        ts_value = ts_candidate
+                        break
+                for payload_key in ("df", "data", "value", "result", "payload"):
+                    try:
+                        payload_candidate = entry.get(payload_key)  # type: ignore[call-arg]
+                    except Exception:  # noqa: BLE001 - tolerate custom mappings
+                        payload_candidate = None
+                    if payload_candidate is not None:
+                        payload = payload_candidate
+                        break
+                ts_normalized: float | None = None
+                if isinstance(ts_value, (int, float)):
+                    ts_normalized = float(ts_value)
+                else:
+                    try:
+                        ts_normalized = float(ts_value) if ts_value is not None else None
+                    except (TypeError, ValueError):
+                        ts_normalized = None
                 return ts_normalized, payload
             return None, None
 
@@ -8474,9 +8522,11 @@ class DataFetcher:
             return memo_ttl <= 0.0 or ts is None or (memo_now - float(ts) <= memo_ttl)
 
         if memo_store is not None:
-            canonical_lookup = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
-            legacy_lookup = (symbol, fetch_date.isoformat())
+            canonical_lookup = canonical_memo_key
+            range_lookup = memo_key
+            legacy_lookup = legacy_memo_key
             additional_lookups: tuple[tuple[str, ...], ...] = (
+                range_lookup,
                 (symbol, "daily"),
                 ("daily", symbol),
                 ("daily", symbol, fetch_date.isoformat()),
@@ -8486,18 +8536,26 @@ class DataFetcher:
                 (f"{symbol}:daily",),
             )
             for lookup_key in (canonical_lookup, legacy_lookup, *additional_lookups):
-                if lookup_key in memo_store:
-                    ts_value, memo_df = _memo_unpack(memo_store[lookup_key])
-                    if memo_df is not None and _memo_fresh(ts_value):
+                entry = None
+                try:
+                    if lookup_key in memo_store:
+                        entry = memo_store[lookup_key]
+                except COMMON_EXC:
+                    entry = None
+                if entry is None:
+                    continue
+                ts_value, memo_df = _memo_unpack(entry)
+                if memo_df is not None and _memo_fresh(ts_value):
+                    for target_key, payload in (
+                        (canonical_lookup, {"ts": memo_now, "data": memo_df}),
+                        (range_lookup, (memo_now, memo_df)),
+                        (legacy_lookup, (memo_now, memo_df)),
+                    ):
                         try:
-                            memo_store[canonical_lookup] = (memo_now, memo_df)
+                            memo_store[target_key] = payload
                         except COMMON_EXC:
-                            pass
-                        try:
-                            memo_store[legacy_lookup] = (memo_now, memo_df)
-                        except COMMON_EXC:
-                            pass
-                        return _emit_cache_hit(memo_df, reason="memo")
+                            continue
+                    return _emit_cache_hit(memo_df, reason="memo")
 
         min_interval = self._daily_fetch_min_interval(ctx)
         now_monotonic = precomputed_monotonic
@@ -8660,17 +8718,25 @@ class DataFetcher:
                     return None
                 except COMMON_EXC:
                     return None
+                except Exception:  # noqa: BLE001 - tolerate arbitrary mapping failures
+                    return None
             return None
 
-        def _memo_set_entry(key: tuple[str, ...], value: tuple[float, Any]) -> None:
+        def _memo_set_entry(key: tuple[str, ...], value: Any) -> None:
+            payload = value
+            if key == canonical_memo_key and value is not None:
+                if isinstance(value, tuple) and len(value) == 2:
+                    payload = {"ts": value[0], "data": value[1]}
+                elif isinstance(value, MappingABC):
+                    payload = dict(value)
             try:
-                _DAILY_FETCH_MEMO[key] = value
+                _DAILY_FETCH_MEMO[key] = payload
                 return
             except TypeError:
                 pass
             setter = getattr(_DAILY_FETCH_MEMO, "__setitem__", None)
             if callable(setter):
-                setter(key, value)
+                setter(key, payload)
 
         def _memo_pop_entry(key: tuple[str, ...]) -> None:
             popper = getattr(_DAILY_FETCH_MEMO, "pop", None)
@@ -8719,6 +8785,7 @@ class DataFetcher:
         if memo_ready and memo_payload is not None:
             normalized_pair = (now_monotonic, memo_payload)
             with cache_lock:
+                _memo_set_entry(canonical_memo_key, normalized_pair)
                 _memo_set_entry(memo_key, normalized_pair)
                 _memo_set_entry(legacy_memo_key, normalized_pair)
             return _emit_cache_hit(memo_payload, reason="memo")
@@ -8736,6 +8803,10 @@ class DataFetcher:
             if refresh_stamp is not None:
                 with cache_lock:
                     if refresh_df is not None:
+                        _memo_set_entry(
+                            canonical_memo_key,
+                            (refresh_stamp, refresh_df),
+                        )
                         _memo_set_entry(memo_key, (refresh_stamp, refresh_df))
                         _memo_set_entry(legacy_memo_key, (refresh_stamp, refresh_df))
                     if refresh_source == "cache":
@@ -8771,7 +8842,7 @@ class DataFetcher:
 
         memo_hit = False
 
-        combined_keys = (memo_key, legacy_memo_key) + additional_lookups
+        combined_keys = (canonical_memo_key, memo_key, legacy_memo_key) + additional_lookups
         memo_entries: list[tuple[float | None, Any | None]] = []
         for key in combined_keys:
             memo_entries.append(_extract_memo_payload(_memo_get_entry(key)))
@@ -8801,6 +8872,7 @@ class DataFetcher:
             if fresh:
                 normalized_pair = (now_monotonic, memo_payload)
                 with cache_lock:
+                    _memo_set_entry(canonical_memo_key, normalized_pair)
                     _memo_set_entry(memo_key, normalized_pair)
                     _memo_set_entry(legacy_memo_key, normalized_pair)
                 return _emit_cache_hit(memo_payload, reason="memo")
@@ -8877,6 +8949,7 @@ class DataFetcher:
             memo_hit = True
             normalized_pair = (now_monotonic, payload)
             with cache_lock:
+                _memo_set_entry(canonical_memo_key, normalized_pair)
                 _memo_set_entry(candidate_key, normalized_pair)
                 if counterpart_key != candidate_key:
                     _memo_set_entry(counterpart_key, normalized_pair)
@@ -9244,6 +9317,7 @@ class DataFetcher:
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
+            _memo_set_entry(canonical_memo_key, (stamp, df))
             _memo_set_entry(memo_key, (stamp, df))
             _memo_set_entry(legacy_memo_key, (stamp, df))
             _DAILY_PROVIDER_SESSION_CACHE[provider_session_key] = (df, stamp)
@@ -16691,6 +16765,11 @@ def _enter_long(
         source_degraded = prefer_backup_quote or price_source_label.endswith(
             ("_invalid", "_degraded")
         )
+        _log_price_warning(
+            "PRICE_PROVIDER_NONE",
+            provider=price_source_label,
+            symbol=symbol,
+        )
         if source_degraded:
             _mark_primary_provider_fallback(
                 state, symbol, reason="fallback_quote_unavailable"
@@ -16957,6 +17036,10 @@ def _enter_long(
         skip_reasons.append(skip_reason)
         reason_label = ";".join(dict.fromkeys(skip_reasons)) or skip_reason
         logger.warning(
+            "FALLBACK_QUOTE_UNAVAILABLE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
+        logger.warning(
             "FALLBACK_QUOTE_LAST_CLOSE_ONLY",
             extra={"symbol": symbol, "price_source": price_source},
         )
@@ -17002,6 +17085,16 @@ def _enter_long(
         price_value = float(quote_price)
         if not _is_primary_price_source(price_source):
             fallback_used = True
+            provider_label = str(price_source or "unknown")
+            _log_price_warning(
+                "PRICE_PROVIDER_NONE",
+                provider=provider_label,
+                symbol=symbol,
+            )
+            logger.warning(
+                "FALLBACK_PROVIDER_USED",
+                extra={"symbol": symbol, "price_source": provider_label},
+            )
             logger.info(
                 "FALLBACK_SOURCE",
                 extra={"symbol": symbol, "provider": price_source},
@@ -17353,6 +17446,11 @@ def _enter_short(
         source_degraded = prefer_backup_quote or price_source_label.endswith(
             ("_invalid", "_degraded")
         )
+        _log_price_warning(
+            "PRICE_PROVIDER_NONE",
+            provider=price_source_label,
+            symbol=symbol,
+        )
         if source_degraded:
             _mark_primary_provider_fallback(
                 state, symbol, reason="fallback_quote_unavailable"
@@ -17559,6 +17657,10 @@ def _enter_short(
     if not nbbo_available and normalized_source in _TERMINAL_FALLBACK_PRICE_SOURCES:
         skip_reason = "nbbo_missing_fallback_price"
         logger.warning(
+            "FALLBACK_QUOTE_UNAVAILABLE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
+        logger.warning(
             "FALLBACK_QUOTE_LAST_CLOSE_ONLY",
             extra={"symbol": symbol, "price_source": price_source},
         )
@@ -17581,6 +17683,16 @@ def _enter_short(
         price_value = float(quote_price)
         if not _is_primary_price_source(price_source):
             fallback_used = True
+            provider_label = str(price_source or "unknown")
+            _log_price_warning(
+                "PRICE_PROVIDER_NONE",
+                provider=provider_label,
+                symbol=symbol,
+            )
+            logger.warning(
+                "FALLBACK_PROVIDER_USED",
+                extra={"symbol": symbol, "price_source": provider_label},
+            )
             logger.info(
                 "FALLBACK_SOURCE",
                 extra={"symbol": symbol, "provider": price_source},
