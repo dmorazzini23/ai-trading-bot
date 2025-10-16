@@ -118,8 +118,8 @@ def test_get_latest_price_uses_yahoo_when_alpaca_none(monkeypatch):
     assert price == 101.0
 
 
-def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
-    """When ask is unusable, prefer last trade over bid before falling back."""
+def test_get_latest_price_prefers_bid_when_ask_invalid(monkeypatch):
+    """When ask is unusable, accept bid before considering backup feeds."""
 
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
     monkeypatch.setattr(
@@ -165,11 +165,11 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
 
     price = bot_engine.get_latest_price("AAPL")
 
-    assert price == 95.1
-    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
+    assert price == 94.5
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid_degraded"
     assert captured["params"].get("feed") in {"iex", "sip"}
-    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo"
-    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") == "yahoo"
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {"iex", "sip"}
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {"iex", "sip"}
 
 
 def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
