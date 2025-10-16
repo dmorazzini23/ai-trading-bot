@@ -242,6 +242,13 @@ providers. Yahoo HTTP fallback is enabled by default; set
 `ENABLE_HTTP_FALLBACK=0` (or `false`) to opt out when running in an offline
 environment.
 
+If Alpaca responds with OHLCV frames whose `close` column is entirely `NaN`,
+the provider monitor records a switchover, disables the impacted feed (IEX or
+SIP), and the trading engine immediately prefers cached Yahoo quotes for new
+orders. Expect to see `PRIMARY_PROVIDER_FALLBACK_ACTIVE` alongside
+`BACKUP_PROVIDER_USED` in logs. Validate Alpaca's status page and data feed
+configuration before re-enabling the primary provider.
+
 **Data Provider Diagnostics:**
 
 ```python

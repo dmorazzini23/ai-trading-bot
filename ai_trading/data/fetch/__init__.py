@@ -1012,6 +1012,10 @@ _IEX_EMPTY_THRESHOLD = 1
 # provider when the upstream repeatedly returns empty payloads.
 _ALPACA_EMPTY_ERROR_COUNTS: dict[tuple[str, str], int] = {}
 _ALPACA_EMPTY_ERROR_THRESHOLD = int(os.getenv("ALPACA_EMPTY_ERROR_THRESHOLD", "2"))
+_ALPACA_CLOSE_NAN_COUNTS: dict[tuple[str, str, str], int] = {}
+_ALPACA_CLOSE_NAN_DISABLE_THRESHOLD = max(
+    1, int(os.getenv("ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", "1"))
+)
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
@@ -1591,6 +1595,16 @@ def _mark_fallback(
         metadata["fallback_feed"] = feed_hint
         log_extra["fallback_feed"] = feed_hint
     _FALLBACK_METADATA[key] = metadata
+    fallback_name: str | None = None
+    if feed_hint:
+        try:
+            fallback_name = _normalize_feed_value(feed_hint)
+        except Exception:
+            fallback_name = str(feed_hint)
+    elif provider_for_register and provider_for_register.startswith("alpaca_"):
+        fallback_name = provider_for_register.split("_", 1)[1]
+    elif provider_for_register:
+        fallback_name = str(provider_for_register)
     # Emit once per unique (symbol, timeframe, window)
     if key not in _FALLBACK_WINDOWS:
         payload = log_backup_provider_used(
@@ -1602,7 +1616,6 @@ def _mark_fallback(
             extra=log_extra,
         )
         logger.warning("BACKUP_PROVIDER_USED", extra=payload)
-        should_register_switchover = True
         fallback_reason = log_extra.get("fallback_reason")
         if fallback_reason == "close_column_all_nan":
             feed_for_guard: str | None = None
@@ -1612,24 +1625,18 @@ def _mark_fallback(
                 feed_for_guard = feed_hint
             if feed_for_guard is None and resolved_feed:
                 feed_for_guard = resolved_feed
-            if not _should_disable_alpaca_on_empty(feed_for_guard):
-                should_register_switchover = False
-        if should_register_switchover:
-            provider_monitor.record_switchover(
-                from_provider or "alpaca",
-                provider_for_register,
+            _should_disable_alpaca_on_empty(
+                feed_for_guard,
+                reason="close_column_all_nan",
+                symbol=symbol,
+                timeframe=timeframe,
+                fallback_feed=fallback_name or resolved_feed or provider_for_register,
             )
+        provider_monitor.record_switchover(
+            from_provider or "alpaca",
+            provider_for_register,
+        )
     _FALLBACK_WINDOWS.add(key)
-    fallback_name: str | None = None
-    if feed_hint:
-        try:
-            fallback_name = _normalize_feed_value(feed_hint)
-        except Exception:
-            fallback_name = str(feed_hint)
-    elif provider_for_register and provider_for_register.startswith("alpaca_"):
-        fallback_name = provider_for_register.split("_", 1)[1]
-    elif provider_for_register:
-        fallback_name = str(provider_for_register)
     if fallback_name:
         fallback_clean = str(fallback_name).strip().lower()
         if fallback_clean:
@@ -3458,8 +3465,15 @@ def _sip_configured() -> bool:
     return any(str(feed).strip().lower() == "sip" for feed in feeds)
 
 
-def _should_disable_alpaca_on_empty(feed: str | None) -> bool:
-    """Return False when empty-frame failures should not disable Alpaca."""
+def _should_disable_alpaca_on_empty(
+    feed: str | None,
+    *,
+    reason: str | None = None,
+    symbol: str | None = None,
+    timeframe: str | None = None,
+    fallback_feed: str | None = None,
+) -> bool:
+    """Return ``False`` when empty-frame failures should not disable Alpaca."""
 
     normalized: str | None = None
     if feed not in (None, ""):
@@ -3470,6 +3484,52 @@ def _should_disable_alpaca_on_empty(feed: str | None) -> bool:
                 normalized = str(feed).strip().lower()
             except Exception:
                 normalized = None
+
+    if reason == "close_column_all_nan":
+        feed_label = normalized or (_DEFAULT_FEED or "iex")
+        symbol_key = str(symbol or "*").upper()
+        timeframe_key = str(timeframe or "1Min")
+        counter_key = (feed_label, symbol_key, timeframe_key)
+        count = _ALPACA_CLOSE_NAN_COUNTS.get(counter_key, 0) + 1
+        _ALPACA_CLOSE_NAN_COUNTS[counter_key] = count
+
+        fallback_norm: str | None = None
+        if fallback_feed not in (None, ""):
+            try:
+                fallback_norm = _normalize_feed_value(fallback_feed)  # type: ignore[arg-type]
+            except Exception:
+                try:
+                    fallback_norm = str(fallback_feed).strip().lower() or None
+                except Exception:
+                    fallback_norm = None
+        if (
+            fallback_norm
+            and symbol
+            and fallback_norm != feed_label
+        ):
+            try:
+                _remember_fallback_for_cycle(
+                    _get_cycle_id(),
+                    symbol,
+                    timeframe_key,
+                    fallback_norm,
+                )
+            except Exception:
+                pass
+
+        if count >= _ALPACA_CLOSE_NAN_DISABLE_THRESHOLD:
+            provider_label = f"alpaca_{feed_label}" if feed_label else "alpaca"
+            try:
+                provider_monitor.disable(provider_label)
+            except Exception:
+                pass
+            try:
+                provider_monitor.disable("alpaca")
+            except Exception:
+                pass
+            _ALPACA_CLOSE_NAN_COUNTS.pop(counter_key, None)
+        return True
+
     if normalized == "iex":
         sip_ready = False
         try:
