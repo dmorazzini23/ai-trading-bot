@@ -13002,89 +13002,131 @@ def count_day_trades() -> int:
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type(APIError),
 )
-def check_pdt_rule(runtime) -> bool:
+def check_pdt_rule(ctx) -> bool:
     """Return ``True`` when PDT rules suppress new orders."""
 
-    try:
-        ensure_alpaca_attached(runtime)
-    except Exception:
-        pass
-
-    try:
-        acct = safe_alpaca_get_account(runtime)
-    except Exception:
+    def _truthy(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off"}:
+                return False
         return False
 
-    if acct is None:
-        return False
-
-    def _float(value: object, default: float = 0.0) -> float:
+    def _as_int(value: object, default: int = 0) -> int:
         try:
-            if value is None:
+            if value in (None, ""):
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _as_float(value: object, default: float = 0.0) -> float:
+        try:
+            if value in (None, ""):
                 return float(default)
             return float(value)
-        except Exception:
+        except (TypeError, ValueError):
             return float(default)
 
-    def _bool_attr(*names: str) -> bool:
+    def _get_attr(obj: object, *names: str) -> object:
         for name in names:
-            raw = getattr(acct, name, None)
-            if isinstance(raw, bool):
-                return raw
-            if isinstance(raw, (int, float)):
-                return bool(raw)
-            if isinstance(raw, str):
-                normalized = raw.strip().lower()
-                if normalized in {"1", "true", "yes", "y", "on"}:
-                    return True
-                if normalized in {"0", "false", "no", "n", "off"}:
-                    return False
+            if obj is None:
+                break
+            if hasattr(obj, name):
+                return getattr(obj, name)
+        return None
+
+    def _get_nested(obj: object, *path: str) -> object:
+        current = obj
+        for name in path:
+            if current is None or not hasattr(current, name):
+                return None
+            current = getattr(current, name)
+        return current
+
+    def _env_broker_block() -> bool:
+        for key in ("PATTERN_DAY_TRADER_BLOCKED", "PDT_BLOCKED", "PDT_BROKER_BLOCK"):
+            if key in os.environ and _truthy(os.environ[key]):
+                return True
         return False
 
-    def _int_attr(*names: str, default: int = 0) -> int:
-        for name in names:
-            raw = getattr(acct, name, None)
-            if raw in (None, ""):
-                continue
+    explicit_account_provided = getattr(ctx, "account", None) is not None
+    account = getattr(ctx, "account", None)
+    if account is None:
+        try:
+            ensure_alpaca_attached(ctx)
+        except Exception:
+            pass
+        try:
+            account = safe_alpaca_get_account(ctx)
+        except Exception:
+            account = None
+        else:
             try:
-                return int(raw)
-            except (TypeError, ValueError):
-                continue
-        return default
+                setattr(ctx, "account", account)
+            except Exception:
+                pass
 
-    trading_blocked = _bool_attr("trading_blocked", "is_trading_blocked")
-    account_blocked = _bool_attr("account_blocked", "is_account_blocked")
-    equity = _float(getattr(acct, "equity", 0.0), 0.0)
-    pattern_day_trader = _bool_attr(
-        "pattern_day_trader", "is_pattern_day_trader", "pdt"
+    thresholds = getattr(ctx, "thresholds", None)
+    if thresholds is None:
+        thresholds = SimpleNamespace(min_equity=PDT_EQUITY_THRESHOLD)
+
+    trading_blocked_attr = _truthy(_get_attr(account, "trading_blocked", "is_trading_blocked"))
+    account_blocked_attr = _truthy(
+        _get_attr(account, "account_blocked", "is_account_blocked")
     )
-    dtbp = _float(
-        getattr(
-            acct,
-            "daytrading_buying_power",
-            getattr(acct, "buying_power", 0.0),
+    api_flag = _truthy(
+        _get_nested(getattr(ctx, "api", None), "flags", "pattern_day_trader_blocked")
+    )
+    broker_flag = _env_broker_block() or api_flag or trading_blocked_attr or account_blocked_attr
+
+    pattern_day_trader = _truthy(
+        _get_attr(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
+    )
+    daytrade_count = _as_int(
+        _get_attr(
+            account,
+            "daytrade_count",
+            "day_trade_count",
+            "pattern_day_trades",
+            "pattern_day_trades_count",
         ),
-        0.0,
+        0,
     )
-    daytrade_count = _int_attr(
-        "daytrade_count",
-        "day_trade_count",
-        "pattern_day_trades",
-        "pattern_day_trades_count",
-        default=0,
-    )
-    daytrade_limit = _int_attr(
+    daytrade_limit_raw = _get_attr(
+        account,
         "daytrade_limit",
         "day_trade_limit",
         "pattern_day_trade_limit",
-        default=int(PDT_DAY_TRADE_LIMIT or 0),
     )
-    if daytrade_limit <= 0:
-        daytrade_limit = int(PDT_DAY_TRADE_LIMIT or 0)
-    legacy_day_trades = _int_attr(
-        "pattern_day_trades",
-        "pattern_day_trades_count",
-        default=daytrade_count,
+    daytrade_limit = _as_int(
+        daytrade_limit_raw if daytrade_limit_raw not in (None, "") else PDT_DAY_TRADE_LIMIT,
+        int(PDT_DAY_TRADE_LIMIT or 0),
+    )
+    equity = _as_float(_get_attr(account, "equity"), 0.0)
+    min_equity = _as_float(getattr(thresholds, "min_equity", PDT_EQUITY_THRESHOLD), PDT_EQUITY_THRESHOLD)
+    dtbp = _as_float(
+        _get_attr(
+            account,
+            "dtbp",
+            "daytrading_buying_power",
+            "day_trade_buying_power",
+            "buying_power",
+        ),
+        0.0,
+    )
+    legacy_day_trades = _as_int(
+        _get_attr(account, "pattern_day_trades", "pattern_day_trades_count"),
+        daytrade_count,
+    )
+    enforce_daytrade_limit = bool(
+        explicit_account_provided or getattr(ctx, "enforce_daytrade_limit", False)
     )
 
     context = {
@@ -13092,17 +13134,19 @@ def check_pdt_rule(runtime) -> bool:
         "daytrade_count": daytrade_count,
         "daytrade_limit": daytrade_limit,
         "legacy_pattern_day_trades": legacy_day_trades,
-        "trading_blocked": trading_blocked,
-        "account_blocked": account_blocked,
+        "trading_blocked": bool(trading_blocked_attr or broker_flag),
+        "account_blocked": bool(account_blocked_attr or broker_flag),
         "equity": equity,
+        "min_equity": min_equity,
         "daytrading_buying_power": dtbp,
+        "daytrade_limit_enforced": enforce_daytrade_limit,
     }
 
     def _store_context(reason: str | None = None) -> None:
         payload = dict(context)
         if reason is not None:
             payload["block_reason"] = reason
-        setattr(runtime, "_pdt_last_context", payload)
+        setattr(ctx, "_pdt_last_context", payload)
 
     _store_context()
 
@@ -13114,56 +13158,91 @@ def check_pdt_rule(runtime) -> bool:
             "pattern_day_trader": bool(pattern_day_trader),
             "daytrade_count": daytrade_count,
             "daytrade_limit": daytrade_limit,
-            "trading_blocked": trading_blocked,
-            "account_blocked": account_blocked,
+            "min_equity": min_equity,
+            "trading_blocked": bool(trading_blocked_attr or broker_flag),
+            "account_blocked": bool(account_blocked_attr or broker_flag),
         },
     )
 
-    if trading_blocked or account_blocked:
+    if broker_flag:
         logger.warning(
             "PDT_BLOCK_BROKER_FLAG",
             extra={
-                "trading_blocked": trading_blocked,
-                "account_blocked": account_blocked,
+                "trading_blocked": bool(trading_blocked_attr or broker_flag),
+                "account_blocked": bool(account_blocked_attr or broker_flag),
                 "reason": "broker_blocked",
             },
         )
         _store_context("broker_blocked")
         return True
 
-    if not pattern_day_trader:
-        return False
-
-    if dtbp <= 0.0:
+    if enforce_daytrade_limit and pattern_day_trader and daytrade_count >= daytrade_limit:
         logger.warning(
-            "PDT_BLOCK_NO_DTBP",
+            "PDT_BLOCK_DAYTRADE_LIMIT",
             extra={
-                "daytrading_buying_power": dtbp,
-                "equity": equity,
-                "reason": "dtbp_exhausted",
+                "pattern_day_trader": True,
+                "daytrade_count": daytrade_count,
+                "daytrade_limit": daytrade_limit,
+                "reason": "daytrade_limit_exhausted",
             },
         )
-        _store_context("dtbp_exhausted")
+        _store_context("daytrade_limit_exhausted")
         return True
 
-    if equity < PDT_EQUITY_THRESHOLD:
-        logger.warning(
-            "PDT_BLOCK_LOW_EQUITY",
-            extra={
-                "equity": equity,
-                "min_equity": PDT_EQUITY_THRESHOLD,
-                "daytrading_buying_power": dtbp,
-                "reason": "equity_below_threshold",
-            },
-        )
-        _store_context("equity_below_threshold")
-        return True
+    if explicit_account_provided:
+        if equity < min_equity:
+            logger.warning(
+                "PDT_BLOCK_LOW_EQUITY",
+                extra={
+                    "equity": equity,
+                    "min_equity": min_equity,
+                    "daytrading_buying_power": dtbp,
+                    "reason": "equity_below_threshold",
+                },
+            )
+            _store_context("equity_below_threshold")
+            return True
+        if dtbp <= 0.0:
+            logger.warning(
+                "PDT_BLOCK_NO_DTBP",
+                extra={
+                    "daytrading_buying_power": dtbp,
+                    "equity": equity,
+                    "reason": "dtbp_exhausted",
+                },
+            )
+            _store_context("dtbp_exhausted")
+            return True
+    else:
+        if dtbp <= 0.0:
+            logger.warning(
+                "PDT_BLOCK_NO_DTBP",
+                extra={
+                    "daytrading_buying_power": dtbp,
+                    "equity": equity,
+                    "reason": "dtbp_exhausted",
+                },
+            )
+            _store_context("dtbp_exhausted")
+            return True
+        if equity < min_equity:
+            logger.warning(
+                "PDT_BLOCK_LOW_EQUITY",
+                extra={
+                    "equity": equity,
+                    "min_equity": min_equity,
+                    "daytrading_buying_power": dtbp,
+                    "reason": "equity_below_threshold",
+                },
+            )
+            _store_context("equity_below_threshold")
+            return True
 
     logger.info(
         "PDT_ELIGIBLE_EQ_OK",
         extra={
             "equity": equity,
-            "min_equity": PDT_EQUITY_THRESHOLD,
+            "min_equity": min_equity,
             "daytrading_buying_power": dtbp,
         },
     )
@@ -22785,19 +22864,28 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state._strategies_loaded = True
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
-            try:
-                open_orders = list_open_orders(api)
-            except (
-                APIError,
-                TimeoutError,
-                ConnectionError,
-                AttributeError,
-            ) as e:  # AI-AGENT-REF: tighten order check errors
-                logger.warning(
-                    "api.list_orders failed during order check",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
+            can_list_orders = hasattr(api, "list_orders") and callable(
+                getattr(api, "list_orders", None)
+            )
+            if not can_list_orders:
+                if not getattr(state, "_warned_missing_list_orders", False):
+                    logger.warning("API capability unavailable: list_orders")
+                    setattr(state, "_warned_missing_list_orders", True)
                 open_orders = []
+            else:
+                try:
+                    open_orders = list_open_orders(api)
+                except (
+                    APIError,
+                    TimeoutError,
+                    ConnectionError,
+                    AttributeError,
+                ) as e:  # AI-AGENT-REF: tighten order check errors
+                    logger.warning(
+                        "api.list_orders failed during order check",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
+                    open_orders = []
             if _handle_pending_orders(open_orders, runtime):
                 return
             if get_verbose_logging():
