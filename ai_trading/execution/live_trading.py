@@ -1470,68 +1470,6 @@ class ExecutionEngine:
                         )
                         return None
         account_snapshot = self._get_account_snapshot()
-        
-        # Use new PDT manager for intelligent order allowance
-        from ai_trading.execution.pdt_manager import PDTManager
-        from ai_trading.execution.swing_mode import get_swing_mode
-        
-        pdt_manager = PDTManager()
-        swing_mode = get_swing_mode()
-        
-        # Get current position for this symbol
-        current_position = 0
-        try:
-            if hasattr(self, '_position_tracker') and symbol in self._position_tracker:
-                current_position = self._position_tracker[symbol]
-        except:
-            pass
-        
-        # Check if order should be allowed (with swing mode support)
-        allow, reason, pdt_context = pdt_manager.should_allow_order(
-            account_snapshot,
-            symbol,
-            side_lower,
-            current_position=current_position,
-            force_swing_mode=swing_mode.enabled
-        )
-        
-        if not allow:
-            # Order blocked by PDT rules
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            base_extra = {
-                "symbol": symbol,
-                "side": side_lower,
-                "quantity": quantity,
-                "client_order_id": client_order_id,
-                "asset_class": asset_class,
-                "price_hint": str(price_hint) if price_hint is not None else None,
-                "order_type": "market",
-                "using_fallback_price": using_fallback_price,
-                "reason": reason,
-            }
-            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
-                pdt_context,
-                extra=base_extra | {"context": pdt_context},
-            )
-            return None
-        
-        # If swing mode is active and this is a new position entry, record it
-        if swing_mode.enabled and reason == "swing_mode_entry":
-            swing_mode.record_entry(symbol)
-            logger.info(
-                "SWING_MODE_ENTRY_RECORDED",
-                extra={
-                    "symbol": symbol,
-                    "side": side_lower,
-                    "quantity": quantity,
-                    "reason": "pdt_safe_trading"
-                }
-            )
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -1771,30 +1709,6 @@ class ExecutionEngine:
                         )
                         return None
         account_snapshot = self._get_account_snapshot()
-        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
-        if skip_pdt:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            base_extra = {
-                "symbol": symbol,
-                "side": side_lower,
-                "quantity": quantity,
-                "client_order_id": client_order_id,
-                "asset_class": asset_class,
-                "price_hint": str(price_hint) if price_hint is not None else None,
-                "order_type": "limit",
-                "using_fallback_price": using_fallback_price,
-                "reason": pdt_reason,
-            }
-            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
-            logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
-                pdt_context,
-                extra=base_extra | {"context": pdt_context},
-            )
-            return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -2633,34 +2547,78 @@ class ExecutionEngine:
 
         skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
         if skip_pdt:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
             symbol = order.get("symbol")
-            side = order.get("side")
+            side_raw = order.get("side")
+            side = str(side_raw).lower() if side_raw is not None else None
             quantity = order.get("quantity")
             client_order_id = order.get("client_order_id")
             asset_class = order.get("asset_class")
             price_hint = order.get("price_hint")
             order_type = order.get("order_type", "unknown")
             using_fallback_price = bool(order.get("using_fallback_price"))
+
+            from ai_trading.execution.pdt_manager import PDTManager
+            from ai_trading.execution.swing_mode import get_swing_mode
+
+            pdt_manager = PDTManager()
+            swing_mode = get_swing_mode()
+
+            current_position = 0
+            tracker = getattr(self, "_position_tracker", None)
+            if tracker is not None and symbol is not None:
+                try:
+                    current_position = tracker.get(symbol, 0) if hasattr(tracker, "get") else tracker[symbol]
+                except Exception:
+                    current_position = 0
+
+            allow, manager_reason, manager_context = pdt_manager.should_allow_order(
+                account_snapshot,
+                symbol,
+                side,
+                current_position=current_position,
+                force_swing_mode=swing_mode.enabled,
+            )
+
+            if allow:
+                if swing_mode.enabled and manager_reason == "swing_mode_entry" and symbol:
+                    swing_mode.record_entry(symbol)
+                    log_side = side if side is not None else side_raw
+                    logger.info(
+                        "SWING_MODE_ENTRY_RECORDED",
+                        extra={
+                            "symbol": symbol,
+                            "side": log_side,
+                            "quantity": quantity,
+                            "reason": "pdt_safe_trading",
+                        },
+                    )
+                return True
+
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            skip_reason = manager_reason or pdt_reason or "pdt_limit_reached"
+            detail_context: dict[str, Any] = dict(pdt_context or {})
+            if manager_context:
+                detail_context["pdt_manager"] = manager_context
+            log_side = side if side is not None else side_raw
             base_extra = {
                 "symbol": symbol,
-                "side": side,
+                "side": log_side,
                 "quantity": quantity,
                 "client_order_id": client_order_id,
                 "asset_class": asset_class,
                 "price_hint": price_hint,
                 "order_type": order_type,
                 "using_fallback_price": using_fallback_price,
-                "reason": pdt_reason,
+                "reason": skip_reason,
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
             logger.warning(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
-                pdt_context,
-                extra=base_extra | {"context": pdt_context},
+                detail_context,
+                extra=base_extra | {"context": detail_context},
             )
             return False
 
