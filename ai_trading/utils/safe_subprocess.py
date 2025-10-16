@@ -67,8 +67,6 @@ def safe_subprocess_run(
         exc.stdout = stdout
         exc.stderr = stderr
         exc.result = result
-        if timeout is not None:
-            exc.timeout = timeout
         raise
     except (OSError, subprocess.SubprocessError) as exc:
         result = _coerce_exception_result(exc, cmd)

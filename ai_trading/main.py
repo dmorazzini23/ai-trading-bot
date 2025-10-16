@@ -1051,7 +1051,12 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
 
     ensure_dotenv_loaded()
     settings = get_settings()
-    port = int(settings.api_port or 9001)
+    port = int(getattr(settings, "api_port", 9001) or 9001)
+    retry_budget = getattr(settings, "bind_retry_budget_seconds", None)
+    if retry_budget is None:
+        retry_budget = getattr(settings, "api_port_wait_seconds", 0.0)
+    retry_budget = max(0.0, float(retry_budget or 0.0))
+    deadline = monotonic_time() + retry_budget
 
     # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
     try:
@@ -1067,65 +1072,60 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             logger.info("HEALTH_SERVER_PORT_SHARED", extra={"port": port})
     except Exception as _exc:  # pragma: no cover - defensive
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
-    wait_seconds = max(0.0, float(getattr(settings, "api_port_wait_seconds", 0.0)))
-    deadline = monotonic_time() + wait_seconds
     attempt = 0
 
-    while not should_stop():
+    while True:
+        if should_stop():
+            logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
+            if ready_signal is not None:
+                ready_signal.set()
+            return
+
         attempt += 1
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
             test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 test_socket.bind(("0.0.0.0", port))
             except OSError as exc:
-                if exc.errno == errno.EADDRINUSE:
-                    pid = get_pid_on_port(port)
-                    if pid:
-                        logger.error(
-                            "API_PORT_PRECHECK_FAILED",
-                            extra={"port": port, "pid": pid},
-                        )
-                        raise PortInUseError(port, pid) from exc
+                if exc.errno != errno.EADDRINUSE:
+                    raise
 
-                    if _probe_local_api_health(port):
-                        logger.critical(
-                            "API_PORT_ALIVE_ELSEWHERE",
-                            extra={"port": port},
-                        )
-                        raise ExistingApiDetected(port) from exc
-
-                    remaining = deadline - monotonic_time()
-                    if remaining <= 0:
-                        logger.error(
-                            "API_PORT_PRECHECK_FAILED",
-                            extra={"port": port, "pid": None},
-                        )
-                        logger.warning(
-                            "API_PORT_RELEASE_TIMEOUT", extra={"port": port}
-                        )
-                        if ready_signal is not None:
-                            ready_signal.set()
-                        return
-
-                    sleep_for = min(1.0, max(0.1, remaining))
-                    logger.warning(
-                        "API_PORT_WAITING_FOR_RELEASE",
-                        extra={
-                            "port": port,
-                            "attempt": attempt,
-                            "sleep_seconds": round(sleep_for, 2),
-                            "remaining_seconds": round(remaining, 2),
-                        },
+                if _probe_local_api_health(port):
+                    logger.critical(
+                        "API_PORT_ALIVE_ELSEWHERE",
+                        extra={"port": port},
                     )
-                    _interruptible_sleep(sleep_for)
-                    continue
-                raise
+                    raise ExistingApiDetected(port) from exc
+
+                pid = get_pid_on_port(port)
+                if pid:
+                    logger.error(
+                        "API_PORT_PRECHECK_FAILED",
+                        extra={"port": port, "pid": pid},
+                    )
+                    raise PortInUseError(port, pid) from exc
+
+                remaining = deadline - monotonic_time()
+                if remaining <= 0:
+                    logger.error(
+                        "API_PORT_PRECHECK_FAILED",
+                        extra={"port": port, "pid": None},
+                    )
+                    raise PortInUseError(port) from exc
+
+                sleep_for = min(1.0, max(0.1, remaining))
+                logger.warning(
+                    "API_PORT_WAITING_FOR_RELEASE",
+                    extra={
+                        "port": port,
+                        "attempt": attempt,
+                        "sleep_seconds": round(sleep_for, 2),
+                        "remaining_seconds": round(max(0.0, remaining), 2),
+                    },
+                )
+                _interruptible_sleep(sleep_for)
+                continue
             break
-    if should_stop():
-        logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
-        if ready_signal is not None:
-            ready_signal.set()
-        return
 
     run_flask_app(port, ready_signal)
 
