@@ -4,90 +4,112 @@ from __future__ import annotations
 import os
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Iterator
 
-_DEFAULT_LIMIT = 3
-_LIMIT_CONDITION = threading.Condition(threading.RLock())
-_ENV_SNAPSHOT: tuple[str | None, int] | None = None
-_LIMIT: int = _DEFAULT_LIMIT
-_CURRENT_IN_USE = 0
-_LOCK = threading.Lock()
-_PEAK = 0
 
-_STATE_FILE = Path(os.getenv("AI_TRADING_FALLBACK_CONCURRENCY_STATE", ".pytest_fallback_concurrency.state"))
+def _sanitize_limit(value: int) -> int:
+    """Clamp *value* to the minimum supported host concurrency."""
+
+    if value < 1:
+        return 1
+    return value
 
 
-def _resolve_limit() -> tuple[str | None, int]:
-    raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
+def _initial_host_limit() -> int:
+    raw = os.getenv("AI_HTTP_HOST_LIMIT", "6")
     try:
-        parsed = int(str(raw).strip()) if raw is not None else None
+        value = int(str(raw).strip())
     except (TypeError, ValueError):
-        parsed = None
-    if parsed is None or parsed <= 0:
-        parsed = _DEFAULT_LIMIT
-    return raw, max(1, parsed)
+        value = 6
+    return _sanitize_limit(value)
 
 
-def _ensure_limit_updated() -> None:
-    raw, limit = _resolve_limit()
-    with _LIMIT_CONDITION:
-        global _ENV_SNAPSHOT, _LIMIT
-        previous = _ENV_SNAPSHOT
-        if previous is not None and previous[0] == raw and previous[1] == limit:
+def _read_env_limit(default: int) -> int:
+    raw = os.getenv("AI_HTTP_HOST_LIMIT")
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return _sanitize_limit(value)
+
+
+_HOST_LIMIT: int = _initial_host_limit()
+_peak_concurrency: int = 0
+_active: int = 0
+_pending_limit: int | None = None
+_lock = threading.RLock()
+_condition = threading.Condition(_lock)
+
+
+def _apply_pending_limit_locked() -> None:
+    global _pending_limit
+
+    if _pending_limit is None:
+        return
+    pending = _pending_limit
+    if _active <= pending:
+        _pending_limit = None
+        _condition.notify_all()
+
+
+def begin_fallback_submission_wave() -> None:
+    """Refresh the limiter configuration using the latest environment value."""
+
+    global _HOST_LIMIT, _pending_limit
+
+    limit = _read_env_limit(_HOST_LIMIT)
+    if limit == _HOST_LIMIT:
+        return
+    with _condition:
+        _HOST_LIMIT = limit
+        if _active <= limit:
+            _pending_limit = None
+            _condition.notify_all()
+        else:
+            _pending_limit = limit
+            _condition.notify_all()
+
+
+def _maybe_refresh_limit_for_new_wave() -> None:
+    with _lock:
+        if _active != 0:
             return
-        _ENV_SNAPSHOT = (raw, limit)
-        _LIMIT = limit
-        _LIMIT_CONDITION.notify_all()
+    begin_fallback_submission_wave()
 
 
-def _load_persisted_peak() -> int:
-    try:
-        return int(_STATE_FILE.read_text().strip())
-    except Exception:
-        return 0
+def _acquire_slot() -> None:
+    global _active, _peak_concurrency
+
+    with _condition:
+        while _active >= _HOST_LIMIT:
+            _condition.wait()
+        _active += 1
+        if _active > _peak_concurrency:
+            _peak_concurrency = _active
 
 
-def _persist_peak(value: int) -> None:
-    try:
-        _STATE_FILE.write_text(str(value))
-    except Exception:
-        pass
+def _release_slot() -> None:
+    global _active
 
-
-try:
-    _PEAK = max(_PEAK, _load_persisted_peak())
-except Exception:
-    pass
-
-
-def _inc_peak_in_place(current_in_use: int) -> None:
-    global _PEAK
-    with _LOCK:
-        if current_in_use > _PEAK:
-            _PEAK = current_in_use
-            _persist_peak(_PEAK)
+    with _condition:
+        if _active > 0:
+            _active -= 1
+        else:
+            _active = 0
+        _apply_pending_limit_locked()
+        _condition.notify_all()
 
 
 @contextmanager
 def limit_concurrency() -> Iterator[None]:
-    with _LIMIT_CONDITION:
-        global _CURRENT_IN_USE
-        while True:
-            _ensure_limit_updated()
-            if _CURRENT_IN_USE < _LIMIT:
-                _CURRENT_IN_USE += 1
-                in_use = _CURRENT_IN_USE
-                break
-            _LIMIT_CONDITION.wait()
-    _inc_peak_in_place(in_use)
+    _maybe_refresh_limit_for_new_wave()
+    _acquire_slot()
     try:
         yield
     finally:
-        with _LIMIT_CONDITION:
-            if _CURRENT_IN_USE > 0:
-                _CURRENT_IN_USE -= 1
-            _LIMIT_CONDITION.notify_all()
+        _release_slot()
 
 
 @contextmanager
@@ -96,10 +118,24 @@ def fallback_slot() -> Iterator[None]:
         yield
 
 
-try:
-    _ensure_limit_updated()
-except Exception:
-    pass
+def get_peak_concurrency() -> int:
+    return _peak_concurrency
 
 
-__all__ = ["limit_concurrency", "fallback_slot"]
+def get_active_slots() -> int:
+    with _lock:
+        return _active
+
+
+def get_configured_host_limit() -> int:
+    return _HOST_LIMIT
+
+
+__all__ = [
+    "limit_concurrency",
+    "fallback_slot",
+    "begin_fallback_submission_wave",
+    "get_peak_concurrency",
+    "get_active_slots",
+    "get_configured_host_limit",
+]
