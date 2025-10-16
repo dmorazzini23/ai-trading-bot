@@ -8,6 +8,7 @@ import types
 
 import pytest
 
+from ai_trading.core import bot_engine
 from ai_trading.data import fetch as fetch_module
 from ai_trading.utils.lazy_imports import load_pandas
 
@@ -166,6 +167,98 @@ def test_ensure_ohlcv_schema_handles_yahoo_premarket_payload():
     assert pytest.approx(first["low"]) == payload[0]["preMarketDayLow"]
     assert pytest.approx(first["close"]) == payload[0]["preMarketPrice"]
     assert pytest.approx(first["volume"]) == payload[0]["preMarketVolume"]
+
+
+def test_close_nan_disable_sets_quote_fallback(monkeypatch):
+    pd = load_pandas()
+    assert pd is not None
+
+    fetch_module._reset_provider_auth_state_for_tests()
+    fetch_module._FALLBACK_WINDOWS.clear()
+    fetch_module._FALLBACK_METADATA.clear()
+    fetch_module._ALPACA_CLOSE_NAN_COUNTS.clear()
+
+    monitor = fetch_module.provider_monitor
+    original_threshold = monitor.threshold
+    original_cooldown = monitor.cooldown
+    monitor.threshold = 1
+    monitor.cooldown = 0
+    monitor.fail_counts.clear()
+    monitor.disabled_until.clear()
+    monitor.disable_counts.clear()
+    monitor.disabled_since.clear()
+    getattr(monitor, "outage_start", {}).clear()
+    getattr(monitor, "_switchover_disable_counts", {}).clear()
+
+    symbol = "AAPL"
+    timeframe = "1Min"
+    start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+
+    fallback_df = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2024-01-02T14:30:00Z"], utc=True),
+            "open": [101.0],
+            "high": [102.0],
+            "low": [100.5],
+            "close": [101.5],
+            "volume": [1_000],
+        }
+    )
+    fallback_df.attrs["data_provider"] = "yahoo"
+    fallback_df.attrs["data_feed"] = "yahoo"
+
+    fetch_module._mark_fallback(
+        symbol,
+        timeframe,
+        start,
+        end,
+        from_provider="alpaca_iex",
+        fallback_df=fallback_df,
+        resolved_provider="yahoo",
+        resolved_feed="yahoo",
+        reason="close_column_all_nan",
+    )
+
+    assert monitor.is_disabled("alpaca")
+    assert monitor.is_disabled("alpaca_iex")
+    assert not fetch_module.is_primary_provider_enabled()
+
+    state = types.SimpleNamespace()
+    bot_engine._PRICE_SOURCE.pop(symbol, None)
+    bot_engine._mark_primary_provider_fallback(
+        state, symbol, reason="alpaca_primary_disabled"
+    )
+    assert getattr(state, "prefer_backup_quotes", False)
+
+    call_history: list[bool] = []
+
+    def _fake_get_latest_price(sym: str, *, prefer_backup: bool):
+        call_history.append(prefer_backup)
+        if prefer_backup:
+            bot_engine._PRICE_SOURCE[sym] = "yahoo"
+            return 101.5
+        bot_engine._PRICE_SOURCE[sym] = bot_engine._ALPACA_DISABLED_SENTINEL
+        return None
+
+    monkeypatch.setattr(bot_engine, "get_latest_price", _fake_get_latest_price)
+
+    price, source = bot_engine._resolve_order_quote(
+        symbol, prefer_backup=getattr(state, "prefer_backup_quotes", False)
+    )
+
+    assert price == pytest.approx(101.5)
+    assert source == "yahoo"
+    assert call_history == [True]
+
+    monitor.threshold = original_threshold
+    monitor.cooldown = original_cooldown
+    monitor.fail_counts.clear()
+    monitor.disabled_until.clear()
+    monitor.disable_counts.clear()
+    monitor.disabled_since.clear()
+    getattr(monitor, "outage_start", {}).clear()
+    getattr(monitor, "_switchover_disable_counts", {}).clear()
 
 
 def test_get_minute_df_handles_yahoo_premarket_backup(monkeypatch):

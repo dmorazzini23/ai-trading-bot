@@ -16149,6 +16149,8 @@ def _mark_primary_provider_fallback(
         events.add(event_key)
     degraded.add(provider)
     degraded.add(symbol)
+    if isinstance(provider, str) and provider.startswith("alpaca"):
+        setattr(state, "prefer_backup_quotes", True)
 
 
 def _should_skip_order_for_alpaca_unavailable(
@@ -16677,7 +16679,7 @@ def _enter_long(
     conf: float,
     strat: str,
 ) -> bool:
-    prefer_backup_quote = False
+    prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
     account_obj: Any | None = None
     api_obj = getattr(ctx, "api", None)
     get_account = getattr(api_obj, "get_account", None)
@@ -17331,7 +17333,7 @@ def _enter_short(
     conf: float,
     strat: str,
 ) -> bool:
-    prefer_backup_quote = False
+    prefer_backup_quote = bool(getattr(state, "prefer_backup_quotes", False))
     account_obj: Any | None = None
     api_obj = getattr(ctx, "api", None)
     get_account = getattr(api_obj, "get_account", None)
