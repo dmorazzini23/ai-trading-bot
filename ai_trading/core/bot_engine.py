@@ -13073,6 +13073,24 @@ def check_pdt_rule(ctx) -> bool:
             except Exception:
                 pass
 
+    if account is None:
+        try:
+            setattr(
+                ctx,
+                "_pdt_last_context",
+                {
+                    "account_available": False,
+                    "block_reason": "account_unavailable",
+                },
+            )
+        except Exception:
+            pass
+        logger.info(
+            "PDT_SKIP_NO_ACCOUNT",
+            extra={"reason": "account_unavailable"},
+        )
+        return False
+
     thresholds = getattr(ctx, "thresholds", None)
     if thresholds is None:
         thresholds = SimpleNamespace(min_equity=PDT_EQUITY_THRESHOLD)
