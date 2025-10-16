@@ -24533,9 +24533,18 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     configured_env = os.getenv("ALPACA_DATA_FEED")
     if configured_env:
         configured_env = configured_env.strip() or None
-    configured_raw = configured_env if configured_env is not None else _get_intraday_feed()
-    configured_feed = _sanitize_alpaca_feed(configured_raw)
-    alpaca_feed = preferred_feed or configured_feed
+    env_feed = _sanitize_alpaca_feed(configured_env) if configured_env is not None else None
+    intraday_raw = _get_intraday_feed()
+    configured_feed = _sanitize_alpaca_feed(intraday_raw)
+    if env_feed is not None:
+        alpaca_feed = env_feed
+    else:
+        alpaca_feed = preferred_feed or configured_feed
+    configured_raw = (
+        configured_env
+        if configured_env is not None
+        else (preferred_feed if preferred_feed is not None else intraday_raw)
+    )
 
     invalid_alpaca_feed = alpaca_feed not in {"iex", "sip"}
 
