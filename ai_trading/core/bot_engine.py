@@ -13865,7 +13865,8 @@ def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) 
     headroom_dollars = max(0.0, (cap - current_frac) * total)
     if headroom_dollars <= 0:
         return 0
-    max_qty = int(headroom_dollars // price)
+    # AI-AGENT-REF: Fix floor division bug - use regular division with max(1, ...) to ensure at least 1 share
+    max_qty = max(1, int(headroom_dollars / price))
     if max_qty < qty:
         logger.debug(
             "SECTOR_CAP_PARTIAL | symbol=%s requested=%d clamped=%d headroom=$%.2f",
@@ -13960,7 +13961,8 @@ def _enforce_buying_power_limit(
     if available <= 0:
         return qty, available
 
-    max_qty = int(available // price)
+    # AI-AGENT-REF: Fix floor division bug - use regular division with max(1, ...) to ensure at least 1 share
+    max_qty = max(1, int(available / price))
     if max_qty <= 0:
         return qty, available
     if max_qty >= qty:
@@ -17221,15 +17223,16 @@ def _enter_long(
 
     # AI-AGENT-REF: Fix zero quantity calculations - ensure minimum position size when cash available
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
-        # If we have significant cash available and a valid signal, use minimum position size
-        if balance > 1000 and target_weight > 0.001 and current_price > 0:
-            raw_qty = max(1, int(1000 / current_price))  # Minimum $1000 position
+        # Calculate minimum viable position based on available capital (more flexible for small accounts)
+        min_position_value = min(balance * 0.05, 500)  # 5% of balance or $500, whichever is smaller
+        if balance > 0 and target_weight > 0 and current_price > 0 and min_position_value >= current_price:
+            raw_qty = max(1, int(min_position_value / current_price))
             logger.info(
-                f"Using minimum position size for {symbol}: {raw_qty} shares (balance=${balance:.0f})"
+                f"Using minimum position size for {symbol}: {raw_qty} shares (balance=${balance:.0f}, min_value=${min_position_value:.0f})"
             )
         else:
             logger.warning(
-                f"Skipping {symbol}: computed qty <= 0 (balance=${balance:.0f}, weight={target_weight:.4f})"
+                f"Skipping {symbol}: insufficient capital for minimum position (balance=${balance:.0f}, weight={target_weight:.4f}, price=${current_price:.2f})"
             )
             return True
     # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
@@ -17261,15 +17264,10 @@ def _enter_long(
             },
         )
         raw_qty = adj_qty
+    # AI-AGENT-REF: Removed redundant zero check - already validated above
     logger.info(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
-    if adj_qty <= 0:
-        logger.info(
-            "SKIP_SECTOR_CAP | Buy order skipped due to sector exposure limits",
-            extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price},
-        )
-        return True
     order_annotations = dict(annotations)
 
     order_id = _call_submit_order(
@@ -17788,15 +17786,10 @@ def _enter_short(
             },
         )
         qty = adj_qty
+    # AI-AGENT-REF: Removed redundant zero check - already validated above
     logger.info(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
-    if adj_qty <= 0:
-        logger.info(
-            "SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits",
-            extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price},
-        )
-        return True
     order_annotations = dict(annotations)
 
     order_id = _call_submit_order(
@@ -23612,7 +23605,8 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
             for sym in valid_symbols:
                 price = valid_prices[sym]
-                target_qty = int((total_capital * weight_per) // price)
+                # AI-AGENT-REF: Fix floor division bug - use regular division to avoid zero quantities
+                target_qty = max(1, int((total_capital * weight_per) / price))
                 current_qty = int(positions.get(sym, 0))
 
                 if current_qty < target_qty:

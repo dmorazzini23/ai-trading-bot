@@ -1294,6 +1294,9 @@ def submit_order(
     ):
         do_shadow = False
     q_int = _as_int(qty)
+    # AI-AGENT-REF: Add quantity validation before submission
+    if q_int <= 0:
+        raise ValueError(f"Invalid quantity: {qty}. Must be a positive integer.")
     timeout = clamp_request_timeout(timeout)
     symbol_part = str(symbol or "").strip().upper() or "UNKNOWN"
     side_part = str(side or "").strip().lower() or "buy"
