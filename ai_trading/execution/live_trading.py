@@ -1031,7 +1031,41 @@ class ExecutionEngine:
 
         self._cycle_account = None
         self._cycle_account_fetched = False
-        self._refresh_cycle_account()
+        account = self._refresh_cycle_account()
+        
+        # Check PDT status and activate swing mode if needed
+        if account is not None:
+            from ai_trading.execution.pdt_manager import PDTManager
+            from ai_trading.execution.swing_mode import get_swing_mode, enable_swing_mode
+            
+            pdt_manager = PDTManager()
+            status = pdt_manager.get_pdt_status(account)
+            
+            logger.info(
+                "PDT_STATUS_CHECK",
+                extra={
+                    "is_pdt": status.is_pattern_day_trader,
+                    "daytrade_count": status.daytrade_count,
+                    "daytrade_limit": status.daytrade_limit,
+                    "can_daytrade": status.can_daytrade,
+                    "remaining": status.remaining_daytrades,
+                    "strategy": status.strategy_recommendation
+                }
+            )
+            
+            # Auto-enable swing mode if PDT limit reached
+            if status.strategy_recommendation == "swing_only":
+                swing_mode = get_swing_mode()
+                if not swing_mode.enabled:
+                    enable_swing_mode()
+                    logger.warning(
+                        "PDT_LIMIT_EXCEEDED_SWING_MODE_ACTIVATED",
+                        extra={
+                            "daytrade_count": status.daytrade_count,
+                            "daytrade_limit": status.daytrade_limit,
+                            "message": "Automatically switched to swing trading mode to avoid PDT violations"
+                        }
+                    )
 
     def end_cycle(self) -> None:
         """Best-effort end-of-cycle hook aligned with core engine expectations."""
@@ -1436,8 +1470,33 @@ class ExecutionEngine:
                         )
                         return None
         account_snapshot = self._get_account_snapshot()
-        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
-        if skip_pdt:
+        
+        # Use new PDT manager for intelligent order allowance
+        from ai_trading.execution.pdt_manager import PDTManager
+        from ai_trading.execution.swing_mode import get_swing_mode
+        
+        pdt_manager = PDTManager()
+        swing_mode = get_swing_mode()
+        
+        # Get current position for this symbol
+        current_position = 0
+        try:
+            if hasattr(self, '_position_tracker') and symbol in self._position_tracker:
+                current_position = self._position_tracker[symbol]
+        except:
+            pass
+        
+        # Check if order should be allowed (with swing mode support)
+        allow, reason, pdt_context = pdt_manager.should_allow_order(
+            account_snapshot,
+            symbol,
+            side_lower,
+            current_position=current_position,
+            force_swing_mode=swing_mode.enabled
+        )
+        
+        if not allow:
+            # Order blocked by PDT rules
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
@@ -1451,7 +1510,7 @@ class ExecutionEngine:
                 "price_hint": str(price_hint) if price_hint is not None else None,
                 "order_type": "market",
                 "using_fallback_price": using_fallback_price,
-                "reason": pdt_reason,
+                "reason": reason,
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
             logger.warning(
@@ -1460,6 +1519,19 @@ class ExecutionEngine:
                 extra=base_extra | {"context": pdt_context},
             )
             return None
+        
+        # If swing mode is active and this is a new position entry, record it
+        if swing_mode.enabled and reason == "swing_mode_entry":
+            swing_mode.record_entry(symbol)
+            logger.info(
+                "SWING_MODE_ENTRY_RECORDED",
+                extra={
+                    "symbol": symbol,
+                    "side": side_lower,
+                    "quantity": quantity,
+                    "reason": "pdt_safe_trading"
+                }
+            )
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
