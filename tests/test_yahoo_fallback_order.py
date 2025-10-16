@@ -1,6 +1,8 @@
 import json
 import types
 import datetime as dt
+from typing import Any
+
 import pytest
 
 pd = pytest.importorskip("pandas")
@@ -25,17 +27,27 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
 
     called = {}
 
-    def fake_get(url, params=None, headers=None, timeout=None):
-        called["requests_get"] = called.get("requests_get", 0) + 1
-        data = {"bars": []}
-        return types.SimpleNamespace(
-            status_code=200,
-            text=json.dumps(data),
-            headers={"Content-Type": "application/json"},
-            json=lambda: data,
-        )
+    class StubSession:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(fetch.requests, "get", fake_get)
+        def get(self, url, params=None, headers=None, timeout=None):
+            called["http_get"] = called.get("http_get", 0) + 1
+            self.calls.append({
+                "url": url,
+                "params": dict(params or {}),
+                "headers": dict(headers or {}),
+            })
+            data = {"bars": []}
+            return types.SimpleNamespace(
+                status_code=200,
+                text=json.dumps(data),
+                headers={"Content-Type": "application/json"},
+                json=lambda: data,
+            )
+
+    session = StubSession()
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", session)
 
     def fake_yahoo(symbol, start, end, interval):
         called["yahoo"] = True
@@ -59,7 +71,7 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
 
     after = inc_provider_fallback("alpaca_sip", "yahoo")
 
-    assert called.get("requests_get")
+    assert called.get("http_get")
     assert called.get("yahoo")
     assert not df.empty
     assert after == before + 1

@@ -62,7 +62,10 @@ def test_fetch_bars_uses_data_base_and_headers(monkeypatch, data_base):
     result = fetch_mod._fetch_bars("AAPL", start, end, "1Min", feed="iex", adjustment="all")
     assert session.last_request is not None
     expected_base = data_base or "https://data.alpaca.markets"
-    assert session.last_request.url == f"{expected_base}/v2/stocks/bars"
+    assert session.last_request.url == f"{expected_base}/v2/stocks/AAPL/bars"
+    assert session.last_request.params["start"].startswith("2024-01-02T15:00:00")
+    assert session.last_request.params["end"].startswith("2024-01-02T16:00:00")
+    assert session.last_request.params["timeframe"] == "1Min"
     assert session.last_request.params["feed"] == "iex"
     assert session.last_request.params["adjustment"] == "all"
     assert session.last_request.headers["APCA-API-KEY-ID"] == "key123"
