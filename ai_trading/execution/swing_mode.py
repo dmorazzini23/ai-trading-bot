@@ -5,7 +5,7 @@ by holding positions overnight, ensuring PDT compliance.
 """
 
 import logging
-from datetime import datetime, time
+from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -75,15 +75,8 @@ class SwingTradingMode:
         if now.date() > entry_time.date():
             return (True, "different_day")
         
-        # Same day - check if market has closed since entry
-        market_close = time(16, 0)  # 4:00 PM ET
-        
-        if entry_time.time() < market_close and now.time() >= market_close:
-            # Entered before close, now after close - safe to exit
-            return (True, "after_market_close")
-        
-        # Same trading day - would be a day trade
-        return (False, "same_day_trade_blocked")
+        # Same trading day - must hold overnight to avoid day trade classification
+        return (False, "must_hold_overnight")
     
     def clear_entry(self, symbol: str):
         """Clear entry time after position is closed."""
