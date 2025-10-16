@@ -1,0 +1,5 @@
+# Additional dependencies required for PDT integration fix
+# Install with: pip3 install -r requirements_pdt_fix.txt
+
+pydantic-settings>=2.2,<3
+
