@@ -6722,9 +6722,9 @@ def _fetch_bars(
                     skip_metrics=False,
                 )
                 _state["stop"] = True
-                if fb_df is not None:
+                if fb_df is not None and not getattr(fb_df, "empty", True):
                     return fb_df
-                return _empty_result()
+                # Allow downstream HTTP fallbacks to execute when SIP returns empty.
             if _feed in {"iex", "sip"}:
                 alt_feed = _alternate_alpaca_feed(_feed)
                 if alt_feed != _feed and alt_feed not in alternate_history:
