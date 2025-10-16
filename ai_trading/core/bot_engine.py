@@ -13865,8 +13865,9 @@ def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) 
     headroom_dollars = max(0.0, (cap - current_frac) * total)
     if headroom_dollars <= 0:
         return 0
-    # AI-AGENT-REF: Fix floor division bug - use regular division with max(1, ...) to ensure at least 1 share
-    max_qty = max(1, int(headroom_dollars / price))
+    max_qty = int(headroom_dollars // price)
+    if max_qty <= 0:
+        return 0
     if max_qty < qty:
         logger.debug(
             "SECTOR_CAP_PARTIAL | symbol=%s requested=%d clamped=%d headroom=$%.2f",
@@ -13875,7 +13876,7 @@ def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) 
             max_qty,
             headroom_dollars,
         )
-    return max(0, max_qty if max_qty < qty else qty)
+    return max_qty if max_qty < qty else qty
 
 
 # --------------------------------------------------------------------------- #
@@ -13961,10 +13962,9 @@ def _enforce_buying_power_limit(
     if available <= 0:
         return qty, available
 
-    # AI-AGENT-REF: Fix floor division bug - use regular division with max(1, ...) to ensure at least 1 share
-    max_qty = max(1, int(available / price))
+    max_qty = int(available // price)
     if max_qty <= 0:
-        return qty, available
+        return 0, available
     if max_qty >= qty:
         return qty, available
     return max_qty, available
@@ -23605,14 +23605,13 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
             for sym in valid_symbols:
                 price = valid_prices[sym]
-                # AI-AGENT-REF: Fix floor division bug - use regular division to avoid zero quantities
-                target_qty = max(1, int((total_capital * weight_per) / price))
+                target_qty = int((total_capital * weight_per) // price)
+                if target_qty <= 0:
+                    continue
                 current_qty = int(positions.get(sym, 0))
 
                 if current_qty < target_qty:
                     qty_to_buy = target_qty  # AI-AGENT-REF: retry full amount
-                    if qty_to_buy < 1:
-                        continue
                     try:
                         # AI-AGENT-REF: preserve consistent client_order_id across retries
                         cid = ctx.rebalance_ids.get(sym)
