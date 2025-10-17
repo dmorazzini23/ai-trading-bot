@@ -1414,6 +1414,24 @@ def _log_price_warning(
     payload = {'provider': provider, 'symbol': symbol}
     if extra:
         payload.update(extra)
+    if message == "PRICE_PROVIDER_NONE":
+        log_throttled_event(
+            logger,
+            "PRICE_PROVIDER_NONE",
+            level=logging.DEBUG,
+            extra=payload,
+            message=message,
+        )
+        return
+    if message == "PRICE_PROVIDER_NONPOSITIVE":
+        log_throttled_event(
+            logger,
+            "PRICE_PROVIDER_NONPOSITIVE",
+            level=logging.DEBUG,
+            extra=payload,
+            message=message,
+        )
+        return
     logger.log(level, message, extra=payload)
 
 
@@ -17307,7 +17325,12 @@ def _enter_long(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
-    if not _ensure_executable_quote(ctx, symbol, reference_price=current_price):
+    quote_gate = _ensure_executable_quote(
+        ctx,
+        symbol,
+        reference_price=current_price,
+    )
+    if not quote_gate:
         return True
 
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
@@ -17939,7 +17962,12 @@ def _enter_short(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
-    if not _ensure_executable_quote(ctx, symbol, reference_price=current_price):
+    quote_gate = _ensure_executable_quote(
+        ctx,
+        symbol,
+        reference_price=current_price,
+    )
+    if not quote_gate:
         return True
 
     atr = feat_df["atr"].iloc[-1]
@@ -21285,6 +21313,18 @@ def _quote_age_seconds(quote: Any | None) -> float:
         return float("inf")
 
 
+@dataclass(slots=True)
+class QuoteGateDecision:
+    """Outcome from quote gate validation."""
+
+    executable: bool
+    reason: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def __bool__(self) -> bool:  # pragma: no cover - exercised implicitly
+        return self.executable
+
+
 def _extract_quote_bid_ask(quote: Any | None) -> tuple[float | None, float | None]:
     """Return ``(bid, ask)`` from *quote* when available and positive."""
 
@@ -21320,13 +21360,46 @@ def _extract_quote_bid_ask(quote: Any | None) -> tuple[float | None, float | Non
     return _coerce(bid_source), _coerce(ask_source)
 
 
+def _evaluate_quote_gate(
+    quote: Any | None,
+    *,
+    require_bid_ask: bool,
+    max_age_sec: float,
+) -> QuoteGateDecision:
+    """Return quote-gate decision enforcing bid/ask presence and staleness limits."""
+
+    bid, ask = _extract_quote_bid_ask(quote)
+    if require_bid_ask and (bid is None or ask is None):
+        return QuoteGateDecision(False, "missing_bid_ask", {"bid": bid, "ask": ask})
+
+    if bid is not None and ask is not None and ask < bid:
+        return QuoteGateDecision(
+            False,
+            "negative_spread",
+            {"bid": bid, "ask": ask},
+        )
+
+    age = _quote_age_seconds(quote)
+    if max_age_sec > 0 and age > max_age_sec:
+        return QuoteGateDecision(False, "stale_quote", {"age_sec": age})
+
+    details: dict[str, Any] = {}
+    if bid is not None:
+        details["bid"] = bid
+    if ask is not None:
+        details["ask"] = ask
+    if math.isfinite(age):
+        details["age_sec"] = age
+    return QuoteGateDecision(True, None, details)
+
+
 def _ensure_executable_quote(
     ctx: BotContext,
     symbol: str,
     *,
     reference_price: float | None,
-) -> bool:
-    """Return ``True`` when an executable quote is present and fresh."""
+) -> QuoteGateDecision:
+    """Return quote-gate decision ensuring an executable and fresh quote."""
 
     data_client = getattr(ctx, "data_client", None)
     try:
@@ -21336,21 +21409,31 @@ def _ensure_executable_quote(
     require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
     if data_client is None or not _stock_quote_request_ready():
         # Without a data client or request support we cannot enforce the gate; defer to existing guards.
-        return True
+        return QuoteGateDecision(True, None, {})
 
     max_age = float(getattr(cfg, "execution_max_staleness_sec", 60) or 60)
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
 
     quote = _fetch_quote(ctx, symbol)
-    bid, ask = _extract_quote_bid_ask(quote)
-    if (bid is None or ask is None) and require_bid_ask:
-        logger.warning("ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=missing_bid_ask", symbol)
-        return False
-
-    age = _quote_age_seconds(quote)
-    if max_age > 0 and age > max_age:
-        logger.warning("ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=stale_quote", symbol)
-        return False
+    gate_decision = _evaluate_quote_gate(
+        quote,
+        require_bid_ask=require_bid_ask,
+        max_age_sec=max_age,
+    )
+    if not gate_decision:
+        reason = gate_decision.reason or "missing_bid_ask"
+        if reason == "missing_bid_ask":
+            logger.warning(
+                "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=missing_bid_ask",
+                symbol,
+            )
+        else:
+            logger.warning(
+                "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=%s",
+                symbol,
+                reason,
+            )
+        return gate_decision
 
     if (
         reference_price is not None
@@ -21359,6 +21442,8 @@ def _ensure_executable_quote(
         and gap_limit > 0
     ):
         mid: float | None = None
+        bid = gate_decision.details.get("bid")
+        ask = gate_decision.details.get("ask")
         if bid is not None and ask is not None:
             mid = (bid + ask) / 2.0
         if mid is not None and math.isfinite(mid):
@@ -21368,9 +21453,18 @@ def _ensure_executable_quote(
                     "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio>limit",
                     symbol,
                 )
-                return False
+                return QuoteGateDecision(
+                    False,
+                    "gap_ratio_exceeded",
+                    {
+                        "reference_price": reference_price,
+                        "mid": mid,
+                        "gap_ratio": gap_ratio,
+                        "gap_limit": gap_limit,
+                    },
+                )
 
-    return True
+    return gate_decision
 
 
 def _format_price_component(value: float | None) -> str:

@@ -3,6 +3,8 @@ import types
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
+from unittest.mock import MagicMock
+
 import pytest
 
 if "numpy" not in sys.modules:  # pragma: no cover - optional dependency shim
@@ -695,6 +697,8 @@ def test_enter_long_price_gate_missing_bid_ask(monkeypatch, caplog):
 
     _patch_price_gate_common(monkeypatch, symbol, 100.0)
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_a, **_k: types.SimpleNamespace())
+    submit_mock = MagicMock(return_value=None)
+    monkeypatch.setattr(bot_engine, "submit_order", submit_mock)
 
     caplog.set_level("INFO")
     result = bot_engine._enter_long(
@@ -715,6 +719,7 @@ def test_enter_long_price_gate_missing_bid_ask(monkeypatch, caplog):
         for record in caplog.records
     )
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+    submit_mock.assert_not_called()
 
 
 def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
@@ -735,6 +740,8 @@ def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
             timestamp=stale_ts,
         ),
     )
+    submit_mock = MagicMock(return_value=None)
+    monkeypatch.setattr(bot_engine, "submit_order", submit_mock)
 
     caplog.set_level("INFO")
     result = bot_engine._enter_long(
@@ -755,6 +762,85 @@ def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
         for record in caplog.records
     )
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+    submit_mock.assert_not_called()
+
+
+def test_enter_long_price_gate_negative_spread(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+    ctx.data_client = object()
+
+    _patch_price_gate_common(monkeypatch, symbol, 100.0)
+    monkeypatch.setattr(
+        bot_engine,
+        "_fetch_quote",
+        lambda *_a, **_k: types.SimpleNamespace(
+            bid_price=101.0,
+            ask_price=100.5,
+            timestamp=datetime.now(UTC),
+        ),
+    )
+    submit_mock = MagicMock(return_value=None)
+    monkeypatch.setattr(bot_engine, "submit_order", submit_mock)
+
+    caplog.set_level("INFO")
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.9,
+        strat="gate_negative_spread",
+    )
+
+    assert result is True
+    assert any(
+        record.message
+        == "ORDER_SKIPPED_PRICE_GATED | symbol=AAPL reason=negative_spread"
+        for record in caplog.records
+    )
+    assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+    submit_mock.assert_not_called()
+
+
+def test_quote_gate_helper_reasons():
+    now = datetime.now(UTC)
+    missing = bot_engine._evaluate_quote_gate(
+        types.SimpleNamespace(),
+        require_bid_ask=True,
+        max_age_sec=10.0,
+    )
+    assert not missing
+    assert missing.reason == "missing_bid_ask"
+
+    negative = bot_engine._evaluate_quote_gate(
+        types.SimpleNamespace(bid_price=101.0, ask_price=100.0, timestamp=now),
+        require_bid_ask=True,
+        max_age_sec=10.0,
+    )
+    assert not negative
+    assert negative.reason == "negative_spread"
+
+    stale_ts = now - timedelta(minutes=5)
+    stale = bot_engine._evaluate_quote_gate(
+        types.SimpleNamespace(bid_price=100.0, ask_price=100.5, timestamp=stale_ts),
+        require_bid_ask=True,
+        max_age_sec=30.0,
+    )
+    assert not stale
+    assert stale.reason == "stale_quote"
+
+    fresh = bot_engine._evaluate_quote_gate(
+        types.SimpleNamespace(bid_price=100.0, ask_price=100.2, timestamp=now),
+        require_bid_ask=True,
+        max_age_sec=30.0,
+    )
+    assert fresh
+    assert fresh.reason is None
 
 
 def test_enter_long_price_gate_gap_ratio(monkeypatch, caplog):
