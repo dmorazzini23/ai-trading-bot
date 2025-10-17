@@ -40,6 +40,34 @@ from ai_trading.utils.time import monotonic_time
 
 logger = get_logger(__name__)
 
+CANON = {
+    "alpaca": "alpaca",
+    "alpaca_iex": "alpaca-iex",
+    "alpaca_sip": "alpaca-sip",
+    "yahoo": "yahoo",
+    "yfinance": "yahoo",
+}
+
+
+def canonical_provider(name: str) -> str:
+    """Return a human-readable provider label for logging."""
+
+    normalized = (name or "").strip().lower()
+    if not normalized:
+        return ""
+    direct = CANON.get(normalized)
+    if direct:
+        return direct
+    if normalized.startswith("alpaca_"):
+        suffix = normalized.split("_", 1)[1]
+        if not suffix:
+            return "alpaca"
+        mapped_suffix = CANON.get(suffix)
+        if mapped_suffix:
+            return mapped_suffix
+        return f"alpaca-{suffix.replace('_', '-')}"
+    return normalized.replace("_", "-")
+
 _PROVIDER_CONFIG_LOGGED: bool = False
 _FIRST_DECISION = True
 
@@ -548,13 +576,21 @@ def _normalize_provider(name: str) -> str:
     return normalized or name
 
 
+def _canonical_label(name: str) -> str:
+    normalized = _normalize_provider(name)
+    label = canonical_provider(normalized)
+    if label:
+        return label
+    return canonical_provider(name)
+
+
 def record_stay(*, provider: str, reason: str, cooldown: int) -> None:
     """Log a stay decision for ``provider`` with the supplied ``reason``."""
 
     normalized = _normalize_provider(provider)
     logger.info(
         "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
-        normalized,
+        _canonical_label(normalized),
         reason,
         cooldown,
     )
@@ -934,7 +970,7 @@ class ProviderMonitor:
             stay_provider = to_key or from_key
             logger.info(
                 "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
-                stay_provider,
+                _canonical_label(stay_provider),
                 "redundant_request",
                 self.cooldown,
             )
@@ -953,7 +989,7 @@ class ProviderMonitor:
                 reason = "insufficient_health_passes" if passes < required_passes else "cooldown_active"
                 logger.info(
                     "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
-                    from_key,
+                    _canonical_label(from_key),
                     reason,
                     int(max(self.cooldown, required_seconds)),
                 )
@@ -1009,8 +1045,8 @@ class ProviderMonitor:
                     "DATA_PROVIDER_SWITCHOVER",
                     level=logging.WARNING,
                     extra={
-                        "from_provider": from_key,
-                        "to_provider": to_key,
+                        "from_provider": _canonical_label(from_key),
+                        "to_provider": _canonical_label(to_key),
                         "count": self.switch_counts[key],
                     },
                 )
@@ -1374,8 +1410,8 @@ class ProviderMonitor:
                     state["decision_severity"] = "good"
                 logger.info(
                     "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                    _normalize_provider(backup),
-                    _normalize_provider(primary),
+                    _canonical_label(backup),
+                    _canonical_label(primary),
                     switch_reason,
                     cooldown_seconds,
                 )
@@ -1391,8 +1427,8 @@ class ProviderMonitor:
                     state["decision_severity"] = normalized_severity
                 logger.info(
                     "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                    _normalize_provider(active),
-                    _normalize_provider(backup),
+                    _canonical_label(active),
+                    _canonical_label(backup),
                     switch_reason,
                     cooldown_default,
                 )
@@ -1433,6 +1469,7 @@ __all__ = [
     "provider_monitor",
     "ProviderMonitor",
     "ProviderAction",
+    "canonical_provider",
     "decide_provider_action",
     "is_safe_mode_active",
     "safe_mode_reason",

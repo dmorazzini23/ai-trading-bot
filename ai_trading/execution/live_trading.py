@@ -282,6 +282,33 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _sanitize_pdt_context(raw_context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return log-safe PDT context including required summary keys."""
+
+    context: dict[str, Any] = {}
+    if raw_context:
+        context.update({k: raw_context.get(k) for k in raw_context.keys()})
+
+    sanitized: dict[str, Any] = {
+        "pattern_day_trader": bool(context.get("pattern_day_trader", False)),
+        "daytrade_limit": _safe_int(context.get("daytrade_limit"), 0),
+        "daytrade_count": _safe_int(context.get("daytrade_count"), 0),
+    }
+
+    lock_info = pdt_lockout_info()
+    if "active" in context:
+        lock_info["active"] = bool(context.get("active"))
+    if "limit" in context:
+        lock_info["limit"] = _safe_int(context.get("limit"), 0)
+    if "count" in context:
+        lock_info["count"] = _safe_int(context.get("count"), 0)
+
+    sanitized["active"] = bool(lock_info.get("active", False))
+    sanitized["limit"] = _safe_int(lock_info.get("limit"), 0)
+    sanitized["count"] = _safe_int(lock_info.get("count"), 0)
+    return sanitized
+
+
 def _extract_value(record: Any, *names: str) -> Any:
     """Return the first matching attribute or mapping value from record."""
 
@@ -2933,6 +2960,8 @@ class ExecutionEngine:
             account_snapshot = getattr(self, "_cycle_account", None)
 
         skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
+        safe_context = _sanitize_pdt_context(pdt_context)
+        logger.debug("PDT_PREFLIGHT_CHECKED | context=%s", safe_context)
         if skip_pdt:
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
@@ -2960,8 +2989,8 @@ class ExecutionEngine:
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
             logger.warning(
                 "ORDER_SKIPPED_NONRETRYABLE_DETAIL | context=%s",
-                pdt_context,
-                extra=base_extra | {"context": pdt_context},
+                safe_context,
+                extra=base_extra | {"context": safe_context},
             )
             return False
 

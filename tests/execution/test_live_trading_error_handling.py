@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -101,3 +102,53 @@ def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch):
     submitted = captured["order_data"]
     assert submitted["type"] == "limit"
     assert submitted.get("limit_price") == pytest.approx(101.0)
+
+
+def test_submit_market_order_pdt_lockout_logs(caplog):
+    account_snapshot = {
+        "pattern_day_trader": True,
+        "daytrade_limit": 3,
+        "daytrade_count": 4,
+        "active": True,
+        "limit": 3,
+        "count": 4,
+    }
+
+    engine = object.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine.is_initialized = True
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine._is_circuit_breaker_open = lambda: False
+    engine._broker_lock_suppressed = lambda **_: False
+    engine.shadow_mode = False
+    engine.trading_client = SimpleNamespace()
+    engine._cycle_account = account_snapshot
+    engine._cycle_account_fetched = True
+    engine.stats = {
+        "capacity_skips": 0,
+        "skipped_orders": 0,
+        "total_orders": 0,
+        "successful_orders": 0,
+        "failed_orders": 0,
+        "total_execution_time": 0.0,
+    }
+    engine._execute_with_retry = MagicMock()
+    engine._submit_order_to_alpaca = MagicMock()
+
+    caplog.set_level("DEBUG", logger=lt.logger.name)
+
+    result = engine.submit_market_order("AAPL", "buy", 1)
+
+    assert result is None
+    engine._execute_with_retry.assert_not_called()
+    messages = [record.message for record in caplog.records]
+    assert any(msg.startswith("PDT_PREFLIGHT_CHECKED") for msg in messages)
+    assert any(record.message == "ORDER_SKIPPED_NONRETRYABLE" for record in caplog.records)
+    detail_records = [
+        record for record in caplog.records if record.message.startswith("ORDER_SKIPPED_NONRETRYABLE_DETAIL")
+    ]
+    assert detail_records, "Expected ORDER_SKIPPED_NONRETRYABLE_DETAIL log entry"
+    detail_message = detail_records[0].message
+    for key in ("pattern_day_trader", "daytrade_limit", "daytrade_count", "active", "limit", "count"):
+        assert key in detail_message
