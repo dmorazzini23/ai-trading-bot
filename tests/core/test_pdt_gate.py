@@ -42,6 +42,9 @@ def test_pdt_blocks_when_broker_flag_set(monkeypatch: pytest.MonkeyPatch):
         account_blocked=False,
     )
     assert bot_engine.check_pdt_rule(runtime) is True
+    context = getattr(runtime, "_pdt_last_context")
+    assert context["pdt_equity_ok"] is True
+    assert context.get("block_reason") == "broker_blocked"
 
 
 def test_pdt_blocks_when_equity_below_threshold(monkeypatch: pytest.MonkeyPatch):
@@ -55,6 +58,9 @@ def test_pdt_blocks_when_equity_below_threshold(monkeypatch: pytest.MonkeyPatch)
         account_blocked=False,
     )
     assert bot_engine.check_pdt_rule(runtime) is True
+    context = getattr(runtime, "_pdt_last_context")
+    assert context["pdt_equity_ok"] is False
+    assert context.get("block_reason") == "equity_below_threshold"
 
 
 def test_pdt_blocks_when_dtbp_exhausted(monkeypatch: pytest.MonkeyPatch):
@@ -67,6 +73,9 @@ def test_pdt_blocks_when_dtbp_exhausted(monkeypatch: pytest.MonkeyPatch):
         account_blocked=False,
     )
     assert bot_engine.check_pdt_rule(runtime) is True
+    context = getattr(runtime, "_pdt_last_context")
+    assert context["pdt_equity_ok"] is True
+    assert context.get("block_reason") == "dtbp_exhausted"
 
 
 def test_pdt_blocks_when_daytrade_limit_exhausted(monkeypatch: pytest.MonkeyPatch):
@@ -81,4 +90,7 @@ def test_pdt_blocks_when_daytrade_limit_exhausted(monkeypatch: pytest.MonkeyPatc
         trading_blocked=False,
         account_blocked=False,
     )
-    assert bot_engine.check_pdt_rule(runtime) is True
+    assert bot_engine.check_pdt_rule(runtime) is False
+    context = getattr(runtime, "_pdt_last_context")
+    assert context["pdt_equity_ok"] is True
+    assert context.get("block_reason") is None

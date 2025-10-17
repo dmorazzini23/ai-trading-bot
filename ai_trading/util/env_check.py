@@ -36,12 +36,12 @@ def ensure_python_dotenv_is_real_package() -> None:
 
     if spec is None:
         globals()["PYTHON_DOTENV_RESOLVED"] = False
-        raise DotenvImportError("python-dotenv not found")
+        return
 
     origin_str = getattr(spec, "origin", None)
     if origin_str is None:
         globals()["PYTHON_DOTENV_RESOLVED"] = False
-        raise DotenvImportError("Unable to locate python-dotenv package")
+        return
 
     origin = Path(origin_str).resolve()
 

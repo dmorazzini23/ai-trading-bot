@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 import hashlib
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
@@ -316,6 +316,7 @@ def _is_minute_timeframe(tf) -> bool:
 class _EntitlementCacheEntry:
     feeds: set[str]
     generation: datetime | None
+    resolved: str | None = None
 
 
 _CALLABLE_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError)
@@ -664,21 +665,46 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     upgrade to SIP if SIP is entitled.
     """
 
+    cache_key = _entitle_cache_key(client)
     requested_norm = (str(requested).strip().lower() if requested else None)
     entitled = _get_entitled_feeds(client)
+    cache_entry = _ENTITLE_CACHE.get(cache_key)
+    cached_resolved: str | None = None
+    if isinstance(cache_entry, _EntitlementCacheEntry):
+        cached_resolved = cache_entry.resolved
+    elif isinstance(cache_entry, Mapping):
+        cached_resolved = cache_entry.get("resolved")  # type: ignore[assignment]
+    else:
+        cached_resolved = None
 
     if _env_explicit_false("ALPACA_ALLOW_SIP") or _env_explicit_false("ALPACA_SIP_ENTITLED"):
         entitled.discard("sip")
     if _env_explicit_false("ALPACA_HAS_SIP"):
         entitled.discard("sip")
 
-    if requested_norm in entitled:
-        return requested_norm or "iex"
-    if "sip" in entitled:
-        return "sip"
-    if "iex" in entitled:
-        return "iex"
-    return "iex"
+    resolved = cached_resolved if cached_resolved in {"sip", "iex"} else None
+    if resolved == "sip" and "sip" not in entitled:
+        resolved = None
+    elif resolved == "iex" and "iex" not in entitled and "sip" in entitled:
+        resolved = None
+
+    if resolved is None:
+        if "sip" in entitled:
+            resolved = "sip"
+        elif requested_norm in entitled:
+            resolved = requested_norm or "iex"
+        elif "iex" in entitled:
+            resolved = "iex"
+        else:
+            resolved = "iex"
+
+    if isinstance(cache_entry, _EntitlementCacheEntry):
+        cache_entry.resolved = resolved
+    elif isinstance(cache_entry, dict):
+        cache_entry["resolved"] = resolved
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled), cache_entry.get("generation"), resolved)
+
+    return resolved
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""
