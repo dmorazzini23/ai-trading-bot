@@ -1083,7 +1083,13 @@ class ProviderMonitor:
         else:
             self._last_switchover_passes = 0
 
-    def disable(self, provider: str, *, duration: float | None = None) -> None:
+    def disable(
+        self,
+        provider: str,
+        *,
+        duration: float | None = None,
+        reason: str | None = None,
+    ) -> None:
         """Disable ``provider`` for ``duration`` seconds with exponential backoff.
 
         When ``duration`` is ``None`` the base cooldown is used and scaled by
@@ -1099,6 +1105,9 @@ class ProviderMonitor:
         if duration is None:
             duration = self.cooldown * (self.backoff_factor ** (count - 1))
         cooldown_s = min(duration, self.max_cooldown)
+        if reason == "nan_close":
+            base_floor = max(float(self.cooldown), 1.0)
+            cooldown_s = max(cooldown_s, base_floor)
         until = now + timedelta(seconds=cooldown_s)
         self.disabled_until[provider] = until
         self.disabled_since[provider] = now
@@ -1118,6 +1127,7 @@ class ProviderMonitor:
                 "disable_count": count,
                 "backoff_factor": self.backoff_factor,
                 "max_cooldown": self.max_cooldown,
+                "reason": reason or "cooldown",
             },
         )
         cb = self._callbacks.get(provider)

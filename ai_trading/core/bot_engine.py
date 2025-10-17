@@ -71,6 +71,7 @@ from ai_trading.data.fetch import (
     should_skip_symbol,
     fetch_daily_backup,
 )
+from ai_trading.data import price_quote_feed
 from ai_trading.data._alpaca_guard import should_import_alpaca_sdk
 from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
@@ -2042,6 +2043,7 @@ def _cache_cycle_fallback_feed_internal(
         else:
             _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.pop(symbol, None)
             _CYCLE_FEED_CACHE.pop(symbol, None)
+        price_quote_feed.cache(symbol, canonical_value)
 
     if canonical_value in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         _GLOBAL_INTRADAY_FALLBACK_FEED = canonical_value
@@ -2062,6 +2064,7 @@ def _reset_cycle_cache() -> None:
     _GLOBAL_INTRADAY_FALLBACK_FEED = None
     _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
     _CYCLE_FEED_CACHE.clear()
+    price_quote_feed.clear()
     with _cycle_feature_cache_lock:
         _cycle_feature_cache.clear()
         _cycle_feature_cache_cycle = _GLOBAL_CYCLE_ID
@@ -8340,7 +8343,13 @@ class DataFetcher:
                 df["timestamp"] = ts_series
         return df
 
-    def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
+    def get_daily_df(
+        self,
+        ctx: BotContext,
+        symbol: str,
+        *,
+        return_meta: bool = False,
+    ) -> Any:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
         time_monotonic = getattr(time, "monotonic", None)
@@ -8408,6 +8417,20 @@ class DataFetcher:
 
         result_logged = False
 
+        def _finalize_result(
+            df_value: Any | None,
+            *,
+            cache_meta: bool | Mapping[str, Any] | None,
+        ) -> Any:
+            if not return_meta:
+                return df_value
+            meta: dict[str, bool] = {}
+            if isinstance(cache_meta, MappingABC):
+                meta = {str(key): bool(value) for key, value in cache_meta.items()}
+            elif cache_meta:
+                meta = {"cache": True}
+            return df_value, meta
+
         def _emit_daily_fetch_result(
             df: Any | None, *, cache: bool | Mapping[str, bool]
         ) -> Any | None:
@@ -8426,11 +8449,11 @@ class DataFetcher:
                     },
                 )
                 result_logged = True
-            return df
+            return _finalize_result(df, cache_meta=cache)
 
         def _emit_cache_hit(df: Any | None, *, reason: str | None) -> Any | None:
             if df is None:
-                return None
+                return _finalize_result(None, cache_meta=None)
             if daily_cache_hit:
                 try:
                     daily_cache_hit.inc()
@@ -8800,9 +8823,9 @@ class DataFetcher:
 
         def _finalize_cached_return() -> Any:
             if cached_df is None:
-                return None
+                return _finalize_result(None, cache_meta=None)
             if not (cached_reason or min_interval <= 0):
-                return None
+                return _finalize_result(None, cache_meta=None)
             if refresh_stamp is not None:
                 with cache_lock:
                     if refresh_df is not None:
@@ -13136,6 +13159,15 @@ def check_pdt_rule(ctx) -> bool:
                 return True
         return False
 
+    def _safe_probe_open_orders() -> None:
+        api_obj = getattr(ctx, "api", None)
+        list_orders = getattr(api_obj, "list_orders", None)
+        if callable(list_orders):
+            try:
+                list_orders(status="open", nested=False, limit=10)
+            except Exception:
+                pass
+
     explicit_account_provided = getattr(ctx, "account", None) is not None
     account = getattr(ctx, "account", None)
     if account is None:
@@ -13169,6 +13201,7 @@ def check_pdt_rule(ctx) -> bool:
             "PDT_SKIP_NO_ACCOUNT",
             extra={"reason": "account_unavailable"},
         )
+        _safe_probe_open_orders()
         return False
 
     thresholds = getattr(ctx, "thresholds", None)
@@ -13207,6 +13240,12 @@ def check_pdt_rule(ctx) -> bool:
         daytrade_limit_raw if daytrade_limit_raw not in (None, "") else PDT_DAY_TRADE_LIMIT,
         int(PDT_DAY_TRADE_LIMIT or 0),
     )
+    ctx_daytrade_limit_raw = getattr(ctx, "daytrade_limit", None)
+    ctx_daytrade_limit_set = ctx_daytrade_limit_raw not in (None, "")
+    if ctx_daytrade_limit_set:
+        limit_to_use = _as_int(ctx_daytrade_limit_raw, daytrade_limit)
+    else:
+        limit_to_use = daytrade_limit
     equity = _as_float(_get_attr(account, "equity"), 0.0)
     min_equity = _as_float(getattr(thresholds, "min_equity", PDT_EQUITY_THRESHOLD), PDT_EQUITY_THRESHOLD)
     dtbp = _as_float(
@@ -13224,13 +13263,13 @@ def check_pdt_rule(ctx) -> bool:
         daytrade_count,
     )
     enforce_daytrade_limit = bool(
-        explicit_account_provided or getattr(ctx, "enforce_daytrade_limit", False)
+        getattr(ctx, "enforce_daytrade_limit", explicit_account_provided)
     )
 
     context = {
         "pattern_day_trader": bool(pattern_day_trader),
         "daytrade_count": daytrade_count,
-        "daytrade_limit": daytrade_limit,
+        "daytrade_limit": limit_to_use,
         "legacy_pattern_day_trades": legacy_day_trades,
         "trading_blocked": bool(trading_blocked_attr or broker_flag),
         "account_blocked": bool(account_blocked_attr or broker_flag),
@@ -13282,17 +13321,17 @@ def check_pdt_rule(ctx) -> bool:
         return True
 
     if (
-        not equity_ok
-        and enforce_daytrade_limit
+        enforce_daytrade_limit
         and pattern_day_trader
-        and daytrade_count >= daytrade_limit
+        and ctx_daytrade_limit_set
+        and daytrade_count >= limit_to_use
     ):
         logger.warning(
             "PDT_BLOCK_DAYTRADE_LIMIT",
             extra={
                 "pattern_day_trader": True,
                 "daytrade_count": daytrade_count,
-                "daytrade_limit": daytrade_limit,
+                "daytrade_limit": limit_to_use,
                 "reason": "daytrade_limit_exhausted",
             },
         )
@@ -13357,6 +13396,7 @@ def check_pdt_rule(ctx) -> bool:
             "pdt_equity_ok": bool(equity_ok),
         },
     )
+    _safe_probe_open_orders()
     return False
 
 
@@ -16711,6 +16751,85 @@ def _evaluate_data_gating(
     return DataGateDecision(False, tuple(combined_reasons), None, annotations)
 
 
+def _normalize_order_quote_payload(
+    raw_price: Any,
+    raw_source: Any,
+) -> tuple[float | None, str, dict[str, Any]]:
+    """Return ``(price, source, metadata)`` for an order quote payload."""
+
+    metadata: dict[str, Any] = {}
+    price_value: float | None = None
+
+    if isinstance(raw_price, MappingABC):
+        maybe_price = raw_price.get("price")
+        if isinstance(maybe_price, (int, float, np.floating)):
+            price_value = float(maybe_price)
+        else:
+            try:
+                price_value = float(maybe_price)
+            except (TypeError, ValueError, OverflowError):
+                price_value = None
+        for key in ("source", "provider", "feed", "last_close_only"):
+            if key in raw_price and key not in metadata:
+                metadata[key] = raw_price[key]
+        if price_value is None:
+            maybe_value = raw_price.get("value")
+            if isinstance(maybe_value, (int, float, np.floating)):
+                price_value = float(maybe_value)
+
+    else:
+        if isinstance(raw_price, (int, float, np.floating)):
+            price_value = float(raw_price)
+        else:
+            try:
+                price_value = float(raw_price)
+            except (TypeError, ValueError, OverflowError):
+                price_value = None
+
+    source_label: Any = None
+    if isinstance(raw_source, MappingABC):
+        for key, value in raw_source.items():
+            if key not in metadata:
+                metadata[key] = value
+        source_label = metadata.get("source") or metadata.get("provider")
+        if price_value is None:
+            maybe_price = raw_source.get("price")
+            if isinstance(maybe_price, (int, float, np.floating)):
+                price_value = float(maybe_price)
+    else:
+        source_label = raw_source
+
+    if source_label is None and isinstance(raw_price, MappingABC):
+        source_label = raw_price.get("source") or raw_price.get("provider")
+
+    source_str = str(source_label) if source_label is not None else "unknown"
+    metadata.setdefault("source", source_str)
+
+    if "last_close_only" in metadata:
+        metadata["last_close_only"] = bool(metadata["last_close_only"])
+
+    return price_value, source_str, metadata
+
+
+def _allow_last_close_execution() -> bool:
+    """Return ``True`` when last-close-only executions are explicitly allowed."""
+
+    for key in ("AI_TRADING_EXEC_ALLOW_LAST_CLOSE", "EXECUTION_ALLOW_LAST_CLOSE"):
+        try:
+            raw_value = get_env(key, None)
+        except COMMON_EXC:
+            raw_value = None
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str):
+            if _truthy_env(raw_value):
+                return True
+            continue
+        if _truthy_env(str(raw_value)):
+            return True
+    return False
+
+
 def _enter_long(
     ctx: BotContext,
     state: BotState,
@@ -16774,14 +16893,19 @@ def _enter_long(
     )
     quote_price: float | None
     price_source: str
+    quote_metadata: dict[str, Any] = {}
     fallback_active = False
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca_ask"
+        quote_metadata = {"source": price_source}
         _set_price_source(symbol, price_source)
     else:
-        quote_price, price_source = _resolve_order_quote(
+        raw_quote_price, raw_quote_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
+        )
+        quote_price, price_source, quote_metadata = _normalize_order_quote_payload(
+            raw_quote_price, raw_quote_source
         )
         _set_price_source(symbol, price_source)
         fallback_active = (
@@ -16807,6 +16931,17 @@ def _enter_long(
             allow_fallback=allow_fallback_skip,
         ):
             return True
+
+    if bool(quote_metadata.get("last_close_only")) and not _allow_last_close_execution():
+        logger.warning(
+            "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+            extra={
+                "reason": "last_close_only",
+                "symbol": symbol,
+                "side": "buy",
+            },
+        )
+        return True
 
     if quote_price is None:
         price_source_label = str(price_source or "unknown")
@@ -17316,6 +17451,19 @@ def _enter_long(
     )
     order_annotations = dict(annotations)
 
+    quote_source_for_log = str(quote_metadata.get("source", price_source))
+    normalized_quote_source = quote_source_for_log.lower()
+    if normalized_quote_source and not normalized_quote_source.startswith("alpaca"):
+        logger.warning(
+            "ORDER_FALLBACK_QUOTE",
+            extra={
+                "fallback_quote": True,
+                "source": quote_source_for_log,
+                "symbol": symbol,
+                "side": "buy",
+            },
+        )
+
     order_id = _call_submit_order(
         ctx,
         symbol,
@@ -17445,15 +17593,20 @@ def _enter_short(
     )
     quote_price: float | None
     price_source: str
+    quote_metadata: dict[str, Any] = {}
     fallback_active = False
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca_ask"
+        quote_metadata = {"source": price_source}
         _set_price_source(symbol, price_source)
         nbbo_available = True
     else:
-        quote_price, price_source = _resolve_order_quote(
+        raw_quote_price, raw_quote_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
+        )
+        quote_price, price_source, quote_metadata = _normalize_order_quote_payload(
+            raw_quote_price, raw_quote_source
         )
         _set_price_source(symbol, price_source)
         nbbo_available = _is_primary_price_source(price_source)
@@ -17480,6 +17633,16 @@ def _enter_short(
             allow_fallback=allow_fallback_skip,
         ):
             return True
+    if bool(quote_metadata.get("last_close_only")) and not _allow_last_close_execution():
+        logger.warning(
+            "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+            extra={
+                "reason": "last_close_only",
+                "symbol": symbol,
+                "side": "sell",
+            },
+        )
+        return True
     nbbo_available = _is_primary_price_source(price_source)
     fallback_active = (
         prefer_backup_quote
@@ -17839,6 +18002,19 @@ def _enter_short(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
     order_annotations = dict(annotations)
+
+    quote_source_for_log = str(quote_metadata.get("source", price_source))
+    normalized_quote_source = quote_source_for_log.lower()
+    if normalized_quote_source and not normalized_quote_source.startswith("alpaca"):
+        logger.warning(
+            "ORDER_FALLBACK_QUOTE",
+            extra={
+                "fallback_quote": True,
+                "source": quote_source_for_log,
+                "symbol": symbol,
+                "side": "sell",
+            },
+        )
 
     order_id = _call_submit_order(
         ctx,
@@ -24799,14 +24975,18 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     intraday_raw = _get_intraday_feed()
     configured_feed = _sanitize_alpaca_feed(intraday_raw)
     if env_feed is not None:
-        alpaca_feed = env_feed
+        requested_feed = env_feed
     else:
-        alpaca_feed = preferred_feed or configured_feed
+        requested_feed = preferred_feed or configured_feed
     configured_raw = (
         configured_env
         if configured_env is not None
         else (preferred_feed if preferred_feed is not None else intraday_raw)
     )
+    if symbol:
+        alpaca_feed = price_quote_feed.resolve(symbol, requested_feed)
+    else:
+        alpaca_feed = price_quote_feed.ensure_entitled_feed(requested_feed, None)
 
     invalid_alpaca_feed = alpaca_feed not in {"iex", "sip"}
 
