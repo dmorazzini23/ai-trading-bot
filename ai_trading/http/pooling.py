@@ -45,7 +45,7 @@ class _ResolvedLimitCache:
     limit: int
     version: int
     config_id: int | None
-    env_snapshot: tuple[str | None, str | None, str | None]
+    env_snapshot: tuple[str | None, str | None, str | None, str | None]
 
 
 class HostLimitSnapshot(NamedTuple):
@@ -63,12 +63,15 @@ _RETIRED_SEMAPHORES: list[asyncio.Semaphore] = []
 
 _LIMIT_CACHE: _ResolvedLimitCache | None = None
 _LIMIT_VERSION: int = 0
-_LAST_LIMIT_ENV_SNAPSHOT: tuple[str | None, str | None, str | None] | None = None
+_LAST_LIMIT_ENV_SNAPSHOT: (
+    tuple[str | None, str | None, str | None, str | None] | None
+) = None
 
-_ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
-    "HTTP_MAX_PER_HOST",
+_ENV_LIMIT_KEYS: Final[tuple[str, str, str, str]] = (
     "AI_TRADING_HTTP_HOST_LIMIT",
     "AI_TRADING_HOST_LIMIT",
+    "HTTP_MAX_PER_HOST",
+    "AI_HTTP_HOST_LIMIT",
 )
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
@@ -309,7 +312,7 @@ def _compute_limit(raw: str | None = None) -> int:
 
 
 def _read_limit_source(
-    env_snapshot: tuple[str | None, str | None, str | None]
+    env_snapshot: tuple[str | None, str | None, str | None, str | None]
 ) -> tuple[int, str | None, str | None, int | None]:
     """Return the resolved limit and metadata describing its source."""
 
@@ -491,6 +494,7 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
         except Exception:
             _HOST_SEMAPHORES.clear()
             _RETIRED_SEMAPHORES.clear()
+        _invalidate_fallback_pooling_state()
         _LIMIT_CACHE = None
         cache = None
 
