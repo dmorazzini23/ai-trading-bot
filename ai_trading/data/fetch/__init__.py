@@ -163,12 +163,12 @@ def _record_session_last_request(session_obj, method, url, params, headers):
             return
         session_obj.last_request = SimpleNamespace(
             method=method,
-            url=url,
+            url=str(url),
             params=dict(params or {}),
             headers=dict(headers or {}),
         )
     except Exception:
-        pass
+        return
 
 
 _HOST_LIMIT_DEFAULT = 4

@@ -491,6 +491,7 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
         except Exception:
             _HOST_SEMAPHORES.clear()
             _RETIRED_SEMAPHORES.clear()
+        _invalidate_fallback_pooling_state()
         _LIMIT_CACHE = None
         cache = None
 

@@ -46,7 +46,9 @@ def safe_subprocess_run(
     requested_check = popen_kwargs.pop("check", check)
     text_mode = popen_kwargs.pop("text", text)
 
-    effective_timeout = timeout if (timeout is None or timeout > 0) else None
+    # Treat non-positive timeout values as an immediate timeout request rather than
+    # "no timeout" to align with subprocess semantics used by the tests.
+    effective_timeout = timeout if (timeout is None or timeout > 0) else 1e-6
 
     try:
         completed = subprocess.run(

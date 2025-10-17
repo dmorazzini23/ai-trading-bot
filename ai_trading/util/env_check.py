@@ -26,7 +26,6 @@ def ensure_python_dotenv_is_real_package() -> None:
 
     guard_flag = globals().get("PYTHON_DOTENV_RESOLVED", None)
     if guard_flag is False:
-        globals()["PYTHON_DOTENV_RESOLVED"] = False
         return
 
     repo_root = _repo_root()
@@ -34,16 +33,10 @@ def ensure_python_dotenv_is_real_package() -> None:
     if spec is None:
         spec = importlib.machinery.PathFinder.find_spec("dotenv")
 
-    if spec is None:
+    if spec is None or getattr(spec, "origin", None) is None:
         globals()["PYTHON_DOTENV_RESOLVED"] = False
-        return
-
-    origin_str = getattr(spec, "origin", None)
-    if origin_str is None:
-        globals()["PYTHON_DOTENV_RESOLVED"] = False
-        return
-
-    origin = Path(origin_str).resolve()
+        raise DotenvImportError("python-dotenv could not be resolved (no spec/origin)")
+    origin = Path(spec.origin).resolve()
 
     if "/tests/stubs/dotenv/" in str(origin):
         globals()["PYTHON_DOTENV_RESOLVED"] = True

@@ -17,6 +17,13 @@ _DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 _DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None] | None = None
 
 
+def _bool_env(env: Mapping[str, str | None], key: str) -> bool:
+    raw = env.get(key)
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _resolve_data_feed_override() -> tuple[str | None, str | None]:
     """Return cached (override, reason) tuple for Alpaca data feed."""
 
@@ -100,19 +107,38 @@ def resolve_alpaca_feed(requested: str | None) -> str | None:
     """
 
     override, _ = _resolve_data_feed_override()
+    if override == "yahoo":
+        return None
+    env = os.environ
+    allow_sip = _bool_env(env, "ALPACA_ALLOW_SIP")
+    has_sip = _bool_env(env, "ALPACA_HAS_SIP") or _bool_env(env, "ALPACA_SIP_ENTITLED")
+    sip_unauth = _bool_env(env, "ALPACA_SIP_UNAUTHORIZED")
+
     if override:
         requested = override
     elif not requested:
         requested = (
             os.getenv("ALPACA_DEFAULT_FEED")
             or os.getenv("ALPACA_DATA_FEED")
+            or os.getenv("DATA_FEED_INTRADAY")
             or "iex"
         )
-    normalized = requested.lower()
-    if normalized in {"sip", "iex"}:
-        return normalized
+
+    normalized = str(requested).strip().lower()
+    if normalized in {"", "auto"}:
+        normalized = "auto"
+
     if normalized == "yahoo":
         return None
+
+    if normalized in {"auto", "sip"}:
+        if allow_sip and has_sip and not sip_unauth:
+            return "sip"
+        return "iex"
+
+    if normalized == "iex":
+        return "iex"
+
     return "iex"
 
 

@@ -25,17 +25,34 @@ def _initial_host_limit() -> int:
 
 
 def _read_env_limit(default: int) -> int:
-    raw = os.getenv("AI_HTTP_HOST_LIMIT")
-    if raw is None:
+    resolved = _resolve_priority_env_limit()
+    if resolved is None:
         return default
-    try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return default
-    return _sanitize_limit(value)
+    return resolved
 
 
-_HOST_LIMIT: int = _initial_host_limit()
+_ENV_LIMIT_KEYS: tuple[str, ...] = (
+    "AI_TRADING_HTTP_HOST_LIMIT",
+    "AI_TRADING_HOST_LIMIT",
+    "HTTP_MAX_PER_HOST",
+    "AI_HTTP_HOST_LIMIT",
+)
+
+
+def _resolve_priority_env_limit() -> int | None:
+    for key in _ENV_LIMIT_KEYS:
+        raw = os.getenv(key)
+        if raw in (None, ""):
+            continue
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        return _sanitize_limit(value)
+    return None
+
+
+_HOST_LIMIT: int = _resolve_priority_env_limit() or _initial_host_limit()
 _peak_concurrency: int = 0
 _active: int = 0
 _pending_limit: int | None = None

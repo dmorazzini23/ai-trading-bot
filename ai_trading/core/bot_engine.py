@@ -8455,6 +8455,7 @@ class DataFetcher:
                 provenance = True
             return _emit_daily_fetch_result(df, cache=provenance)
 
+        # STRICT: memo must short-circuit without consulting other caches
         if memo_store is not None:
             direct_entries: list[tuple[tuple[str, ...], Any | None]] = []
             for candidate_key in (canonical_memo_key, memo_key, legacy_memo_key):
@@ -8478,6 +8479,7 @@ class DataFetcher:
                             memo_store[target_key] = payload
                         except COMMON_EXC:
                             continue
+                    # Return immediately; DO NOT probe daily cache or other stores
                     return _emit_cache_hit(memo_df, reason="memo")
 
         def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
@@ -8535,6 +8537,7 @@ class DataFetcher:
                 (f"daily:{symbol}",),
                 (f"{symbol}:daily",),
             )
+            # Only execute extended lookups when memo miss occurs
             for lookup_key in (canonical_lookup, legacy_lookup, *additional_lookups):
                 entry = None
                 try:
@@ -12991,6 +12994,9 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 # ─── J. RISK & GUARDS ─────────────────────────────────────────────────────────
 
 
+# The ratelimit/backoff wrappers in this module must behave as pure decorators.
+# In lightweight test environments the wrappers may be replaced; ensure return
+# semantics remain unchanged.
 @sleep_and_retry
 @limits(calls=200, period=60)
 @retry(
