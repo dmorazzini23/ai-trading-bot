@@ -33,6 +33,7 @@ class SafetyState:
 
     pdt: PDTState = PDTState()
     shadow_cycle: bool = False
+    shadow_cycle_forced: bool = False
     stale_symbols: int = 0
     universe_size: int = 0
 
@@ -92,7 +93,10 @@ def begin_cycle(universe_size: int, degraded: bool) -> None:
 
     STATE.universe_size = int(universe_size or 0)
     STATE.stale_symbols = 0
-    STATE.shadow_cycle = bool(degraded)
+    if STATE.shadow_cycle_forced:
+        STATE.shadow_cycle = True
+    else:
+        STATE.shadow_cycle = bool(degraded)
 
 
 def mark_symbol_stale() -> None:
@@ -106,7 +110,9 @@ def end_cycle(stale_threshold_ratio: float = 0.30) -> None:
 
     if STATE.universe_size > 0:
         ratio = STATE.stale_symbols / float(STATE.universe_size)
-        if ratio >= stale_threshold_ratio:
+        trigger_shadow = ratio >= stale_threshold_ratio
+        STATE.shadow_cycle_forced = trigger_shadow
+        if trigger_shadow:
             STATE.shadow_cycle = True
 
 
