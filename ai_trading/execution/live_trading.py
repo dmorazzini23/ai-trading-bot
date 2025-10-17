@@ -1143,6 +1143,47 @@ class ExecutionEngine:
             return self._cycle_account
         return self._refresh_cycle_account()
 
+    def _pdt_lockout_active(self, account: Any | None) -> bool:
+        """Return ``True`` when the PDT lockout should block new openings."""
+
+        if not account:
+            return False
+        try:
+            pattern_flag = _safe_bool(
+                _extract_value(
+                    account,
+                    "pattern_day_trader",
+                    "is_pattern_day_trader",
+                    "pdt",
+                )
+            )
+            if not pattern_flag:
+                return False
+            limit_val = _safe_int(
+                _extract_value(
+                    account,
+                    "daytrade_limit",
+                    "day_trade_limit",
+                    "pattern_day_trade_limit",
+                ),
+                0,
+            )
+            count_val = _safe_int(
+                _extract_value(
+                    account,
+                    "daytrade_count",
+                    "day_trade_count",
+                    "pattern_day_trades",
+                    "pattern_day_trades_count",
+                ),
+                0,
+            )
+        except Exception:
+            return False
+        if limit_val <= 0:
+            return False
+        return count_val >= limit_val
+
     def _should_skip_for_pdt(
         self, account: Any, closing_position: bool
     ) -> tuple[bool, str | None, dict[str, Any]]:
@@ -3179,6 +3220,49 @@ class ExecutionEngine:
     def _submit_order_to_alpaca(self, order_data: dict[str, Any]) -> dict[str, Any]:
         """Submit an order using Alpaca TradingClient."""
         import os
+
+        try:
+            account_snapshot = self._get_account_snapshot()
+        except Exception:
+            account_snapshot = None
+
+        closing_position = bool(
+            order_data.get("closing_position")
+            or order_data.get("close_position")
+            or order_data.get("reduce_only")
+        )
+
+        if not closing_position and self._pdt_lockout_active(account_snapshot):
+            daytrade_limit = _safe_int(
+                _extract_value(
+                    account_snapshot,
+                    "daytrade_limit",
+                    "day_trade_limit",
+                    "pattern_day_trade_limit",
+                ),
+                0,
+            )
+            daytrade_count = _safe_int(
+                _extract_value(
+                    account_snapshot,
+                    "daytrade_count",
+                    "day_trade_count",
+                    "pattern_day_trades",
+                    "pattern_day_trades_count",
+                ),
+                0,
+            )
+            logger.warning(
+                "PDT_LOCKOUT_ACTIVE | action=skip_openings",
+                extra={
+                    "context": {
+                        "pattern_day_trader": True,
+                        "daytrade_limit": daytrade_limit,
+                        "daytrade_count": daytrade_count,
+                    }
+                },
+            )
+            return {"status": "skipped", "reason": "pdt_lockout", "context": {"pdt": True}}
 
         resp: Any | None = None
         if os.environ.get("PYTEST_RUNNING"):

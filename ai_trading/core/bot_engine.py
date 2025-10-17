@@ -3691,7 +3691,10 @@ def sleep_and_retry(func):
         except ImportError:
             return func(*a, **k)
 
-        return _sr(func)(*a, **k)
+        result = _sr(func)(*a, **k)
+        if a and result is a[0]:
+            return func(*a, **k)
+        return result
 
     return wrapped
 # Retry helpers (optional Tenacity)
@@ -17304,6 +17307,9 @@ def _enter_long(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
+    if not _ensure_executable_quote(ctx, symbol, reference_price=current_price):
+        return True
+
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     if target_weight == 0.0:
@@ -17932,6 +17938,10 @@ def _enter_short(
         annotations.pop("using_fallback_price", None)
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
+
+    if not _ensure_executable_quote(ctx, symbol, reference_price=current_price):
+        return True
+
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
     if gate.size_cap is not None and gate.size_cap < 1.0 and qty > 0:
@@ -21259,6 +21269,108 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             },
         )
         return None
+
+
+def _quote_age_seconds(quote: Any | None) -> float:
+    """Return the age of ``quote`` in seconds, ``inf`` when unavailable."""
+
+    if quote is None:
+        return float("inf")
+    ts = _extract_quote_timestamp(quote)
+    if ts is None:
+        return float("inf")
+    try:
+        return max(0.0, (datetime.now(UTC) - ts.astimezone(UTC)).total_seconds())
+    except COMMON_EXC:
+        return float("inf")
+
+
+def _extract_quote_bid_ask(quote: Any | None) -> tuple[float | None, float | None]:
+    """Return ``(bid, ask)`` from *quote* when available and positive."""
+
+    if quote is None:
+        return None, None
+
+    def _coerce(value: Any | None) -> float | None:
+        try:
+            if value is None:
+                return None
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed) or parsed <= 0:
+            return None
+        return parsed
+
+    bid_source = None
+    ask_source = None
+    for attr in ("bid_price", "bp", "bid"):
+        bid_source = getattr(quote, attr, None)
+        if bid_source is not None:
+            break
+    for attr in ("ask_price", "ap", "ask"):
+        ask_source = getattr(quote, attr, None)
+        if ask_source is not None:
+            break
+    if isinstance(quote, Mapping):
+        if bid_source is None:
+            bid_source = quote.get("bid_price") or quote.get("bp") or quote.get("bid")
+        if ask_source is None:
+            ask_source = quote.get("ask_price") or quote.get("ap") or quote.get("ask")
+    return _coerce(bid_source), _coerce(ask_source)
+
+
+def _ensure_executable_quote(
+    ctx: BotContext,
+    symbol: str,
+    *,
+    reference_price: float | None,
+) -> bool:
+    """Return ``True`` when an executable quote is present and fresh."""
+
+    data_client = getattr(ctx, "data_client", None)
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+    require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
+    if data_client is None or not _stock_quote_request_ready():
+        # Without a data client or request support we cannot enforce the gate; defer to existing guards.
+        return True
+
+    max_age = float(getattr(cfg, "execution_max_staleness_sec", 60) or 60)
+    gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
+
+    quote = _fetch_quote(ctx, symbol)
+    bid, ask = _extract_quote_bid_ask(quote)
+    if (bid is None or ask is None) and require_bid_ask:
+        logger.warning("ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=missing_bid_ask", symbol)
+        return False
+
+    age = _quote_age_seconds(quote)
+    if max_age > 0 and age > max_age:
+        logger.warning("ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=stale_quote", symbol)
+        return False
+
+    if (
+        reference_price is not None
+        and math.isfinite(reference_price)
+        and reference_price > 0
+        and gap_limit > 0
+    ):
+        mid: float | None = None
+        if bid is not None and ask is not None:
+            mid = (bid + ask) / 2.0
+        if mid is not None and math.isfinite(mid):
+            gap_ratio = abs(mid - reference_price) / reference_price
+            if gap_ratio > gap_limit:
+                logger.info(
+                    "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio>limit",
+                    symbol,
+                )
+                return False
+
+    return True
 
 
 def _format_price_component(value: float | None) -> str:
