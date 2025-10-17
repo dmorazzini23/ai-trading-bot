@@ -1481,11 +1481,19 @@ class ExecutionEngine:
         # Get current position for this symbol
         current_position = 0
         try:
-            if hasattr(self, '_position_tracker') and symbol in self._position_tracker:
-                current_position = self._position_tracker[symbol]
-        except:
-            pass
-        
+            tracker = getattr(self, "_position_tracker", None)
+            if tracker is None:
+                raise AttributeError("position_tracker_missing")
+            if isinstance(tracker, Mapping):
+                current_position = tracker.get(symbol, 0)  # type: ignore[assignment]
+            elif symbol in tracker:  # type: ignore[operator]
+                current_position = tracker[symbol]  # type: ignore[index]
+        except (AttributeError, KeyError, TypeError) as exc:
+            logger.debug(
+                "POSITION_TRACKER_UNAVAILABLE",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+
         # Check if order should be allowed (with swing mode support)
         allow, reason, pdt_context = pdt_manager.should_allow_order(
             account_snapshot,

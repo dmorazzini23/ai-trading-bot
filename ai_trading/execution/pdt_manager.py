@@ -187,19 +187,27 @@ class PDTManager:
                     if isinstance(val, bool):
                         return val
                     return str(val).lower() in ("true", "1", "yes")
-            except:
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "PDT_ATTR_BOOL_EXTRACT_FAILED",
+                    extra={"attribute": attr, "error": str(exc)},
+                )
                 continue
         return False
-    
+
     def _extract_int(self, obj: Any, *attrs: str, default: int = 0) -> int:
         """Extract integer value from object attributes."""
-        
+
         for attr in attrs:
             try:
                 val = getattr(obj, attr, None)
                 if val is not None:
                     return int(val)
-            except:
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "PDT_ATTR_INT_EXTRACT_FAILED",
+                    extra={"attribute": attr, "error": str(exc)},
+                )
                 continue
         return default
 

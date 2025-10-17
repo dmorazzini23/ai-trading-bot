@@ -13234,6 +13234,13 @@ def check_pdt_rule(ctx) -> bool:
         "daytrade_limit_enforced": enforce_daytrade_limit,
     }
 
+    equity_ok = False
+    try:
+        equity_ok = math.isfinite(float(equity)) and float(equity) >= float(min_equity)
+    except Exception:
+        equity_ok = False
+    context["pdt_equity_ok"] = bool(equity_ok)
+
     def _store_context(reason: str | None = None) -> None:
         payload = dict(context)
         if reason is not None:
@@ -13268,7 +13275,12 @@ def check_pdt_rule(ctx) -> bool:
         _store_context("broker_blocked")
         return True
 
-    if enforce_daytrade_limit and pattern_day_trader and daytrade_count >= daytrade_limit:
+    if (
+        not equity_ok
+        and enforce_daytrade_limit
+        and pattern_day_trader
+        and daytrade_count >= daytrade_limit
+    ):
         logger.warning(
             "PDT_BLOCK_DAYTRADE_LIMIT",
             extra={
@@ -13282,7 +13294,7 @@ def check_pdt_rule(ctx) -> bool:
         return True
 
     if explicit_account_provided:
-        if equity < min_equity:
+        if not equity_ok:
             logger.warning(
                 "PDT_BLOCK_LOW_EQUITY",
                 extra={
@@ -13317,7 +13329,7 @@ def check_pdt_rule(ctx) -> bool:
             )
             _store_context("dtbp_exhausted")
             return True
-        if equity < min_equity:
+        if not equity_ok:
             logger.warning(
                 "PDT_BLOCK_LOW_EQUITY",
                 extra={
@@ -13336,6 +13348,7 @@ def check_pdt_rule(ctx) -> bool:
             "equity": equity,
             "min_equity": min_equity,
             "daytrading_buying_power": dtbp,
+            "pdt_equity_ok": bool(equity_ok),
         },
     )
     return False
