@@ -1,15 +1,47 @@
-"""Swing Trading Mode - PDT-Safe Trading Strategy.
-
-This module implements swing trading logic that avoids day trades
-by holding positions overnight, ensuring PDT compliance.
-"""
+"""Swing Trading Mode - PDT-Safe Trading Strategy."""
 
 import logging
-from datetime import datetime, time
-from typing import Optional
+import os
+from datetime import datetime, time, timezone
+from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+
+def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
+    """Return ``True`` when a position may exit on ``now_utc``."""
+
+    allow_env = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip()
+    if allow_env == "1":
+        return True
+
+    opened_at = position.get("opened_at") if isinstance(position, Mapping) else None
+    if opened_at is None:
+        return True
+
+    opened_dt: datetime | None
+    if isinstance(opened_at, datetime):
+        opened_dt = opened_at
+    elif isinstance(opened_at, (int, float)):
+        opened_dt = datetime.fromtimestamp(float(opened_at), tz=timezone.utc)
+    elif isinstance(opened_at, str):
+        try:
+            opened_dt = datetime.fromisoformat(opened_at)
+        except ValueError:
+            return True
+    else:
+        return True
+
+    if opened_dt.tzinfo is None:
+        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+
+    opened_date = opened_dt.astimezone(timezone.utc).date()
+    now_date = now_utc.astimezone(timezone.utc).date()
+    return opened_date < now_date
 
 
 class SwingTradingMode:
@@ -69,21 +101,28 @@ class SwingTradingMode:
             return (True, "no_entry_time_recorded")
         
         entry_time = self.position_entry_times[symbol]
-        now = datetime.now(ZoneInfo("America/New_York"))
-        
+        now_utc = datetime.now(timezone.utc)
+        env_allow = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip() == "1"
+        if not can_exit_today({"opened_at": entry_time}, now_utc):
+            return (False, "same_day_trade_blocked")
+        if env_allow:
+            return (True, "same_day_exit_allowed")
+
+        now = now_utc.astimezone(ZoneInfo("America/New_York"))
+
         # Check if we're on a different calendar day
         if now.date() > entry_time.date():
             return (True, "different_day")
-        
+
         # Same day - check if market has closed since entry
         market_close = time(16, 0)  # 4:00 PM ET
-        
+
         if entry_time.time() < market_close and now.time() >= market_close:
             # Entered before close, now after close - safe to exit
             return (True, "after_market_close")
-        
-        # Same trading day - would be a day trade
-        return (False, "same_day_trade_blocked")
+
+        # Default allowance when the position predates current day
+        return (True, "same_day_after_close")
     
     def clear_entry(self, symbol: str):
         """Clear entry time after position is closed."""

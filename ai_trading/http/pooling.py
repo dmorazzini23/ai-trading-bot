@@ -5,7 +5,7 @@ import importlib
 import os
 import sys
 import threading
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Final, NamedTuple
@@ -45,7 +45,7 @@ class _ResolvedLimitCache:
     limit: int
     version: int
     config_id: int | None
-    env_snapshot: tuple[str | None, str | None, str | None, str | None]
+    env_snapshot: tuple[str | None, str | None, str | None]
 
 
 class HostLimitSnapshot(NamedTuple):
@@ -63,15 +63,12 @@ _RETIRED_SEMAPHORES: list[asyncio.Semaphore] = []
 
 _LIMIT_CACHE: _ResolvedLimitCache | None = None
 _LIMIT_VERSION: int = 0
-_LAST_LIMIT_ENV_SNAPSHOT: (
-    tuple[str | None, str | None, str | None, str | None] | None
-) = None
+_LAST_LIMIT_ENV_SNAPSHOT: (tuple[str | None, str | None, str | None] | None) = None
 
-_ENV_LIMIT_KEYS: Final[tuple[str, str, str, str]] = (
+_ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
+    "HTTP_MAX_PER_HOST",
     "AI_TRADING_HTTP_HOST_LIMIT",
     "AI_TRADING_HOST_LIMIT",
-    "HTTP_MAX_PER_HOST",
-    "AI_HTTP_HOST_LIMIT",
 )
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
@@ -189,6 +186,34 @@ def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapsho
 def _normalize_host(hostname: str | None) -> str:
     host = (hostname or "").strip().lower()
     return host or _DEFAULT_HOST_KEY
+
+
+def _build_host_override_key(hostname: str) -> str:
+    normalized = []
+    for ch in hostname:
+        if ch.isalnum():
+            normalized.append(ch.upper())
+        else:
+            normalized.append("_")
+    candidate = "".join(normalized).strip("_")
+    if not candidate:
+        candidate = "DEFAULT"
+    return f"HTTP_RPS_LIMIT_{candidate}"
+
+
+def _resolve_host_override_limit(hostname: str) -> int | None:
+    host_key = _normalize_host(hostname)
+    env_key = _build_host_override_key(host_key)
+    raw = os.getenv(env_key)
+    if raw in (None, ""):
+        return None
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if limit < 1:
+        limit = 1
+    return limit
 
 
 def _annotate_semaphore_metadata(
@@ -312,7 +337,7 @@ def _compute_limit(raw: str | None = None) -> int:
 
 
 def _read_limit_source(
-    env_snapshot: tuple[str | None, str | None, str | None, str | None]
+    env_snapshot: tuple[str | None, str | None, str | None]
 ) -> tuple[int, str | None, str | None, int | None]:
     """Return the resolved limit and metadata describing its source."""
 
@@ -536,6 +561,9 @@ def _get_or_create_loop_semaphore(
     else:
         resolved_limit = snapshot.limit
         version = snapshot.version
+    host_override = _resolve_host_override_limit(hostname)
+    if host_override is not None:
+        resolved_limit = host_override
     host_map = _get_host_map(loop)
 
     if host_map:
@@ -606,8 +634,12 @@ def refresh_host_semaphore(
         cache = _ensure_limit_cache()
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
     previous = host_map.get(host)
-    semaphore = _build_semaphore(snapshot.limit, snapshot.version)
-    host_map[host] = _SemaphoreRecord(semaphore, snapshot.limit, snapshot.version)
+    resolved_limit = snapshot.limit
+    host_override = _resolve_host_override_limit(host)
+    if host_override is not None:
+        resolved_limit = host_override
+    semaphore = _build_semaphore(resolved_limit, snapshot.version)
+    host_map[host] = _SemaphoreRecord(semaphore, resolved_limit, snapshot.version)
     if previous is not None:
         _RETIRED_SEMAPHORES.append(previous.semaphore)
         if len(_RETIRED_SEMAPHORES) > 8:
@@ -667,6 +699,28 @@ def limit_url(url: str) -> AsyncHostLimiter:
     return AsyncHostLimiter.from_url(url)
 
 
+def host_limiter_async(hostname: str | None = None) -> AsyncHostLimiter:
+    """Return an async host limiter with per-host semaphore enforcement."""
+
+    return AsyncHostLimiter(hostname)
+
+
+@contextmanager
+def host_limiter(hostname: str | None = None):
+    """Synchronously limit host concurrency using the shared semaphore."""
+
+    normalized = _normalize_host(hostname)
+    semaphore = get_host_limiter(normalized)
+    semaphore.acquire()
+    try:
+        yield
+    finally:
+        try:
+            semaphore.release()
+        except ValueError:
+            pass
+
+
 # === TEST-COMPAT DEFAULT HOST LIMITER ===
 try:
     _HOST_LIMITERS
@@ -681,12 +735,26 @@ def _normalize_host_env_key(host: str) -> str:
 
 
 def get_host_limiter(host: str):
-    key = _normalize_host_env_key(host)
+    normalized_host = _normalize_host(host)
+    key = _normalize_host_env_key(normalized_host)
     with _HOST_LOCK:
         limiter = _HOST_LIMITERS.get(key)
+        override = _resolve_host_override_limit(normalized_host)
+        default = max(1, int(os.getenv("AI_TRADING_HTTP_HOST_LIMIT", "3")))
+        limit_value = override if override is not None else default
+        needs_refresh = False
         if limiter is None:
-            default = max(1, int(os.getenv("AI_TRADING_HTTP_HOST_LIMIT", "3")))
-            limiter = threading.Semaphore(default)
+            needs_refresh = True
+        else:
+            current_limit = getattr(limiter, "_ai_trading_host_limit", None)
+            if current_limit != limit_value:
+                needs_refresh = True
+        if needs_refresh:
+            limiter = threading.Semaphore(limit_value)
+            try:
+                setattr(limiter, "_ai_trading_host_limit", limit_value)
+            except Exception:
+                pass
             _HOST_LIMITERS[key] = limiter
         return limiter
 

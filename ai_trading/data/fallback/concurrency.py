@@ -26,6 +26,11 @@ from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import TypeVar
 
 try:  # pragma: no cover - optional during stubbed tests
+    from ai_trading.net import http_host_limit as _http_host_limit
+except Exception:  # pragma: no cover - fallback when module unavailable
+    _http_host_limit = None
+
+try:  # pragma: no cover - optional during stubbed tests
     from ai_trading.http import pooling as _http_pooling
 except Exception:  # pragma: no cover - pooling optional during stubbed tests
     _pooling_host_limit = None
@@ -592,6 +597,15 @@ FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
 LAST_RUN_PEAK_SIMULTANEOUS_WORKERS: int = 0
 
+if _http_host_limit is not None:
+    try:
+        _stored_peak = int(_http_host_limit.current_peak())
+    except Exception:
+        _stored_peak = 0
+    else:
+        if _stored_peak > PEAK_SIMULTANEOUS_WORKERS:
+            PEAK_SIMULTANEOUS_WORKERS = _stored_peak
+
 
 def reset_peak_simultaneous_workers() -> None:
     """Reset ``PEAK_SIMULTANEOUS_WORKERS`` to ``0`` for test isolation."""
@@ -780,6 +794,11 @@ async def run_with_concurrency(
                     except (TypeError, ValueError):
                         current_peak = 0
                     PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
+                    if _http_host_limit is not None:
+                        try:
+                            _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
+                        except Exception:
+                            pass
 
     async def _mark_worker_end(started: bool) -> None:
         nonlocal active_workers
@@ -850,6 +869,11 @@ async def run_with_concurrency(
             except (TypeError, ValueError):
                 current_peak = 0
             PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
+            if _http_host_limit is not None:
+                try:
+                    _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
+                except Exception:
+                    pass
         raise
     for task, outcome in zip(tasks, outcomes):
         symbol = task_to_symbol.get(task)
@@ -866,6 +890,11 @@ async def run_with_concurrency(
         except (TypeError, ValueError):
             current_peak = 0
         PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
+        if _http_host_limit is not None:
+            try:
+                _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
+            except Exception:
+                pass
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 

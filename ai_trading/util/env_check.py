@@ -1,3 +1,4 @@
+import importlib
 import importlib.machinery
 import importlib.util
 from pathlib import Path
@@ -29,14 +30,33 @@ def ensure_python_dotenv_is_real_package() -> None:
         return
 
     repo_root = _repo_root()
+    try:
+        module = importlib.import_module("dotenv")
+    except ImportError as exc:
+        globals()["PYTHON_DOTENV_RESOLVED"] = False
+        raise DotenvImportError("python-dotenv could not be imported") from exc
+
+    origin_attr = getattr(module, "__file__", None)
+    if origin_attr is None:
+        origin = None
+    else:
+        origin = Path(origin_attr).resolve()
+
     spec = importlib.util.find_spec("dotenv")
     if spec is None:
         spec = importlib.machinery.PathFinder.find_spec("dotenv")
+    spec_origin: Path | None = None
+    if spec is not None and getattr(spec, "origin", None):
+        try:
+            spec_origin = Path(spec.origin).resolve()
+        except Exception:
+            spec_origin = None
+    if spec_origin is not None:
+        origin = spec_origin
 
-    if spec is None or getattr(spec, "origin", None) is None:
-        globals()["PYTHON_DOTENV_RESOLVED"] = False
-        raise DotenvImportError("python-dotenv could not be resolved (no spec/origin)")
-    origin = Path(spec.origin).resolve()
+    if origin is None:
+        globals()["PYTHON_DOTENV_RESOLVED"] = True
+        return
 
     if "/tests/stubs/dotenv/" in str(origin):
         globals()["PYTHON_DOTENV_RESOLVED"] = True
@@ -47,11 +67,27 @@ def ensure_python_dotenv_is_real_package() -> None:
         globals()["PYTHON_DOTENV_RESOLVED"] = False
         raise DotenvImportError(f"python-dotenv is shadowed at {origin}")
 
+    if origin.name == "dotenv.py" and origin.is_relative_to(repo_root):
+        globals()["PYTHON_DOTENV_RESOLVED"] = False
+        raise DotenvImportError(f"python-dotenv is shadowed at {origin}")
+
     if _is_site_packages(origin):
         globals()["PYTHON_DOTENV_RESOLVED"] = True
         return
 
     globals()["PYTHON_DOTENV_RESOLVED"] = True
+
+
+def guard_python_dotenv_import() -> None:
+    """Import ``dotenv`` and ensure it does not resolve to a shadowed module."""
+
+    ensure_python_dotenv_is_real_package()
+
+
+def guard_dotenv_shadowing() -> None:
+    """Alias for :func:`guard_python_dotenv_import` for compatibility."""
+
+    ensure_python_dotenv_is_real_package()
 
 
 def assert_dotenv_not_shadowed() -> None:
