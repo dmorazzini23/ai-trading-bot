@@ -8,6 +8,9 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+MARKET_TZ = ZoneInfo("America/New_York")
+MARKET_CLOSE = time(16, 0)
+
 
 def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
     """Return ``True`` when a position may exit on ``now_utc``."""
@@ -39,9 +42,25 @@ def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
     if now_utc.tzinfo is None:
         now_utc = now_utc.replace(tzinfo=timezone.utc)
 
-    opened_date = opened_dt.astimezone(timezone.utc).date()
-    now_date = now_utc.astimezone(timezone.utc).date()
-    return opened_date < now_date
+    opened_utc = opened_dt.astimezone(timezone.utc)
+    now_aware = now_utc.astimezone(timezone.utc)
+    if opened_utc.date() < now_aware.date():
+        return True
+
+    opened_local = opened_dt.astimezone(MARKET_TZ)
+    now_local = now_aware.astimezone(MARKET_TZ)
+
+    if now_local.date() > opened_local.date():
+        return True
+
+    if (
+        now_local.date() == opened_local.date()
+        and now_local.time() >= MARKET_CLOSE
+        and opened_local.time() < MARKET_CLOSE
+    ):
+        return True
+
+    return False
 
 
 class SwingTradingMode:
@@ -73,7 +92,7 @@ class SwingTradingMode:
         """Record when a position was entered."""
         
         if entry_time is None:
-            entry_time = datetime.now(ZoneInfo("America/New_York"))
+            entry_time = datetime.now(MARKET_TZ)
         
         self.position_entry_times[symbol] = entry_time
         logger.info(
@@ -103,12 +122,12 @@ class SwingTradingMode:
         entry_time = self.position_entry_times[symbol]
         now_utc = datetime.now(timezone.utc)
         env_allow = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip() == "1"
-        if not can_exit_today({"opened_at": entry_time}, now_utc):
-            return (False, "same_day_trade_blocked")
         if env_allow:
             return (True, "same_day_exit_allowed")
+        if not can_exit_today({"opened_at": entry_time}, now_utc):
+            return (False, "same_day_trade_blocked")
 
-        now = now_utc.astimezone(ZoneInfo("America/New_York"))
+        now = now_utc.astimezone(MARKET_TZ)
 
         # Check if we're on a different calendar day
         if now.date() > entry_time.date():
