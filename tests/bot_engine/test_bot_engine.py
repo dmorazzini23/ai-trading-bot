@@ -665,6 +665,137 @@ def _build_dummy_long_context(pd, symbol):
     return ctx, state, feat_df
 
 
+def _patch_price_gate_common(monkeypatch, symbol: str, price: float) -> None:
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda _symbol, prefer_backup=False: (price, "alpaca_ask"),
+    )
+    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_data_gating",
+        lambda *a, **k: types.SimpleNamespace(
+            block=False, reasons=tuple(), annotations={}, size_cap=None
+        ),
+    )
+    monkeypatch.setattr(bot_engine, "_set_price_source", lambda *_a, **_k: None)
+    monkeypatch.setattr(bot_engine, "_clear_cached_yahoo_fallback", lambda *_a, **_k: None)
+
+
+def test_enter_long_price_gate_missing_bid_ask(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+    ctx.data_client = object()
+
+    _patch_price_gate_common(monkeypatch, symbol, 100.0)
+    monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_a, **_k: types.SimpleNamespace())
+
+    caplog.set_level("INFO")
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.9,
+        strat="gate_missing",
+    )
+
+    assert result is True
+    assert any(
+        record.message
+        == "ORDER_SKIPPED_PRICE_GATED | symbol=AAPL reason=missing_bid_ask"
+        for record in caplog.records
+    )
+    assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+
+
+def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+    ctx.data_client = object()
+
+    _patch_price_gate_common(monkeypatch, symbol, 100.0)
+    stale_ts = datetime.now(UTC) - timedelta(minutes=10)
+    monkeypatch.setattr(
+        bot_engine,
+        "_fetch_quote",
+        lambda *_a, **_k: types.SimpleNamespace(
+            bid_price=100.0,
+            ask_price=100.5,
+            timestamp=stale_ts,
+        ),
+    )
+
+    caplog.set_level("INFO")
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.9,
+        strat="gate_stale",
+    )
+
+    assert result is True
+    assert any(
+        record.message
+        == "ORDER_SKIPPED_PRICE_GATED | symbol=AAPL reason=stale_quote"
+        for record in caplog.records
+    )
+    assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+
+
+def test_enter_long_price_gate_gap_ratio(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+    ctx.data_client = object()
+
+    _patch_price_gate_common(monkeypatch, symbol, 100.0)
+    monkeypatch.setattr(
+        bot_engine,
+        "_fetch_quote",
+        lambda *_a, **_k: types.SimpleNamespace(
+            bid_price=110.0,
+            ask_price=112.0,
+            timestamp=datetime.now(UTC),
+        ),
+    )
+
+    caplog.set_level("INFO")
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.9,
+        strat="gate_gap",
+    )
+
+    assert result is True
+    assert any(
+        record.message
+        == "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=AAPL reason=gap_ratio>limit"
+        for record in caplog.records
+    )
+    assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+
+
 def _build_dummy_short_context(pd, symbol):
     class _DummyAPI:
         def get_asset(self, sym):
