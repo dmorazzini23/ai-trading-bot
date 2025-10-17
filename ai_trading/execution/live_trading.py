@@ -3226,7 +3226,13 @@ class ExecutionEngine:
         except Exception:
             account_snapshot = None
 
-        if self._pdt_lockout_active(account_snapshot):
+        closing_position = bool(
+            order_data.get("closing_position")
+            or order_data.get("close_position")
+            or order_data.get("reduce_only")
+        )
+
+        if not closing_position and self._pdt_lockout_active(account_snapshot):
             daytrade_limit = _safe_int(
                 _extract_value(
                     account_snapshot,
