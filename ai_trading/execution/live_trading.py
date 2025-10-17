@@ -22,6 +22,12 @@ from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
+from ai_trading.execution.guards import (
+    pdt_guard,
+    pdt_lockout_info,
+    quote_fresh_enough,
+    shadow_active as guard_shadow_active,
+)
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -178,6 +184,30 @@ except Exception as exc:  # pragma: no cover - fallback when optional deps missi
         extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
     )
     _config_get_env = None
+
+
+def _require_bid_ask_quotes() -> bool:
+    """Return ``True`` when execution requires bid/ask quotes."""
+
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        return True
+    return bool(getattr(cfg, "execution_require_bid_ask", True))
+
+
+def _max_quote_staleness_seconds() -> int:
+    """Return configured maximum quote staleness in seconds."""
+
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        return 60
+    raw_value = getattr(cfg, "execution_max_staleness_sec", 60)
+    try:
+        return max(0, int(raw_value))
+    except (TypeError, ValueError):
+        return 60
 
 
 def _safe_decimal(value: Any) -> Decimal:
@@ -1149,6 +1179,12 @@ class ExecutionEngine:
         )
         context["daytrade_count"] = daytrade_count
 
+        guard_allows = pdt_guard(bool(pattern_flag), int(daytrade_limit or 0), int(daytrade_count))
+        if not guard_allows:
+            lock_info = pdt_lockout_info()
+            context.update(lock_info)
+            return (True, "pdt_lockout", context)
+
         if daytrade_limit is None or daytrade_limit <= 0:
             return (False, None, context)
 
@@ -1577,6 +1613,114 @@ class ExecutionEngine:
         if capacity.suggested_qty != quantity:
             quantity = capacity.suggested_qty
             order_data["quantity"] = quantity
+
+        if not closing_position:
+            pattern_attr = _extract_value(
+                account_snapshot,
+                "pattern_day_trader",
+                "is_pattern_day_trader",
+                "pdt",
+            )
+            limit_attr = _extract_value(
+                account_snapshot,
+                "daytrade_limit",
+                "day_trade_limit",
+                "pattern_day_trade_limit",
+            )
+            count_attr = _extract_value(
+                account_snapshot,
+                "daytrade_count",
+                "day_trade_count",
+                "pattern_day_trades",
+                "pattern_day_trades_count",
+            )
+            if not pdt_guard(
+                _safe_bool(pattern_attr),
+                _safe_int(limit_attr, 0),
+                _safe_int(count_attr, 0),
+            ):
+                info = pdt_lockout_info()
+                logger.info(
+                    "PDT_LOCKOUT_ACTIVE",
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "limit": info.get("limit"),
+                        "count": info.get("count"),
+                        "action": "skip_openings",
+                    },
+                )
+                return None
+
+        if guard_shadow_active() and not closing_position:
+            logger.info(
+                "SHADOW_MODE_ACTIVE",
+                extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
+            )
+            return None
+
+        if _require_bid_ask_quotes() and not closing_position:
+            annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
+            quote_payload: Mapping[str, Any] | None = None
+            if isinstance(kwargs, dict):
+                candidate = kwargs.get("quote")
+                if isinstance(candidate, Mapping):
+                    quote_payload = candidate  # type: ignore[assignment]
+            fallback_age = None
+            fallback_error = None
+            if isinstance(annotations, Mapping):
+                fallback_age = annotations.get("fallback_quote_age")
+                fallback_error = annotations.get("fallback_quote_error")
+                if quote_payload is None:
+                    candidate_quote = annotations.get("quote")
+                    if isinstance(candidate_quote, Mapping):
+                        quote_payload = candidate_quote  # type: ignore[assignment]
+
+            quote_ts = None
+            bid = ask = None
+            if quote_payload is not None:
+                bid = quote_payload.get("bid")  # type: ignore[assignment]
+                ask = quote_payload.get("ask")  # type: ignore[assignment]
+                ts_candidate = (
+                    quote_payload.get("ts")
+                    or quote_payload.get("timestamp")
+                    or quote_payload.get("t")
+                )
+                if hasattr(ts_candidate, "isoformat"):
+                    quote_ts = ts_candidate  # type: ignore[assignment]
+
+            fresh = True
+            if quote_ts is not None and hasattr(quote_ts, "isoformat"):
+                fresh = quote_fresh_enough(quote_ts, _max_quote_staleness_seconds())
+            elif isinstance(fallback_age, (int, float)):
+                fresh = float(fallback_age) <= float(_max_quote_staleness_seconds())
+            elif isinstance(fallback_error, str) and fallback_error:
+                fresh = False
+
+            has_ba = True
+            if bid is None or ask is None:
+                has_ba = False
+            else:
+                try:
+                    has_ba = float(bid) > 0 and float(ask) > 0
+                except (TypeError, ValueError):
+                    has_ba = False
+
+            if not (fresh and has_ba):
+                logger.warning(
+                    "ORDER_SKIPPED_PRICE_GATED",
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "fresh": fresh,
+                        "bid": None if bid is None else float(bid),
+                        "ask": None if ask is None else float(ask),
+                        "fallback_error": fallback_error,
+                        "fallback_age": fallback_age,
+                    },
+                )
+                return None
+
         start_time = time.time()
         logger.info(
             "Submitting market order",
@@ -1842,6 +1986,114 @@ class ExecutionEngine:
         if capacity.suggested_qty != quantity:
             quantity = capacity.suggested_qty
             order_data["quantity"] = quantity
+
+        if not closing_position:
+            pattern_attr = _extract_value(
+                account_snapshot,
+                "pattern_day_trader",
+                "is_pattern_day_trader",
+                "pdt",
+            )
+            limit_attr = _extract_value(
+                account_snapshot,
+                "daytrade_limit",
+                "day_trade_limit",
+                "pattern_day_trade_limit",
+            )
+            count_attr = _extract_value(
+                account_snapshot,
+                "daytrade_count",
+                "day_trade_count",
+                "pattern_day_trades",
+                "pattern_day_trades_count",
+            )
+            if not pdt_guard(
+                _safe_bool(pattern_attr),
+                _safe_int(limit_attr, 0),
+                _safe_int(count_attr, 0),
+            ):
+                info = pdt_lockout_info()
+                logger.info(
+                    "PDT_LOCKOUT_ACTIVE",
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "limit": info.get("limit"),
+                        "count": info.get("count"),
+                        "action": "skip_openings",
+                    },
+                )
+                return None
+
+        if guard_shadow_active() and not closing_position:
+            logger.info(
+                "SHADOW_MODE_ACTIVE",
+                extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
+            )
+            return None
+
+        if _require_bid_ask_quotes() and not closing_position:
+            annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
+            quote_payload: Mapping[str, Any] | None = None
+            if isinstance(kwargs, dict):
+                candidate = kwargs.get("quote")
+                if isinstance(candidate, Mapping):
+                    quote_payload = candidate  # type: ignore[assignment]
+            fallback_age = None
+            fallback_error = None
+            if isinstance(annotations, Mapping):
+                fallback_age = annotations.get("fallback_quote_age")
+                fallback_error = annotations.get("fallback_quote_error")
+                if quote_payload is None:
+                    candidate_quote = annotations.get("quote")
+                    if isinstance(candidate_quote, Mapping):
+                        quote_payload = candidate_quote  # type: ignore[assignment]
+
+            quote_ts = None
+            bid = ask = None
+            if quote_payload is not None:
+                bid = quote_payload.get("bid")  # type: ignore[assignment]
+                ask = quote_payload.get("ask")  # type: ignore[assignment]
+                ts_candidate = (
+                    quote_payload.get("ts")
+                    or quote_payload.get("timestamp")
+                    or quote_payload.get("t")
+                )
+                if hasattr(ts_candidate, "isoformat"):
+                    quote_ts = ts_candidate  # type: ignore[assignment]
+
+            fresh = True
+            if quote_ts is not None and hasattr(quote_ts, "isoformat"):
+                fresh = quote_fresh_enough(quote_ts, _max_quote_staleness_seconds())
+            elif isinstance(fallback_age, (int, float)):
+                fresh = float(fallback_age) <= float(_max_quote_staleness_seconds())
+            elif isinstance(fallback_error, str) and fallback_error:
+                fresh = False
+
+            has_ba = True
+            if bid is None or ask is None:
+                has_ba = False
+            else:
+                try:
+                    has_ba = float(bid) > 0 and float(ask) > 0
+                except (TypeError, ValueError):
+                    has_ba = False
+
+            if not (fresh and has_ba):
+                logger.warning(
+                    "ORDER_SKIPPED_PRICE_GATED",
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "fresh": fresh,
+                        "bid": None if bid is None else float(bid),
+                        "ask": None if ask is None else float(ask),
+                        "fallback_error": fallback_error,
+                        "fallback_age": fallback_age,
+                    },
+                )
+                return None
+
         start_time = time.time()
         explicit_limit = ("limit_price" in order_data) or ("stop_price" in order_data)
         downgraded_logged = False

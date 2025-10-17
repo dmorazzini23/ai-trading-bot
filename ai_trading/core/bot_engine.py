@@ -149,6 +149,13 @@ from ai_trading.config.management import (
     TradingConfig,
     get_trading_config,
 )
+from ai_trading.execution.guards import (
+    STATE as EXEC_GUARD_STATE,
+    begin_cycle as guard_begin_cycle,
+    end_cycle as guard_end_cycle,
+    mark_symbol_stale as guard_mark_symbol_stale,
+    shadow_active as guard_shadow_active,
+)
 from ai_trading.config import (
     get_execution_settings,
     PRICE_PROVIDER_ORDER,
@@ -16814,20 +16821,11 @@ def _normalize_order_quote_payload(
 def _allow_last_close_execution() -> bool:
     """Return ``True`` when last-close-only executions are explicitly allowed."""
 
-    for key in ("AI_TRADING_EXEC_ALLOW_LAST_CLOSE", "EXECUTION_ALLOW_LAST_CLOSE"):
-        try:
-            raw_value = get_env(key, None)
-        except COMMON_EXC:
-            raw_value = None
-        if raw_value is None:
-            continue
-        if isinstance(raw_value, str):
-            if _truthy_env(raw_value):
-                return True
-            continue
-        if _truthy_env(str(raw_value)):
-            return True
-    return False
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        return False
+    return bool(getattr(cfg, "execution_allow_last_close", False))
 
 
 def _enter_long(
@@ -16969,6 +16967,7 @@ def _enter_long(
                     "prefer_backup": prefer_backup_quote,
                 },
             )
+            guard_mark_symbol_stale()
             return True
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
         if fallback_price is not None:
@@ -17093,6 +17092,7 @@ def _enter_long(
                 "prefer_backup": prefer_backup_quote,
             },
         )
+        guard_mark_symbol_stale()
         return True
     nbbo_available = _is_primary_price_source(price_source)
     gap_exceeds = False
@@ -17211,6 +17211,7 @@ def _enter_long(
                 "prefer_backup": prefer_backup_quote,
             },
         )
+        guard_mark_symbol_stale()
         return True
 
     normalized_source = str(price_source or "").strip().lower()
@@ -17238,6 +17239,7 @@ def _enter_long(
                 "skip_reason": skip_reason,
             },
         )
+        guard_mark_symbol_stale()
         return True
 
     reasons_to_log: tuple[str, ...] | None = None
@@ -17770,6 +17772,7 @@ def _enter_short(
                 "skip_reason": skip_reason,
             },
         )
+        guard_mark_symbol_stale()
         return True
     fallback_in_use = bool(annotations.get("using_fallback_price"))
     if (
@@ -17847,6 +17850,7 @@ def _enter_short(
                 "prefer_backup": prefer_backup_quote,
             },
         )
+        guard_mark_symbol_stale()
         return True
     if (
         gate.reasons
@@ -17885,6 +17889,7 @@ def _enter_short(
                 "skip_reason": skip_reason,
             },
         )
+        guard_mark_symbol_stale()
         return True
 
     fallback_used = False
@@ -21987,6 +21992,14 @@ def _prepare_run(
         symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
+    degraded_cycle = False
+    try:
+        degraded_cycle = bool(provider_monitor.is_disabled("alpaca"))
+    except Exception:
+        degraded_cycle = False
+    if safe_mode_reason():
+        degraded_cycle = True
+    guard_begin_cycle(universe_size=len(symbols), degraded=degraded_cycle)
     try:
         summary = pre_trade_health_check(runtime, symbols)
         logger.info("PRE_TRADE_HEALTH", extra=summary)
@@ -23705,6 +23718,20 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             _restore_last_run_timestamp()
             raise
         finally:
+            try:
+                cfg = get_trading_config()
+                stale_ratio = float(getattr(cfg, "execution_stale_ratio_shadow", 0.30))
+            except COMMON_EXC:
+                stale_ratio = 0.30
+            guard_end_cycle(stale_threshold_ratio=stale_ratio)
+            logger.info(
+                "CYCLE_GATES",
+                extra={
+                    "shadow": guard_shadow_active(),
+                    "stale": getattr(EXEC_GUARD_STATE, "stale_symbols", "na"),
+                    "universe": getattr(EXEC_GUARD_STATE, "universe_size", "na"),
+                },
+            )
             # Always reset running flag
             state.running = False
             state._strategies_loaded = False
