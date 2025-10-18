@@ -75,3 +75,16 @@ def test_canonical_creds_enable_alpaca(monkeypatch: pytest.MonkeyPatch, caplog: 
 
     downgrade_logs = [record for record in caplog.records if record.message == "DATA_PROVIDER_DOWNGRADED"]
     assert not downgrade_logs
+
+
+def test_resolve_feed_cache_tracks_env_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Changing credentials should update the cached feed override automatically."""
+
+    # Prime the cache with missing credentials to emulate prior downgrade decisions.
+    assert env_utils.resolve_alpaca_feed(None) is None
+
+    monkeypatch.setenv("ALPACA_API_KEY", "cache-fix-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "cache-fix-secret")
+
+    # The next lookup should observe the new credentials without an explicit refresh.
+    assert env_utils.resolve_alpaca_feed(None) == "iex"

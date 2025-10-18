@@ -14,7 +14,7 @@ from ai_trading.broker.alpaca_credentials import (
 
 _DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 
-_DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None] | None = None
+_DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None, str | None, str | None] | None = None
 
 
 def _bool_env(env: Mapping[str, str | None], key: str) -> bool:
@@ -28,16 +28,24 @@ def _resolve_data_feed_override() -> tuple[str | None, str | None]:
     """Return cached (override, reason) tuple for Alpaca data feed."""
 
     global _DATA_FEED_OVERRIDE_CACHE
-    if _DATA_FEED_OVERRIDE_CACHE is not None:
-        return _DATA_FEED_OVERRIDE_CACHE
+
     creds = resolve_alpaca_credentials()
+    current_fingerprint = (creds.key or None, creds.secret or None)
+
+    if _DATA_FEED_OVERRIDE_CACHE is not None:
+        cached_override, cached_reason, cached_key, cached_secret = _DATA_FEED_OVERRIDE_CACHE
+        if (cached_key, cached_secret) == current_fingerprint:
+            return cached_override, cached_reason
+
     override: str | None = None
     reason: str | None = None
-    if not creds.key or not creds.secret:
+    key, secret = current_fingerprint
+    if not key or not secret:
         override = "yahoo"
         reason = "missing_credentials"
-    _DATA_FEED_OVERRIDE_CACHE = (override, reason)
-    return _DATA_FEED_OVERRIDE_CACHE
+
+    _DATA_FEED_OVERRIDE_CACHE = (override, reason, key, secret)
+    return override, reason
 
 
 def refresh_alpaca_credentials_cache() -> None:
