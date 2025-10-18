@@ -201,3 +201,22 @@ def test_session_info_uses_fallback_when_calendar_available(monkeypatch):
     assert session.start_utc == datetime(2024, 1, 1, 14, 30, tzinfo=UTC)
     assert session.end_utc == datetime(2024, 1, 1, 21, 0, tzinfo=UTC)
     assert session.is_early_close is False
+
+
+def test_is_trading_day_falls_back_without_valid_days(monkeypatch):
+    mc = pytest.importorskip("ai_trading.utils.market_calendar")
+
+    class NoValidDaysCalendar:
+        def schedule(self, start_date, end_date):  # pragma: no cover - unused here
+            return pd.DataFrame(columns=["market_open", "market_close"])
+
+    pmc = types.SimpleNamespace(get_calendar=lambda _: NoValidDaysCalendar())
+
+    monkeypatch.setattr(mc, "_CAL", None)
+    monkeypatch.setattr(mc, "load_pandas_market_calendars", lambda: pmc)
+
+    weekday = date(2024, 1, 2)
+    weekend = date(2024, 1, 6)
+
+    assert mc.is_trading_day(weekday) is True
+    assert mc.is_trading_day(weekend) is False

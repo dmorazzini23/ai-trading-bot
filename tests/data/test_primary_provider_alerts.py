@@ -109,3 +109,30 @@ def test_primary_provider_disabled_alert(monkeypatch):
 
     assert not df.empty
     assert alerts.calls
+
+
+def test_primary_provider_monitor_sync(monkeypatch):
+    start, end = _dt_range()
+    monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
+    fetch.provider_monitor.disable_counts.clear()
+    fetch.provider_monitor.disabled_until.clear()
+    fetch.provider_monitor.outage_start.clear()
+    fetch.provider_monitor.disabled_since.clear()
+    fetch.provider_monitor.disable("alpaca", duration=60)
+    monkeypatch.setattr(fetch, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "is_market_open", lambda: True)
+
+    def fake_backup(*_a, **_k):
+        return pd.DataFrame([
+            {"timestamp": start, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1}
+        ])
+
+    monkeypatch.setattr(fetch, "_backup_get_bars", fake_backup)
+    alerts = DummyAlerts()
+    monkeypatch.setattr(fetch.provider_monitor, "alert_manager", alerts)
+
+    df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert not df.empty

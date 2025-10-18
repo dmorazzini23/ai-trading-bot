@@ -199,7 +199,7 @@ class RiskEngine:
                 self.data_client = StockHistoricalDataClient(api_key=api_key, secret_key=secret)
             elif oauth:
                 self.data_client = StockHistoricalDataClient(oauth_token=oauth)
-        except (APIError, TypeError, AttributeError, OSError) as e:
+        except (APIError, TypeError, AttributeError, OSError, ImportError) as e:
             logger.warning("Could not initialize data client: %s", e)
         self._returns: list[float] = []
         self._drawdowns: list[float] = []

@@ -5815,6 +5815,20 @@ def _fetch_bars(
     short_circuit_empty = False
     _state["skip_empty_metrics"] = False
     _state["short_circuit_empty"] = False
+    def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
+        if candidate is None:
+            frame = pd.DataFrame()
+        elif isinstance(candidate, pd.DataFrame):
+            frame = candidate
+        else:
+            try:
+                frame = pd.DataFrame(candidate)
+            except Exception:
+                frame = pd.DataFrame()
+        if short_circuit_empty and not _frame_has_rows(frame):
+            return _empty_ohlcv_frame(pd)
+        return frame
+
     if no_session_window:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -5861,20 +5875,6 @@ def _fetch_bars(
             window_has_session = False
             no_session_window = True
 
-    def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
-        if candidate is None:
-            frame = pd.DataFrame()
-        elif isinstance(candidate, pd.DataFrame):
-            frame = candidate
-        else:
-            try:
-                frame = pd.DataFrame(candidate)
-            except Exception:
-                frame = pd.DataFrame()
-        if short_circuit_empty and not _frame_has_rows(frame):
-            return _empty_ohlcv_frame(pd)
-        return frame
-
     if no_session_window and not _ENABLE_HTTP_FALLBACK:
         return _finalize_frame(None)
 
@@ -5912,6 +5912,22 @@ def _fetch_bars(
             f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
         )
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
+    monitor_disabled_until: _dt.datetime | None = None
+    try:
+        monitor_disabled_until = provider_monitor.disabled_until.get("alpaca")
+    except Exception:
+        monitor_disabled_until = None
+    if monitor_disabled_until is not None:
+        try:
+            if monitor_disabled_until.tzinfo is None:
+                monitor_disabled_until = monitor_disabled_until.replace(tzinfo=UTC)
+        except Exception:
+            monitor_disabled_until = None
+    if monitor_disabled_until and (
+        _alpaca_disabled_until is None or monitor_disabled_until > _alpaca_disabled_until
+    ):
+        _alpaca_disabled_until = monitor_disabled_until
+        _ALPACA_DISABLED_ALERTED = False
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
         if now < _alpaca_disabled_until:

@@ -599,8 +599,8 @@ def _fail_fast_env() -> None:
             "ALPACA_SECRET_KEY": "test-secret",
             "ALPACA_DATA_FEED": "iex",
             "WEBHOOK_SECRET": "test-webhook",
-            "CAPITAL_CAP": "0",
-            "DOLLAR_RISK_LIMIT": "0",
+            "CAPITAL_CAP": "0.25",
+            "DOLLAR_RISK_LIMIT": "0.05",
             "ALPACA_API_URL": "https://paper-api.alpaca.markets",
             "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
         }
@@ -651,10 +651,13 @@ def _fail_fast_env() -> None:
         message = str(exc)
         _, _, tail = message.partition(":")
         missing = tuple(sorted(part.strip() for part in tail.split(",") if part.strip()))
+        if not missing:
+            logger.critical("ENV_VALIDATION_FAILED", extra={"error": message})
+            raise SystemExit(1) from exc
         alpaca_fields = {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}
         non_alpaca_missing = tuple(name for name in missing if name not in alpaca_fields)
         if non_alpaca_missing:
-            logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(exc)})
+            logger.critical("ENV_VALIDATION_FAILED", extra={"error": message})
             raise SystemExit(1) from exc
         missing_alpaca = tuple(name for name in missing if name in alpaca_fields)
         if missing_alpaca:

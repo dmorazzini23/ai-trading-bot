@@ -30,13 +30,18 @@ class ProcessManager:
         except OSError as e:
             raise RuntimeError("Another ai-trading instance is already running.") from e
         atexit.register(self._cleanup)
-        signal.signal(signal.SIGTERM, self._sigexit)
-        signal.signal(signal.SIGINT, self._sigexit)
+        running_tests = str(os.getenv("PYTEST_RUNNING", "0")).strip().lower()
+        if running_tests not in {"1", "true", "yes"}:
+            signal.signal(signal.SIGTERM, self._sigexit)
+            signal.signal(signal.SIGINT, self._sigexit)
         return True
 
     def _sigexit(self, *_args) -> None:
         """Handle termination signals and release lock."""
         self._cleanup()
+        running_tests = str(os.getenv("PYTEST_RUNNING", "0")).strip().lower()
+        if running_tests in {"1", "true", "yes"}:
+            return
         sys.exit(0)
 
     def _cleanup(self) -> None:

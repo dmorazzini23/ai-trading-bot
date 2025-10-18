@@ -106,9 +106,23 @@ def is_trading_day(d: date) -> bool:
     """Return ``True`` if *d* is an NYSE trading day."""
     cal = _get_calendar()
     if cal is not None:
-        valid_days = getattr(cal, "valid_days", lambda *a, **k: [])
-        days = valid_days(start_date=d, end_date=d)
-        return len(days) == 1
+        valid_days = getattr(cal, "valid_days", None)
+        if callable(valid_days):
+            try:
+                days = valid_days(start_date=d, end_date=d)
+            except Exception:
+                pass
+            else:
+                try:
+                    return len(days) == 1
+                except TypeError:
+                    try:
+                        materialized = list(days)
+                    except TypeError:
+                        pass
+                    else:
+                        return len(materialized) == 1
+        return d.weekday() < 5
     # Fallback: weekdays only. All known early closes are trading days.
     return d.weekday() < 5
 
