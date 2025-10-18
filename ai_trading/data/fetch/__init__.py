@@ -9686,15 +9686,29 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             pass
 
         return_meta = bool(kwargs.pop("return_meta", False))
-        df = _FETCH_BARS_ORIG(
-            symbol,
-            start,
-            end,
-            interval,
-            *args,
-            return_meta=return_meta,
-            **kwargs,
-        )
+        try:
+            df = _FETCH_BARS_ORIG(
+                symbol,
+                start,
+                end,
+                interval,
+                *args,
+                return_meta=return_meta,
+                **kwargs,
+            )
+        except EmptyBarsError as err:
+            state_obj = globals().get("_state")
+            state = state_obj if isinstance(state_obj, dict) else {}
+            short_circuit = bool(state.get("short_circuit_empty")) or bool(short_circuit_empty)
+            fallbacks_off = not bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
+            if short_circuit and fallbacks_off:
+                try:
+                    empty_frame = _empty_ohlcv_frame()
+                except Exception:
+                    empty_frame = None
+                if empty_frame is not None:
+                    return (empty_frame, {}) if return_meta else empty_frame
+            raise
 
         try:
             import pandas as _pd
@@ -9731,6 +9745,15 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                     if short_circuit:
                         return (df, {}) if return_meta else df
                     return (None, {}) if return_meta else None
+        except Exception:
+            pass
+
+        try:
+            short_circuit_local = bool(globals().get("_state", {}).get("short_circuit_empty")) or bool(short_circuit_empty)
+            if df is None and short_circuit_local:
+                empty_frame = _empty_ohlcv_frame()
+                if empty_frame is not None:
+                    df = empty_frame
         except Exception:
             pass
 
