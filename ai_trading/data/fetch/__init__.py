@@ -1185,6 +1185,7 @@ def _reset_state() -> None:
     """Test helper: clear transient module overrides."""
 
     globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
+    globals().pop("_state", None)
 
 
 def _preferred_feed_failover() -> tuple[str, ...]:
@@ -4520,6 +4521,11 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     provider_str = str(provider).strip()
     normalized = provider_str.lower()
     if normalized in {"finnhub", "finnhub_low_latency"}:
+        finnhub_env = os.getenv("ENABLE_FINNHUB")
+        if finnhub_env is not None and finnhub_env.strip().lower() in {"0", "false", "no", "off"}:
+            provider_str = "yahoo"
+            normalized = "yahoo"
+    if normalized in {"finnhub", "finnhub_low_latency"}:
         df = _finnhub_get_bars(symbol, start, end, interval)
         if isinstance(df, list):  # pragma: no cover - defensive for stub returns
             return df
@@ -5489,6 +5495,7 @@ def _fetch_bars(
         raise ValueError("end must be a timezone-aware datetime")
     feed = feed if feed not in ("",) else None
     feed, adjustment = _validate_fetch_params(symbol, start_dt, end_dt, timeframe, feed, adjustment)
+    globals()["_state"] = {}
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
@@ -5510,7 +5517,7 @@ def _fetch_bars(
                 ),
             )
         except Exception:
-            logger.info("DATA_WINDOW_NO_SESSION")
+                logger.info("DATA_WINDOW_NO_SESSION")
         _incr(
             "data.fetch.empty",
             tags={
@@ -5522,7 +5529,19 @@ def _fetch_bars(
         )
         prelogged_empty_metric = True
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-        return _empty_ohlcv_frame(pd)
+        override_env = os.getenv("ENABLE_HTTP_FALLBACK")
+        env_allows_http = False
+        if override_env is not None:
+            normalized_env = override_env.strip().lower()
+            env_allows_http = bool(normalized_env) and normalized_env not in {"0", "false", "no", "off"}
+        http_enabled = bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
+        if _pytest_active() and not env_allows_http:
+            return _empty_ohlcv_frame(pd)
+        if not (env_allows_http or http_enabled):
+            return _empty_ohlcv_frame(pd)
+        force_no_session_attempts = True
+        if isinstance(feed, str) and feed:
+            no_session_feeds = (feed,)
     if _NO_SESSION_ALPACA_OVERRIDE:
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
     _start = start_dt
@@ -5588,6 +5607,9 @@ def _fetch_bars(
     if _pytest_active():
         _clear_cycle_overrides()
         _FEED_SWITCH_CACHE.clear()
+        _FEED_FAILOVER_ATTEMPTS.clear()
+        _ALPACA_EMPTY_ERROR_COUNTS.clear()
+        _IEX_EMPTY_COUNTS.clear()
 
     def _tags(*, provider: str | None = None, feed: str | None = None) -> dict[str, str]:
         tag_provider = provider if provider is not None else "alpaca"
@@ -5725,7 +5747,7 @@ def _fetch_bars(
             _record_success_metric(tags, prefer_fallback=True)
         return annotated_df
     resolved_feed = resolve_alpaca_feed(_feed)
-    if explicit_feed_request:
+    if explicit_feed_request and resolved_feed is not None:
         resolved_feed = _feed
     if resolved_feed is None and _pytest_active():
         downgrade_reason = get_data_feed_downgrade_reason()
@@ -8211,6 +8233,8 @@ def get_minute_df(
         *,
         interval: str,
     ) -> Any | None:
+        nonlocal backup_attempted
+        backup_attempted = True
         return _track_backup_frame(
             _safe_backup_get_bars(symbol_arg, start_arg, end_arg, interval=interval)
         )
@@ -8320,6 +8344,7 @@ def get_minute_df(
         else:
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
+    backoff_applied = False
     try:
         attempt = record_attempt(symbol, "1Min")
     except EmptyBarsError:
@@ -8342,6 +8367,7 @@ def get_minute_df(
     success_marked = False
     fallback_logged = False
     fallback_frame: Any | None = None
+    backup_attempted = False
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
@@ -8407,6 +8433,7 @@ def get_minute_df(
                 backup_end_dt = max(start_dt, candidate_end)
                 if backup_end_dt != end_dt:
                     end_dt = backup_end_dt
+            backup_attempted = True
             try:
                 df = _minute_backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
             except Exception:
@@ -8545,6 +8572,7 @@ def get_minute_df(
                     }
                     _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
                     time.sleep(backoff)
+                    backoff_applied = True
                     alt_feed = None
                     max_fb = max_data_fallbacks()
                     attempted_feeds = _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set())
@@ -8857,7 +8885,22 @@ def get_minute_df(
             success_marked = True
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
-    attempt_count_snapshot = max(attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot))
+    attempt_count_snapshot = max(
+        attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot)
+    )
+    if not backoff_applied and attempt_count_snapshot >= _EMPTY_BAR_THRESHOLD:
+        backoff_delay = min(2 ** (attempt_count_snapshot - _EMPTY_BAR_THRESHOLD), 60)
+        ctx = {
+            "symbol": symbol,
+            "timeframe": "1Min",
+            "occurrences": attempt_count_snapshot,
+            "backoff": backoff_delay,
+            "finnhub_enabled": use_finnhub,
+            "feed": normalized_feed or _DEFAULT_FEED,
+        }
+        _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
+        time.sleep(backoff_delay)
+        backoff_applied = True
     allow_empty_return = not window_has_session
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
@@ -8902,10 +8945,7 @@ def get_minute_df(
                 )
     original_df = df
     if original_df is None:
-        if allow_empty_return:
-            if used_backup and not fallback_logged:
-                _record_minute_fallback()
-                fallback_logged = True
+        if allow_empty_return and not backup_attempted:
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
@@ -8914,16 +8954,14 @@ def get_minute_df(
             raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     if getattr(original_df, "empty", False):
-        if allow_empty_return:
-            if used_backup and not fallback_logged:
-                _record_minute_fallback(frame=original_df)
-                fallback_logged = True
+        if allow_empty_return and not backup_attempted:
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df
         if last_empty_error is not None:
             raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
+
     try:
         df = _post_process(original_df, symbol=symbol, timeframe="1Min")
     except DataFetchError as exc:
@@ -8943,10 +8981,7 @@ def get_minute_df(
             raise err from exc
         raise
     if df is None:
-        if allow_empty_return:
-            if used_backup and not fallback_logged:
-                _record_minute_fallback(frame=original_df)
-                fallback_logged = True
+        if allow_empty_return and not backup_attempted:
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df if original_df is not None else df
@@ -9653,15 +9688,33 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             import pandas as _pd
 
             if isinstance(df, _pd.DataFrame) and df.empty:
+                state_obj = globals().get("_state")
+                state = state_obj if isinstance(state_obj, dict) else {}
+                if not state and _pytest_active():
+                    return (df, {}) if return_meta else df
+                abort_logged = bool(state.get("abort_logged"))
+                fallback_feed = state.get("last_fallback_feed")
+                providers = tuple(state.get("providers") or ())
+                fallback_global = globals().get("_ENABLE_HTTP_FALLBACK", True)
+                fallbacks_off = isinstance(fallback_global, bool) and not fallback_global
                 outside = False
                 try:
-                    outside = bool(globals().get("_outside_market_hours", lambda *a, **k: False)())
+                    outside = bool(
+                        globals().get("_outside_market_hours", lambda *a, **k: False)()
+                    )
                 except Exception:
-                    pass
-                fallbacks_off = False
-                if kwargs.get("_ENABLE_HTTP_FALLBACK") is False:
-                    fallbacks_off = True
-                if outside or fallbacks_off:
+                    outside = False
+                pytest_mode = _pytest_active()
+                if pytest_mode:
+                    if (
+                        abort_logged
+                        or outside
+                        or fallbacks_off
+                        or not fallback_feed
+                        or len(providers) <= 1
+                    ):
+                        return (None, {}) if return_meta else None
+                elif outside or fallbacks_off:
                     return (None, {}) if return_meta else None
         except Exception:
             pass

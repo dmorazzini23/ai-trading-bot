@@ -13214,19 +13214,8 @@ def check_pdt_rule(ctx) -> bool:
                 pass
 
     if account is None:
-        try:
-            setattr(
-                ctx,
-                "_pdt_last_context",
-                {
-                    "account_available": False,
-                    "block_reason": "account_unavailable",
-                },
-            )
-        except Exception:
-            pass
         logger.info(
-            "PDT_SKIP_NO_ACCOUNT",
+            "PDT_CHECK_SKIPPED",
             extra={"reason": "account_unavailable"},
         )
         _safe_probe_open_orders()

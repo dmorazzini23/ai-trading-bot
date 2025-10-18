@@ -1570,6 +1570,9 @@ class ExecutionEngine:
                 order_data["stop_loss"] = {"stop_price": float(sl)}
         if asset_class:
             order_data["asset_class"] = asset_class
+
+        require_quotes = _require_bid_ask_quotes()
+        limit_has_price = bool(order_data.get("limit_price"))
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -1739,7 +1742,7 @@ class ExecutionEngine:
             )
             return None
 
-        if _require_bid_ask_quotes() and not closing_position:
+        if require_quotes and not closing_position and not limit_has_price:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             quote_payload: Mapping[str, Any] | None = None
             if isinstance(kwargs, dict):
@@ -1988,6 +1991,10 @@ class ExecutionEngine:
                 order_data["stop_loss"] = {"stop_price": float(sl)}
         if asset_class:
             order_data["asset_class"] = asset_class
+
+        require_quotes = _require_bid_ask_quotes()
+        limit_has_price = bool(order_data.get("limit_price"))
+
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -2113,7 +2120,7 @@ class ExecutionEngine:
             )
             return None
 
-        if _require_bid_ask_quotes() and not closing_position:
+        if require_quotes and not closing_position and not limit_has_price:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             quote_payload: Mapping[str, Any] | None = None
             if isinstance(kwargs, dict):

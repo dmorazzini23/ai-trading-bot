@@ -176,10 +176,10 @@ class DataQualityValidator:
             return df
         
         # Forward fill NaN values (use last known price)
-        df = df.fillna(method='ffill')
+        df = df.ffill()
         
         # Backward fill any remaining NaN at the start
-        df = df.fillna(method='bfill')
+        df = df.bfill()
         
         # Remove rows with non-positive prices
         for col in ['open', 'high', 'low', 'close']:
@@ -224,4 +224,3 @@ class DataQualityValidator:
         )
         
         return price
-
