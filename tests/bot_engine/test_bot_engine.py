@@ -1079,6 +1079,66 @@ def test_enter_long_logs_fallback_for_non_alpaca_sources(monkeypatch, caplog):
     )
 
 
+def test_enter_long_uses_fallback_when_env_flag_unset(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+
+    monkeypatch.delenv("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", raising=False)
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_apply_sector_cap_qty",
+        lambda _ctx, _sym, qty, _price: qty,
+    )
+    monkeypatch.setattr(bot_engine, "scaled_atr_stop", lambda **_k: (95.95, 106.05))
+    monkeypatch.setattr(bot_engine, "is_high_vol_regime", lambda: False)
+    monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
+    monkeypatch.setattr(
+        bot_engine,
+        "_record_trade_in_frequency_tracker",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
+        or types.SimpleNamespace(id="order-1"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: (101.0, "iex"),
+    )
+
+    caplog.set_level("INFO")
+
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.8,
+        strat="fallback_env_unset_test",
+    )
+
+    assert result is True
+    assert orders and orders[0][3] == pytest.approx(101.0)
+    assert any(
+        record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
+    )
+    assert not any(
+        record.message == "FALLBACK_PRICE_DISABLED" for record in caplog.records
+    )
+
+
 def test_enter_long_warns_when_fallback_quote_unavailable(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
 
@@ -1373,6 +1433,58 @@ def test_enter_short_logs_fallback_for_non_alpaca_sources(monkeypatch, caplog):
     assert orders and orders[0][3] == pytest.approx(101.0)
     assert any(
         record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
+    )
+
+
+def test_enter_short_uses_fallback_when_env_flag_unset(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx, state, feat_df = _build_dummy_short_context(pd, symbol)
+
+    monkeypatch.delenv("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", raising=False)
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(bot_engine, "calculate_entry_size", lambda *a, **k: 5)
+    monkeypatch.setattr(
+        bot_engine,
+        "_apply_sector_cap_qty",
+        lambda _ctx, _sym, qty, _price: qty,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
+        or types.SimpleNamespace(id="order-1"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: (101.0, "polygon"),
+    )
+
+    caplog.set_level("INFO")
+
+    result = bot_engine._enter_short(
+        ctx,
+        state,
+        symbol,
+        feat_df=feat_df,
+        final_score=-1.0,
+        conf=-0.8,
+        strat="fallback_short_env_unset_test",
+    )
+
+    assert result is True
+    assert orders and orders[0][3] == pytest.approx(101.0)
+    assert any(
+        record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
+    )
+    assert not any(
+        record.message == "FALLBACK_PRICE_DISABLED" for record in caplog.records
     )
 
 

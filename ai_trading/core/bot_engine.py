@@ -17050,19 +17050,22 @@ def _enter_long(
         fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", None)
     except COMMON_EXC:
         fallback_env_raw = None
-    fallback_env_value = (
-        str(fallback_env_raw)
-        if fallback_env_raw is not None
-        else None
-    )
-    fallback_env_allowed = (
-        True
-        if fallback_env_value is None
-        else _truthy_env(fallback_env_value)
+    if fallback_env_raw is None:
+        fallback_env_value: str | None = None
+    else:
+        fallback_env_value = str(fallback_env_raw).strip()
+        if fallback_env_value == "":
+            fallback_env_value = None
+    fallback_env_explicit = fallback_env_value is not None
+    fallback_env_enabled = (
+        True if not fallback_env_explicit else _truthy_env(fallback_env_value)
     )
     fallback_forced = not provider_enabled
-    fallback_allowed = fallback_env_allowed or fallback_forced
-    if not fallback_allowed:
+    fallback_allowed = fallback_env_enabled or fallback_forced
+    fallback_disabled_by_env = (
+        fallback_env_explicit and not fallback_env_enabled and not fallback_forced
+    )
+    if fallback_disabled_by_env:
         annotations.pop("using_fallback_price", None)
     now_utc = datetime.now(UTC)
     fallback_ts: datetime | None = None
@@ -17136,7 +17139,7 @@ def _enter_long(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
-    if using_fallback_candidate and not fallback_allowed:
+    if using_fallback_candidate and fallback_disabled_by_env:
         skip_reason = "fallback_price_disabled"
         skip_reasons.append(skip_reason)
         logger.warning(
@@ -17743,18 +17746,21 @@ def _enter_short(
         fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", None)
     except COMMON_EXC:
         fallback_env_raw = None
-    fallback_env_value = (
-        str(fallback_env_raw)
-        if fallback_env_raw is not None
-        else None
-    )
-    fallback_env_allowed = (
-        True
-        if fallback_env_value is None
-        else _truthy_env(fallback_env_value)
+    if fallback_env_raw is None:
+        fallback_env_value: str | None = None
+    else:
+        fallback_env_value = str(fallback_env_raw).strip()
+        if fallback_env_value == "":
+            fallback_env_value = None
+    fallback_env_explicit = fallback_env_value is not None
+    fallback_env_enabled = (
+        True if not fallback_env_explicit else _truthy_env(fallback_env_value)
     )
     fallback_forced = not provider_enabled
-    fallback_allowed = fallback_env_allowed or fallback_forced
+    fallback_allowed = fallback_env_enabled or fallback_forced
+    fallback_disabled_by_env = (
+        fallback_env_explicit and not fallback_env_enabled and not fallback_forced
+    )
     now_utc = datetime.now(UTC)
     fallback_ts: datetime | None = None
     if isinstance(fallback_age, (int, float, np.floating)):
@@ -17786,7 +17792,7 @@ def _enter_short(
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
-    if using_fallback_candidate and not fallback_allowed:
+    if using_fallback_candidate and fallback_disabled_by_env:
         skip_reason = "fallback_price_disabled"
         logger.warning(
             "FALLBACK_PRICE_DISABLED",
