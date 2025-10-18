@@ -20,9 +20,9 @@ warnings = []
 # Test 1: Check if modules exist
 print("\n1. Checking if PDT modules exist...")
 try:
-    from ai_trading.execution import pdt_manager, swing_mode
+    from ai_trading.execution import pdt_manager, swing_mode as swing_mode_module
     print("   ✅ PDT manager module found")
-    print("   ✅ Swing mode module found")
+    print(f"   ✅ Swing mode module found ({swing_mode_module.__name__})")
 except ImportError as e:
     errors.append(f"Module import failed: {e}")
     print(f"   ❌ {e}")
@@ -86,11 +86,11 @@ print("\n4. Testing swing mode functionality...")
 try:
     from ai_trading.execution.swing_mode import get_swing_mode, enable_swing_mode
     
-    swing_mode = get_swing_mode()
-    initial_state = swing_mode.enabled
-    
+    swing_mode_state = get_swing_mode()
+    initial_state = swing_mode_state.enabled
+
     enable_swing_mode()
-    enabled_state = swing_mode.enabled
+    enabled_state = swing_mode_state.enabled
     
     if enabled_state:
         print("   ✅ Swing mode can be enabled")
