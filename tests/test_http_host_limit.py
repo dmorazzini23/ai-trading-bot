@@ -61,6 +61,23 @@ def test_host_limit_enforced(monkeypatch):
     pooling = _reload_pooling(pooling)
 
 
+def test_host_limit_helper_refreshes_on_env_toggle(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
+    pooling = _reload_pooling()
+
+    try:
+        assert pooling.get_host_limit() == 2
+
+        monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "4")
+        assert pooling.get_host_limit() == 4
+
+        monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "1")
+        assert pooling.get_host_limit() == 1
+    finally:
+        monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+        _reload_pooling(pooling)
+
+
 def test_host_limit_updates_when_env_changes(monkeypatch):
     monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
     pooling = _reload_pooling()

@@ -20,6 +20,7 @@ from .runtime import (
     SPEC_BY_ENV,
     SPEC_BY_FIELD,
     TradingConfig,
+    ensure_trading_config_current,
     generate_config_schema,
     get_trading_config,
     reload_trading_config,
@@ -153,7 +154,8 @@ def get_env(
             return default
         return _coerce(raw, cast)
 
-    cfg = get_trading_config()
+    env_keys = tuple(spec.env) + tuple(spec.deprecated_env.keys())
+    cfg = ensure_trading_config_current(env_keys)
     value = getattr(cfg, spec.field)
     if value in (None, ""):
         if required:
