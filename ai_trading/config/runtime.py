@@ -1434,6 +1434,55 @@ def _signature_from_snapshot(snapshot: Mapping[str, str]) -> tuple[tuple[str, st
     return tuple((key, snapshot.get(key)) for key in keys)
 
 
+def ensure_trading_config_current(keys: Iterable[str] | None = None) -> TradingConfig:
+    """Ensure the cached configuration reflects relevant environment keys."""
+
+    normalized_keys: tuple[str, ...]
+    if keys:
+        normalized_keys = tuple(sorted({str(key).upper() for key in keys if key}))
+    else:
+        normalized_keys = ()
+
+    if not normalized_keys:
+        return get_trading_config()
+
+    current_values = {key: os.environ.get(key) for key in normalized_keys}
+
+    refresh_side_effects = False
+    with _CACHE_LOCK:
+        global _CACHED_CONFIG, _CACHED_SIGNATURE
+        cached_config = _CACHED_CONFIG
+        cached_signature = _CACHED_SIGNATURE
+
+        if cached_config is not None and cached_signature is not None:
+            signature_map = dict(cached_signature)
+            missing_key = any(key not in signature_map for key in normalized_keys)
+            mismatch = any(
+                signature_map.get(key) != current_values.get(key)
+                for key in normalized_keys
+                if key in signature_map
+            )
+            if not missing_key and not mismatch:
+                return cached_config
+
+        _CACHED_CONFIG = None
+        _CACHED_SIGNATURE = None
+        refresh_side_effects = True
+
+    if refresh_side_effects:
+        try:
+            from ai_trading.utils.env import refresh_alpaca_credentials_cache
+        except Exception:
+            pass
+        else:
+            try:
+                refresh_alpaca_credentials_cache()
+            except Exception:
+                pass
+
+    return get_trading_config()
+
+
 for spec in CONFIG_SPECS:
     SPEC_BY_FIELD[spec.field] = spec
     for key in spec.env:
@@ -1850,6 +1899,7 @@ def generate_config_schema() -> str:
 __all__ = [
     "TradingConfig",
     "CONFIG_SPECS",
+    "ensure_trading_config_current",
     "get_trading_config",
     "reload_trading_config",
     "generate_config_schema",

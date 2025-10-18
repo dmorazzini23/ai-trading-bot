@@ -5579,7 +5579,11 @@ def _fetch_bars(
     }
     globals()["_state"] = _state
 
-    if not _state.get("window_has_session", True) and not _state.get("allow_no_session_primary", False):
+    if (
+        not _state.get("window_has_session", True)
+        and not _state.get("allow_no_session_primary", False)
+        and not _state.get("no_session_forced", False)
+    ):
         empty_frame = _empty_ohlcv_frame(pd)
         if empty_frame is not None:
             return empty_frame
@@ -5875,7 +5879,7 @@ def _fetch_bars(
         return _finalize_frame(None)
 
     env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
-    if not _has_alpaca_keys() and not _pytest_active() and not env_has_keys:
+    if not _has_alpaca_keys() and not _pytest_active():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
             try:
@@ -8163,6 +8167,11 @@ def get_minute_df(
                 skip_primary_due_to_fallback = True
                 skip_due_to_metadata = True
     window_has_session = _window_has_trading_session(start_dt, end_dt)
+    global _state
+    _state = {
+        "window_has_session": bool(window_has_session),
+        "no_session_forced": bool(not window_has_session),
+    }
     tf_key = (symbol, "1Min")
     if not window_has_session and not _ENABLE_HTTP_FALLBACK:
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -8576,7 +8585,7 @@ def get_minute_df(
                     market_open = is_market_open()
                 except Exception:  # pragma: no cover - defensive
                     market_open = True
-                if not market_open:
+                if not market_open and not _state.get("no_session_forced", False):
                     _log_with_capture(
                         logging.INFO,
                         "ALPACA_EMPTY_BAR_MARKET_CLOSED",
