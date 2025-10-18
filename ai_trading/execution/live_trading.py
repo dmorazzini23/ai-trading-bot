@@ -11,7 +11,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from functools import lru_cache
 from types import SimpleNamespace
@@ -23,6 +23,7 @@ from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
 from ai_trading.execution.guards import (
+    can_execute,
     pdt_guard,
     pdt_lockout_info,
     quote_fresh_enough,
@@ -280,6 +281,17 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_float(value: Any) -> float | None:
+    """Return float conversion tolerant to non-numeric payloads."""
+
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sanitize_pdt_context(raw_context: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1744,45 +1756,46 @@ class ExecutionEngine:
                     if isinstance(candidate_quote, Mapping):
                         quote_payload = candidate_quote  # type: ignore[assignment]
 
-            quote_ts = None
-            bid = ask = None
-            if quote_payload is not None:
-                bid = quote_payload.get("bid")  # type: ignore[assignment]
-                ask = quote_payload.get("ask")  # type: ignore[assignment]
-                ts_candidate = (
-                    quote_payload.get("ts")
-                    or quote_payload.get("timestamp")
-                    or quote_payload.get("t")
-                )
-                if hasattr(ts_candidate, "isoformat"):
-                    quote_ts = ts_candidate  # type: ignore[assignment]
+            quote_dict: dict[str, Any] | None = None
+            if isinstance(quote_payload, Mapping):
+                quote_dict = dict(quote_payload)
+            now_utc = datetime.now(UTC)
+            if quote_dict is not None and isinstance(fallback_age, (int, float)):
+                if "timestamp" not in quote_dict and "ts" not in quote_dict:
+                    try:
+                        age = float(fallback_age)
+                    except (TypeError, ValueError):
+                        age = None
+                    if age is not None and age >= 0:
+                        quote_dict["timestamp"] = now_utc - timedelta(seconds=age)
 
-            fresh = True
-            if quote_ts is not None and hasattr(quote_ts, "isoformat"):
-                fresh = quote_fresh_enough(quote_ts, _max_quote_staleness_seconds())
-            elif isinstance(fallback_age, (int, float)):
-                fresh = float(fallback_age) <= float(_max_quote_staleness_seconds())
-            elif isinstance(fallback_error, str) and fallback_error:
-                fresh = False
+            bid = None
+            ask = None
+            if quote_dict is not None:
+                bid = quote_dict.get("bid") or quote_dict.get("bp")
+                ask = quote_dict.get("ask") or quote_dict.get("ap")
 
-            has_ba = True
-            if bid is None or ask is None:
-                has_ba = False
-            else:
-                try:
-                    has_ba = float(bid) > 0 and float(ask) > 0
-                except (TypeError, ValueError):
-                    has_ba = False
+            ok, reason = can_execute(
+                quote_dict,
+                now=now_utc,
+                max_age_sec=_max_quote_staleness_seconds(),
+            )
+            if isinstance(fallback_error, str) and fallback_error:
+                ok = False
+                reason = fallback_error
 
-            if not (fresh and has_ba):
+            if not ok:
+                log_reason = reason or "price_gate_failed"
                 logger.warning(
-                    "ORDER_SKIPPED_PRICE_GATED",
+                    "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=%s",
+                    symbol,
+                    log_reason,
                     extra={
                         "symbol": symbol,
                         "side": side_lower,
-                        "fresh": fresh,
-                        "bid": None if bid is None else float(bid),
-                        "ask": None if ask is None else float(ask),
+                        "reason": log_reason,
+                        "bid": None if bid is None else _safe_float(bid),
+                        "ask": None if ask is None else _safe_float(ask),
                         "fallback_error": fallback_error,
                         "fallback_age": fallback_age,
                     },
