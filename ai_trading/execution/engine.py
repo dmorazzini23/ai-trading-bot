@@ -1898,9 +1898,7 @@ class ExecutionEngine:
                         },
                     )
                     testing_flag = os.getenv("TESTING", "").strip().lower()
-                    if testing_flag in {"1", "true", "yes"} and not (
-                        had_manual_price and order.order_type == OrderType.LIMIT
-                    ):
+                    if testing_flag in {"1", "true", "yes"}:
                         raise AssertionError(
                             "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                         )

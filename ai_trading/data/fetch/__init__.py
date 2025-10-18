@@ -5827,9 +5827,9 @@ def _fetch_bars(
         _state["short_circuit_empty"] = True
         if _ENABLE_HTTP_FALLBACK:
             _state["allow_no_session_primary"] = True
-            window_has_session = True
-            _state["window_has_session"] = True
-            no_session_window = False
+        else:
+            window_has_session = False
+            no_session_window = True
 
     def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
         if candidate is None:
@@ -5845,9 +5845,7 @@ def _fetch_bars(
             return _empty_ohlcv_frame(pd)
         return frame
 
-    env_has_keys = bool(os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")) and bool(
-        os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
-    )
+    env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
     if not _has_alpaca_keys() and not _pytest_active() and not env_has_keys:
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
@@ -8379,6 +8377,7 @@ def get_minute_df(
     backup_label = (backup_normalized or provider_str.lower() or "").strip()
     primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
     primary_failure_logged = False
+    allow_empty_override = False
 
     def _disable_signal_active(provider_label: str) -> bool:
         try:
@@ -8542,8 +8541,7 @@ def get_minute_df(
                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
                     _SKIPPED_SYMBOLS.discard(tf_key)
-                    if window_has_session:
-                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 cnt = _EMPTY_BAR_COUNTS.get(tf_key, attempt)
                 if cnt > _EMPTY_BAR_MAX_RETRIES:
                     _log_with_capture(
@@ -8901,7 +8899,7 @@ def get_minute_df(
         _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
         time.sleep(backoff_delay)
         backoff_applied = True
-    allow_empty_return = not window_has_session
+    allow_empty_return = allow_empty_override or (not window_has_session)
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
@@ -8944,6 +8942,7 @@ def get_minute_df(
                     },
                 )
     original_df = df
+    # Debug hooks intentionally removed after validation
     if original_df is None:
         if allow_empty_return and not backup_attempted:
             _IEX_EMPTY_COUNTS.pop(tf_key, None)

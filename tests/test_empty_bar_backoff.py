@@ -18,6 +18,7 @@ def _dt_range():
 @pytest.fixture(autouse=True)
 def _force_window(monkeypatch):
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "is_market_open", lambda: True)
 
 
 def test_record_attempt_limits_and_skips():

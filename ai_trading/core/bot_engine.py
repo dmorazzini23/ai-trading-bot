@@ -149,13 +149,31 @@ from ai_trading.config.management import (
     TradingConfig,
     get_trading_config,
 )
-from ai_trading.execution.guards import (
-    STATE as EXEC_GUARD_STATE,
-    begin_cycle as guard_begin_cycle,
-    end_cycle as guard_end_cycle,
-    mark_symbol_stale as guard_mark_symbol_stale,
-    shadow_active as guard_shadow_active,
-)
+try:
+    from ai_trading.execution.guards import (
+        STATE as EXEC_GUARD_STATE,
+        begin_cycle as guard_begin_cycle,
+        end_cycle as guard_end_cycle,
+        mark_symbol_stale as guard_mark_symbol_stale,
+        shadow_active as guard_shadow_active,
+    )
+except (ImportError, ModuleNotFoundError, AttributeError):
+    from types import SimpleNamespace as _SimpleNamespace
+
+    EXEC_GUARD_STATE = _SimpleNamespace(active=False)
+
+    def guard_begin_cycle(*_a, **_k):
+        return None
+
+    def guard_end_cycle(*_a, **_k):
+        return None
+
+    def guard_mark_symbol_stale(*_a, **_k):
+        return None
+
+    def guard_shadow_active() -> bool:
+        return bool(getattr(EXEC_GUARD_STATE, 'active', False))
+
 from ai_trading.config import (
     get_execution_settings,
     PRICE_PROVIDER_ORDER,
