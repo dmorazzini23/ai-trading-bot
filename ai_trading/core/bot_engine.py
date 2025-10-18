@@ -8539,10 +8539,11 @@ class DataFetcher:
             for lookup_key, entry in direct_entries:
                 fresh, memo_df = _memo_is_fresh(entry, now=memo_now, ttl=effective_ttl)
                 if fresh and memo_df is not None:
+                    memo_payload = (memo_now, memo_df)
                     for target_key, payload in (
-                        (canonical_memo_key, {"ts": memo_now, "data": memo_df}),
-                        (memo_key, (memo_now, memo_df)),
-                        (legacy_memo_key, (memo_now, memo_df)),
+                        (canonical_memo_key, memo_payload),
+                        (memo_key, memo_payload),
+                        (legacy_memo_key, memo_payload),
                     ):
                         try:
                             memo_store[target_key] = payload
@@ -8618,10 +8619,11 @@ class DataFetcher:
                     continue
                 ts_value, memo_df = _memo_unpack(entry)
                 if memo_df is not None and _memo_fresh(ts_value):
+                    memo_payload = (memo_now, memo_df)
                     for target_key, payload in (
-                        (canonical_lookup, {"ts": memo_now, "data": memo_df}),
-                        (range_lookup, (memo_now, memo_df)),
-                        (legacy_lookup, (memo_now, memo_df)),
+                        (canonical_lookup, memo_payload),
+                        (range_lookup, memo_payload),
+                        (legacy_lookup, memo_payload),
                     ):
                         try:
                             memo_store[target_key] = payload
@@ -8796,11 +8798,12 @@ class DataFetcher:
 
         def _memo_set_entry(key: tuple[str, ...], value: Any) -> None:
             payload = value
-            if key == canonical_memo_key and value is not None:
-                if isinstance(value, tuple) and len(value) == 2:
-                    payload = {"ts": value[0], "data": value[1]}
-                elif isinstance(value, MappingABC):
-                    payload = dict(value)
+            if isinstance(value, MappingABC):
+                ts_value, payload_value, normalized_pair = _normalize_memo_entry(value)
+                if normalized_pair is not None:
+                    payload = normalized_pair
+                else:
+                    payload = (ts_value, payload_value)
             try:
                 _DAILY_FETCH_MEMO[key] = payload
                 return

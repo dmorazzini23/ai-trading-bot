@@ -391,8 +391,19 @@ def test_daily_fetch_canonical_and_legacy_memo_bypass_daily_cache(monkeypatch):
 
     assert result is memo_payload
     assert fetcher._daily_cache.get_calls == 0
-    assert be._DAILY_FETCH_MEMO[canonical_key][1] is memo_payload
-    assert be._DAILY_FETCH_MEMO[legacy_key][1] is memo_payload
+    canonical_entry = be._DAILY_FETCH_MEMO[canonical_key]
+    legacy_entry = be._DAILY_FETCH_MEMO[legacy_key]
+
+    assert isinstance(canonical_entry, tuple)
+    assert len(canonical_entry) == 2
+    assert canonical_entry[1] is memo_payload
+    assert isinstance(canonical_entry[0], (int, float))
+    assert canonical_entry[0] > 0
+
+    assert isinstance(legacy_entry, tuple)
+    assert len(legacy_entry) == 2
+    assert legacy_entry[1] is memo_payload
+    assert isinstance(legacy_entry[0], (int, float))
 
 
 def test_daily_fetch_memo_mapping_get_raises(monkeypatch):
