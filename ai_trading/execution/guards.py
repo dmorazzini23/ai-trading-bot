@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+from decimal import Decimal
 from dataclasses import dataclass
 from typing import Any, Tuple
 
@@ -111,6 +112,24 @@ def _max_age_seconds() -> int:
         return 60
 
 
+def _safe_bool(value: Any) -> bool:
+    """Best-effort boolean normalization for configuration payloads."""
+
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    return False
+
+
 def can_execute(
     quote: dict[str, Any] | None,
     *,
@@ -143,7 +162,7 @@ def can_execute(
 def pdt_preflight(ctx: dict[str, Any]) -> Tuple[bool, str | None]:
     """Return PDT eligibility based on context mapping used in tests."""
 
-    pattern_day_trader = bool(ctx.get("pattern_day_trader"))
+    pattern_day_trader = _safe_bool(ctx.get("pattern_day_trader"))
     if not pattern_day_trader:
         return True, None
     count = int(ctx.get("daytrade_count", 0) or 0)
