@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import datetime as _dt
+from decimal import Decimal
 from dataclasses import dataclass
+from typing import Any, Tuple
+
+from ai_trading.config.management import get_trading_config
 
 
 def _utcnow() -> _dt.datetime:
@@ -39,6 +43,133 @@ class SafetyState:
 
 
 STATE = SafetyState()
+
+
+def _now() -> _dt.datetime:
+    """Return timezone-aware ``datetime`` in UTC."""
+
+    return _dt.datetime.now(tz=_dt.timezone.utc)
+
+
+def _coerce_timestamp(value: Any) -> _dt.datetime | None:
+    """Return a timezone-aware timestamp extracted from *value* if possible."""
+
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return _dt.datetime.fromtimestamp(float(value), tz=_dt.timezone.utc)
+        except Exception:
+            return None
+    if isinstance(value, _dt.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=_dt.timezone.utc)
+        try:
+            return value.astimezone(_dt.timezone.utc)
+        except Exception:
+            return None
+    return None
+
+
+def _is_stale(quote: dict[str, Any], now: _dt.datetime, max_age_sec: int) -> Tuple[bool, str | None]:
+    """Return ``(True, reason)`` when *quote* is stale or timestamp missing."""
+
+    ts = (
+        quote.get("timestamp")
+        or quote.get("ts")
+        or quote.get("t")
+        or quote.get("time")
+    )
+    dt_val = _coerce_timestamp(ts)
+    if dt_val is None:
+        return True, "quote_timestamp_missing"
+    try:
+        age = (now - dt_val).total_seconds()
+    except Exception:
+        return True, "quote_timestamp_missing"
+    if age > float(max_age_sec):
+        return True, "stale_quote"
+    return False, None
+
+
+def _require_bid_ask() -> bool:
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        return True
+    return bool(getattr(cfg, "execution_require_bid_ask", True))
+
+
+def _max_age_seconds() -> int:
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        return 60
+    value = getattr(cfg, "execution_max_staleness_sec", 60)
+    try:
+        return int(value)
+    except Exception:
+        return 60
+
+
+def _safe_bool(value: Any) -> bool:
+    """Best-effort boolean normalization for configuration payloads."""
+
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    return False
+
+
+def can_execute(
+    quote: dict[str, Any] | None,
+    *,
+    now: _dt.datetime | None = None,
+    max_age_sec: int | None = None,
+) -> Tuple[bool, str | None]:
+    """Return gating decision for *quote* with optional overrides."""
+
+    if quote is None:
+        return False, "no_quote"
+    now = now or _now()
+    max_age = int(max_age_sec if max_age_sec is not None else _max_age_seconds())
+    bid = quote.get("bid") or quote.get("bp") or quote.get("bid_price")
+    ask = quote.get("ask") or quote.get("ap") or quote.get("ask_price")
+    if _require_bid_ask():
+        if bid is None or ask is None:
+            return False, "missing_bid_ask"
+        try:
+            spread_ok = float(ask) >= float(bid) > 0
+        except (TypeError, ValueError):
+            spread_ok = False
+        if not spread_ok:
+            return False, "negative_spread"
+    stale, reason = _is_stale(quote, now, max_age)
+    if stale:
+        return False, reason
+    return True, None
+
+
+def pdt_preflight(ctx: dict[str, Any]) -> Tuple[bool, str | None]:
+    """Return PDT eligibility based on context mapping used in tests."""
+
+    pattern_day_trader = _safe_bool(ctx.get("pattern_day_trader"))
+    if not pattern_day_trader:
+        return True, None
+    count = int(ctx.get("daytrade_count", 0) or 0)
+    limit = int(ctx.get("daytrade_limit", 0) or 0)
+    if limit > 0 and count >= limit:
+        return False, "pdt_limit_exceeded"
+    return True, None
 
 
 def pdt_guard(pattern_day_trader: bool, daytrade_limit: int, daytrade_count: int) -> bool:

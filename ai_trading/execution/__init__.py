@@ -13,6 +13,8 @@ from ai_trading.utils.env import (
     get_alpaca_base_url,
 )
 
+from .guards import can_execute, pdt_preflight
+
 _logger = get_logger(__name__)
 
 
@@ -348,6 +350,8 @@ except Exception:  # noqa: BLE001 - broad to guard optional deps
 
 __all__ = [
     "Order",
+    "can_execute",
+    "pdt_preflight",
     "ExecutionAlgorithm",
     "ExecutionEngine",
     "ProductionExecutionCoordinator",
