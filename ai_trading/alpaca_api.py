@@ -326,6 +326,7 @@ class TradingClientAdapter:
         "__ai_trading_adapter__",
         "list_orders",
         "list_positions",
+        "__dict__",
     )
 
     def __init__(self, client: Any):

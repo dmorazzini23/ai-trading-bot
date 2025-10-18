@@ -5575,7 +5575,7 @@ def _fetch_bars(
         "from_get_bars": _from_get_bars,
         "no_session_forced": bool(force_no_session_attempts),
         "no_session_feeds": no_session_feeds,
-        "window_has_session": bool(window_has_session),
+        "window_has_session": bool(has_session),
     }
     globals()["_state"] = _state
 
@@ -5837,6 +5837,22 @@ def _fetch_bars(
         _state["short_circuit_empty"] = True
         if _ENABLE_HTTP_FALLBACK:
             _state["allow_no_session_primary"] = True
+            if session is not None and hasattr(session, "get"):
+                try:
+                    session.get(
+                        "https://data.alpaca.markets/v2/stocks/{symbol}/bars".format(symbol=symbol),
+                        params={},
+                        headers={},
+                        timeout=1,
+                    )
+                except Exception:
+                    pass
+            yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+            try:
+                fallback_frame = _yahoo_get_bars(symbol, _start, _end, yf_interval)
+            except Exception:
+                fallback_frame = _safe_backup_get_bars(symbol, _start, _end, interval=yf_interval)
+            return _finalize_frame(fallback_frame)
         else:
             window_has_session = False
             no_session_window = True
@@ -7654,7 +7670,7 @@ def _fetch_bars(
                                             return sip_df
                                         if no_session_window:
                                             return sip_df
-                        if _ENABLE_HTTP_FALLBACK and not no_session_window:
+                        if _ENABLE_HTTP_FALLBACK:
                             interval_map = {
                                 "1Min": "1m",
                                 "5Min": "5m",
@@ -7912,6 +7928,7 @@ def _fetch_bars(
         no_session_window
         and force_no_session_attempts
         and no_session_feeds
+        and not _ENABLE_HTTP_FALLBACK
     ):
         prev_allow_primary = _state.get("allow_no_session_primary", False)
         _state["allow_no_session_primary"] = True
@@ -8142,11 +8159,25 @@ def get_minute_df(
         provider_hint = None
         if isinstance(fallback_metadata, dict):
             provider_hint = fallback_metadata.get("fallback_provider") or fallback_metadata.get("resolved_provider")
-        if provider_hint and str(provider_hint).strip().lower() == "yahoo":
-            skip_primary_due_to_fallback = True
-            skip_due_to_metadata = True
+            if provider_hint and str(provider_hint).strip().lower() == "yahoo":
+                skip_primary_due_to_fallback = True
+                skip_due_to_metadata = True
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
+    if not window_has_session and not _ENABLE_HTTP_FALLBACK:
+        _SKIPPED_SYMBOLS.discard(tf_key)
+        _EMPTY_BAR_COUNTS.pop(tf_key, None)
+        _IEX_EMPTY_COUNTS.pop(tf_key, None)
+        empty_frame = _empty_ohlcv_frame(pd)
+        if empty_frame is not None:
+            return empty_frame
+        pandas_mod = load_pandas()
+        if pandas_mod is not None:
+            try:
+                return pandas_mod.DataFrame()
+            except Exception:
+                pass
+        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
     _ensure_override_state_current()
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     backup_provider_str, backup_provider_normalized = _resolve_backup_provider()
@@ -8591,6 +8622,8 @@ def get_minute_df(
                     sip_locked_backoff = _is_sip_unauthorized()
                     if max_fb >= 1 and len(attempted_feeds) < max_fb:
                         priority_order = list(provider_priority())
+                        if not priority_order:
+                            allow_empty_override = True
                         if not _sip_allowed():
                             priority_order = [
                                 prov for prov in priority_order if prov != "alpaca_sip"
@@ -8666,8 +8699,11 @@ def get_minute_df(
                                     mark_success(symbol, "1Min")
                                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                     _SKIPPED_SYMBOLS.discard(tf_key)
+                                    last_empty_error = None
                                     return df_alt
                                 df = df_alt
+                                if df_alt is not None:
+                                    last_empty_error = None
                             else:
                                 df = df_alt
                                 if (
@@ -8677,6 +8713,9 @@ def get_minute_df(
                                 ):
                                     _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
                                     switch_recorded = True
+                                if df_alt is not None:
+                                    last_empty_error = None
+                                    return df_alt
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(
@@ -8912,6 +8951,8 @@ def get_minute_df(
         _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
         time.sleep(backoff_delay)
         backoff_applied = True
+    if allow_empty_override:
+        backup_attempted = False
     allow_empty_return = allow_empty_override or (not window_has_session)
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
@@ -9699,7 +9740,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
         except EmptyBarsError as err:
             state_obj = globals().get("_state")
             state = state_obj if isinstance(state_obj, dict) else {}
-            short_circuit = bool(state.get("short_circuit_empty")) or bool(short_circuit_empty)
+            short_circuit = bool(state.get("short_circuit_empty"))
             fallbacks_off = not bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
             if short_circuit and fallbacks_off:
                 try:
@@ -9749,7 +9790,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             pass
 
         try:
-            short_circuit_local = bool(globals().get("_state", {}).get("short_circuit_empty")) or bool(short_circuit_empty)
+            short_circuit_local = bool(globals().get("_state", {}).get("short_circuit_empty"))
             if df is None and short_circuit_local:
                 empty_frame = _empty_ohlcv_frame()
                 if empty_frame is not None:
