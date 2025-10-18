@@ -254,6 +254,7 @@ def test_no_session_empty_payload_uses_sip_before_backup(monkeypatch):
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
     monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True, raising=False)
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True, raising=False)
     monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
 
     fallback_calls: list[tuple[str, ...]] = []
@@ -413,6 +414,8 @@ def test_window_no_session_override_persists(monkeypatch):
     monkeypatch.setattr(fetch, "_HAS_SIP", True)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
     monkeypatch.setattr(fetch, "alpaca_feed_failover", lambda: ("sip",))
     monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
     monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
@@ -462,6 +465,7 @@ def test_alt_feed_switch_records_override(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_sip_configured", lambda: True)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True, raising=False)
     monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
     monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
     monkeypatch.setattr(fetch, "_verify_minute_continuity", lambda df, *a, **k: df)

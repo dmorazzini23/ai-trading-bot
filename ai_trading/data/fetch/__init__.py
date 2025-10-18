@@ -5575,8 +5575,18 @@ def _fetch_bars(
         "from_get_bars": _from_get_bars,
         "no_session_forced": bool(force_no_session_attempts),
         "no_session_feeds": no_session_feeds,
+        "window_has_session": bool(window_has_session),
     }
     globals()["_state"] = _state
+
+    if not _state.get("window_has_session", True) and not _state.get("allow_no_session_primary", False):
+        empty_frame = _empty_ohlcv_frame(pd)
+        if empty_frame is not None:
+            return empty_frame
+        pandas_mod = load_pandas()
+        if pandas_mod is not None:
+            return pandas_mod.DataFrame()
+        return pd.DataFrame()
 
     meta: dict[str, Any] = {}
     _state["meta"] = meta
@@ -5844,6 +5854,9 @@ def _fetch_bars(
         if short_circuit_empty and not _frame_has_rows(frame):
             return _empty_ohlcv_frame(pd)
         return frame
+
+    if no_session_window and not _ENABLE_HTTP_FALLBACK:
+        return _finalize_frame(None)
 
     env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
     if not _has_alpaca_keys() and not _pytest_active() and not env_has_keys:
@@ -9704,6 +9717,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 except Exception:
                     outside = False
                 pytest_mode = _pytest_active()
+                short_circuit = bool(state.get("short_circuit_empty"))
                 if pytest_mode:
                     if (
                         abort_logged
@@ -9711,9 +9725,11 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                         or fallbacks_off
                         or not fallback_feed
                         or len(providers) <= 1
-                    ):
+                    ) and not short_circuit:
                         return (None, {}) if return_meta else None
                 elif outside or fallbacks_off:
+                    if short_circuit:
+                        return (df, {}) if return_meta else df
                     return (None, {}) if return_meta else None
         except Exception:
             pass
