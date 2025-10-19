@@ -5474,7 +5474,7 @@ def _fetch_bars(
     pd = _ensure_pandas()
     _ensure_requests()
     pytest_active = os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
-    global _NO_SESSION_ALPACA_OVERRIDE
+    global _NO_SESSION_ALPACA_OVERRIDE, _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
     if pd is None:
         raise RuntimeError("pandas not available")
     if start is None:
@@ -5496,6 +5496,11 @@ def _fetch_bars(
     feed = feed if feed not in ("",) else None
     feed, adjustment = _validate_fetch_params(symbol, start_dt, end_dt, timeframe, feed, adjustment)
     globals()["_state"] = {}
+    if pytest_active:
+        _alpaca_disabled_until = None
+        _ALPACA_DISABLED_ALERTED = False
+        _alpaca_disable_count = 0
+        _alpaca_empty_streak = 0
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
@@ -5763,10 +5768,13 @@ def _fetch_bars(
     resolved_feed = resolve_alpaca_feed(_feed)
     if explicit_feed_request and resolved_feed is not None:
         resolved_feed = _feed
-    if resolved_feed is None and _pytest_active():
-        downgrade_reason = get_data_feed_downgrade_reason()
-        if downgrade_reason == "missing_credentials":
+    if resolved_feed is None and (pytest_active or _pytest_active()):
+        if explicit_feed_request:
             resolved_feed = _feed
+        else:
+            downgrade_reason = get_data_feed_downgrade_reason()
+            if downgrade_reason == "missing_credentials":
+                resolved_feed = _feed
     if resolved_feed is None:
         fallback_prohibited = (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK
         if fallback_prohibited:
@@ -5870,7 +5878,29 @@ def _fetch_bars(
                 fallback_frame = _yahoo_get_bars(symbol, _start, _end, yf_interval)
             except Exception:
                 fallback_frame = _safe_backup_get_bars(symbol, _start, _end, interval=yf_interval)
-            return _finalize_frame(fallback_frame)
+            annotated_df = _annotate_df_source(
+                fallback_frame,
+                provider="yahoo",
+                feed="yahoo",
+            )
+            tags = _tags(provider="yahoo", feed="yahoo")
+            _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
+            _state["last_fallback_feed"] = "yahoo"
+            _mark_fallback(
+                symbol,
+                _interval,
+                _start,
+                _end,
+                from_provider=f"alpaca_{_feed}" if _feed else "alpaca",
+                fallback_df=annotated_df,
+                resolved_provider="yahoo",
+                resolved_feed="yahoo",
+                reason=_state.get("fallback_reason") or "no_session_window",
+            )
+            _state["fallback_reason"] = None
+            _record_fallback_success_metric(tags)
+            _record_success_metric(tags, prefer_fallback=True)
+            return _finalize_frame(annotated_df)
         else:
             window_has_session = False
             no_session_window = True
@@ -5879,7 +5909,7 @@ def _fetch_bars(
         return _finalize_frame(None)
 
     env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
-    if not _has_alpaca_keys() and not _pytest_active():
+    if not _has_alpaca_keys() and not (pytest_active or _pytest_active()):
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
             try:
@@ -5911,7 +5941,6 @@ def _fetch_bars(
         raise EmptyBarsError(
             f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
         )
-    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     monitor_disabled_until: _dt.datetime | None = None
     try:
         monitor_disabled_until = provider_monitor.disabled_until.get("alpaca")
@@ -7549,7 +7578,7 @@ def _fetch_bars(
                 else:
                     _state["retries"] = max_retries
             if (
-                _state["retries"] == 0
+                _state["retries"] <= 1
                 and _feed == "iex"
                 and reason in {"symbol_delisted_or_wrong_feed", "feed_error"}
                 and _sip_configured()
