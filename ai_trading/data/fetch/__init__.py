@@ -3396,8 +3396,25 @@ def _now_monotonic() -> float:
     return monotonic_time()
 
 
+def _detect_pytest_env() -> bool:
+    if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    try:
+        import sys as _sys
+
+        if "pytest" in _sys.modules:
+            return True
+    except Exception:
+        return False
+    try:
+        import pytest  # type: ignore  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def _pytest_active() -> bool:
-    return bool(os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"))
+    return _detect_pytest_env()
 
 
 def _is_sip_unauthorized() -> bool:
@@ -3594,7 +3611,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     # In tests, avoid consuming mocked SIP responses during the preflight check;
     # allow a single bypass so fixtures can reserve the payload for the actual
     # fallback attempt.
-    pytest_active = bool(os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"))
+    pytest_active = _detect_pytest_env()
     if pytest_active:
         if not allow_sip:
             return False
@@ -5305,7 +5322,7 @@ def get_daily(symbol: str, start: Any, end: Any) -> pd.DataFrame:
     """Fetch daily bars for ``symbol`` using a Yahoo-style endpoint."""
     pd = _ensure_pandas()
     _ensure_requests()
-    pytest_active = os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+    pytest_active = _detect_pytest_env()
     if pd is None:
         raise DataFetchError("pandas not available")
     start_dt = ensure_datetime(start)
@@ -5476,7 +5493,7 @@ def _fetch_bars(
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
     _ensure_requests()
-    pytest_active = os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+    pytest_active = _detect_pytest_env()
     global _NO_SESSION_ALPACA_OVERRIDE, _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
     if pd is None:
         raise RuntimeError("pandas not available")
@@ -8191,7 +8208,7 @@ def get_minute_df(
 
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    pytest_active = os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+    pytest_active = _detect_pytest_env()
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
@@ -9761,9 +9778,7 @@ __all__ = [
 
 
 def _pytest_active() -> bool:
-    import os
-
-    return bool(os.getenv("PYTEST_CURRENT_TEST"))
+    return _detect_pytest_env()
 
 
 if "_FETCH_BARS_WRAPPED" not in globals():
