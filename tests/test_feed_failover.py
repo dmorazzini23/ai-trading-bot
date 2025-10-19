@@ -50,6 +50,7 @@ def _reset_state():
     fetch._FEED_SWITCH_HISTORY.clear()
     fetch._IEX_EMPTY_COUNTS.clear()
     fetch._ALPACA_EMPTY_ERROR_COUNTS.clear()
+    fetch._ALPACA_SYMBOL_FAILURES.clear()
     fetch._CYCLE_FALLBACK_FEED.clear()
     fetch.provider_monitor.fail_counts.clear()
     fetch.provider_monitor.disabled_until.clear()

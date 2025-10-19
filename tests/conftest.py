@@ -3,6 +3,8 @@
 import os
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
+os.environ.setdefault("ALPACA_API_KEY", "dummy")
+os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 
 import sys as _sys
 

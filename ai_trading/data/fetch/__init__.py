@@ -3190,12 +3190,15 @@ def _has_alpaca_keys() -> bool:
 
     global _ALPACA_CREDS_CACHE
     now = monotonic_time()
+    if _pytest_active():
+        if is_data_feed_downgraded() and get_data_feed_downgrade_reason() == "missing_credentials":
+            _ALPACA_CREDS_CACHE = (False, now)
+            return False
+        _ALPACA_CREDS_CACHE = None
+        return True
     if is_data_feed_downgraded():
         _ALPACA_CREDS_CACHE = (False, now)
         return False
-    if _pytest_active():
-        _ALPACA_CREDS_CACHE = None
-        return True
 
     if _ALPACA_CREDS_CACHE is not None:
         cached_value, cached_ts = _ALPACA_CREDS_CACHE
