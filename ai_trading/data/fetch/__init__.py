@@ -9657,6 +9657,11 @@ def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
     )
 
 
+# Backwards-compatibility: expose ``empty_handling`` submodule at package level
+# so legacy tests using ``ai_trading.data.fetch.empty_handling`` continue to work.
+from . import empty_handling  # noqa: E402  # defer until dependencies defined
+
+
 __all__ = [
     "_DEFAULT_FEED",
     "refresh_default_feed",
@@ -9716,6 +9721,7 @@ __all__ = [
     "retry_empty_fetch_once",
     "is_primary_provider_enabled",
     "should_skip_symbol",
+    "empty_handling",
 ]
 
 
