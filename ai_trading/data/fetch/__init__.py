@@ -4549,14 +4549,17 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         df = _finnhub_get_bars(symbol, start, end, interval)
         if isinstance(df, list):  # pragma: no cover - defensive for stub returns
             return df
-        if getattr(df, "empty", True):
-            logger.warning(
-                "BACKUP_PROVIDER_EMPTY",
-                extra={"provider": provider, "symbol": symbol, "interval": interval},
-            )
-        if isinstance(df, pd.DataFrame):
-            df = _normalize_with_attrs(df)
-        return _annotate_df_source(df, provider=normalized, feed=normalized)
+        frame_has_rows = not getattr(df, "empty", True)
+        if frame_has_rows:
+            if isinstance(df, pd.DataFrame):
+                df = _normalize_with_attrs(df)
+            return _annotate_df_source(df, provider=normalized, feed=normalized)
+        logger.warning(
+            "BACKUP_PROVIDER_EMPTY",
+            extra={"provider": provider, "symbol": symbol, "interval": interval},
+        )
+        provider_str = "yahoo"
+        normalized = "yahoo"
     if normalized == "yahoo":
         pd_local = _ensure_pandas()
         start_dt = ensure_datetime(start)
