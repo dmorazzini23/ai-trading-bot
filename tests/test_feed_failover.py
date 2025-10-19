@@ -1,5 +1,10 @@
+import importlib
 import json
 import logging
+import os
+import sys
+
+from ai_trading.utils import env as env_utils
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,6 +16,8 @@ pd = pytest.importorskip("pandas")
 
 @pytest.fixture
 def capmetrics(monkeypatch: pytest.MonkeyPatch):
+    global fetch
+    fetch = importlib.import_module('ai_trading.data.fetch')
     bucket: list[tuple[str, dict]] = []
 
     def record(name: str, value: float = 1.0, tags: dict | None = None):
@@ -18,6 +25,17 @@ def capmetrics(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(fetch.metrics, "incr", record, raising=False)
     return bucket
+
+
+@pytest.fixture(autouse=True)
+def _dummy_alpaca_keys(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+    env_utils.refresh_alpaca_credentials_cache()
+    try:
+        yield
+    finally:
+        env_utils.refresh_alpaca_credentials_cache()
 
 
 class _Resp:
@@ -52,6 +70,11 @@ def _reset_state():
     fetch._ALPACA_EMPTY_ERROR_COUNTS.clear()
     fetch._ALPACA_SYMBOL_FAILURES.clear()
     fetch._CYCLE_FALLBACK_FEED.clear()
+    fetch._SIP_UNAVAILABLE_LOGGED.clear()
+    fetch._SIP_PRECHECK_DONE = False
+    fetch._SIP_UNAUTHORIZED = False
+    fetch._SIP_UNAUTHORIZED_UNTIL = None
+    os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
     fetch.provider_monitor.fail_counts.clear()
     fetch.provider_monitor.disabled_until.clear()
     fetch.provider_monitor.disabled_since.clear()

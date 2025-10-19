@@ -10,6 +10,7 @@ pd = pytest.importorskip("pandas")
 from ai_trading.data import fetch as data_fetcher
 from ai_trading import alpaca_api as bars
 from ai_trading.utils.base import health_check
+from ai_trading.utils import env as env_utils
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +22,21 @@ def _suppress_system_time_warning(monkeypatch):
 
     monkeypatch.setattr(urllib3, "disable_warnings", _disable_warnings)
     urllib3.disable_warnings(urllib3.exceptions.SystemTimeWarning)
+
+
+@pytest.fixture(autouse=True)
+def _reload_data_fetcher():
+    import importlib
+    global data_fetcher
+    data_fetcher = importlib.import_module("ai_trading.data.fetch")
+    global bars
+    bars = importlib.import_module("ai_trading.alpaca_api")
+    env_utils.refresh_alpaca_credentials_cache()
+    try:
+        data_fetcher._ALPACA_SYMBOL_FAILURES.clear()
+        data_fetcher._FEED_OVERRIDE_BY_TF.clear()
+    except AttributeError:
+        pass
 
 
 def _stub_df():
@@ -38,6 +54,8 @@ def test_fetch_fallback_to_daily(monkeypatch):
     df = _stub_df()
     monkeypatch.setattr(data_fetcher, "get_minute_df", lambda *a, **k: None)
     monkeypatch.setattr(bars, "get_bars_df", lambda *a, **k: df)
+    monkeypatch.setattr(data_fetcher, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    data_fetcher._ALPACA_SYMBOL_FAILURES.clear()
 
     # Properly mocked module for pandas_ta
     mock_module = types.ModuleType("pandas_ta")
