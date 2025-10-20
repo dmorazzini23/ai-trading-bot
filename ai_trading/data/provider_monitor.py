@@ -49,6 +49,23 @@ CANON = {
 }
 
 
+def _detect_pytest_env() -> bool:
+    if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    try:
+        import sys as _sys
+
+        if "pytest" in _sys.modules:
+            return True
+    except Exception:
+        return False
+    try:
+        import pytest  # type: ignore  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def canonical_provider(name: str) -> str:
     """Return a human-readable provider label for logging."""
 
