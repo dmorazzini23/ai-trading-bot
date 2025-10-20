@@ -21563,6 +21563,17 @@ def _ensure_executable_quote(
                 reason=reason,
                 slippage_bps=slippage_bps,
             )
+        if reference_valid:
+            logger.warning(
+                "QUOTE_GATE_FALLBACK_DISABLED",
+                extra={
+                    "symbol": symbol,
+                    "reason": reason,
+                    "allow_reference_fallback": allow_reference_fallback,
+                    "allow_last_close": allow_last_close,
+                    "slippage_bps": slippage_bps,
+                },
+            )
         if reason == "missing_bid_ask":
             logger.warning(
                 "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=missing_bid_ask",
