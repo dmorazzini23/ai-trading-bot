@@ -17338,10 +17338,15 @@ def _enter_long(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
+    fallback_gate_ok = fallback_used or (
+        isinstance(price_source, str)
+        and price_source.strip().lower() in _TERMINAL_FALLBACK_PRICE_SOURCES
+    )
     quote_gate = _ensure_executable_quote(
         ctx,
         symbol,
         reference_price=current_price,
+        allow_reference_fallback=fallback_gate_ok,
     )
     if not quote_gate:
         return True
@@ -17978,10 +17983,15 @@ def _enter_short(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
+    fallback_gate_ok = fallback_used or (
+        isinstance(price_source, str)
+        and price_source.strip().lower() in _TERMINAL_FALLBACK_PRICE_SOURCES
+    )
     quote_gate = _ensure_executable_quote(
         ctx,
         symbol,
         reference_price=current_price,
+        allow_reference_fallback=fallback_gate_ok,
     )
     if not quote_gate:
         return True
@@ -21414,6 +21424,7 @@ def _ensure_executable_quote(
     symbol: str,
     *,
     reference_price: float | None,
+    allow_reference_fallback: bool = False,
 ) -> QuoteGateDecision:
     """Return quote-gate decision ensuring an executable and fresh quote."""
 
@@ -21423,6 +21434,9 @@ def _ensure_executable_quote(
     except COMMON_EXC:
         cfg = None
     require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
+    allow_last_close = bool(getattr(cfg, "execution_allow_last_close", False))
+    if allow_reference_fallback:
+        allow_last_close = True
     if data_client is None or not _stock_quote_request_ready():
         # Without a data client or request support we cannot enforce the gate; defer to existing guards.
         return QuoteGateDecision(True, None, {})
@@ -21438,6 +21452,36 @@ def _ensure_executable_quote(
     )
     if not gate_decision:
         reason = gate_decision.reason or "missing_bid_ask"
+        fallback_ok = (
+            allow_last_close
+            and reference_price is not None
+            and math.isfinite(reference_price)
+            and reference_price > 0
+        )
+        if fallback_ok:
+            slippage_bps = float(getattr(cfg, "price_slippage_bps", 10.0) or 10.0)
+            slippage = max(slippage_bps, 0.0) / 10000.0
+            bid = reference_price * (1.0 - slippage) if slippage else reference_price
+            ask = reference_price * (1.0 + slippage) if slippage else reference_price
+            logger.warning(
+                "QUOTE_GATE_SYNTHETIC_FALLBACK",
+                extra={
+                    "symbol": symbol,
+                    "reason": reason,
+                    "reference_price": reference_price,
+                    "slippage_bps": slippage_bps,
+                },
+            )
+            details = {
+                "bid": bid,
+                "ask": ask,
+                "reference_price": reference_price,
+                "synthetic": True,
+                "fallback_reason": reason,
+                "slippage_bps": slippage_bps,
+                "age_sec": 0.0,
+            }
+            return QuoteGateDecision(True, None, details)
         if reason == "missing_bid_ask":
             logger.warning(
                 "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=missing_bid_ask",
