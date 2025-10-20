@@ -17342,13 +17342,37 @@ def _enter_long(
         isinstance(price_source, str)
         and price_source.strip().lower() in _TERMINAL_FALLBACK_PRICE_SOURCES
     )
+    fallback_slippage_bps = _slippage_setting_bps()
     quote_gate = _ensure_executable_quote(
         ctx,
         symbol,
         reference_price=current_price,
         allow_reference_fallback=fallback_gate_ok,
     )
+    if not quote_gate and fallback_gate_ok:
+        try:
+            quote_gate = _synthetic_quote_decision(
+                symbol,
+                current_price,
+                reason=getattr(quote_gate, "reason", None) if quote_gate else None,
+                slippage_bps=fallback_slippage_bps,
+            )
+        except ValueError:
+            return True
     if not quote_gate:
+        return True
+
+    pdt_blocked, pdt_context = _pdt_limit_exhausted(ctx)
+    if pdt_blocked:
+        logger.warning(
+            "PDT_LIMIT_ACTIVE_SKIP",
+            extra={
+                "symbol": symbol,
+                "daytrade_count": pdt_context.get("daytrade_count") if pdt_context else None,
+                "daytrade_limit": pdt_context.get("daytrade_limit") if pdt_context else None,
+                "pattern_day_trader": pdt_context.get("pattern_day_trader") if pdt_context else None,
+            },
+        )
         return True
 
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
@@ -17987,13 +18011,37 @@ def _enter_short(
         isinstance(price_source, str)
         and price_source.strip().lower() in _TERMINAL_FALLBACK_PRICE_SOURCES
     )
+    fallback_slippage_bps = _slippage_setting_bps()
     quote_gate = _ensure_executable_quote(
         ctx,
         symbol,
         reference_price=current_price,
         allow_reference_fallback=fallback_gate_ok,
     )
+    if not quote_gate and fallback_gate_ok:
+        try:
+            quote_gate = _synthetic_quote_decision(
+                symbol,
+                current_price,
+                reason=getattr(quote_gate, "reason", None) if quote_gate else None,
+                slippage_bps=fallback_slippage_bps,
+            )
+        except ValueError:
+            return True
     if not quote_gate:
+        return True
+
+    pdt_blocked, pdt_context = _pdt_limit_exhausted(ctx)
+    if pdt_blocked:
+        logger.warning(
+            "PDT_LIMIT_ACTIVE_SKIP",
+            extra={
+                "symbol": symbol,
+                "daytrade_count": pdt_context.get("daytrade_count") if pdt_context else None,
+                "daytrade_limit": pdt_context.get("daytrade_limit") if pdt_context else None,
+                "pattern_day_trader": pdt_context.get("pattern_day_trader") if pdt_context else None,
+            },
+        )
         return True
 
     atr = feat_df["atr"].iloc[-1]
@@ -21419,6 +21467,55 @@ def _evaluate_quote_gate(
     return QuoteGateDecision(True, None, details)
 
 
+def _synthetic_quote_decision(
+    symbol: str,
+    reference_price: float,
+    *,
+    reason: str | None,
+    slippage_bps: float,
+) -> QuoteGateDecision:
+    """Construct a synthetic quote using reference pricing when live quotes fail."""
+
+    base_price = float(reference_price)
+    slip_ratio = max(float(slippage_bps), 0.0) / 10000.0
+    if not math.isfinite(base_price) or base_price <= 0:
+        raise ValueError("Synthetic quote requires positive finite reference price")
+    bid = base_price * (1.0 - slip_ratio) if slip_ratio else base_price
+    ask = base_price * (1.0 + slip_ratio) if slip_ratio else base_price
+    details = {
+        "symbol": symbol,
+        "bid": bid,
+        "ask": ask,
+        "reference_price": base_price,
+        "slippage_bps": float(slippage_bps),
+        "synthetic": True,
+        "fallback_reason": reason,
+        "age_sec": 0.0,
+    }
+    logger.warning("QUOTE_GATE_SYNTHETIC_FALLBACK", extra=details)
+    return QuoteGateDecision(True, None, details)
+
+
+def _pdt_limit_exhausted(ctx: Any) -> tuple[bool, Mapping[str, Any] | None]:
+    """Return ``(True, context)`` when PDT limits block new trades."""
+
+    context = getattr(ctx, "_pdt_last_context", None)
+    if not isinstance(context, Mapping):
+        return False, None
+    enforced = bool(context.get("daytrade_limit_enforced"))
+    pattern_flag = bool(context.get("pattern_day_trader"))
+    if not enforced or not pattern_flag:
+        return False, context
+    try:
+        limit = int(context.get("daytrade_limit", 0))
+        count = int(context.get("daytrade_count", 0))
+    except (TypeError, ValueError):
+        return False, context
+    if limit <= 0:
+        return False, context
+    return count >= limit, context
+
+
 def _ensure_executable_quote(
     ctx: BotContext,
     symbol: str,
@@ -21443,6 +21540,7 @@ def _ensure_executable_quote(
 
     max_age = float(getattr(cfg, "execution_max_staleness_sec", 60) or 60)
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
+    slippage_bps = _slippage_setting_bps()
 
     quote = _fetch_quote(ctx, symbol)
     gate_decision = _evaluate_quote_gate(
@@ -21458,30 +21556,13 @@ def _ensure_executable_quote(
             and math.isfinite(reference_price)
             and reference_price > 0
         )
-        if fallback_ok:
-            slippage_bps = float(getattr(cfg, "price_slippage_bps", 10.0) or 10.0)
-            slippage = max(slippage_bps, 0.0) / 10000.0
-            bid = reference_price * (1.0 - slippage) if slippage else reference_price
-            ask = reference_price * (1.0 + slippage) if slippage else reference_price
-            logger.warning(
-                "QUOTE_GATE_SYNTHETIC_FALLBACK",
-                extra={
-                    "symbol": symbol,
-                    "reason": reason,
-                    "reference_price": reference_price,
-                    "slippage_bps": slippage_bps,
-                },
+        if fallback_ok and reason in {"missing_bid_ask", "stale_quote"}:
+            return _synthetic_quote_decision(
+                symbol,
+                float(reference_price),
+                reason=reason,
+                slippage_bps=slippage_bps,
             )
-            details = {
-                "bid": bid,
-                "ask": ask,
-                "reference_price": reference_price,
-                "synthetic": True,
-                "fallback_reason": reason,
-                "slippage_bps": slippage_bps,
-                "age_sec": 0.0,
-            }
-            return QuoteGateDecision(True, None, details)
         if reason == "missing_bid_ask":
             logger.warning(
                 "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=missing_bid_ask",
@@ -21509,6 +21590,14 @@ def _ensure_executable_quote(
         if mid is not None and math.isfinite(mid):
             gap_ratio = abs(mid - reference_price) / reference_price
             if gap_ratio > gap_limit:
+                fallback_ok = allow_last_close and allow_reference_fallback and math.isfinite(reference_price)
+                if fallback_ok:
+                    return _synthetic_quote_decision(
+                        symbol,
+                        float(reference_price),
+                        reason="gap_ratio_exceeded",
+                        slippage_bps=slippage_bps,
+                    )
                 logger.info(
                     "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio>limit",
                     symbol,
@@ -21525,6 +21614,36 @@ def _ensure_executable_quote(
                 )
 
     return gate_decision
+
+
+def _slippage_setting_bps() -> float:
+    """Return configured slippage (basis points) for synthetic pricing paths."""
+
+    for key in ("PRICE_SLIPPAGE_BPS", "SLIPPAGE_BPS"):
+        try:
+            value = get_env(key, None, cast=float)
+        except COMMON_EXC:
+            continue
+        if value is not None:
+            try:
+                return max(float(value), 0.0)
+            except (TypeError, ValueError):
+                continue
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+    if cfg is not None:
+        try:
+            configured = getattr(cfg, "price_slippage_bps", None)
+        except AttributeError:
+            configured = None
+        if configured is not None:
+            try:
+                return max(float(configured), 0.0)
+            except (TypeError, ValueError):
+                pass
+    return 10.0
 
 
 def _format_price_component(value: float | None) -> str:
@@ -21571,23 +21690,10 @@ def _resolve_limit_price(
 ) -> tuple[float | None, str | None]:
     """Determine a limit price using deterministic priority with slippage."""
 
-    def _slippage_setting() -> float:
-        for key in ("PRICE_SLIPPAGE_BPS", "SLIPPAGE_BPS"):
-            try:
-                value = get_env(key, None, cast=float)
-            except COMMON_EXC:
-                continue
-            if value is not None:
-                try:
-                    return max(float(value), 0.0)
-                except (TypeError, ValueError):
-                    continue
-        return 10.0
-
     def _reason_summary(reasons: list[str]) -> str:
         return "ok" if not reasons else ";".join(reasons)
 
-    slippage_bps = _slippage_setting()
+    slippage_bps = _slippage_setting_bps()
     failure_reasons: list[str] = []
 
     nbbo_quote = _fetch_quote(ctx, symbol)
