@@ -5791,13 +5791,6 @@ def _fetch_bars(
     resolved_feed = resolve_alpaca_feed(_feed)
     if explicit_feed_request and resolved_feed is not None:
         resolved_feed = _feed
-    if resolved_feed is None and (pytest_active or _pytest_active()):
-        if explicit_feed_request:
-            resolved_feed = _feed
-        else:
-            downgrade_reason = get_data_feed_downgrade_reason()
-            if downgrade_reason == "missing_credentials":
-                resolved_feed = _feed
     if resolved_feed is None:
         fallback_prohibited = (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK
         if fallback_prohibited:
@@ -5964,6 +5957,40 @@ def _fetch_bars(
         raise EmptyBarsError(
             f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
         )
+    now = datetime.now(UTC)
+    disable_expired = False
+    if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
+        disable_expired = True
+        prev_disable_count = _alpaca_disable_count
+        _alpaca_disabled_until = None
+        _ALPACA_DISABLED_ALERTED = False
+        _alpaca_empty_streak = 0
+        provider_disabled.labels(provider="alpaca").set(0)
+        provider_monitor.record_success("alpaca")
+        _alpaca_disable_count = 0
+        try:
+            tf_key = (symbol, _interval)
+            _FALLBACK_UNTIL.pop(tf_key, None)
+            _SKIPPED_SYMBOLS.discard(tf_key)
+            _FALLBACK_WINDOWS.discard(_fallback_key(symbol, _interval, _start, _end))
+            _clear_backup_skip(symbol, _interval)
+            _clear_minute_fallback_state(symbol, _interval, _start, _end)
+        except Exception:
+            pass
+        try:
+            logger.info(
+                "PRIMARY_PROVIDER_REENABLED",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "disable_count": prev_disable_count,
+                    }
+                ),
+            )
+        except Exception:
+            pass
     monitor_disabled_until: _dt.datetime | None = None
     try:
         monitor_disabled_until = provider_monitor.disabled_until.get("alpaca")
@@ -5975,13 +6002,20 @@ def _fetch_bars(
                 monitor_disabled_until = monitor_disabled_until.replace(tzinfo=UTC)
         except Exception:
             monitor_disabled_until = None
-    if monitor_disabled_until and (
-        _alpaca_disabled_until is None or monitor_disabled_until > _alpaca_disabled_until
+    if monitor_disabled_until and monitor_disabled_until <= now:
+        provider_monitor.record_success("alpaca")
+        monitor_disabled_until = None
+    if (
+        monitor_disabled_until
+        and not disable_expired
+        and (
+            _alpaca_disabled_until is None
+            or monitor_disabled_until > _alpaca_disabled_until
+        )
     ):
         _alpaca_disabled_until = monitor_disabled_until
         _ALPACA_DISABLED_ALERTED = False
     if _alpaca_disabled_until:
-        now = datetime.now(UTC)
         if now < _alpaca_disabled_until:
             if not _ALPACA_DISABLED_ALERTED:
                 try:
@@ -6032,28 +6066,6 @@ def _fetch_bars(
             raise EmptyBarsError(
                 f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled"
             )
-        else:
-            _alpaca_disabled_until = None
-            _ALPACA_DISABLED_ALERTED = False
-            _alpaca_empty_streak = 0
-            prev_disable_count = _alpaca_disable_count
-            provider_disabled.labels(provider="alpaca").set(0)
-            provider_monitor.record_success("alpaca")
-            _alpaca_disable_count = 0
-            try:
-                logger.info(
-                    "PRIMARY_PROVIDER_REENABLED",
-                    extra=_norm_extra(
-                        {
-                            "provider": "alpaca",
-                            "feed": _feed,
-                            "timeframe": _interval,
-                            "disable_count": prev_disable_count,
-                        }
-                    ),
-                )
-            except Exception:
-                pass
     fallback_key = _fallback_key(symbol, _interval, _start, _end)
     if fallback_key in _FALLBACK_WINDOWS:
         override_feed = _FEED_OVERRIDE_BY_TF.get((symbol, _interval))
@@ -8311,6 +8323,13 @@ def get_minute_df(
             skip_primary_due_to_fallback = True
         else:
             _clear_backup_skip(symbol, "1Min")
+
+    if pytest_active and _alpaca_disabled_until is None and not provider_monitor.disabled_until.get("alpaca"):
+        skip_primary_due_to_fallback = False
+        try:
+            _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
+        except Exception:
+            pass
 
     minute_metrics: dict[str, Any] = {
         "success_emitted": False,

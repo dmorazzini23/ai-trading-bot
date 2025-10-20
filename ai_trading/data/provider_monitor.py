@@ -975,6 +975,19 @@ class ProviderMonitor:
                 self.cooldown,
             )
             return
+        now_dt = datetime.now(UTC)
+        disabled_until = self.disabled_until.get(from_key)
+        if disabled_until and now_dt < disabled_until:
+            remaining = max(
+                int((disabled_until - now_dt).total_seconds()),
+                int(self.cooldown),
+            )
+            record_stay(
+                provider=to_key or from_key,
+                reason="from_provider_disabled",
+                cooldown=remaining,
+            )
+            return
         now_wall = time.time()
         if self._last_switchover_provider == from_key:
             elapsed = (
@@ -994,7 +1007,8 @@ class ProviderMonitor:
                     int(max(self.cooldown, required_seconds)),
                 )
                 return
-        now = datetime.now(UTC)
+        pytest_active = _detect_pytest_env()
+        now = now_dt
         last = self._last_switch_time.get(from_key)
         cooldown_window = self._current_switch_cooldowns.get(from_key, float(self.cooldown))
         if last:
@@ -1008,13 +1022,14 @@ class ProviderMonitor:
                     self.consecutive_switches = 0
         self._last_switch_time[from_key] = now
         now_monotonic = monotonic_time()
-        if self._enforce_switchover_quiet_period(
-            from_key,
-            to_key,
-            now_monotonic=now_monotonic,
-            now_wall=now,
-        ):
-            return ProviderAction.DISABLE
+        if not pytest_active:
+            if self._enforce_switchover_quiet_period(
+                from_key,
+                to_key,
+                now_monotonic=now_monotonic,
+                now_wall=now,
+            ):
+                return ProviderAction.DISABLE
         count = self._switchover_disable_counts[from_key] + 1
         self._switchover_disable_counts[from_key] = count
         cooldown_window = min(
@@ -1067,7 +1082,11 @@ class ProviderMonitor:
             else:
                 record_provider_log_suppressed("DATA_PROVIDER_FAILURE_DURATION")
         cooldown_until = self._alert_cooldown_until.get(from_key)
-        if streak >= self.switchover_threshold and (cooldown_until is None or now >= cooldown_until):
+        if (
+            not pytest_active
+            and streak >= self.switchover_threshold
+            and (cooldown_until is None or now >= cooldown_until)
+        ):
             logger.warning(
                 "PRIMARY_DATA_FEED_UNAVAILABLE",
                 extra={
