@@ -16418,6 +16418,28 @@ def _fallback_gap_ratio_limit_cached(signature: tuple[str | None, ...]) -> float
 
 
 def _fallback_gap_ratio_limit() -> float:
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+
+    if cfg is not None:
+        try:
+            primary_bps = float(getattr(cfg, "gap_limit_bps", 0) or 0)
+        except (TypeError, ValueError):
+            primary_bps = 0.0
+        try:
+            ratio_bps = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0) * 10000.0
+        except (TypeError, ValueError):
+            ratio_bps = 0.0
+        try:
+            fallback_bps = float(getattr(cfg, "fallback_gap_limit_bps", 0) or 0)
+        except (TypeError, ValueError):
+            fallback_bps = 0.0
+        base_bps = max(500.0, primary_bps, ratio_bps)
+        candidate = max(base_bps, fallback_bps)
+        return max(0.0, candidate) / 10000.0
+
     return _fallback_gap_ratio_limit_cached(
         _env_signature(
             "AI_TRADING_GAP_LIMIT_BPS",

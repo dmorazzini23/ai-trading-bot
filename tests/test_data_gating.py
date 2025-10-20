@@ -5,6 +5,7 @@ import pytest
 
 import ai_trading.core.bot_engine as bot_engine
 from ai_trading.core.bot_engine import BotState
+from ai_trading.config.runtime import TradingConfig
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +144,23 @@ def test_fallback_gap_floor_relaxes_price_reliability(monkeypatch):
     assert quality["price_reliable"] is True
     assert quality.get("price_reliable_reason") is None
     assert quality.get("fallback_gap_relaxed") is True
+
+
+def test_fallback_gap_ratio_prefers_trading_config(monkeypatch):
+    # Ensure legacy environment values are present but should be ignored.
+    monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "20")
+    monkeypatch.setenv("AI_TRADING_FALLBACK_GAP_LIMIT_BPS", "30")
+    cfg = TradingConfig(
+        gap_ratio_limit=0.01,
+        gap_limit_bps=120,
+        fallback_gap_limit_bps=900,
+    )
+    monkeypatch.setattr(bot_engine, "get_trading_config", lambda: cfg)
+    bot_engine._fallback_gap_ratio_limit.cache_clear()
+
+    result = bot_engine._fallback_gap_ratio_limit()
+
+    assert result == pytest.approx(0.09)
 
 
 def test_missing_ohlcv_blocks(monkeypatch):

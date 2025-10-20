@@ -35,3 +35,25 @@ def test_shadow_cycle_respects_degraded_flag() -> None:
     guards.end_cycle(stale_threshold_ratio=0.30)
     guards.begin_cycle(universe_size=12, degraded=False)
     assert not guards.shadow_active()
+
+
+def test_pdt_guard_forces_shadow_and_logs_once(caplog) -> None:
+    _reset_state()
+    caplog.set_level("INFO", logger="ai_trading.execution.guards")
+
+    assert guards.pdt_guard(True, 3, 3) is False
+    assert guards.STATE.pdt.locked_day is not None
+    assert guards.STATE.shadow_cycle_forced is True
+    assert guards.STATE.shadow_cycle is True
+
+    records = [rec for rec in caplog.records if rec.message == "PDT_SHADOW_MODE_ENABLED"]
+    assert len(records) == 1
+
+    caplog.clear()
+    assert guards.pdt_guard(True, 3, 0) is False
+    assert guards.STATE.shadow_cycle_forced is True
+    assert guards.STATE.shadow_cycle is True
+    assert not [rec for rec in caplog.records if rec.message == "PDT_SHADOW_MODE_ENABLED"]
+
+    guards.begin_cycle(universe_size=5, degraded=False)
+    assert guards.shadow_active()

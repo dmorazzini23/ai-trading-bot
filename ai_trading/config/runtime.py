@@ -496,6 +496,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Permit opening trades using last close prices when live quotes unavailable.",
     ),
     ConfigSpec(
+        field="execution_allow_fallback_price",
+        env=("EXECUTION_ALLOW_FALLBACK_PRICE", "AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE"),
+        cast="bool",
+        default=True,
+        description="Allow fallback pricing sources when primary NBBO quotes are unavailable.",
+    ),
+    ConfigSpec(
         field="execution_stale_ratio_shadow",
         env=("EXECUTION_STALE_RATIO_SHADOW",),
         cast="float",
@@ -702,6 +709,24 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         default=0.005,
         description="Maximum acceptable gap ratio before orders are blocked by execution gating.",
         min_value=0.0,
+    ),
+    ConfigSpec(
+        field="gap_limit_bps",
+        env=("AI_TRADING_GAP_LIMIT_BPS",),
+        cast="int",
+        default=200,
+        description="Maximum acceptable primary gap in basis points before orders are blocked by execution gating.",
+        min_value=0,
+        max_value=10000,
+    ),
+    ConfigSpec(
+        field="fallback_gap_limit_bps",
+        env=("AI_TRADING_FALLBACK_GAP_LIMIT_BPS",),
+        cast="int",
+        default=500,
+        description="Permissible fallback pricing gap in basis points when primary quotes are unavailable.",
+        min_value=0,
+        max_value=10000,
     ),
     ConfigSpec(
         field="data_daily_fetch_min_interval_s",
@@ -1296,6 +1321,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="str",
         default="rl_agent.zip",
         description="Filesystem path to the reinforcement learning model artifact.",
+    ),
+    ConfigSpec(
+        field="halt_flag_path",
+        env=("HALT_FLAG_PATH", "AI_TRADING_HALT_FLAG_PATH"),
+        cast="str",
+        default="halt.flag",
+        description="Filesystem path to the halt flag used to pause live trading.",
     ),
     ConfigSpec(
         field="trading_mode",

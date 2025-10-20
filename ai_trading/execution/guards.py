@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Tuple
 
 from ai_trading.config.management import get_trading_config
+from ai_trading.logging import get_logger
 
 
 def _utcnow() -> _dt.datetime:
@@ -43,6 +44,7 @@ class SafetyState:
 
 
 STATE = SafetyState()
+logger = get_logger(__name__)
 
 
 def _now() -> _dt.datetime:
@@ -177,14 +179,29 @@ def pdt_guard(pattern_day_trader: bool, daytrade_limit: int, daytrade_count: int
 
     today = _trading_day()
     if STATE.pdt.locked_day == today:
+        STATE.shadow_cycle_forced = True
+        STATE.shadow_cycle = True
         return False
 
     if pattern_day_trader and daytrade_count >= daytrade_limit > 0:
+        previous_day = STATE.pdt.locked_day
+        previously_forced = STATE.shadow_cycle_forced
         STATE.pdt = PDTState(
             locked_day=today,
             limit=daytrade_limit,
             count=daytrade_count,
         )
+        STATE.shadow_cycle_forced = True
+        STATE.shadow_cycle = True
+        if previous_day != today or not previously_forced:
+            logger.info(
+                "PDT_SHADOW_MODE_ENABLED",
+                extra={
+                    "day": today.isoformat(),
+                    "limit": daytrade_limit,
+                    "count": daytrade_count,
+                },
+            )
         return False
     return True
 
@@ -251,4 +268,3 @@ def shadow_active() -> bool:
     """Return ``True`` when the current cycle is shadow-only."""
 
     return STATE.shadow_cycle
-
