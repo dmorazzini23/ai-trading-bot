@@ -21497,23 +21497,26 @@ def _synthetic_quote_decision(
 
 
 def _pdt_limit_exhausted(ctx: Any) -> tuple[bool, Mapping[str, Any] | None]:
-    """Return ``(True, context)`` when PDT limits block new trades."""
+    """Return ``(True, context)`` when PDT limits or counters block new trades."""
 
     context = getattr(ctx, "_pdt_last_context", None)
     if not isinstance(context, Mapping):
         return False, None
-    enforced = bool(context.get("daytrade_limit_enforced"))
     pattern_flag = bool(context.get("pattern_day_trader"))
-    if not enforced or not pattern_flag:
-        return False, context
     try:
         limit = int(context.get("daytrade_limit", 0))
         count = int(context.get("daytrade_count", 0))
     except (TypeError, ValueError):
-        return False, context
-    if limit <= 0:
-        return False, context
-    return count >= limit, context
+        limit = 0
+        count = 0
+    enforced = bool(context.get("daytrade_limit_enforced"))
+    threshold_hit = pattern_flag and limit > 0 and count >= limit
+    if threshold_hit:
+        return True, context
+    if enforced and limit <= 0 and pattern_flag and count > 0:
+        # Defensive guard when brokers flag PDT but limit absent.
+        return True, context
+    return False, context
 
 
 def _ensure_executable_quote(
@@ -21541,6 +21544,8 @@ def _ensure_executable_quote(
     max_age = float(getattr(cfg, "execution_max_staleness_sec", 60) or 60)
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
     slippage_bps = _slippage_setting_bps()
+    reference_valid = reference_price is not None and math.isfinite(reference_price) and reference_price > 0.0
+    fallback_permitted = (allow_reference_fallback or allow_last_close) and reference_valid
 
     quote = _fetch_quote(ctx, symbol)
     gate_decision = _evaluate_quote_gate(
@@ -21550,13 +21555,8 @@ def _ensure_executable_quote(
     )
     if not gate_decision:
         reason = gate_decision.reason or "missing_bid_ask"
-        fallback_ok = (
-            allow_last_close
-            and reference_price is not None
-            and math.isfinite(reference_price)
-            and reference_price > 0
-        )
-        if fallback_ok and reason in {"missing_bid_ask", "stale_quote"}:
+        fallback_ok = fallback_permitted
+        if fallback_ok:
             return _synthetic_quote_decision(
                 symbol,
                 float(reference_price),
@@ -21577,9 +21577,7 @@ def _ensure_executable_quote(
         return gate_decision
 
     if (
-        reference_price is not None
-        and math.isfinite(reference_price)
-        and reference_price > 0
+        reference_valid
         and gap_limit > 0
     ):
         mid: float | None = None
@@ -21590,8 +21588,7 @@ def _ensure_executable_quote(
         if mid is not None and math.isfinite(mid):
             gap_ratio = abs(mid - reference_price) / reference_price
             if gap_ratio > gap_limit:
-                fallback_ok = allow_last_close and allow_reference_fallback and math.isfinite(reference_price)
-                if fallback_ok:
+                if fallback_permitted:
                     return _synthetic_quote_decision(
                         symbol,
                         float(reference_price),
