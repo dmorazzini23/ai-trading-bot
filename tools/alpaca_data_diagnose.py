@@ -57,7 +57,10 @@ def diagnose(symbol: str, key_id: str | None, secret_key: str | None, base_url: 
             result["quote_status"] = "ok" if bid and ask else "incomplete"
             result["bid"] = bid
             result["ask"] = ask
-            result["quote_ts"] = getattr(quote, "timestamp", None) or getattr(quote, "t", None)
+            quote_ts = getattr(quote, "timestamp", None) or getattr(quote, "t", None)
+            if hasattr(quote_ts, "isoformat"):
+                quote_ts = quote_ts.isoformat()
+            result["quote_ts"] = quote_ts
 
     return result
 
