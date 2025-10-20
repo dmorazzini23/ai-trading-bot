@@ -24,17 +24,27 @@ def _client(key_id: str | None, secret_key: str | None, base_url: str | None) ->
     return REST(key_id, secret_key, api_base, api_version="v2")
 
 
-def diagnose(symbol: str, key_id: str | None, secret_key: str | None, base_url: str | None) -> dict[str, object]:
+def diagnose(
+    symbol: str,
+    key_id: str | None,
+    secret_key: str | None,
+    base_url: str | None,
+    feed: str | None = None,
+) -> dict[str, object]:
     client = _client(key_id, secret_key, base_url)
     now = datetime.now(UTC)
     start = now - timedelta(minutes=15)
     start_iso = start.replace(microsecond=0).isoformat()
     end_iso = now.replace(microsecond=0).isoformat()
 
-    result: dict[str, object] = {"symbol": symbol, "timestamp": now.isoformat()}
+    result: dict[str, object] = {
+        "symbol": symbol,
+        "timestamp": now.isoformat(),
+        "feed": feed or "sip",
+    }
 
     try:
-        bars = client.get_bars(symbol, "1Min", start=start_iso, end=end_iso, limit=5)
+        bars = client.get_bars(symbol, "1Min", start=start_iso, end=end_iso, limit=5, feed=feed)
     except Exception as exc:  # pragma: no cover - diagnostic path
         result["minute_error"] = str(exc)
     else:
@@ -47,7 +57,7 @@ def diagnose(symbol: str, key_id: str | None, secret_key: str | None, base_url: 
             result["minute_volume"] = getattr(bar, "v", None) or getattr(bar, "volume", None)
 
     try:
-        quote = client.get_latest_quote(symbol)
+        quote = client.get_latest_quote(symbol, feed=feed)
     except Exception as exc:  # pragma: no cover - diagnostic path
         result["quote_error"] = str(exc)
     else:
@@ -81,9 +91,15 @@ def main() -> int:
         default="https://data.alpaca.markets/v2",
         help="Alpaca data API base URL",
     )
+    parser.add_argument(
+        "--feed",
+        default=None,
+        choices=("iex", "sip"),
+        help="Data feed to request (default: account default)",
+    )
     args = parser.parse_args()
 
-    payload = diagnose(args.symbol.upper(), args.key_id, args.secret_key, args.data_url)
+    payload = diagnose(args.symbol.upper(), args.key_id, args.secret_key, args.data_url, feed=args.feed)
     print(json.dumps(payload, indent=2, sort_keys=True))
 
     if payload.get("minute_status") != "ok" or payload.get("quote_status") not in {"ok", "incomplete"}:
