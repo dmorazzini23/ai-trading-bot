@@ -12,6 +12,7 @@ from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
 from ai_trading.data.fetch import get_bars, get_minute_df
 from ai_trading.data.fetch import get_bars as _raw_http_get_bars
+from ai_trading.data import fetch as data_fetcher
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df, REQUIRED as _OHLCV_REQUIRED
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.logging import get_logger
@@ -682,17 +683,23 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if _env_explicit_false("ALPACA_HAS_SIP"):
         entitled.discard("sip")
 
+    fetch_state = getattr(data_fetcher, "_state", {})
+    sip_unauthorized = False
+    if isinstance(fetch_state, Mapping):
+        sip_unauthorized = bool(fetch_state.get("sip_unauthorized"))
+    sip_unauthorized = sip_unauthorized or bool(getattr(data_fetcher, "_SIP_UNAUTHORIZED", False))
+
     resolved = cached_resolved if cached_resolved in {"sip", "iex"} else None
-    if resolved == "sip" and "sip" not in entitled:
+    if resolved == "sip" and ("sip" not in entitled or sip_unauthorized):
         resolved = None
-    elif resolved == "iex" and "iex" not in entitled and "sip" in entitled:
+    elif resolved == "iex" and resolved not in entitled and "sip" in entitled and not sip_unauthorized:
         resolved = None
 
     if resolved is None:
-        if "sip" in entitled:
+        if requested_norm and requested_norm in entitled:
+            resolved = requested_norm
+        elif "sip" in entitled and not sip_unauthorized:
             resolved = "sip"
-        elif requested_norm in entitled:
-            resolved = requested_norm or "iex"
         elif "iex" in entitled:
             resolved = "iex"
         else:

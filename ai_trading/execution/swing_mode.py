@@ -50,14 +50,13 @@ def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
     opened_local = opened_dt.astimezone(MARKET_TZ)
     now_local = now_aware.astimezone(MARKET_TZ)
 
+    if opened_local.date() == now_local.date():
+        return False
+
     if now_local.date() > opened_local.date():
         return True
 
-    if (
-        now_local.date() == opened_local.date()
-        and now_local.time() >= MARKET_CLOSE
-        and opened_local.time() < MARKET_CLOSE
-    ):
+    if now_local.time() >= MARKET_CLOSE and opened_local.time() < MARKET_CLOSE:
         return True
 
     return False
@@ -124,24 +123,20 @@ class SwingTradingMode:
         env_allow = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip() == "1"
         if env_allow:
             return (True, "same_day_exit_allowed")
-        if not can_exit_today({"opened_at": entry_time}, now_utc):
+
+        entry_local = entry_time.astimezone(MARKET_TZ)
+        now_local = now_utc.astimezone(MARKET_TZ)
+        if now_local.date() == entry_local.date():
             return (False, "same_day_trade_blocked")
 
-        now = now_utc.astimezone(MARKET_TZ)
-
-        # Check if we're on a different calendar day
-        if now.date() > entry_time.date():
+        if now_local.date() > entry_local.date():
             return (True, "different_day")
 
-        # Same day - check if market has closed since entry
-        market_close = time(16, 0)  # 4:00 PM ET
-
-        if entry_time.time() < market_close and now.time() >= market_close:
-            # Entered before close, now after close - safe to exit
+        market_close = time(16, 0)
+        if entry_local.time() < market_close and now_local.time() >= market_close:
             return (True, "after_market_close")
 
-        # Default allowance when the position predates current day
-        return (True, "same_day_after_close")
+        return (True, "eligible_to_exit")
     
     def clear_entry(self, symbol: str):
         """Clear entry time after position is closed."""
@@ -196,4 +191,3 @@ def enable_swing_mode():
 def disable_swing_mode():
     """Disable swing trading mode globally."""
     _swing_mode.disable()
-

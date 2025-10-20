@@ -33,11 +33,11 @@ def ensure_entitled_feed(requested: str | None, cached: str | None) -> str | Non
 
     requested_norm = _normalize_feed(requested)
     if requested_norm in _VALID_FEEDS:
-        return requested_norm
+        return _apply_sip_guard(requested_norm)
     cached_norm = _normalize_feed(cached)
     if cached_norm in _VALID_FEEDS:
-        return cached_norm
-    return None
+        return _apply_sip_guard(cached_norm)
+    return _fallback_feed()
 
 
 def resolve(symbol: str, requested: str | None) -> str | None:
@@ -78,6 +78,31 @@ def clear(symbol: str | None = None) -> None:
         _FEED_CACHE.pop(symbol, None)
 
 
+def _sip_unauthorized() -> bool:
+    try:
+        from ai_trading.data import fetch as data_fetcher  # local import to avoid cycles
+    except Exception:
+        return False
+
+    state = getattr(data_fetcher, "_state", {})
+    unauthorized_state = False
+    if isinstance(state, dict):
+        unauthorized_state = bool(state.get("sip_unauthorized"))
+    if not unauthorized_state:
+        unauthorized_state = bool(getattr(data_fetcher, "_SIP_UNAUTHORIZED", False))
+    return unauthorized_state
+
+
+def _apply_sip_guard(feed: str) -> str | None:
+    if feed == "sip" and _sip_unauthorized():
+        return "iex"
+    return feed
+
+
+def _fallback_feed() -> str:
+    return "iex" if _sip_unauthorized() else "sip"
+
+
 __all__ = [
     "cache",
     "clear",
@@ -85,4 +110,3 @@ __all__ = [
     "get_cached",
     "resolve",
 ]
-

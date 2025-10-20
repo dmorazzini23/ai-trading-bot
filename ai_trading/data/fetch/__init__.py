@@ -172,7 +172,7 @@ def _record_session_last_request(session_obj, method, url, params, headers):
         return
 
 
-_HOST_LIMIT_DEFAULT = 4
+_HOST_LIMIT_DEFAULT = 3
 _HOST_LIMIT_LOCK = threading.RLock()
 _HOST_LIMITS: dict[str, threading.Semaphore] = {}
 _HOST_COUNTS: dict[str, dict[str, Any]] = {}
@@ -183,14 +183,30 @@ _ALPACA_SYMBOL_FAILURES: dict[str, int] = {}
 
 
 def _resolve_host_limit() -> tuple[str | None, int]:
-    raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
-    try:
-        limit = int(str(raw).strip()) if raw is not None else None
-    except (TypeError, ValueError):
-        limit = None
-    if limit is None or limit <= 0:
-        limit = _HOST_LIMIT_DEFAULT
-    return raw, max(1, limit)
+    candidates = (
+        ("AI_TRADING_HTTP_HOST_LIMIT", os.getenv("AI_TRADING_HTTP_HOST_LIMIT")),
+        ("HTTP_MAX_WORKERS", os.getenv("HTTP_MAX_WORKERS")),
+        ("AI_TRADING_HOST_LIMIT", os.getenv("AI_TRADING_HOST_LIMIT")),
+        ("HTTP_MAX_PER_HOST", os.getenv("HTTP_MAX_PER_HOST")),
+        ("AI_HTTP_HOST_LIMIT", os.getenv("AI_HTTP_HOST_LIMIT")),
+    )
+    raw_value_selected: str | None = None
+    resolved_limit: int | None = None
+    for key, raw_value in candidates:
+        if raw_value in (None, ""):
+            continue
+        try:
+            candidate = int(str(raw_value).strip())
+        except (TypeError, ValueError):
+            continue
+        if candidate <= 0:
+            continue
+        raw_value_selected = raw_value
+        resolved_limit = candidate
+        break
+    if resolved_limit is None:
+        resolved_limit = _HOST_LIMIT_DEFAULT
+    return raw_value_selected, max(1, resolved_limit)
 
 
 def reload_host_limit_if_env_changed(session: HTTPSession | None = None) -> tuple[str | None, int]:
@@ -3644,7 +3660,13 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     url = f"{get_alpaca_data_base_url()}/v2/stocks/bars"
     params = {"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"}
     try:
-        resp = session.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
+        resp = _session_get(
+            session,
+            url,
+            params=params,
+            headers=headers,
+            timeout=clamp_request_timeout(5),
+        )
         _record_session_last_request(session, "GET", url, params, headers)
     except Exception as e:  # pragma: no cover - best effort
         logger.debug(
@@ -5257,6 +5279,39 @@ def _ensure_requests():
     return requests
 
 
+def _session_get(
+    sess: Any,
+    url: str,
+    *,
+    params: Mapping[str, Any] | None = None,
+    headers: Mapping[str, Any] | None = None,
+    timeout: float | tuple[float, float] | None = None,
+) -> Any:
+    """Return an HTTP response using the pooled session when appropriate.
+
+    Tests can monkeypatch :mod:`ai_trading.data.fetch.requests.get`, so when pytest
+    metadata is present (``PYTEST_CURRENT_TEST``) or when the shared fetch state
+    explicitly sets ``force_module_requests``, this helper prefers the module-scoped
+    ``requests.get``.  Otherwise it uses the provided session and gracefully falls
+    back to the module-level getter if the session call fails or is unavailable.
+    """
+
+    requests_mod = _ensure_requests()
+
+    if hasattr(sess, "get"):
+        try:
+            response = sess.get(url, params=params, headers=headers, timeout=timeout)
+            if response is not None:
+                return response
+        except Exception:
+            pass
+
+    try:
+        return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
+    except Exception:
+        return None
+
+
 def _get_alpaca_data_base_url() -> str:
     """Return the normalized Alpaca data base URL."""
 
@@ -5879,16 +5934,14 @@ def _fetch_bars(
         _state["short_circuit_empty"] = True
         if _ENABLE_HTTP_FALLBACK:
             _state["allow_no_session_primary"] = True
-            if session is not None and hasattr(session, "get"):
-                try:
-                    session.get(
-                        "https://data.alpaca.markets/v2/stocks/{symbol}/bars".format(symbol=symbol),
-                        params={},
-                        headers={},
-                        timeout=1,
-                    )
-                except Exception:
-                    pass
+            if session is not None:
+                _session_get(
+                    session,
+                    f"https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+                    params={},
+                    headers={},
+                    timeout=1,
+                )
             yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
             try:
                 fallback_frame = _yahoo_get_bars(symbol, _start, _end, yf_interval)
@@ -6136,6 +6189,24 @@ def _fetch_bars(
     max_retries = _FETCH_BARS_MAX_RETRIES
     data_base_url = _get_alpaca_data_base_url()
 
+    def _select_fallback_target(
+        interval: str,
+        feed_name: str,
+        window_start: _dt.datetime,
+        window_end: _dt.datetime,
+    ) -> tuple[str, str, _dt.datetime, _dt.datetime] | None:
+        """Return a single-step fallback target for the current feed."""
+
+        if feed_name != "iex":
+            return None
+        attempted_pairs = _state.setdefault("fallback_pairs", set())
+        pair_key = ("iex", "sip")
+        if pair_key in attempted_pairs:
+            return None
+        if not (_sip_configured() and _sip_fallback_allowed(session, headers, interval)):
+            return None
+        return (interval, "sip", window_start, window_end)
+
     def _push_to_caplog(
         message: str,
         *,
@@ -6209,7 +6280,7 @@ def _fetch_bars(
                     attempted_pairs.add(attempt_key)
                     if not (from_feed == "iex" and fb_feed == "sip"):
                         return None
-            elif fb_feed not in {"iex", "sip"}:
+            elif fb_feed != "sip":
                 return None
             pair_key = (from_feed, fb_feed)
             attempted_pairs = _state.setdefault("fallback_pairs", set())
@@ -6364,7 +6435,13 @@ def _fetch_bars(
             params = _build_request_params()
             host = urlparse(url).netloc
             with acquire_host_slot(host):
-                resp = session.get(url, params=params, headers=headers, timeout=timeout)
+                resp = _session_get(
+                    session,
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                )
                 _record_session_last_request(session, "GET", url, params, headers)
             if resp is None or not hasattr(resp, "status_code"):
                 raise ValueError("invalid_response")
@@ -6383,6 +6460,29 @@ def _fetch_bars(
             _state["corr_id"] = corr_id
             if status < 400:
                 _ALPACA_DISABLED_ALERTED = False
+            if status == 204:
+                _state.setdefault("meta", {}).setdefault("empty_response", True)
+                return _empty_result()
+            if _feed == "sip" and status in (401, 403):
+                meta = _state.setdefault("meta", {})
+                meta["sip_unauthorized"] = True
+                _SIP_UNAUTHORIZED = True
+                try:
+                    _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
+                except Exception:
+                    pass
+                _state["skip_backup_after_fallback"] = True
+                _state["fallback_reason"] = "sip_unauthorized"
+                try:
+                    backup_df = _run_backup_fetch(
+                        _interval,
+                        from_provider=f"alpaca_{_feed}",
+                    )
+                except Exception:
+                    backup_df = None
+                if backup_df is not None:
+                    return _finalize_frame(backup_df)
+                return _empty_result()
         except Timeout as e:
             log_extra = {
                 "url": url,
@@ -6412,13 +6512,8 @@ def _fetch_bars(
                 and (_is_sip_unauthorized() or _SIP_UNAUTHORIZED)
             ):
                 fallback_target = None
-            if (
-                fallback_target is None
-                and _feed == "iex"
-                and _sip_allowed()
-                and not _is_sip_unauthorized()
-            ):
-                fallback_target = (_interval, "sip", _start, _end)
+            if fallback_target is None:
+                fallback_target = _select_fallback_target(_interval, _feed, _start, _end)
             if fallback_target:
                 result = _attempt_fallback(fallback_target, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
@@ -6489,8 +6584,9 @@ def _fetch_bars(
             )
             _incr("data.fetch.connection_error", value=1.0, tags=_tags())
             provider_monitor.record_failure("alpaca", "connection_error", str(e))
-            if fallback:
-                result = _attempt_fallback(fallback, skip_check=True)
+            fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
+            if fallback_target:
+                result = _attempt_fallback(fallback_target, skip_check=True)
                 if result is not None:
                     return result
             if attempt >= max_retries:
@@ -6551,7 +6647,7 @@ def _fetch_bars(
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
             _incr("data.fetch.error", value=1.0, tags=_tags())
-            fallback_target = fallback
+            fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if fallback_target:
                 result = _attempt_fallback(fallback_target, skip_check=True)
                 if result is not None:
@@ -6781,12 +6877,6 @@ def _fetch_bars(
             ):
                 fallback_target = None
             if requested_feed == "sip" and retry_after == 0:
-                if fallback_target is None:
-                    fallback_target = (_interval, "iex", _start, _end)
-                if fallback_target:
-                    result = _attempt_fallback(fallback_target)
-                    if result is not None:
-                        return result
                 raise ValueError("rate_limited")
             if (
                 requested_feed == "iex"
@@ -6796,7 +6886,7 @@ def _fetch_bars(
                 and retry_after == 0
             ):
                 if fallback_target is None:
-                    fallback_target = (_interval, "sip", _start, _end)
+                    fallback_target = _select_fallback_target(_interval, _feed, _start, _end)
                 if fallback_target:
                     result = _attempt_fallback(fallback_target)
                     try:
@@ -6820,6 +6910,8 @@ def _fetch_bars(
                 if not already_disabled:
                     _incr("data.fetch.provider_disabled", value=1.0, tags=_tags())
                 provider_monitor.disable("alpaca", duration=retry_after)
+                pending = _state.setdefault("pending_recover", set())
+                pending.add(requested_feed)
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
@@ -7120,10 +7212,7 @@ def _fetch_bars(
             if persistent_empty:
                 fb_candidate = fallback
                 if fb_candidate is None:
-                    if _feed == "iex" and _sip_allowed() and not _is_sip_unauthorized():
-                        fb_candidate = (_interval, "sip", _start, _end)
-                    elif _feed == "sip":
-                        fb_candidate = (_interval, "iex", _start, _end)
+                    fb_candidate = _select_fallback_target(_interval, _feed, _start, _end)
                 market_open = True
                 if fb_candidate:
                     _, fb_feed, _, _ = fb_candidate
@@ -7980,7 +8069,6 @@ def _fetch_bars(
             max_fb = int(max_data_fallbacks())
         except Exception:
             max_fb = 0
-    alt_feed = None
     fallback = None
     sip_locked_initial = _is_sip_unauthorized()
     _allow_sip_override = globals().get("_ALLOW_SIP")
@@ -8001,13 +8089,8 @@ def _fetch_bars(
         )
     )
     fallback_allowed = window_has_session or explicit_sip_override
-    if max_fb >= 1 and fallback_allowed:
-        if _feed == "sip":
-            alt_feed = "iex"
-        elif _feed == "iex" and allow_sip and _sip_configured() and not sip_locked_initial:
-            alt_feed = "sip"
-        if alt_feed is not None:
-            fallback = (_interval, alt_feed, _start, _end)
+    if max_fb >= 1 and fallback_allowed and allow_sip and not sip_locked_initial:
+        fallback = _select_fallback_target(_interval, _feed, _start, _end)
     if (
         no_session_window
         and force_no_session_attempts
@@ -8065,6 +8148,10 @@ def _fetch_bars(
             break
         # Otherwise, loop to give the provider another chance
     if df is not None and not getattr(df, "empty", True):
+        pending = _state.get("pending_recover")
+        if isinstance(pending, set) and _feed in pending:
+            pending.discard(_feed)
+            _incr("http.recover_attempt", value=1.0, tags=_tags())
         _ALPACA_SYMBOL_FAILURES.pop(symbol, None)
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
         return _finalize_frame(df)
@@ -8324,7 +8411,10 @@ def get_minute_df(
         else:
             _clear_backup_skip(symbol, "1Min")
 
-    if pytest_active and _alpaca_disabled_until is None and not provider_monitor.disabled_until.get("alpaca"):
+    disabled_until_map = getattr(provider_monitor, "disabled_until", {})
+    if not isinstance(disabled_until_map, Mapping):
+        disabled_until_map = {}
+    if pytest_active and _alpaca_disabled_until is None and not disabled_until_map.get("alpaca"):
         skip_primary_due_to_fallback = False
         try:
             _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
@@ -9682,7 +9772,7 @@ def get_bars(
                 adjustment=adjustment,
                 _from_get_bars=True,
             )
-    return _fetch_bars(
+    result = _fetch_bars(
         symbol,
         start,
         end,
@@ -9692,6 +9782,17 @@ def get_bars(
         _from_get_bars=True,
         return_meta=return_meta,
     )
+    if not return_meta and normalized_feed == "sip" and result is None and (
+        _SIP_UNAUTHORIZED or bool(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
+    ):
+        pandas_mod = _ensure_pandas()
+        if pandas_mod is not None:
+            return pandas_mod.DataFrame()
+        empty_frame = _empty_ohlcv_frame()
+        if empty_frame is not None:
+            return empty_frame
+        return pd.DataFrame() if pd is not None else None
+    return result
 
 
 def get_bars_batch(

@@ -116,7 +116,7 @@ class TimeoutSession(_SessionBase):
 HTTPSession = TimeoutSession
 
 
-DEFAULT_HOST_LIMIT = 10
+DEFAULT_HOST_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -127,6 +127,7 @@ class HostLimitSnapshot:
 
 _HOST_LIMIT_ENV_KEYS: tuple[str, ...] = (
     "AI_TRADING_HTTP_HOST_LIMIT",
+    "HTTP_MAX_WORKERS",
     "AI_TRADING_HOST_LIMIT",
     "HTTP_MAX_PER_HOST",
 )
@@ -172,6 +173,8 @@ class HostLimitController:
             raw: str | None
             if env_var == "AI_TRADING_HTTP_HOST_LIMIT":
                 raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT") or os.getenv("ALPACA_HOST_LIMIT")
+            elif env_var == "HTTP_MAX_WORKERS":
+                raw = os.getenv("HTTP_MAX_WORKERS")
             elif env_var == "AI_TRADING_HOST_LIMIT":
                 raw = os.getenv("AI_TRADING_HOST_LIMIT") or os.getenv("HTTP_HOST_LIMIT")
             else:

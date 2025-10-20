@@ -29,7 +29,7 @@ if "_LIMIT_VERSION" in globals():
 
 from ai_trading.config import management as config
 
-_DEFAULT_LIMIT: Final[int] = 8
+_DEFAULT_LIMIT: Final[int] = 3
 
 @dataclass(slots=True)
 class _SemaphoreRecord:
@@ -337,11 +337,17 @@ def _compute_limit(raw: str | None = None) -> int:
 
 
 def _read_limit_source(
-    env_snapshot: tuple[str | None, str | None, str | None]
+    env_snapshot: tuple[str | None, ...]
 ) -> tuple[int, str | None, str | None, int | None]:
     """Return the resolved limit and metadata describing its source."""
 
-    for env_key, raw_env in zip(_ENV_LIMIT_KEYS, env_snapshot):
+    priority_envs = (
+        ("AI_TRADING_HTTP_HOST_LIMIT", os.getenv("AI_TRADING_HTTP_HOST_LIMIT")),
+        ("HTTP_MAX_WORKERS", os.getenv("HTTP_MAX_WORKERS")),
+        ("AI_TRADING_HOST_LIMIT", os.getenv("AI_TRADING_HOST_LIMIT")),
+        ("HTTP_MAX_PER_HOST", os.getenv("HTTP_MAX_PER_HOST")),
+    )
+    for env_key, raw_env in priority_envs:
         if raw_env not in (None, ""):
             limit = _compute_limit(raw_env)
             return limit, env_key, raw_env, None

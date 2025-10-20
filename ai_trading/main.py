@@ -1093,13 +1093,6 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 if exc.errno != errno.EADDRINUSE:
                     raise
 
-                if _probe_local_api_health(port):
-                    logger.critical(
-                        "API_PORT_ALIVE_ELSEWHERE",
-                        extra={"port": port},
-                    )
-                    raise ExistingApiDetected(port) from exc
-
                 pid = get_pid_on_port(port)
                 if pid:
                     logger.error(
@@ -1107,6 +1100,13 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                         extra={"port": port, "pid": pid},
                     )
                     raise PortInUseError(port, pid) from exc
+
+                if _probe_local_api_health(port):
+                    logger.critical(
+                        "API_PORT_ALIVE_ELSEWHERE",
+                        extra={"port": port},
+                    )
+                    raise ExistingApiDetected(port) from exc
 
                 remaining = deadline - monotonic_time()
                 if remaining <= 0:

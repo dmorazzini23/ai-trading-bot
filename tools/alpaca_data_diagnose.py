@@ -60,8 +60,10 @@ def diagnose(
     base_url: str | None,
     feed: str | None = None,
 ) -> dict[str, object]:
-    key_id = key_id or os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY")
-    secret_key = secret_key or os.getenv("APCA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET") or os.getenv("ALPACA_SECRET_KEY")
+    key_id = key_id or os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+    secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET")
+    if not key_id or not secret_key:
+        raise RuntimeError("Missing explicit Alpaca credentials in env")
     client = _client(key_id, secret_key, base_url)
     now = datetime.now(UTC)
     start = now - timedelta(minutes=15)

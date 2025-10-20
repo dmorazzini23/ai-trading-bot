@@ -1310,7 +1310,17 @@ def _sanitize_alpaca_feed(feed: str | None) -> str | None:
     if feed is None:
         return None
     normalized = str(feed).strip().lower()
-    return normalized if normalized in {"iex", "sip"} else None
+    if normalized not in {"iex", "sip"}:
+        return None
+    if normalized == "sip":
+        fetch_state = getattr(data_fetcher_module, "_state", {})
+        sip_unauthorized = False
+        if isinstance(fetch_state, dict):
+            sip_unauthorized = bool(fetch_state.get("sip_unauthorized"))
+        sip_unauthorized = sip_unauthorized or bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
+        if sip_unauthorized:
+            return "iex"
+    return normalized
 
 
 def _canonicalize_fallback_feed(feed: object | None) -> str | None:
@@ -25024,7 +25034,12 @@ def _record_trade_in_frequency_tracker(
     )
 
 
-def get_latest_price(symbol: str, *, prefer_backup: bool = False):
+def get_latest_price(
+    symbol: str,
+    *,
+    prefer_backup: bool = False,
+    feed: str | None = None,
+):
     """Return the most recent quote price with provider fallbacks."""
 
     price: float | None = None
@@ -25126,12 +25141,13 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     if cycle_feed and cycle_feed not in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         cycle_feed = None
     configured_feed = cycle_feed or _get_intraday_feed()
-    sanitized_feed = _normalize_cycle_feed(configured_feed)
-    feed = sanitized_feed or configured_feed
+    feed_candidate = feed if feed is not None else configured_feed
+    requested_feed_label = feed_candidate
+    sanitized_feed = _normalize_cycle_feed(feed_candidate)
+    sanitized_direct = _sanitize_alpaca_feed(feed_candidate) if feed_candidate else None
+    invalid_alpaca_feed = bool(feed_candidate) and sanitized_feed is None and sanitized_direct is None
 
-    invalid_alpaca_feed = bool(feed) and _sanitize_alpaca_feed(feed) is None
-
-    alpaca_feed: str | None = sanitized_feed
+    alpaca_feed: str | None = sanitized_feed or sanitized_direct
     if alpaca_feed is None and not invalid_alpaca_feed:
         default_feed = _normalize_cycle_feed(_get_intraday_feed())
         if default_feed:
@@ -25147,19 +25163,20 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if switchover_reason:
             fallback_feed = "iex"
             if cycle_feed != fallback_feed:
+                previous_feed_label = requested_feed_label
                 logger_once.warning(
                     "DATA_PROVIDER_SWITCHOVER",
-                    key=f"data_provider_switchover:{feed}->{fallback_feed}:{switchover_reason}",
+                    key=f"data_provider_switchover:{previous_feed_label}->{fallback_feed}:{switchover_reason}",
                     extra={
                         "symbol": symbol,
-                        "from_feed": feed,
+                        "from_feed": previous_feed_label,
                         "to_feed": fallback_feed,
                         "reason": switchover_reason,
                         "scope": "latest_price",
                     },
                 )
             sanitized_feed = fallback_feed
-            feed = fallback_feed
+            requested_feed_label = fallback_feed
             _cache_cycle_fallback_feed_helper(fallback_feed, symbol=symbol)
     elif cycle_feed is None and sanitized_feed:
         existing_global = _GLOBAL_INTRADAY_FALLBACK_FEED
@@ -25173,8 +25190,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if filtered_order != provider_order:
             logger_once.warning(
                 "ALPACA_INVALID_FEED_SKIPPED",
-                key=f"alpaca_invalid_feed_skipped:{feed}",
-                extra={"provider": "alpaca", "requested_feed": feed, "symbol": symbol},
+                key=f"alpaca_invalid_feed_skipped:{requested_feed_label}",
+                extra={
+                    "provider": "alpaca",
+                    "requested_feed": requested_feed_label,
+                    "symbol": symbol,
+                },
             )
         provider_order = filtered_order
         skip_primary = True

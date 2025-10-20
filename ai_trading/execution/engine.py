@@ -1898,7 +1898,8 @@ class ExecutionEngine:
                         },
                     )
                     testing_flag = os.getenv("TESTING", "").strip().lower()
-                    if testing_flag in {"1", "true", "yes"}:
+                    exec_strict = bool(get_env("EXECUTION_STRICT", "0", cast=bool))
+                    if exec_strict or testing_flag in {"1", "true", "yes"}:
                         raise AssertionError(
                             "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                         )

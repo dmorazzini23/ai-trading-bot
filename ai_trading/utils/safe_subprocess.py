@@ -48,7 +48,10 @@ def safe_subprocess_run(
 
     # Treat non-positive timeout values as an immediate timeout request rather than
     # "no timeout" to align with subprocess semantics used by the tests.
-    effective_timeout = timeout if (timeout is None or timeout > 0) else 1e-6
+    if timeout is not None and timeout <= 0:
+        effective_timeout = None
+    else:
+        effective_timeout = timeout
 
     try:
         completed = subprocess.run(

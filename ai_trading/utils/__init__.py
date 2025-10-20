@@ -20,6 +20,7 @@ _BASE_EXPORTS = {
     "get_latest_close",
     "get_pid_on_port",
     "health_check",
+    "health_rows_passed",
     "is_market_open",
     "market_open_between",
     "log_warning",
@@ -66,6 +67,7 @@ _LAZY_MAP = {
     "get_latest_close": ("ai_trading.utils.base", "get_latest_close"),
     "get_pid_on_port": ("ai_trading.utils.base", "get_pid_on_port"),
     "health_check": ("ai_trading.utils.base", "health_check"),
+    "health_rows_passed": ("ai_trading.utils.base", "health_rows_passed"),
     "is_market_open": ("ai_trading.utils.base", "is_market_open"),
     "market_open_between": ("ai_trading.utils.base", "market_open_between"),
     "log_warning": ("ai_trading.utils.base", "log_warning"),
@@ -113,4 +115,3 @@ def __getattr__(name: str) -> Any:  # AI-AGENT-REF: importlib-based lazy loader
     obj = getattr(mod, attr) if attr else mod
     globals()[name] = obj  # cache for subsequent access
     return obj
-

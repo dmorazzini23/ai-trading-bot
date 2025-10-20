@@ -16,7 +16,7 @@ def _sanitize_limit(value: int) -> int:
 
 
 def _initial_host_limit() -> int:
-    raw = os.getenv("AI_HTTP_HOST_LIMIT", "6")
+    raw = os.getenv("AI_HTTP_HOST_LIMIT", "3")
     try:
         value = int(str(raw).strip())
     except (TypeError, ValueError):
@@ -33,6 +33,7 @@ def _read_env_limit(default: int) -> int:
 
 _ENV_LIMIT_KEYS: tuple[str, ...] = (
     "AI_TRADING_HTTP_HOST_LIMIT",
+    "HTTP_MAX_WORKERS",
     "AI_TRADING_HOST_LIMIT",
     "HTTP_MAX_PER_HOST",
     "AI_HTTP_HOST_LIMIT",
