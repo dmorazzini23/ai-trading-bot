@@ -14,10 +14,38 @@ import argparse
 import json
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Iterable
 
 import os
+
 from alpaca_trade_api.common import URL
 from alpaca_trade_api.rest import REST
+
+
+def _load_env_from_file() -> None:
+    """Populate environment variables from a local .env if present."""
+
+    candidates: Iterable[Path] = (
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+    )
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            for line in candidate.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = value.strip()
+        except OSError:
+            continue
+        else:
+            break
 
 
 def _client(key_id: str | None, secret_key: str | None, base_url: str | None) -> REST:
@@ -81,6 +109,8 @@ def diagnose(
 
 
 def main() -> int:
+    _load_env_from_file()
+
     parser = argparse.ArgumentParser(description="Diagnose Alpaca data availability.")
     parser.add_argument("symbol", help="Ticker to probe (e.g. AAPL)")
     parser.add_argument("--key-id", default=None, help="Alpaca API key ID (defaults to env ALPACA_API_KEY_ID)")
