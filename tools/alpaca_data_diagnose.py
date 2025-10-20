@@ -28,11 +28,13 @@ def diagnose(symbol: str, key_id: str | None, secret_key: str | None, base_url: 
     client = _client(key_id, secret_key, base_url)
     now = datetime.now(UTC)
     start = now - timedelta(minutes=15)
+    start_iso = start.replace(microsecond=0).isoformat()
+    end_iso = now.replace(microsecond=0).isoformat()
 
     result: dict[str, object] = {"symbol": symbol, "timestamp": now.isoformat()}
 
     try:
-        bars = client.get_bars(symbol, "1Min", start=start, end=now, limit=5)
+        bars = client.get_bars(symbol, "1Min", start=start_iso, end=end_iso, limit=5)
     except Exception as exc:  # pragma: no cover - diagnostic path
         result["minute_error"] = str(exc)
     else:
