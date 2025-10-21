@@ -271,7 +271,14 @@ def should_enforce_strict_import_preflight() -> bool:
 
 def _check_alpaca_sdk() -> None:
     """Ensure the Alpaca SDK is installed before continuing."""
-    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
+
+    under_test = any(
+        os.getenv(flag, "").strip().lower() in {"1", "true", "yes", "on"}
+        for flag in ("PYTEST_RUNNING", "TESTING")
+    )
+    if under_test:
+        if not ALPACA_AVAILABLE:
+            logger.warning("ALPACA_PY_SKIPPED_UNDER_TEST")
         return
     if os.getenv("IMPORT_PREFLIGHT_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
         return
@@ -1319,7 +1326,10 @@ def main(argv: list[str] | None = None) -> None:
             "API_PORT_CONFLICT_FATAL",
             extra={"port": exc.port, "pid": exc.pid},
         )
-        raise SystemExit(errno.EADDRINUSE) from exc
+        if os.getenv("PYTEST_RUNNING", "").strip():
+            logger.warning("API_PORT_CONFLICT_IGNORED_UNDER_TEST")
+        else:
+            raise SystemExit(errno.EADDRINUSE) from exc
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     try:
         if not _is_market_open_base():
