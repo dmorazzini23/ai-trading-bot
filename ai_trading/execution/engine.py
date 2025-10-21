@@ -28,7 +28,7 @@ except Exception:  # ImportError
 
 
 from ai_trading.logging.emit_once import emit_once
-from ai_trading.metrics import get_counter
+from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, register_reset_hook
 from ai_trading.config.management import get_env
 from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
@@ -37,7 +37,29 @@ logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
 
 # Lightweight Prometheus counters (no-op if client unavailable)
-_orders_submitted_total = get_counter("orders_submitted_total", "Orders submitted")
+ORDERS_SUBMITTED: Any | None = None
+_orders_submitted_total: Any | None = None
+
+
+def _ensure_orders_submitted_metric(registry: CollectorRegistry):
+    collectors = getattr(registry, "_names_to_collectors", None)
+    if collectors is None:
+        collectors = {}
+        setattr(registry, "_names_to_collectors", collectors)
+    metric = get_counter(
+        "orders_submitted_total",
+        "Orders submitted total",
+        registry=registry,
+    )
+    collectors.setdefault("orders_submitted_total", metric)
+    globals()["ORDERS_SUBMITTED"] = metric
+    globals()["_orders_submitted_total"] = metric
+    return metric
+
+
+_metrics_registry = get_registry()
+ORDERS_SUBMITTED = _ensure_orders_submitted_metric(_metrics_registry)
+register_reset_hook(_ensure_orders_submitted_metric)
 _orders_rejected_total = get_counter("orders_rejected_total", "Orders rejected")
 _orders_duplicate_total = get_counter("orders_duplicate_total", "Duplicate orders prevented")
 
