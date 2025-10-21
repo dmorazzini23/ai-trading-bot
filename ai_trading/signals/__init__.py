@@ -959,17 +959,19 @@ def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict:
         symbols.add("SPY")
         for symbol in symbols:
             try:
-                if hasattr(ctx, "data_fetcher"):
-                    df = ctx.data_fetcher.get_daily_df(ctx, symbol)
-                    if df is not None and len(df) > 0:
-                        market_data["prices"][symbol] = robust_signal_price(df)
-                        if "close" in df.columns and len(df) > 1:
-                            prices = df["close"].values[-100:]
-                            returns = []
-                            for i in range(1, len(prices)):
-                                if prices[i - 1] > 0:
-                                    returns.append((prices[i] - prices[i - 1]) / prices[i - 1])
-                            market_data["returns"][symbol] = returns
+                fetcher = getattr(ctx, "data_fetcher", None)
+                if not fetcher:
+                    continue
+                df = fetcher.get_daily_df(ctx, symbol)
+                if df is not None and len(df) > 0:
+                    market_data["prices"][symbol] = robust_signal_price(df)
+                    if "close" in df.columns and len(df) > 1:
+                        prices = df["close"].values[-100:]
+                        returns = []
+                        for i in range(1, len(prices)):
+                            if prices[i - 1] > 0:
+                                returns.append((prices[i] - prices[i - 1]) / prices[i - 1])
+                        market_data["returns"][symbol] = returns
                         if "volume" in df.columns and len(df) > 0:
                             avg_volume = df["volume"].tail(20).mean()
                             market_data["volumes"][symbol] = avg_volume
@@ -1314,7 +1316,10 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
         signal_decisions = []
         for symbol in symbols:
             try:
-                df = ctx.data_fetcher.get_data(symbol)
+                fetcher = getattr(ctx, "data_fetcher", None)
+                if not fetcher:
+                    continue
+                df = fetcher.get_data(symbol)
                 if df is None or len(df) < 50:
                     logger.warning("Insufficient data for %s - skipping", symbol)
                     continue

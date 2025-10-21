@@ -193,7 +193,7 @@ def load_model(symbol: str) -> object:
         "MODEL_FILE_MISSING",
         extra={"symbol": symbol, "paths": [str(p) for p in dirs]},
     )
-    raise RuntimeError(f"Model file for '{symbol}' not found in configured paths")
+    raise RuntimeError("Model required but not configured")
 
 
 # AI-AGENT-REF: avoid import-time model loading; expose explicit preload

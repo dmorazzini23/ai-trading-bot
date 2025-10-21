@@ -997,7 +997,11 @@ def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
 def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     symbol = _canon_symbol(symbol)
     now_utc = ensure_utc_datetime(now_utc)
-    start_u, end_u = _minute_fallback_window(now_utc)
+    try:
+        start_u, end_u = _minute_fallback_window(now_utc)
+    except RuntimeError:
+        _log.debug("MINUTE_FALLBACK_NO_SESSION", extra={"symbol": symbol})
+        return empty_bars_dataframe()
     day_et = start_u.astimezone(ZoneInfo('America/New_York')).date()
     _log_fallback_window_debug(_log, day_et, start_u, end_u)
     feed_str = 'iex'

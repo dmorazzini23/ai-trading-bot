@@ -919,9 +919,9 @@ def ensure_trade_log_path() -> None:
     if parent.exists() and not os.access(parent, os.W_OK | os.X_OK):
         logger.warning(
             "TRADE_LOGGER_FALLBACK_ACTIVE",
-            extra={"reason": "log_dir_not_writable", "detail": str(parent)},
+            extra={"reason": "log_dir_not_writable", "path": str(parent)},
         )
-        raise SystemExit(errno.EACCES)
+        raise SystemExit(1)
     try:
         parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a"):

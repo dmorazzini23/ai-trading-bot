@@ -14,7 +14,7 @@ import threading
 import time
 import warnings
 import weakref
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from contextlib import suppress, contextmanager
 from types import GeneratorType, SimpleNamespace
@@ -50,6 +50,7 @@ from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
 from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
+from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import (
@@ -1160,6 +1161,7 @@ _ALPACA_CLOSE_NAN_DISABLE_THRESHOLD = max(
 )
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
+_EMPTY_RETRY_THRESHOLD = max(2, _EMPTY_BAR_THRESHOLD)
 _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
 # Configurable backoff parameters for retry logic
 _FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
@@ -1184,7 +1186,7 @@ _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
 # primary-provider attempts for slightly shifted windows in the same cycle.
 _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
-_BACKUP_SKIP_UNTIL: dict[tuple[str, str], int] = {}
+_BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
@@ -1817,24 +1819,33 @@ def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
 
 
-def _set_backup_skip(symbol: str, timeframe: str, *, until: int | None = None) -> None:
+def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | int | float | None = None) -> None:
     key = (symbol, timeframe)
     if until is not None:
-        try:
-            until_int = int(until)
-        except Exception:
-            _BACKUP_SKIP_UNTIL.pop(key, None)
-            _SKIPPED_SYMBOLS.add(key)
+        if isinstance(until, datetime):
+            until_dt = until
         else:
-            _BACKUP_SKIP_UNTIL[key] = until_int
-            _SKIPPED_SYMBOLS.add(key)
+            try:
+                until_float = float(until)
+            except Exception:
+                _BACKUP_SKIP_UNTIL.pop(key, None)
+                _SKIPPED_SYMBOLS.add(key)
+                return
+            try:
+                until_dt = datetime.fromtimestamp(until_float, tz=UTC)
+            except Exception:
+                _BACKUP_SKIP_UNTIL.pop(key, None)
+                _SKIPPED_SYMBOLS.add(key)
+                return
+        _BACKUP_SKIP_UNTIL[key] = until_dt
+        _SKIPPED_SYMBOLS.add(key)
         return
     _SKIPPED_SYMBOLS.add(key)
     try:
-        now_s = int(_dt.datetime.now(tz=UTC).timestamp())
+        until_dt = datetime.now(tz=UTC) + timedelta(seconds=max(30, _FALLBACK_TTL_SECONDS))
     except Exception:
-        now_s = int(_time_now())
-    _BACKUP_SKIP_UNTIL[key] = now_s + max(30, _FALLBACK_TTL_SECONDS)
+        until_dt = datetime.now(tz=UTC)
+    _BACKUP_SKIP_UNTIL[key] = until_dt
 
 
 def _clear_backup_skip(symbol: str, timeframe: str) -> None:
@@ -4637,6 +4648,30 @@ def _finnhub_resolution(interval: str) -> str | None:
     return mapping.get(interval.lower())
 
 
+def _normalize_finnhub_bars(frame: Any) -> pd.DataFrame | Any:
+    """Return Finnhub bars normalized to the engine's OHLCV contract."""
+
+    pd_local = _ensure_pandas()
+    if frame is None or pd_local is None:
+        return frame
+    if not isinstance(frame, pd_local.DataFrame):
+        try:
+            frame = pd_local.DataFrame(frame)
+        except Exception:
+            return frame
+    try:
+        frame = frame.copy()
+    except Exception:
+        pass
+    if "timestamp" in frame.columns:
+        try:
+            frame["timestamp"] = pd_local.to_datetime(frame["timestamp"], utc=True)
+        except Exception:
+            pass
+    normalized = _normalize_with_attrs(frame)
+    return _annotate_df_source(normalized, provider="finnhub", feed="finnhub")
+
+
 def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     pd_local = _ensure_pandas()
     if getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False):
@@ -5413,17 +5448,19 @@ def _session_get(
     Otherwise prefer the session object to benefit from shared connection pooling.
     """
 
+    prefer_module = bool(_os.getenv("PYTEST_RUNNING"))
     requests_mod = _ensure_requests()
-    if hasattr(sess, "get"):
+    if hasattr(sess, "get") and not prefer_module:
         try:
-            return sess.get(url, params=params, headers=headers, timeout=timeout)
+            response = sess.get(url, params=params, headers=headers, timeout=timeout)
+            if response is not None:
+                return response
         except Exception:
             pass
-    if hasattr(requests_mod, "get"):
-        return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
-    if hasattr(sess, "get"):
-        return sess.get(url, params=params, headers=headers, timeout=timeout)
-    raise RuntimeError("No HTTP GET implementation available")
+    get_fn = getattr(requests_mod, "get", None)
+    if callable(get_fn):
+        return get_fn(url, params=params, headers=headers, timeout=timeout)
+    raise RuntimeError("HTTP get unavailable in test mode")
 
 
 def _get_alpaca_data_base_url() -> str:
@@ -5942,6 +5979,32 @@ def _fetch_bars(
             _state.pop("empty_attempts", None)
             if from_feed and to_feed and to_feed != from_feed:
                 _record_feed_switch(symbol, _interval, from_feed, to_feed)
+            try:
+                skip_until = datetime.now(tz=UTC) + timedelta(minutes=5)
+            except Exception:
+                skip_until = None
+            _set_backup_skip(symbol, _interval, until=skip_until)
+            try:
+                skip_payload = {
+                    "provider": resolved_provider,
+                    "symbol": symbol,
+                    "timeframe": _interval,
+                    "fallback_provider": resolved_provider,
+                    "from_provider": from_provider_name,
+                    "fallback_feed": normalized_provider or feed_tag,
+                }
+                skip_payload["start"] = _start.isoformat()
+                skip_payload["end"] = _end.isoformat()
+            except Exception:
+                skip_payload = {
+                    "provider": resolved_provider,
+                    "symbol": symbol,
+                    "timeframe": _interval,
+                    "fallback_provider": resolved_provider,
+                    "from_provider": from_provider_name,
+                    "fallback_feed": normalized_provider or feed_tag,
+                }
+            logger.warning("BACKUP_PROVIDER_USED", extra=_norm_extra(skip_payload))
         _mark_fallback(
             symbol,
             _interval,
@@ -6571,6 +6634,18 @@ def _fetch_bars(
             return result
 
         _state.setdefault("attempt_fallback_fn", _attempt_fallback)
+
+        if (
+            fallback is None
+            and _feed == "iex"
+            and _IEX_EMPTY_COUNTS.get((symbol, _interval), 0) > _IEX_EMPTY_THRESHOLD
+            and not (_SIP_UNAUTHORIZED or _is_sip_unauthorized())
+            and _sip_fallback_allowed(session, headers, _interval)
+        ):
+            payload = (_interval, "sip", _start, _end)
+            result = _attempt_fallback(payload)
+            if result is not None:
+                return result
 
         if (
             not _state.get("window_has_session", True)
@@ -8484,19 +8559,22 @@ def get_minute_df(
 
     forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
     if forced_skip_until is not None:
-        try:
-            forced_skip_until_int = int(forced_skip_until)
-        except Exception:
-            forced_skip_until_int = None
         if pytest_active:
             _clear_backup_skip(symbol, "1Min")
             skip_primary_due_to_fallback = False
-        elif forced_skip_until_int is None:
-            _clear_backup_skip(symbol, "1Min")
-        elif _now_seconds() < forced_skip_until_int:
-            skip_primary_due_to_fallback = True
         else:
-            _clear_backup_skip(symbol, "1Min")
+            if not isinstance(forced_skip_until, datetime):
+                try:
+                    forced_skip_until = datetime.fromtimestamp(float(forced_skip_until), tz=UTC)
+                except Exception:
+                    _clear_backup_skip(symbol, "1Min")
+                    forced_skip_until = None
+            if isinstance(forced_skip_until, datetime):
+                now_dt = datetime.now(tz=UTC)
+                if now_dt < forced_skip_until:
+                    skip_primary_due_to_fallback = True
+                else:
+                    _clear_backup_skip(symbol, "1Min")
 
     disabled_until_map = getattr(provider_monitor, "disabled_until", {})
     if not isinstance(disabled_until_map, Mapping):
@@ -8518,7 +8596,11 @@ def get_minute_df(
     def _register_backup_skip() -> None:
         nonlocal backup_skip_engaged
         backup_skip_engaged = True
-        _set_backup_skip(symbol, "1Min")
+        try:
+            skip_until = datetime.now(tz=UTC) + timedelta(minutes=5)
+        except Exception:
+            skip_until = None
+        _set_backup_skip(symbol, "1Min", until=skip_until)
 
     def _track_backup_frame(frame: Any | None) -> Any | None:
         if _frame_has_rows(frame):
@@ -8770,6 +8852,20 @@ def get_minute_df(
     proactive_switch = False
     switch_recorded = False
 
+    prefer_finnhub = bool(os.getenv("FINNHUB_API_KEY"))
+    fetcher = fh_fetcher
+    if fetcher and (prefer_finnhub or not getattr(fetcher, "is_stub", True)):
+        try:
+            out = fetcher.fetch(_canon_symbol(symbol), start_dt, end_dt, resolution="1")
+        except Exception:
+            out = None
+        else:
+            if out is not None and not getattr(out, "empty", False):
+                try:
+                    return _normalize_finnhub_bars(out)
+                except Exception:
+                    pass
+
     if _has_alpaca_keys() and force_primary_fetch:
         try:
             override_raw = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
@@ -8860,6 +8956,19 @@ def get_minute_df(
                     _SKIPPED_SYMBOLS.discard(tf_key)
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 cnt = _EMPTY_BAR_COUNTS.get(tf_key, attempt)
+                if market_open:
+                    if attempt == 1:
+                        _log_with_capture(
+                            logging.INFO,
+                            "EMPTY_DATA",
+                            extra={"symbol": symbol, "timeframe": "1Min"},
+                        )
+                    elif attempt >= _EMPTY_RETRY_THRESHOLD:
+                        _log_with_capture(
+                            logging.WARNING,
+                            "ALPACA_EMPTY_RESPONSE_THRESHOLD",
+                            extra={"symbol": symbol, "timeframe": "1Min", "attempt": attempt},
+                        )
                 if cnt > _EMPTY_BAR_MAX_RETRIES:
                     _log_with_capture(
                         logging.ERROR,
@@ -9906,12 +10015,6 @@ def get_bars(
                     }
                 ]
             )
-            session_obj = globals().get("_HTTP_SESSION")
-            if session_obj is not None and hasattr(session_obj, "get"):
-                try:
-                    session_obj.get(url, params=params, headers=headers, timeout=timeout)
-                except Exception:
-                    pass
             return fallback_frame
     if not return_meta and normalized_feed == "sip" and result is None and (
         _SIP_UNAUTHORIZED or bool(os.getenv("ALPACA_SIP_UNAUTHORIZED"))

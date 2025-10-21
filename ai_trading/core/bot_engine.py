@@ -4686,6 +4686,26 @@ def get_latest_close(df: pd.DataFrame) -> float:
         return 0.0
 
 
+def _resolve_latest_close(df_obj: Any) -> float | None:
+    """Return the latest close price from *df_obj* or ``None`` when unavailable."""
+
+    if df_obj is None:
+        return None
+    try:
+        value = get_latest_close(df_obj)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or number <= 0.0:
+        return None
+    return number
+
+
 @dataclass
 class FeatureDataResult:
     df: Optional["pd.DataFrame"]
@@ -15161,6 +15181,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
     for attempt in range(2):
         try:
+            positions: list[Any] = []
             try:
                 get_account_fn = getattr(api, "get_account", None)
                 acct = get_account_fn() if callable(get_account_fn) else None
@@ -25153,6 +25174,20 @@ def get_latest_price(
     primary_failure_labels: set[str] = set()
 
     pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
+    now_utc = datetime.now(UTC)
+    lookback_start = now_utc - timedelta(days=5)
+    backup_fetch_fn = getattr(data_fetcher_module, "_backup_get_bars", None)
+
+    if prefer_backup and callable(backup_fetch_fn):
+        try:
+            backup_df = backup_fetch_fn(symbol, lookback_start, now_utc, "1d")
+        except Exception:
+            backup_df = None
+        else:
+            backup_close = _resolve_latest_close(backup_df)
+            if backup_close is not None:
+                _PRICE_SOURCE[symbol] = "backup_daily_close"
+                return backup_close
 
     provider_disabled = False
     primary_provider_fn = getattr(
@@ -25240,6 +25275,23 @@ def get_latest_price(
             winning_provider = price_source
             return True
         return False
+
+    preferred_feed = _prefer_feed_this_cycle()
+    configured_env = os.getenv("ALPACA_DATA_FEED")
+    if configured_env:
+        configured_env = configured_env.strip() or None
+    env_feed = _sanitize_alpaca_feed(configured_env) if configured_env is not None else None
+    intraday_raw = _get_intraday_feed()
+    configured_feed = _sanitize_alpaca_feed(intraday_raw)
+    if env_feed is not None:
+        requested_feed = env_feed
+    else:
+        requested_feed = preferred_feed or configured_feed
+    configured_raw = (
+        configured_env
+        if configured_env is not None
+        else (preferred_feed if preferred_feed is not None else intraday_raw)
+    )
 
     cycle_feed = _prefer_feed_this_cycle_helper(symbol)
     if cycle_feed and cycle_feed not in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
@@ -25700,6 +25752,22 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 _PRICE_SOURCE[symbol] = str(source or provider)
                 return price
             continue
+
+    backup_fetch_fn = getattr(data_fetcher_module, "_backup_get_bars", None)
+    if callable(backup_fetch_fn):
+        fallback_now = datetime.now(UTC)
+        fallback_start = fallback_now - timedelta(days=5)
+        try:
+            backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
+        except Exception:
+            backup_df = None
+        else:
+            backup_close = _resolve_latest_close(backup_df)
+            if backup_close is not None:
+                _PRICE_SOURCE[symbol] = "yahoo"
+                return backup_close
+        if _PRICE_SOURCE.get(symbol) in (None, "unknown"):
+            _PRICE_SOURCE[symbol] = "yahoo_invalid"
 
     if attempted_alpaca and _PRICE_SOURCE.get(symbol) in (None, "unknown"):
         _PRICE_SOURCE[symbol] = "alpaca_empty"

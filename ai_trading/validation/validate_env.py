@@ -65,7 +65,7 @@ def debug_environment() -> dict:
     env_vars = {
         name: {
             "status": "set",
-            "value": masked[name],
+            "value": masked.get(name, "<redacted>"),
             "length": len(str(os.environ[name])),
         }
         for name in os.environ

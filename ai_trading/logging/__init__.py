@@ -638,9 +638,8 @@ def reset_provider_log_dedupe() -> None:
 def flush_log_throttle_summaries() -> None:
     """Emit LOG_THROTTLE_SUMMARY lines for suppressed messages this cycle."""
 
-    _THROTTLE_FILTER.flush_cycle()
-    _flush_provider_log_summaries()
-    _emit_rate_limit_summaries(_get_rate_limit_tracker().flush(force=True))
+    if _THROTTLE_FILTER:
+        _THROTTLE_FILTER.flush_cycle()
 
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):

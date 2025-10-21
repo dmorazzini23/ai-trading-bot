@@ -68,79 +68,35 @@ def StageTimer(logger: Any, stage_name: str, **extra: Any) -> None:
             pass
 
 class SoftBudget:
+    """Track a soft millisecond budget using monotonic time."""
 
-    def __init__(self, millis: int):
-        self.budget_ms = max(0, int(millis))
-        start_ns = time.perf_counter_ns()
-        self._start_ns: int = start_ns
-        self._last_sample_ns: int = start_ns
-        self._fractional_ns: int = 0
-        self._elapsed_ms: int = 0
-        self._minimum_tick_emitted: bool = False
+    def __init__(self, millis: int | float):
+        self.ms = max(0.0, float(millis))
+        self.start = time.monotonic()
 
     def __enter__(self) -> "SoftBudget":
-        self.reset()
+        self.start = time.monotonic()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
-    def reset(self) -> None:
-        start_ns = time.perf_counter_ns()
-        self._start_ns = start_ns
-        self._last_sample_ns = start_ns
-        self._fractional_ns = 0
-        self._elapsed_ms = 0
-        self._minimum_tick_emitted = False
-
-    def _update_elapsed_state(self) -> None:
-        now = time.perf_counter_ns()
-        if now < self._last_sample_ns:
-            # perf_counter_ns is monotonic, but guard against unexpected clock
-            # behaviour from monkeypatched or emulated timers.
-            self._last_sample_ns = now
-            return
-
-        delta_ns = now - self._last_sample_ns
-        if delta_ns:
-            self._last_sample_ns = now
-            self._fractional_ns += delta_ns
-            increment, self._fractional_ns = divmod(self._fractional_ns, 1_000_000)
-            if increment:
-                self._elapsed_ms += increment
-                if self._elapsed_ms > 0:
-                    self._minimum_tick_emitted = False
-        else:
-            self._last_sample_ns = now
-
-    def elapsed_ms(self) -> int:
+    def elapsed_ms(self) -> float:
         """Return elapsed milliseconds since the most recent reset."""
 
-        self._update_elapsed_state()
-
-        if self._elapsed_ms == 0 and self._fractional_ns > 0:
-            self._minimum_tick_emitted = True
-            return 1
-
-        if self._minimum_tick_emitted and self._elapsed_ms == 0:
-            return 1
-
-        return self._elapsed_ms
-
-    def over_budget(self) -> bool:
-        self._update_elapsed_state()
-        total_elapsed_ns = (self._elapsed_ms * 1_000_000) + self._fractional_ns
-        budget_ns = self.budget_ms * 1_000_000
-        return total_elapsed_ns >= budget_ns
+        return (time.monotonic() - self.start) * 1000.0
 
     def remaining(self) -> float:
-        self._update_elapsed_state()
-        budget_ns = self.budget_ms * 1_000_000
-        total_elapsed_ns = (self._elapsed_ms * 1_000_000) + self._fractional_ns
-        if total_elapsed_ns >= budget_ns:
-            return 0.0
-        remaining_ns = budget_ns - total_elapsed_ns
-        return round(remaining_ns / 1_000_000_000, 3)
+        """Return milliseconds remaining before the budget is exceeded."""
 
-    def over(self) -> bool:  # Backward compatibility
+        return max(0.0, self.ms - self.elapsed_ms())
+
+    def over_budget(self) -> bool:
+        """Return True if the elapsed time has exceeded the budget."""
+
+        return self.remaining() <= 0.0
+
+    def over(self) -> bool:
+        """Backward compatibility alias for :meth:`over_budget`."""
+
         return self.over_budget()

@@ -50,7 +50,7 @@ def _load_env_from_file() -> None:
 
 def _client(key_id: str | None, secret_key: str | None, base_url: str | None) -> REST:
     api_base = URL(base_url or "https://paper-api.alpaca.markets")
-    return REST(key_id, secret_key, api_base, api_version="v2")
+    return REST(key_id=key_id, secret_key=secret_key, base_url=api_base, api_version="v2")
 
 
 def diagnose(

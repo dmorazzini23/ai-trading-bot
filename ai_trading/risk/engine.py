@@ -230,6 +230,18 @@ class RiskEngine:
             self.hard_stop_cooldown = 10.0
         self._hard_stop_until: float | None = None
 
+    def _init_data_client(self):
+        """Return an initialized data client if available."""
+
+        if self.data_client is not None:
+            return self.data_client
+        ctx = getattr(self, "ctx", None)
+        if ctx is not None:
+            candidate = getattr(ctx, "api", None)
+            if candidate is not None:
+                return candidate
+        return None
+
     def _validate_env(self) -> None:
         """Validate required environment variables unless running tests."""
         if get_env("PYTEST_RUNNING", "0", cast=bool):
@@ -267,7 +279,7 @@ class RiskEngine:
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
             ctx = getattr(self, "ctx", None)
-            client = getattr(ctx, "data_client", None) or self.data_client or getattr(ctx, "api", None)
+            client = getattr(ctx, "data_client", None) or self._init_data_client()
 
             def _safe_bar_value(bar: Any, names: Sequence[str]) -> Any:
                 if isinstance(bar, dict):
