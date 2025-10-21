@@ -5396,18 +5396,30 @@ def _session_get(
     requests_mod = _ensure_requests()
     use_module_requests = bool(os.getenv("PYTEST_CURRENT_TEST")) or bool(_state.get("force_module_requests"))
 
-    if not use_module_requests and hasattr(sess, "get"):
+    session_response: Any | None = None
+    if hasattr(sess, "get"):
         try:
-            response = sess.get(url, params=params, headers=headers, timeout=timeout)
-            if response is not None:
-                return response
+            session_response = sess.get(url, params=params, headers=headers, timeout=timeout)
+            if session_response is not None:
+                return session_response
         except Exception:
-            pass
+            session_response = None
 
-    try:
-        return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
-    except Exception:
-        return None
+    if use_module_requests:
+        try:
+            module_response = requests_mod.get(url, params=params, headers=headers, timeout=timeout)
+            if module_response is not None:
+                return module_response
+        except Exception:
+            return session_response
+        return module_response
+
+    if not use_module_requests:
+        try:
+            return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
+        except Exception:
+            return session_response
+    return session_response
 
 
 def _get_alpaca_data_base_url() -> str:
@@ -6614,6 +6626,9 @@ def _fetch_bars(
             }
             if prev_corr:
                 log_extra["previous_correlation_id"] = prev_corr
+            attempt_number = int(_state.get("retries", 0)) + 1
+            remaining_retries = max(0, max_retries - attempt_number)
+            log_extra["remaining_retries"] = remaining_retries
             log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -6622,6 +6637,12 @@ def _fetch_bars(
             _incr("data.fetch.timeout", value=1.0, tags=_tags())
             metrics.timeout += 1
             provider_monitor.record_failure("alpaca", "timeout", str(e))
+            retry_delay = float(_state.get("retry_delay") or 0.0)
+            if retry_delay <= 0:
+                retry_delay = _MIN_RATE_LIMIT_SLEEP_SECONDS
+            _state["retries"] = attempt_number
+            _state["retry_delay"] = retry_delay
+            _state["delay"] = retry_delay
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if (
                 fallback_target
@@ -6634,7 +6655,14 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback_target, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
                     return _depth_exit(result)
-            return _depth_exit(_empty_result())
+            if attempt_number >= max_retries:
+                return _depth_exit(_empty_result())
+            try:
+                time.sleep(retry_delay)
+            except Exception:
+                pass
+            result = _req(session, fallback, headers=headers, timeout=timeout)
+            return _depth_exit(result)
         except ConnectionError as e:
             log_extra = {
                 "url": url,
@@ -6872,13 +6900,7 @@ def _fetch_bars(
                 if not from_fallback:
                     fb_int = interval_map.get(_interval)
                     if fb_int:
-                        provider_str, normalized_provider = _resolve_backup_provider()
-                        backup_df = _safe_backup_get_bars(symbol, _start, _end, interval=fb_int)
-                        annotated_backup = _annotate_df_source(
-                            backup_df,
-                            provider=normalized_provider or provider_str,
-                            feed=normalized_provider or None,
-                        )
+                        annotated_backup = _run_backup_fetch(fb_int, from_provider=f"alpaca_{_feed}")
                         if annotated_backup is not None and not getattr(annotated_backup, "empty", True):
                             return annotated_backup
                 empty_df = _empty_ohlcv_frame(pd)
@@ -6917,7 +6939,9 @@ def _fetch_bars(
                     return result
             raise ValueError("unauthorized")
         if status == 429:
-            log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+            retries_before = int(_state.get("retries", 0))
+            remaining = max(0, max_retries - retries_before)
+            log_extra_with_remaining = {"remaining_retries": remaining, **log_extra}
             log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
                 "DATA_SOURCE_RATE_LIMITED",
@@ -6936,12 +6960,75 @@ def _fetch_bars(
             pending_recover = _state.setdefault("pending_recover", set())
             if isinstance(pending_recover, set):
                 pending_recover.add(_feed)
+            retry_delay = float(_state.get("retry_delay") or 0.0)
+            if retry_delay <= 0:
+                retry_delay = _MIN_RATE_LIMIT_SLEEP_SECONDS
+            _state["retry_delay"] = retry_delay
+            _state["delay"] = retry_delay
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
+            if (
+                fallback_target
+                and len(fallback_target) >= 2
+                and fallback_target[1] == "sip"
+                and (_is_sip_unauthorized() or _SIP_UNAUTHORIZED)
+            ):
+                fallback_target = None
             if fallback_target:
                 result = _attempt_fallback(fallback_target, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
                     return _depth_exit(result)
-            return _depth_exit(_empty_result())
+            backup_frame: pd.DataFrame | None = None
+            should_attempt_backup = False
+            try:
+                max_fb_budget = max_data_fallbacks()
+            except Exception:
+                max_fb_budget = None
+            if _ENABLE_HTTP_FALLBACK and (max_fb_budget is None or max_fb_budget > 0):
+                should_attempt_backup = True
+            if should_attempt_backup:
+                interval_map = {
+                    "1Min": "1m",
+                    "5Min": "5m",
+                    "15Min": "15m",
+                    "1Hour": "60m",
+                    "1Day": "1d",
+                }
+                fb_int = interval_map.get(_interval)
+                if fb_int:
+                    backup_frame = _run_backup_fetch(fb_int, from_provider=f"alpaca_{_feed}")
+                    if backup_frame is not None and not getattr(backup_frame, "empty", True):
+                        finalized_backup = _finalize_frame(backup_frame)
+                        try:
+                            attrs = getattr(finalized_backup, "attrs", {}) or {}
+                        except Exception:
+                            attrs = {}
+                        provider_name = (
+                            attrs.get("data_provider")
+                            or attrs.get("fallback_provider")
+                            or attrs.get("provider")
+                            or _state.get("last_fallback_feed")
+                            or "backup"
+                        )
+                        feed_tag = (
+                            attrs.get("data_feed")
+                            or attrs.get("fallback_feed")
+                            or _state.get("last_fallback_feed")
+                            or provider_name
+                        )
+                        fallback_tags = _tags(provider=str(provider_name), feed=str(feed_tag))
+                        _record_fallback_success_metric(fallback_tags)
+                        _record_success_metric(fallback_tags, prefer_fallback=True)
+                        return _depth_exit(finalized_backup)
+            attempt_number = retries_before + 1
+            _state["retries"] = attempt_number
+            if attempt_number >= max_retries or _SIP_UNAUTHORIZED or _is_sip_unauthorized():
+                raise ValueError("rate_limited")
+            try:
+                time.sleep(retry_delay)
+            except Exception:
+                pass
+            result = _req(session, fallback, headers=headers, timeout=timeout)
+            return _depth_exit(result)
         df = pd.DataFrame(data)
         _attach_payload_metadata(
             df,
