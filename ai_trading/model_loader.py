@@ -193,20 +193,7 @@ def load_model(symbol: str) -> object:
         "MODEL_FILE_MISSING",
         extra={"symbol": symbol, "paths": [str(p) for p in dirs]},
     )
-    # Fallback: builtin heuristic model (scikit-like API)
-    try:
-        from ai_trading.simple_models import get_model as _get_model
-
-        mdl = _get_model()
-        ML_MODELS[symbol] = mdl
-        logger.info(
-            "MODEL_LOADED", extra={"source": "module", "model_module": "ai_trading.simple_models"}
-        )
-        return mdl
-    except Exception as exc:  # pragma: no cover - defensive
-        raise RuntimeError(
-            f"Model file for '{symbol}' not found and heuristic fallback failed: {exc}"
-        ) from exc
+    raise RuntimeError(f"Model file for '{symbol}' not found in configured paths")
 
 
 # AI-AGENT-REF: avoid import-time model loading; expose explicit preload

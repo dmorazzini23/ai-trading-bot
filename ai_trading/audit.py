@@ -283,13 +283,20 @@ def log_trade(
             try:
                 action()
                 return True
-            except PermissionError as exc:
-                logger.error("audit.log permission denied %s: %s", path, exc)
-                fix_file_permissions(path)
+            except PermissionError as first_exc:
+                repaired = fix_file_permissions(path)
                 try:
                     action()
                     return True
                 except PermissionError:
+                    logger.error(
+                        "TRADE_LOG_WRITE_PERMISSION_DENIED",
+                        extra={
+                            "path": str(path),
+                            "repaired": bool(repaired),
+                            "error": str(first_exc),
+                        },
+                    )
                     return False
 
         if not _run_with_fix(lambda: _ensure_file_header(path, headers)):

@@ -152,7 +152,9 @@ def _pmc_session_info(d: date) -> Session:
             prev_fallback = _FALLBACK_SESSIONS.get(prev)
             if prev_fallback is not None:
                 return prev_fallback
-        raise RuntimeError(f"No trading session for {d}")
+        start_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
+        end_et = datetime(d.year, d.month, d.day, 16, 0, tzinfo=_ET)
+        return Session(start_et.astimezone(UTC), end_et.astimezone(UTC), False)
     open_et = sched.iloc[0]["market_open"].tz_convert(_ET).to_pydatetime()
     close_et = sched.iloc[0]["market_close"].tz_convert(_ET).to_pydatetime()
     early = close_et.hour < 16

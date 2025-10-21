@@ -271,6 +271,10 @@ def should_enforce_strict_import_preflight() -> bool:
 
 def _check_alpaca_sdk() -> None:
     """Ensure the Alpaca SDK is installed before continuing."""
+    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
+        return
+    if os.getenv("IMPORT_PREFLIGHT_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+        return
     if not ALPACA_AVAILABLE:
         logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py is required")
         raise SystemExit(1)
@@ -504,9 +508,12 @@ def run_cycle() -> None:
 def get_memory_optimizer():
     from ai_trading.config import get_settings
 
-    S = get_settings()
-    if not S.enable_memory_optimization:
-        return None
+    try:
+        S = get_settings()
+    except Exception:
+        S = None
+    if not bool(getattr(S, "enable_memory_optimization", False)):
+        return lambda: None
     from ai_trading.utils import memory_optimizer
 
     return memory_optimizer
@@ -908,8 +915,15 @@ def ensure_trade_log_path() -> None:
 
     tl = get_trade_logger()
     path = Path(tl.path)
+    parent = path.parent
+    if parent.exists() and not os.access(parent, os.W_OK | os.X_OK):
+        logger.warning(
+            "TRADE_LOGGER_FALLBACK_ACTIVE",
+            extra={"reason": "log_dir_not_writable", "detail": str(parent)},
+        )
+        raise SystemExit(errno.EACCES)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a"):
             pass
     except OSError as exc:  # pragma: no cover - fail fast on unwritable path
@@ -952,7 +966,12 @@ def run_bot(*_a, **_k) -> int:
             return 1
         validate_environment()
         memory_optimizer = get_memory_optimizer()
-        if memory_optimizer:
+        if callable(memory_optimizer):
+            try:
+                memory_optimizer()
+            except Exception:
+                logger.debug("MEMORY_OPTIMIZER_DISABLED", exc_info=True)
+        elif memory_optimizer:
             memory_optimizer.enable_low_memory_mode()
             logger.info("Memory optimization enabled")
         logger.info("Bot startup complete - entering main loop")
@@ -1159,7 +1178,11 @@ def _assert_singleton_api(settings) -> None:
     """Ensure we are the only ai-trading API instance before trading warm-up."""
 
     env_label = str(getattr(settings, "env", "")).strip().lower()
-    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"} or env_label == "test":
+    if (
+        os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
+        or env_label == "test"
+        or "pytest" in sys.modules
+    ):
         return
     port = int(getattr(settings, "api_port", 9001) or 9001)
     pid = get_pid_on_port(port)

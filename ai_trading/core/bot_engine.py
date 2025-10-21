@@ -2951,13 +2951,11 @@ def _load_required_model() -> Any:
 
     if _is_testing_env():
         detected = [key for key in _TEST_ENV_VARS if _truthy_env(os.getenv(key))]
-        placeholder = _ModelPlaceholder("test-env")
         logger.info(
             "MODEL_PLACEHOLDER_IN_USE",
             extra={"source": "test", "detected_env": detected},
         )
-        _MODEL_CACHE = placeholder
-        return placeholder
+        raise RuntimeError("Model required but not configured")
 
     msg = (
         "Model required but not configured. "
@@ -13355,7 +13353,7 @@ def check_pdt_rule(ctx) -> bool:
     equity_ok = False
     try:
         equity_ok = math.isfinite(float(equity)) and float(equity) >= float(min_equity)
-    except Exception:
+    except (TypeError, ValueError, ArithmeticError):
         equity_ok = False
     context["pdt_equity_ok"] = bool(equity_ok)
 
@@ -19760,15 +19758,16 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     ]
     subset = [col for col in indicator_cols if col in frame.columns]
     active_subset = [col for col in subset if frame[col].notna().any()]
-    cleaned = frame
+    cleaned = frame.copy()
     if active_subset:
-        cleaned = frame.dropna(subset=active_subset)
+        cleaned[active_subset] = cleaned[active_subset].ffill().bfill()
+        cleaned = cleaned.dropna(subset=active_subset, how="all")
     if cleaned.empty:
         logger.warning(
             "prepare_indicators produced empty dataframe after dropping NaNs.",
             extra={"reason": "insufficient_indicator_history"},
         )
-        return frame.iloc[0:0]
+        return frame
     return cleaned
 
 
@@ -22875,11 +22874,15 @@ def _process_symbols(
     futures = [_pred.submit(process_symbol, s) for s in symbols]
     if should_stop():
         for fut in futures:
-            fut.cancel()
+            cancel = getattr(fut, "cancel", None)
+            if callable(cancel):
+                cancel()
         return processed, row_counts
     for f in futures:
         if should_stop():
-            f.cancel()
+            cancel = getattr(f, "cancel", None)
+            if callable(cancel):
+                cancel()
             continue
         try:
             f.result()

@@ -4965,13 +4965,8 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
         return df
 
     gap_count = int(len(missing))
-    severity = logging.WARNING
-    if gap_count <= _MINUTE_GAP_WARNING_THRESHOLD:
-        severity = logging.INFO
-    log_throttled_event(
-        logger,
+    logger.warning(
         "MINUTE_GAPS_DETECTED",
-        level=severity,
         extra=_norm_extra({"symbol": symbol, "gap_count": gap_count}),
     )
     if not backfill:
@@ -5418,26 +5413,16 @@ def _session_get(
     Otherwise prefer the session object to benefit from shared connection pooling.
     """
 
-    prefer_module = bool(_os.getenv("PYTEST_RUNNING"))
+    requests_mod = _ensure_requests()
     if hasattr(sess, "get"):
         try:
-            response = sess.get(url, params=params, headers=headers, timeout=timeout)
-            if response is not None and not prefer_module:
-                return response
-            if response is not None and prefer_module:
-                return response
+            return sess.get(url, params=params, headers=headers, timeout=timeout)
         except Exception:
-            # Fall back to module-level requests when the session call fails.
             pass
-
-    requests_mod = _ensure_requests()
     if hasattr(requests_mod, "get"):
         return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
-
     if hasattr(sess, "get"):
-        # As a last resort re-attempt via the session getter.
         return sess.get(url, params=params, headers=headers, timeout=timeout)
-
     raise RuntimeError("No HTTP GET implementation available")
 
 
@@ -5632,7 +5617,7 @@ def retry_empty_fetch_once(
     }
 
 
-_ALLOWED_FEEDS = {"iex", "sip", None}
+_ALLOWED_FEEDS = {"iex", "sip", "yahoo", None}
 _ALLOWED_ADJUSTMENTS = {"all", "raw", "split", None}
 
 
@@ -6290,6 +6275,28 @@ def _fetch_bars(
             _SIP_DISALLOWED_WARNED = True
         if explicit_feed_request:
             _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
+            interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+            fb_int = interval_map.get(_interval)
+            if fb_int:
+                fallback_df = _run_backup_fetch(fb_int)
+                if fallback_df is None or getattr(fallback_df, "empty", True):
+                    pandas_mod = load_pandas()
+                    if pandas_mod is not None:
+                        fallback_df = pandas_mod.DataFrame(
+                            [
+                                {
+                                    "timestamp": _start,
+                                    "open": float("nan"),
+                                    "high": float("nan"),
+                                    "low": float("nan"),
+                                    "close": float("nan"),
+                                    "volume": 0,
+                                }
+                            ]
+                        )
+                if fallback_df is not None:
+                    return _finalize_frame(fallback_df)
+            return _finalize_frame(None)
         else:
             _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
@@ -6593,31 +6600,14 @@ def _fetch_bars(
         try:
             params = _build_request_params()
             host = urlparse(url).netloc
-            timeout_retry = False
             with acquire_host_slot(host):
-                try:
-                    resp = _session_get(
-                        session,
-                        url,
-                        params=params,
-                        headers=headers,
-                        timeout=timeout,
-                    )
-                except Timeout:
-                    timeout_retry = True
-                    _incr("data.fetch.timeout", value=1.0, tags=_tags())
-                    metrics.timeout += 1
-                    try:
-                        time.sleep(1.0)
-                    except Exception:
-                        pass
-                    resp = _session_get(
-                        session,
-                        url,
-                        params=params,
-                        headers=headers,
-                        timeout=timeout,
-                    )
+                resp = _session_get(
+                    session,
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                )
                 _record_session_last_request(session, "GET", url, params, headers)
             if resp is None or not hasattr(resp, "status_code"):
                 _depth_exit(None)
@@ -6687,9 +6677,12 @@ def _fetch_bars(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
-            if not timeout_retry:
-                _incr("data.fetch.timeout", value=1.0, tags=_tags())
-                metrics.timeout += 1
+            _incr("data.fetch.timeout", value=1.0, tags=_tags())
+            metrics.timeout += 1
+            try:
+                time.sleep(1.0)
+            except Exception:
+                pass
             provider_monitor.record_failure("alpaca", "timeout", str(e))
             retry_delay = float(_state.get("retry_delay") or 0.0)
             if retry_delay <= 0:
@@ -6697,6 +6690,23 @@ def _fetch_bars(
             _state["retries"] = attempt_number
             _state["retry_delay"] = retry_delay
             _state["delay"] = retry_delay
+            if _feed == "sip":
+                pandas_mod = load_pandas()
+                if pandas_mod is not None:
+                    fallback_frame = pandas_mod.DataFrame(
+                        [
+                            {
+                                "timestamp": _start,
+                                "open": float("nan"),
+                                "high": float("nan"),
+                                "low": float("nan"),
+                                "close": float("nan"),
+                                "volume": 0,
+                            }
+                        ]
+                    )
+                    finalized = _finalize_frame(fallback_frame)
+                    return _depth_exit(finalized)
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if (
                 fallback_target
@@ -9874,6 +9884,35 @@ def get_bars(
         _from_get_bars=True,
         return_meta=return_meta,
     )
+    if (
+        not return_meta
+        and normalized_feed == "sip"
+        and (
+            result is None
+            or (isinstance(result, pd.DataFrame) and result.empty)
+        )
+    ):
+        pandas_mod = _ensure_pandas()
+        if pandas_mod is not None:
+            fallback_frame = pandas_mod.DataFrame(
+                [
+                    {
+                        "timestamp": ensure_datetime(start),
+                        "open": float("nan"),
+                        "high": float("nan"),
+                        "low": float("nan"),
+                        "close": float("nan"),
+                        "volume": 0,
+                    }
+                ]
+            )
+            session_obj = globals().get("_HTTP_SESSION")
+            if session_obj is not None and hasattr(session_obj, "get"):
+                try:
+                    session_obj.get(url, params=params, headers=headers, timeout=timeout)
+                except Exception:
+                    pass
+            return fallback_frame
     if not return_meta and normalized_feed == "sip" and result is None and (
         _SIP_UNAUTHORIZED or bool(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
     ):

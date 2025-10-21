@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+from types import SimpleNamespace
 from ai_trading.logging import logger
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas_market_calendars
@@ -206,8 +207,15 @@ class RiskValidator:
     def __init__(self, risk_level: RiskLevel=RiskLevel.MODERATE):
         """Initialize risk validator."""
         self.risk_level = risk_level
-        settings = get_settings()
-        self.enable_portfolio_features = settings.ENABLE_PORTFOLIO_FEATURES
+        settings = None
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        fallback_settings = settings if settings is not None else SimpleNamespace()
+        self.enable_portfolio_features = bool(
+            getattr(fallback_settings, "ENABLE_PORTFOLIO_FEATURES", False)
+        )
         self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.max_position_size = RISK_PARAMETERS['MAX_POSITION_SIZE']
         self.max_correlation_exposure = RISK_PARAMETERS['MAX_CORRELATION_EXPOSURE']

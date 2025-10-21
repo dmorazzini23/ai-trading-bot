@@ -318,7 +318,7 @@ def benchmark_operation(operation_name: str, operation_func: Callable, *args, **
     pd = load_pandas()
     try:
         import psutil
-    except (ValueError, TypeError):
+    except Exception:
         psutil = None
     gc.collect()
     if psutil is not None:

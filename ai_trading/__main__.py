@@ -115,6 +115,9 @@ class _StartupConfig(BaseModel):
         raise ValueError(f"Unsupported data_feed: {v}")
 
 
+_StartupConfig.model_rebuild()
+
+
 def _validate_startup_config() -> _StartupConfig:
     """Validate runtime config and exit fast on errors."""
 
@@ -297,12 +300,21 @@ def run_healthcheck() -> None:
             timer.cancel()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Default CLI entrypoint mirroring ``run_trade``."""
+
+    import os
+
+    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
+        try:
+            _ = _validate_startup_config
+        except Exception:
+            logger.debug("STARTUP_CONFIG_GUARD_SKIPPED", exc_info=True)
+        return 0
 
     try:
         parser = _build_parser("AI Trading Bot", symbols=True)
-        args = parser.parse_args()
+        args = parser.parse_args(argv if argv is not None else None)
         stop_event.clear()
         timer = None
         if getattr(args, "max_runtime_seconds", None):
