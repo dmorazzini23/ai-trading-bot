@@ -25740,7 +25740,12 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 _PRICE_SOURCE[symbol] = str(source or provider)
                 return price
             if source:
-                _PRICE_SOURCE[symbol] = str(source)
+                current_source = _PRICE_SOURCE.get(symbol)
+                if not (
+                    current_source == _ALPACA_DISABLED_SENTINEL
+                    and str(source or "").startswith("yahoo")
+                ):
+                    _PRICE_SOURCE[symbol] = str(source)
             continue
 
         if provider == "bars":

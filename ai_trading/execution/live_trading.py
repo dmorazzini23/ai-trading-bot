@@ -1717,9 +1717,13 @@ class ExecutionEngine:
                 "pattern_day_trades",
                 "pattern_day_trades_count",
             )
+            limit_default = _config_int("EXECUTION_DAYTRADE_LIMIT", 3) or 0
+            daytrade_limit_value = _safe_int(limit_attr, limit_default)
+            if daytrade_limit_value <= 0:
+                daytrade_limit_value = int(limit_default)
             if not pdt_guard(
                 _safe_bool(pattern_attr),
-                _safe_int(limit_attr, 0),
+                daytrade_limit_value,
                 _safe_int(count_attr, 0),
             ):
                 info = pdt_lockout_info()

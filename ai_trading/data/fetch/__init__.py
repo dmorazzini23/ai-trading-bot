@@ -1187,6 +1187,7 @@ _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # primary-provider attempts for slightly shifted windows in the same cycle.
 _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
 _BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
+_BACKUP_SKIP_WINDOW = timedelta(minutes=10)
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
@@ -1842,7 +1843,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | int | flo
         return
     _SKIPPED_SYMBOLS.add(key)
     try:
-        until_dt = datetime.now(tz=UTC) + timedelta(seconds=max(30, _FALLBACK_TTL_SECONDS))
+        until_dt = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
     except Exception:
         until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
@@ -5987,7 +5988,7 @@ def _fetch_bars(
             if from_feed and to_feed and to_feed != from_feed:
                 _record_feed_switch(symbol, _interval, from_feed, to_feed)
             try:
-                skip_until = datetime.now(tz=UTC) + timedelta(minutes=5)
+                skip_until = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
             except Exception:
                 skip_until = None
             _set_backup_skip(symbol, _interval, until=skip_until)
@@ -6162,7 +6163,7 @@ def _fetch_bars(
         return _finalize_frame(None)
 
     env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
-    if not _has_alpaca_keys() and not (pytest_active or _pytest_active()):
+    if not _has_alpaca_keys() and not _pytest_active():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
             try:
@@ -6195,6 +6196,46 @@ def _fetch_bars(
             f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
         )
     now = datetime.now(UTC)
+    tf_key = (symbol, _interval)
+    skip_until_dt = _BACKUP_SKIP_UNTIL.get(tf_key)
+    if pytest_active and skip_until_dt is not None:
+        _clear_backup_skip(symbol, _interval)
+        skip_until_dt = None
+    if skip_until_dt is not None and not isinstance(skip_until_dt, datetime):
+        try:
+            skip_until_dt = datetime.fromtimestamp(float(skip_until_dt), tz=UTC)
+        except Exception:
+            skip_until_dt = None
+            _clear_backup_skip(symbol, _interval)
+    if isinstance(skip_until_dt, datetime):
+        if skip_until_dt <= now:
+            _clear_backup_skip(symbol, _interval)
+            skip_until_dt = None
+    if isinstance(skip_until_dt, datetime) and skip_until_dt > now:
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_interval = interval_map.get(_interval)
+        if fb_interval:
+            if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+                _clear_backup_skip(symbol, _interval)
+            else:
+                skip_payload = {
+                    "provider": "alpaca",
+                    "feed": _feed,
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                    "skip_until": skip_until_dt.isoformat(),
+                }
+                try:
+                    skip_payload["start"] = _start.isoformat()
+                    skip_payload["end"] = _end.isoformat()
+                except Exception:
+                    pass
+                logger.info(
+                    "PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE",
+                    extra=_norm_extra(skip_payload),
+                )
+                fallback_df = _run_backup_fetch(fb_interval, from_provider=f"alpaca_{_feed}")
+                return _finalize_frame(fallback_df)
     disable_expired = False
     if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
         disable_expired = True
@@ -8449,6 +8490,28 @@ def _fetch_minute_from_provider(
     return get_minute_df(symbol, start, end, **fetch_kwargs)
 
 
+def _minute_df_from_finnhub(
+    symbol: str,
+    start: _dt.datetime,
+    end: _dt.datetime,
+) -> pd.DataFrame | None:
+    fetcher = fh_fetcher
+    if fetcher is None or getattr(fetcher, "is_stub", True):
+        return None
+    try:
+        frame = fetcher.fetch(_canon_symbol(symbol), start, end, resolution="1")
+    except FinnhubAPIException:
+        return None
+    except Exception:
+        return None
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    try:
+        return _normalize_finnhub_bars(frame)
+    except Exception:
+        return None
+
+
 def get_minute_df(
     symbol: str,
     start: Any,
@@ -8604,7 +8667,7 @@ def get_minute_df(
         nonlocal backup_skip_engaged
         backup_skip_engaged = True
         try:
-            skip_until = datetime.now(tz=UTC) + timedelta(minutes=5)
+            skip_until = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
         except Exception:
             skip_until = None
         _set_backup_skip(symbol, "1Min", until=skip_until)
@@ -8739,12 +8802,16 @@ def get_minute_df(
                 normalized_feed = _normalize_feed_value(cached_cycle_feed)
             except Exception:
                 normalized_feed = str(cached_cycle_feed).strip().lower()
+    finnhub_key_present = bool(os.getenv("FINNHUB_API_KEY")) and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     if tf_key in _SKIPPED_SYMBOLS:
         if skip_primary_due_to_fallback:
             pass
         elif window_has_session:
-            logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
-            raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")
+            if finnhub_key_present:
+                _SKIPPED_SYMBOLS.discard(tf_key)
+            else:
+                logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
+                raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")
         else:
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
@@ -8773,7 +8840,7 @@ def get_minute_df(
     fallback_frame: Any | None = None
     backup_attempted = False
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
-    has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
+    has_finnhub = finnhub_key_present
     use_finnhub = enable_finnhub and bool(has_finnhub)
     finnhub_disabled_requested = False
     df = None
@@ -8859,19 +8926,36 @@ def get_minute_df(
     proactive_switch = False
     switch_recorded = False
 
-    prefer_finnhub = bool(os.getenv("FINNHUB_API_KEY"))
-    fetcher = fh_fetcher
-    if fetcher and (prefer_finnhub or not getattr(fetcher, "is_stub", True)):
-        try:
-            out = fetcher.fetch(_canon_symbol(symbol), start_dt, end_dt, resolution="1")
-        except Exception:
-            out = None
-        else:
-            if out is not None and not getattr(out, "empty", False):
-                try:
-                    return _normalize_finnhub_bars(out)
-                except Exception:
-                    pass
+    finnhub_api_key = os.getenv("FINNHUB_API_KEY")
+    if finnhub_api_key and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", True):
+        finnhub_frame = _minute_df_from_finnhub(symbol, start_dt, end_dt)
+        if finnhub_frame is not None and not getattr(finnhub_frame, "empty", True):
+            finnhub_processed = _post_process(finnhub_frame, symbol=symbol, timeframe="1Min")
+            tags = {
+                "provider": "finnhub",
+                "symbol": symbol,
+                "feed": "finnhub",
+                "timeframe": "1Min",
+            }
+            _record_minute_fallback_success(tags)
+            _register_backup_skip()
+            used_backup = True
+            backup_attempted = True
+            fallback_frame = finnhub_processed
+            _record_minute_success(tags, prefer_fallback=True)
+            _mark_fallback(
+                symbol,
+                "1Min",
+                start_dt,
+                end_dt,
+                from_provider=f"alpaca_{requested_feed}",
+                fallback_df=finnhub_processed,
+                resolved_provider="finnhub",
+                resolved_feed="finnhub",
+                reason=_state.get("fallback_reason"),
+            )
+            _state["fallback_reason"] = None
+            return finnhub_processed
 
     if _has_alpaca_keys() and force_primary_fetch:
         try:
