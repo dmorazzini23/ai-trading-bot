@@ -21391,14 +21391,20 @@ def _apply_slippage_limit(
     """Apply side-aware slippage bounds to ``mid`` price."""
 
     slip = max(0.0, float(slippage_bps)) / 10000.0
-    if side.lower() == "buy":
-        limit = mid * (1.0 + slip)
+    safety_pip = 0.0008
+    normalized_side = side.lower()
+
+    if normalized_side == "buy":
+        base = mid * (1.0 + slip)
+        limit = round(base, 4) + safety_pip
         if ask and ask > 0:
-            limit = min(limit, ask)
+            limit = min(limit, float(ask))
         return max(limit, 0.0)
-    limit = mid * (1.0 - slip)
+
+    base = mid * (1.0 - slip)
+    limit = round(base, 4) - safety_pip
     if bid and bid > 0:
-        limit = max(limit, bid)
+        limit = max(limit, float(bid))
     return max(limit, 0.0)
 
 

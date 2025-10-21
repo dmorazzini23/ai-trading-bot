@@ -1774,6 +1774,10 @@ class ExecutionEngine:
                     tick = TICK_BY_SYMBOL.get(order.symbol)
                     order.price = Money(limit_price, tick)
                     base_price = float(order.price)
+                    try:
+                        order.expected_price = Money(base_price, tick)
+                    except Exception:
+                        order.expected_price = Money(base_price)
                 order.order_type = OrderType.LIMIT
                 logger.warning(
                     "SLIPPAGE_LIMIT_CONVERSION",
@@ -1866,6 +1870,16 @@ class ExecutionEngine:
                     actual = float(order.average_fill_price) if order.average_fill_price is not None else expected
                 except Exception:
                     actual = expected
+                try:
+                    limit_price_val = float(order.price) if order.price is not None else None
+                except Exception:
+                    limit_price_val = None
+                if limit_price_val and limit_price_val > 0 and side is not None:
+                    side_value = getattr(side, "value", str(side)).lower()
+                    if side_value.startswith("buy"):
+                        actual = min(actual, limit_price_val)
+                    elif side_value.startswith("sell"):
+                        actual = max(actual, limit_price_val)
                 if expected:
                     slippage_bps = ((actual - expected) / expected) * 10000
                 else:
