@@ -526,27 +526,35 @@ def optimize_memory():
 class PortInUseError(RuntimeError):
     """Raised when the API server cannot bind to the requested port."""
 
-    def __init__(self, port: int, pid: int | None = None):
+    def __init__(self, port: int, pid: int | None = None, *, message: str | None = None):
         self.port = port
         self.pid = pid
-        if pid:
-            message = f"Port {port} is already in use by pid {pid}"
+        if message is not None:
+            resolved = message
+        elif pid is not None:
+            resolved = f"port {port} in use by pid {pid}"
         else:
-            message = f"Port {port} is already in use"
-        super().__init__(message)
+            resolved = f"port {port} in use"
+        super().__init__(resolved)
 
 
 class ExistingApiDetected(PortInUseError):
     """Raised when another healthy ai-trading API instance owns the port."""
 
     def __init__(self, port: int):
-        super().__init__(port, pid=None)
+        super().__init__(port, pid=None, message=f"healthy API already on {port}")
 
 
 def _get_wait_window(settings: Any) -> float:
     """Resolve the API port wait window from multiple settings aliases."""
 
-    for attr in ("wait_window", "api_port_wait_window", "api_port_retry_window", "startup_wait_window"):
+    for attr in (
+        "wait_window",
+        "api_port_wait_window",
+        "api_port_retry_window",
+        "startup_wait_window",
+        "api_port_wait_seconds",
+    ):
         value = getattr(settings, attr, None)
         if value is None:
             continue
@@ -1114,7 +1122,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             if pid:
                 conflict_extra["pid"] = pid
                 logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
-                logger.warning(
+                logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "port_in_use", "pid": pid},
                 )
@@ -1122,7 +1130,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
 
             if _probe_local_api_health(port):
                 logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
-                logger.warning(
+                logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "existing_api"},
                 )
@@ -1130,11 +1138,14 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
 
             if elapsed >= wait_window:
                 logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
-                logger.warning(
+                logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "port_timeout"},
                 )
-                raise PortInUseError(port) from exc
+                raise PortInUseError(
+                    port,
+                    message=f"port {port} busy (transient) after {wait_window}s",
+                ) from exc
 
             time.sleep(0.1)
             continue

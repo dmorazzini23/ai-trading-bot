@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - pooling optional during stubbed tests
     _pooling_reload_host_limit = None
     _pooling_get_limit_snapshot = None
     _pooling_refresh_host_semaphore = None
+    _pooling_record_concurrency = None
 else:  # pragma: no cover - exercised in integration tests
     _pooling_host_limit = getattr(_http_pooling, "get_host_limit", None)
     _pooling_get_host_semaphore = getattr(_http_pooling, "get_host_semaphore", None)
@@ -50,6 +51,7 @@ else:  # pragma: no cover - exercised in integration tests
     _pooling_refresh_host_semaphore = getattr(
         _http_pooling, "refresh_host_semaphore", None
     )
+    _pooling_record_concurrency = getattr(_http_pooling, "record_concurrency", None)
 
 
 _POOLING_LIMIT_STATE: tuple[int, int] | None = None
@@ -799,6 +801,11 @@ async def run_with_concurrency(
                             _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
                         except Exception:
                             pass
+                    if callable(_pooling_record_concurrency):
+                        try:
+                            _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
+                        except Exception:
+                            pass
 
     async def _mark_worker_end(started: bool) -> None:
         nonlocal active_workers
@@ -895,6 +902,11 @@ async def run_with_concurrency(
                 _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
             except Exception:
                 pass
+        if callable(_pooling_record_concurrency):
+            try:
+                _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
+            except Exception:
+                pass
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
@@ -926,4 +938,3 @@ __all__ = [
     "reset_peak_simultaneous_workers",
     "reset_tracking_state",
 ]
-

@@ -31,6 +31,22 @@ from ai_trading.config import management as config
 
 _DEFAULT_LIMIT: Final[int] = 3
 
+_peak_lock = threading.Lock()
+_peak_concurrency: int = 0
+_ENV_SNAPSHOT: dict[str, str | None] = {}
+_HOST_LIMIT: int = _DEFAULT_LIMIT
+
+
+def record_concurrency(n: int) -> None:
+    """Record the highest observed concurrent worker count."""
+
+    global _peak_concurrency
+    if n < 0:
+        return
+    with _peak_lock:
+        if n > _peak_concurrency:
+            _peak_concurrency = n
+
 @dataclass(slots=True)
 class _SemaphoreRecord:
     semaphore: asyncio.Semaphore
@@ -66,9 +82,9 @@ _LIMIT_VERSION: int = 0
 _LAST_LIMIT_ENV_SNAPSHOT: (tuple[str | None, str | None, str | None] | None) = None
 
 _ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
-    "HTTP_MAX_PER_HOST",
-    "AI_TRADING_HTTP_HOST_LIMIT",
     "AI_TRADING_HOST_LIMIT",
+    "AI_TRADING_HTTP_HOST_LIMIT",
+    "HTTP_MAX_WORKERS",
 )
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
@@ -314,9 +330,10 @@ def testing_reset_host_limits() -> None:
 def _compute_limit(raw: str | None = None) -> int:
     if raw is None:
         raw = (
-            os.getenv("HTTP_MAX_PER_HOST")
+            os.getenv("AI_TRADING_HOST_LIMIT")
             or os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
-            or os.getenv("AI_TRADING_HOST_LIMIT")
+            or os.getenv("HTTP_MAX_WORKERS")
+            or os.getenv("HTTP_MAX_PER_HOST")
         )
     if raw not in (None, ""):
         try:
@@ -342,9 +359,9 @@ def _read_limit_source(
     """Return the resolved limit and metadata describing its source."""
 
     priority_envs = (
+        ("AI_TRADING_HOST_LIMIT", os.getenv("AI_TRADING_HOST_LIMIT")),
         ("AI_TRADING_HTTP_HOST_LIMIT", os.getenv("AI_TRADING_HTTP_HOST_LIMIT")),
         ("HTTP_MAX_WORKERS", os.getenv("HTTP_MAX_WORKERS")),
-        ("AI_TRADING_HOST_LIMIT", os.getenv("AI_TRADING_HOST_LIMIT")),
         ("HTTP_MAX_PER_HOST", os.getenv("HTTP_MAX_PER_HOST")),
     )
     for env_key, raw_env in priority_envs:
@@ -402,7 +419,7 @@ def _refresh_all_host_semaphores(snapshot: HostLimitSnapshot) -> None:
 def _resolve_limit() -> tuple[int, int]:
     """Return the current host limit and cache version."""
 
-    global _LIMIT_CACHE, _LIMIT_VERSION, _LAST_LIMIT_ENV_SNAPSHOT
+    global _LIMIT_CACHE, _LIMIT_VERSION, _LAST_LIMIT_ENV_SNAPSHOT, _HOST_LIMIT, _ENV_SNAPSHOT
 
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
     prior_cache = _LIMIT_CACHE
@@ -439,6 +456,8 @@ def _resolve_limit() -> tuple[int, int]:
     )
     snapshot = HostLimitSnapshot(limit, version)
     _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
+    _HOST_LIMIT = max(1, int(limit))
+    _ENV_SNAPSHOT = {key: os.getenv(key) for key in _ENV_LIMIT_KEYS}
 
     should_refresh = env_changed
     if not should_refresh and prior_cache is not None:
@@ -488,7 +507,7 @@ def get_host_limit_snapshot() -> HostLimitSnapshot:
 def get_host_limit() -> int:
     """Return the configured maximum concurrency per host."""
 
-    snapshot = get_host_limit_snapshot()
+    snapshot = reload_host_limit_if_env_changed()
     return snapshot.limit
 
 
@@ -505,10 +524,11 @@ def invalidate_host_limit_cache() -> None:
     _refresh_all_host_semaphores(snapshot)
 
 
-def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
+def reload_host_limit_if_env_changed(_session: object | None = None) -> HostLimitSnapshot:
     """Refresh cached limit metadata when relevant environment variables change."""
 
-    global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE, _RETIRED_SEMAPHORES, _HOST_SEMAPHORES
+    del _session
+    global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE, _RETIRED_SEMAPHORES, _HOST_SEMAPHORES, _HOST_LIMIT, _ENV_SNAPSHOT
 
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
     cache = _LIMIT_CACHE
@@ -516,6 +536,8 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
     if cache is not None and cache.env_snapshot == env_snapshot and not env_changed:
         _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
+        _ENV_SNAPSHOT = {key: os.getenv(key) for key in _ENV_LIMIT_KEYS}
+        _HOST_LIMIT = snapshot.limit
         _set_pooling_limit_state(snapshot.limit, snapshot.version)
         return snapshot
 
@@ -543,6 +565,8 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
         _LIMIT_CACHE = cache
     snapshot = HostLimitSnapshot(cache.limit, cache.version)
     _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
+    _ENV_SNAPSHOT = {key: os.getenv(key) for key in _ENV_LIMIT_KEYS}
+    _HOST_LIMIT = snapshot.limit
     _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return snapshot
 
@@ -772,6 +796,7 @@ _invalidate_fallback_pooling_state()
 __all__ = [
     "AsyncHostLimiter",
     "HostLimitSnapshot",
+    "record_concurrency",
     "get_host_limit",
     "get_host_limit_snapshot",
     "get_host_semaphore",

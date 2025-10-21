@@ -1352,6 +1352,25 @@ def _canonicalize_fallback_feed(feed: object | None) -> str | None:
     return None
 
 
+def _sanitized_alpaca_feed_for_quote(feed: str | None) -> str | None:
+    """Return Alpaca feed suitable for quotes, respecting SIP lockouts."""
+
+    if feed not in {"iex", "sip"}:
+        return None
+    try:
+        from ai_trading.data import fetch as data_fetch
+    except COMMON_EXC:
+        data_fetch = data_fetcher_module
+    fetch_state = getattr(data_fetch, "_state", {})
+    sip_unauthorized = False
+    if isinstance(fetch_state, Mapping):
+        sip_unauthorized = bool(fetch_state.get("sip_unauthorized"))
+    sip_unauthorized = sip_unauthorized or bool(getattr(data_fetch, "_SIP_UNAUTHORIZED", False))
+    if feed == "sip" and sip_unauthorized:
+        return None
+    return feed
+
+
 def _set_price_source(symbol: str, source: object | None) -> None:
     """Store *source* for *symbol* while normalizing known fallback feeds."""
 
@@ -1734,6 +1753,7 @@ def _attempt_alpaca_trade(
         cache['trade_source'] = 'alpaca_trade_invalid_feed'
         cache['trade_price'] = None
         return None, cache['trade_source']
+    effective_feed = sanitized_feed if sanitized_feed is not None else None
     try:
         alpaca_get, _ = _alpaca_symbols()
     except COMMON_EXC as exc:  # pragma: no cover - network availability guard
@@ -1741,7 +1761,7 @@ def _attempt_alpaca_trade(
         cache['trade_source'] = 'alpaca_trade_error'
         cache['trade_price'] = None
         return None, cache['trade_source']
-    params = {'feed': feed} if feed else None
+    params = {'feed': effective_feed} if effective_feed else None
     url = f"{ALPACA_DATA_BASE}/stocks/{symbol}/trades/latest"
     try:
         payload = alpaca_get(url, params=params)
@@ -21629,7 +21649,11 @@ def _ensure_executable_quote(
         cfg = get_trading_config()
     except COMMON_EXC:
         cfg = None
-    require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
+    env_require_bid_ask = os.getenv("EXECUTION_REQUIRE_BID_ASK")
+    if env_require_bid_ask not in (None, ""):
+        require_bid_ask = _parse_env_bool(env_require_bid_ask, True)
+    else:
+        require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
     require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", True))
     allow_last_close = bool(getattr(cfg, "execution_allow_last_close", False))
     if allow_reference_fallback:
@@ -21652,7 +21676,10 @@ def _ensure_executable_quote(
         details = {"fallback_quote": True}
         if fallback_reason:
             details["fallback_reason"] = fallback_reason
-        return QuoteGateDecision(False, "synthetic_quote", details)
+        decision_reason = fallback_reason or "missing_bid_ask"
+        if decision_reason == "missing_bid_ask":
+            details.setdefault("fallback_reason", decision_reason)
+        return QuoteGateDecision(False, decision_reason, details)
 
     gate_decision = _evaluate_quote_gate(
         quote,
@@ -25222,6 +25249,10 @@ def get_latest_price(
     invalid_alpaca_feed = bool(feed_candidate) and sanitized_feed is None and sanitized_direct is None
 
     alpaca_feed: str | None = sanitized_feed or sanitized_direct
+    if not invalid_alpaca_feed and configured_raw is not None:
+        sanitized_configured = _sanitize_alpaca_feed(configured_raw)
+        if sanitized_configured is None:
+            invalid_alpaca_feed = True
     if alpaca_feed is None and not invalid_alpaca_feed:
         default_feed = _normalize_cycle_feed(_get_intraday_feed())
         if default_feed:
@@ -25487,9 +25518,9 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             provider_disabled = not bool(primary_provider_fn())
         except Exception:
             provider_disabled = False
-    if provider_disabled and not prefer_backup:
+    if provider_disabled:
         _PRICE_SOURCE[symbol] = _ALPACA_DISABLED_SENTINEL
-        return None
+        prefer_backup = True
 
     preferred_feed = _prefer_feed_this_cycle()
     configured_env = os.getenv("ALPACA_DATA_FEED")
@@ -25512,18 +25543,31 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     else:
         alpaca_feed = price_quote_feed.ensure_entitled_feed(requested_feed, None)
 
-    invalid_alpaca_feed = alpaca_feed not in {"iex", "sip"}
+    raw_alpaca_feed = alpaca_feed
+    invalid_alpaca_feed = raw_alpaca_feed not in {"iex", "sip"}
+    if not invalid_alpaca_feed and configured_raw not in (None, ""):
+        sanitized_configured = _sanitize_alpaca_feed(configured_raw)
+        if sanitized_configured is None:
+            invalid_alpaca_feed = True
+            raw_alpaca_feed = None
+            alpaca_feed = None
 
     pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
     sip_flagged = bool(
         getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
         or os.getenv("ALPACA_SIP_UNAUTHORIZED")
     )
-    sip_locked = (
-        alpaca_feed == "sip"
-        and sip_flagged
-        and not pytest_running
-    )
+
+    sanitized_quote_feed = _sanitized_alpaca_feed_for_quote(raw_alpaca_feed)
+    sip_locked = False
+    if sanitized_quote_feed is None:
+        if raw_alpaca_feed == "sip":
+            sip_locked = True
+        alpaca_feed = None
+    else:
+        alpaca_feed = sanitized_quote_feed
+        if alpaca_feed == "sip" and not pytest_running:
+            sip_locked = sip_flagged
 
     skip_alpaca = (
         prefer_backup
@@ -25531,6 +25575,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         or provider_disabled
         or invalid_alpaca_feed
         or sip_locked
+        or alpaca_feed is None
     )
 
     if invalid_alpaca_feed:

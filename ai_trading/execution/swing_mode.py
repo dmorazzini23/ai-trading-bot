@@ -75,6 +75,7 @@ class SwingTradingMode:
     
     def __init__(self):
         self.position_entry_times = {}  # symbol -> entry datetime
+        self._entries = self.position_entry_times
         self.enabled = False
     
     def enable(self):
@@ -112,24 +113,28 @@ class SwingTradingMode:
         """
         
         if not self.enabled:
-            return (True, "swing_mode_disabled")
-        
-        if symbol not in self.position_entry_times:
-            # No entry time recorded, assume it's old position - safe to exit
-            return (True, "no_entry_time_recorded")
-        
-        entry_time = self.position_entry_times[symbol]
-        now_utc = datetime.now(timezone.utc)
-        env_allow = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip() == "1"
-        if env_allow:
-            return (True, "same_day_exit_allowed")
+            return True, "swing_mode_disabled"
 
-        entry_local = entry_time.astimezone(MARKET_TZ)
-        now_local = now_utc.astimezone(MARKET_TZ)
-        if entry_local.date() == now_local.date():
-            return (False, "day_trade_restriction")
+        now_et = datetime.now(MARKET_TZ)
+        entry = self.position_entry_times.get(symbol)
+        if entry is None:
+            return True, "no_entry"
 
-        return (True, None)
+        try:
+            entry_et = entry.astimezone(MARKET_TZ)
+        except (ValueError, AttributeError, TypeError):
+            if isinstance(entry, datetime):
+                if entry.tzinfo is None:
+                    entry_et = entry.replace(tzinfo=MARKET_TZ)
+                else:
+                    entry_et = entry
+            else:
+                return True, "no_entry"
+
+        if entry_et.date() == now_et.date():
+            return False, "day_trade_restriction"
+
+        return True, "different_day"
     
     def clear_entry(self, symbol: str):
         """Clear entry time after position is closed."""

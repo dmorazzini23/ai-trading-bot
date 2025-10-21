@@ -7,6 +7,7 @@ import gc
 import importlib
 import logging
 import os
+import os as _os
 import re
 import sys
 import threading
@@ -20,6 +21,10 @@ from types import GeneratorType, SimpleNamespace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
+try:  # pragma: no cover - requests optional in some test environments
+    import requests as _requests  # type: ignore[import]
+except Exception:  # pragma: no cover - fallback sentinel when requests unavailable
+    _requests = None  # type: ignore[assignment]
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time, is_generator_stop
 
@@ -255,9 +260,27 @@ def _is_fresh(ts: datetime) -> bool:
     return age <= ttl
 
 
-def _rate_limit_cooldown() -> float:
+def _rate_limit_cooldown(resp: Any | None = None) -> float:
     """Return cooldown seconds applied after HTTP 429 responses."""
 
+    retry_after: float | None = None
+    if resp is not None:
+        headers_obj = getattr(resp, "headers", None)
+        header_value: Any = None
+        if isinstance(headers_obj, Mapping):
+            header_value = headers_obj.get("Retry-After") or headers_obj.get("retry-after")
+        if header_value is None:
+            header_value = getattr(resp, "retry_after", None)
+        if header_value not in (None, ""):
+            try:
+                candidate = float(header_value)
+            except (TypeError, ValueError):
+                candidate = math.nan
+            if math.isfinite(candidate) and candidate >= 0:
+                retry_after = candidate
+
+    if retry_after is not None:
+        return float(retry_after)
     try:
         raw_value = get_env("AI_TRADING_RATE_LIMIT_COOLDOWN", 60, cast=float)
     except Exception:
@@ -932,6 +955,8 @@ class _RequestsModulePlaceholder:
 
 
 requests: Any = _RequestsModulePlaceholder()
+if _requests is None:  # pragma: no cover - ensures alias available when requests missing
+    _requests = requests  # type: ignore[assignment]
 
 
 class _YFinancePlaceholder:
@@ -5342,10 +5367,10 @@ def _ensure_yfinance():
 
 
 def _ensure_requests():
-    global requests, ConnectionError, HTTPError, RequestException, Timeout
+    global requests, ConnectionError, HTTPError, RequestException, Timeout, _requests
     if getattr(requests, "get", None) is None:
         try:
-            import requests as _requests  # type: ignore
+            import requests as _requests_mod  # type: ignore
             from requests.exceptions import (
                 ConnectionError as _ConnectionError,
                 HTTPError as _HTTPError,
@@ -5353,7 +5378,7 @@ def _ensure_requests():
                 Timeout as _Timeout,
             )
 
-            requests = _requests
+            requests = _requests_mod
             for placeholder, real in (
                 (RequestException, _RequestException),
                 (Timeout, _Timeout),
@@ -5373,6 +5398,8 @@ def _ensure_requests():
                         continue
         except Exception:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
+    if _requests is None or getattr(_requests, "get", None) is None:
+        _requests = requests
     return requests
 
 
@@ -5386,40 +5413,32 @@ def _session_get(
 ) -> Any:
     """Return an HTTP response using the pooled session when appropriate.
 
-    Tests can monkeypatch :mod:`ai_trading.data.fetch.requests.get`, so when pytest
-    metadata is present (``PYTEST_CURRENT_TEST``) or when the shared fetch state
-    explicitly sets ``force_module_requests``, this helper prefers the module-scoped
-    ``requests.get``.  Otherwise it uses the provided session and gracefully falls
-    back to the module-level getter if the session call fails or is unavailable.
+    Tests can monkeypatch :mod:`ai_trading.data.fetch.requests.get`, so honour the
+    module-level getter when ``PYTEST_RUNNING`` is present in the environment.
+    Otherwise prefer the session object to benefit from shared connection pooling.
     """
 
-    requests_mod = _ensure_requests()
-    use_module_requests = bool(os.getenv("PYTEST_CURRENT_TEST")) or bool(_state.get("force_module_requests"))
-
-    session_response: Any | None = None
+    prefer_module = bool(_os.getenv("PYTEST_RUNNING"))
     if hasattr(sess, "get"):
         try:
-            session_response = sess.get(url, params=params, headers=headers, timeout=timeout)
-            if session_response is not None:
-                return session_response
+            response = sess.get(url, params=params, headers=headers, timeout=timeout)
+            if response is not None and not prefer_module:
+                return response
+            if response is not None and prefer_module:
+                return response
         except Exception:
-            session_response = None
+            # Fall back to module-level requests when the session call fails.
+            pass
 
-    if use_module_requests:
-        try:
-            module_response = requests_mod.get(url, params=params, headers=headers, timeout=timeout)
-            if module_response is not None:
-                return module_response
-        except Exception:
-            return session_response
-        return module_response
+    requests_mod = _ensure_requests()
+    if hasattr(requests_mod, "get"):
+        return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
 
-    if not use_module_requests:
-        try:
-            return requests_mod.get(url, params=params, headers=headers, timeout=timeout)
-        except Exception:
-            return session_response
-    return session_response
+    if hasattr(sess, "get"):
+        # As a last resort re-attempt via the session getter.
+        return sess.get(url, params=params, headers=headers, timeout=timeout)
+
+    raise RuntimeError("No HTTP GET implementation available")
 
 
 def _get_alpaca_data_base_url() -> str:
@@ -6361,18 +6380,9 @@ def _fetch_bars(
         skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
         alternate_history = _state.setdefault("alternate_feed_attempts", set())
         alternate_history.add(_feed)
-        depth = int(_state.get("req_depth", 0)) + 1
-        _state["req_depth"] = depth
-
-        def _depth_exit(result: pd.DataFrame | None) -> pd.DataFrame | None:
-            next_depth = depth - 1
-            if next_depth <= 0:
-                _state.pop("req_depth", None)
-            else:
-                _state["req_depth"] = next_depth
-            return result
-
-        if depth > 4:
+        current_depth = int(_state.get("req_depth", 0))
+        proposed_depth = current_depth + 1
+        if current_depth > 4:
             logger.warning(
                 "FALLBACK_DEPTH_CUTOFF",
                 extra=_norm_extra(
@@ -6381,11 +6391,25 @@ def _fetch_bars(
                         "feed": _feed,
                         "timeframe": _interval,
                         "symbol": symbol,
-                        "depth": depth,
+                        "depth": proposed_depth,
                     }
                 ),
             )
-            return _depth_exit(_empty_result())
+            return _empty_result()
+        _state["req_depth"] = proposed_depth
+
+        def _depth_exit(result: pd.DataFrame | None) -> pd.DataFrame | None:
+            existing_depth = _state.get("req_depth", 0)
+            try:
+                current_value = int(existing_depth or 0)
+            except (TypeError, ValueError):
+                current_value = 0
+            remaining = current_value - 1
+            if remaining <= 0:
+                _state.pop("req_depth", None)
+            else:
+                _state["req_depth"] = remaining
+            return result
 
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False
@@ -6569,16 +6593,34 @@ def _fetch_bars(
         try:
             params = _build_request_params()
             host = urlparse(url).netloc
+            timeout_retry = False
             with acquire_host_slot(host):
-                resp = _session_get(
-                    session,
-                    url,
-                    params=params,
-                    headers=headers,
-                    timeout=timeout,
-                )
+                try:
+                    resp = _session_get(
+                        session,
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                except Timeout:
+                    timeout_retry = True
+                    _incr("data.fetch.timeout", value=1.0, tags=_tags())
+                    metrics.timeout += 1
+                    try:
+                        time.sleep(1.0)
+                    except Exception:
+                        pass
+                    resp = _session_get(
+                        session,
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=timeout,
+                    )
                 _record_session_last_request(session, "GET", url, params, headers)
             if resp is None or not hasattr(resp, "status_code"):
+                _depth_exit(None)
                 raise ValueError("invalid_response")
             status = resp.status_code
             text_attr = getattr(resp, "text", "")
@@ -6596,9 +6638,12 @@ def _fetch_bars(
             if status < 400:
                 _ALPACA_DISABLED_ALERTED = False
                 pending_recover = _state.get("pending_recover")
-                if isinstance(pending_recover, set) and _feed in pending_recover:
-                    pending_recover.discard(_feed)
-                    _incr("http.recover_attempt", value=1.0, tags=_tags())
+                if isinstance(pending_recover, set):
+                    if "alpaca" in pending_recover and _feed not in {"sip"}:
+                        pending_recover.discard("alpaca")
+                        _incr("http.recover_attempt", value=1.0, tags=_tags())
+                    elif _feed in pending_recover:
+                        pending_recover.discard(_feed)
             if status == 204:
                 _state.setdefault("meta", {}).setdefault("empty_response", True)
                 return _depth_exit(_empty_result())
@@ -6615,6 +6660,14 @@ def _fetch_bars(
                 _state["skip_backup_after_fallback"] = True
                 _state["fallback_reason"] = "sip_unauthorized"
                 provider_monitor.record_failure(f"alpaca_{_feed}", "unauthorized")
+                backup_frame = None
+                if callable(_backup_get_bars):
+                    try:
+                        backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
+                    except Exception:
+                        backup_frame = None
+                if backup_frame is not None and not getattr(backup_frame, "empty", True):
+                    return _depth_exit(_finalize_frame(backup_frame))
                 return _depth_exit(_empty_result())
         except Timeout as e:
             log_extra = {
@@ -6634,8 +6687,9 @@ def _fetch_bars(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
-            _incr("data.fetch.timeout", value=1.0, tags=_tags())
-            metrics.timeout += 1
+            if not timeout_retry:
+                _incr("data.fetch.timeout", value=1.0, tags=_tags())
+                metrics.timeout += 1
             provider_monitor.record_failure("alpaca", "timeout", str(e))
             retry_delay = float(_state.get("retry_delay") or 0.0)
             if retry_delay <= 0:
@@ -6858,6 +6912,7 @@ def _fetch_bars(
                 )
                 yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
                 return _run_backup_fetch(yf_interval)
+            _depth_exit(None)
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
             reason_tag = "alpaca_unauthorized"
@@ -6937,6 +6992,7 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
+            _depth_exit(None)
             raise ValueError("unauthorized")
         if status == 429:
             retries_before = int(_state.get("retries", 0))
@@ -6949,86 +7005,52 @@ def _fetch_bars(
                     {"provider": "alpaca", "status": "rate_limited", "feed": _feed, "timeframe": _interval}
                 ),
             )
-            _incr("data.fetch.timeout", value=1.0, tags=_tags())
-            metrics.timeout += 1
-            cooldown = _rate_limit_cooldown()
-            provider_label = f"alpaca_{_feed}"
+            _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
+            cooldown = _rate_limit_cooldown(resp)
             try:
-                provider_monitor.disable(provider_label, duration=cooldown)
+                provider_monitor.disable("alpaca", duration=cooldown)
             except Exception:
                 pass
             pending_recover = _state.setdefault("pending_recover", set())
             if isinstance(pending_recover, set):
-                pending_recover.add(_feed)
-            retry_delay = float(_state.get("retry_delay") or 0.0)
-            if retry_delay <= 0:
-                retry_delay = _MIN_RATE_LIMIT_SLEEP_SECONDS
-            _state["retry_delay"] = retry_delay
-            _state["delay"] = retry_delay
-            fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
-            if (
-                fallback_target
-                and len(fallback_target) >= 2
-                and fallback_target[1] == "sip"
-                and (_is_sip_unauthorized() or _SIP_UNAUTHORIZED)
-            ):
-                fallback_target = None
-            if fallback_target:
-                result = _attempt_fallback(fallback_target, skip_check=True)
-                if result is not None and not getattr(result, "empty", True):
-                    return _depth_exit(result)
-            backup_frame: pd.DataFrame | None = None
-            should_attempt_backup = False
-            try:
-                max_fb_budget = max_data_fallbacks()
-            except Exception:
-                max_fb_budget = None
-            if _ENABLE_HTTP_FALLBACK and (max_fb_budget is None or max_fb_budget > 0):
-                should_attempt_backup = True
-            if should_attempt_backup:
-                interval_map = {
-                    "1Min": "1m",
-                    "5Min": "5m",
-                    "15Min": "15m",
-                    "1Hour": "60m",
-                    "1Day": "1d",
-                }
-                fb_int = interval_map.get(_interval)
-                if fb_int:
-                    backup_frame = _run_backup_fetch(fb_int, from_provider=f"alpaca_{_feed}")
-                    if backup_frame is not None and not getattr(backup_frame, "empty", True):
-                        finalized_backup = _finalize_frame(backup_frame)
-                        try:
-                            attrs = getattr(finalized_backup, "attrs", {}) or {}
-                        except Exception:
-                            attrs = {}
-                        provider_name = (
-                            attrs.get("data_provider")
-                            or attrs.get("fallback_provider")
-                            or attrs.get("provider")
-                            or _state.get("last_fallback_feed")
-                            or "backup"
-                        )
-                        feed_tag = (
-                            attrs.get("data_feed")
-                            or attrs.get("fallback_feed")
-                            or _state.get("last_fallback_feed")
-                            or provider_name
-                        )
-                        fallback_tags = _tags(provider=str(provider_name), feed=str(feed_tag))
-                        _record_fallback_success_metric(fallback_tags)
-                        _record_success_metric(fallback_tags, prefer_fallback=True)
-                        return _depth_exit(finalized_backup)
-            attempt_number = retries_before + 1
-            _state["retries"] = attempt_number
-            if attempt_number >= max_retries or _SIP_UNAUTHORIZED or _is_sip_unauthorized():
+                pending_recover.add("alpaca")
+            if _state.get("sip_unauthorized"):
+                _depth_exit(None)
                 raise ValueError("rate_limited")
-            try:
-                time.sleep(retry_delay)
-            except Exception:
-                pass
-            result = _req(session, fallback, headers=headers, timeout=timeout)
-            return _depth_exit(result)
+            fallback_args = (_interval, "sip", _start, _end)
+            result = _attempt_fallback(fallback_args, skip_check=True)
+            if result is not None and not getattr(result, "empty", True):
+                return _depth_exit(result)
+            backup_frame: pd.DataFrame | None = None
+            if callable(_backup_get_bars):
+                try:
+                    backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
+                except Exception:
+                    backup_frame = None
+            if backup_frame is not None and not getattr(backup_frame, "empty", True):
+                finalized_backup = _finalize_frame(backup_frame)
+                try:
+                    attrs = getattr(finalized_backup, "attrs", {}) or {}
+                except Exception:
+                    attrs = {}
+                provider_name = (
+                    attrs.get("data_provider")
+                    or attrs.get("fallback_provider")
+                    or attrs.get("provider")
+                    or _state.get("last_fallback_feed")
+                    or "backup"
+                )
+                feed_tag = (
+                    attrs.get("data_feed")
+                    or attrs.get("fallback_feed")
+                    or _state.get("last_fallback_feed")
+                    or provider_name
+                )
+                fallback_tags = _tags(provider=str(provider_name), feed=str(feed_tag))
+                _record_fallback_success_metric(fallback_tags)
+                _record_success_metric(fallback_tags, prefer_fallback=True)
+                return _depth_exit(finalized_backup)
+            return _depth_exit(_empty_result())
         df = pd.DataFrame(data)
         _attach_payload_metadata(
             df,
@@ -8207,7 +8229,6 @@ def _fetch_bars(
         pending = _state.get("pending_recover")
         if isinstance(pending, set) and _feed in pending:
             pending.discard(_feed)
-            _incr("http.recover_attempt", value=1.0, tags=_tags())
         _ALPACA_SYMBOL_FAILURES.pop(symbol, None)
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
         return _finalize_frame(df)
