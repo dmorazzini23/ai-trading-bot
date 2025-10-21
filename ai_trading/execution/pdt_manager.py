@@ -6,7 +6,7 @@ while maximizing trading opportunities within regulatory constraints.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, Mapping
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ class PDTManager:
             logger.warning(
                 "PDT_CONSERVATIVE_MODE",
                 extra={
-                    "message": f"Last day trade available ({status.remaining_daytrades} remaining)",
+                    "detail": f"Last day trade available ({status.remaining_daytrades} remaining)",
                     **context
                 }
             )
@@ -179,10 +179,13 @@ class PDTManager:
     
     def _extract_bool(self, obj: Any, *attrs: str) -> bool:
         """Extract boolean value from object attributes."""
-        
+
         for attr in attrs:
             try:
-                val = getattr(obj, attr, None)
+                if isinstance(obj, Mapping) and attr in obj:
+                    val = obj[attr]
+                else:
+                    val = getattr(obj, attr, None)
                 if val is not None:
                     if isinstance(val, bool):
                         return val
@@ -200,7 +203,10 @@ class PDTManager:
 
         for attr in attrs:
             try:
-                val = getattr(obj, attr, None)
+                if isinstance(obj, Mapping) and attr in obj:
+                    val = obj[attr]
+                else:
+                    val = getattr(obj, attr, None)
                 if val is not None:
                     return int(val)
             except (AttributeError, TypeError, ValueError) as exc:

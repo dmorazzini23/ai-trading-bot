@@ -1,4 +1,5 @@
 from ai_trading.data import provider_monitor as monitor_mod
+from ai_trading.logging import reset_provider_log_dedupe
 
 
 def test_provider_logs_use_canonical_labels(caplog):
@@ -14,6 +15,7 @@ def test_provider_logs_use_canonical_labels(caplog):
     caplog.clear()
     caplog.set_level("INFO", logger=monitor_mod.logger.name)
 
+    reset_provider_log_dedupe()
     monitor = monitor_mod.ProviderMonitor(cooldown=0, threshold=1)
     monitor.record_switchover("alpaca_alpaca", "alpaca_yfinance")
 

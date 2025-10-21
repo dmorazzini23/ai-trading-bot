@@ -7,6 +7,7 @@ import logging
 from types import SimpleNamespace
 
 from ai_trading.execution import live_trading as lt
+from ai_trading.execution import guards
 
 
 class DummyAPIError(lt.APIError):
@@ -116,6 +117,9 @@ def test_skip_shorting_when_asset_not_shortable(monkeypatch, caplog):
 
 
 def test_skip_when_pdt_limit_reached(monkeypatch, caplog):
+    guards.STATE.pdt = guards.PDTState()
+    guards.STATE.shadow_cycle = False
+    guards.STATE.shadow_cycle_forced = False
     engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine._refresh_settings = lambda: None
     engine._ensure_initialized = lambda: True
