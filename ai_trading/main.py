@@ -505,25 +505,38 @@ def run_cycle() -> None:
         return
 
 
-def get_memory_optimizer():
-    from ai_trading.config import get_settings
+class _NullOptimizer:
+    """No-op memory optimizer placeholder."""
 
+    def __call__(self) -> None:
+        return None
+
+    def enable_low_memory_mode(self) -> None:  # pragma: no cover - simple no-op
+        return None
+
+
+_NULL_MEMORY_OPTIMIZER = _NullOptimizer()
+
+
+def get_memory_optimizer():
+    from ai_trading.config import safe_settings
+
+    settings = safe_settings()
+    if not bool(getattr(settings, "enable_memory_optimization", False)):
+        return _NULL_MEMORY_OPTIMIZER
     try:
-        S = get_settings()
+        from ai_trading.utils import memory_optimizer
     except Exception:
-        S = None
-    if not bool(getattr(S, "enable_memory_optimization", False)):
-        return lambda: None
-    from ai_trading.utils import memory_optimizer
+        return _NULL_MEMORY_OPTIMIZER
 
     return memory_optimizer
 
 
 def optimize_memory():
-    from ai_trading.config import get_settings
+    from ai_trading.config import safe_settings
 
-    S = get_settings()
-    if not S.enable_memory_optimization:
+    settings = safe_settings()
+    if not bool(getattr(settings, "enable_memory_optimization", False)):
         return {}
     from ai_trading.utils import memory_optimizer
 

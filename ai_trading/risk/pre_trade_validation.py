@@ -9,13 +9,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
-from types import SimpleNamespace
 from ai_trading.logging import logger
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas_market_calendars
 from ..core.constants import EXECUTION_PARAMETERS, MARKET_HOURS, RISK_PARAMETERS
 from ..core.enums import RiskLevel
-from ai_trading.config import get_settings
+from ai_trading.config import safe_settings
 
 class ValidationStatus(Enum):
     """Pre-trade validation status."""
@@ -207,14 +206,9 @@ class RiskValidator:
     def __init__(self, risk_level: RiskLevel=RiskLevel.MODERATE):
         """Initialize risk validator."""
         self.risk_level = risk_level
-        settings = None
-        try:
-            settings = get_settings()
-        except Exception:
-            settings = None
-        fallback_settings = settings if settings is not None else SimpleNamespace()
+        settings = safe_settings()
         self.enable_portfolio_features = bool(
-            getattr(fallback_settings, "ENABLE_PORTFOLIO_FEATURES", False)
+            getattr(settings, "ENABLE_PORTFOLIO_FEATURES", False)
         )
         self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.max_position_size = RISK_PARAMETERS['MAX_POSITION_SIZE']

@@ -15,9 +15,10 @@ if TYPE_CHECKING:  # pragma: no cover - heavy import for type checking only
     import pandas as pd
 
 def _import_clustering():
-    from ai_trading.config import get_settings
-    S = get_settings()
-    if not S.ENABLE_PORTFOLIO_FEATURES:
+    from ai_trading.config import safe_settings
+
+    settings = safe_settings()
+    if not bool(getattr(settings, "ENABLE_PORTFOLIO_FEATURES", False)):
         return (None, None, None, False)
     try:
         from scipy.cluster.hierarchy import fcluster, linkage

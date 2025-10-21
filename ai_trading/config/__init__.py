@@ -98,6 +98,18 @@ def get_settings():
     return _CACHED_SETTINGS
 
 
+def safe_settings():
+    """Return settings with conservative defaults when unavailable."""
+
+    try:
+        settings_obj = get_settings()
+    except Exception:
+        settings_obj = None
+    if settings_obj is None:
+        return _default_test_settings()
+    return settings_obj
+
+
 def _normalize_intraday_feed(feed: str | None) -> str:
     normalized = str(feed or "iex").strip().lower()
     return normalized or "iex"
