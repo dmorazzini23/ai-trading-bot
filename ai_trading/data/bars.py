@@ -988,10 +988,19 @@ def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: st
 def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
     """Compute NYSE session for the current or previous trading day."""
     today_ny = now_utc.astimezone(ZoneInfo('America/New_York')).date()
-    start_u, end_u = rth_session_utc(today_ny)
+    try:
+        start_u, end_u = rth_session_utc(today_ny)
+    except RuntimeError:
+        end_u = now_utc
+        start_u = end_u - timedelta(minutes=20)
+        return (start_u, end_u)
     if now_utc < start_u or now_utc > end_u:
-        prev_day = previous_trading_session(today_ny)
-        start_u, end_u = rth_session_utc(prev_day)
+        try:
+            prev_day = previous_trading_session(today_ny)
+            start_u, end_u = rth_session_utc(prev_day)
+        except RuntimeError:
+            end_u = now_utc
+            start_u = end_u - timedelta(minutes=20)
     return (start_u, end_u)
 
 def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:

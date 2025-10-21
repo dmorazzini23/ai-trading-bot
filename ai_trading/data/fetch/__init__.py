@@ -5448,19 +5448,26 @@ def _session_get(
     Otherwise prefer the session object to benefit from shared connection pooling.
     """
 
-    prefer_module = bool(_os.getenv("PYTEST_RUNNING"))
-    requests_mod = _ensure_requests()
-    if hasattr(sess, "get") and not prefer_module:
+    if getattr(sess, "get", None):
         try:
             response = sess.get(url, params=params, headers=headers, timeout=timeout)
             if response is not None:
                 return response
         except Exception:
             pass
+    requests_mod = _ensure_requests()
     get_fn = getattr(requests_mod, "get", None)
     if callable(get_fn):
-        return get_fn(url, params=params, headers=headers, timeout=timeout)
-    raise RuntimeError("HTTP get unavailable in test mode")
+        try:
+            return get_fn(url, params=params, headers=headers, timeout=timeout)
+        except Exception:
+            pass
+    return SimpleNamespace(
+        status_code=599,
+        text="",
+        headers={},
+        json=lambda: {},
+    )
 
 
 def _get_alpaca_data_base_url() -> str:
