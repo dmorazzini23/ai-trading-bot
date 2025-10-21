@@ -12451,6 +12451,11 @@ def pre_trade_health_check(
                 df = fetcher.get_daily_df(ctx, sym)
         except (AttributeError, TypeError):
             df = None
+        except (ImportError, RuntimeError) as exc:
+            if "alpaca stub" in str(exc).lower():
+                df = None
+            else:
+                raise
         if df is None:
             if frames is None:
                 frames = _fetch_universe_bars_chunked(
@@ -21466,6 +21471,65 @@ def _extract_quote_bid_ask(quote: Any | None) -> tuple[float | None, float | Non
     return _coerce(bid_source), _coerce(ask_source)
 
 
+def _quote_is_fallback(quote: Any | None) -> tuple[bool, str | None]:
+    """Return ``(True, reason)`` when *quote* is a synthetic or fallback payload."""
+
+    def _coerce_reason(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        try:
+            text = str(value).strip()
+        except Exception:
+            return None
+        return text or None
+
+    reason: str | None = None
+
+    def _inspect_mapping(candidate: Mapping[str, Any]) -> bool:
+        nonlocal reason
+        detected = False
+        if candidate.get("synthetic"):
+            detected = True
+        candidate_reason = _coerce_reason(candidate.get("fallback_reason"))
+        if candidate_reason and reason is None:
+            reason = candidate_reason
+            detected = True
+        details = candidate.get("details")
+        if isinstance(details, Mapping):
+            if details.get("synthetic"):
+                detected = True
+            details_reason = _coerce_reason(details.get("fallback_reason"))
+            if details_reason and reason is None:
+                reason = details_reason
+                detected = True
+        return detected
+
+    def _inspect_object(candidate: Any) -> bool:
+        nonlocal reason
+        detected = False
+        if getattr(candidate, "synthetic", False):
+            detected = True
+        cand_reason = _coerce_reason(getattr(candidate, "fallback_reason", None))
+        if cand_reason and reason is None:
+            reason = cand_reason
+            detected = True
+        details = getattr(candidate, "details", None)
+        if isinstance(details, Mapping):
+            if details.get("synthetic"):
+                detected = True
+            details_reason = _coerce_reason(details.get("fallback_reason"))
+            if details_reason and reason is None:
+                reason = details_reason
+                detected = True
+        if isinstance(candidate, Mapping):
+            if _inspect_mapping(candidate):
+                detected = True
+        return detected
+
+    detected = _inspect_object(quote) if quote is not None else False
+    return detected, reason
+
+
 def _evaluate_quote_gate(
     quote: Any | None,
     *,
@@ -21566,6 +21630,7 @@ def _ensure_executable_quote(
     except COMMON_EXC:
         cfg = None
     require_bid_ask = bool(getattr(cfg, "execution_require_bid_ask", True))
+    require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", True))
     allow_last_close = bool(getattr(cfg, "execution_allow_last_close", False))
     if allow_reference_fallback:
         allow_last_close = True
@@ -21577,9 +21642,18 @@ def _ensure_executable_quote(
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
     slippage_bps = _slippage_setting_bps()
     reference_valid = reference_price is not None and math.isfinite(reference_price) and reference_price > 0.0
-    fallback_permitted = (allow_reference_fallback or allow_last_close) and reference_valid
+    fallback_permitted = reference_valid and (
+        allow_reference_fallback or allow_last_close or not require_realtime_nbbo
+    )
 
     quote = _fetch_quote(ctx, symbol)
+    fallback_detected, fallback_reason = _quote_is_fallback(quote)
+    if fallback_detected and not fallback_permitted:
+        details = {"fallback_quote": True}
+        if fallback_reason:
+            details["fallback_reason"] = fallback_reason
+        return QuoteGateDecision(False, "synthetic_quote", details)
+
     gate_decision = _evaluate_quote_gate(
         quote,
         require_bid_ask=require_bid_ask,

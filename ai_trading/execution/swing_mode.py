@@ -103,7 +103,7 @@ class SwingTradingMode:
             }
         )
     
-    def can_exit_position(self, symbol: str) -> tuple[bool, str]:
+    def can_exit_position(self, symbol: str) -> tuple[bool, str | None]:
         """
         Check if a position can be exited without creating a day trade.
         
@@ -126,17 +126,10 @@ class SwingTradingMode:
 
         entry_local = entry_time.astimezone(MARKET_TZ)
         now_local = now_utc.astimezone(MARKET_TZ)
-        if now_local.date() == entry_local.date():
-            return (False, "same_day_trade_blocked")
+        if entry_local.date() == now_local.date():
+            return (False, "day_trade_restriction")
 
-        if now_local.date() > entry_local.date():
-            return (True, "different_day")
-
-        market_close = time(16, 0)
-        if entry_local.time() < market_close and now_local.time() >= market_close:
-            return (True, "after_market_close")
-
-        return (True, "eligible_to_exit")
+        return (True, None)
     
     def clear_entry(self, symbol: str):
         """Clear entry time after position is closed."""

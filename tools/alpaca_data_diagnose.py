@@ -60,8 +60,8 @@ def diagnose(
     base_url: str | None,
     feed: str | None = None,
 ) -> dict[str, object]:
-    key_id = key_id or os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
-    secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET")
+    key_id = key_id or os.getenv("ALPACA_API_KEY")
+    secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY")
     if not key_id or not secret_key:
         raise RuntimeError("Missing explicit Alpaca credentials in env")
     client = _client(key_id, secret_key, base_url)
@@ -115,11 +115,11 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Diagnose Alpaca data availability.")
     parser.add_argument("symbol", help="Ticker to probe (e.g. AAPL)")
-    parser.add_argument("--key-id", default=None, help="Alpaca API key ID (defaults to env ALPACA_API_KEY_ID)")
+    parser.add_argument("--key-id", default=None, help="Alpaca API key (defaults to env ALPACA_API_KEY)")
     parser.add_argument(
         "--secret-key",
         default=None,
-        help="Alpaca API secret key (defaults to env ALPACA_API_SECRET_KEY)",
+        help="Alpaca API secret key (defaults to env ALPACA_SECRET_KEY)",
     )
     parser.add_argument(
         "--data-url",

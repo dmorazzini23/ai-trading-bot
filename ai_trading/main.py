@@ -542,6 +542,28 @@ class ExistingApiDetected(PortInUseError):
     def __init__(self, port: int):
         super().__init__(port, pid=None)
 
+
+def _get_wait_window(settings: Any) -> float:
+    """Resolve the API port wait window from multiple settings aliases."""
+
+    for attr in ("wait_window", "api_port_wait_window", "api_port_retry_window", "startup_wait_window"):
+        value = getattr(settings, attr, None)
+        if value is None:
+            continue
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _bind_probe(port: int) -> None:
+    """Attempt to bind *port* to confirm availability."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("0.0.0.0", port))
+
 config: Any | None = None
 register_signal_handlers()
 
@@ -1055,11 +1077,8 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     ensure_dotenv_loaded()
     settings = get_settings()
     port = int(getattr(settings, "api_port", 9001) or 9001)
-    retry_budget = getattr(settings, "bind_retry_budget_seconds", None)
-    if retry_budget is None:
-        retry_budget = getattr(settings, "api_port_wait_seconds", 0.0)
-    retry_budget = max(0.0, float(retry_budget or 0.0))
-    deadline = monotonic_time() + retry_budget
+    wait_window = _get_wait_window(settings)
+    start_time = time.monotonic()
 
     # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
     try:
@@ -1075,7 +1094,6 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             logger.info("HEALTH_SERVER_PORT_SHARED", extra={"port": port})
     except Exception as _exc:  # pragma: no cover - defensive
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
-    attempt = 0
 
     while True:
         if should_stop():
@@ -1084,51 +1102,44 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 ready_signal.set()
             return
 
-        attempt += 1
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
-            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                test_socket.bind(("0.0.0.0", port))
-            except OSError as exc:
-                if exc.errno != errno.EADDRINUSE:
-                    raise
+        try:
+            _bind_probe(port)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
 
-                pid = get_pid_on_port(port)
-                if pid:
-                    logger.error(
-                        "API_PORT_PRECHECK_FAILED",
-                        extra={"port": port, "pid": pid},
-                    )
-                    raise PortInUseError(port, pid) from exc
-
-                if _probe_local_api_health(port):
-                    logger.critical(
-                        "API_PORT_ALIVE_ELSEWHERE",
-                        extra={"port": port},
-                    )
-                    raise ExistingApiDetected(port) from exc
-
-                remaining = deadline - monotonic_time()
-                if remaining <= 0:
-                    logger.error(
-                        "API_PORT_PRECHECK_FAILED",
-                        extra={"port": port, "pid": None},
-                    )
-                    raise PortInUseError(port) from exc
-
-                sleep_for = min(1.0, max(0.1, remaining))
+            elapsed = time.monotonic() - start_time
+            pid = get_pid_on_port(port)
+            conflict_extra = {"port": port}
+            if pid:
+                conflict_extra["pid"] = pid
+                logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
                 logger.warning(
-                    "API_PORT_WAITING_FOR_RELEASE",
-                    extra={
-                        "port": port,
-                        "attempt": attempt,
-                        "sleep_seconds": round(sleep_for, 2),
-                        "remaining_seconds": round(max(0.0, remaining), 2),
-                    },
+                    "API_STARTUP_ABORTED",
+                    extra={"port": port, "reason": "port_in_use", "pid": pid},
                 )
-                _interruptible_sleep(sleep_for)
-                continue
-            break
+                raise PortInUseError(port, pid) from exc
+
+            if _probe_local_api_health(port):
+                logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
+                logger.warning(
+                    "API_STARTUP_ABORTED",
+                    extra={"port": port, "reason": "existing_api"},
+                )
+                raise ExistingApiDetected(port) from exc
+
+            if elapsed >= wait_window:
+                logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
+                logger.warning(
+                    "API_STARTUP_ABORTED",
+                    extra={"port": port, "reason": "port_timeout"},
+                )
+                raise PortInUseError(port) from exc
+
+            time.sleep(0.1)
+            continue
+
+        break
 
     run_flask_app(port, ready_signal)
 

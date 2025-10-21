@@ -481,6 +481,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Require live bid/ask quotes before opening new positions.",
     ),
     ConfigSpec(
+        field="execution_require_realtime_nbbo",
+        env=("EXECUTION_REQUIRE_REALTIME_NBBO", "AI_TRADING_EXEC_REQUIRE_REALTIME_NBBO"),
+        cast="bool",
+        default=True,
+        description="Require real-time NBBO quotes instead of synthetic fallbacks.",
+    ),
+    ConfigSpec(
         field="execution_max_staleness_sec",
         env=("EXECUTION_MAX_STALENESS_SEC", "AI_TRADING_EXEC_MAX_STALENESS_SEC"),
         cast="int",

@@ -690,9 +690,9 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     sip_unauthorized = sip_unauthorized or bool(getattr(data_fetcher, "_SIP_UNAUTHORIZED", False))
 
     resolved = cached_resolved if cached_resolved in {"sip", "iex"} else None
-    if resolved == "sip" and ("sip" not in entitled or sip_unauthorized):
+    if resolved == "sip" and (sip_unauthorized or "sip" not in entitled):
         resolved = None
-    elif resolved == "iex" and resolved not in entitled and "sip" in entitled and not sip_unauthorized:
+    if resolved == "iex" and resolved not in entitled:
         resolved = None
 
     if resolved is None:
