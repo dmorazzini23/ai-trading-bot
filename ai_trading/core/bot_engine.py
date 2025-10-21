@@ -15132,7 +15132,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             except COMMON_EXC:
                 pass
 
-    if not skip_market_check and not (os.getenv("PYTEST_RUNNING") or market_is_open()):
+    if not skip_market_check and not (pytest_running or market_is_open()):
         logger.warning(
             "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": order_args.get("symbol", "")}
         )
