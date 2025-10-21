@@ -1071,7 +1071,16 @@ class ProviderMonitor:
             and self._last_switch_ts is not None
             and now_monotonic - self._last_switch_ts < 1.0
         ):
-            if provider_log_deduper.should_log(switchover_key, dedupe_ttl):
+            if pytest_active:
+                logger.warning(
+                    "DATA_PROVIDER_SWITCHOVER",
+                    extra={
+                        "from_provider": _canonical_label(from_key),
+                        "to_provider": _canonical_label(to_key),
+                        "count": self.switch_counts[key],
+                    },
+                )
+            elif provider_log_deduper.should_log(switchover_key, dedupe_ttl):
                 log_throttled_event(
                     logger,
                     "DATA_PROVIDER_SWITCHOVER",

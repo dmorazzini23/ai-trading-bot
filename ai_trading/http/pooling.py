@@ -61,7 +61,7 @@ class _ResolvedLimitCache:
     limit: int
     version: int
     config_id: int | None
-    env_snapshot: tuple[str | None, str | None, str | None]
+    env_snapshot: tuple[str | None, ...]
 
 
 class HostLimitSnapshot(NamedTuple):
@@ -79,9 +79,10 @@ _RETIRED_SEMAPHORES: list[asyncio.Semaphore] = []
 
 _LIMIT_CACHE: _ResolvedLimitCache | None = None
 _LIMIT_VERSION: int = 0
-_LAST_LIMIT_ENV_SNAPSHOT: (tuple[str | None, str | None, str | None] | None) = None
+_LAST_LIMIT_ENV_SNAPSHOT: tuple[str | None, ...] | None = None
 
-_ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
+_ENV_LIMIT_KEYS: Final[tuple[str, ...]] = (
+    "HTTP_MAX_PER_HOST",
     "AI_TRADING_HOST_LIMIT",
     "AI_TRADING_HTTP_HOST_LIMIT",
     "HTTP_MAX_WORKERS",

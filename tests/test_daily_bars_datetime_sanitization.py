@@ -112,6 +112,7 @@ def test_safe_get_stock_bars_sets_datetimes_on_plain_request():
 
 
 def test_http_fallback_receives_iso_timestamps(monkeypatch):
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "force")
     start = datetime(2024, 1, 9, tzinfo=UTC)
     end = datetime(2024, 1, 10, tzinfo=UTC)
     req = StockBarsRequest(

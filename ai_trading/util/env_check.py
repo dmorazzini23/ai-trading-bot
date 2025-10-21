@@ -203,8 +203,6 @@ if _module is not None and not isinstance(_module, _EnvCheckModule):
 
 
 __all__ = [
-    "ensure_dotenv_loaded",
-    "load_dotenv_if_present",
     "PYTHON_DOTENV_RESOLVED",
     "guard_python_dotenv_import",
     "guard_dotenv_shadowing",

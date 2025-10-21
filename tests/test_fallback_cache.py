@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from datetime import datetime, UTC, timedelta
+import time
 
 import pytest
 
@@ -18,7 +19,7 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(minutes=1)
 
-    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "1")
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "force")
     monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True)
 
     calls = {"alpaca": 0}
@@ -55,7 +56,11 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
     tf_key = ("AAPL", "1Min")
     skip_until = data_fetcher._BACKUP_SKIP_UNTIL.get(tf_key)
     assert skip_until is not None
-    assert skip_until > int(datetime.now(UTC).timestamp()) - 1
+    if hasattr(skip_until, "timestamp"):
+        skip_epoch = float(skip_until.timestamp())
+    else:
+        skip_epoch = float(skip_until)
+    assert skip_epoch > time.time() - 1
     assert tf_key in data_fetcher._SKIPPED_SYMBOLS
     first_calls = calls["alpaca"]
 

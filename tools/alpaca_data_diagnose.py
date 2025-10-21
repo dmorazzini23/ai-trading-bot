@@ -49,8 +49,17 @@ def _load_env_from_file() -> None:
 
 
 def _client(key_id: str | None, secret_key: str | None, base_url: str | None) -> REST:
-    api_base = URL(base_url or "https://paper-api.alpaca.markets")
-    return REST(key_id=key_id, secret_key=secret_key, base_url=api_base, api_version="v2")
+    resolved_key = key_id or os.getenv("ALPACA_API_KEY")
+    resolved_secret = secret_key or os.getenv("ALPACA_SECRET_KEY")
+    if not resolved_key or not resolved_secret:
+        raise RuntimeError("Missing explicit Alpaca credentials in env")
+    api_base = URL(base_url or os.getenv("ALPACA_API_URL", "https://paper-api.alpaca.markets"))
+    return REST(
+        key_id=resolved_key,
+        secret_key=resolved_secret,
+        base_url=api_base,
+        api_version="v2",
+    )
 
 
 def diagnose(
@@ -60,11 +69,9 @@ def diagnose(
     base_url: str | None,
     feed: str | None = None,
 ) -> dict[str, object]:
-    key_id = key_id or os.getenv("ALPACA_API_KEY")
-    secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY")
-    if not key_id or not secret_key:
-        raise RuntimeError("Missing explicit Alpaca credentials in env")
     client = _client(key_id, secret_key, base_url)
+    if not getattr(client, "_key_id", None) or not getattr(client, "_secret_key", None):
+        raise RuntimeError("Missing explicit Alpaca credentials in env")
     now = datetime.now(UTC)
     start = now - timedelta(minutes=15)
     start_iso = start.replace(microsecond=0).isoformat()

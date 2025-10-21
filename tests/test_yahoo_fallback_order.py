@@ -19,7 +19,8 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
 
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "1")
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "force")
+    monkeypatch.setenv("PYTEST_RUNNING", "")
     monkeypatch.delenv("TESTING", raising=False)
     fetch._SIP_UNAUTHORIZED = False
     fetch._ALLOW_SIP = True

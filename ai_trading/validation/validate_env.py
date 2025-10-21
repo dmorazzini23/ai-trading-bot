@@ -62,14 +62,14 @@ def debug_environment() -> dict:
     """
 
     masked = redact_env(os.environ)
-    env_vars = {
-        name: {
+    env_vars = {}
+    for name in os.environ:
+        raw = os.environ.get(name)
+        env_vars[name] = {
             "status": "set",
-            "value": masked.get(name, "<redacted>"),
-            "length": len(str(os.environ[name])),
+            "value": masked.get(name, "<unset>"),
+            "length": len(str(raw)) if raw is not None else 0,
         }
-        for name in os.environ
-    }
 
     return {
         "timestamp": datetime.utcnow().isoformat(),

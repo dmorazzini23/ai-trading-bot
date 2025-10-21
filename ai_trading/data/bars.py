@@ -73,8 +73,19 @@ pd = load_pandas()
 _log = get_logger(__name__)
 'AI-AGENT-REF: canonicalizers moved to ai_trading.logging.normalize'
 
-_TRUTHY = {"1", "true", "yes", "on"}
+_TRUTHY = {"1", "true", "yes", "on", "force"}
 _FALSEY = {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _http_fallback_enabled() -> bool:
+    val = str(os.getenv("ENABLE_HTTP_FALLBACK", "0")).strip().lower()
+    enabled = val in _TRUTHY
+    if not enabled:
+        return False
+    pytest_flag = str(os.getenv("PYTEST_RUNNING", "0")).strip().lower()
+    if pytest_flag in {"1", "true", "yes"} and val != "force":
+        return False
+    return True
 
 
 @dataclass(slots=True)
@@ -825,7 +836,7 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
             if df.empty:
                 tf_str = _canon_tf(getattr(request, 'timeframe', ''))
                 feed_str = _canon_feed(getattr(request, 'feed', None))
-                if tf_str.lower() in {'1day', 'day'}:
+                if tf_str.lower() in {'1day', 'day'} and _http_fallback_enabled():
                     mdf = get_minute_df(symbol, iso_start, iso_end, feed=feed_str)
                     if mdf is not None and (not mdf.empty):
                         rdf = _resample_minutes_to_daily(mdf)
@@ -861,17 +872,22 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                             _log.warning('ALPACA_LIMIT_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
                 elif _is_minute_timeframe(tf_str):
                     df = get_minute_df(symbol, iso_start, iso_end, feed=feed_str)
-                else:
+                elif _http_fallback_enabled():
                     df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
                     df = _coerce_http_bars(df)
                     if df is None or df.empty:
                         return _create_empty_bars_dataframe()
+                else:
+                    return _create_empty_bars_dataframe()
         if df.empty:
             tf_str = _canon_tf(getattr(request, 'timeframe', ''))
             feed_str = _canon_feed(getattr(request, 'feed', None))
-            http_df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
-            df = _coerce_http_bars(http_df)
-            if df is None or df.empty:
+            if _http_fallback_enabled():
+                http_df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
+                df = _coerce_http_bars(http_df)
+                if df is None or df.empty:
+                    return _create_empty_bars_dataframe()
+            else:
                 return _create_empty_bars_dataframe()
         if isinstance(df.index, pd.MultiIndex):
             try:
@@ -895,6 +911,8 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
             )
         tf_str = _canon_tf(getattr(request, 'timeframe', ''))
         feed_str = _canon_feed(getattr(request, 'feed', None))
+        if not _http_fallback_enabled():
+            return empty_bars_dataframe()
         df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
         return _coerce_http_bars(df)
 

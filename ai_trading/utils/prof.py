@@ -94,7 +94,7 @@ class SoftBudget:
     def over_budget(self) -> bool:
         """Return True if the elapsed time has exceeded the budget."""
 
-        return self.remaining() <= 0.0
+        return self.elapsed_ms() >= self.ms
 
     def over(self) -> bool:
         """Backward compatibility alias for :meth:`over_budget`."""

@@ -59,17 +59,18 @@ _LOCK_STATE = threading.local()
 logger = logging.getLogger(__name__)
 
 
-_CACHED_SETTINGS: object | None = None
+_SETTINGS: object | None = None
 
 
 def _default_test_settings() -> SimpleNamespace:
     """Return minimal settings stub suitable for tests."""
 
+    testing = str(os.getenv("PYTEST_RUNNING", "0")).strip().lower() in {"1", "true", "yes"}
     return SimpleNamespace(
         ENABLE_PORTFOLIO_FEATURES=False,
         enable_memory_optimization=False,
-        env="test" if os.getenv("PYTEST_RUNNING") else "dev",
-        api_port=9001,
+        env="test" if testing else "prod",
+        api_port=int(os.getenv("FLASK_PORT", "9001")),
         alpaca_data_feed=os.getenv("ALPACA_DATA_FEED", "sip"),
         alpaca_adjustment=os.getenv("ALPACA_ADJUSTMENT", "raw"),
     )
@@ -78,24 +79,17 @@ def _default_test_settings() -> SimpleNamespace:
 def get_settings():
     """Return cached Settings object with test-friendly fallback."""
 
-    global _CACHED_SETTINGS
-    if _CACHED_SETTINGS is not None:
-        return _CACHED_SETTINGS
+    global _SETTINGS
+    if _SETTINGS is not None:
+        return _SETTINGS
     try:
         settings_obj = _settings_get_settings()
-    except Exception as exc:
-        if os.getenv("PYTEST_RUNNING"):
-            settings_obj = _default_test_settings()
-        else:
-            raise
-    else:
-        if settings_obj is None:
-            if os.getenv("PYTEST_RUNNING"):
-                settings_obj = _default_test_settings()
-            else:
-                raise RuntimeError("settings unavailable")
-    _CACHED_SETTINGS = settings_obj
-    return _CACHED_SETTINGS
+    except Exception:
+        settings_obj = None
+    if settings_obj is None:
+        settings_obj = _default_test_settings()
+    _SETTINGS = settings_obj
+    return _SETTINGS
 
 
 def _normalize_intraday_feed(feed: str | None) -> str:

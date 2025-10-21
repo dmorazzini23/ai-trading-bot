@@ -3423,10 +3423,12 @@ def clear_cached_minute_timestamp(symbol: str) -> None:
 def age_cached_minute_timestamps(max_age_seconds: int) -> int:
     """Drop cache entries older than max_age_seconds (based on inserted time)."""
     now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-    to_del = [sym for sym, (_, ins) in _MINUTE_CACHE.items() if now_s - ins > max_age_seconds]
-    for sym in to_del:
-        _MINUTE_CACHE.pop(sym, None)
-    return len(to_del)
+    removed = 0
+    for sym, (_, ins) in list(_MINUTE_CACHE.items()):
+        if now_s - ins > max_age_seconds:
+            _MINUTE_CACHE.pop(sym, None)
+            removed += 1
+    return removed
 
 
 def last_minute_bar_age_seconds(symbol: str) -> int | None:
@@ -4672,6 +4674,10 @@ def _normalize_finnhub_bars(frame: Any) -> pd.DataFrame | Any:
     return _annotate_df_source(normalized, provider="finnhub", feed="finnhub")
 
 
+def _finnhub_df_to_ohlcv(frame: Any) -> pd.DataFrame | Any:
+    return _normalize_finnhub_bars(frame)
+
+
 def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     pd_local = _ensure_pandas()
     if getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False):
@@ -5450,7 +5456,7 @@ def _session_get(
 
     prefer_module = bool(_os.getenv("PYTEST_RUNNING"))
     requests_mod = _ensure_requests()
-    if hasattr(sess, "get") and not prefer_module:
+    if hasattr(sess, "get"):
         try:
             response = sess.get(url, params=params, headers=headers, timeout=timeout)
             if response is not None:
@@ -6155,7 +6161,7 @@ def _fetch_bars(
         return _finalize_frame(None)
 
     env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
-    if not _has_alpaca_keys() and not (pytest_active or _pytest_active()):
+    if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
             try:
@@ -6642,10 +6648,30 @@ def _fetch_bars(
             and not (_SIP_UNAUTHORIZED or _is_sip_unauthorized())
             and _sip_fallback_allowed(session, headers, _interval)
         ):
-            payload = (_interval, "sip", _start, _end)
-            result = _attempt_fallback(payload)
-            if result is not None:
-                return result
+            try:
+                attempt_extra = {
+                    "provider": "alpaca",
+                    "from_feed": "iex",
+                    "feed": "sip",
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                }
+                attempt_extra["start"] = _start.isoformat()
+                attempt_extra["end"] = _end.isoformat()
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra=_norm_extra(attempt_extra),
+                )
+            except Exception:
+                pass
+            prev_feed = _feed
+            try:
+                _feed = "sip"
+                sip_result = _req(session, None, headers=headers, timeout=timeout)
+            finally:
+                _feed = prev_feed
+            if sip_result is not None:
+                return sip_result
 
         if (
             not _state.get("window_has_session", True)
@@ -7459,6 +7485,10 @@ def _fetch_bars(
                                 }
                             ),
                         )
+                        logger.info(
+                            "EMPTY_DATA",
+                            extra={"symbol": symbol, "timeframe": _interval},
+                        )
                         _push_to_caplog("EMPTY_DATA", level=lvl)
                         _state["empty_data_logged"] = True
                 if remaining_retries > 0:
@@ -7977,6 +8007,7 @@ def _fetch_bars(
                         "PERSISTENT_EMPTY_ABORT",
                         extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                     )
+                    logger.info("EMPTY_DATA", extra={"symbol": symbol, "timeframe": _interval})
                     return None
                 raise EmptyBarsError("alpaca_empty")
             if can_retry_timeframe:
@@ -8118,6 +8149,7 @@ def _fetch_bars(
                         "PERSISTENT_EMPTY_ABORT",
                         extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                     )
+                    logger.info("EMPTY_DATA", extra={"symbol": symbol, "timeframe": _interval})
                     return None
                 raise EmptyBarsError("alpaca_empty")
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
@@ -8178,6 +8210,7 @@ def _fetch_bars(
                         "PERSISTENT_EMPTY_ABORT",
                         extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                     )
+                    logger.info("EMPTY_DATA", extra={"symbol": symbol, "timeframe": _interval})
                     return None
                 raise EmptyBarsError("alpaca_empty")
             elif log_event == "ALPACA_FETCH_ABORTED":
@@ -8456,6 +8489,36 @@ def get_minute_df(
     pd = _ensure_pandas()
     last_complete_evaluations = 0
 
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+
+    if (
+        os.getenv("FINNHUB_API_KEY")
+        and str(os.getenv("ENABLE_FINNHUB", "1")).strip().lower() in {"1", "true", "yes"}
+        and fh_fetcher
+    ):
+        try:
+            raw = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
+            converted = _finnhub_df_to_ohlcv(raw)
+        except Exception:
+            converted = None
+        else:
+            if converted is not None:
+                try:
+                    _mark_fallback(
+                        symbol,
+                        "1Min",
+                        start_dt,
+                        end_dt,
+                        from_provider="alpaca",
+                        resolved_provider="finnhub",
+                        fallback_df=converted,
+                        reason="finnhub_preferred",
+                    )
+                except Exception:
+                    pass
+                return converted
+
     def _evaluate_last_complete(
         fallback: _dt.datetime | None = None,
     ) -> _dt.datetime:
@@ -8470,8 +8533,6 @@ def get_minute_df(
             last_complete_evaluations += 1
             return value
 
-    start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
     pytest_active = _detect_pytest_env()
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
@@ -8563,7 +8624,16 @@ def get_minute_df(
             _clear_backup_skip(symbol, "1Min")
             skip_primary_due_to_fallback = False
         else:
-            if not isinstance(forced_skip_until, datetime):
+            if isinstance(forced_skip_until, (int, float)):
+                try:
+                    if time.time() < float(forced_skip_until):
+                        skip_primary_due_to_fallback = True
+                    else:
+                        _clear_backup_skip(symbol, "1Min")
+                except Exception:
+                    _clear_backup_skip(symbol, "1Min")
+                forced_skip_until = None
+            if forced_skip_until is not None and not isinstance(forced_skip_until, datetime):
                 try:
                     forced_skip_until = datetime.fromtimestamp(float(forced_skip_until), tz=UTC)
                 except Exception:

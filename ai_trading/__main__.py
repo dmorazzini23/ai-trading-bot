@@ -115,10 +115,7 @@ class _StartupConfig(BaseModel):
         raise ValueError(f"Unsupported data_feed: {v}")
 
 
-try:
-    _StartupConfig.model_rebuild()
-except Exception:  # pragma: no cover - defensive
-    pass
+_StartupConfig.model_rebuild()
 
 
 def _validate_startup_config() -> _StartupConfig:

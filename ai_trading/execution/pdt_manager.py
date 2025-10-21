@@ -143,10 +143,11 @@ class PDTManager:
             logger.warning(
                 "PDT_CONSERVATIVE_MODE",
                 extra={
-                    "message": f"Last day trade available ({status.remaining_daytrades} remaining)",
+                    "detail": f"Last day trade available ({status.remaining_daytrades} remaining)",
                     **context
                 }
             )
+            logger.warning("PDT_LIMIT_IMMINENT", extra=context)
             return (True, "pdt_conservative", context)
         
         # Normal trading allowed
@@ -182,7 +183,10 @@ class PDTManager:
         
         for attr in attrs:
             try:
-                val = getattr(obj, attr, None)
+                if isinstance(obj, dict):
+                    val = obj.get(attr)
+                else:
+                    val = getattr(obj, attr, None)
                 if val is not None:
                     if isinstance(val, bool):
                         return val
@@ -200,7 +204,10 @@ class PDTManager:
 
         for attr in attrs:
             try:
-                val = getattr(obj, attr, None)
+                if isinstance(obj, dict):
+                    val = obj.get(attr)
+                else:
+                    val = getattr(obj, attr, None)
                 if val is not None:
                     return int(val)
             except (AttributeError, TypeError, ValueError) as exc:

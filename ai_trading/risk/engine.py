@@ -280,48 +280,12 @@ class RiskEngine:
                     return val
             ctx = getattr(self, "ctx", None)
             client = getattr(ctx, "data_client", None) or self._init_data_client()
-
-            def _safe_bar_value(bar: Any, names: Sequence[str]) -> Any:
-                if isinstance(bar, dict):
-                    for name in names:
-                        if name in bar and bar[name] is not None:
-                            return bar[name]
-                for name in names:
-                    if hasattr(bar, name):
-                        value = getattr(bar, name)
-                        if value is not None:
-                            return value
-                return None
-
-            def _extract_arrays(df_in) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-                if df_in is None:
-                    return (None, None, None)
-                try:
-                    if pd is not None and not isinstance(df_in, pd.DataFrame):
-                        df_local = pd.DataFrame(df_in)
-                    else:
-                        df_local = df_in.copy() if isinstance(df_in, pd.DataFrame) else df_in
-                except (ValueError, TypeError, AttributeError):
-                    return (None, None, None)
-                if getattr(df_local, "empty", True):
-                    return (None, None, None)
-                df_local = normalize_ohlcv_columns(df_local)
-                if pd is not None and hasattr(pd, "RangeIndex") and isinstance(df_local.index, pd.RangeIndex):
-                    df_local = df_local.reset_index(drop=True)
-
-                def _series(df_obj: "pd.DataFrame", name: str) -> np.ndarray | None:
-                    if name in df_obj:
-                        try:
-                            return df_obj[name].dropna().to_numpy()
-                        except AttributeError:
-                            return None
-                    return None
-
-                return (
-                    _series(df_local, "high"),
-                    _series(df_local, "low"),
-                    _series(df_local, "close"),
-                )
+            high = low = close = None
+            df = None
+            bars_sequence: Sequence[Any] | None = None
+            simple_get = None
+            attempted_simple_get = False
+            limit: int | None = None
 
             def _sequence_to_records(seq: Sequence[Any]) -> list[dict[str, Any]]:
                 records: list[dict[str, Any]] = []
@@ -409,6 +373,36 @@ class RiskEngine:
                 if getattr(df_candidate, "empty", True):
                     return None
                 return df_candidate
+
+            def _extract_arrays(df_in) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+                if df_in is None:
+                    return (None, None, None)
+                try:
+                    if pd is not None and not isinstance(df_in, pd.DataFrame):
+                        df_local = pd.DataFrame(df_in)
+                    else:
+                        df_local = df_in.copy() if isinstance(df_in, pd.DataFrame) else df_in
+                except (ValueError, TypeError, AttributeError):
+                    return (None, None, None)
+                if getattr(df_local, "empty", True):
+                    return (None, None, None)
+                df_local = normalize_ohlcv_columns(df_local)
+                if pd is not None and hasattr(pd, "RangeIndex") and isinstance(df_local.index, pd.RangeIndex):
+                    df_local = df_local.reset_index(drop=True)
+
+                def _series(df_obj: "pd.DataFrame", name: str) -> np.ndarray | None:
+                    if name in df_obj:
+                        try:
+                            return df_obj[name].dropna().to_numpy()
+                        except AttributeError:
+                            return None
+                    return None
+
+                return (
+                    _series(df_local, "high"),
+                    _series(df_local, "low"),
+                    _series(df_local, "close"),
+                )
 
             def _sequence_to_arrays(
                 seq: Any,
@@ -512,12 +506,63 @@ class RiskEngine:
                         seq_candidate = candidate
                 return cand_high, cand_low, cand_close, seq_candidate
 
-            high = low = close = None
-            df = None
-            bars_sequence: Sequence[Any] | None = None
-            simple_get = None
-            attempted_simple_get = False
-            limit: int | None = None
+            history_fn = getattr(client, "history", None)
+            if callable(history_fn):
+                period_days = max(lookback + 10, lookback + 1)
+                try:
+                    history_df = history_fn(period=f"{period_days}d", interval="1d")
+                except (ValueError, TypeError, AttributeError, RuntimeError, OSError) as exc:  # pragma: no cover - provider variance
+                    logger.debug("ATR history fetch failed for %s: %s", symbol, exc)
+                else:
+                    df_candidate = _coerce_dataframe(history_df)
+                    if df_candidate is not None and not getattr(df_candidate, "empty", True):
+                        try:
+                            high, low, close = _extract_arrays(df_candidate)
+                        except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover
+                            logger.debug("ATR history extraction failed for %s: %s", symbol, exc)
+
+            def _safe_bar_value(bar: Any, names: Sequence[str]) -> Any:
+                if isinstance(bar, dict):
+                    for name in names:
+                        if name in bar and bar[name] is not None:
+                            return bar[name]
+                for name in names:
+                    if hasattr(bar, name):
+                        value = getattr(bar, name)
+                        if value is not None:
+                            return value
+                return None
+
+            def _extract_arrays(df_in) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+                if df_in is None:
+                    return (None, None, None)
+                try:
+                    if pd is not None and not isinstance(df_in, pd.DataFrame):
+                        df_local = pd.DataFrame(df_in)
+                    else:
+                        df_local = df_in.copy() if isinstance(df_in, pd.DataFrame) else df_in
+                except (ValueError, TypeError, AttributeError):
+                    return (None, None, None)
+                if getattr(df_local, "empty", True):
+                    return (None, None, None)
+                df_local = normalize_ohlcv_columns(df_local)
+                if pd is not None and hasattr(pd, "RangeIndex") and isinstance(df_local.index, pd.RangeIndex):
+                    df_local = df_local.reset_index(drop=True)
+
+                def _series(df_obj: "pd.DataFrame", name: str) -> np.ndarray | None:
+                    if name in df_obj:
+                        try:
+                            return df_obj[name].dropna().to_numpy()
+                        except AttributeError:
+                            return None
+                    return None
+
+                return (
+                    _series(df_local, "high"),
+                    _series(df_local, "low"),
+                    _series(df_local, "close"),
+                )
+
             if client:
                 has_stock_bars = callable(getattr(client, "get_stock_bars", None)) or callable(
                     getattr(client, "get_bars", None)

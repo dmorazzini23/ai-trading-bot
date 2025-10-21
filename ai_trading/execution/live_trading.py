@@ -193,7 +193,7 @@ def _require_bid_ask_quotes() -> bool:
     try:
         cfg = get_trading_config()
     except Exception:
-        return True
+        return False
     return bool(getattr(cfg, "execution_require_bid_ask", True))
 
 
@@ -1224,7 +1224,12 @@ class ExecutionEngine:
         return count_val >= limit_val
 
     def _should_skip_for_pdt(
-        self, account: Any, closing_position: bool
+        self,
+        account: Any,
+        closing_position: bool,
+        symbol: str,
+        side: str,
+        current_position: int = 0,
     ) -> tuple[bool, str | None, dict[str, Any]]:
         """Return (skip, reason, context) if PDT limits should block the order."""
 
@@ -1232,58 +1237,47 @@ class ExecutionEngine:
         if closing_position or account is None:
             return (False, None, context)
 
-        pattern_flag = _safe_bool(
-            _extract_value(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
-        )
-        context["pattern_day_trader"] = pattern_flag
-        if not pattern_flag:
-            return (False, None, context)
+        try:
+            account_payload: Any = account
+            daytrade_limit_env = _config_int("EXECUTION_DAYTRADE_LIMIT", None)
+            if isinstance(account, Mapping):
+                if daytrade_limit_env is not None and daytrade_limit_env > 0:
+                    current_limit = _safe_int(
+                        account.get("daytrade_limit") or account.get("day_trade_limit")
+                        or account.get("pattern_day_trade_limit"),
+                        0,
+                    )
+                    if current_limit <= 0:
+                        account_payload = dict(account)
+                        account_payload.setdefault("daytrade_limit", daytrade_limit_env)
+        except Exception:
+            account_payload = account
 
-        daytrade_limit = _config_int("EXECUTION_DAYTRADE_LIMIT", 3)
-        account_limit = _extract_value(account, "daytrade_limit", "day_trade_limit", "pattern_day_trade_limit")
-        if account_limit not in (None, ""):
-            account_limit_int = _safe_int(account_limit, daytrade_limit or 0)
-            if account_limit_int > 0:
-                daytrade_limit = account_limit_int
-        context["daytrade_limit"] = daytrade_limit
+        try:
+            from ai_trading.execution.pdt_manager import PDTManager
 
-        daytrade_count = _safe_int(
-            _extract_value(
-                account,
-                "daytrade_count",
-                "day_trade_count",
-                "pattern_day_trades",
-                "pattern_day_trades_count",
-            ),
-            0,
-        )
-        context["daytrade_count"] = daytrade_count
-
-        guard_allows = pdt_guard(bool(pattern_flag), int(daytrade_limit or 0), int(daytrade_count))
-        if not guard_allows:
-            lock_info = pdt_lockout_info()
-            context.update(lock_info)
-            return (True, "pdt_lockout", context)
-
-        if daytrade_limit is None or daytrade_limit <= 0:
-            return (False, None, context)
-
-        if daytrade_count >= daytrade_limit:
-            return (True, "pdt_limit_reached", context)
-
-        imminent_threshold = daytrade_limit - 1
-        if imminent_threshold >= 0 and daytrade_count == imminent_threshold:
-            logger.warning(
-                "PDT_LIMIT_IMMINENT",
-                extra={
-                    "daytrade_count": daytrade_count,
-                    "daytrade_limit": daytrade_limit,
-                    "pattern_day_trader": pattern_flag,
-                },
+            manager = PDTManager()
+            allow, reason, manager_context = manager.should_allow_order(
+                account_payload,
+                symbol,
+                side,
+                current_position=current_position,
+                force_swing_mode=False,
             )
-            return (False, "pdt_limit_imminent", context)
+        except Exception:
+            manager_context = {}
+            allow = True
+            reason = None
 
-        return (False, None, context)
+        if not allow:
+            skip_context = dict(manager_context)
+            skip_context["pdt_reason"] = reason
+            return (True, reason, skip_context)
+
+        normalized_reason = None
+        if reason not in {None, "pdt_ok", "not_pdt", "closing_position"}:
+            normalized_reason = reason
+        return (False, normalized_reason, dict(manager_context))
 
     def _refresh_settings(self) -> None:
         """Refresh cached execution settings from configuration."""
@@ -1803,7 +1797,8 @@ class ExecutionEngine:
                         "fallback_age": fallback_age,
                     },
                 )
-                return None
+                if log_reason != "no_quote":
+                    return None
 
         start_time = time.time()
         logger.info(
@@ -2011,7 +2006,27 @@ class ExecutionEngine:
                         )
                         return None
         account_snapshot = self._get_account_snapshot()
-        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
+        current_position = 0
+        try:
+            tracker = getattr(self, "_position_tracker", None)
+            if tracker is None:
+                raise AttributeError("position_tracker_missing")
+            if isinstance(tracker, Mapping):
+                current_position = tracker.get(symbol, 0)  # type: ignore[assignment]
+            elif symbol in tracker:  # type: ignore[operator]
+                current_position = tracker[symbol]  # type: ignore[index]
+        except (AttributeError, KeyError, TypeError) as exc:
+            logger.debug(
+                "POSITION_TRACKER_UNAVAILABLE",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(
+            account_snapshot,
+            closing_position,
+            symbol,
+            side_lower,
+            current_position=current_position,
+        )
         if skip_pdt:
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
@@ -2975,11 +2990,40 @@ class ExecutionEngine:
         if closing_position:
             return True
 
+        raw_symbol = order.get("symbol")
+        raw_side = order.get("side")
+        symbol_value = str(raw_symbol or "").strip()
+        side_value = str(raw_side or "").strip()
+        side_lower = side_value.lower()
+
+        provided_position = order.get("current_position")
+        current_position = _safe_int(provided_position, 0)
+        if provided_position is None and symbol_value:
+            try:
+                tracker = getattr(self, "_position_tracker", None)
+                if tracker is None:
+                    raise AttributeError("position_tracker_missing")
+                if isinstance(tracker, Mapping):
+                    current_position = _safe_int(tracker.get(symbol_value), current_position)
+                elif symbol_value in tracker:  # type: ignore[operator]
+                    current_position = _safe_int(tracker[symbol_value], current_position)  # type: ignore[index]
+            except (AttributeError, KeyError, TypeError) as exc:
+                logger.debug(
+                    "POSITION_TRACKER_UNAVAILABLE",
+                    extra={"symbol": symbol_value or None, "error": str(exc)},
+                )
+
         account_snapshot = order.get("account_snapshot")
         if account_snapshot is None:
             account_snapshot = getattr(self, "_cycle_account", None)
 
-        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
+        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(
+            account_snapshot,
+            closing_position,
+            symbol_value,
+            side_lower,
+            current_position=current_position,
+        )
         safe_context = _sanitize_pdt_context(pdt_context)
         logger.debug("PDT_PREFLIGHT_CHECKED | context=%s", safe_context)
         if skip_pdt:
@@ -2987,8 +3031,6 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
-            symbol = order.get("symbol")
-            side = order.get("side")
             quantity = order.get("quantity")
             client_order_id = order.get("client_order_id")
             asset_class = order.get("asset_class")
@@ -2996,8 +3038,8 @@ class ExecutionEngine:
             order_type = order.get("order_type", "unknown")
             using_fallback_price = bool(order.get("using_fallback_price"))
             base_extra = {
-                "symbol": symbol,
-                "side": side,
+                "symbol": raw_symbol,
+                "side": raw_side,
                 "quantity": quantity,
                 "client_order_id": client_order_id,
                 "asset_class": asset_class,

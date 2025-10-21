@@ -273,6 +273,8 @@ def _check_alpaca_sdk() -> None:
     """Ensure the Alpaca SDK is installed before continuing."""
     if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
         return
+    if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes"}:
+        return
     if os.getenv("IMPORT_PREFLIGHT_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
         return
     if not ALPACA_AVAILABLE:
@@ -680,6 +682,10 @@ def _fail_fast_env() -> None:
     except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
+
+    webhook_secret = str(getattr(trading_cfg, "webhook_secret", "") or "").strip()
+    if not webhook_secret:
+        raise RuntimeError("WEBHOOK_SECRET missing")
 
     credential_warning_logged = False
     try:

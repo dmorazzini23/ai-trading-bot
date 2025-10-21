@@ -36,6 +36,8 @@ def test_safe_get_stock_bars_handles_sentinel(monkeypatch):
     class DummyClient:
         pass
 
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "force")
+
     req = StockBarsRequest(
         symbol_or_symbols="SPY",
         timeframe=TimeFrame.Day,

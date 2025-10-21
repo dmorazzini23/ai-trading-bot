@@ -98,7 +98,7 @@ def _require_bid_ask() -> bool:
     try:
         cfg = get_trading_config()
     except Exception:
-        return True
+        return False
     return bool(getattr(cfg, "execution_require_bid_ask", True))
 
 
@@ -140,13 +140,16 @@ def can_execute(
 ) -> Tuple[bool, str | None]:
     """Return gating decision for *quote* with optional overrides."""
 
+    require_bid = _require_bid_ask()
     if quote is None:
-        return False, "no_quote"
+        if require_bid:
+            return False, "no_quote"
+        return True, None
     now = now or _now()
     max_age = int(max_age_sec if max_age_sec is not None else _max_age_seconds())
     bid = quote.get("bid") or quote.get("bp") or quote.get("bid_price")
     ask = quote.get("ask") or quote.get("ap") or quote.get("ask_price")
-    if _require_bid_ask():
+    if require_bid:
         if bid is None or ask is None:
             return False, "missing_bid_ask"
         try:

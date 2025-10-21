@@ -62,7 +62,7 @@ def register(metric) -> object:
             collectors = {}
             setattr(registry, "_names_to_collectors", collectors)
         if name:
-            collectors[name] = metric
+            collectors.setdefault(name, metric)
     return metric
 
 
