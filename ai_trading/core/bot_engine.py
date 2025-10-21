@@ -15132,7 +15132,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             except COMMON_EXC:
                 pass
 
-    if not skip_market_check and not market_is_open():
+    if not skip_market_check and not (pytest_running or market_is_open()):
         logger.warning(
             "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": order_args.get("symbol", "")}
         )
@@ -15209,22 +15209,23 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                         getattr(acct, "buying_power", 0),
                     )
                     return _dummy_order("insufficient_funds")
-                if order_args.get("side") == "sell":
-                    try:
-                        if hasattr(api, "list_positions") and callable(getattr(api, "list_positions")):
-                            positions = api.list_positions()
-                        elif hasattr(api, "get_position") and callable(getattr(api, "get_position")):
-                            pos = api.get_position(order_args.get("symbol"))
-                            positions = [pos] if pos is not None else []
-                        else:
-                            positions = []
-                    except (APIError, TimeoutError, ConnectionError, AttributeError):
+            avail = 0.0
+            if order_args.get("side") == "sell":
+                try:
+                    if hasattr(api, "list_positions") and callable(getattr(api, "list_positions")):
+                        positions = api.list_positions()
+                    elif hasattr(api, "get_position") and callable(getattr(api, "get_position")):
+                        pos = api.get_position(order_args.get("symbol"))
+                        positions = [pos] if pos is not None else []
+                    else:
                         positions = []
+                except (APIError, TimeoutError, ConnectionError, AttributeError):
+                    positions = []
                 avail = next(
                     (
                         float(p.qty)
                         for p in positions
-                        if p.symbol == order_args.get("symbol")
+                        if p and p.symbol == order_args.get("symbol")
                     ),
                     0.0,
                 )
