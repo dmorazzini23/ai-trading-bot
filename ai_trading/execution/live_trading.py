@@ -1741,7 +1741,7 @@ class ExecutionEngine:
                 )
                 return None
 
-        if guard_shadow_active() and not closing_position and account_snapshot:
+        if guard_shadow_active() and not closing_position:
             logger.info(
                 "SHADOW_MODE_ACTIVE",
                 extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
@@ -2119,7 +2119,7 @@ class ExecutionEngine:
                 )
                 return None
 
-        if guard_shadow_active() and not closing_position and account_snapshot:
+        if guard_shadow_active() and not closing_position:
             logger.info(
                 "SHADOW_MODE_ACTIVE",
                 extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
