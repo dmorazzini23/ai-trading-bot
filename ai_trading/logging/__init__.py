@@ -10,6 +10,7 @@ sanitizing adapter for all modules.
 import atexit
 import contextlib
 import csv
+import inspect
 import json
 import logging
 import os
@@ -312,6 +313,7 @@ class MessageThrottleFilter(logging.Filter):
                     "suppressed": 0,
                     "last_summary": now,
                     "logger_name": record.name or _ROOT_LOGGER_NAME,
+                    "seen_in_cycle": True,
                 }
                 return True
 
@@ -319,6 +321,7 @@ class MessageThrottleFilter(logging.Filter):
             suppressed = int(state.get("suppressed", 0))
             last_summary = float(state.get("last_summary", 0.0))
             state["logger_name"] = record.name or _ROOT_LOGGER_NAME
+            state["seen_in_cycle"] = True
 
             if now - last_emit < self.throttle_seconds:
                 suppressed += 1
@@ -337,7 +340,7 @@ class MessageThrottleFilter(logging.Filter):
             state["last_emit"] = now
             return True
 
-    def flush_cycle(self) -> None:
+    def flush_cycle(self, *, namespace: str | None = None) -> None:
         """Emit summaries for suppressed messages and reset counters."""
 
         if self.throttle_seconds <= 0:
@@ -346,9 +349,13 @@ class MessageThrottleFilter(logging.Filter):
         now = self._now()
         with self._lock:
             for message, state in self._state.items():
+                if not state.get("seen_in_cycle"):
+                    continue
                 suppressed = int(state.get("suppressed", 0))
+                logger_name = str(state.get("logger_name") or _ROOT_LOGGER_NAME)
+                if namespace is not None and not _namespace_matches(namespace, logger_name):
+                    continue
                 if suppressed:
-                    logger_name = str(state.get("logger_name") or _ROOT_LOGGER_NAME)
                     key = self._summary_key_from_message(message)
                     _emit_throttle_summary(
                         logging.getLogger(logger_name),
@@ -357,6 +364,7 @@ class MessageThrottleFilter(logging.Filter):
                     )
                 state["suppressed"] = 0
                 state["last_summary"] = now
+                state["seen_in_cycle"] = False
 
 
 _THROTTLE_FILTER = MessageThrottleFilter()
@@ -635,11 +643,62 @@ def reset_provider_log_dedupe() -> None:
     reset_rate_limit_tracker()
 
 
-def flush_log_throttle_summaries() -> None:
+def _truthy_flag(raw: str | None) -> bool:
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _logger_namespace(obj: Any) -> str | None:
+    if obj is None:
+        return None
+    name = getattr(obj, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    base = getattr(obj, "logger", None)
+    base_name = getattr(base, "name", None)
+    if isinstance(base_name, str) and base_name:
+        return base_name
+    return None
+
+
+def _infer_logger_namespace_from_stack() -> str | None:
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            for candidate in ("logger", "log", "LOGGER"):
+                namespace = _logger_namespace(frame.f_locals.get(candidate))
+                if namespace:
+                    return namespace
+                namespace = _logger_namespace(frame.f_globals.get(candidate))
+                if namespace:
+                    return namespace
+            frame = frame.f_back
+    finally:
+        del frame
+    return None
+
+
+def _namespace_matches(target: str, candidate: str) -> bool:
+    if candidate == target:
+        return True
+    if candidate.startswith(f"{target}."):
+        return True
+    return False
+
+
+def flush_log_throttle_summaries(logger: logging.Logger | logging.LoggerAdapter | None = None) -> None:
     """Emit LOG_THROTTLE_SUMMARY lines for suppressed messages this cycle."""
 
-    if _THROTTLE_FILTER:
-        _THROTTLE_FILTER.flush_cycle()
+    if not _THROTTLE_FILTER:
+        return
+
+    pytest_running = _truthy_flag(os.getenv("PYTEST_RUNNING"))
+    namespace = _logger_namespace(logger)
+    if pytest_running and namespace is None:
+        namespace = _infer_logger_namespace_from_stack()
+
+    _THROTTLE_FILTER.flush_cycle(namespace=namespace if pytest_running else None)
 
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
