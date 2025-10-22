@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+from collections.abc import Callable
+
 PROMETHEUS_AVAILABLE = False
 REGISTRY = None
 CollectorRegistry = None
@@ -26,6 +29,9 @@ try:
 except (ImportError, KeyError, ValueError, TypeError):
 
     class _NoopRegistry:
+
+        def __init__(self):
+            self._names_to_collectors: dict[str, object] = {}
 
         def register(self, *_, **__):
             pass
@@ -58,13 +64,28 @@ except (ImportError, KeyError, ValueError, TypeError):
     class CollectorRegistry:
 
         def __init__(self, *_, **__):
-            pass
+            self._names_to_collectors: dict[str, object] = {}
     Gauge = Counter = Histogram = Summary = _NoopMetric
     start_http_server = _noop_start_http_server
 
 
+def _ensure_names_map(registry):
+    """Ensure ``registry`` exposes a ``_names_to_collectors`` mapping."""
+
+    if registry is None:
+        return None
+    if not hasattr(registry, "_names_to_collectors"):
+        setattr(registry, "_names_to_collectors", {})
+    return registry
+
+
+REGISTRY = _ensure_names_map(REGISTRY)
+
+
 _calculate_atr = None
 _safe_divide = None
+
+_RESET_HOOKS: list[Callable[[CollectorRegistry], None]] = []
 
 
 def calculate_atr(*args, **kwargs):
@@ -102,8 +123,26 @@ def reset_registry(registry: CollectorRegistry | None = None) -> CollectorRegist
     When ``registry`` is ``None`` a new :class:`CollectorRegistry` is created.
     """
     global REGISTRY
-    REGISTRY = registry or CollectorRegistry()  # type: ignore[call-arg]
+    if registry is not None:
+        REGISTRY = _ensure_names_map(registry)
+    else:
+        REGISTRY = _ensure_names_map(CollectorRegistry())  # type: ignore[call-arg]
+    for hook in list(_RESET_HOOKS):
+        hook(REGISTRY)
     return REGISTRY
+
+
+def get_registry() -> CollectorRegistry:
+    """Return the active metrics registry."""
+
+    return REGISTRY  # type: ignore[return-value]
+
+
+def register_reset_hook(callback: Callable[[CollectorRegistry], None]) -> None:
+    """Register ``callback`` to run whenever the metrics registry resets."""
+
+    if callback not in _RESET_HOOKS:
+        _RESET_HOOKS.append(callback)
 
 
 def _get_metric(metric_cls, name: str, documentation: str, *args, **kwargs):
@@ -116,10 +155,18 @@ def _get_metric(metric_cls, name: str, documentation: str, *args, **kwargs):
     has not been used yet.
     """
     registry = kwargs.pop("registry", REGISTRY)
-    existing = getattr(registry, "_names_to_collectors", {}).get(name)
+    collectors = getattr(registry, "_names_to_collectors", None)
+    existing = collectors.get(name) if collectors and name else None
     if existing is not None:
         return existing
-    return metric_cls(name, documentation, *args, registry=registry, **kwargs)
+    metric = metric_cls(name, documentation, *args, registry=registry, **kwargs)
+    if not hasattr(registry, "register"):
+        if collectors is None:
+            collectors = {}
+            setattr(registry, "_names_to_collectors", collectors)
+        if name:
+            collectors[name] = metric
+    return metric
 
 
 def get_counter(name: str, documentation: str, *args, **kwargs):
@@ -148,6 +195,8 @@ __all__ = [
     'calculate_atr',
     'compute_basic_metrics',
     'reset_registry',
+    'register_reset_hook',
+    'get_registry',
     'get_counter',
     'get_gauge',
     'get_histogram',
