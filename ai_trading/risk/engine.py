@@ -625,7 +625,8 @@ class RiskEngine:
                         if yf_module is not None and hasattr(yf_module, "Ticker"):
                             try:
                                 yf_ticker = yf_module.Ticker(symbol)
-                                period_days = max(int(lookback), 1)
+                                base_days = max(int(math.ceil(lookback)), 1)
+                                period_days = max(base_days + 10, base_days + 1, 2)
                                 yf_df = yf_ticker.history(period=f"{period_days}d", interval="1d")
                             except Exception as exc:  # pragma: no cover - defensive network guard
                                 logger.debug("ATR yfinance fallback failed for %s: %s", symbol, exc)
