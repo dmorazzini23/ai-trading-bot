@@ -670,6 +670,9 @@ def _infer_logger_namespace_from_stack() -> str | None:
                 namespace = _logger_namespace(frame.f_locals.get(candidate))
                 if namespace:
                     return namespace
+                namespace = _logger_namespace(frame.f_globals.get(candidate))
+                if namespace:
+                    return namespace
             frame = frame.f_back
     finally:
         del frame
