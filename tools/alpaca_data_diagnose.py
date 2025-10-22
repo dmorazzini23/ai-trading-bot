@@ -12,15 +12,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
-import os
-
-from alpaca_trade_api.common import URL
-from alpaca_trade_api.rest import REST
+from alpaca.data.enums import DataFeed
+from alpaca.data.historical.stock import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.timeframe import TimeFrame
 
 
 def _load_env_from_file() -> None:
@@ -48,9 +50,21 @@ def _load_env_from_file() -> None:
             break
 
 
-def _client(key_id: str | None, secret_key: str | None, base_url: str | None) -> REST:
-    api_base = URL(base_url or "https://paper-api.alpaca.markets")
-    return REST(key_id=key_id, secret_key=secret_key, base_url=api_base, api_version="v2")
+def _resolve_feed(feed: str | None) -> DataFeed | None:
+    if feed is None:
+        return None
+    try:
+        return DataFeed(feed)
+    except ValueError as exc:  # pragma: no cover - guarded by argparse choices
+        raise RuntimeError(f"Unsupported data feed: {feed}") from exc
+
+
+def _client(api_key: str, api_secret: str, base_url: str | None) -> StockHistoricalDataClient:
+    return StockHistoricalDataClient(
+        api_key=api_key,
+        secret_key=api_secret,
+        url_override=base_url,
+    )
 
 
 def diagnose(
@@ -67,8 +81,6 @@ def diagnose(
     client = _client(key_id, secret_key, base_url)
     now = datetime.now(UTC)
     start = now - timedelta(minutes=15)
-    start_iso = start.replace(microsecond=0).isoformat()
-    end_iso = now.replace(microsecond=0).isoformat()
 
     result: dict[str, object] = {
         "symbol": symbol,
@@ -76,24 +88,49 @@ def diagnose(
         "feed": feed or "sip",
     }
 
+    feed_enum = _resolve_feed(feed)
+
     try:
-        bars = client.get_bars(symbol, "1Min", start=start_iso, end=end_iso, limit=5, feed=feed)
+        bars_request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            start=start,
+            end=now,
+            limit=5,
+            timeframe=TimeFrame.Minute,
+            feed=feed_enum,
+        )
+        bar_set = client.get_stock_bars(bars_request)
     except Exception as exc:  # pragma: no cover - diagnostic path
         result["minute_error"] = str(exc)
     else:
-        if not bars:
+        bars_for_symbol: Sequence[object] | None
+        if hasattr(bar_set, "data"):
+            bars_for_symbol = bar_set.data.get(symbol)
+        elif isinstance(bar_set, dict):
+            bars_for_symbol = bar_set.get(symbol)
+        else:
+            bars_for_symbol = None
+        if not bars_for_symbol:
             result["minute_status"] = "empty"
         else:
-            bar = bars[-1]
+            bar = bars_for_symbol[-1]
             result["minute_status"] = "ok"
-            result["minute_close"] = getattr(bar, "c", None) or getattr(bar, "close", None)
-            result["minute_volume"] = getattr(bar, "v", None) or getattr(bar, "volume", None)
+            result["minute_close"] = getattr(bar, "close", None)
+            result["minute_volume"] = getattr(bar, "volume", None)
 
     try:
-        quote = client.get_latest_quote(symbol, feed=feed)
+        quote_request = StockLatestQuoteRequest(
+            symbol_or_symbols=symbol,
+            feed=feed_enum,
+        )
+        quote_response = client.get_stock_latest_quote(quote_request)
     except Exception as exc:  # pragma: no cover - diagnostic path
         result["quote_error"] = str(exc)
     else:
+        if isinstance(quote_response, dict):
+            quote = quote_response.get(symbol)
+        else:
+            quote = None
         if quote is None:
             result["quote_status"] = "missing"
         else:
@@ -102,7 +139,7 @@ def diagnose(
             result["quote_status"] = "ok" if bid and ask else "incomplete"
             result["bid"] = bid
             result["ask"] = ask
-            quote_ts = getattr(quote, "timestamp", None) or getattr(quote, "t", None)
+            quote_ts = getattr(quote, "timestamp", None)
             if hasattr(quote_ts, "isoformat"):
                 quote_ts = quote_ts.isoformat()
             result["quote_ts"] = quote_ts
