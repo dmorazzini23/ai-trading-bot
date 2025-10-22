@@ -665,12 +665,19 @@ def save_model_checkpoint(model: Any, filepath: str) -> None:
     try:
         with open(filepath, "wb") as f:
             pickle.dump(model, f)
-    except Exception as exc:  # noqa: BLE001 - tolerate wide pickle failures
+    except (pickle.PicklingError, AttributeError, TypeError) as exc:
         logger.warning(
             "CHECKPOINT_SKIP_UNPICKLABLE",
             extra={"path": filepath, "error": str(exc)},
         )
         return
+    except OSError as exc:
+        logger.error(
+            "MODEL_CHECKPOINT_WRITE_FAILED",
+            extra={"path": filepath, "error": str(exc)},
+            exc_info=True,
+        )
+        raise
     logger.info("MODEL_CHECKPOINT_SAVED", extra={"path": filepath})
 
 def load_model_checkpoint(filepath: str) -> Any | None:
