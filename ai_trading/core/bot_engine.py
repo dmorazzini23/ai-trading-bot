@@ -197,6 +197,23 @@ _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
 _EASTERN_TZ = ZoneInfo("America/New_York")
 
 
+def _normalize_order_side_value(value: Any) -> str | None:
+    """Return canonical side label for ``value`` when recognized."""
+
+    if isinstance(value, CoreOrderSide):
+        if value is CoreOrderSide.BUY:
+            return "buy"
+        if value is CoreOrderSide.SELL_SHORT:
+            return "sell_short"
+        if value is CoreOrderSide.SELL:
+            return "sell"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"buy", "sell", "sell_short", "short"}:
+            return "sell_short" if normalized == "short" else normalized
+    return None
+
+
 def _count_trading_minutes(start_dt: datetime, end_dt: datetime) -> int:
     """Return the number of in-session minutes within ``[start_dt, end_dt)``."""
 
@@ -13377,13 +13394,49 @@ def check_pdt_rule(ctx) -> bool:
         equity_ok = False
     context["pdt_equity_ok"] = bool(equity_ok)
 
-    def _store_context(reason: str | None = None) -> None:
+    def _store_context(
+        reason: str | None = None,
+        *,
+        enforced: bool = False,
+        warn_reasons: Sequence[str] | None = None,
+    ) -> None:
         payload = dict(context)
         if reason is not None:
             payload["block_reason"] = reason
+        elif "block_reason" in payload and not enforced:
+            payload.pop("block_reason", None)
+        payload["block_enforced"] = bool(enforced)
+        if warn_reasons is not None:
+            payload["warn_reasons"] = tuple(warn_reasons)
         setattr(ctx, "_pdt_last_context", payload)
 
-    _store_context()
+    try:
+        now_local = datetime.now(_EASTERN_TZ)
+    except Exception:
+        now_local = datetime.now(UTC).astimezone(_EASTERN_TZ)
+    session_date = now_local.date()
+    snapshot = getattr(ctx, "_pdt_daytrade_snapshot", None)
+    if not isinstance(snapshot, dict) or snapshot.get("session_date") != session_date:
+        snapshot = {"session_date": session_date, "max_count": 0}
+    prev_count = _as_int(snapshot.get("last_count"), daytrade_count)
+    if prev_count > daytrade_count:
+        logger.info(
+            "PDT_DAYTRADE_COUNTER_RESET",
+            extra={
+                "previous": prev_count,
+                "current": daytrade_count,
+                "limit": limit_to_use,
+            },
+        )
+    snapshot["last_count"] = daytrade_count
+    snapshot["max_count"] = max(_as_int(snapshot.get("max_count"), 0), daytrade_count)
+    snapshot["limit"] = limit_to_use
+    setattr(ctx, "_pdt_daytrade_snapshot", snapshot)
+    context["daytrade_snapshot"] = {
+        "session_date": session_date.isoformat(),
+        "last_count": snapshot["last_count"],
+        "max_count": snapshot["max_count"],
+    }
 
     logger.info(
         "PDT_CHECK",
@@ -13399,40 +13452,94 @@ def check_pdt_rule(ctx) -> bool:
         },
     )
 
+    limit_reached = (
+        enforce_daytrade_limit
+        and pattern_day_trader
+        and limit_to_use > 0
+        and daytrade_count >= limit_to_use
+    )
+
+    warn_reasons: list[str] = []
+    block_reason: str | None = None
+    block_enforced = False
+
     if broker_flag:
+        if limit_reached:
+            block_reason = "broker_blocked"
+            block_enforced = True
+        else:
+            warn_reasons.append("broker_blocked")
+
+    if limit_reached and not block_enforced:
+        warn_reasons.append("daytrade_limit_exhausted")
+
+    if dtbp <= 0.0:
+        warn_reasons.append("dtbp_exhausted")
+
+    if not equity_ok:
+        warn_reasons.append("equity_below_threshold")
+
+    unique_warns = tuple(dict.fromkeys(warn_reasons))
+    context["limit_reached"] = bool(limit_reached)
+    context["block_enforced"] = block_enforced
+    if block_reason is not None:
+        context["block_reason"] = block_reason
+    elif "block_reason" in context:
+        context.pop("block_reason", None)
+    context["warn_reasons"] = unique_warns
+
+    _store_context(
+        block_reason if block_enforced else None,
+        enforced=block_enforced,
+        warn_reasons=unique_warns,
+    )
+
+    if block_enforced:
         logger.warning(
             "PDT_BLOCK_BROKER_FLAG",
             extra={
                 "trading_blocked": bool(trading_blocked_attr or broker_flag),
                 "account_blocked": bool(account_blocked_attr or broker_flag),
                 "reason": "broker_blocked",
-            },
-        )
-        _store_context("broker_blocked")
-        return True
-
-    if (
-        enforce_daytrade_limit
-        and pattern_day_trader
-        and ctx_daytrade_limit_set
-        and daytrade_count >= limit_to_use
-    ):
-        logger.warning(
-            "PDT_BLOCK_DAYTRADE_LIMIT",
-            extra={
-                "pattern_day_trader": True,
                 "daytrade_count": daytrade_count,
                 "daytrade_limit": limit_to_use,
-                "reason": "daytrade_limit_exhausted",
             },
         )
-        _store_context("daytrade_limit_exhausted")
+        _safe_probe_open_orders()
         return True
 
-    if explicit_account_provided:
-        if not equity_ok:
+    for reason in unique_warns:
+        if reason == "broker_blocked":
             logger.warning(
-                "PDT_BLOCK_LOW_EQUITY",
+                "PDT_BROKER_FLAG_WARN_ONLY",
+                extra={
+                    "trading_blocked": bool(trading_blocked_attr or broker_flag),
+                    "account_blocked": bool(account_blocked_attr or broker_flag),
+                    "reason": "broker_blocked",
+                },
+            )
+        elif reason == "daytrade_limit_exhausted":
+            logger.warning(
+                "PDT_DAYTRADE_LIMIT_WARN_ONLY",
+                extra={
+                    "pattern_day_trader": bool(pattern_day_trader),
+                    "daytrade_count": daytrade_count,
+                    "daytrade_limit": limit_to_use,
+                    "reason": "daytrade_limit_exhausted",
+                },
+            )
+        elif reason == "dtbp_exhausted":
+            logger.warning(
+                "PDT_NO_DTBP_WARN_ONLY",
+                extra={
+                    "daytrading_buying_power": dtbp,
+                    "equity": equity,
+                    "reason": "dtbp_exhausted",
+                },
+            )
+        elif reason == "equity_below_threshold":
+            logger.warning(
+                "PDT_LOW_EQUITY_WARN_ONLY",
                 extra={
                     "equity": equity,
                     "min_equity": min_equity,
@@ -13440,53 +13547,18 @@ def check_pdt_rule(ctx) -> bool:
                     "reason": "equity_below_threshold",
                 },
             )
-            _store_context("equity_below_threshold")
-            return True
-        if dtbp <= 0.0:
-            logger.warning(
-                "PDT_BLOCK_NO_DTBP",
-                extra={
-                    "daytrading_buying_power": dtbp,
-                    "equity": equity,
-                    "reason": "dtbp_exhausted",
-                },
-            )
-            _store_context("dtbp_exhausted")
-            return True
-    else:
-        if dtbp <= 0.0:
-            logger.warning(
-                "PDT_BLOCK_NO_DTBP",
-                extra={
-                    "daytrading_buying_power": dtbp,
-                    "equity": equity,
-                    "reason": "dtbp_exhausted",
-                },
-            )
-            _store_context("dtbp_exhausted")
-            return True
-        if not equity_ok:
-            logger.warning(
-                "PDT_BLOCK_LOW_EQUITY",
-                extra={
-                    "equity": equity,
-                    "min_equity": min_equity,
-                    "daytrading_buying_power": dtbp,
-                    "reason": "equity_below_threshold",
-                },
-            )
-            _store_context("equity_below_threshold")
-            return True
 
-    logger.info(
-        "PDT_ELIGIBLE_EQ_OK",
-        extra={
-            "equity": equity,
-            "min_equity": min_equity,
-            "daytrading_buying_power": dtbp,
-            "pdt_equity_ok": bool(equity_ok),
-        },
-    )
+    if not unique_warns:
+        logger.info(
+            "PDT_ELIGIBLE_EQ_OK",
+            extra={
+                "equity": equity,
+                "min_equity": min_equity,
+                "daytrading_buying_power": dtbp,
+                "pdt_equity_ok": bool(equity_ok),
+            },
+        )
+
     _safe_probe_open_orders()
     return False
 
@@ -17415,10 +17487,13 @@ def _enter_long(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
-    fallback_gate_ok = fallback_used or (
-        isinstance(price_source, str)
-        and price_source.strip().lower() in _TERMINAL_FALLBACK_PRICE_SOURCES
-    )
+    fallback_gate_ok = False
+    if fallback_used:
+        if isinstance(price_source, str):
+            source_label = price_source.strip().lower()
+            fallback_gate_ok = source_label not in _TERMINAL_FALLBACK_PRICE_SOURCES
+        else:
+            fallback_gate_ok = True
     fallback_slippage_bps = _slippage_setting_bps()
     quote_gate = _ensure_executable_quote(
         ctx,
@@ -18084,10 +18159,13 @@ def _enter_short(
     if fallback_used:
         _clear_cached_yahoo_fallback(symbol)
 
-    fallback_gate_ok = fallback_used or (
-        isinstance(price_source, str)
-        and price_source.strip().lower() in _TERMINAL_FALLBACK_PRICE_SOURCES
-    )
+    fallback_gate_ok = False
+    if fallback_used:
+        if isinstance(price_source, str):
+            source_label = price_source.strip().lower()
+            fallback_gate_ok = source_label not in _TERMINAL_FALLBACK_PRICE_SOURCES
+        else:
+            fallback_gate_ok = True
     fallback_slippage_bps = _slippage_setting_bps()
     quote_gate = _ensure_executable_quote(
         ctx,
@@ -21645,6 +21723,9 @@ def _pdt_limit_exhausted(ctx: Any) -> tuple[bool, Mapping[str, Any] | None]:
     context = getattr(ctx, "_pdt_last_context", None)
     if not isinstance(context, Mapping):
         return False, None
+    enforced_flag = context.get("block_enforced")
+    if enforced_flag is not None:
+        return bool(enforced_flag), context
     pattern_flag = bool(context.get("pattern_day_trader"))
     try:
         limit = int(context.get("daytrade_limit", 0))
@@ -21941,19 +22022,22 @@ def _resolve_limit_price(
             failure_reasons.append(f"backup_mid:{backup_feed}:no_mid")
 
     if last_close and last_close > 0:
-        limit = _apply_slippage_limit(side, float(last_close), None, None, slippage_bps)
-        _log_price_source(
-            symbol,
-            "last_close",
-            limit_price=limit,
-            side=side,
-            slippage_bps=slippage_bps,
-            reason=_reason_summary(failure_reasons),
-            bid=None,
-            ask=None,
-            mid=float(last_close),
-        )
-        return limit, "last_close"
+        if not _allow_last_close_execution():
+            failure_reasons.append("last_close:disabled")
+        else:
+            limit = _apply_slippage_limit(side, float(last_close), None, None, slippage_bps)
+            _log_price_source(
+                symbol,
+                "last_close",
+                limit_price=limit,
+                side=side,
+                slippage_bps=slippage_bps,
+                reason=_reason_summary(failure_reasons),
+                bid=None,
+                ask=None,
+                mid=float(last_close),
+            )
+            return limit, "last_close"
 
     return None, None
 
@@ -22353,12 +22437,27 @@ def run_multi_strategy(ctx) -> None:
             if isinstance(tp, (int, float)) and tp > 0:
                 order_kwargs['take_profit'] = float(tp)
                 order_kwargs.setdefault('order_class', 'bracket')
+            expected_sides = {"buy"} if sig.side == "buy" else {"sell", "sell_short"}
             result = ctx.execution_engine.execute_order(
                 sig.symbol,
                 sig.side,
                 qty,
                 **order_kwargs,
             )
+            if result is not None:
+                actual_side_norm = _normalize_order_side_value(getattr(result, "side", None))
+                if actual_side_norm not in expected_sides:
+                    logger.error(
+                        "ORDER_SIDE_MISMATCH",
+                        extra={
+                            "symbol": sig.symbol,
+                            "signal_side": sig.side,
+                            "order_side": actual_side_norm,
+                            "expected_sides": tuple(sorted(expected_sides)),
+                            "order_id": getattr(result, "id", None),
+                        },
+                    )
+                    raise AssertionError("order_side_mismatch")
         except AssertionError as exc:
             logger.warning(
                 "ORDER_EXECUTION_ABORTED",

@@ -56,10 +56,10 @@ def test_check_pdt_rule_allows_high_equity_pattern_day_trader(
     assert context.get("block_reason") is None
 
 
-def test_check_pdt_rule_blocks_when_dtbp_exhausted(
+def test_check_pdt_rule_warns_when_dtbp_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Below-threshold equity with no DTBP must block orders."""
+    """Below-threshold equity with no DTBP should warn-only."""
 
     runtime = SimpleNamespace(api=SimpleNamespace())
     account = _pdt_account(
@@ -73,9 +73,10 @@ def test_check_pdt_rule_blocks_when_dtbp_exhausted(
 
     blocked = bot_engine.check_pdt_rule(runtime)
 
-    assert blocked is True
+    assert blocked is False
     context = getattr(runtime, "_pdt_last_context")
-    assert context["block_reason"] == "dtbp_exhausted"
+    assert context.get("block_enforced") is False
+    assert "dtbp_exhausted" in context.get("warn_reasons", ())
     assert context["equity"] == pytest.approx(20000.0)
     assert context["daytrading_buying_power"] == pytest.approx(0.0)
 
@@ -86,7 +87,10 @@ def test_run_all_trades_logs_single_pdt_suppression(
     """run_all_trades_worker should emit a single suppression log when PDT blocks."""
 
     runtime = SimpleNamespace(
-        api=SimpleNamespace(),
+        api=SimpleNamespace(
+            list_orders=lambda **_kw: [],
+            get_all_positions=lambda: [],
+        ),
         risk_engine=SimpleNamespace(wait_for_exposure_update=lambda *_a, **_k: None),
         tickers=["AAPL", "MSFT"],
     )
@@ -117,12 +121,8 @@ def test_run_all_trades_logs_single_pdt_suppression(
     with caplog.at_level(logging.INFO):
         bot_engine.run_all_trades_worker(state, runtime)
 
-    assert state.pdt_blocked is True
+    assert state.pdt_blocked is False
     records = [record for record in caplog.records if record.msg == "ORDERS_SUPPRESSED_BY_PDT"]
-    assert len(records) == 1
-    record = records[0]
-    assert record.pattern_day_trader is True
-    assert record.daytrade_count == 6
-    assert record.daytrade_limit == 3
-    assert record.symbol_count == 2
-    assert record.reason == "dtbp_exhausted"
+    assert not records
+    warn_records = [record for record in caplog.records if record.msg == "PDT_NO_DTBP_WARN_ONLY"]
+    assert warn_records

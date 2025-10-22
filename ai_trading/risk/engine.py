@@ -3,7 +3,7 @@ from ai_trading.logging import get_logger
 import math
 import random
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -46,6 +46,27 @@ if not hasattr(np, "NaN"):
 
 # Lazy pandas proxy
 pd = load_pandas()
+
+
+DEFAULT_VOLATILITY_FALLBACK = 0.02
+
+try:  # pragma: no cover - optional dependency
+    from requests import exceptions as _requests_exceptions  # type: ignore[import]
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - requests optional
+    _requests_exceptions = None
+
+_YF_HISTORY_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ValueError,
+    TypeError,
+    OSError,
+    RuntimeError,
+    ConnectionError,
+    TimeoutError,
+)
+if _requests_exceptions is not None:  # pragma: no cover - requests optional
+    request_exc = getattr(_requests_exceptions, "RequestException", None)
+    if isinstance(request_exc, type):
+        _YF_HISTORY_EXCEPTIONS = _YF_HISTORY_EXCEPTIONS + (request_exc,)
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -186,6 +207,7 @@ class RiskEngine:
         self._positions: dict[str, int] = {}
         self._atr_cache: dict[str, tuple] = {}
         self._volatility_cache: dict[str, tuple] = {}
+        self._volatility_alerted = False
         self.data_client = None
         try:
             cfg_key, cfg_secret, _ = _resolve_alpaca_env()
@@ -268,7 +290,43 @@ class RiskEngine:
         return min(base_cap, port_cap)
 
     def _current_volatility(self) -> float:
-        return float(np.std(self._returns[-10:])) if self._returns else 0.0
+        recent = self._returns[-10:]
+        fallback = DEFAULT_VOLATILITY_FALLBACK
+        if not recent:
+            self._log_volatility_anomaly("no_returns", fallback=fallback)
+            return fallback
+        try:
+            vol = float(np.std(recent))
+        except (TypeError, ValueError):
+            self._log_volatility_anomaly("std_failed", fallback=fallback)
+            return fallback
+        if not math.isfinite(vol) or vol <= 0:
+            self._log_volatility_anomaly(
+                "non_positive",
+                fallback=fallback,
+                details={"volatility": vol, "samples": len(recent)},
+            )
+            return fallback
+        self._volatility_alerted = False
+        return vol
+
+    def _log_volatility_anomaly(
+        self,
+        reason: str,
+        *,
+        fallback: float,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if getattr(self, "_volatility_alerted", False):
+            return
+        payload: dict[str, Any] = {"reason": reason, "fallback": fallback}
+        if details:
+            try:
+                payload.update(details)
+            except (TypeError, ValueError):
+                payload["details_error"] = "unmergeable"
+        logger.warning("PORTFOLIO_VOLATILITY_FALLBACK", extra=payload)
+        self._volatility_alerted = True
 
     def _get_atr_data(self, symbol: str, lookback: int = 14) -> float | None:
         """Return ATR value for ``symbol``."""
@@ -617,7 +675,7 @@ class RiskEngine:
                     from ai_trading.data.providers import yfinance_provider  # local import
 
                     provider_cls = getattr(yfinance_provider, "Provider", None)
-                except Exception:  # pragma: no cover - optional dependency missing
+                except (ImportError, ModuleNotFoundError, AttributeError):  # pragma: no cover - optional dependency missing
                     provider_cls = None
                 else:
                     if provider_cls is not None and isinstance(client, provider_cls):
@@ -628,7 +686,7 @@ class RiskEngine:
                                 base_days = max(int(math.ceil(lookback)), 1)
                                 period_days = max(base_days + 10, base_days + 1, 2)
                                 yf_df = yf_ticker.history(period=f"{period_days}d", interval="1d")
-                            except Exception as exc:  # pragma: no cover - defensive network guard
+                            except _YF_HISTORY_EXCEPTIONS as exc:  # pragma: no cover - defensive network guard
                                 logger.debug("ATR yfinance fallback failed for %s: %s", symbol, exc)
                             else:
                                 if yf_df is not None and getattr(yf_df, "empty", True) is False:
