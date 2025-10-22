@@ -663,11 +663,22 @@ class WeightOptimizer:
 def save_model_checkpoint(model: Any, filepath: str) -> None:
     """Serialize ``model`` to ``filepath`` using :mod:`pickle`."""
     try:
-        with open(filepath, 'wb') as f:
+        with open(filepath, "wb") as f:
             pickle.dump(model, f)
-        logger.info('MODEL_CHECKPOINT_SAVED', extra={'path': filepath})
-    except (OSError, pickle.PickleError) as exc:
-        logger.error('Failed to save model checkpoint: %s', exc, exc_info=True)
+    except (pickle.PicklingError, AttributeError, TypeError) as exc:
+        logger.warning(
+            "CHECKPOINT_SKIP_UNPICKLABLE",
+            extra={"path": filepath, "error": str(exc)},
+        )
+        return
+    except OSError as exc:
+        logger.error(
+            "MODEL_CHECKPOINT_WRITE_FAILED",
+            extra={"path": filepath, "error": str(exc)},
+            exc_info=True,
+        )
+        raise
+    logger.info("MODEL_CHECKPOINT_SAVED", extra={"path": filepath})
 
 def load_model_checkpoint(filepath: str) -> Any | None:
     """Load a model from ``filepath`` previously saved with ``save_model_checkpoint``."""

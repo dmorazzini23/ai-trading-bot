@@ -31,16 +31,16 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
                 rename_map[col] = std
     if rename_map:
         df = df.rename(columns=rename_map)
-    if 'close' not in df.columns:
-        raise KeyError("Column 'close' required")
-    if 'high' not in df.columns:
-        df['high'] = df['close']
-    if 'low' not in df.columns:
-        df['low'] = df['close']
+    for col in ['high', 'low', 'close', 'volume']:
+        if col not in df.columns:
+            if col in ('high', 'low') and 'close' in df.columns:
+                df[col] = df['close']
+            elif col == 'volume':
+                df[col] = 1
+            else:
+                raise KeyError(f"Column '{col}' not found in DataFrame in prepare_indicators")
     if 'open' not in df.columns:
         df['open'] = df['close']
-    if 'volume' not in df.columns:
-        df['volume'] = 0
     for col in ['high', 'low', 'close', 'volume', 'open']:
         if col in df.columns:
             df[col] = df[col].astype(float)
