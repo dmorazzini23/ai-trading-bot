@@ -4693,7 +4693,7 @@ def _resolve_latest_close(df_obj: Any) -> float | None:
         return None
     try:
         value = get_latest_close(df_obj)
-    except Exception:
+    except (*COMMON_EXC, AttributeError, OSError):
         return None
     if value is None:
         return None
