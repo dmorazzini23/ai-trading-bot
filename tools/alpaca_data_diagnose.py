@@ -59,11 +59,20 @@ def _resolve_feed(feed: str | None) -> DataFeed | None:
         raise RuntimeError(f"Unsupported data feed: {feed}") from exc
 
 
+def _normalize_base_url(base_url: str | None) -> str | None:
+    if base_url is None:
+        return None
+    stripped = base_url.rstrip("/")
+    if stripped.endswith("/v2"):
+        stripped = stripped[: -len("/v2")]
+    return stripped or None
+
+
 def _client(api_key: str, api_secret: str, base_url: str | None) -> StockHistoricalDataClient:
     return StockHistoricalDataClient(
         api_key=api_key,
         secret_key=api_secret,
-        url_override=base_url,
+        url_override=_normalize_base_url(base_url),
     )
 
 
