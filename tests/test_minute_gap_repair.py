@@ -116,7 +116,7 @@ def test_should_skip_symbol_partial_gap_sets_metadata() -> None:
         partial_df,
         window=(start_local.astimezone(UTC), end_local.astimezone(UTC)),
         tz=tz,
-        max_gap_ratio=0.0,
+        max_gap_ratio=0.2,
     )
 
     assert should_skip is False
@@ -126,6 +126,31 @@ def test_should_skip_symbol_partial_gap_sets_metadata() -> None:
     assert meta["missing_after"] == len(missing)
     assert meta["gap_ratio"] == pytest.approx(len(missing) / expected_local.size)
     assert "skip_flagged" not in meta
+
+
+def test_should_skip_symbol_partial_gap_exceeds_limit(caplog: pytest.LogCaptureFixture) -> None:
+    tz = ZoneInfo("America/New_York")
+    start_local = datetime(2024, 1, 4, 9, 30, tzinfo=tz)
+    end_local = datetime(2024, 1, 4, 16, 0, tzinfo=tz)
+    expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
+    missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
+    partial_df = _build_base_frame(start_local, end_local, missing)
+    partial_df.attrs["symbol"] = "SKIPLIM"
+    fetch_module._SKIP_LOGGED.clear()  # type: ignore[attr-defined]
+    caplog.set_level("INFO")
+
+    should_skip = fetch_module.should_skip_symbol(
+        partial_df,
+        window=(start_local.astimezone(UTC), end_local.astimezone(UTC)),
+        tz=tz,
+        max_gap_ratio=0.01,
+    )
+
+    assert should_skip is True
+    meta = partial_df.attrs.get("_coverage_meta")
+    assert isinstance(meta, dict)
+    assert meta.get("skip_flagged") is True
+    assert "SKIP_SYMBOL_GAP_RATIO_LIMIT" in " ".join(record.msg for record in caplog.records)
 
 
 def test_should_skip_symbol_zero_gap_records_metadata() -> None:

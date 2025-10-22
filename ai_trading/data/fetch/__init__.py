@@ -5307,7 +5307,8 @@ def should_skip_symbol(
         symbol = attrs.get("symbol")
     symbol_str = str(symbol) if symbol else "UNKNOWN"
     catastrophic_gap = math.isclose(gap_ratio, 1.0, rel_tol=0.0, abs_tol=1e-6) or gap_ratio >= 0.999999
-    skip = catastrophic_gap
+    skip_due_to_ratio = gap_ratio > max_gap_ratio if max_gap_ratio is not None else False
+    skip = catastrophic_gap or skip_due_to_ratio
     if skip:
         if coverage_meta is None and isinstance(attrs, dict):
             meta_candidate = attrs.setdefault("_coverage_meta", {})
@@ -5320,13 +5321,23 @@ def should_skip_symbol(
             coverage_meta["expected"] = expected_count
         key = (symbol_str, start.date())
         if key not in _SKIP_LOGGED:
-            logger.warning(
-                "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_ratio=%s",
-                symbol_str,
-                missing_after,
-                expected_count,
-                f"{gap_ratio:.4%}",
-            )
+            if catastrophic_gap:
+                logger.warning(
+                    "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_ratio=%s",
+                    symbol_str,
+                    missing_after,
+                    expected_count,
+                    f"{gap_ratio:.4%}",
+                )
+            else:
+                logger.info(
+                    "SKIP_SYMBOL_GAP_RATIO_LIMIT | symbol=%s missing=%d expected=%d gap_ratio=%s limit=%s",
+                    symbol_str,
+                    missing_after,
+                    expected_count,
+                    f"{gap_ratio:.4%}",
+                    f"{max_gap_ratio:.4%}" if max_gap_ratio is not None else "na",
+                )
             _SKIP_LOGGED.add(key)
     else:
         if isinstance(coverage_meta, dict):
