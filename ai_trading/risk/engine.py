@@ -613,6 +613,26 @@ class RiskEngine:
                 if seq_high is not None and seq_low is not None and seq_close is not None:
                     high, low, close = seq_high, seq_low, seq_close
             if any(x is None for x in (high, low, close)):
+                try:
+                    from ai_trading.data.providers import yfinance_provider  # local import
+
+                    provider_cls = getattr(yfinance_provider, "Provider", None)
+                except Exception:  # pragma: no cover - optional dependency missing
+                    provider_cls = None
+                else:
+                    if provider_cls is not None and isinstance(client, provider_cls):
+                        yf_module = yfinance_provider.get_yfinance()
+                        if yf_module is not None and hasattr(yf_module, "Ticker"):
+                            try:
+                                yf_ticker = yf_module.Ticker(symbol)
+                                base_days = max(int(math.ceil(lookback)), 1)
+                                period_days = max(base_days + 10, base_days + 1, 2)
+                                yf_df = yf_ticker.history(period=f"{period_days}d", interval="1d")
+                            except Exception as exc:  # pragma: no cover - defensive network guard
+                                logger.debug("ATR yfinance fallback failed for %s: %s", symbol, exc)
+                            else:
+                                if yf_df is not None and getattr(yf_df, "empty", True) is False:
+                                    high, low, close = _extract_arrays(yf_df)
                 data = None
                 if ctx is not None:
                     data = getattr(ctx, "minute_data", {}).get(symbol)
@@ -648,13 +668,21 @@ class RiskEngine:
             high = high[-min_len:]
             low = low[-min_len:]
             close = close[-min_len:]
-            if len(high) < lookback + 1 or len(low) < lookback + 1 or len(close) < lookback + 1:
+            if len(high) < lookback or len(low) < lookback or len(close) < lookback:
                 return None
-            tr1 = np.abs(high[1:] - low[1:])
-            tr2 = np.abs(high[1:] - close[:-1])
-            tr3 = np.abs(low[1:] - close[:-1])
-            tr = np.maximum(tr1, np.maximum(tr2, tr3))
-            atr = float(np.mean(tr[-lookback:]))
+            window_start = len(high) - lookback
+            window_high = high[window_start:]
+            window_low = low[window_start:]
+            window_close = close[window_start:]
+            if window_start > 0:
+                prev_close = close[window_start - 1 : window_start - 1 + lookback]
+            else:
+                prev_close = np.concatenate(([window_close[0]], window_close[:-1])) if lookback > 1 else np.array([window_close[0]])
+            tr_high_low = np.abs(window_high - window_low)
+            tr_high_prev = np.abs(window_high - prev_close)
+            tr_low_prev = np.abs(window_low - prev_close)
+            tr = np.maximum.reduce([tr_high_low, tr_high_prev, tr_low_prev])
+            atr = float(np.mean(tr))
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
         except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
