@@ -1905,6 +1905,10 @@ class ExecutionEngine:
             "closing_position": closing_position,
             "account_snapshot": getattr(self, "_cycle_account", None),
         }
+        if precheck_order["account_snapshot"] is None:
+            if not self.is_initialized and not self._ensure_initialized():
+                return None
+            precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
         if not self._pre_execution_order_checks(precheck_order):
             return None
 
