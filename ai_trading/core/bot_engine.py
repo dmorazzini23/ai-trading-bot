@@ -7677,7 +7677,7 @@ def chunked(iterable: Sequence, n: int):
 
 
 def ttl_seconds() -> int:
-    """Configurable TTL for minute-bar cache (default 60s)."""
+    """Configurable TTL for minute-bar cache (default 300s)."""
     return CFG.minute_cache_ttl
 
 

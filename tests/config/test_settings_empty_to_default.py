@@ -31,3 +31,13 @@ def test_empty_env_paths_use_defaults(monkeypatch, env_var, expected):
     }[env_var]
     assert getattr(s, attr) == expected
 
+
+def test_cache_ttls_default(monkeypatch):
+    monkeypatch.delenv("MINUTE_CACHE_TTL", raising=False)
+    monkeypatch.delenv("MARKET_CACHE_TTL", raising=False)
+    from ai_trading.settings import Settings
+
+    s = Settings()
+    assert s.minute_cache_ttl == 300
+    assert s.market_cache_ttl == 86400
+
