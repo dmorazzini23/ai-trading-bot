@@ -7717,6 +7717,30 @@ def to_trade_signal(sig: Any):
     )
 
 
+def _signal_strength_threshold(ctx: Any) -> float:
+    """Resolve the minimum absolute signal strength required for execution."""
+
+    candidates: list[Any] = []
+    params_obj = getattr(ctx, "params", None)
+    if isinstance(params_obj, MappingABC):
+        candidates.append(params_obj.get("MIN_SIGNAL_STRENGTH"))
+    cfg_obj = getattr(ctx, "cfg", None)
+    if cfg_obj is not None:
+        candidates.append(getattr(cfg_obj, "min_signal_strength", None))
+    candidates.append(getattr(ctx, "min_signal_strength", None))
+    candidates.append(MIN_SIGNAL_STRENGTH)
+    for candidate in candidates:
+        if candidate in (None, ""):
+            continue
+        try:
+            value = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if value >= 0:
+            return value
+    return 0.0
+
+
 MAX_VOL_FETCH_RETRIES = 3
 # Default lookback for daily bar requests (~1.5 years to cover 252 trading days)
 DEFAULT_DAILY_LOOKBACK_DAYS = 400
@@ -22329,6 +22353,7 @@ def run_multi_strategy(ctx) -> None:
         return
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
+    strength_threshold = _signal_strength_threshold(ctx)
     for sig in final:
         sig = to_trade_signal(sig)
         minute_df: pd.DataFrame | None = None
@@ -22450,6 +22475,24 @@ def run_multi_strategy(ctx) -> None:
             logger.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
             continue
 
+        try:
+            strength = float(getattr(sig, "strength", 0.0))
+        except (TypeError, ValueError):
+            strength = 0.0
+
+        if abs(strength) < strength_threshold:
+            logger.info(
+                "SIGNAL_STRENGTH_REJECTED",
+                extra={
+                    "symbol": sig.symbol,
+                    "side": sig.side,
+                    "strategy": getattr(sig, "strategy", "unknown"),
+                    "signal_strength": strength,
+                    "threshold": strength_threshold,
+                },
+            )
+            continue
+
         # AI-AGENT-REF: Add validation and logging for signal processing
         logger.debug(
             "PROCESSING_SIGNAL",
@@ -22459,6 +22502,8 @@ def run_multi_strategy(ctx) -> None:
                 "confidence": sig.confidence,
                 "strategy": getattr(sig, "strategy", "unknown"),
                 "weight": getattr(sig, "weight", 0.0),
+                "signal_strength": strength,
+                "strength_threshold": strength_threshold,
             },
         )
 
@@ -22472,9 +22517,22 @@ def run_multi_strategy(ctx) -> None:
                     "qty": qty,
                     "cash": cash,
                     "price": price,
+                    "signal_strength": strength,
+                    "threshold": strength_threshold,
                 },
             )
             continue
+
+        logger.debug(
+            "RISK_MANAGER_APPROVED",
+            extra={
+                "symbol": sig.symbol,
+                "side": sig.side,
+                "qty": qty,
+                "signal_strength": strength,
+                "threshold": strength_threshold,
+            },
+        )
 
         # AI-AGENT-REF: Validate signal side before execution to catch any corruption
         if sig.side not in ["buy", "sell"]:
@@ -22490,7 +22548,15 @@ def run_multi_strategy(ctx) -> None:
 
         logger.info(
             "EXECUTING_ORDER",
-            extra={"symbol": sig.symbol, "side": sig.side, "qty": qty, "price": price},
+            extra={
+                "symbol": sig.symbol,
+                "side": sig.side,
+                "qty": qty,
+                "price": price,
+                "signal_strength": strength,
+                "threshold": strength_threshold,
+                "confidence": sig.confidence,
+            },
         )
 
         try:

@@ -1530,6 +1530,9 @@ class ExecutionEngine:
                 except Exception:
                     price_hint = None
 
+        resolved_tif = self._resolve_time_in_force(kwargs.get("time_in_force"))
+        kwargs["time_in_force"] = resolved_tif
+
         precheck_order = {
             "symbol": symbol,
             "side": side_lower,
@@ -1541,6 +1544,7 @@ class ExecutionEngine:
             "using_fallback_price": using_fallback_price,
             "closing_position": closing_position,
             "account_snapshot": getattr(self, "_cycle_account", None),
+            "time_in_force": resolved_tif,
         }
 
         if precheck_order["account_snapshot"] is None:
@@ -1558,7 +1562,7 @@ class ExecutionEngine:
             "side": side_lower,
             "quantity": quantity,
             "type": "market",
-            "time_in_force": kwargs.get("time_in_force", "day"),
+            "time_in_force": resolved_tif,
             "client_order_id": client_order_id,
         }
         # Optional bracket fields (ATR-based levels should be passed in by caller)
@@ -1632,6 +1636,20 @@ class ExecutionEngine:
         if capacity.suggested_qty != quantity:
             quantity = capacity.suggested_qty
             order_data["quantity"] = quantity
+
+        logger.debug(
+            "ORDER_PREFLIGHT_READY",
+            extra={
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "order_type": "market",
+                "time_in_force": resolved_tif,
+                "closing_position": closing_position,
+                "using_fallback_price": using_fallback_price,
+                "client_order_id": client_order_id,
+            },
+        )
 
         if not closing_position and account_snapshot:
             pattern_attr = _extract_value(
@@ -1893,6 +1911,9 @@ class ExecutionEngine:
                 except Exception:
                     price_hint = None
 
+        resolved_tif = self._resolve_time_in_force(kwargs.get("time_in_force"))
+        kwargs["time_in_force"] = resolved_tif
+
         precheck_order = {
             "symbol": symbol,
             "side": side_lower,
@@ -1904,6 +1925,7 @@ class ExecutionEngine:
             "using_fallback_price": using_fallback_price,
             "closing_position": closing_position,
             "account_snapshot": getattr(self, "_cycle_account", None),
+            "time_in_force": resolved_tif,
         }
         if precheck_order["account_snapshot"] is None:
             if not self.is_initialized and not self._ensure_initialized():
@@ -1922,7 +1944,7 @@ class ExecutionEngine:
             "quantity": quantity,
             "type": "limit",
             "limit_price": limit_price,
-            "time_in_force": kwargs.get("time_in_force", "day"),
+            "time_in_force": resolved_tif,
             "client_order_id": client_order_id,
         }
         # Optional bracket fields
@@ -1999,6 +2021,21 @@ class ExecutionEngine:
         if capacity.suggested_qty != quantity:
             quantity = capacity.suggested_qty
             order_data["quantity"] = quantity
+
+        logger.debug(
+            "ORDER_PREFLIGHT_READY",
+            extra={
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "order_type": "limit",
+                "time_in_force": resolved_tif,
+                "closing_position": closing_position,
+                "using_fallback_price": using_fallback_price,
+                "client_order_id": client_order_id,
+                "limit_price": None if limit_price is None else float(limit_price),
+            },
+        )
 
         if not closing_position and account_snapshot:
             pattern_attr = _extract_value(
@@ -2888,6 +2925,44 @@ class ExecutionEngine:
 
         return True
 
+    def _resolve_time_in_force(self, requested: Any | None = None) -> str:
+        """Return normalized time-in-force token for outgoing orders."""
+
+        valid_tokens = {
+            "day",
+            "gtc",
+            "opg",
+            "cls",
+            "ioc",
+            "fok",
+        }
+
+        def _normalize(value: Any | None) -> str | None:
+            if value in (None, ""):
+                return None
+            try:
+                text = str(value).strip().lower()
+            except Exception:
+                return None
+            if not text:
+                return None
+            if text not in valid_tokens:
+                return None
+            return text
+
+        candidates: tuple[Any | None, ...] = (
+            requested,
+            getattr(getattr(self, "settings", None), "time_in_force", None),
+            getattr(getattr(self, "config", None), "time_in_force", None),
+            os.getenv("EXECUTION_TIME_IN_FORCE"),
+            os.getenv("ALPACA_TIME_IN_FORCE"),
+        )
+        for candidate in candidates:
+            normalized = _normalize(candidate)
+            if normalized is not None:
+                return normalized
+        return "gtc"
+
     def _evaluate_pdt_preflight(
         self,
         order: Mapping[str, Any],
@@ -3351,9 +3426,30 @@ class ExecutionEngine:
 
         # If bracket requested, call submit_order with keyword args to pass nested structures
         order_type = str(order_data.get("type", "limit")).lower()
+        tif_token = self._resolve_time_in_force(order_data.get("time_in_force"))
+        order_data["time_in_force"] = tif_token
+        alpaca_payload = dict(order_data)
+        qty_payload = alpaca_payload.get("quantity")
+        if qty_payload is not None:
+            alpaca_payload["qty"] = qty_payload
+            alpaca_payload.pop("quantity", None)
+        if isinstance(alpaca_payload.get("time_in_force"), str):
+            alpaca_payload["time_in_force"] = str(alpaca_payload["time_in_force"]).lower()
         market_cls, limit_cls, side_enum, tif_enum = _ensure_request_models()
         if side_enum is None or tif_enum is None or market_cls is None or limit_cls is None:
             raise RuntimeError("Alpaca request models unavailable")
+        logger.info(
+            "ALPACA_ORDER_SUBMIT_ATTEMPT",
+            extra={
+                "symbol": order_data.get("symbol"),
+                "side": order_data.get("side"),
+                "qty": qty_payload,
+                "order_type": order_type,
+                "time_in_force": tif_token,
+                "client_order_id": order_data.get("client_order_id"),
+                "closing_position": closing_position,
+            },
+        )
         try:
             if resp is None:
                 if os.environ.get("PYTEST_RUNNING"):
@@ -3368,19 +3464,29 @@ class ExecutionEngine:
                         "client_order_id": mock_id,
                     }
                 elif order_data.get("order_class"):
-                    resp = self.trading_client.submit_order(**order_data)
+                    resp = self.trading_client.submit_order(**alpaca_payload)
                 else:
                     side = (
                         side_enum.BUY
                         if str(order_data["side"]).lower() == "buy"
                         else side_enum.SELL
                     )
-                    tif = tif_enum.DAY
+                    tif_member = tif_enum.DAY
+                    tif_lookup = str(tif_token).strip().upper()
+                    if tif_lookup:
+                        candidate = getattr(tif_enum, tif_lookup, None)
+                        if candidate is None:
+                            try:
+                                candidate = tif_enum[tif_lookup]  # type: ignore[index]
+                            except Exception:
+                                candidate = None
+                        if candidate is not None:
+                            tif_member = candidate
                     common_kwargs = {
                         "symbol": order_data["symbol"],
                         "qty": order_data["quantity"],
                         "side": side,
-                        "time_in_force": tif,
+                        "time_in_force": tif_member,
                         "client_order_id": order_data.get("client_order_id"),
                     }
                     asset_class = order_data.get("asset_class")
@@ -3413,7 +3519,7 @@ class ExecutionEngine:
                     "qty": order_data.get("quantity"),
                     "side": order_data.get("side"),
                     "type": order_data.get("type"),
-                    "time_in_force": "day",
+                    "time_in_force": tif_token,
                 },
             )
             raise
