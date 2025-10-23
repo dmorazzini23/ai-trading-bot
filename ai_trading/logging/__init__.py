@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
@@ -1227,6 +1227,62 @@ def warn_finnhub_disabled_no_data(
     )
 
 
+def _safe_context_payload(context: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """Return a logging-safe mapping for structured context payloads."""
+
+    if not context:
+        return {}
+    try:
+        return sanitize_extra(dict(context))
+    except COMMON_EXC:
+        return {}
+
+
+def log_pdt_enforcement(
+    *,
+    blocked: bool,
+    reason: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    """Log a standardized PDT enforcement decision."""
+
+    payload: dict[str, Any] = {"blocked": bool(blocked)}
+    if reason:
+        payload["reason"] = reason
+    safe_context = _safe_context_payload(context)
+    if safe_context:
+        payload["context"] = safe_context
+    level = logging.WARNING if blocked else logging.INFO
+    get_logger("ai_trading.execution.pdt").log(level, "PDT_ENFORCEMENT", extra=payload)
+
+
+def log_data_quality_event(
+    event: str,
+    *,
+    provider: str,
+    severity: str = "warning",
+    reason: str | None = None,
+    symbols: Iterable[str] | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    """Emit a normalized data-quality log entry with sanitized context."""
+
+    payload: dict[str, Any] = {"event": event, "provider": provider}
+    if reason:
+        payload["reason"] = reason
+    if symbols:
+        try:
+            payload["symbols"] = sorted({sym.strip().upper() for sym in symbols if sym})
+        except COMMON_EXC:
+            pass
+    safe_context = _safe_context_payload(context)
+    if safe_context:
+        payload["context"] = safe_context
+    level_lookup = {"info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
+    level = level_lookup.get(str(severity).lower(), logging.WARNING)
+    get_logger("ai_trading.data_quality").log(level, "DATA_QUALITY_EVENT", extra=payload)
+
+
 def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | None = None, **extra: Any) -> None:
     """Log a market data fetch attempt and its outcome.
 
@@ -1738,6 +1794,8 @@ __all__ = [
     "log_trading_event",
     "log_finnhub_disabled",
     "warn_finnhub_disabled_no_data",
+    "log_pdt_enforcement",
+    "log_data_quality_event",
     "log_compact_json",
     "log_market_fetch",
     "setup_enhanced_logging",

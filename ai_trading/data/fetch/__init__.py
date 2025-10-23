@@ -54,15 +54,16 @@ from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import (
-    log_throttled_event,
+    get_logger,
     log_backup_provider_used,
+    log_data_quality_event,
     log_empty_retries_exhausted,
     log_fetch_attempt,
     log_finnhub_disabled,
+    log_throttled_event,
     provider_log_deduper,
     record_provider_log_suppressed,
     warn_finnhub_disabled_no_data,
-    get_logger,
 )
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
@@ -133,6 +134,7 @@ from ai_trading.data.metrics import (
     provider_disable_total,
 )
 from ai_trading.data.provider_monitor import (
+    activate_data_kill_switch,
     provider_monitor,
     record_minute_gap_event,
     record_unauthorized_sip_event,
@@ -894,6 +896,32 @@ _YF_INTERVAL_MAP = {
 }
 
 
+def _data_fallback_allowed() -> bool:
+    """Return ``True`` when backup data providers are explicitly permitted."""
+
+    explicit: bool | None
+    try:
+        explicit = get_env("AI_TRADING_ALLOW_DATA_FALLBACK", None, cast=bool)
+    except Exception:
+        explicit = None
+    if explicit is not None:
+        return bool(explicit)
+
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        try:
+            max_fallbacks = int(getattr(settings, "max_data_fallbacks", 0) or 0)
+        except (TypeError, ValueError):
+            max_fallbacks = 0
+        if max_fallbacks > 0:
+            return True
+
+    return False
+
+
 def fetch_daily_backup(
     symbols: Iterable[str], *, start: Any | None = None, end: Any | None = None, period: str = "1y"
 ) -> dict[str, pd.DataFrame]:
@@ -908,6 +936,30 @@ def fetch_daily_backup(
         if normalized is None or normalized.empty:  # type: ignore[truthy-bool]
             continue
         filtered[symbol] = normalized
+    if not filtered:
+        return filtered
+
+    try:
+        backup_provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+    except Exception:
+        backup_provider = "yahoo"
+    metadata = {"symbols": sorted(filtered.keys())}
+    if not _data_fallback_allowed():
+        activate_data_kill_switch(
+            "backup_provider_blocked",
+            provider=str(backup_provider or "yahoo"),
+            metadata=metadata,
+        )
+        return {}
+
+    log_data_quality_event(
+        "backup_provider_used",
+        provider=str(backup_provider or "yahoo"),
+        severity="warning",
+        reason="primary_data_unavailable",
+        symbols=filtered.keys(),
+        context=metadata,
+    )
     return filtered
 
 

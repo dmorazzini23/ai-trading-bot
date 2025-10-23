@@ -100,6 +100,7 @@ from ai_trading.utils import health_check as _health_check
 from ai_trading.utils.env import alpaca_credential_status
 from ai_trading.logging import (
     flush_log_throttle_summaries,
+    log_data_quality_event,
     log_throttled_event,
     logger_once,
 )
@@ -697,6 +698,7 @@ from ai_trading.config.settings import (
     sentiment_backoff_strategy,
 )
 from ai_trading.data.provider_monitor import (
+    activate_data_kill_switch,
     is_safe_mode_active,
     provider_monitor,
     safe_mode_reason,
@@ -20519,6 +20521,23 @@ def screen_universe(
                     )
                 return []
 
+            try:
+                screen_settings = get_settings()
+            except Exception:
+                screen_settings = None
+            try:
+                min_signal_strength = float(
+                    getattr(screen_settings, "screen_min_signal_strength", MIN_SIGNAL_STRENGTH)
+                )
+            except (TypeError, ValueError):
+                min_signal_strength = float(MIN_SIGNAL_STRENGTH)
+            try:
+                min_liquidity = float(getattr(screen_settings, "screen_min_avg_volume", 250_000))
+            except (TypeError, ValueError):
+                min_liquidity = 250_000.0
+            min_signal_strength = max(0.0, min_signal_strength)
+            min_liquidity = max(0.0, min_liquidity)
+
             for sym in list(_SCREEN_CACHE):
                 if sym not in cand_set:
                     _SCREEN_CACHE.pop(sym, None)
@@ -20618,6 +20637,57 @@ def screen_universe(
                         filtered_out[sym] = "low_volume"
                         logger.debug(
                             f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
+                        )
+                        time.sleep(0.1)
+                        continue
+
+                    try:
+                        avg_volume = float(
+                            pd.to_numeric(df["volume"].tail(20), errors="coerce").dropna().mean() or 0.0
+                        )
+                    except Exception:
+                        avg_volume = 0.0
+                    if avg_volume < min_liquidity:
+                        failed += 1
+                        filtered_out[sym] = "liquidity_below_threshold"
+                        log_data_quality_event(
+                            "screen_filter",
+                            provider="alpaca",
+                            severity="info",
+                            reason="liquidity_below_threshold",
+                            symbols=[sym],
+                            context={"avg_volume": avg_volume, "threshold": min_liquidity},
+                        )
+                        logger.debug(
+                            "[SCREEN_UNIVERSE] %s: avg volume %.0f below threshold %.0f",
+                            sym,
+                            avg_volume,
+                            min_liquidity,
+                        )
+                        time.sleep(0.1)
+                        continue
+
+                    signal_strength = 0.0
+                    try:
+                        signal_strength = float(df["close"].pct_change(5, fill_method=None).iloc[-1])
+                    except Exception:
+                        signal_strength = 0.0
+                    if abs(signal_strength) < min_signal_strength:
+                        failed += 1
+                        filtered_out[sym] = "signal_weak"
+                        log_data_quality_event(
+                            "screen_filter",
+                            provider="alpaca",
+                            severity="info",
+                            reason="signal_weak",
+                            symbols=[sym],
+                            context={"signal_strength": signal_strength, "threshold": min_signal_strength},
+                        )
+                        logger.debug(
+                            "[SCREEN_UNIVERSE] %s: signal %.4f below threshold %.4f",
+                            sym,
+                            signal_strength,
+                            min_signal_strength,
                         )
                         time.sleep(0.1)
                         continue
@@ -21714,6 +21784,13 @@ def _synthetic_quote_decision(
         "age_sec": 0.0,
     }
     logger.warning("QUOTE_GATE_SYNTHETIC_FALLBACK", extra=details)
+    log_data_quality_event(
+        "synthetic_quote",
+        provider="alpaca",
+        severity="warning",
+        reason=reason or "synthetic_quote",
+        context=details,
+    )
     return QuoteGateDecision(True, None, details)
 
 
@@ -21787,6 +21864,11 @@ def _ensure_executable_quote(
         decision_reason = fallback_reason or "missing_bid_ask"
         if decision_reason == "missing_bid_ask":
             details.setdefault("fallback_reason", decision_reason)
+        activate_data_kill_switch(
+            decision_reason,
+            provider="alpaca",
+            metadata={"symbol": symbol, **details},
+        )
         return QuoteGateDecision(False, decision_reason, details)
 
     gate_decision = _evaluate_quote_gate(

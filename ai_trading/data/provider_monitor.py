@@ -24,6 +24,7 @@ from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
 from ai_trading.logging import (
     get_logger,
+    log_data_quality_event,
     log_throttled_event,
     provider_log_deduper,
     record_provider_log_suppressed,
@@ -267,6 +268,41 @@ def safe_mode_reason() -> str | None:
     """Return the most recent safe-mode trigger reason, if any."""
 
     return _SAFE_MODE_REASON
+
+
+def activate_data_kill_switch(
+    reason: str,
+    *,
+    provider: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    """Trigger provider safe mode due to a data-quality violation."""
+
+    payload: dict[str, Any] = {"provider": provider, "reason": reason}
+    if metadata:
+        payload.update({k: v for k, v in metadata.items() if k not in payload})
+    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
+        log_data_quality_event(
+            "kill_switch",
+            provider=provider,
+            severity="warning",
+            reason=reason,
+            context=payload,
+        )
+        return
+    dedupe_key = f"kill_switch:{provider}:{reason}"
+    if provider_log_deduper.should_log(dedupe_key, _DEFAULT_SWITCH_QUIET_SECONDS):
+        log_data_quality_event(
+            "kill_switch",
+            provider=provider,
+            severity="error",
+            reason=reason,
+            context=payload,
+        )
+    else:
+        record_provider_log_suppressed(dedupe_key)
+    logger.error("DATA_KILL_SWITCH_ACTIVATED", extra=payload)
+    _trigger_provider_safe_mode(f"data_quality:{reason}", count=1, metadata=payload)
 
 
 def _trigger_provider_safe_mode(
@@ -1509,6 +1545,7 @@ __all__ = [
     "decide_provider_action",
     "is_safe_mode_active",
     "safe_mode_reason",
+    "activate_data_kill_switch",
     "record_unauthorized_sip_event",
     "record_minute_gap_event",
 ]
