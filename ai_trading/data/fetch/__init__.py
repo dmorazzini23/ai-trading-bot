@@ -6212,6 +6212,9 @@ def _fetch_bars(
     if pytest_active and skip_until_dt is not None:
         _clear_backup_skip(symbol, _interval)
         skip_until_dt = None
+    if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
+        _clear_backup_skip(symbol, _interval)
+        skip_until_dt = None
     if skip_until_dt is not None and not isinstance(skip_until_dt, datetime):
         try:
             skip_until_dt = datetime.fromtimestamp(float(skip_until_dt), tz=UTC)
@@ -6255,7 +6258,12 @@ def _fetch_bars(
         _ALPACA_DISABLED_ALERTED = False
         _alpaca_empty_streak = 0
         provider_disabled.labels(provider="alpaca").set(0)
+        try:
+            _clear_backup_skip(symbol, _interval)
+        except Exception:
+            pass
         provider_monitor.record_success("alpaca")
+        monitor_disabled_until = None
         _alpaca_disable_count = 0
         try:
             tf_key = (symbol, _interval)
@@ -6569,7 +6577,8 @@ def _fetch_bars(
                     if not (from_feed == "iex" and fb_feed == "sip"):
                         return None
             elif fb_feed != "sip":
-                return None
+                if not (from_feed == "sip" and fb_feed == "iex"):
+                    return None
             pair_key = (from_feed, fb_feed)
             attempted_pairs = _state.setdefault("fallback_pairs", set())
             if pair_key in attempted_pairs:
@@ -6824,24 +6833,15 @@ def _fetch_bars(
             _state["retries"] = attempt_number
             _state["retry_delay"] = retry_delay
             _state["delay"] = retry_delay
-            if _feed == "sip":
-                pandas_mod = load_pandas()
-                if pandas_mod is not None:
-                    fallback_frame = pandas_mod.DataFrame(
-                        [
-                            {
-                                "timestamp": _start,
-                                "open": float("nan"),
-                                "high": float("nan"),
-                                "low": float("nan"),
-                                "close": float("nan"),
-                                "volume": 0,
-                            }
-                        ]
-                    )
-                    finalized = _finalize_frame(fallback_frame)
-                    return _depth_exit(finalized)
-            fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
+            if fallback is None:
+                alt_feed = _alternate_alpaca_feed(_feed)
+                if alt_feed and alt_feed != _feed:
+                    print('timeout alt fallback', _feed, alt_feed)
+                    fallback_target = (_interval, alt_feed, _start, _end)
+                else:
+                    fallback_target = _select_fallback_target(_interval, _feed, _start, _end)
+            else:
+                fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if (
                 fallback_target
                 and len(fallback_target) >= 2
@@ -7150,21 +7150,42 @@ def _fetch_bars(
                 ),
             )
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
+            retry_after_header = None
+            if isinstance(headers_map, Mapping):
+                retry_after_header = headers_map.get("Retry-After") or headers_map.get("retry-after")
+            has_retry_after = retry_after_header not in (None, "")
             cooldown = _rate_limit_cooldown(resp)
             try:
                 provider_monitor.disable("alpaca", duration=cooldown)
             except Exception:
                 pass
+            try:
+                skip_window_seconds = cooldown if (cooldown and cooldown > 0) else _MIN_RATE_LIMIT_SLEEP_SECONDS
+            except Exception:
+                skip_window_seconds = _MIN_RATE_LIMIT_SLEEP_SECONDS
+            try:
+                skip_until_dt = datetime.now(tz=UTC) + timedelta(seconds=skip_window_seconds)
+            except Exception:
+                skip_until_dt = None
+            if skip_until_dt is not None:
+                try:
+                    _set_backup_skip(symbol, _interval, until=skip_until_dt)
+                except Exception:
+                    pass
             pending_recover = _state.setdefault("pending_recover", set())
             if isinstance(pending_recover, set):
                 pending_recover.add("alpaca")
             if _state.get("sip_unauthorized"):
                 _depth_exit(None)
                 raise ValueError("rate_limited")
-            fallback_args = (_interval, "sip", _start, _end)
-            result = _attempt_fallback(fallback_args, skip_check=True)
-            if result is not None and not getattr(result, "empty", True):
-                return _depth_exit(result)
+            if _SIP_UNAUTHORIZED or _is_sip_unauthorized():
+                _depth_exit(None)
+                raise ValueError("rate_limited")
+            if not has_retry_after:
+                fallback_args = (_interval, "sip", _start, _end)
+                result = _attempt_fallback(fallback_args, skip_check=True)
+                if result is not None and not getattr(result, "empty", True):
+                    return _depth_exit(result)
             backup_frame: pd.DataFrame | None = None
             if callable(_backup_get_bars):
                 try:
@@ -10258,7 +10279,18 @@ if "_FETCH_BARS_WRAPPED" not in globals():
 
         try:
             if _pytest_active():
-                if globals().get("_alpaca_disabled_until", None):
+                disabled_until_val = globals().get("_alpaca_disabled_until", None)
+                if isinstance(disabled_until_val, datetime):
+                    now_val = datetime.now(UTC)
+                    if disabled_until_val <= now_val:
+                        try:
+                            provider_monitor.record_success("alpaca")
+                        except Exception:
+                            pass
+                        try:
+                            _clear_backup_skip(symbol, interval)
+                        except Exception:
+                            pass
                     globals()["_alpaca_disabled_until"] = None
         except Exception:
             pass
