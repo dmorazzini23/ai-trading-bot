@@ -8628,6 +8628,7 @@ def _fetch_bars(
                     }
                 ),
             )
+            yahoo_allowed = False
         if y_int and yahoo_allowed and ("yahoo" in priority or force_yahoo):
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
