@@ -25,7 +25,7 @@ import ai_trading.logging as _logging
 from ai_trading.paths import LOG_DIR, ensure_runtime_paths
 from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
 from ai_trading.data.fetch import DataFetchError, EmptyBarsError
-from ai_trading.execution.live_trading import NonRetryableBrokerError
+from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
 from ai_trading.utils.datetime import ensure_datetime
 
 
@@ -504,7 +504,7 @@ def run_cycle() -> None:
 
     try:
         run_all_trades_worker(state, runtime)
-    except (EmptyBarsError, DataFetchError, NonRetryableBrokerError) as exc:
+    except (EmptyBarsError, DataFetchError, NonRetryableBrokerError, APIError) as exc:
         logger.warning(
             "WARMUP_SYMBOL_ERRORS_TOLERATED",
             extra={"error": str(exc), "exc_type": exc.__class__.__name__},
@@ -1431,6 +1431,7 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("STARTUP_BANNER", extra=_redact(banner))
     _install_signal_handlers()
     ensure_trade_log_path()
+    warmup_ok = True
     try:
         run_cycle()
     except (TypeError, ValueError) as e:
@@ -1445,13 +1446,22 @@ def main(argv: list[str] | None = None) -> None:
             exc_info=e,
         )
         raise
+    except (NonRetryableBrokerError, DataFetchError, EmptyBarsError, APIError, ConnectionError, TimeoutError) as e:
+        warmup_ok = False
+        logger.warning(
+            "WARMUP_RECOVERED",
+            extra={"error": str(e), "exc_type": e.__class__.__name__},
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception(
             "Warm-up run_cycle failed unexpectedly; shutting down",
             exc_info=e,
         )
         raise SystemExit(1) from e
-    logger.info("Warm-up run_cycle completed")
+    else:
+        logger.info("Warm-up run_cycle completed")
+    if not warmup_ok:
+        logger.info("Warm-up run_cycle completed with recovery")
     _reset_warmup_cooldown_timestamp()
     api_ready = threading.Event()
     api_error = threading.Event()

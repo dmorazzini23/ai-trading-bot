@@ -167,6 +167,20 @@ def _parse_price_provider_order(raw: str) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _parse_order_flip_mode(raw: str) -> str:
+    """Normalize ORDER_FLIP_MODE policy from environment."""
+
+    value = _strip_inline_comment(raw).strip().lower()
+    if not value:
+        return "cancel_then_submit"
+    allowed = {"cancel_then_submit", "cover_then_long", "skip"}
+    if value not in allowed:
+        raise ValueError(
+            "ORDER_FLIP_MODE must be one of: cancel_then_submit, cover_then_long, skip"
+        )
+    return value
+
+
 CastFn = Callable[[str], Any]
 
 
@@ -508,6 +522,35 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="bool",
         default=True,
         description="Allow fallback pricing sources when primary NBBO quotes are unavailable.",
+    ),
+    ConfigSpec(
+        field="order_flip_mode",
+        env=("ORDER_FLIP_MODE",),
+        cast=_parse_order_flip_mode,
+        default="cancel_then_submit",
+        description="Policy for resolving opposite-side order conflicts.",
+    ),
+    ConfigSpec(
+        field="alpaca_fallback_ttl_seconds",
+        env=("ALPACA_FALLBACK_TTL_SECONDS",),
+        cast="int",
+        default=120,
+        description="Cooldown window before retrying Alpaca as primary data feed after fallback.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="data_drop_last_partial_bar",
+        env=("DATA_DROP_LAST_PARTIAL_BAR",),
+        cast="bool",
+        default=True,
+        description="Drop incomplete intraday bars with missing close data before use.",
+    ),
+    ConfigSpec(
+        field="nbbo_required_for_limit",
+        env=("NBBO_REQUIRED_FOR_LIMIT",),
+        cast="bool",
+        default=False,
+        description="Require NBBO quotes for limit pricing; fallback to last trade when false.",
     ),
     ConfigSpec(
         field="execution_stale_ratio_shadow",
