@@ -863,6 +863,18 @@ class ProviderMonitor:
         )
         diagnostics["projected_cooldown"] = projected_cooldown
         logger.warning("DATA_PROVIDER_FAILURE_DIAGNOSTIC", extra=diagnostics)
+        normalized = _normalize_provider(provider)
+        canonical = canonical_provider(normalized)
+        if canonical == "yahoo" and reason in {"empty", "invalid_payload", "nan_close", "close_column_all_nan"}:
+            if not self.is_disabled(normalized):
+                cooldown_hint = max(float(self.cooldown), 60.0)
+                try:
+                    self.disable(normalized, duration=cooldown_hint, reason="backup_quality")
+                except Exception:  # pragma: no cover - defensive
+                    logger.exception(
+                        "PROVIDER_DISABLE_FAILED",
+                        extra={"provider": normalized, "reason": reason},
+                    )
         if count >= self.threshold:
             extra = {"provider": provider, "reason": reason, "count": count}
             if error:
