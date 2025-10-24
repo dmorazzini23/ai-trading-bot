@@ -1,14 +1,18 @@
 from __future__ import annotations
 from ai_trading.logging import get_logger
 import math
+import builtins
+import os
 import random
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
-import numpy as np
 import importlib
+import sys
+from typing import Any
+
+import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
 from ai_trading.utils.time import monotonic_time
@@ -34,10 +38,9 @@ from ai_trading.config.management import (
     _resolve_alpaca_env,
     validate_required_env,
 )
-from ai_trading.config.settings import get_settings
+from ai_trading.config.settings import get_settings, _secret_to_str
 from ai_trading.settings import (
     POSITION_SIZE_MIN_USD_DEFAULT,
-    get_alpaca_secret_key_plain,
     get_position_size_min_usd,
 )
 
@@ -155,15 +158,24 @@ def _safe_call(fn, *a, **k):
         return None
 
 
-@dataclass
-class TradeSignal:
-    symbol: str
-    side: str
-    confidence: float
-    strategy: str
-    weight: float
-    asset_class: str
-    strength: float = 1.0
+_TRADE_SIGNAL_SENTINEL = "_AI_TRADING_TRADE_SIGNAL_CLASS"
+_existing_trade_signal = getattr(builtins, _TRADE_SIGNAL_SENTINEL, None)
+
+if isinstance(_existing_trade_signal, type):
+    TradeSignal = _existing_trade_signal
+else:
+
+    @dataclass
+    class TradeSignal:
+        symbol: str
+        side: str
+        confidence: float
+        strategy: str
+        weight: float
+        asset_class: str
+        strength: float = 1.0
+
+    setattr(builtins, _TRADE_SIGNAL_SENTINEL, TradeSignal)
 
 
 logger = get_logger(__name__)
@@ -211,14 +223,37 @@ class RiskEngine:
         self.data_client = None
         try:
             cfg_key, cfg_secret, _ = _resolve_alpaca_env()
-            api_key = cfg_key or getattr(settings, "alpaca_api_key", None)
-            secret = cfg_secret or get_alpaca_secret_key_plain()
-            oauth = get_env("ALPACA_OAUTH")
-            has_keypair = bool(api_key and secret)
-            if has_keypair and oauth:
+
+            def _pick_credential(*values: Any) -> str | None:
+                for value in values:
+                    normalized = _secret_to_str(value)
+                    if not normalized:
+                        continue
+                    cleaned = normalized.strip()
+                    if cleaned:
+                        return cleaned
+                return None
+
+            env_api_key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+            env_secret_key = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+
+            api_key = _pick_credential(env_api_key, cfg_key)
+            secret_key = _pick_credential(env_secret_key, cfg_secret)
+
+            oauth_raw = get_env("ALPACA_OAUTH")
+            oauth = _secret_to_str(oauth_raw)
+            oauth = oauth.strip() if isinstance(oauth, str) else oauth
+
+            if oauth and (api_key or secret_key):
                 raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
-            if has_keypair:
-                self.data_client = StockHistoricalDataClient(api_key=api_key, secret_key=secret)
+
+            if api_key or secret_key:
+                credentials: dict[str, str] = {}
+                if api_key:
+                    credentials["api_key"] = api_key
+                if secret_key:
+                    credentials["secret_key"] = secret_key
+                self.data_client = StockHistoricalDataClient(**credentials)
             elif oauth:
                 self.data_client = StockHistoricalDataClient(oauth_token=oauth)
         except (APIError, TypeError, AttributeError, OSError, ImportError) as e:
