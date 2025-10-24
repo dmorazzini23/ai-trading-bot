@@ -3011,8 +3011,6 @@ class ExecutionEngine:
             ],
         }
         logger.warning("ORDER_CONFLICT_OPPOSITE_SIDE", extra=conflict_extra)
-        canceled_ids = self._cancel_opposite_orders(opposite_orders, symbol, normalized_side)
-        conflict_extra["canceled_order_ids"] = tuple(canceled_ids)
         if policy == "skip":
             logger.info("ORDER_FLIP_POLICY_SKIP", extra=conflict_extra)
             return False, {
@@ -3021,6 +3019,8 @@ class ExecutionEngine:
                 "policy": policy,
                 "symbol": symbol,
             }
+        canceled_ids = self._cancel_opposite_orders(opposite_orders, symbol, normalized_side)
+        conflict_extra["canceled_order_ids"] = tuple(canceled_ids)
         if policy == "cover_then_long" and normalized_side == "buy":
             self._submit_cover_order(symbol, quantity)
         return True, None
