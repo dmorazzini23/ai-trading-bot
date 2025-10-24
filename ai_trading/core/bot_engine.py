@@ -22022,17 +22022,19 @@ def _log_price_source(
     ask: float | None = None,
     mid: float | None = None,
 ) -> None:
+    message = f"QUOTE_SOURCE_{source.upper()}"
     logger.info(
-        "ORDER_PRICE_SOURCE | symbol=%s source=%s reason=%s limit=%.6f bid=%s ask=%s mid=%s side=%s slippage_bps=%.4f",
-        symbol,
-        source,
-        reason,
-        float(limit_price),
-        _format_price_component(bid),
-        _format_price_component(ask),
-        _format_price_component(mid),
-        side,
-        float(slippage_bps),
+        message,
+        extra={
+            "symbol": symbol,
+            "reason": reason,
+            "limit_price": float(limit_price),
+            "bid": _format_price_component(bid),
+            "ask": _format_price_component(ask),
+            "mid": _format_price_component(mid),
+            "side": side,
+            "slippage_bps": float(slippage_bps),
+        },
     )
 
 
@@ -22050,6 +22052,27 @@ def _resolve_limit_price(
 
     slippage_bps = _slippage_setting_bps()
     failure_reasons: list[str] = []
+    require_nbbo = False
+    last_trade_price: float | None = None
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+    if cfg is not None:
+        require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
+    if minute_df is not None:
+        try:
+            if "close" in minute_df:
+                close_series = minute_df["close"]
+            else:
+                close_series = minute_df.get("close")
+        except Exception:
+            close_series = None
+        if close_series is not None:
+            try:
+                last_trade_price = float(close_series.dropna().iloc[-1])
+            except Exception:
+                last_trade_price = None
 
     nbbo_quote = _fetch_quote(ctx, symbol)
     mid, bid, ask = _quote_to_mid(nbbo_quote)
@@ -22073,6 +22096,13 @@ def _resolve_limit_price(
         failure_reasons.append("broker_nbbo:no_bid_ask")
     else:
         failure_reasons.append("broker_nbbo:no_mid")
+
+    if require_nbbo:
+        logger.info(
+            "QUOTE_SOURCE_NBBO_REQUIRED",
+            extra={"symbol": symbol, "reason": _reason_summary(failure_reasons)},
+        )
+        return None, None
 
     primary_feed = DATA_FEED_INTRADAY or "iex"
     primary_quote = _fetch_quote(ctx, symbol, feed=primary_feed)
@@ -22127,23 +22157,46 @@ def _resolve_limit_price(
         else:
             failure_reasons.append(f"backup_mid:{backup_feed}:no_mid")
 
-    if last_close and last_close > 0:
-        if not _allow_last_close_execution():
+    if last_trade_price and last_trade_price > 0:
+        limit = _apply_slippage_limit(side, last_trade_price, last_trade_price, last_trade_price, slippage_bps)
+        _log_price_source(
+            symbol,
+            "last_trade",
+            limit_price=limit,
+            side=side,
+            slippage_bps=slippage_bps,
+            reason=_reason_summary(failure_reasons),
+            bid=last_trade_price,
+            ask=last_trade_price,
+            mid=last_trade_price,
+        )
+        return limit, "last_trade"
+
+    fallback_base: float | None = None
+    derived_from_last_close = False
+    if last_trade_price and last_trade_price > 0:
+        fallback_base = last_trade_price
+    elif last_close and last_close > 0:
+        fallback_base = float(last_close)
+        derived_from_last_close = True
+
+    if fallback_base and fallback_base > 0:
+        if derived_from_last_close and not _allow_last_close_execution():
             failure_reasons.append("last_close:disabled")
         else:
-            limit = _apply_slippage_limit(side, float(last_close), None, None, slippage_bps)
+            limit = _apply_slippage_limit(side, float(fallback_base), None, None, slippage_bps)
             _log_price_source(
                 symbol,
-                "last_close",
+                "lmt_fallback",
                 limit_price=limit,
                 side=side,
                 slippage_bps=slippage_bps,
                 reason=_reason_summary(failure_reasons),
                 bid=None,
                 ask=None,
-                mid=float(last_close),
+                mid=float(fallback_base),
             )
-            return limit, "last_close"
+            return limit, "lmt_fallback"
 
     return None, None
 

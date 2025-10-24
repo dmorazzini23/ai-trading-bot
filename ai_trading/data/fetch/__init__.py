@@ -28,6 +28,8 @@ except Exception:  # pragma: no cover - fallback sentinel when requests unavaila
     _requests = None  # type: ignore[assignment]
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time, is_generator_stop
+from ai_trading.config import get_trading_config
+from functools import lru_cache
 
 
 def _now_ts() -> float:
@@ -93,6 +95,60 @@ def _should_bootstrap_primary_first() -> bool:
 def _configured_primary_provider() -> str | None:
     provider = os.getenv("DATA_PROVIDER", "").strip()
     return provider or None
+
+
+@lru_cache(maxsize=1)
+def _drop_last_bar_enabled() -> bool:
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        return True
+    return bool(getattr(cfg, "data_drop_last_partial_bar", True))
+
+
+def _apply_incomplete_row_policy(
+    frame: Any,
+    symbol: str | None,
+    timeframe: str | None,
+) -> Any:
+    if not hasattr(frame, "dropna"):
+        return frame
+    try:
+        import pandas as pd  # type: ignore
+    except Exception:
+        pd = None  # type: ignore
+    drop_events: list[dict[str, Any]] = []
+    df_out = frame
+    if pd is not None and isinstance(df_out, pd.DataFrame):
+        if _drop_last_bar_enabled() and len(df_out.index) > 0:
+            try:
+                last_row = df_out.iloc[-1]
+                partial_mask = last_row[["open", "high", "low", "close", "volume"]].isna().any()
+            except Exception:
+                partial_mask = False
+            if partial_mask:
+                df_out = df_out.iloc[:-1]
+                drop_events.append({"reason": "partial_last_row"})
+        before_close = len(df_out)
+        try:
+            df_out = df_out.dropna(subset=["close"])
+        except Exception:
+            pass
+        else:
+            dropped = before_close - len(df_out)
+            if dropped > 0:
+                drop_events.append({"reason": "nan_close", "dropped": dropped})
+    for event in drop_events:
+        logger.info(
+            "DROPPED_INCOMPLETE_BAR",
+            extra={
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "remaining_rows": int(getattr(df_out, "shape", (0, 0))[0]),
+                **event,
+            },
+        )
+    return df_out
 
 
 def _set_bootstrap_backup_reason(
@@ -4585,6 +4641,8 @@ def _flatten_and_normalize_ohlcv(
         if index_name != "timestamp":
             df_reset.rename(columns={index_name: "timestamp"}, inplace=True)
         df_out = df_reset
+
+    df_out = _apply_incomplete_row_policy(df_out, symbol, timeframe)
 
     # Avoid timestamp being simultaneously a column and an index label.
     try:

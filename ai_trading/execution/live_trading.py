@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from functools import lru_cache
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Optional, Sequence
 
 from ai_trading.logging import get_logger, log_pdt_enforcement
 from ai_trading.market.symbol_specs import get_tick_size
@@ -2805,6 +2805,243 @@ class ExecutionEngine:
             return "sell"
         return "buy"
 
+    @staticmethod
+    def _normalized_order_side(side: str | None) -> str | None:
+        if side is None:
+            return None
+        try:
+            value = str(side).strip().lower()
+        except Exception:
+            return None
+        if value in {"buy", "sell"}:
+            return value
+        if value in {"short", "sell_short", "exit"}:
+            return "sell"
+        if value in {"cover", "long"}:
+            return "buy"
+        return None
+
+    def _order_flip_mode(self) -> str:
+        try:
+            cfg = get_trading_config()
+        except Exception:
+            return "cancel_then_submit"
+        policy = getattr(cfg, "order_flip_mode", "cancel_then_submit")
+        if policy not in {"cancel_then_submit", "cover_then_long", "skip"}:
+            return "cancel_then_submit"
+        return policy
+
+    def _list_open_orders_for_symbol(self, symbol: str) -> list[Any]:
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return []
+        list_orders = getattr(client, "list_orders", None)
+        if not callable(list_orders):
+            return []
+        try:
+            orders = list_orders(status="open", symbols=[symbol])  # type: ignore[call-arg]
+        except TypeError:
+            orders = list_orders(status="open")  # type: ignore[call-arg]
+        except Exception as exc:
+            logger.debug(
+                "OPPOSITE_GUARD_LIST_FAILED",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            return []
+        if orders is None:
+            return []
+        filtered: list[Any] = []
+        for order in orders:
+            order_symbol = _extract_value(order, "symbol")
+            if order_symbol:
+                try:
+                    if str(order_symbol).strip().upper() != symbol.upper():
+                        continue
+                except Exception:
+                    pass
+            filtered.append(order)
+        return filtered
+
+    def _cancel_opposite_orders(
+        self,
+        orders: Sequence[Any],
+        symbol: str,
+        desired_side: str,
+        *,
+        timeout: float = 5.0,
+    ) -> list[str]:
+        canceled_ids: list[str] = []
+        deadline = monotonic_time() + max(timeout, 0.5)
+        for order in orders:
+            order_id = _extract_value(order, "id", "order_id", "client_order_id")
+            if not order_id:
+                continue
+            order_id_str = str(order_id)
+            try:
+                self._cancel_order_alpaca(order_id_str)
+            except Exception as exc:
+                logger.warning(
+                    "CANCEL_OPPOSITE_FAILED",
+                    extra={"symbol": symbol, "desired_side": desired_side, "order_id": order_id_str, "error": str(exc)},
+                )
+                continue
+            canceled_ids.append(order_id_str)
+            while monotonic_time() < deadline:
+                try:
+                    status_info = self._get_order_status_alpaca(order_id_str)
+                except Exception:
+                    break
+                status_val = _extract_value(status_info, "status")
+                if status_val:
+                    normalized = str(status_val).strip().lower()
+                    if normalized in {"canceled", "cancelled", "done", "filled", "expired", "rejected"}:
+                        break
+                time.sleep(0.25)
+            logger.info(
+                "CANCELED_OPEN_OPPOSITE",
+                extra={"symbol": symbol, "desired_side": desired_side, "order_id": order_id_str},
+            )
+        return canceled_ids
+
+    def _position_quantity(self, symbol: str) -> int:
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return 0
+        get_position = getattr(client, "get_position", None)
+        position_obj: Any | None = None
+        if callable(get_position):
+            try:
+                position_obj = get_position(symbol)
+            except Exception:
+                position_obj = None
+        if position_obj is None:
+            list_positions = getattr(client, "list_positions", None)
+            if callable(list_positions):
+                try:
+                    for pos in list_positions():
+                        if str(_extract_value(pos, "symbol") or "").upper() == symbol.upper():
+                            position_obj = pos
+                            break
+                except Exception:
+                    position_obj = None
+        if position_obj is None:
+            return 0
+        qty_raw = _extract_value(position_obj, "qty", "quantity", "position")
+        try:
+            qty_decimal = _safe_decimal(qty_raw)
+        except Exception:
+            return 0
+        try:
+            side_val = _extract_value(position_obj, "side")
+            normalized_side = self._normalized_order_side(side_val)
+        except Exception:
+            normalized_side = None
+        qty_int = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
+        if normalized_side == "sell":
+            return -qty_int
+        return qty_int
+
+    def _submit_cover_order(self, symbol: str, requested_qty: int) -> bool:
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return False
+        short_qty = self._position_quantity(symbol)
+        if short_qty >= 0:
+            return False
+        cover_qty = min(abs(short_qty), max(int(requested_qty), 0))
+        if cover_qty <= 0:
+            return False
+        try:
+            client.submit_order(
+                symbol=symbol,
+                qty=cover_qty,
+                side="buy",
+                type="market",
+                time_in_force="day",
+                client_order_id=_stable_order_id(symbol, "cover"),
+                reduce_only=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "COVER_ORDER_SUBMIT_FAILED",
+                extra={"symbol": symbol, "quantity": cover_qty, "error": str(exc)},
+            )
+            return False
+        logger.info(
+            "COVER_ORDER_SUBMITTED",
+            extra={"symbol": symbol, "quantity": cover_qty},
+        )
+        return True
+
+    def _enforce_opposite_side_policy(
+        self,
+        symbol: str,
+        desired_side: str,
+        quantity: int,
+        *,
+        closing_position: bool,
+        client_order_id: str | None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        if closing_position:
+            return True, None
+        normalized_side = self._normalized_order_side(desired_side)
+        if normalized_side is None:
+            return True, None
+        orders = self._list_open_orders_for_symbol(symbol)
+        opposite_orders: list[Any] = []
+        for order in orders:
+            side_val = self._normalized_order_side(_extract_value(order, "side"))
+            if side_val is None or side_val == normalized_side:
+                continue
+            status_val = _extract_value(order, "status")
+            if status_val and str(status_val).strip().lower() in {"canceled", "cancelled"}:
+                continue
+            opposite_orders.append(order)
+        if not opposite_orders:
+            return True, None
+        policy = self._order_flip_mode()
+        conflict_extra = {
+            "symbol": symbol,
+            "desired_side": normalized_side,
+            "policy": policy,
+            "client_order_id": client_order_id,
+            "open_order_ids": [
+                str(_extract_value(order, "id", "order_id", "client_order_id") or "")
+                for order in opposite_orders
+            ],
+        }
+        logger.warning("ORDER_CONFLICT_OPPOSITE_SIDE", extra=conflict_extra)
+        if policy == "skip":
+            logger.info("ORDER_FLIP_POLICY_SKIP", extra=conflict_extra)
+            return False, {
+                "status": "skipped",
+                "reason": "opposite_side_conflict",
+                "policy": policy,
+                "symbol": symbol,
+            }
+        canceled_ids = self._cancel_opposite_orders(opposite_orders, symbol, normalized_side)
+        conflict_extra["canceled_order_ids"] = tuple(canceled_ids)
+        if policy == "cover_then_long" and normalized_side == "buy":
+            self._submit_cover_order(symbol, quantity)
+        return True, None
+
+    @staticmethod
+    def _is_opposite_conflict_error(exc: Exception) -> bool:
+        code = getattr(exc, "code", None)
+        if code is not None and str(code) == "40310000":
+            return True
+        message = getattr(exc, "message", None)
+        if isinstance(message, dict):
+            message = message.get("message") or message.get("detail")
+        message_str = str(message or exc)
+        normalized = message_str.lower()
+        tokens = {
+            "cannot open a long buy while a short sell order is open",
+            "cannot open a short sell while a long buy order is open",
+            "opposite side order is open",
+        }
+        return any(token in normalized for token in tokens)
+
     def check_stops(self) -> None:
         """Hook for risk-stop enforcement from core loop (currently no-op)."""
 
@@ -3064,7 +3301,36 @@ class ExecutionEngine:
         if order is None:
             return True
 
+        symbol = str(order.get("symbol") or "").upper()
+        side_token = order.get("side")
+        normalized_side = self._normalized_order_side(side_token)
+        quantity_val = order.get("quantity")
+        if quantity_val in (None, ""):
+            quantity_val = order.get("qty")
+        quantity = _safe_int(quantity_val, 0)
+        if not order.get("client_order_id") and symbol and normalized_side:
+            stable_id = _stable_order_id(symbol, normalized_side)
+            if isinstance(order, dict):
+                order.setdefault("client_order_id", stable_id)
+            client_order_id = stable_id
+        else:
+            client_order_id = order.get("client_order_id")
+
         closing_position = bool(order.get("closing_position"))
+        guard_ok, skip_payload = self._enforce_opposite_side_policy(
+            symbol,
+            normalized_side or str(side_token or ""),
+            quantity,
+            closing_position=closing_position,
+            client_order_id=None if client_order_id in (None, "") else str(client_order_id),
+        )
+        if not guard_ok:
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            if skip_payload:
+                logger.info("ORDER_SKIPPED_OPPOSITE_CONFLICT", extra=skip_payload)
+            return False
+
         account_snapshot = order.get("account_snapshot")
         if not closing_position and account_snapshot is None:
             account_snapshot = self._get_account_snapshot()
@@ -3161,6 +3427,17 @@ class ExecutionEngine:
                     symbol = symbol_val
             elif isinstance(candidate, str):
                 symbol = candidate
+
+        conflict_tokens = {
+            "cannot open a long buy while a short sell order is open",
+            "cannot open a short sell while a long buy order is open",
+        }
+        if code_str == "40310000" or any(token in normalized_message for token in conflict_tokens):
+            logger.info(
+                "ORDER_CONFLICT_RETRY_CLASSIFIED",
+                extra={"symbol": symbol, "code": code, "status": status_val},
+            )
+            return None
 
         capacity_tokens: dict[str, str] = {
             "insufficient day trading buying power": "insufficient_day_trading_buying_power",
@@ -3509,6 +3786,31 @@ class ExecutionEngine:
                             raise
                     resp = self.trading_client.submit_order(order_data=req)
         except (APIError, TimeoutError, ConnectionError) as e:
+            if isinstance(e, APIError) and self._is_opposite_conflict_error(e):
+                symbol = str(order_data.get("symbol") or "")
+                desired_side = str(order_data.get("side") or "")
+                quantity = _safe_int(order_data.get("quantity") or order_data.get("qty"), 0)
+                guard_ok, skip_payload = self._enforce_opposite_side_policy(
+                    symbol,
+                    desired_side,
+                    quantity,
+                    closing_position=closing_position,
+                    client_order_id=order_data.get("client_order_id"),
+                )
+                if not guard_ok:
+                    return skip_payload or {"status": "skipped", "reason": "opposite_side_conflict"}
+                if not order_data.get("_opposite_retry_attempted"):
+                    order_data["_opposite_retry_attempted"] = True
+                    logger.info(
+                        "ORDER_CONFLICT_RETRYING",
+                        extra={"symbol": symbol, "side": desired_side, "client_order_id": order_data.get("client_order_id")},
+                    )
+                    return self._submit_order_to_alpaca(order_data)
+                logger.warning(
+                    "ORDER_CONFLICT_RETRY_ABORTED",
+                    extra={"symbol": symbol, "side": desired_side, "client_order_id": order_data.get("client_order_id")},
+                )
+                return skip_payload or {"status": "skipped", "reason": "opposite_side_conflict_retry"}
             logger.error(
                 "ORDER_API_FAILED",
                 extra={

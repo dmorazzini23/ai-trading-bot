@@ -1253,7 +1253,8 @@ def log_pdt_enforcement(
     if safe_context:
         payload["context"] = safe_context
     level = logging.WARNING if blocked else logging.INFO
-    get_logger("ai_trading.execution.pdt").log(level, "PDT_ENFORCEMENT", extra=payload)
+    event = "PDT_ENFORCEMENT_BLOCKED" if blocked else "PDT_CHECK_OK"
+    get_logger("ai_trading.execution.pdt").log(level, event, extra=payload)
 
 
 def log_data_quality_event(
