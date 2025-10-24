@@ -34,6 +34,7 @@ def _reload_data_fetcher():
     env_utils.refresh_alpaca_credentials_cache()
     try:
         data_fetcher._ALPACA_SYMBOL_FAILURES.clear()
+        data_fetcher._ALPACA_FAILURE_EVENTS.clear()
         data_fetcher._FEED_OVERRIDE_BY_TF.clear()
     except AttributeError:
         pass
@@ -56,6 +57,7 @@ def test_fetch_fallback_to_daily(monkeypatch):
     monkeypatch.setattr(bars, "get_bars_df", lambda *a, **k: df)
     monkeypatch.setattr(data_fetcher, "_ENABLE_HTTP_FALLBACK", False, raising=False)
     data_fetcher._ALPACA_SYMBOL_FAILURES.clear()
+    data_fetcher._ALPACA_FAILURE_EVENTS.clear()
 
     # Properly mocked module for pandas_ta
     mock_module = types.ModuleType("pandas_ta")
