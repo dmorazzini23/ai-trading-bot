@@ -7,6 +7,7 @@ import pytest
 
 
 import ai_trading.execution.live_trading as lt
+from ai_trading.execution import guards
 
 
 @pytest.fixture
@@ -14,6 +15,9 @@ def engine_factory(monkeypatch):
     """Provide a minimally wired execution engine for limit order tests."""
 
     monkeypatch.setattr(lt, "_safe_mode_guard", lambda *_, **__: False)
+    guards.STATE.pdt = guards.PDTState()
+    guards.STATE.shadow_cycle = False
+    guards.STATE.shadow_cycle_forced = False
 
     def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
         return lt.CapacityCheck(True, int(quantity))

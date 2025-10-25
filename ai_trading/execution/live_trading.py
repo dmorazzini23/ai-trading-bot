@@ -3432,7 +3432,7 @@ class ExecutionEngine:
             "cannot open a long buy while a short sell order is open",
             "cannot open a short sell while a long buy order is open",
         }
-        if code_str == "40310000" or any(token in normalized_message for token in conflict_tokens):
+        if any(token in normalized_message for token in conflict_tokens):
             logger.info(
                 "ORDER_CONFLICT_RETRY_CLASSIFIED",
                 extra={"symbol": symbol, "code": code, "status": status_val},

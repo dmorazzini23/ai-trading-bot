@@ -363,6 +363,86 @@ _ALPACA_SYMBOL_FAILURES: dict[str, int] = {}
 _ALPACA_FAILURE_EVENTS: dict[str, deque[float]] = {}
 
 
+def _resolve_consecutive_failure_threshold() -> int:
+    """Return the minimum consecutive Alpaca failures required before fallback."""
+
+    candidate: int | None = None
+    try:
+        from ai_trading.config.settings import get_settings as _get_settings  # local import to avoid cycles
+    except Exception:  # pragma: no cover - settings optional in tests
+        _get_settings = None
+    settings = None
+    if _get_settings is not None:
+        try:
+            settings = _get_settings()
+        except Exception:
+            settings = None
+    if settings is not None:
+        for attr in (
+            "alpaca_consecutive_failure_threshold",
+            "alpaca_failure_consecutive_threshold",
+        ):
+            value = getattr(settings, attr, None)
+            if value is not None:
+                try:
+                    candidate = int(value)
+                except (TypeError, ValueError):
+                    candidate = None
+                else:
+                    break
+    if candidate is None:
+        try:
+            candidate = get_env(
+                "AI_TRADING_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD",
+                None,
+                cast=int,
+            )
+        except Exception:
+            candidate = None
+    if candidate is None:
+        raw = os.getenv("AI_TRADING_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD", "").strip()
+        if raw:
+            try:
+                candidate = int(raw)
+            except Exception:
+                candidate = None
+    if candidate is None:
+        candidate = 1
+    try:
+        return max(int(candidate), 1)
+    except Exception:
+        return 1
+
+
+_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD = _resolve_consecutive_failure_threshold()
+_ALPACA_CONSECUTIVE_FAILURES: dict[tuple[str, str], int] = {}
+
+
+def _consecutive_failure_key(symbol: str, timeframe: str | None) -> tuple[str, str]:
+    return (str(symbol or "").upper(), str(timeframe or "").lower())
+
+
+def _record_consecutive_failure(symbol: str, timeframe: str | None) -> int:
+    key = _consecutive_failure_key(symbol, timeframe)
+    count = _ALPACA_CONSECUTIVE_FAILURES.get(key, 0) + 1
+    _ALPACA_CONSECUTIVE_FAILURES[key] = count
+    return count
+
+
+def _consecutive_failure_count(symbol: str, timeframe: str | None) -> int:
+    return _ALPACA_CONSECUTIVE_FAILURES.get(_consecutive_failure_key(symbol, timeframe), 0)
+
+
+def _clear_consecutive_failures(symbol: str, timeframe: str | None = None) -> None:
+    symbol_key = str(symbol or "").upper()
+    if timeframe is None:
+        to_clear = [key for key in _ALPACA_CONSECUTIVE_FAILURES if key[0] == symbol_key]
+    else:
+        to_clear = [_consecutive_failure_key(symbol, timeframe)]
+    for key in to_clear:
+        _ALPACA_CONSECUTIVE_FAILURES.pop(key, None)
+
+
 def _yahoo_failure_threshold() -> int:
     try:
         value = get_env("AI_TRADING_YAHOO_FAILURE_THRESHOLD", 3, cast=int)
@@ -387,7 +467,12 @@ def _yahoo_failure_window_seconds() -> float:
     return max(window, 1.0)
 
 
-def _record_alpaca_failure_event(symbol: str, *, now: float | None = None) -> int:
+def _record_alpaca_failure_event(
+    symbol: str,
+    timeframe: str | None = None,
+    *,
+    now: float | None = None,
+) -> int:
     if not symbol:
         return 0
     ts = now or monotonic_time()
@@ -397,6 +482,7 @@ def _record_alpaca_failure_event(symbol: str, *, now: float | None = None) -> in
     cutoff = ts - window
     while queue and queue[0] < cutoff:
         queue.popleft()
+    _record_consecutive_failure(symbol, timeframe)
     return len(queue)
 
 
@@ -412,23 +498,46 @@ def _alpaca_failure_count(symbol: str, *, now: float | None = None) -> int:
     return len(queue)
 
 
-def _clear_alpaca_failure_events(symbol: str) -> None:
+def _clear_alpaca_failure_events(symbol: str, timeframe: str | None = None) -> None:
     _ALPACA_FAILURE_EVENTS.pop(symbol, None)
+    _clear_consecutive_failures(symbol, timeframe)
 
 
-def _yahoo_fallback_allowed(symbol: str, *, force: bool = False) -> bool:
+def _yahoo_fallback_allowed(symbol: str, timeframe: str | None = None, *, force: bool = False) -> bool:
     if force:
         return True
     monitor = provider_monitor
+    provider_disabled = False
+    if monitor is not None:
+        try:
+            provider_disabled = monitor.is_disabled("alpaca") or monitor.is_disabled("alpaca_iex")
+        except Exception:
+            provider_disabled = False
+    required = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
+    consecutive = _consecutive_failure_count(symbol, timeframe)
+    if required <= 1:
+        if provider_disabled:
+            return True
+        if monitor is None:
+            return True
+        try:
+            fail_count = int(monitor.fail_counts.get("alpaca", 0))
+        except Exception:
+            fail_count = 0
+        try:
+            threshold = int(getattr(monitor, "threshold", 1))
+        except Exception:
+            threshold = 1
+        if fail_count >= max(threshold, 1):
+            return True
+        recent_failures = _alpaca_failure_count(symbol)
+        return recent_failures >= _yahoo_failure_threshold()
+    if provider_disabled:
+        return True
+    if consecutive >= required:
+        return True
     if monitor is None:
-        return True
-    try:
-        if monitor.is_disabled("alpaca"):
-            return True
-        if monitor.is_disabled("alpaca_iex"):
-            return True
-    except Exception:
-        return True
+        return False
     try:
         fail_count = int(monitor.fail_counts.get("alpaca", 0))
     except Exception:
@@ -440,7 +549,7 @@ def _yahoo_fallback_allowed(symbol: str, *, force: bool = False) -> bool:
     if fail_count >= max(threshold, 1):
         return True
     recent_failures = _alpaca_failure_count(symbol)
-    return recent_failures >= _yahoo_failure_threshold()
+    return recent_failures >= _yahoo_failure_threshold() or consecutive >= required
 
 
 def _resolve_host_limit() -> tuple[str | None, int]:
@@ -4560,6 +4669,10 @@ def _flatten_and_normalize_ohlcv(
             setattr(err, "fetch_reason", "close_column_all_nan")
             setattr(err, "symbol", symbol)
             setattr(err, "timeframe", timeframe)
+            try:
+                _record_alpaca_failure_event(symbol or "", timeframe=timeframe)
+            except Exception:
+                pass
             raise err
         if recovered_from is not None or recovered_from_normalized is not None:
             logger.info(
@@ -6108,7 +6221,17 @@ def _fetch_bars(
         feed_tag = normalized_provider or provider_str
         normalized_provider_lower = (normalized_provider or provider_str or "").strip().lower()
         force_yahoo_flag = bool(_state.get("force_yahoo_fallback"))
-        if normalized_provider_lower == "yahoo" and not _yahoo_fallback_allowed(symbol, force=force_yahoo_flag):
+        if (
+            normalized_provider_lower == "yahoo"
+            and int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD) > 1
+            and not _yahoo_fallback_allowed(
+                symbol,
+                _interval,
+                force=force_yahoo_flag,
+            )
+        ):
+            consecutive = _consecutive_failure_count(symbol, _interval)
+            required = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
             logger.info(
                 "YAHOO_FALLBACK_DEFERRED",
                 extra=_norm_extra(
@@ -6117,6 +6240,8 @@ def _fetch_bars(
                         "symbol": symbol,
                         "timeframe": _interval,
                         "reason": "threshold_not_met",
+                        "consecutive_failures": consecutive,
+                        "required_failures": required,
                     }
                 ),
             )
@@ -6126,6 +6251,24 @@ def _fetch_bars(
             if pd is not None:
                 return pd.DataFrame()
             return []  # type: ignore[return-value]
+        if normalized_provider_lower == "yahoo" and int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD) > 1:
+            consecutive = _consecutive_failure_count(symbol, _interval)
+            required = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
+            logger.warning(
+                "ALPACA_FEED_SWITCHOVER",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "requested_feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "fallback": "yahoo",
+                        "reason": "consecutive_failures",
+                        "consecutive_failures": consecutive,
+                        "required_failures": required,
+                    }
+                ),
+            )
         tags = _tags(provider=resolved_provider, feed=feed_tag)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         _state["last_fallback_feed"] = feed_tag
@@ -7024,7 +7167,7 @@ def _fetch_bars(
                 _state["skip_backup_after_fallback"] = True
                 _state["fallback_reason"] = "sip_unauthorized"
                 provider_monitor.record_failure(f"alpaca_{_feed}", "unauthorized")
-                _record_alpaca_failure_event(symbol)
+                _record_alpaca_failure_event(symbol, timeframe=_interval)
                 backup_frame = None
                 if callable(_backup_get_bars):
                     try:
@@ -7059,7 +7202,7 @@ def _fetch_bars(
             except Exception:
                 pass
             provider_monitor.record_failure("alpaca", "timeout", str(e))
-            _record_alpaca_failure_event(symbol)
+            _record_alpaca_failure_event(symbol, timeframe=_interval)
             retry_delay = float(_state.get("retry_delay") or 0.0)
             if retry_delay <= 0:
                 retry_delay = _MIN_RATE_LIMIT_SLEEP_SECONDS
@@ -7113,7 +7256,7 @@ def _fetch_bars(
             )
             _incr("data.fetch.connection_error", value=1.0, tags=_tags())
             provider_monitor.record_failure("alpaca", "connection_error", str(e))
-            _record_alpaca_failure_event(symbol)
+            _record_alpaca_failure_event(symbol, timeframe=_interval)
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if fallback_target:
                 result = _attempt_fallback(fallback_target, skip_check=True)
@@ -7178,7 +7321,7 @@ def _fetch_bars(
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
             _incr("data.fetch.error", value=1.0, tags=_tags())
-            _record_alpaca_failure_event(symbol)
+            _record_alpaca_failure_event(symbol, timeframe=_interval)
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if fallback_target:
                 result = _attempt_fallback(fallback_target, skip_check=True)
@@ -7303,7 +7446,7 @@ def _fetch_bars(
             if _feed in {"sip", "iex"}:
                 provider_id = f"alpaca_{_feed}"
             provider_monitor.record_failure(provider_id, "unauthorized")
-            _record_alpaca_failure_event(symbol)
+            _record_alpaca_failure_event(symbol, timeframe=_interval)
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             if _feed == "sip":
@@ -7391,7 +7534,7 @@ def _fetch_bars(
             has_retry_after = retry_after_header not in (None, "")
             cooldown = _rate_limit_cooldown(resp)
             provider_monitor.record_failure("alpaca", "rate_limited", retry_after=cooldown)
-            _record_alpaca_failure_event(symbol)
+            _record_alpaca_failure_event(symbol, timeframe=_interval)
             try:
                 provider_monitor.disable("alpaca", duration=cooldown)
             except Exception:
@@ -7485,7 +7628,7 @@ def _fetch_bars(
             if not skip_empty_metrics and not _state.get("empty_metric_emitted"):
                 _state["empty_metric_emitted"] = True
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
-            _record_alpaca_failure_event(symbol)
+            _record_alpaca_failure_event(symbol, timeframe=_interval)
             # --- AI-AGENT: enforce IEX -> SIP on empty ---
             if (
                 _feed == "iex"
@@ -8640,7 +8783,9 @@ def _fetch_bars(
             pending.discard(_feed)
         _ALPACA_SYMBOL_FAILURES.pop(symbol, None)
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
-        _clear_alpaca_failure_events(symbol)
+        last_fallback_feed = _state.get("last_fallback_feed")
+        if last_fallback_feed in (None, "sip", "iex"):
+            _clear_alpaca_failure_events(symbol, timeframe=_interval)
         return _finalize_frame(df)
     providers_attempted = list(_state.get("providers", []) or [])
     if providers_attempted:
@@ -8670,7 +8815,9 @@ def _fetch_bars(
                 provider_disabled = False
         threshold = _yahoo_failure_threshold()
         force_yahoo = False
-        if _yahoo_fallback_allowed(symbol):
+        consecutive_failures = _consecutive_failure_count(symbol, _interval)
+        required_failures = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
+        if _yahoo_fallback_allowed(symbol, _interval):
             yahoo_allowed = True
             force_yahoo = provider_disabled or failure_count >= threshold
         else:
@@ -8683,6 +8830,8 @@ def _fetch_bars(
                         "timeframe": _interval,
                         "failure_count": failure_count,
                         "threshold": threshold,
+                        "consecutive_failures": consecutive_failures,
+                        "required_failures": required_failures,
                     }
                 ),
             )

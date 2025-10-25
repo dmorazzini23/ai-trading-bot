@@ -31,6 +31,10 @@ from . import (
     _SIP_UNAUTHORIZED,
     _IEX_EMPTY_COUNTS,
     _IEX_EMPTY_THRESHOLD,
+    _ALPACA_CONSECUTIVE_FAILURE_THRESHOLD,
+    _consecutive_failure_count,
+    _record_alpaca_failure_event,
+    _clear_alpaca_failure_events,
 )
 
 pd = load_pandas()
@@ -80,9 +84,24 @@ def fetch_bars(
     # (when allowed).
     feed = "iex"
     if _IEX_EMPTY_COUNTS.get(key, 0) >= _IEX_EMPTY_THRESHOLD and _ALLOW_SIP and not _SIP_UNAUTHORIZED:
+        consecutive = _consecutive_failure_count(symbol, tf)
+        required = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
         logger.info(
             "DATA_SOURCE_FALLBACK_ATTEMPT",
             extra={"symbol": symbol, "timeframe": tf, "from": "iex", "to": "sip", "attempts": 0},
+        )
+        logger.warning(
+            "ALPACA_FEED_SWITCHOVER",
+            extra={
+                "provider": "alpaca",
+                "requested_feed": "iex",
+                "timeframe": tf,
+                "symbol": symbol,
+                "fallback": "sip",
+                "reason": "iex_empty_threshold",
+                "consecutive_failures": consecutive,
+                "required_failures": required,
+            },
         )
         feed = "sip"
 
@@ -106,6 +125,7 @@ def fetch_bars(
             # bypass IEX until it provides data again.
             if feed == "iex":
                 _IEX_EMPTY_COUNTS.pop(key, None)
+            _clear_alpaca_failure_events(symbol, timeframe=tf)
             return _to_df(payload)
 
         # Empty response handling
@@ -114,6 +134,7 @@ def fetch_bars(
             _IEX_EMPTY_COUNTS[key] = _IEX_EMPTY_COUNTS.get(key, 0) + 1
             inc_empty_payload(symbol, tf)
             mark_skipped(symbol, tf)
+            _record_alpaca_failure_event(symbol, timeframe=tf)
             if _ALLOW_SIP and not _SIP_UNAUTHORIZED:
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
@@ -125,10 +146,23 @@ def fetch_bars(
                         "attempts": attempts,
                     },
                 )
+                logger.warning(
+                    "ALPACA_FEED_SWITCHOVER",
+                    extra={
+                        "provider": "alpaca",
+                        "requested_feed": "iex",
+                        "timeframe": tf,
+                        "symbol": symbol,
+                        "fallback": "sip",
+                        "reason": "iex_empty_response",
+                        "attempts": attempts,
+                    },
+                )
                 feed = "sip"
                 continue
             if _SIP_UNAUTHORIZED:
                 inc_unauthorized_sip("alpaca")
+            _record_alpaca_failure_event(symbol, timeframe=tf)
             return _to_df({})
 
         # If we get here the SIP request was also empty
@@ -136,6 +170,7 @@ def fetch_bars(
             "IEX_EMPTY_SIP_EMPTY",
             extra={"symbol": symbol, "timeframe": tf, "attempts": attempts + 1},
         )
+        _record_alpaca_failure_event(symbol, timeframe=tf)
         return _to_df({})
 
 
