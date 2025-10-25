@@ -13298,7 +13298,7 @@ def check_pdt_rule(ctx) -> bool:
         if callable(list_orders):
             try:
                 list_orders(status="open", nested=False, limit=10)
-            except COMMON_EXC:
+            except Exception:
                 pass
 
     explicit_account_provided = getattr(ctx, "account", None) is not None
@@ -13306,11 +13306,11 @@ def check_pdt_rule(ctx) -> bool:
     if account is None:
         try:
             ensure_alpaca_attached(ctx)
-        except COMMON_EXC:
+        except Exception:
             pass
         try:
             account = safe_alpaca_get_account(ctx)
-        except COMMON_EXC:
+        except Exception:
             account = None
         else:
             try:
