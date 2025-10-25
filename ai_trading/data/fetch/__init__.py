@@ -7536,9 +7536,14 @@ def _fetch_bars(
             provider_monitor.record_failure("alpaca", "rate_limited", retry_after=cooldown)
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             try:
-                provider_monitor.disable("alpaca", duration=cooldown)
+                already_disabled = provider_monitor.is_disabled("alpaca")
             except Exception:
-                pass
+                already_disabled = False
+            if not already_disabled:
+                try:
+                    provider_monitor.disable("alpaca", duration=cooldown)
+                except Exception:
+                    pass
             try:
                 skip_window_seconds = cooldown if (cooldown and cooldown > 0) else _MIN_RATE_LIMIT_SLEEP_SECONDS
             except Exception:
