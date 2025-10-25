@@ -3337,7 +3337,25 @@ class ExecutionEngine:
             if isinstance(order, dict):
                 order["account_snapshot"] = account_snapshot
 
-        skip_pdt, pdt_reason, pdt_context = self._evaluate_pdt_preflight(order, account_snapshot, closing_position)
+        snapshot_payload: Mapping[str, Any] = (
+            account_snapshot if isinstance(account_snapshot, Mapping) else {}
+        )
+        logger.debug(
+            "PDT_PREFLIGHT_CHECKED",
+            extra={
+                "pattern_day_trader": snapshot_payload.get("pattern_day_trader"),
+                "daytrade_limit": snapshot_payload.get("daytrade_limit"),
+                "daytrade_count": snapshot_payload.get("daytrade_count"),
+                "active": snapshot_payload.get("active"),
+                "limit": snapshot_payload.get("limit"),
+                "count": snapshot_payload.get("count"),
+                "closing_position": closing_position,
+            },
+        )
+
+        skip_pdt, pdt_reason, pdt_context = self._evaluate_pdt_preflight(
+            order, account_snapshot, closing_position
+        )
         log_pdt_enforcement(blocked=skip_pdt, reason=pdt_reason, context=pdt_context)
         logger.debug(
             "PDT_PREFLIGHT_RESULT",
@@ -3372,9 +3390,16 @@ class ExecutionEngine:
                 "reason": pdt_reason,
             }
             logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            context_payload = pdt_context if isinstance(pdt_context, Mapping) else {}
+            detail_message = "ORDER_SKIPPED_NONRETRYABLE_DETAIL"
+            if context_payload:
+                context_pairs = " ".join(
+                    f"{key}={context_payload.get(key)!r}" for key in sorted(context_payload)
+                )
+                detail_message = f"{detail_message} {context_pairs}"
             logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
-                extra=base_extra | {"context": pdt_context},
+                detail_message,
+                extra=base_extra | {"context": context_payload},
             )
             return False
 

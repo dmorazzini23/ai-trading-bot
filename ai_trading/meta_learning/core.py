@@ -58,7 +58,16 @@ class RequestException(Exception):
     """Fallback when :mod:`requests` is unavailable."""
 
 
-COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    RequestException,
+    TimeoutError,
+    ImportError,
+    OSError,
+)
 sys.modules.setdefault("meta_learning", sys.modules[__name__])
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
@@ -276,21 +285,21 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
         quality_report['file_exists'] = True
         try:
             file_size = Path(trade_log_path).stat().st_size
-            if file_size == 0:
-                quality_report['issues'].append('Trade log file is empty')
-                quality_report['recommendations'].append('Ensure trade logging is actively writing data')
-                logger.warning(
-                    'TRADE_HISTORY_EMPTY: %s',
-                    trade_log_path,
-                    extra={
-                        'hint': 'Seed with `python -m ai_trading.tools.seed_trade_history` or see docs/SEED_TRADE_HISTORY.md'
-                    },
-                )
-                return quality_report
         except COMMON_EXC as e:
             quality_report['issues'].append(f'Cannot access file stats: {e}')
+            quality_report['recommendations'].append('Verify trade log path or ensure filesystem access permissions')
+            file_size = None
+        if file_size == 0:
+            quality_report['issues'].append('Trade log file is empty')
+            quality_report['recommendations'].append('Ensure trade logging is actively writing data')
+            logger.warning(
+                'TRADE_HISTORY_EMPTY: %s',
+                trade_log_path,
+                extra={
+                    'hint': 'Seed with `python -m ai_trading.tools.seed_trade_history` or see docs/SEED_TRADE_HISTORY.md'
+                },
+            )
             return quality_report
-        quality_report['file_readable'] = True
         try:
             with open(trade_log_path, 'r') as f:
                 raw_lines = f.readlines()
@@ -318,6 +327,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                     },
                 )
                 return quality_report
+            quality_report['file_readable'] = True
             _header, *data_lines = lines
             audit_format_rows = 0
             meta_format_rows = 0

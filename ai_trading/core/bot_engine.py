@@ -3531,7 +3531,7 @@ import threading
 import time as pytime
 from argparse import ArgumentParser
 from collections.abc import Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC
 from datetime import datetime as dt_
 from datetime import time as dt_time
@@ -7914,32 +7914,28 @@ def _memo_is_fresh(entry: Any, *, now: float, ttl: float) -> tuple[bool, Any | N
         if isinstance(entry, MappingABC):
             ts_raw = None
             for ts_key in ("ts", "timestamp", "time", "monotonic"):
-                try:
+                with suppress(Exception):  # tolerate custom mappings
                     ts_raw = entry.get(ts_key)  # type: ignore[call-arg]
-                except Exception:  # noqa: BLE001 - tolerate custom mappings
-                    ts_raw = None
                 if ts_raw is not None:
                     break
             if ts_raw is not None:
                 ts = float(ts_raw)
                 if ttl <= 0 or (now - ts) <= ttl:
-                    try:
+                    value: Any | None = None
+                    with suppress(Exception):  # tolerate custom mappings
                         value = (
                             entry.get("value")
                             or entry.get("df")
                             or entry.get("data")
                         )
-                    except Exception:  # noqa: BLE001 - tolerate custom mappings
-                        value = None
                     return True, value
-            try:
+            fallback_value: Any | None = None
+            with suppress(Exception):  # tolerate custom mappings
                 fallback_value = (
                     entry.get("value")
                     or entry.get("df")
                     or entry.get("data")
                 )
-            except Exception:  # noqa: BLE001 - tolerate custom mappings
-                fallback_value = None
             return False, fallback_value
         if isinstance(entry, tuple) and len(entry) >= 2:
             ts = float(entry[0])
@@ -8655,18 +8651,16 @@ class DataFetcher:
                 payload: Any | None = None
                 ts_value: Any | None = None
                 for ts_key in ("ts", "timestamp", "time", "monotonic"):
-                    try:
+                    ts_candidate = None
+                    with suppress(Exception):  # tolerate custom mappings
                         ts_candidate = entry.get(ts_key)  # type: ignore[call-arg]
-                    except Exception:  # noqa: BLE001 - tolerate custom mappings
-                        ts_candidate = None
                     if ts_candidate is not None:
                         ts_value = ts_candidate
                         break
                 for payload_key in ("df", "data", "value", "result", "payload"):
-                    try:
+                    payload_candidate = None
+                    with suppress(Exception):  # tolerate custom mappings
                         payload_candidate = entry.get(payload_key)  # type: ignore[call-arg]
-                    except Exception:  # noqa: BLE001 - tolerate custom mappings
-                        payload_candidate = None
                     if payload_candidate is not None:
                         payload = payload_candidate
                         break
@@ -8877,14 +8871,8 @@ class DataFetcher:
 
             getter = getattr(_DAILY_FETCH_MEMO, "get", None)
             if callable(getter):
-                try:
+                with suppress(Exception):  # tolerate arbitrary mapping failures
                     return getter(key)
-                except (TypeError, KeyError, AttributeError, AssertionError):
-                    return None
-                except COMMON_EXC:
-                    return None
-                except Exception:  # noqa: BLE001 - tolerate arbitrary mapping failures
-                    return None
             return None
 
         def _memo_set_entry(key: tuple[str, ...], value: Any) -> None:
@@ -13310,7 +13298,7 @@ def check_pdt_rule(ctx) -> bool:
         if callable(list_orders):
             try:
                 list_orders(status="open", nested=False, limit=10)
-            except Exception:
+            except COMMON_EXC:
                 pass
 
     explicit_account_provided = getattr(ctx, "account", None) is not None
@@ -13318,16 +13306,16 @@ def check_pdt_rule(ctx) -> bool:
     if account is None:
         try:
             ensure_alpaca_attached(ctx)
-        except Exception:
+        except COMMON_EXC:
             pass
         try:
             account = safe_alpaca_get_account(ctx)
-        except Exception:
+        except COMMON_EXC:
             account = None
         else:
             try:
                 setattr(ctx, "account", account)
-            except Exception:
+            except COMMON_EXC:
                 pass
 
     if account is None:
@@ -13436,10 +13424,7 @@ def check_pdt_rule(ctx) -> bool:
             payload["warn_reasons"] = tuple(warn_reasons)
         setattr(ctx, "_pdt_last_context", payload)
 
-    try:
-        now_local = datetime.now(_EASTERN_TZ)
-    except Exception:
-        now_local = datetime.now(UTC).astimezone(_EASTERN_TZ)
+    now_local = datetime.now(UTC).astimezone(_EASTERN_TZ)
     session_date = now_local.date()
     snapshot = getattr(ctx, "_pdt_daytrade_snapshot", None)
     if not isinstance(snapshot, dict) or snapshot.get("session_date") != session_date:
@@ -14153,7 +14138,7 @@ def _safe_bool(value: Any) -> bool:
         return bool(value)
     try:
         normalized = str(value).strip().lower()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return False
     if not normalized:
         return False
@@ -20547,7 +20532,7 @@ def screen_universe(
 
             try:
                 screen_settings = get_settings()
-            except Exception:
+            except COMMON_EXC:
                 screen_settings = None
             try:
                 min_signal_strength = float(
@@ -20669,7 +20654,7 @@ def screen_universe(
                         avg_volume = float(
                             pd.to_numeric(df["volume"].tail(20), errors="coerce").dropna().mean() or 0.0
                         )
-                    except Exception:
+                    except (TypeError, ValueError, KeyError, AttributeError):
                         avg_volume = 0.0
                     if avg_volume < min_liquidity:
                         failed += 1
@@ -20694,7 +20679,7 @@ def screen_universe(
                     signal_strength = 0.0
                     try:
                         signal_strength = float(df["close"].pct_change(5, fill_method=None).iloc[-1])
-                    except Exception:
+                    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
                         signal_strength = 0.0
                     if abs(signal_strength) < min_signal_strength:
                         failed += 1
@@ -21698,7 +21683,7 @@ def _quote_is_fallback(quote: Any | None) -> tuple[bool, str | None]:
             return None
         try:
             text = str(value).strip()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return None
         return text or None
 
@@ -22066,12 +22051,12 @@ def _resolve_limit_price(
                 close_series = minute_df["close"]
             else:
                 close_series = minute_df.get("close")
-        except Exception:
+        except (KeyError, TypeError, AttributeError):
             close_series = None
         if close_series is not None:
             try:
                 last_trade_price = float(close_series.dropna().iloc[-1])
-            except Exception:
+            except (IndexError, TypeError, ValueError, AttributeError):
                 last_trade_price = None
 
     nbbo_quote = _fetch_quote(ctx, symbol)
@@ -22833,10 +22818,12 @@ def _prepare_run(
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
     degraded_cycle = False
-    try:
-        degraded_cycle = bool(provider_monitor.is_disabled("alpaca"))
-    except Exception:
-        degraded_cycle = False
+    disabled_check = getattr(provider_monitor, "is_disabled", None)
+    if callable(disabled_check):
+        try:
+            degraded_cycle = bool(disabled_check("alpaca"))
+        except (RuntimeError, ValueError, KeyError, TypeError, AttributeError):
+            degraded_cycle = False
     if safe_mode_reason():
         degraded_cycle = True
     guard_begin_cycle(universe_size=len(symbols), degraded=degraded_cycle)
@@ -25488,7 +25475,7 @@ def get_latest_price(
     if prefer_backup and callable(backup_fetch_fn):
         try:
             backup_df = backup_fetch_fn(symbol, lookback_start, now_utc, "1d")
-        except Exception:
+        except COMMON_EXC:
             backup_df = None
         else:
             backup_close = _resolve_latest_close(backup_df)
@@ -25868,18 +25855,12 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     prefer_backup = bool(__.get("prefer_backup", False))
     _PRICE_SOURCE.pop(symbol, None)
 
-    try:
-        service_available = bool(is_alpaca_service_available())
-    except Exception:
-        service_available = False
+    service_available = bool(is_alpaca_service_available())
 
     provider_disabled = False
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     if callable(primary_provider_fn):
-        try:
-            provider_disabled = not bool(primary_provider_fn())
-        except Exception:
-            provider_disabled = False
+        provider_disabled = not bool(primary_provider_fn())
     if provider_disabled:
         _PRICE_SOURCE[symbol] = _ALPACA_DISABLED_SENTINEL
         prefer_backup = True
@@ -25919,17 +25900,27 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
         or os.getenv("ALPACA_SIP_UNAUTHORIZED")
     )
+    sip_lockout_active = False
+    if not pytest_running:
+        # ``_sip_lockout_active`` mirrors the complex pricing path behaviour and
+        # ensures runtime SIP lockouts skip Alpaca entirely until cleared.
+        sip_lockout_active = sip_flagged or _sip_lockout_active()
 
     sanitized_quote_feed = _sanitized_alpaca_feed_for_quote(raw_alpaca_feed)
-    sip_locked = False
+    sip_locked = sip_lockout_active
     if sanitized_quote_feed is None:
         if raw_alpaca_feed == "sip":
             sip_locked = True
         alpaca_feed = None
     else:
         alpaca_feed = sanitized_quote_feed
-        if alpaca_feed == "sip" and not pytest_running:
+        if sip_lockout_active:
+            alpaca_feed = None
+        elif alpaca_feed == "sip" and not pytest_running:
             sip_locked = sip_flagged
+
+    if sip_lockout_active and symbol:
+        _cache_cycle_fallback_feed_helper("iex", symbol=symbol)
 
     skip_alpaca = (
         prefer_backup
@@ -26071,7 +26062,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         fallback_start = fallback_now - timedelta(days=5)
         try:
             backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
-        except Exception:
+        except COMMON_EXC:
             backup_df = None
         else:
             backup_close = _resolve_latest_close(backup_df)
