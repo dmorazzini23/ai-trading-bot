@@ -25,7 +25,9 @@ def register_provider_disable(provider: str) -> None:
     except Exception:  # pragma: no cover - defensive fallback
         count = _PROVIDER_DISABLE_TOTALS.get(provider, 0)
     if count > 0:
-        _PROVIDER_DISABLE_TOTALS[provider] = count
+        _PROVIDER_DISABLE_TOTALS[provider] = max(
+            _PROVIDER_DISABLE_TOTALS.get(provider, 0), count
+        )
     else:
         _PROVIDER_DISABLE_TOTALS.pop(provider, None)
 
@@ -170,25 +172,13 @@ def inc_backup_provider_used(provider: str, symbol: str) -> int:
 def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
 
-    metric = _provider_disable_total_counter.labels(provider=provider)
-    current_value = _current_value(metric)
-    if current_value > 0:
-        # Metrics backend already tracks the disable count; keep our local cache in sync
-        _PROVIDER_DISABLE_TOTALS[provider] = max(
-            _PROVIDER_DISABLE_TOTALS.get(provider, 0), current_value
-        )
-        return current_value
-
-    metric.inc()
-    value = _current_value(metric)
-    if value > 0:
-        _PROVIDER_DISABLE_TOTALS[provider] = max(
-            _PROVIDER_DISABLE_TOTALS.get(provider, 0), value
-        )
-        return value
-
     total = _PROVIDER_DISABLE_TOTALS.get(provider, 0) + 1
     _PROVIDER_DISABLE_TOTALS[provider] = total
+    try:
+        metric = _provider_disable_total_counter.labels(provider=provider)
+        metric.inc()
+    except Exception:
+        pass
     return total
 
 

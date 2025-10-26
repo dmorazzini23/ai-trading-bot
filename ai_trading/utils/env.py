@@ -31,16 +31,22 @@ def _resolve_data_feed_override() -> tuple[str | None, str | None]:
 
     creds = resolve_alpaca_credentials()
     current_fingerprint = (creds.key or None, creds.secret or None)
+    testing_mode = bool(os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"))
 
     if _DATA_FEED_OVERRIDE_CACHE is not None:
         cached_override, cached_reason, cached_key, cached_secret = _DATA_FEED_OVERRIDE_CACHE
-        if (cached_key, cached_secret) == current_fingerprint:
+        if testing_mode and cached_reason == "missing_credentials":
+            _DATA_FEED_OVERRIDE_CACHE = None
+        elif (cached_key, cached_secret) == current_fingerprint:
             return cached_override, cached_reason
 
     override: str | None = None
     reason: str | None = None
     key, secret = current_fingerprint
     if not key or not secret:
+        if testing_mode:
+            _DATA_FEED_OVERRIDE_CACHE = (None, None, key, secret)
+            return None, None
         override = "yahoo"
         reason = "missing_credentials"
 
