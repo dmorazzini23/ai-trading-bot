@@ -234,8 +234,8 @@ class RiskEngine:
                         return cleaned
                 return None
 
-            env_api_key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
-            env_secret_key = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+            env_api_key = get_env("ALPACA_API_KEY", None)
+            env_secret_key = get_env("ALPACA_SECRET_KEY", None)
 
             api_key = _pick_credential(env_api_key, cfg_key)
             secret_key = _pick_credential(env_secret_key, cfg_secret)
@@ -248,12 +248,14 @@ class RiskEngine:
                 raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
 
             if api_key or secret_key:
-                credentials: dict[str, str] = {}
-                if api_key:
-                    credentials["api_key"] = api_key
-                if secret_key:
-                    credentials["secret_key"] = secret_key
-                self.data_client = StockHistoricalDataClient(**credentials)
+                if not (api_key and secret_key):
+                    raise RuntimeError(
+                        "ALPACA_API_KEY and ALPACA_SECRET_KEY must both be provided for config-driven initialization"
+                    )
+                self.data_client = StockHistoricalDataClient(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                )
             elif oauth:
                 self.data_client = StockHistoricalDataClient(oauth_token=oauth)
         except (APIError, TypeError, AttributeError, OSError, ImportError) as e:

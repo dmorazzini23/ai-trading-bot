@@ -118,7 +118,7 @@ class SwingTradingMode:
         now_et = datetime.now(MARKET_TZ)
         entry = self.position_entry_times.get(symbol)
         if entry is None:
-            return True, "no_entry"
+            return True, "no_entry_time_recorded"
 
         try:
             entry_et = entry.astimezone(MARKET_TZ)
@@ -129,10 +129,10 @@ class SwingTradingMode:
                 else:
                     entry_et = entry
             else:
-                return True, "no_entry"
+                return True, "no_entry_time_recorded"
 
         if entry_et.date() == now_et.date():
-            return False, "day_trade_restriction"
+            return False, "same_day_trade_blocked"
 
         return True, "different_day"
     

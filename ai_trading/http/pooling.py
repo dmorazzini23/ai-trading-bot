@@ -82,9 +82,9 @@ _LIMIT_VERSION: int = 0
 _LAST_LIMIT_ENV_SNAPSHOT: (tuple[str | None, str | None, str | None] | None) = None
 
 _ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
-    "AI_TRADING_HOST_LIMIT",
+    "HTTP_MAX_PER_HOST",
     "AI_TRADING_HTTP_HOST_LIMIT",
-    "HTTP_MAX_WORKERS",
+    "AI_TRADING_HOST_LIMIT",
 )
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
