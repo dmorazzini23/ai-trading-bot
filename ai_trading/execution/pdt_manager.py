@@ -31,6 +31,12 @@ class PDTManager:
         self.last_check_time: Optional[datetime] = None
         self.cached_status: Optional[PDTStatus] = None
         self.cache_ttl_seconds = 60  # Cache for 1 minute
+
+    def reset_cache(self) -> None:
+        """Invalidate cached PDT data to force the next lookup to hit the broker."""
+
+        self.last_check_time = None
+        self.cached_status = None
     
     def get_pdt_status(self, account: Any) -> PDTStatus:
         """Get current PDT status from account."""
@@ -134,9 +140,11 @@ class PDTManager:
             else:
                 return (False, "swing_mode_has_position", context)
         
-        # Check if we've hit the limit
+        # No remaining day-trade capacity: treat fresh entries as swing trades.
         if not status.can_daytrade:
-            return (False, "pdt_limit_reached", context)
+            if current_position == 0:
+                return (True, "swing_mode_entry", context)
+            return (True, "pdt_conservative", context)
         
         # Conservative mode - warn but allow
         if status.strategy_recommendation == "conservative":
@@ -216,4 +224,3 @@ class PDTManager:
                 )
                 continue
         return default
-

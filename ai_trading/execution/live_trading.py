@@ -3221,7 +3221,7 @@ class ExecutionEngine:
 
         try:
             from ai_trading.execution.pdt_manager import PDTManager  # lazy import
-            from ai_trading.execution.swing_mode import get_swing_mode
+            from ai_trading.execution.swing_mode import get_swing_mode, enable_swing_mode
         except Exception:
             skip, reason, legacy_context = self._should_skip_for_pdt(account_snapshot, closing_position)
             sanitized_context.update(_sanitize_pdt_context(legacy_context))
@@ -3244,14 +3244,46 @@ class ExecutionEngine:
             )
             current_position = 0
 
+        force_swing = getattr(swing_mode, "enabled", False)
+
         try:
             allow, reason, context = pdt_manager.should_allow_order(
                 account_snapshot,
                 symbol,
                 side,
                 current_position=current_position,
-                force_swing_mode=getattr(swing_mode, "enabled", False),
+                force_swing_mode=force_swing,
             )
+
+            if not allow and reason == "pdt_limit_reached":
+                swing_retry_context = {
+                    "daytrade_count": context.get("daytrade_count"),
+                    "daytrade_limit": context.get("daytrade_limit"),
+                }
+                swing_mode_obj = swing_mode
+                try:
+                    swing_mode_obj = get_swing_mode()
+                    if not getattr(swing_mode_obj, "enabled", False):
+                        enable_swing_mode()
+                        swing_mode_obj = get_swing_mode()
+                        logger.warning(
+                            "PDT_LIMIT_EXCEEDED_SWING_MODE_ACTIVATED",
+                            extra={
+                                **{k: v for k, v in swing_retry_context.items() if v is not None},
+                                "message": "Automatically switched to swing trading mode to avoid PDT violations",
+                            },
+                        )
+                except Exception:
+                    logger.debug("SWING_MODE_ENABLE_FAILED", exc_info=True)
+
+                allow, reason, context = pdt_manager.should_allow_order(
+                    account_snapshot,
+                    symbol,
+                    side,
+                    current_position=current_position,
+                    force_swing_mode=True,
+                )
+                swing_mode = swing_mode_obj
         except Exception as exc:
             logger.exception("PDT_MANAGER_PRECHECK_FAILED", extra={"symbol": symbol, "error": str(exc)})
             skip, reason, legacy_context = self._should_skip_for_pdt(account_snapshot, closing_position)
