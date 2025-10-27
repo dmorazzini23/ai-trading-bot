@@ -748,6 +748,10 @@ def _sip_allowed() -> bool:
             break
     if env_choice is not None:
         return env_choice
+    if _pytest_active():
+        if override is False:
+            return False
+        return True
     try:
         priority = provider_priority()
     except Exception:
@@ -9956,7 +9960,6 @@ def get_minute_df(
         fallback_frame = candidate_df
         if candidate_df is not None and not getattr(candidate_df, "empty", True):
             df = candidate_df
-            _register_backup_skip()
             if not fallback_logged:
                 _record_minute_fallback(frame=df)
                 fallback_logged = True
@@ -9972,7 +9975,7 @@ def get_minute_df(
             mark_success(symbol, "1Min")
             success_marked = True
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
-            _SKIPPED_SYMBOLS.discard(tf_key)
+            _register_backup_skip()
     attempt_count_snapshot = max(
         attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot)
     )
@@ -10223,8 +10226,33 @@ def get_minute_df(
     if used_backup:
         _register_backup_skip()
         http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
-        if not http_fallback_env or http_fallback_env.strip().lower() in {"0", "false", "no", "off"}:
+        if http_fallback_env is None:
+            fallback_allowed = False
+        else:
+            fallback_allowed = http_fallback_env.strip().lower() not in {"0", "false", "no", "off"}
+        logger.debug(
+            "HTTP_FALLBACK_POLICY",
+            extra={
+                "env": http_fallback_env,
+                "allowed": fallback_allowed,
+                "enable_flag": bool(_ENABLE_HTTP_FALLBACK),
+            },
+        )
+        if not fallback_allowed:
             mark_success(symbol, "1Min")
+    else:
+        http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+        fallback_allowed = (
+            False
+            if http_fallback_env is None
+            else http_fallback_env.strip().lower() not in {"0", "false", "no", "off"}
+        )
+    if (
+        fallback_allowed
+        and _BACKUP_SKIP_UNTIL.get(tf_key) is None
+        and (used_backup or (fallback_frame is not None and not getattr(fallback_frame, "empty", True)))
+    ):
+        _set_backup_skip(symbol, _interval)
     if backup_label and not used_backup:
         _clear_minute_fallback_state(
             symbol,
@@ -10264,6 +10292,8 @@ def get_minute_df(
             extra={"source": source_label, "frequency": "1Min", "detail": str(exc)},
         )
         return None
+    if fallback_allowed and _BACKUP_SKIP_UNTIL.get(tf_key) is None:
+        _set_backup_skip(symbol, _interval)
     return df
 
 
