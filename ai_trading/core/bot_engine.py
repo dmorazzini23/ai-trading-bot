@@ -105,6 +105,7 @@ from ai_trading.logging import (
     logger_once,
 )
 from ai_trading.logging.emit_once import emit_once
+from ai_trading.diagnostics.env_diag import gather_alpaca_diag, log_env_diag
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
     AlpacaOrderHTTPError,
@@ -856,7 +857,6 @@ from ai_trading.logging import (
     _get_metrics_logger,
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
-from ai_trading.logging.redact import redact as _redact  # AI-AGENT-REF: mask secrets
 from ai_trading.utils import http
 from ai_trading.utils.timing import (
     HTTP_TIMEOUT,
@@ -2385,19 +2385,8 @@ def _sip_authorized() -> bool:
 
 def _alpaca_diag_info() -> dict[str, object]:
     """Collect Alpaca env & mode diagnostics for operator visibility."""
-    # AI-AGENT-REF: structured diag for once-per-process logging
     try:
-        key, secret, base_url = _resolve_alpaca_env()
-        shadow = is_shadow_mode()
-        paper = bool(base_url and ("paper" in base_url))
-        return {
-            "has_key": bool(key),
-            "has_secret": bool(secret),
-            "base_url": base_url or "",
-            "paper": paper,
-            "shadow_mode": shadow,
-            "cwd": os.getcwd(),
-        }
+        return gather_alpaca_diag()
     except COMMON_EXC as e:  # pragma: no cover – diag never fatal
         return {"diag_error": str(e)}  # AI-AGENT-REF: narrowed diag exception
 
@@ -11942,13 +11931,11 @@ def _initialize_alpaca_clients() -> bool:
             data_client = None
             raise
         if not (key and secret):
-            diag = _alpaca_diag_info()
             if not is_shadow_mode():
                 logger_once.error(
                     "ALPACA_CLIENT_INIT_FAILED - missing credentials",
                     key="alpaca_client_init_failed",
                 )
-                logger.info("ALPACA_DIAG", extra=_redact(diag))
                 raise RuntimeError("Missing Alpaca API credentials")
             # In SHADOW_MODE we may not have creds; skip client init
             logger.info(
@@ -11958,7 +11945,6 @@ def _initialize_alpaca_clients() -> bool:
                 "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
                 key="alpaca_init_skipped",
             )
-            logger.info("ALPACA_DIAG", extra=_redact(diag))
             return False
         try:
             AlpacaREST = get_trading_client_cls()
@@ -12012,9 +11998,7 @@ def _initialize_alpaca_clients() -> bool:
             trading_client = None
             data_client = None
             return False
-        logger.info(
-            "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
-        )
+        log_env_diag(logger, extra={"initialized": True})
         stream = None  # initialize stream lazily elsewhere if/when required
         return True
     return False
@@ -16268,71 +16252,82 @@ def _fetch_feature_data(
     if cached is not None:
         _FEATURE_CACHE.move_to_end(cache_key)
         return raw_df, cached.copy(), None
+    return _build_feature_frames(df, raw_df, symbol, cache_key)
+
+
+def _build_feature_frames(
+    df: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    symbol: str,
+    cache_key: tuple[str, Any],
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None, bool | None]:
+    """Compute feature frames with detailed timing split."""
 
     initial_len = len(df)
 
-    with StageTimer(logger, "compute_macd", symbol=symbol):
-        df = compute_macd(df)
-    assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
-    macd_missing = "macd" not in df.columns
-    if not macd_missing:
-        macd_missing = int(df["macd"].notna().sum()) == 0
-    if macd_missing:
-        logger.warning(
-            "MACD indicators unavailable for %s; skipping indicator preparation",
-            symbol,
-        )
-        return raw_df, None, True
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("[%s] Post MACD: last closes: %s", symbol, df["close"].tail(5).tolist())
-
-    with StageTimer(logger, "compute_atr", symbol=symbol):
-        df = compute_atr(df)
-    assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("[%s] Post ATR: last closes: %s", symbol, df["close"].tail(5).tolist())
-
-    with StageTimer(logger, "compute_vwap", symbol=symbol):
-        df = compute_vwap(df)
-    assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("[%s] Post VWAP: last closes: %s", symbol, df["close"].tail(5).tolist())
-
-    with StageTimer(logger, "compute_sma", symbol=symbol):
-        df = compute_sma(df)
-    assert_row_integrity(initial_len, len(df), "compute_sma", symbol)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("[%s] Post SMA: last closes: %s", symbol, df["close"].tail(5).tolist())
-
-    with StageTimer(logger, "compute_macds", symbol=symbol):
-        df = compute_macds(df)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("%s dataframe columns after indicators: %s", symbol, df.columns.tolist())
-    df = ensure_columns(df, ["macd", "atr", "vwap", "macds", "sma_50", "sma_200"], symbol)
-    if df.empty and raw_df is not None:
-        df = raw_df.copy()
-
-    try:
-        with StageTimer(logger, "prepare_indicators", symbol=symbol):
-            feat_df = prepare_indicators(df)
-        if feat_df is None:
+    with StageTimer(logger, "FEATURE_BUILD_MS", symbol=symbol):
+        with StageTimer(logger, "compute_macd", symbol=symbol):
+            df = compute_macd(df)
+        assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
+        macd_missing = "macd" not in df.columns
+        if not macd_missing:
+            macd_missing = int(df["macd"].notna().sum()) == 0
+        if macd_missing:
+            logger.warning(
+                "MACD indicators unavailable for %s; skipping indicator preparation",
+                symbol,
+            )
             return raw_df, None, True
-        # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("[%s] Post MACD: last closes: %s", symbol, df["close"].tail(5).tolist())
+
+        with StageTimer(logger, "compute_atr", symbol=symbol):
+            df = compute_atr(df)
+        assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("[%s] Post ATR: last closes: %s", symbol, df["close"].tail(5).tolist())
+
+        with StageTimer(logger, "compute_vwap", symbol=symbol):
+            df = compute_vwap(df)
+        assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("[%s] Post VWAP: last closes: %s", symbol, df["close"].tail(5).tolist())
+
+        with StageTimer(logger, "compute_sma", symbol=symbol):
+            df = compute_sma(df)
+        assert_row_integrity(initial_len, len(df), "compute_sma", symbol)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("[%s] Post SMA: last closes: %s", symbol, df["close"].tail(5).tolist())
+
+        with StageTimer(logger, "compute_macds", symbol=symbol):
+            df = compute_macds(df)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("%s dataframe columns after indicators: %s", symbol, df.columns.tolist())
+        df = ensure_columns(df, ["macd", "atr", "vwap", "macds", "sma_50", "sma_200"], symbol)
+        if df.empty and raw_df is not None:
+            df = raw_df.copy()
+
+        try:
+            with StageTimer(logger, "prepare_indicators", symbol=symbol):
+                feat_df = prepare_indicators(df)
+            if feat_df is None:
+                return raw_df, None, True
+            # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
+            if feat_df.empty:
+                logger.warning("Parsed feature DataFrame is empty; falling back to raw data")
+                feat_df = raw_df.copy()
+        except (ValueError, KeyError) as exc:
+            logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+            return raw_df, None, True
         if feat_df.empty:
-            logger.warning("Parsed feature DataFrame is empty; falling back to raw data")
-            feat_df = raw_df.copy()
-    except (ValueError, KeyError) as exc:
-        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
-        return raw_df, None, True
-    if feat_df.empty:
-        logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
-        return raw_df, None, True
-    _set_cycle_feature_cache(symbol, raw_df, feat_df)
-    _FEATURE_CACHE[cache_key] = feat_df
-    _FEATURE_CACHE.move_to_end(cache_key)
-    if len(_FEATURE_CACHE) > _FEATURE_CACHE_LIMIT:
-        _FEATURE_CACHE.popitem(last=False)
-    return raw_df, feat_df, None
+            logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
+            return raw_df, None, True
+        _set_cycle_feature_cache(symbol, raw_df, feat_df)
+        _FEATURE_CACHE[cache_key] = feat_df
+        _FEATURE_CACHE.move_to_end(cache_key)
+        if len(_FEATURE_CACHE) > _FEATURE_CACHE_LIMIT:
+            _FEATURE_CACHE.popitem(last=False)
+        return raw_df, feat_df, None
 
 
 def _model_feature_names(model) -> list[str]:
@@ -18606,7 +18601,7 @@ def trade_logic(
         )
         return False
 
-    with StageTimer(logger, "FETCH_FEATURE_DATA", symbol=symbol):
+    with StageTimer(logger, "DATA_FETCH_TOTAL_MS", symbol=symbol):
         raw_df, feat_df, skip_flag = _fetch_feature_data(
             ctx, state, symbol, price_df=price_df
         )
@@ -24367,7 +24362,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             retries = 3
             processed, row_counts = [], {}
             for attempt in range(retries):
-                with StageTimer(logger, "INDICATORS_COMPUTE", symbols=len(symbols)):
+                with StageTimer(logger, "INDICATORS_COMPUTE_MS", symbols=len(symbols)):
                     processed, row_counts = _process_symbols(
                         symbols, current_cash, alpha_model, regime_ok
                     )

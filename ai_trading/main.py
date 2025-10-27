@@ -1020,6 +1020,72 @@ def run_flask_app(
     from ai_trading import app
 
     application = app.create_app()
+
+    def _mask_identifier(value: str | None, keep: int = 4) -> str:
+        if not value:
+            return ""
+        prefix = str(value)[: max(keep, 0)]
+        if not prefix:
+            return "***"
+        return f"{prefix}***"
+
+    def _broker_snapshot() -> dict[str, Any]:
+        snapshot: dict[str, Any] = {"available": False}
+        try:
+            from ai_trading.core import bot_engine as _bot_engine
+        except Exception:
+            logger.debug("BROKER_DIAG_IMPORT_FAILED", exc_info=True)
+            return snapshot
+
+        client = getattr(_bot_engine, "trading_client", None)
+        if client is None:
+            return snapshot
+
+        snapshot["available"] = True
+
+        try:
+            orders = _bot_engine.list_open_orders(client)
+            if orders is None:
+                snapshot["open_orders"] = 0
+            else:
+                orders_list = list(orders)
+                snapshot["open_orders"] = len(orders_list)
+        except Exception:
+            logger.debug("BROKER_DIAG_OPEN_ORDERS_FAILED", exc_info=True)
+
+        try:
+            list_positions = getattr(client, "list_positions", None)
+            if callable(list_positions):
+                positions = list_positions()
+                if positions is None:
+                    snapshot["positions"] = 0
+                else:
+                    positions_list = list(positions)
+                    snapshot["positions"] = len(positions_list)
+        except Exception:
+            logger.debug("BROKER_DIAG_POSITIONS_FAILED", exc_info=True)
+
+        try:
+            get_account = getattr(client, "get_account", None)
+            if callable(get_account):
+                account = get_account()
+                if account is not None:
+                    acct_payload: dict[str, Any] = {
+                        "status": getattr(account, "status", None),
+                        "trading_blocked": getattr(account, "trading_blocked", None),
+                    }
+                    identifier = getattr(account, "id", None) or getattr(
+                        account, "account_number", None
+                    )
+                    if identifier:
+                        acct_payload["id_masked"] = _mask_identifier(str(identifier))
+                    snapshot["account"] = acct_payload
+        except Exception:
+            logger.debug("BROKER_DIAG_ACCOUNT_FAILED", exc_info=True)
+
+        return snapshot
+
+    application.config.setdefault("broker_snapshot_fn", _broker_snapshot)
     debug = run_kwargs.pop("debug", False)
 
     def _port_available(candidate: int) -> bool:

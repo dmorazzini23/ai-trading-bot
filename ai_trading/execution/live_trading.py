@@ -336,6 +336,44 @@ def _extract_value(record: Any, *names: str) -> Any:
     return None
 
 
+def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any, str, int, int, Any, Any]:
+    """Return normalized order metadata for logging and ExecutionResult."""
+
+    if isinstance(order_payload, dict):
+        order_id = order_payload.get("id") or order_payload.get("order_id") or order_payload.get("client_order_id")
+        client_order_id = order_payload.get("client_order_id")
+        status = order_payload.get("status") or "submitted"
+        filled_raw = order_payload.get("filled_qty") or order_payload.get("filled_quantity")
+        requested_raw = (
+            order_payload.get("qty")
+            or order_payload.get("quantity")
+            or order_payload.get("requested_quantity")
+        )
+        order_obj: Any = SimpleNamespace(
+            **{
+                key: order_payload.get(key)
+                for key in ("id", "symbol", "side", "qty", "status", "client_order_id")
+            }
+        )
+    else:
+        order_id = getattr(order_payload, "id", None) or getattr(order_payload, "order_id", None) or getattr(
+            order_payload, "client_order_id", None
+        )
+        client_order_id = getattr(order_payload, "client_order_id", None)
+        status = getattr(order_payload, "status", None) or "submitted"
+        filled_raw = getattr(order_payload, "filled_qty", None) or getattr(
+            order_payload, "filled_quantity", None
+        )
+        requested_raw = getattr(order_payload, "qty", None) or getattr(
+            order_payload, "quantity", None
+        ) or getattr(order_payload, "requested_quantity", None)
+        order_obj = order_payload
+
+    filled_qty = _safe_int(filled_raw, 0)
+    requested_qty = _safe_int(requested_raw, qty_fallback)
+    return order_obj, str(status), filled_qty, requested_qty, order_id, client_order_id
+
+
 def _extract_error_detail(err: BaseException | None) -> str | None:
     """Best-effort extraction of a human-readable detail from an exception."""
 
@@ -1681,6 +1719,14 @@ class ExecutionEngine:
                 _safe_int(count_attr, 0),
             ):
                 info = pdt_lockout_info()
+                detail_context = {
+                    "pattern_day_trader": _safe_bool(pattern_attr),
+                    "daytrade_limit": daytrade_limit_value,
+                    "daytrade_count": _safe_int(count_attr, 0),
+                    "active": _safe_bool(_extract_value(account_snapshot, "active")),
+                    "limit": info.get("limit"),
+                    "count": info.get("count"),
+                }
                 logger.info(
                     "PDT_LOCKOUT_ACTIVE",
                     extra={
@@ -1689,6 +1735,32 @@ class ExecutionEngine:
                         "limit": info.get("limit"),
                         "count": info.get("count"),
                         "action": "skip_openings",
+                    },
+                )
+                logger.info(
+                    "ORDER_SKIPPED_NONRETRYABLE",
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "quantity": quantity,
+                        "client_order_id": client_order_id,
+                        "order_type": "market",
+                        "reason": "pdt_lockout",
+                    },
+                )
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "pdt_lockout",
+                    detail_context,
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "quantity": quantity,
+                        "client_order_id": client_order_id,
+                        "order_type": "market",
+                        "reason": "pdt_lockout",
+                        "detail": "pdt_lockout",
+                        "context": detail_context,
                     },
                 )
                 return None
@@ -1821,7 +1893,6 @@ class ExecutionEngine:
         self.stats["total_orders"] += 1
         if result:
             self.stats["successful_orders"] += 1
-            logger.info(f"Market order executed successfully: {result.get('id', 'unknown')}")
         else:
             self.stats["failed_orders"] += 1
             extra: dict[str, Any] = {
@@ -2063,6 +2134,14 @@ class ExecutionEngine:
                 _safe_int(count_attr, 0),
             ):
                 info = pdt_lockout_info()
+                detail_context = {
+                    "pattern_day_trader": _safe_bool(pattern_attr),
+                    "daytrade_limit": _safe_int(limit_attr, 0),
+                    "daytrade_count": _safe_int(count_attr, 0),
+                    "active": _safe_bool(_extract_value(account_snapshot, "active")),
+                    "limit": info.get("limit"),
+                    "count": info.get("count"),
+                }
                 logger.info(
                     "PDT_LOCKOUT_ACTIVE",
                     extra={
@@ -2071,6 +2150,34 @@ class ExecutionEngine:
                         "limit": info.get("limit"),
                         "count": info.get("count"),
                         "action": "skip_openings",
+                    },
+                )
+                logger.info(
+                    "ORDER_SKIPPED_NONRETRYABLE",
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "quantity": quantity,
+                        "client_order_id": client_order_id,
+                        "order_type": "limit",
+                        "limit_price": None if limit_price is None else float(limit_price),
+                        "reason": "pdt_lockout",
+                    },
+                )
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "pdt_lockout",
+                    detail_context,
+                    extra={
+                        "symbol": symbol,
+                        "side": side_lower,
+                        "quantity": quantity,
+                        "client_order_id": client_order_id,
+                        "order_type": "limit",
+                        "limit_price": None if limit_price is None else float(limit_price),
+                        "reason": "pdt_lockout",
+                        "detail": "pdt_lockout",
+                        "context": detail_context,
                     },
                 )
                 return None
@@ -2298,7 +2405,6 @@ class ExecutionEngine:
         self.stats["total_orders"] += 1
         if result:
             self.stats["successful_orders"] += 1
-            logger.info(f"Limit order executed successfully: {result.get('id', 'unknown')}")
         else:
             self.stats["failed_orders"] += 1
             extra: dict[str, Any] = {
@@ -2356,9 +2462,21 @@ class ExecutionEngine:
             annotations = dict(annotations_raw)
         else:
             annotations = {}
-        mapped_side = self._map_core_side(side)
-        if qty <= 0:
+
+        side_token = getattr(side, "value", side)
+        try:
+            side_str_for_validation = side_token if isinstance(side_token, str) else str(side_token)
+        except Exception:
+            side_str_for_validation = str(side_token)
+        normalized_side_input = self._normalized_order_side(side_str_for_validation)
+        if normalized_side_input is None:
+            self._emit_validation_failure(symbol, side, qty, "invalid_side")
+            raise ValueError(f"invalid side: {side}")
+        if qty is None or qty <= 0:
+            self._emit_validation_failure(symbol, side, qty, "invalid_qty")
             raise ValueError(f"execute_order invalid qty={qty}")
+
+        mapped_side = self._map_core_side(side)
 
         time_in_force_alias = kwargs.pop("tif", None)
         extended_hours = kwargs.get("extended_hours")
@@ -2688,20 +2806,55 @@ class ExecutionEngine:
             )
             return None
 
-        if isinstance(order, dict):
-            order_id = order.get("id") or order.get("client_order_id")
-            status = order.get("status") or "submitted"
-            filled_qty = order.get("filled_qty") or order.get("filled_quantity") or 0
-            requested_qty = order.get("qty") or qty
-            order_obj: Any = SimpleNamespace(**{k: order.get(k) for k in ("id", "symbol", "side", "qty", "status")})
-        else:
-            order_id = getattr(order, "id", None) or getattr(order, "client_order_id", None)
-            status = getattr(order, "status", None) or "submitted"
-            filled_qty = getattr(order, "filled_qty", None) or getattr(order, "filled_quantity", None) or 0
-            requested_qty = getattr(order, "qty", None) or getattr(order, "quantity", None) or qty
-            order_obj = order
+        final_order = order
+        client = getattr(self, "trading_client", None)
+        order_id_hint = _extract_value(final_order, "id", "order_id")
+        client_order_id_hint = _extract_value(final_order, "client_order_id")
+        final_status = _extract_value(final_order, "status") or "submitted"
+        if client is not None:
+            poll_deadline = time.monotonic() + 3.0
+            poll_interval = 0.25
+            terminal_statuses = {
+                "filled",
+                "partially_filled",
+                "canceled",
+                "cancelled",
+                "rejected",
+                "expired",
+                "done_for_day",
+            }
+            while time.monotonic() < poll_deadline:
+                refreshed = None
+                try:
+                    get_by_id = getattr(client, "get_order_by_id", None)
+                    if callable(get_by_id) and order_id_hint:
+                        refreshed = get_by_id(str(order_id_hint))
+                    else:
+                        get_by_client = getattr(client, "get_order_by_client_order_id", None)
+                        if callable(get_by_client) and client_order_id_hint:
+                            refreshed = get_by_client(str(client_order_id_hint))
+                except Exception:
+                    logger.debug(
+                        "ORDER_STATUS_POLL_FAILED",
+                        extra={"symbol": symbol},
+                        exc_info=True,
+                    )
+                    break
+                if refreshed is None:
+                    break
+                final_order = refreshed
+                refreshed_status = _extract_value(refreshed, "status")
+                if refreshed_status:
+                    final_status = refreshed_status
+                if str(final_status).lower() in terminal_statuses:
+                    break
+                time.sleep(poll_interval)
 
-        if not order_id:
+        order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
+            final_order, qty
+        )
+
+        if not (order_id or client_order_id):
             logger.error(
                 "EXEC_ORDER_RESPONSE_INVALID",
                 extra={
@@ -2713,11 +2866,85 @@ class ExecutionEngine:
             )
             return None
 
+        logger.info(
+            "ORDER_SUBMITTED",
+            extra={
+                "symbol": symbol,
+                "side": mapped_side,
+                "qty": qty,
+                "order_id": str(order_id) if order_id is not None else None,
+                "client_order_id": str(client_order_id) if client_order_id is not None else None,
+                "status": status,
+                "order_type": order_type_normalized,
+            },
+        )
+
+        open_orders_count: int | None = None
+        positions_count: int | None = None
+        if client is not None:
+            try:
+                open_orders_resp: Any | None = None
+                get_orders = getattr(client, "get_orders", None)
+                if callable(get_orders):
+                    open_orders_resp = get_orders(status="open")  # type: ignore[call-arg]
+                else:
+                    list_orders = getattr(client, "list_orders", None)
+                    if callable(list_orders):
+                        open_orders_resp = list_orders(status="open")  # type: ignore[call-arg]
+                if open_orders_resp is not None:
+                    open_orders_list = list(open_orders_resp)
+                    open_orders_count = len(open_orders_list)
+                else:
+                    open_orders_count = 0
+            except Exception:
+                logger.debug(
+                    "BROKER_STATE_OPEN_ORDERS_FAILED",
+                    extra={"symbol": symbol},
+                    exc_info=True,
+                )
+                open_orders_count = None
+
+            try:
+                positions_resp: Any | None = None
+                get_all_positions = getattr(client, "get_all_positions", None)
+                if callable(get_all_positions):
+                    positions_resp = get_all_positions()
+                else:
+                    list_positions = getattr(client, "list_positions", None)
+                    if callable(list_positions):
+                        positions_resp = list_positions()
+                if positions_resp is not None:
+                    positions_list = list(positions_resp)
+                    positions_count = len(positions_list)
+                    self._update_position_tracker_snapshot(positions_list)
+                else:
+                    positions_count = 0
+            except Exception:
+                logger.debug(
+                    "BROKER_STATE_POSITIONS_FAILED",
+                    extra={"symbol": symbol},
+                    exc_info=True,
+                )
+                positions_count = None
+
+        order_id_display = order_id or client_order_id
+        logger.info(
+            "BROKER_STATE_AFTER_SUBMIT",
+            extra={
+                "symbol": symbol,
+                "order_id": str(order_id_display) if order_id_display is not None else None,
+                "client_order_id": str(client_order_id) if client_order_id is not None else None,
+                "final_status": status,
+                "open_orders": open_orders_count,
+                "positions": positions_count,
+            },
+        )
+
         execution_result = ExecutionResult(
             order_obj,
             status,
-            int(filled_qty or 0),
-            int(requested_qty or qty),
+            filled_qty,
+            requested_qty,
             None if signal_weight is None else float(signal_weight),
         )
 
@@ -2940,6 +3167,98 @@ class ExecutionEngine:
         if normalized_side == "sell":
             return -qty_int
         return qty_int
+
+    def _resolve_position_before(self, symbol: str) -> int | None:
+        """Return best-effort position quantity prior to order submission."""
+
+        tracker = getattr(self, "_position_tracker", None)
+        try:
+            symbol_key = str(symbol or "").upper()
+        except Exception:
+            symbol_key = str(symbol)
+
+        if isinstance(tracker, dict):
+            raw = tracker.get(symbol_key, tracker.get(symbol))
+            if raw is not None:
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    pass
+        elif tracker is not None:
+            try:
+                raw = getattr(tracker, symbol_key, None)
+            except Exception:
+                raw = None
+            if raw is None:
+                get = getattr(tracker, "get", None)
+                if callable(get):
+                    raw = get(symbol_key, get(symbol, None))
+            if raw is not None:
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    pass
+        try:
+            return int(self._position_quantity(symbol))
+        except Exception:
+            logger.debug(
+                "ORDER_VALIDATION_POSITION_LOOKUP_FAILED",
+                extra={"symbol": symbol},
+                exc_info=True,
+            )
+            return None
+
+    def _emit_validation_failure(self, symbol: str, side: Any, qty: Any, reason: str) -> None:
+        position_before = self._resolve_position_before(symbol)
+        try:
+            side_str = getattr(side, "value", side)
+        except Exception:
+            side_str = side
+        logger.error(
+            "ORDER_VALIDATION_FAILED",
+            extra={
+                "symbol": symbol,
+                "side": str(side_str),
+                "qty": qty,
+                "position_qty_before": position_before,
+                "reason": reason,
+            },
+        )
+
+    def _update_position_tracker_snapshot(self, positions: list[Any]) -> None:
+        """Refresh the cached position tracker with broker supplied snapshot."""
+
+        tracker = getattr(self, "_position_tracker", None)
+        if not isinstance(tracker, dict):
+            tracker = {}
+            setattr(self, "_position_tracker", tracker)
+        else:
+            tracker.clear()
+
+        for pos in positions:
+            symbol_val = _extract_value(pos, "symbol")
+            if not symbol_val:
+                continue
+            try:
+                symbol_key = str(symbol_val).upper()
+            except Exception:
+                symbol_key = str(symbol_val)
+
+            qty_decimal = _safe_decimal(
+                _extract_value(pos, "qty", "quantity", "position", "current_qty")
+            )
+            try:
+                qty_abs = int(qty_decimal.copy_abs()) if qty_decimal is not None else 0
+            except Exception:
+                try:
+                    qty_abs = _safe_int(qty_decimal, 0)
+                except Exception:
+                    qty_abs = 0
+            side_val = _extract_value(pos, "side")
+            normalized_side = self._normalized_order_side(side_val)
+            if normalized_side == "sell":
+                qty_abs = -qty_abs
+            tracker[symbol_key] = qty_abs
 
     def _submit_cover_order(self, symbol: str, requested_qty: int) -> bool:
         client = getattr(self, "trading_client", None)

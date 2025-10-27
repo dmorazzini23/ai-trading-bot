@@ -23,6 +23,7 @@ from ai_trading.alpaca_api import (
     _set_alpaca_service_available,
 )
 from ai_trading.config.management import get_env, is_shadow_mode
+from ai_trading.diagnostics.env_diag import log_env_diag
 from ai_trading.exc import COMMON_EXC
 
 logger = get_logger(__name__)
@@ -402,15 +403,8 @@ def _initialize_alpaca_clients() -> bool:
             be.data_client = None
             raise
         if not (key and secret):
-            diag = {}
-            try:
-                from ai_trading.core.bot_engine import _alpaca_diag_info
-                diag = _alpaca_diag_info()
-            except Exception:
-                pass
             logger.info("Shadow mode or missing credentials: skipping Alpaca client initialization")
             log_once.warning("ALPACA_INIT_SKIPPED - shadow mode or missing credentials", key="alpaca_init_skipped")
-            logger.info("ALPACA_DIAG", extra=diag)
             _set_alpaca_service_available(False)
             return False
         try:
@@ -455,10 +449,6 @@ def _initialize_alpaca_clients() -> bool:
             be.data_client = None
             return False
         logger.info("ALPACA_CLIENT_INIT_SUCCESS")
-        try:
-            from ai_trading.core.bot_engine import _alpaca_diag_info
-            logger.info("ALPACA_DIAG", extra={"initialized": True, **_alpaca_diag_info()})
-        except Exception:
-            pass
+        log_env_diag(logger, extra={"initialized": True})
         return True
     return False

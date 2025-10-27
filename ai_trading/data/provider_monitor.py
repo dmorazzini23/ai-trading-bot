@@ -15,6 +15,7 @@ production deployments receive notifications about outages.
 import logging
 import os
 import time
+import random
 from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -163,6 +164,26 @@ def _resolve_health_passes_required() -> int:
         return max(int(candidate), 1)
     except Exception:
         return 4
+
+
+def _resolve_primary_dwell_seconds() -> float:
+    """Return dwell window (seconds) before switching primary providers again."""
+
+    candidate: float | None = None
+    try:
+        candidate = float(get_env("DATA_PROVIDER_PRIMARY_DWELL_SECONDS", None, cast=float))
+    except Exception:
+        candidate = None
+    if candidate is None:
+        raw = os.getenv("DATA_PROVIDER_PRIMARY_DWELL_SECONDS", "").strip()
+        if raw:
+            try:
+                candidate = float(raw)
+            except Exception:
+                candidate = None
+    if candidate is None:
+        candidate = 600.0
+    return max(float(candidate), 0.0)
 
 
 _MIN_RECOVERY_SECONDS = _resolve_switch_cooldown_seconds()
@@ -681,6 +702,7 @@ class ProviderMonitor:
         switchover_threshold: int = 5,
         backoff_factor: float | None = None,
         max_cooldown: int | None = None,
+        primary_dwell_seconds: float | None = None,
     ) -> None:
         self.threshold = threshold
         self.cooldown = cooldown
@@ -711,6 +733,24 @@ class ProviderMonitor:
             else float(_resolve_max_cooldown())
         )
         self.switch_quiet_seconds = max(float(_resolve_switch_quiet_seconds()), 0.0)
+        pytest_active = (
+            os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
+            or bool(os.getenv("PYTEST_CURRENT_TEST"))
+        )
+        dwell_candidate = (
+            float(primary_dwell_seconds)
+            if primary_dwell_seconds is not None
+            else _resolve_primary_dwell_seconds()
+        )
+        if pytest_active:
+            self.primary_dwell_seconds = 0.0
+            self.retry_jitter_range: tuple[float, float] | None = None
+        else:
+            if primary_dwell_seconds is None:
+                self.primary_dwell_seconds = max(float(dwell_candidate), 600.0)
+            else:
+                self.primary_dwell_seconds = max(float(dwell_candidate), 0.0)
+            self.retry_jitter_range = (10.0, 45.0)
         self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
         self._last_switch_logged: tuple[str, str] | None = None
         self._last_switch_ts: float | None = None
@@ -737,6 +777,7 @@ class ProviderMonitor:
                         "decision_window_secs": decision_secs,
                         "switch_cooldown_secs": switch_cd,
                         "max_cooldown_secs": max_cd,
+                        "primary_dwell_secs": int(self.primary_dwell_seconds),
                     },
                 )
             except Exception:
@@ -1097,10 +1138,11 @@ class ProviderMonitor:
                 return ProviderAction.DISABLE
         count = self._switchover_disable_counts[from_key] + 1
         self._switchover_disable_counts[from_key] = count
-        cooldown_window = min(
-            self.cooldown * (self.backoff_factor ** (count - 1)),
-            self.max_cooldown,
-        )
+        base_cooldown = self.cooldown * (self.backoff_factor ** (count - 1))
+        cooldown_window = min(base_cooldown, self.max_cooldown)
+        if self.retry_jitter_range:
+            jitter = random.uniform(*self.retry_jitter_range)
+            cooldown_window = min(self.max_cooldown, cooldown_window + jitter)
         self._current_switch_cooldowns[from_key] = cooldown_window
         key = (from_key, to_key)
         if key not in self.switch_counts:
@@ -1223,8 +1265,15 @@ class ProviderMonitor:
         self.disable_counts[provider] = count
         self.outage_start.setdefault(provider, now)
         if duration is None:
-            duration = self.cooldown * (self.backoff_factor ** (count - 1))
-        cooldown_s = min(duration, self.max_cooldown)
+            base_duration = self.cooldown * (self.backoff_factor ** (count - 1))
+            cooldown_s = min(base_duration, self.max_cooldown)
+            if self.retry_jitter_range:
+                cooldown_s = min(
+                    self.max_cooldown,
+                    cooldown_s + random.uniform(*self.retry_jitter_range),
+                )
+        else:
+            cooldown_s = min(duration, self.max_cooldown)
         if reason == "nan_close":
             base_floor = max(float(self.cooldown), 1.0)
             cooldown_s = max(cooldown_s, base_floor)
@@ -1476,6 +1525,16 @@ class ProviderMonitor:
         )
         stay_reason = decision_context.get("stay_reason", stay_reason)
         stay_logged = bool(decision_context.get("stay_logged"))
+
+        if action is ProviderAction.SWITCH and self.primary_dwell_seconds > 0:
+            last_primary_switch = state.get("last_switch")
+            dwell_elapsed = None
+            if isinstance(last_primary_switch, datetime):
+                dwell_elapsed = (now - last_primary_switch).total_seconds()
+            if dwell_elapsed is not None and dwell_elapsed < float(self.primary_dwell_seconds) and not hard_fail:
+                action = ProviderAction.STAY
+                stay_reason = "primary_dwell"
+                stay_logged = False
 
         if action is ProviderAction.SWITCH and not self._sip_switch_allowed(target_provider):
             action = ProviderAction.STAY

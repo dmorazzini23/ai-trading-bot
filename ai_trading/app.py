@@ -68,6 +68,15 @@ def create_app():
     # Bypass any mocked Flask import by resolving the class at call time
     FlaskClass = import_module("flask.app").Flask
     app: "Flask" = FlaskClass(__name__)
+    try:
+        from ai_trading.diagnostics.http_diag import diag_bp  # type: ignore
+    except ImportError:
+        diag_bp = None  # type: ignore[assignment]
+    if diag_bp is not None:
+        try:
+            app.register_blueprint(diag_bp)
+        except Exception:
+            _log.debug("DIAG_BLUEPRINT_REGISTER_FAILED", exc_info=True)
 
     # Some tests may monkeypatch Flask and return objects without a real config
     if not isinstance(getattr(app, "config", None), dict):
