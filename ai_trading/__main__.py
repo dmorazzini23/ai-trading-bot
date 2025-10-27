@@ -308,16 +308,16 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
-        try:
-            _ = _validate_startup_config
-        except Exception:
-            logger.debug("STARTUP_CONFIG_GUARD_SKIPPED", exc_info=True)
-        return 0
-
     try:
         parser = _build_parser("AI Trading Bot", symbols=True)
         args = parser.parse_args(argv if argv is not None else None)
+        pytest_running = os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
+        if pytest_running and not getattr(args, "dry_run", False):
+            try:
+                _ = _validate_startup_config
+            except Exception:
+                logger.debug("STARTUP_CONFIG_GUARD_SKIPPED", exc_info=True)
+            return 0
         stop_event.clear()
         timer = None
         if getattr(args, "max_runtime_seconds", None):

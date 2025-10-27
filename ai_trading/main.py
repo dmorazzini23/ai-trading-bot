@@ -596,7 +596,6 @@ def _bind_probe(port: int) -> None:
     """Attempt to bind *port* to confirm availability."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(("0.0.0.0", port))
 
 config: Any | None = None

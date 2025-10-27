@@ -15309,14 +15309,29 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                         positions = []
                 except (APIError, TimeoutError, ConnectionError, AttributeError):
                     positions = []
-                avail = next(
-                    (
-                        float(p.qty)
-                        for p in positions
-                        if p and p.symbol == order_args.get("symbol")
-                    ),
-                    0.0,
-                )
+                target_symbol = order_args.get("symbol")
+                avail = 0.0
+                for pos in positions:
+                    if not pos:
+                        continue
+                    try:
+                        symbol_value = getattr(pos, "symbol", None)
+                    except COMMON_EXC:
+                        symbol_value = None
+                    if symbol_value in (None, "", target_symbol) and target_symbol:
+                        try:
+                            setattr(pos, "symbol", target_symbol)
+                        except COMMON_EXC:
+                            pass
+                        symbol_value = target_symbol
+                    if symbol_value != target_symbol:
+                        continue
+                    try:
+                        avail = float(getattr(pos, "qty", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    else:
+                        break
                 try:
                     req_qty = float(order_args.get("qty") or 0)
                 except (TypeError, ValueError):
@@ -20546,9 +20561,9 @@ def screen_universe(
             except (TypeError, ValueError):
                 min_signal_strength = float(MIN_SIGNAL_STRENGTH)
             try:
-                min_liquidity = float(getattr(screen_settings, "screen_min_avg_volume", 250_000))
+                min_liquidity = float(getattr(screen_settings, "screen_min_avg_volume", 150_000))
             except (TypeError, ValueError):
-                min_liquidity = 250_000.0
+                min_liquidity = 150_000.0
             min_signal_strength = max(0.0, min_signal_strength)
             min_liquidity = max(0.0, min_liquidity)
 
@@ -25950,6 +25965,11 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     use_alpaca = not skip_alpaca
 
     provider_order = _get_price_provider_order()
+    if use_alpaca and not any(p.startswith("alpaca") for p in provider_order):
+        provider_order = (
+            "alpaca_quote",
+            "alpaca_trade",
+        ) + tuple(p for p in provider_order if not p.startswith("alpaca"))
     if skip_alpaca:
         provider_order = tuple(p for p in provider_order if not p.startswith("alpaca"))
     cache: dict[str, Any] = {}

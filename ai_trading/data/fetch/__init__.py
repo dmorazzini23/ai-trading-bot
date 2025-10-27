@@ -748,8 +748,6 @@ def _sip_allowed() -> bool:
             break
     if env_choice is not None:
         return env_choice
-    if _pytest_active():
-        return bool(force_flag)
     try:
         priority = provider_priority()
     except Exception:
@@ -3965,11 +3963,24 @@ def _remember_fallback_for_cycle(cycle_id: str, symbol: str, timeframe: str, fee
 
 
 def _reset_provider_auth_state_for_tests() -> None:
-    global _ALLOW_SIP
+    global _ALLOW_SIP, _FORCE_SIP_REQUEST, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE, _state
+    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
     _clear_sip_lockout_for_tests()
     _SIP_UNAVAILABLE_LOGGED.clear()
     _CYCLE_FALLBACK_FEED.clear()
     _ALLOW_SIP = None
+    _FORCE_SIP_REQUEST = False
+    _SIP_DISALLOWED_WARNED = False
+    _SIP_PRECHECK_DONE = False
+    current_state = globals().get("_state")
+    if isinstance(current_state, dict):
+        current_state.clear()
+    else:
+        globals()["_state"] = {}
+    _alpaca_disabled_until = None
+    _ALPACA_DISABLED_ALERTED = False
+    _alpaca_disable_count = 0
+    _alpaca_empty_streak = 0
 
 
 def _sip_configured() -> bool:

@@ -358,9 +358,50 @@ def _reset_fallback_cache():
         data_fetcher._FALLBACK_UNTIL.clear()
         if hasattr(data_fetcher, "_CYCLE_FALLBACK_FEED"):
             data_fetcher._CYCLE_FALLBACK_FEED.clear()
+        cache_attrs = {
+            "_BACKUP_SKIP_UNTIL",
+            "_SKIPPED_SYMBOLS",
+            "_FEED_FAILOVER_ATTEMPTS",
+            "_FEED_OVERRIDE_BY_TF",
+            "_FEED_SWITCH_CACHE",
+            "_FEED_SWITCH_LOGGED",
+            "_FEED_SWITCH_HISTORY",
+            "_IEX_EMPTY_COUNTS",
+            "_ALPACA_SYMBOL_FAILURES",
+            "_ALPACA_CLOSE_NAN_COUNTS",
+            "_ALPACA_FAILURE_EVENTS",
+            "_ALPACA_CONSECUTIVE_FAILURES",
+            "_ALPACA_EMPTY_ERROR_COUNTS",
+            "_BACKUP_USAGE_LOGGED",
+            "_FALLBACK_METADATA",
+            "_FALLBACK_WINDOWS",
+            "_FALLBACK_UNTIL",
+            "_daily_memo",
+            "_MINUTE_CACHE",
+            "_HOST_COUNTS",
+            "_HOST_LIMITS",
+            "_CYCLE_FALLBACK_FEED",
+            "_SIP_UNAVAILABLE_LOGGED",
+            "_cycle_feed_override",
+            "_override_set_ts",
+        }
+        for attr in cache_attrs:
+            target = getattr(data_fetcher, attr, None)
+            if isinstance(target, (dict, set)):
+                target.clear()
+            elif isinstance(target, list):
+                target.clear()
         data_fetcher._DATA_FEED_OVERRIDE = None
         data_fetcher._LAST_OVERRIDE_LOGGED = None
         data_fetcher._SIP_PRECHECK_DONE = False
+        if hasattr(data_fetcher, "_reset_state"):
+            data_fetcher._reset_state()
+        env_override = os.getenv("ENABLE_HTTP_FALLBACK")
+        if env_override is None:
+            data_fetcher._ENABLE_HTTP_FALLBACK = True
+        else:
+            data_fetcher._ENABLE_HTTP_FALLBACK = env_override.strip().lower() not in {"0", "false", "no", "off"}
+        data_fetcher._max_fallbacks_config = None
         if hasattr(data_fetcher, "_reset_provider_auth_state_for_tests"):
             data_fetcher._reset_provider_auth_state_for_tests()
         elif hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):
