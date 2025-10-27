@@ -9206,6 +9206,7 @@ def get_minute_df(
         # Reconsider primary fetch attempts once fallback TTL expires.
         skip_primary_due_to_fallback = False
 
+    forced_skip_engaged = False
     forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
     if forced_skip_until is not None:
         if pytest_active and not fallback_allowed_flag:
@@ -9222,6 +9223,8 @@ def get_minute_df(
                 now_dt = datetime.now(tz=UTC)
                 if now_dt < forced_skip_until:
                     skip_primary_due_to_fallback = True
+                    if fallback_allowed_flag:
+                        forced_skip_engaged = True
                 elif not (pytest_active and fallback_allowed_flag):
                     _clear_backup_skip(symbol, "1Min")
 
@@ -9229,11 +9232,17 @@ def get_minute_df(
     if not isinstance(disabled_until_map, Mapping):
         disabled_until_map = {}
     if pytest_active and _alpaca_disabled_until is None and not disabled_until_map.get("alpaca"):
-        skip_primary_due_to_fallback = False
-        try:
-            _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
-        except Exception:
-            pass
+        if forced_skip_engaged:
+            # Preserve dwell-induced skip while the backup cool-down is active.
+            skip_primary_due_to_fallback = True
+        else:
+            skip_primary_due_to_fallback = False
+            try:
+                _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
+            except Exception:
+                pass
+    elif forced_skip_engaged:
+        skip_primary_due_to_fallback = True
 
     used_backup = False
     minute_metrics: dict[str, Any] = {
