@@ -6999,6 +6999,8 @@ def _fetch_bars(
                 _state["req_depth"] = remaining
             return result
 
+        used_backup = False
+
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False
         ) -> pd.DataFrame | None:
@@ -7011,7 +7013,7 @@ def _fetch_bars(
             * Appends the target provider and symbol to the shared registries.
             """
 
-            nonlocal _interval, _feed, _start, _end
+            nonlocal _interval, _feed, _start, _end, used_backup
             fb_interval, fb_feed, fb_start, fb_end = fb
             from_feed = _feed
             if fb_feed == "sip" and (not skip_check):
@@ -7087,6 +7089,8 @@ def _fetch_bars(
                     _state.pop("defer_success_metric", None)
                 else:
                     _state["defer_success_metric"] = prev_defer
+            if result is not None and not getattr(result, "empty", False):
+                used_backup = True
             try:
                 fallback_meta = dict(_state.get("meta", {}) or {})
             except Exception:
@@ -9161,6 +9165,12 @@ def get_minute_df(
     resolved_backup_provider = backup_provider_normalized or backup_provider_str
     resolved_backup_feed = backup_provider_normalized or None
 
+    http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+    if http_fallback_env is None:
+        fallback_allowed_flag = bool(_ENABLE_HTTP_FALLBACK)
+    else:
+        fallback_allowed_flag = http_fallback_env.strip().lower() not in {"0", "false", "no", "off"}
+
     ttl_until: int | None = None
     now_s_cached: int | None = None
 
@@ -9198,7 +9208,7 @@ def get_minute_df(
 
     forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
     if forced_skip_until is not None:
-        if pytest_active:
+        if pytest_active and not fallback_allowed_flag:
             _clear_backup_skip(symbol, "1Min")
             skip_primary_due_to_fallback = False
         else:
@@ -9212,7 +9222,7 @@ def get_minute_df(
                 now_dt = datetime.now(tz=UTC)
                 if now_dt < forced_skip_until:
                     skip_primary_due_to_fallback = True
-                else:
+                elif not (pytest_active and fallback_allowed_flag):
                     _clear_backup_skip(symbol, "1Min")
 
     disabled_until_map = getattr(provider_monitor, "disabled_until", {})
@@ -9225,6 +9235,7 @@ def get_minute_df(
         except Exception:
             pass
 
+    used_backup = False
     minute_metrics: dict[str, Any] = {
         "success_emitted": False,
         "fallback_tags": None,
@@ -9373,8 +9384,34 @@ def get_minute_df(
                 normalized_feed = str(cached_cycle_feed).strip().lower()
     finnhub_key_present = bool(os.getenv("FINNHUB_API_KEY")) and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     if tf_key in _SKIPPED_SYMBOLS:
-        if skip_primary_due_to_fallback:
-            pass
+        skip_window_until = _BACKUP_SKIP_UNTIL.get(tf_key)
+        skip_window_active = False
+        if isinstance(skip_window_until, datetime):
+            try:
+                now_dt = datetime.now(tz=UTC)
+            except Exception:
+                now_dt = None
+            if now_dt is not None and skip_window_until > now_dt:
+                skip_window_active = True
+        elif skip_window_until is not None:
+            try:
+                until_float = float(skip_window_until)
+            except Exception:
+                until_float = None
+            if until_float is not None:
+                try:
+                    converted_until = datetime.fromtimestamp(until_float, tz=UTC)
+                except Exception:
+                    converted_until = None
+                if converted_until is not None:
+                    try:
+                        now_dt = datetime.now(tz=UTC)
+                    except Exception:
+                        now_dt = None
+                    if now_dt is not None and converted_until > now_dt:
+                        skip_window_active = True
+        if skip_primary_due_to_fallback or (fallback_allowed_flag and skip_window_active):
+            skip_primary_due_to_fallback = True
         elif window_has_session:
             if finnhub_key_present:
                 _SKIPPED_SYMBOLS.discard(tf_key)
@@ -9976,6 +10013,8 @@ def get_minute_df(
             success_marked = True
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _register_backup_skip()
+            if fallback_allowed_flag:
+                _SKIPPED_SYMBOLS.add(tf_key)
     attempt_count_snapshot = max(
         attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot)
     )
@@ -10252,7 +10291,7 @@ def get_minute_df(
         and _BACKUP_SKIP_UNTIL.get(tf_key) is None
         and (used_backup or (fallback_frame is not None and not getattr(fallback_frame, "empty", True)))
     ):
-        _set_backup_skip(symbol, _interval)
+        _set_backup_skip(symbol, "1Min")
     if backup_label and not used_backup:
         _clear_minute_fallback_state(
             symbol,
@@ -10292,8 +10331,8 @@ def get_minute_df(
             extra={"source": source_label, "frequency": "1Min", "detail": str(exc)},
         )
         return None
-    if fallback_allowed and _BACKUP_SKIP_UNTIL.get(tf_key) is None:
-        _set_backup_skip(symbol, _interval)
+    if fallback_allowed_flag and _BACKUP_SKIP_UNTIL.get(tf_key) is None:
+        _set_backup_skip(symbol, "1Min")
     return df
 
 
