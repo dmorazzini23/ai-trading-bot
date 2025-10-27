@@ -1208,12 +1208,6 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
 
     while True:
-        if should_stop():
-            logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
-            if ready_signal is not None:
-                ready_signal.set()
-            return
-
         try:
             _bind_probe(port)
         except OSError as exc:
@@ -1252,7 +1246,18 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 ) from exc
 
             time.sleep(0.1)
+            if should_stop():
+                logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
+                if ready_signal is not None:
+                    ready_signal.set()
+                return
             continue
+
+        if should_stop():
+            logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
+            if ready_signal is not None:
+                ready_signal.set()
+            return
 
         break
 

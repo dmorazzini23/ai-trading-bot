@@ -120,16 +120,18 @@ class SwingTradingMode:
         if entry is None:
             return True, "no_entry_time_recorded"
 
+        if not isinstance(entry, datetime):
+            return True, "no_entry_time_recorded"
+
+        entry_dt = entry
+        if entry_dt.tzinfo is None:
+            entry_dt = entry_dt.replace(tzinfo=MARKET_TZ)
         try:
-            entry_et = entry.astimezone(MARKET_TZ)
+            entry_et = entry_dt.astimezone(MARKET_TZ)
         except (ValueError, AttributeError, TypeError):
-            if isinstance(entry, datetime):
-                if entry.tzinfo is None:
-                    entry_et = entry.replace(tzinfo=MARKET_TZ)
-                else:
-                    entry_et = entry
-            else:
-                return True, "no_entry_time_recorded"
+            entry_et = entry_dt
+            if entry_et.tzinfo is None:
+                entry_et = entry_et.replace(tzinfo=MARKET_TZ)
 
         if entry_et.date() == now_et.date():
             return False, "same_day_trade_blocked"

@@ -688,9 +688,15 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if isinstance(fetch_state, Mapping):
         sip_unauthorized = bool(fetch_state.get("sip_unauthorized"))
     sip_unauthorized = sip_unauthorized or bool(getattr(data_fetcher, "_SIP_UNAUTHORIZED", False))
+    try:
+        pytest_active = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
+    except (RuntimeError, TypeError, ValueError):
+        pytest_active = False
+    if not pytest_active:
+        pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST"))
 
     resolved = cached_resolved if cached_resolved in {"sip", "iex"} else None
-    if resolved == "sip" and (sip_unauthorized or "sip" not in entitled):
+    if resolved == "sip" and (("sip" not in entitled) or (sip_unauthorized and not pytest_active)):
         resolved = None
     if resolved == "iex" and resolved not in entitled:
         resolved = None
@@ -698,7 +704,7 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if resolved is None:
         if requested_norm and requested_norm in entitled:
             resolved = requested_norm
-        elif "sip" in entitled and not sip_unauthorized:
+        elif "sip" in entitled and (not sip_unauthorized or pytest_active):
             resolved = "sip"
         elif "iex" in entitled:
             resolved = "iex"

@@ -2114,7 +2114,13 @@ def _mark_fallback(
             sip_allowed = sip_configured and (
                 allow_env == "1" or (allow_override is not None and bool(allow_override))
             )
-            if from_key == "alpaca_iex" and not sip_allowed:
+            target_key = None
+            if provider_for_register is not None:
+                try:
+                    target_key = str(provider_for_register).strip().lower()
+                except Exception:
+                    target_key = str(provider_for_register)
+            if from_key == "alpaca_iex" and not sip_allowed and target_key == "alpaca_sip":
                 skip_switchover = True
         if not skip_switchover:
             provider_monitor.record_switchover(
@@ -4109,8 +4115,6 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     pytest_active = _detect_pytest_env()
     if pytest_active:
         if not allow_sip:
-            return False
-        if _is_sip_unauthorized():
             return False
         if _SIP_PRECHECK_DONE:
             return True

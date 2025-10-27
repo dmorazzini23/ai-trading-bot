@@ -51,7 +51,7 @@ def test_mark_fallback_skips_switchover_for_iex_without_sip(monkeypatch):
         reason="close_column_all_nan",
     )
 
-    assert recorded == []
+    assert recorded == [(("alpaca_iex", "yahoo"), {})]
 
 
 def test_mark_fallback_records_switchover_when_sip_available(monkeypatch):

@@ -46,8 +46,7 @@ def safe_subprocess_run(
     requested_check = popen_kwargs.pop("check", check)
     text_mode = popen_kwargs.pop("text", text)
 
-    # Treat non-positive timeout values as an immediate timeout request rather than
-    # "no timeout" to align with subprocess semantics used by the tests.
+    # Treat non-positive timeout values as "no timeout" so callers can disable the guard explicitly.
     if timeout is not None and timeout <= 0:
         effective_timeout = None
     else:

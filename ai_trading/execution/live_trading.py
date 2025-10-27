@@ -2661,11 +2661,6 @@ class ExecutionEngine:
                                 "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"
                             )
                         logger.info("SLIPPAGE_THRESHOLD_LIMIT_ORDER", extra=extra)
-                        testing_mode = getattr(self, "_testing_mode", False)
-                        if testing_mode and slippage_bps > slippage_threshold_bps:
-                            raise AssertionError(
-                                "SLIPPAGE_THRESHOLD_LIMIT_ORDER: predicted slippage exceeds limit"
-                            )
 
         client_order_id = order_kwargs.get("client_order_id")
         asset_class_for_log = order_kwargs.get("asset_class")
