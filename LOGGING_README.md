@@ -50,8 +50,9 @@ Daily price requests now log their parameters and outcome:
 
 - `DAILY_FETCH_REQUEST` records the symbol, timeframe, and date range only when a cache miss triggers a fetch
 - `DAILY_FETCH_CACHE_HIT` emits once on first cache use; subsequent hits appear only when debug logging is enabled
-- `DAILY_FETCH_RESULT` reports the number of rows returned and whether the
-  response came from cache
+- `FETCH_RESULT` reports the number of rows returned and whether the response
+  came from cache; the `timeframe` attribute clarifies the cadence (daily,
+  minute, etc.)
 - `MINUTE_DATA_COVERAGE_WARNING` fires when intraday data covers less than half
   of the expected regular-session window or drops below the configured
   indicator lookback. The bot immediately re-requests the same window from an

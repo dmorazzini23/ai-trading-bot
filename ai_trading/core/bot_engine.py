@@ -100,6 +100,7 @@ from ai_trading.utils import health_check as _health_check
 from ai_trading.utils.env import alpaca_credential_status
 from ai_trading.logging import (
     flush_log_throttle_summaries,
+    log_backup_provider_used,
     log_data_quality_event,
     log_throttled_event,
     logger_once,
@@ -5808,15 +5809,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         if not fallback_used:
             fallback_attempted = True
-            logger.warning(
-                "BACKUP_PROVIDER_USED",
-                extra={
-                    "provider": "yahoo",
-                    "symbol": symbol,
-                    "timeframe": "1Min",
-                    "start": fallback_start_dt.isoformat(),
-                    "end": end_dt.isoformat(),
-                },
+            log_backup_provider_used(
+                "yahoo",
+                symbol=symbol,
+                timeframe="1Min",
+                start=fallback_start_dt,
+                end=end_dt,
+                logger=logger,
             )
             try:
                 yahoo_df = get_minute_df(
@@ -8667,7 +8666,7 @@ class DataFetcher:
             if not result_logged:
                 rows = 0 if df is None else len(df)  # len(None) guarded
                 logger.info(
-                    "DAILY_FETCH_RESULT",
+                    "FETCH_RESULT",
                     extra={
                         "symbol": symbol,
                         "timeframe": timeframe_key,
@@ -24444,10 +24443,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             retries = 3
             processed, row_counts = [], {}
             for attempt in range(retries):
-                with StageTimer(logger, "INDICATORS_COMPUTE_MS", symbols=len(symbols)):
-                    processed, row_counts = _process_symbols(
-                        symbols, current_cash, alpha_model, regime_ok
-                    )
+                with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
+                    with StageTimer(
+                        logger, "INDICATORS_COMPUTE_MS", symbols=len(symbols)
+                    ):
+                        processed, row_counts = _process_symbols(
+                            symbols, current_cash, alpha_model, regime_ok
+                        )
                 if processed:
                     if attempt:
                         logger.info(
@@ -24481,13 +24483,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 return
             zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
             skipped = [s for s in symbols if s not in processed]
-            logger.info(
-                "DATA_SOURCE_RETRY_FINAL",
-                extra={
-                    "success": not skipped and not zero_row_symbols,
-                    "attempts": attempt + 1,
-                },
-            )
+            attempts_used = attempt + 1
+            success = not skipped and not zero_row_symbols
+            if attempts_used > 1 or skipped or zero_row_symbols:
+                logger.info(
+                    "DATA_SOURCE_RETRY_FINAL",
+                    extra={"success": success, "attempts": attempts_used},
+                )
 
             if skipped:
                 logger.info(

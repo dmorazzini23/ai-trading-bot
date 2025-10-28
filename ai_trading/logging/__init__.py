@@ -1323,6 +1323,7 @@ def log_backup_provider_used(
     start: datetime,
     end: datetime,
     extra: Mapping[str, Any] | None = None,
+    logger: logging.Logger | None = None,
 ) -> dict[str, Any]:
     """Log and record when the backup data provider serves a window."""
     payload: dict[str, Any] = {
@@ -1337,22 +1338,20 @@ def log_backup_provider_used(
             if value is None:
                 continue
             payload[str(key)] = value
+    active_logger = logger or globals().get("logger")
+    if active_logger is None:
+        active_logger = get_logger(__name__)
 
     try:
         from ai_trading.data.metrics import backup_provider_used as _backup_counter
 
         _backup_counter.labels(provider=provider, symbol=symbol).inc()
     except COMMON_EXC:
-        logger.debug(
+        active_logger.debug(
             "METRIC_BACKUP_PROVIDER_FAILED",
             extra={"provider": provider, "symbol": symbol},
         )
-    log_throttled_event(
-        logger,
-        "BACKUP_PROVIDER_USED",
-        level=logging.WARNING,
-        extra=payload,
-    )
+    active_logger.warning("BACKUP_PROVIDER_USED", extra=payload)
 
     return payload
 

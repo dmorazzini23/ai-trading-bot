@@ -18,7 +18,7 @@ from ai_trading.data.empty_bar_backoff import (
 from ai_trading.data.metrics import provider_fallback, fetch_retry_total
 from ai_trading.config.settings import provider_priority, max_data_fallbacks
 from ai_trading.config.management import get_env
-from ai_trading.logging import log_backup_provider_used, get_logger
+from ai_trading.logging import get_logger
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.utils.time import monotonic_time
@@ -307,7 +307,6 @@ def _fetch_feed(
         except EmptyBarsError:
             df_alt = None
         if df_alt is not None and not getattr(df_alt, "empty", True):
-            logger.warning("BACKUP_PROVIDER_USED")
             _record_feed_switch(symbol, timeframe, feed, alt_feed)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _PROVIDER_COOLDOWNS.pop(tf_key, None)

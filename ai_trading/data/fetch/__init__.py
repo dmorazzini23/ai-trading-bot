@@ -2091,15 +2091,15 @@ def _mark_fallback(
         fallback_name = str(provider_for_register)
     # Emit once per unique (symbol, timeframe, window)
     if key not in _FALLBACK_WINDOWS:
-        payload = log_backup_provider_used(
+        log_backup_provider_used(
             provider_for_register,
             symbol=symbol,
             timeframe=timeframe,
             start=start,
             end=end,
             extra=log_extra,
+            logger=logger,
         )
-        logger.warning("BACKUP_PROVIDER_USED", extra=payload)
         fallback_reason = log_extra.get("fallback_reason")
         if fallback_reason == "close_column_all_nan":
             feed_for_guard: str | None = None
@@ -6464,27 +6464,6 @@ def _fetch_bars(
             except Exception:
                 skip_until = None
             _set_backup_skip(symbol, _interval, until=skip_until)
-            try:
-                skip_payload = {
-                    "provider": resolved_provider,
-                    "symbol": symbol,
-                    "timeframe": _interval,
-                    "fallback_provider": resolved_provider,
-                    "from_provider": from_provider_name,
-                    "fallback_feed": normalized_provider or feed_tag,
-                }
-                skip_payload["start"] = _start.isoformat()
-                skip_payload["end"] = _end.isoformat()
-            except Exception:
-                skip_payload = {
-                    "provider": resolved_provider,
-                    "symbol": symbol,
-                    "timeframe": _interval,
-                    "fallback_provider": resolved_provider,
-                    "from_provider": from_provider_name,
-                    "fallback_feed": normalized_provider or feed_tag,
-                }
-            logger.warning("BACKUP_PROVIDER_USED", extra=_norm_extra(skip_payload))
             _mark_fallback(
                 symbol,
                 _interval,
