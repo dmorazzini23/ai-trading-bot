@@ -599,24 +599,39 @@ def reload_host_limit_if_env_changed(session: HTTPSession | None = None) -> tupl
             if sem is None:
                 continue
             if limit > old_limit:
-                release_count = limit - old_limit
+                delta = limit - old_limit
                 reserved = int(meta.get("reserved", 0))
-                to_release = min(reserved, release_count)
-                if to_release > 0:
-                    meta["reserved"] = max(0, reserved - to_release)
-                    for _ in range(to_release):
-                        sem.release()
-                    release_count -= to_release
-                for _ in range(release_count):
+                if reserved > 0:
+                    release_reserved = min(reserved, delta)
+                    if release_reserved > 0:
+                        meta["reserved"] = reserved - release_reserved
+                        for _ in range(release_reserved):
+                            sem.release()
+                        delta -= release_reserved
+                pending = int(meta.get("pending", 0))
+                if pending > 0 and delta > 0:
+                    release_pending = min(pending, delta)
+                    if release_pending > 0:
+                        meta["pending"] = pending - release_pending
+                        for _ in range(release_pending):
+                            sem.release()
+                        delta -= release_pending
+                for _ in range(delta):
                     sem.release()
             elif limit < old_limit:
-                reduce_by = old_limit - limit
-                for _ in range(reduce_by):
+                delta = old_limit - limit
+                while delta > 0:
                     if sem.acquire(blocking=False):
                         meta["reserved"] = int(meta.get("reserved", 0)) + 1
+                        delta -= 1
                     else:
-                        meta["pending"] = int(meta.get("pending", 0)) + 1
+                        meta["pending"] = int(meta.get("pending", 0)) + delta
+                        break
             meta["limit"] = limit
+            if int(meta.get("reserved", 0)) < 0:
+                meta["reserved"] = 0
+            if int(meta.get("pending", 0)) < 0:
+                meta["pending"] = 0
         return _HOST_LIMIT_ENV
 
 
@@ -6106,10 +6121,19 @@ def _fetch_bars(
     feed, adjustment = _validate_fetch_params(symbol, start_dt, end_dt, timeframe, feed, adjustment)
     globals()["_state"] = {}
     if pytest_active:
-        _alpaca_disabled_until = None
         _ALPACA_DISABLED_ALERTED = False
         _alpaca_disable_count = 0
         _alpaca_empty_streak = 0
+        backup_allowed = True
+        if not _ENABLE_HTTP_FALLBACK:
+            try:
+                backup_allowed = bool(alpaca_empty_to_backup())
+            except Exception:
+                backup_allowed = True
+        if not backup_allowed:
+            _FALLBACK_WINDOWS.clear()
+            _FALLBACK_UNTIL.clear()
+            _FEED_OVERRIDE_BY_TF.clear()
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
@@ -6281,17 +6305,6 @@ def _fetch_bars(
         resolved_provider = normalized_provider or provider_str
         feed_tag = normalized_provider or provider_str
         normalized_provider_lower = (normalized_provider or provider_str or "").strip().lower()
-        if (
-            _canon_tf(_interval) == "1Min"
-            and _state.get("window_has_session", True)
-            and normalized_provider_lower not in {"alpaca", "alpaca_iex", "alpaca_sip", "iex", "sip"}
-        ):
-            empty_frame = _empty_ohlcv_frame(pd)
-            if isinstance(empty_frame, pd.DataFrame):
-                return empty_frame
-            if pd is not None:
-                return pd.DataFrame()
-            return []  # type: ignore[return-value]
         if _pytest_active():
             fallback_reason = _state.get("fallback_reason")
             if fallback_reason in {"alpaca_sip_unauthorized", "sip_unauthorized"}:
@@ -6809,7 +6822,17 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
+                backup_allowed = _ENABLE_HTTP_FALLBACK
+                if not backup_allowed:
+                    try:
+                        backup_allowed = _should_use_backup_on_empty()
+                    except Exception:
+                        backup_allowed = False
                 if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+                    raise EmptyBarsError(
+                        f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled"
+                    )
+                if not backup_allowed:
                     raise EmptyBarsError(
                         f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled"
                     )

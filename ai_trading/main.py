@@ -1190,6 +1190,8 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     settings = get_settings()
     port = int(getattr(settings, "api_port", 9001) or 9001)
     wait_window = _get_wait_window(settings)
+    if wait_window <= 0:
+        wait_window = 1.0
     start_time = time.monotonic()
 
     # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
@@ -1219,7 +1221,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             conflict_extra = {"port": port}
             if pid:
                 conflict_extra["pid"] = pid
-                logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
+                logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
                 logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "port_in_use", "pid": pid},
@@ -1227,7 +1229,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 raise PortInUseError(port, pid) from exc
 
             if _probe_local_api_health(port):
-                logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
+                logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
                 logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "existing_api"},
@@ -1235,7 +1237,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 raise ExistingApiDetected(port) from exc
 
             if elapsed >= wait_window:
-                logger.warning("HEALTH_SERVER_START_FAILED", extra=conflict_extra)
+                logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
                 logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "port_timeout"},

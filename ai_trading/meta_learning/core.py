@@ -60,10 +60,6 @@ def _resolve_trade_log_path(trade_log_path: str | os.PathLike) -> tuple[Path, bo
     candidate = Path(trade_log_path)
     if candidate.exists():
         return candidate, False
-    testing_mode = bool(os.getenv("TESTING")) or bool(os.getenv("PYTEST_CURRENT_TEST"))
-    fallback = Path(__file__).resolve().parents[2] / "test_trades.csv"
-    if testing_mode and fallback.exists():
-        return fallback, True
     return candidate, False
 
 
@@ -394,7 +390,8 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                     logger.debug('Invalid entry price format in meta row: %s', row)
                                     continue
                                 if not _is_strict_decimal(exit_raw):
-                                    exit_raw = entry_raw
+                                    logger.debug('Invalid exit price format in meta row: %s', row)
+                                    continue
                                 if not (_is_strict_decimal(entry_raw) and _is_strict_decimal(exit_raw)):
                                     logger.debug('Invalid price format in meta row: %s', row)
                                     continue

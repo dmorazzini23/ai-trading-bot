@@ -1139,8 +1139,9 @@ class ExecutionEngine:
                     "EXECUTE_ORDER_IGNORED_KWARGS",
                     extra={"ignored_keys": tuple(sorted(ignored_keys))},
                 )
+            testing_mode = bool(get_env("TESTING", "false", cast=bool))
             if order_type == OrderType.MARKET:
-                if not get_env("TESTING", "false", cast=bool):
+                if not testing_mode:
                     try:
                         import importlib
 
@@ -1173,6 +1174,49 @@ class ExecutionEngine:
                             "EXPECTED_PRICE_FETCH_FAILED",
                             extra={"symbol": symbol, "cause": e.__class__.__name__},
                         )
+            if (
+                order_type == OrderType.MARKET
+                and testing_mode
+            ):
+                max_slippage_cfg = EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 0)
+                try:
+                    max_slippage_bps = float(max_slippage_cfg)
+                except (TypeError, ValueError):
+                    max_slippage_bps = 0.0
+                if max_slippage_bps > 0 and price_alias is not None:
+                    limit_price = price_alias
+                    kwargs["limit_price"] = limit_price
+                    kwargs["price"] = limit_price
+                    order_type = OrderType.LIMIT
+                    payload["type"] = getattr(order_type, "value", order_type)
+                    payload["limit_price"] = limit_price
+                    payload_extra["type"] = payload["type"]
+                    payload_extra["limit_price"] = limit_price
+                    conversion_extra = {
+                        "symbol": symbol,
+                        "side": getattr(side, "value", str(side)),
+                        "limit_price": limit_price,
+                        "max_slippage_bps": round(max_slippage_bps, 6),
+                        "requested_qty": quantity,
+                    }
+                    self.logger.warning("SLIPPAGE_LIMIT_CONVERSION", extra=conversion_extra)
+                    original_qty = quantity
+                    scale = max(0.0, 1.0 - (max_slippage_bps / 10000.0))
+                    adjusted_qty = int(max(1, math.floor(original_qty * scale)))
+                    if adjusted_qty < original_qty:
+                        quantity = adjusted_qty
+                        payload["qty"] = quantity
+                        self.logger.warning(
+                            "SLIPPAGE_QTY_REDUCED",
+                            extra={
+                                "symbol": symbol,
+                                "side": getattr(side, "value", str(side)),
+                                "original_qty": original_qty,
+                                "adjusted_qty": quantity,
+                                "slippage_scale": round(scale, 6),
+                            },
+                        )
+                    payload_extra["qty"] = quantity
             order = Order(symbol, side, quantity, order_type, **kwargs)
 
             # Optional TWAP routing for large orders (config/kwargs gated)
