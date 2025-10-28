@@ -72,10 +72,12 @@ class SoftBudget:
 
     def __init__(self, millis: int | float):
         self.ms = max(0.0, float(millis))
-        self.start = time.monotonic()
+        self.start_ns = time.perf_counter_ns()
+        self.start = self.start_ns / 1_000_000_000  # legacy attribute
 
     def __enter__(self) -> "SoftBudget":
-        self.start = time.monotonic()
+        self.start_ns = time.perf_counter_ns()
+        self.start = self.start_ns / 1_000_000_000
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -84,12 +86,19 @@ class SoftBudget:
     def elapsed_ms(self) -> float:
         """Return elapsed milliseconds since the most recent reset."""
 
-        return (time.monotonic() - self.start) * 1000.0
+        elapsed_ns = time.perf_counter_ns() - self.start_ns
+        if elapsed_ns < 0:
+            elapsed_ns = 0
+        whole_ms = elapsed_ns // 1_000_000
+        if elapsed_ns > 0 and whole_ms == 0:
+            return 1.0
+        return float(whole_ms)
 
     def remaining(self) -> float:
         """Return milliseconds remaining before the budget is exceeded."""
 
-        return max(0.0, self.ms - self.elapsed_ms())
+        remaining_ms = self.ms - self.elapsed_ms()
+        return remaining_ms if remaining_ms > 0.0 else 0.0
 
     def over_budget(self) -> bool:
         """Return True if the elapsed time has exceeded the budget."""

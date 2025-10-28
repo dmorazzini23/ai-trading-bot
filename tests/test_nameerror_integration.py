@@ -46,7 +46,7 @@ os.environ.update({
 
 try:
     # This should trigger validate_trading_parameters() during import
-from ai_trading.core import bot_engine
+    from ai_trading.core import bot_engine
     
     print("SUCCESS: bot_engine imported without NameError")
     exit_code = 0

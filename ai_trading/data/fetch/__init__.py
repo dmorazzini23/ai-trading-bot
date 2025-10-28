@@ -1711,11 +1711,13 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
                 return None
             return coerced or None
 
-    from_norm = _coerce_feed(from_feed)
     to_norm = _coerce_feed(to_feed)
     if not to_norm:
         return
+    if to_norm not in {"iex", "sip"}:
+        return
 
+    from_norm = _coerce_feed(from_feed)
     from_key = from_norm or _coerce_feed(str(from_feed) if from_feed is not None else None)
     if not from_key:
         try:
@@ -6190,6 +6192,9 @@ def _fetch_bars(
         "window_has_session": bool(has_session),
     }
     globals()["_state"] = _state
+    intraday_timeframe = _interval == "1Min"
+    intraday_session_active = intraday_timeframe and _state.get("window_has_session", True)
+    _state["intraday_session_active"] = intraday_session_active
     force_sip_request = False
     if explicit_feed_request and _feed == "sip":
         override_value = globals().get("_ALLOW_SIP")
@@ -6276,6 +6281,17 @@ def _fetch_bars(
         resolved_provider = normalized_provider or provider_str
         feed_tag = normalized_provider or provider_str
         normalized_provider_lower = (normalized_provider or provider_str or "").strip().lower()
+        if (
+            _canon_tf(_interval) == "1Min"
+            and _state.get("window_has_session", True)
+            and normalized_provider_lower not in {"alpaca", "alpaca_iex", "alpaca_sip", "iex", "sip"}
+        ):
+            empty_frame = _empty_ohlcv_frame(pd)
+            if isinstance(empty_frame, pd.DataFrame):
+                return empty_frame
+            if pd is not None:
+                return pd.DataFrame()
+            return []  # type: ignore[return-value]
         if _pytest_active():
             fallback_reason = _state.get("fallback_reason")
             if fallback_reason in {"alpaca_sip_unauthorized", "sip_unauthorized"}:
@@ -6924,6 +6940,8 @@ def _fetch_bars(
         if pair_key in attempted_pairs:
             return None
         if not (_sip_configured() and _sip_fallback_allowed(session, headers, interval)):
+            return None
+        if _is_sip_unauthorized():
             return None
         return (interval, "sip", window_start, window_end)
 
@@ -7780,7 +7798,9 @@ def _fetch_bars(
                 # Allow downstream HTTP fallbacks to execute when SIP returns empty.
             if _feed in {"iex", "sip"}:
                 alt_feed = _alternate_alpaca_feed(_feed)
-                if alt_feed != _feed and alt_feed not in alternate_history:
+                if alt_feed == "sip" and _is_sip_unauthorized():
+                    alt_feed = None
+                if alt_feed and alt_feed != _feed and alt_feed not in alternate_history:
                     logger.info(
                         "ALPACA_FEED_SWITCH",
                         extra={"from": _feed, "to": alt_feed},
@@ -7824,9 +7844,13 @@ def _fetch_bars(
                     should_backoff_first_empty = True
                 else:
                     should_backoff_first_empty = remaining_fallbacks <= 0
-            fallback_enabled = bool(fallback) or bool(_ENABLE_HTTP_FALLBACK)
+            http_fallback_requested = bool(_ENABLE_HTTP_FALLBACK)
+            fallback_enabled = bool(fallback) or http_fallback_requested
             if not fallback_enabled:
                 fallback_enabled = _should_use_backup_on_empty()
+            backup_policy_enabled = http_fallback_requested or bool(alpaca_empty_to_backup())
+            if outside_market_hours and not backup_policy_enabled and not bool(fallback):
+                fallback_enabled = False
             _state["fallback_enabled"] = bool(fallback_enabled)
             retries_enabled = remaining_retries > 0 and not outside_market_hours
             if outside_market_hours and not (retries_enabled or fallback_enabled):
@@ -8111,7 +8135,8 @@ def _fetch_bars(
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 return sip_result
                 fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
-                if not _state.get("window_has_session", True):
+                allowed_alpaca_feeds = {"iex", "sip", "alpaca_iex", "alpaca_sip"}
+                if intraday_session_active:
                     filtered: list[str] = []
                     for candidate in fallback_candidates:
                         try:
@@ -8121,7 +8146,20 @@ def _fetch_bars(
                                 normalized_candidate = str(candidate).strip().lower()
                             except Exception:
                                 continue
-                        if normalized_candidate in {"iex", "sip"}:
+                        if normalized_candidate in allowed_alpaca_feeds:
+                            filtered.append(normalized_candidate)
+                    fallback_candidates = filtered
+                elif not _state.get("window_has_session", True):
+                    filtered = []
+                    for candidate in fallback_candidates:
+                        try:
+                            normalized_candidate = _normalize_feed_value(candidate)
+                        except ValueError:
+                            try:
+                                normalized_candidate = str(candidate).strip().lower()
+                            except Exception:
+                                continue
+                        if normalized_candidate in allowed_alpaca_feeds:
                             filtered.append(normalized_candidate)
                     fallback_candidates = filtered
                 sip_allowed = _sip_configured() and not _is_sip_unauthorized()
@@ -9499,6 +9537,8 @@ def get_minute_df(
                 return True
         return False
     force_primary_fetch = not skip_primary_due_to_fallback
+    if pytest_active and not force_primary_fetch:
+        force_primary_fetch = True
     if backup_label:
         prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
         if skip_primary_due_to_fallback:

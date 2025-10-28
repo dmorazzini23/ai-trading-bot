@@ -7476,7 +7476,10 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     name="finnhub_api",
 )
 
-import ai_trading.core.executors as executors
+from ai_trading.core import executors as _executors
+
+_executors._ensure_executors()
+executors = _executors
 
 # Expose cleanup function on this module for tests/back-compat
 cleanup_executors = executors.cleanup_executors
@@ -26027,6 +26030,29 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         ) + tuple(p for p in provider_order if not p.startswith("alpaca"))
     if skip_alpaca:
         provider_order = tuple(p for p in provider_order if not p.startswith("alpaca"))
+    backup_fetch_fn = getattr(data_fetcher_module, "_backup_get_bars", None)
+    backup_checked = False
+    if prefer_backup and callable(backup_fetch_fn):
+        backup_checked = True
+        fallback_now = datetime.now(UTC)
+        fallback_start = fallback_now - timedelta(days=5)
+        try:
+            backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
+        except COMMON_EXC:
+            backup_df = None
+            backup_frame_obtained = False
+        else:
+            backup_frame_obtained = True
+            backup_close = _resolve_latest_close(backup_df)
+            if backup_close is not None:
+                _PRICE_SOURCE[symbol] = "yahoo"
+                return backup_close
+        if (
+            _PRICE_SOURCE.get(symbol) != "alpaca_auth_failed"
+            and backup_df is not None
+            and backup_frame_obtained
+        ):
+            _PRICE_SOURCE[symbol] = "yahoo_invalid"
     cache: dict[str, Any] = {}
     attempted_alpaca = False
 
@@ -26136,20 +26162,25 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 return price
             continue
 
-    backup_fetch_fn = getattr(data_fetcher_module, "_backup_get_bars", None)
-    if callable(backup_fetch_fn):
+    if callable(backup_fetch_fn) and not backup_checked:
         fallback_now = datetime.now(UTC)
         fallback_start = fallback_now - timedelta(days=5)
         try:
             backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
         except COMMON_EXC:
             backup_df = None
+            backup_frame_obtained = False
         else:
+            backup_frame_obtained = True
             backup_close = _resolve_latest_close(backup_df)
             if backup_close is not None:
                 _PRICE_SOURCE[symbol] = "yahoo"
                 return backup_close
-        if _PRICE_SOURCE.get(symbol) in (None, "unknown"):
+        if (
+            backup_df is not None
+            and backup_frame_obtained
+            and _PRICE_SOURCE.get(symbol) not in {"alpaca_auth_failed", "yahoo_invalid"}
+        ):
             _PRICE_SOURCE[symbol] = "yahoo_invalid"
 
     if attempted_alpaca and _PRICE_SOURCE.get(symbol) in (None, "unknown"):

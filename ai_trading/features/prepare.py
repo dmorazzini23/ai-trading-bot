@@ -57,13 +57,16 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
     df['kc_lower'] = np.nan
     df['kc_mid'] = np.nan
     df['kc_upper'] = np.nan
-    try:
-        kc = ta.kc(df['high'], df['low'], df['close'], length=20)
-        df['kc_lower'] = kc.iloc[:, 0].astype(float)
-        df['kc_mid'] = kc.iloc[:, 1].astype(float)
-        df['kc_upper'] = kc.iloc[:, 2].astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('KC indicator failed: %s', e)
+    if hasattr(ta, 'kc'):
+        try:
+            kc = ta.kc(df['high'], df['low'], df['close'], length=20)
+            df['kc_lower'] = kc.iloc[:, 0].astype(float)
+            df['kc_mid'] = kc.iloc[:, 1].astype(float)
+            df['kc_upper'] = kc.iloc[:, 2].astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('KC indicator failed: %s', e)
+    else:
+        logger.warning('KC indicator unavailable in pandas_ta; skipping')
     df['atr_band_upper'] = np.nan
     df['atr_band_lower'] = np.nan
     df['avg_vol_20'] = np.nan
@@ -75,32 +78,41 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
         df['dow'] = idx.dayofweek.astype(float)
     df['macd'] = np.nan
     df['macds'] = np.nan
-    try:
-        macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
-        df['macd'] = macd['MACD_12_26_9'].astype(float)
-        df['macds'] = macd['MACDs_12_26_9'].astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('MACD calculation failed: %s', e)
+    if hasattr(ta, 'macd'):
+        try:
+            macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
+            df['macd'] = macd['MACD_12_26_9'].astype(float)
+            df['macds'] = macd['MACDs_12_26_9'].astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('MACD calculation failed: %s', e)
+    else:
+        logger.warning('MACD indicator unavailable in pandas_ta; skipping')
     df['bb_upper'] = np.nan
     df['bb_lower'] = np.nan
     df['bb_percent'] = np.nan
-    try:
-        bb = ta.bbands(df['close'], length=20)
-        df['bb_upper'] = bb['BBU_20_2.0'].astype(float)
-        df['bb_lower'] = bb['BBL_20_2.0'].astype(float)
-        df['bb_percent'] = bb['BBP_20_2.0'].astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('Bollinger Bands failed: %s', e)
+    if hasattr(ta, 'bbands'):
+        try:
+            bb = ta.bbands(df['close'], length=20)
+            df['bb_upper'] = bb['BBU_20_2.0'].astype(float)
+            df['bb_lower'] = bb['BBL_20_2.0'].astype(float)
+            df['bb_percent'] = bb['BBP_20_2.0'].astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('Bollinger Bands failed: %s', e)
+    else:
+        logger.warning('Bollinger Bands indicator unavailable in pandas_ta; skipping')
     df['adx'] = np.nan
     df['dmp'] = np.nan
     df['dmn'] = np.nan
-    try:
-        adx = ta.adx(df['high'], df['low'], df['close'], length=14)
-        df['adx'] = adx['ADX_14'].astype(float)
-        df['dmp'] = adx['DMP_14'].astype(float)
-        df['dmn'] = adx['DMN_14'].astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('ADX calculation failed: %s', e)
+    if hasattr(ta, 'adx'):
+        try:
+            adx = ta.adx(df['high'], df['low'], df['close'], length=14)
+            df['adx'] = adx['ADX_14'].astype(float)
+            df['dmp'] = adx['DMP_14'].astype(float)
+            df['dmn'] = adx['DMN_14'].astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('ADX calculation failed: %s', e)
+    else:
+        logger.warning('ADX indicator unavailable in pandas_ta; skipping')
     df['cci'] = np.nan
     try:
         if hasattr(ta, 'cci'):
@@ -115,41 +127,54 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
         logger.exception('MFI calculation failed: %s', e)
         df['mfi_14'] = np.nan
     df['tema'] = np.nan
-    try:
-        if hasattr(ta, 'tema'):
+    if hasattr(ta, 'tema'):
+        try:
             df['tema'] = ta.tema(df['close'], length=10).astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('TEMA calculation failed: %s', e)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('TEMA calculation failed: %s', e)
+    else:
+        logger.warning('TEMA indicator unavailable in pandas_ta; skipping')
     df['willr'] = np.nan
-    try:
-        if hasattr(ta, 'willr'):
+    if hasattr(ta, 'willr'):
+        try:
             df['willr'] = ta.willr(df['high'], df['low'], df['close'], length=14).astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('Williams %%R calculation failed: %s', e)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('Williams %%R calculation failed: %s', e)
+    else:
+        logger.warning('Williams %%R indicator unavailable in pandas_ta; skipping')
     df['psar_long'] = np.nan
     df['psar_short'] = np.nan
-    try:
-        psar = ta.psar(df['high'], df['low'], df['close'])
-        df['psar_long'] = psar['PSARl_0.02_0.2'].astype(float)
-        df['psar_short'] = psar['PSARs_0.02_0.2'].astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('PSAR calculation failed: %s', e)
+    if hasattr(ta, 'psar'):
+        try:
+            psar = ta.psar(df['high'], df['low'], df['close'])
+            df['psar_long'] = psar['PSARl_0.02_0.2'].astype(float)
+            df['psar_short'] = psar['PSARs_0.02_0.2'].astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('PSAR calculation failed: %s', e)
+    else:
+        logger.warning('PSAR indicator unavailable in pandas_ta; skipping')
     df['ichimoku_conv'] = np.nan
     df['ichimoku_base'] = np.nan
-    try:
-        ich = ta.ichimoku(high=df['high'], low=df['low'], close=df['close'])
-        conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
-        base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df['ichimoku_conv'] = (conv.iloc[:, 0] if hasattr(conv, 'iloc') else conv).astype(float)
-        df['ichimoku_base'] = (base.iloc[:, 0] if hasattr(base, 'iloc') else base).astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('Ichimoku calculation failed: %s', e)
+    if hasattr(ta, 'ichimoku'):
+        try:
+            ich = ta.ichimoku(high=df['high'], low=df['low'], close=df['close'])
+            conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
+            base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
+            df['ichimoku_conv'] = (conv.iloc[:, 0] if hasattr(conv, 'iloc') else conv).astype(float)
+            df['ichimoku_base'] = (base.iloc[:, 0] if hasattr(base, 'iloc') else base).astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('Ichimoku calculation failed: %s', e)
+    else:
+        logger.warning('Ichimoku indicator unavailable in pandas_ta; skipping')
     df['stochrsi'] = np.nan
-    try:
-        st = ta.stochrsi(df['close'])
-        df['stochrsi'] = st['STOCHRSIk_14_14_3_3'].astype(float)
-    except (ValueError, TypeError) as e:
-        logger.exception('StochRSI calculation failed: %s', e)
+    if hasattr(ta, 'stochrsi'):
+        try:
+            st = ta.stochrsi(df['close'])
+            df['stochrsi'] = st['STOCHRSIk_14_14_3_3'].astype(float)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('StochRSI calculation failed: %s', e)
+    else:
+        logger.warning('StochRSI indicator unavailable in pandas_ta; skipping')
     df['ret_5m'] = np.nan
     df['ret_1h'] = np.nan
     df['ret_d'] = np.nan
