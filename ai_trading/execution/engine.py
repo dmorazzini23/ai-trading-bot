@@ -356,6 +356,47 @@ class ExecutionResult(str):
         obj.signal_weight = signal_weight
         return obj
 
+    @property
+    def side(self) -> str | None:
+        """Return normalized textual side when available."""
+
+        order = getattr(self, "order", None)
+        if order is None:
+            return None
+        raw_side = getattr(order, "side", None)
+        if raw_side is None:
+            return None
+        candidate = getattr(raw_side, "value", raw_side)
+        try:
+            normalized = str(candidate).strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        if not normalized:
+            return None
+        if normalized in {"buy", "sell"}:
+            return normalized
+        if normalized in {"short", "sell_short", "sell-short", "sell short", "exit"}:
+            return "sell"
+        if normalized in {"cover", "long"}:
+            return "buy"
+        return None
+
+    @property
+    def symbol(self) -> str | None:
+        """Return order symbol when available."""
+
+        order = getattr(self, "order", None)
+        if order is None:
+            return None
+        sym = getattr(order, "symbol", None)
+        if sym is None:
+            return None
+        try:
+            text = str(sym).strip()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        return text or None
+
     @staticmethod
     def _normalize_status(status: OrderStatus | str | None) -> OrderStatus | None:
         if isinstance(status, OrderStatus):
@@ -1223,9 +1264,9 @@ class ExecutionEngine:
             use_twap = bool(kwargs.get("use_twap", False))
             if not use_twap:
                 try:
-                    from ai_trading.core.constants import EXECUTION_PARAMETERS
+                    from ai_trading.core.constants import EXECUTION_PARAMETERS as _EXECUTION_PARAMETERS
 
-                    twap_min_qty = int(EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
+                    twap_min_qty = int(_EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
                     use_twap = quantity >= twap_min_qty or getattr(order, "execution_algorithm", None) == ExecutionAlgorithm.TWAP
                 except Exception:
                     use_twap = False

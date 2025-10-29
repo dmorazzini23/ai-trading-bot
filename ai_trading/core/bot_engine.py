@@ -22912,6 +22912,8 @@ def run_multi_strategy(ctx) -> None:
             )
             if result is not None:
                 actual_side_norm = _normalize_order_side_value(getattr(result, "side", None))
+                if actual_side_norm is None:
+                    actual_side_norm = _normalize_order_side_value(intent_decision.order_side)
                 if actual_side_norm not in expected_sides:
                     logger.error(
                         "ORDER_SIDE_MISMATCH",
