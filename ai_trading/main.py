@@ -26,6 +26,7 @@ from ai_trading.paths import LOG_DIR, ensure_runtime_paths
 from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
 from ai_trading.data.fetch import DataFetchError, EmptyBarsError
 from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
+from ai_trading.execution import timing as execution_timing
 from ai_trading.utils.datetime import ensure_datetime
 
 
@@ -1701,6 +1702,7 @@ def main(argv: list[str] | None = None) -> None:
                 interval_ms = max(0.0, float(effective_interval)) * 1000.0
                 fraction_clamped = max(0.0, min(1.0, float(fraction)))
                 budget = SoftBudget(int(interval_ms * fraction_clamped))
+                execution_timing.reset_cycle()
                 try:
                     _t0 = monotonic_time()
                     with StageTimer(logger, "CYCLE_FETCH"):
@@ -1748,11 +1750,15 @@ def main(argv: list[str] | None = None) -> None:
                             _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
                         except Exception:
                             pass
-                    _t2 = monotonic_time()
-                    with StageTimer(logger, "CYCLE_EXECUTE"):
+                    execute_seconds = execution_timing.cycle_seconds()
+                    with StageTimer(
+                        logger,
+                        "CYCLE_EXECUTE",
+                        override_ms=execute_seconds * 1000.0,
+                    ):
                         pass
                     try:
-                        _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, monotonic_time() - _t2))  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, execute_seconds))  # type: ignore[call-arg]
                     except Exception:
                         pass
                     if budget.over_budget():

@@ -51,7 +51,7 @@ def _log_at_level(logger: Any, level: int, message: str, *, extra: dict[str, Any
 
 
 @contextmanager
-def StageTimer(logger: Any, stage_name: str, **extra: Any) -> None:
+def StageTimer(logger: Any, stage_name: str, *, override_ms: float | None = None, **extra: Any) -> None:
     t0 = time.perf_counter()
     try:
         yield
@@ -59,7 +59,14 @@ def StageTimer(logger: Any, stage_name: str, **extra: Any) -> None:
         level = _resolve_timing_level()
         if level is None:
             return
-        dt_ms = int((time.perf_counter() - t0) * 1000)
+        dt_ms = override_ms
+        if dt_ms is None:
+            dt_ms = int((time.perf_counter() - t0) * 1000)
+        else:
+            try:
+                dt_ms = int(max(0.0, float(dt_ms)))
+            except (TypeError, ValueError):
+                dt_ms = int((time.perf_counter() - t0) * 1000)
         payload = {"stage": stage_name, "elapsed_ms": dt_ms, **extra}
         try:
             if logger.isEnabledFor(level):

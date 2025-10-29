@@ -160,6 +160,7 @@ try:
         mark_symbol_stale as guard_mark_symbol_stale,
         shadow_active as guard_shadow_active,
     )
+    from ai_trading.execution.timing import execution_span
 except (ImportError, ModuleNotFoundError, AttributeError):
     from types import SimpleNamespace as _SimpleNamespace
 
@@ -6988,6 +6989,7 @@ class BotState:
     last_trade_direction: dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
     auth_skipped_symbols: set[str] = field(default_factory=set)
+    cycle_order_intents: dict[str, str] = field(default_factory=dict)
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -11613,6 +11615,7 @@ class BotContext:
     drawdown_circuit_breaker: DrawdownCircuitBreaker | None = None
     logger: logging.Logger = logger
     liquidity_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    allow_short_selling: bool = False
 
     # AI-AGENT-REF: Add backward compatibility property for alpaca_client
     @property
@@ -12209,6 +12212,11 @@ class LazyBotContext:
             ensure_alpaca_attached(self._context)
         except COMMON_EXC:
             pass
+        try:
+            allow_short_flag = bool(get_env("AI_TRADING_ALLOW_SHORT", "0", cast=bool))
+        except COMMON_EXC:
+            allow_short_flag = False
+        self._context.allow_short_selling = allow_short_flag
         # ExecutionEngine does not accept slippage/metrics kwargs.
         # Metrics remain tracked in bot_engine via Prometheus counters.
         _exec_engine = None
@@ -15437,8 +15445,15 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     )
                     return _dummy_order("insufficient_position")
 
+            timing_meta = {
+                "symbol": order_args.get("symbol"),
+                "side": order_args.get("side"),
+                "qty": order_args.get("qty", 0),
+                "attempt": attempt + 1,
+            }
             try:
-                order = _invoke_submit(order_args)
+                with execution_span(logger, **timing_meta):
+                    order = _invoke_submit(order_args)
             except APIError as e:
                 if getattr(e, "code", None) == 40310000:
                     available = int(
@@ -15449,7 +15464,10 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                             f"Adjusting order for {order_args.get('symbol')} to available qty={available}"
                         )
                         order_args["qty"] = available
-                        order = _invoke_submit(order_args)
+                        adjusted_meta = dict(timing_meta)
+                        adjusted_meta["phase"] = "adjusted_qty"
+                        with execution_span(logger, **adjusted_meta):
+                            order = _invoke_submit(order_args)
                     else:
                         logger.warning(
                             f"Skipping {order_args.get('symbol')}, no available qty"
@@ -18425,11 +18443,24 @@ def _enter_short(
             },
         )
 
+    target_weight_short = ctx.portfolio_weights.get(symbol, 0.0)
+    intent_decision_short = _resolve_order_intent(
+        ctx,
+        state,
+        symbol=symbol,
+        signal_side="sell_short",
+        target_weight=target_weight_short,
+        intended_side="sell_short",
+    )
+    if not intent_decision_short:
+        logger.error("ORDER_INTENT_BLOCKED", extra=intent_decision_short.details)
+        return True
+
     order_id = _call_submit_order(
         ctx,
         symbol,
         adj_qty,
-        "sell_short",
+        intent_decision_short.order_side or "sell_short",
         price=current_price,
         annotations=order_annotations,
         price_hint=current_price,
@@ -21953,6 +21984,113 @@ def _pdt_limit_exhausted(ctx: Any) -> tuple[bool, Mapping[str, Any] | None]:
     return False, context
 
 
+@dataclass(frozen=True)
+class OrderIntentDecision:
+    allowed: bool
+    order_side: str | None
+    expected_sides: tuple[str, ...]
+    reason: str | None
+    details: dict[str, Any]
+
+    def __bool__(self) -> bool:
+        return self.allowed
+
+
+def _resolve_order_intent(
+    ctx: BotContext,
+    state: BotState,
+    *,
+    symbol: str,
+    signal_side: Any,
+    target_weight: float,
+    intended_side: str | None = None,
+) -> OrderIntentDecision:
+    allow_short = bool(getattr(ctx, "allow_short_selling", False))
+    normalized_signal = _normalize_order_side_value(signal_side)
+    if normalized_signal is None and isinstance(signal_side, str):
+        normalized_signal = signal_side.strip().lower() or None
+    order_side = intended_side or normalized_signal
+    if order_side == "short":
+        order_side = "sell_short"
+    if order_side not in {"buy", "sell", "sell_short"}:
+        details = {
+            "symbol": symbol,
+            "signal_side": normalized_signal,
+            "target_weight": float(target_weight) if target_weight is not None else None,
+            "allow_short": allow_short,
+            "position_side": "unknown",
+            "position_qty": None,
+            "open_orders_side": (),
+            "intended_order_side": order_side,
+        }
+        return OrderIntentDecision(False, None, tuple(), "unsupported_intent", details)
+
+    expected = {"sell", "sell_short"} if order_side == "sell_short" else {order_side}
+    position_qty = _current_qty(ctx, symbol)
+    if position_qty > 0:
+        position_side = "long"
+    elif position_qty < 0:
+        position_side = "short"
+    else:
+        position_side = "flat"
+
+    open_sides: set[str] = set()
+    execution_engine = getattr(ctx, "execution_engine", None)
+    pending_fetcher = getattr(execution_engine, "get_pending_orders", None)
+    if callable(pending_fetcher):
+        try:
+            pending_orders = pending_fetcher()
+        except Exception:
+            pending_orders = []
+        for info in pending_orders:
+            info_symbol = getattr(info, "symbol", None)
+            if info_symbol is None:
+                continue
+            try:
+                if str(info_symbol).upper() != symbol.upper():
+                    continue
+            except Exception:
+                continue
+            raw_side = getattr(info, "side", None)
+            normalized = _normalize_order_side_value(raw_side)
+            if normalized is None and isinstance(raw_side, str):
+                normalized = raw_side.strip().lower()
+            if normalized:
+                open_sides.add(normalized)
+
+    try:
+        cycle_intents = state.cycle_order_intents
+    except AttributeError:
+        cycle_intents = {}
+        state.cycle_order_intents = cycle_intents  # type: ignore[assignment]
+    existing_cycle = cycle_intents.get(symbol)
+
+    details = {
+        "symbol": symbol,
+        "signal_side": normalized_signal,
+        "target_weight": float(target_weight) if target_weight is not None else None,
+        "allow_short": allow_short,
+        "position_side": position_side,
+        "position_qty": position_qty,
+        "open_orders_side": tuple(sorted(open_sides)) if open_sides else (),
+        "intended_order_side": order_side,
+    }
+
+    if order_side == "sell_short" and not allow_short:
+        return OrderIntentDecision(False, None, tuple(), "short_not_allowed", details)
+
+    if existing_cycle and existing_cycle not in expected:
+        details["conflict_side"] = existing_cycle
+        return OrderIntentDecision(False, None, tuple(), "cycle_conflict", details)
+
+    if any(side not in expected for side in open_sides):
+        details["conflict_side"] = tuple(sorted(open_sides))
+        return OrderIntentDecision(False, None, tuple(), "open_order_conflict", details)
+
+    cycle_intents[symbol] = order_side
+    return OrderIntentDecision(True, order_side, tuple(sorted(expected)), None, details)
+
+
 def _ensure_executable_quote(
     ctx: BotContext,
     symbol: str,
@@ -22748,10 +22886,27 @@ def run_multi_strategy(ctx) -> None:
             if isinstance(tp, (int, float)) and tp > 0:
                 order_kwargs['take_profit'] = float(tp)
                 order_kwargs.setdefault('order_class', 'bracket')
-            expected_sides = {"buy"} if sig.side == "buy" else {"sell", "sell_short"}
+            try:
+                target_weight_val = float(ctx.portfolio_weights.get(sig.symbol, 0.0))
+            except (AttributeError, TypeError, ValueError):
+                try:
+                    target_weight_val = float(getattr(sig, "weight", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    target_weight_val = 0.0
+            intent_decision = _resolve_order_intent(
+                ctx,
+                state,
+                symbol=sig.symbol,
+                signal_side=sig.side,
+                target_weight=target_weight_val,
+            )
+            if not intent_decision:
+                logger.error("ORDER_INTENT_BLOCKED", extra=intent_decision.details)
+                continue
+            expected_sides = set(intent_decision.expected_sides) or {intent_decision.order_side}
             result = ctx.execution_engine.execute_order(
                 sig.symbol,
-                sig.side,
+                intent_decision.order_side,
                 qty,
                 **order_kwargs,
             )
@@ -24172,6 +24327,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         previous_last_run_at = state.last_run_at
         state.running = True
         state.last_run_at = now
+        intents = getattr(state, "cycle_order_intents", None)
+        if isinstance(intents, dict):
+            intents.clear()
+        else:
+            state.cycle_order_intents = {}
 
         def _restore_last_run_timestamp() -> None:
             """Revert ``state.last_run_at`` to its pre-cycle value."""
@@ -25820,6 +25980,7 @@ def get_latest_price(
 
         trade_price: float | None = None
         trade_source: str | None = None
+        backup_checked = False
         if last_price is None or last_price <= 0:
             trade_price, trade_source = _attempt_alpaca_trade(symbol, alpaca_feed, cache)
             if trade_source == "alpaca_auth_failed":
