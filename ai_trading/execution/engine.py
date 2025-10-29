@@ -36,6 +36,17 @@ from ai_trading.meta_learning.persistence import record_trade_fill
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
 
+
+@dataclass(slots=True)
+class BrokerSyncResult:
+    """Snapshot of broker open orders and positions after synchronization."""
+
+    open_orders: tuple[Any, ...]
+    positions: tuple[Any, ...]
+    open_buy_by_symbol: dict[str, int]
+    open_sell_by_symbol: dict[str, int]
+    timestamp: float
+
 # Lightweight Prometheus counters (no-op if client unavailable)
 ORDERS_SUBMITTED: Any | None = None
 _orders_submitted_total: Any | None = None
@@ -99,6 +110,7 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "order_class",
         "parent_order_id",
         "post_only",
+        "quote",
         "price",
         "price_improvement",
         "price_source",
@@ -800,6 +812,8 @@ class ExecutionEngine:
             "average_fill_time": 0.0,
         }
         self._last_partial_fill_summary: dict[str, Any] | None = None
+        self._broker_sync: BrokerSyncResult | None = None
+        self._open_order_qty_index: dict[str, tuple[int, int]] = {}
         emit_once(logger, "EXECUTION_ENGINE_INIT", "info", "ExecutionEngine initialized")
         try:
             self.order_manager.add_execution_callback(self._handle_execution_event)
@@ -893,6 +907,109 @@ class ExecutionEngine:
         """Return list of currently tracked orders."""
         with _order_tracking_lock:
             return list(_active_orders.values())
+
+    def _update_broker_snapshot(
+        self,
+        open_orders: Iterable[Any] | None,
+        positions: Iterable[Any] | None,
+    ) -> BrokerSyncResult:
+        """Store normalized broker state for downstream consumers."""
+
+        open_orders_tuple = tuple(open_orders or ())
+        positions_tuple = tuple(positions or ())
+        buy_index: dict[str, int] = {}
+        sell_index: dict[str, int] = {}
+
+        def _normalize_symbol(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            try:
+                text = str(value).strip()
+            except Exception:  # pragma: no cover - defensive
+                return None
+            if not text:
+                return None
+            return text.upper()
+
+        def _extract_side(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            try:
+                text = str(value).strip().lower()
+            except Exception:  # pragma: no cover - defensive
+                return None
+            if text in {"buy", "long", "cover"}:
+                return "buy"
+            if text in {"sell", "sell_short", "sellshort", "short"}:
+                return "sell"
+            return None
+
+        def _extract_qty(value: Any) -> int:
+            candidates = []
+            if isinstance(value, Mapping):
+                candidates.extend(
+                    value.get(key)
+                    for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty")
+                )
+            else:
+                for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty"):
+                    if hasattr(value, key):
+                        candidates.append(getattr(value, key))
+            for candidate in candidates:
+                if candidate in (None, ""):
+                    continue
+                try:
+                    return abs(int(float(candidate)))
+                except (TypeError, ValueError):
+                    continue
+            return 0
+
+        for order in open_orders_tuple:
+            if isinstance(order, Mapping):
+                symbol = _normalize_symbol(order.get("symbol"))
+                side = _extract_side(order.get("side"))
+            else:
+                symbol = _normalize_symbol(getattr(order, "symbol", None))
+                side = _extract_side(getattr(order, "side", None))
+            if symbol is None or side is None:
+                continue
+            qty_val = _extract_qty(order)
+            if qty_val <= 0:
+                continue
+            if side == "buy":
+                buy_index[symbol] = buy_index.get(symbol, 0) + qty_val
+            else:
+                sell_index[symbol] = sell_index.get(symbol, 0) + qty_val
+
+        qty_index: dict[str, tuple[int, int]] = {}
+        for sym in set(buy_index) | set(sell_index):
+            qty_index[sym] = (buy_index.get(sym, 0), sell_index.get(sym, 0))
+
+        snapshot = BrokerSyncResult(
+            open_orders=open_orders_tuple,
+            positions=positions_tuple,
+            open_buy_by_symbol=buy_index,
+            open_sell_by_symbol=sell_index,
+            timestamp=monotonic_time(),
+        )
+        self._broker_sync = snapshot
+        self._open_order_qty_index = qty_index
+        return snapshot
+
+    def synchronize_broker_state(self) -> BrokerSyncResult:
+        """Return the latest broker snapshot (no-op for base engine)."""
+
+        if self._broker_sync is None:
+            self._broker_sync = BrokerSyncResult((), (), {}, {}, monotonic_time())
+        return self._broker_sync
+
+    def open_order_totals(self, symbol: str) -> tuple[int, int]:
+        """Return aggregate (buy_qty, sell_qty) for *symbol* from last sync."""
+
+        if not symbol:
+            return (0, 0)
+        key = symbol.upper()
+        return self._open_order_qty_index.get(key, (0, 0))
 
     def _cancel_stale_order(self, order_id: str) -> bool:
         """Attempt to cancel a stale order via broker interface."""
