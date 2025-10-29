@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from functools import lru_cache
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
 from ai_trading.logging import get_logger, log_pdt_enforcement
 from ai_trading.market.symbol_specs import get_tick_size
@@ -154,6 +154,7 @@ from ai_trading.data.provider_monitor import (
     safe_mode_reason,
 )
 from ai_trading.execution.engine import (
+    BrokerSyncResult,
     ExecutionResult,
     KNOWN_EXECUTE_ORDER_KWARGS,
     OrderManager,
@@ -1042,6 +1043,8 @@ class ExecutionEngine:
         self._explicit_shadow = shadow_mode
 
         self.trading_client = None
+        self._broker_sync: BrokerSyncResult | None = None
+        self._open_order_qty_index: dict[str, tuple[int, int]] = {}
         self.config: AlpacaConfig | None = None
         self.settings = None
         self.execution_mode = str(requested_mode).lower()
@@ -1617,6 +1620,7 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         limit_has_price = bool(order_data.get("limit_price"))
+        price_gate_required = require_quotes and not closing_position and not limit_has_price
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -1773,9 +1777,13 @@ class ExecutionEngine:
             if os.getenv("PYTEST_RUNNING", "").strip().lower() not in {"1", "true", "yes"}:
                 return None
 
-        if require_quotes and not closing_position and not limit_has_price:
+        quote_payload: Mapping[str, Any] | None = None
+        quote_ts = None
+        bid = ask = None
+        quote_age_ms: float | None = None
+        synthetic_quote = False
+        if price_gate_required:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
-            quote_payload: Mapping[str, Any] | None = None
             if isinstance(kwargs, dict):
                 candidate = kwargs.get("quote")
                 if isinstance(candidate, Mapping):
@@ -1803,8 +1811,6 @@ class ExecutionEngine:
                     if age is not None and age >= 0:
                         quote_dict["timestamp"] = now_utc - timedelta(seconds=age)
 
-            bid = None
-            ask = None
             if quote_dict is not None:
                 bid = quote_dict.get("bid") or quote_dict.get("bp")
                 ask = quote_dict.get("ask") or quote_dict.get("ap")
@@ -2032,6 +2038,7 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         limit_has_price = bool(order_data.get("limit_price"))
+        price_gate_required = require_quotes and not closing_position and not limit_has_price
 
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
@@ -2182,6 +2189,14 @@ class ExecutionEngine:
                 )
                 return None
 
+        quote_payload: Mapping[str, Any] | None = None
+        fallback_age: float | int | None = None
+        fallback_error: str | None = None
+        quote_ts = None
+        bid = ask = None
+        quote_age_ms: float | None = None
+        synthetic_quote = False
+        fresh = True
         if guard_shadow_active() and not closing_position:
             logger.info(
                 "SHADOW_MODE_ACTIVE",
@@ -2189,15 +2204,12 @@ class ExecutionEngine:
             )
             return None
 
-        if require_quotes and not closing_position and not limit_has_price:
+        if price_gate_required:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
-            quote_payload: Mapping[str, Any] | None = None
             if isinstance(kwargs, dict):
                 candidate = kwargs.get("quote")
                 if isinstance(candidate, Mapping):
                     quote_payload = candidate  # type: ignore[assignment]
-            fallback_age = None
-            fallback_error = None
             if isinstance(annotations, Mapping):
                 fallback_age = annotations.get("fallback_quote_age")
                 fallback_error = annotations.get("fallback_quote_error")
@@ -2206,50 +2218,58 @@ class ExecutionEngine:
                     if isinstance(candidate_quote, Mapping):
                         quote_payload = candidate_quote  # type: ignore[assignment]
 
-            quote_ts = None
-            bid = ask = None
-            if quote_payload is not None:
-                bid = quote_payload.get("bid")  # type: ignore[assignment]
-                ask = quote_payload.get("ask")  # type: ignore[assignment]
-                ts_candidate = (
-                    quote_payload.get("ts")
-                    or quote_payload.get("timestamp")
-                    or quote_payload.get("t")
-                )
-                if hasattr(ts_candidate, "isoformat"):
-                    quote_ts = ts_candidate  # type: ignore[assignment]
+        if quote_payload is None and isinstance(kwargs, dict):
+            candidate = kwargs.get("quote")
+            if isinstance(candidate, Mapping):
+                quote_payload = candidate  # type: ignore[assignment]
 
-            fresh = True
-            if quote_ts is not None and hasattr(quote_ts, "isoformat"):
-                fresh = quote_fresh_enough(quote_ts, _max_quote_staleness_seconds())
-            elif isinstance(fallback_age, (int, float)):
-                fresh = float(fallback_age) <= float(_max_quote_staleness_seconds())
-            elif isinstance(fallback_error, str) and fallback_error:
-                fresh = False
-
-            has_ba = True
-            if bid is None or ask is None:
-                has_ba = False
+        if quote_payload is not None:
+            bid = quote_payload.get("bid")  # type: ignore[assignment]
+            ask = quote_payload.get("ask")  # type: ignore[assignment]
+            ts_candidate = (
+                quote_payload.get("ts")
+                or quote_payload.get("timestamp")
+                or quote_payload.get("t")
+            )
+            if hasattr(ts_candidate, "isoformat"):
+                quote_ts = ts_candidate  # type: ignore[assignment]
+            if isinstance(quote_payload, Mapping):
+                synthetic_quote = bool(quote_payload.get("synthetic"))
+                details = quote_payload.get("details")
+                if isinstance(details, Mapping):
+                    synthetic_quote = synthetic_quote or bool(details.get("synthetic"))
             else:
-                try:
-                    has_ba = float(bid) > 0 and float(ask) > 0
-                except (TypeError, ValueError):
-                    has_ba = False
+                synthetic_quote = bool(getattr(quote_payload, "synthetic", False))
 
-            if not (fresh and has_ba):
-                logger.warning(
-                    "ORDER_SKIPPED_PRICE_GATED",
-                    extra={
-                        "symbol": symbol,
-                        "side": side_lower,
-                        "fresh": fresh,
-                        "bid": None if bid is None else float(bid),
-                        "ask": None if ask is None else float(ask),
-                        "fallback_error": fallback_error,
-                        "fallback_age": fallback_age,
-                    },
+        fresh = True
+        if quote_ts is not None and hasattr(quote_ts, "isoformat"):
+            fresh = quote_fresh_enough(quote_ts, _max_quote_staleness_seconds())
+            try:
+                quote_age_ms = max(
+                    0.0,
+                    (datetime.now(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0,
                 )
-                return None
+            except Exception:
+                quote_age_ms = quote_age_ms
+        elif isinstance(fallback_age, (int, float)):
+            fresh = float(fallback_age) <= float(_max_quote_staleness_seconds())
+            try:
+                quote_age_ms = max(0.0, float(fallback_age) * 1000.0)
+            except (TypeError, ValueError):
+                quote_age_ms = quote_age_ms
+        elif isinstance(fallback_error, str) and fallback_error:
+            fresh = False
+
+        has_ba = True
+        if bid is None or ask is None:
+            has_ba = False
+        else:
+            try:
+                has_ba = float(bid) > 0 and float(ask) > 0
+            except (TypeError, ValueError):
+                has_ba = False
+        if price_gate_required:
+            price_gate_ok = fresh and has_ba
 
         start_time = time.time()
         explicit_limit = ("limit_price" in order_data) or ("stop_price" in order_data)
@@ -2463,6 +2483,14 @@ class ExecutionEngine:
         else:
             annotations = {}
 
+        bid = None
+        ask = None
+        quote_ts = None
+        quote_age_ms: float | None = None
+        synthetic_quote = False
+        price_gate_required = False
+        price_gate_ok = True
+
         side_token = getattr(side, "value", side)
         try:
             side_str_for_validation = side_token if isinstance(side_token, str) else str(side_token)
@@ -2568,6 +2596,187 @@ class ExecutionEngine:
         ):
             order_type_normalized = "market"
             downgraded_to_market_initial = True
+
+        provider_source = (
+            annotations.get("price_source")
+            or annotations.get("source")
+            or annotations.get("quote_source")
+            or annotations.get("fallback_source")
+        )
+        try:
+            provider_source_str = str(provider_source).strip().lower()
+        except Exception:
+            provider_source_str = ""
+
+        def _safe_float(value: Any) -> float | None:
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(num):
+                return None
+            return num
+
+        bid_val = _safe_float(bid)
+        ask_val = _safe_float(ask)
+        basis_price = None
+        basis_label = None
+        if bid_val is not None and ask_val is not None:
+            if mapped_side in {"buy", "cover"}:
+                basis_price = ask_val
+                basis_label = "ask"
+            else:
+                basis_price = bid_val
+                basis_label = "bid"
+        if basis_price is None and bid_val is not None and ask_val is not None:
+            basis_price = (bid_val + ask_val) / 2.0
+            basis_label = "mid"
+        if basis_price is None and price_for_limit is not None:
+            fallback_basis = _safe_float(price_for_limit)
+            if fallback_basis is not None:
+                basis_price = fallback_basis
+                basis_label = basis_label or "limit_hint"
+        if basis_price is None and resolved_limit_price is not None:
+            fallback_basis = _safe_float(resolved_limit_price)
+            if fallback_basis is not None:
+                basis_price = fallback_basis
+                basis_label = basis_label or "limit_hint"
+        if basis_label is None:
+            basis_label = "unknown"
+
+        provider_for_log = "alpaca"
+        if (
+            synthetic_quote
+            or using_fallback_price
+            or (provider_source_str and not provider_source_str.startswith("alpaca"))
+        ):
+            provider_for_log = "backup/synthetic"
+
+        quote_type = "synthetic" if synthetic_quote else ("nbbo" if provider_for_log == "alpaca" else "fallback")
+        age_ms_int = int(round(quote_age_ms)) if quote_age_ms is not None else -1
+
+        try:
+            cfg = get_trading_config()
+        except Exception:
+            cfg = None
+        min_quote_fresh_ms = 1500
+        degraded_mode = "widen"
+        degraded_widen_bps = 8
+        if cfg is not None:
+            try:
+                min_quote_fresh_ms = max(0, int(getattr(cfg, "min_quote_freshness_ms", min_quote_fresh_ms)))
+            except (TypeError, ValueError):
+                min_quote_fresh_ms = 1500
+            mode_candidate = getattr(cfg, "degraded_feed_mode", degraded_mode)
+            if isinstance(mode_candidate, str) and mode_candidate.strip():
+                degraded_mode = mode_candidate.strip().lower()
+            try:
+                degraded_widen_bps = max(0, int(getattr(cfg, "degraded_feed_limit_widen_bps", degraded_widen_bps)))
+            except (TypeError, ValueError):
+                degraded_widen_bps = 0
+
+        degrade_due_age = quote_age_ms is not None and quote_age_ms > float(min_quote_fresh_ms)
+        try:
+            degrade_due_monitor = bool(
+                is_safe_mode_active()
+                or provider_monitor.is_disabled("alpaca")
+                or provider_monitor.is_disabled("alpaca_sip")
+            )
+        except Exception:
+            degrade_due_monitor = is_safe_mode_active()
+        degrade_due_provider = provider_for_log != "alpaca"
+        degrade_active = degrade_due_provider or degrade_due_age or degrade_due_monitor
+
+        limit_for_log = resolved_limit_price if resolved_limit_price is not None else price_for_limit
+        if limit_for_log is None and basis_price is not None:
+            limit_for_log = basis_price
+
+        if (
+            degrade_active
+            and degraded_mode == "block"
+            and not closing_position
+        ):
+            logger.info(
+                "LIMIT_BASIS",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "provider": provider_for_log,
+                    "type": quote_type,
+                    "age_ms": age_ms_int,
+                    "basis": basis_label,
+                    "limit": None if limit_for_log is None else round(float(limit_for_log), 6),
+                    "degraded": True,
+                    "mode": degraded_mode,
+                    "widen_bps": 0,
+                },
+            )
+            logger.warning(
+                "DEGRADED_FEED_BLOCK_ENTRY",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "provider": provider_for_log,
+                    "mode": degraded_mode,
+                    "age_ms": age_ms_int,
+                },
+            )
+            return None
+
+        widen_applied = False
+        if (
+            degrade_active
+            and degraded_mode == "widen"
+            and order_type_normalized in {"limit", "stop_limit"}
+            and degraded_widen_bps > 0
+        ):
+            base_for_widen = basis_price
+            if base_for_widen is None and limit_for_log is not None:
+                base_for_widen = _safe_float(limit_for_log)
+            if base_for_widen is not None and base_for_widen > 0:
+                direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
+                adjusted = max(base_for_widen * (1.0 + direction * degraded_widen_bps / 10000.0), 0.01)
+                resolved_limit_price = adjusted
+                price_for_limit = adjusted
+                kwargs["price"] = adjusted
+                if price_hint is None:
+                    price_hint = adjusted
+                limit_for_log = adjusted
+                widen_applied = True
+
+        logger.info(
+            "LIMIT_BASIS",
+            extra={
+                "symbol": symbol,
+                "side": mapped_side,
+                "provider": provider_for_log,
+                "type": quote_type,
+                "age_ms": age_ms_int,
+                "basis": basis_label,
+                "limit": None if limit_for_log is None else round(float(limit_for_log), 6),
+                "degraded": bool(degrade_active),
+                "mode": degraded_mode,
+                "widen_bps": degraded_widen_bps if widen_applied else 0,
+            },
+        )
+
+        if price_gate_required and not price_gate_ok:
+            gate_log_extra = {
+                "symbol": symbol,
+                "side": mapped_side,
+                "fresh": locals().get("fresh", True),
+                "bid": None if bid is None else float(bid),
+                "ask": None if ask is None else float(ask),
+                "fallback_error": locals().get("fallback_error"),
+                "fallback_age": locals().get("fallback_age"),
+            }
+            if degrade_active and degraded_mode == "widen" and limit_for_log is not None:
+                gate_log_extra["limit"] = float(limit_for_log)
+                gate_log_extra["mode"] = degraded_mode
+                logger.warning("ORDER_PRICE_GATE_BYPASSED", extra=gate_log_extra)
+            else:
+                logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
+                return None
 
         if self._broker_lock_suppressed(
             symbol=symbol,
@@ -2876,51 +3085,22 @@ class ExecutionEngine:
 
         open_orders_count: int | None = None
         positions_count: int | None = None
+        open_orders_list: list[Any] = []
+        positions_list: list[Any] = []
         if client is not None:
+            open_orders_list, positions_list = self._fetch_broker_state()
+            open_orders_count = len(open_orders_list)
+            positions_count = len(positions_list)
+            if positions_list:
+                self._update_position_tracker_snapshot(positions_list)
             try:
-                open_orders_resp: Any | None = None
-                get_orders = getattr(client, "get_orders", None)
-                if callable(get_orders):
-                    open_orders_resp = get_orders(status="open")  # type: ignore[call-arg]
-                else:
-                    list_orders = getattr(client, "list_orders", None)
-                    if callable(list_orders):
-                        open_orders_resp = list_orders(status="open")  # type: ignore[call-arg]
-                if open_orders_resp is not None:
-                    open_orders_list = list(open_orders_resp)
-                    open_orders_count = len(open_orders_list)
-                else:
-                    open_orders_count = 0
+                self._update_broker_snapshot(open_orders_list, positions_list)
             except Exception:
                 logger.debug(
-                    "BROKER_STATE_OPEN_ORDERS_FAILED",
+                    "BROKER_SYNC_UPDATE_FAILED",
                     extra={"symbol": symbol},
                     exc_info=True,
                 )
-                open_orders_count = None
-
-            try:
-                positions_resp: Any | None = None
-                get_all_positions = getattr(client, "get_all_positions", None)
-                if callable(get_all_positions):
-                    positions_resp = get_all_positions()
-                else:
-                    list_positions = getattr(client, "list_positions", None)
-                    if callable(list_positions):
-                        positions_resp = list_positions()
-                if positions_resp is not None:
-                    positions_list = list(positions_resp)
-                    positions_count = len(positions_list)
-                    self._update_position_tracker_snapshot(positions_list)
-                else:
-                    positions_count = 0
-            except Exception:
-                logger.debug(
-                    "BROKER_STATE_POSITIONS_FAILED",
-                    extra={"symbol": symbol},
-                    exc_info=True,
-                )
-                positions_count = None
 
         order_id_display = order_id or client_order_id
         logger.info(
@@ -4376,12 +4556,164 @@ class ExecutionEngine:
             ]
 
 
+    def _update_broker_snapshot(
+        self,
+        open_orders: Iterable[Any] | None,
+        positions: Iterable[Any] | None,
+    ) -> BrokerSyncResult:
+        """Normalize broker state and cache aggregate open order quantities."""
+
+        open_orders_tuple = tuple(open_orders or ())
+        positions_tuple = tuple(positions or ())
+        buy_index: dict[str, int] = {}
+        sell_index: dict[str, int] = {}
+
+        def _normalize_symbol(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            try:
+                text = str(value).strip()
+            except Exception:  # pragma: no cover - defensive
+                return None
+            return text.upper() or None
+
+        def _extract_side(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            try:
+                token = str(value).strip().lower()
+            except Exception:  # pragma: no cover - defensive
+                return None
+            if token in {"buy", "long", "cover"}:
+                return "buy"
+            if token in {"sell", "sell_short", "sellshort", "short"}:
+                return "sell"
+            return None
+
+        def _extract_qty(value: Any) -> int:
+            candidates: list[Any] = []
+            if isinstance(value, Mapping):
+                candidates.extend(
+                    value.get(key)
+                    for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty")
+                )
+            else:
+                for key in ("qty", "quantity", "remaining_qty", "unfilled_qty", "filled_qty"):
+                    if hasattr(value, key):
+                        candidates.append(getattr(value, key))
+            for candidate in candidates:
+                if candidate in (None, ""):
+                    continue
+                try:
+                    return abs(int(float(candidate)))
+                except (TypeError, ValueError):
+                    continue
+            return 0
+
+        for order in open_orders_tuple:
+            if isinstance(order, Mapping):
+                symbol = _normalize_symbol(order.get("symbol"))
+                side = _extract_side(order.get("side"))
+            else:
+                symbol = _normalize_symbol(getattr(order, "symbol", None))
+                side = _extract_side(getattr(order, "side", None))
+            if symbol is None or side is None:
+                continue
+            qty_val = _extract_qty(order)
+            if qty_val <= 0:
+                continue
+            if side == "buy":
+                buy_index[symbol] = buy_index.get(symbol, 0) + qty_val
+            else:
+                sell_index[symbol] = sell_index.get(symbol, 0) + qty_val
+
+        qty_index: dict[str, tuple[int, int]] = {}
+        for sym in set(buy_index) | set(sell_index):
+            qty_index[sym] = (buy_index.get(sym, 0), sell_index.get(sym, 0))
+
+        snapshot = BrokerSyncResult(
+            open_orders=open_orders_tuple,
+            positions=positions_tuple,
+            open_buy_by_symbol=buy_index,
+            open_sell_by_symbol=sell_index,
+            timestamp=monotonic_time(),
+        )
+        self._broker_sync = snapshot
+        self._open_order_qty_index = qty_index
+        return snapshot
+
+    def synchronize_broker_state(self) -> BrokerSyncResult:
+        """Return the last broker snapshot or an empty default."""
+
+        if self._broker_sync is None:
+            self._broker_sync = BrokerSyncResult((), (), {}, {}, monotonic_time())
+        return self._broker_sync
+
+    def open_order_totals(self, symbol: str) -> tuple[int, int]:
+        """Return aggregate (buy_qty, sell_qty) for *symbol* from cached snapshot."""
+
+        if not symbol:
+            return (0, 0)
+        key = symbol.upper()
+        return self._open_order_qty_index.get(key, (0, 0))
+
+
 class LiveTradingExecutionEngine(ExecutionEngine):
     """Execution engine variant with optional trailing-stop manager."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._ts_mgr = kwargs.get("trailing_stop_manager")
+
+    def _fetch_broker_state(self) -> tuple[list[Any], list[Any]]:
+        """Return (open_orders, positions) using the active trading client."""
+
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return ([], [])
+
+        open_orders_list: list[Any] = []
+        positions_list: list[Any] = []
+
+        try:
+            open_orders_resp: Any | None = None
+            get_orders = getattr(client, "get_orders", None)
+            if callable(get_orders):
+                open_orders_resp = get_orders(status="open")  # type: ignore[call-arg]
+            else:
+                list_orders = getattr(client, "list_orders", None)
+                if callable(list_orders):
+                    open_orders_resp = list_orders(status="open")  # type: ignore[call-arg]
+            if open_orders_resp is not None:
+                open_orders_list = list(open_orders_resp)
+        except Exception:
+            logger.debug("BROKER_SYNC_OPEN_ORDERS_FAILED", exc_info=True)
+
+        try:
+            positions_resp: Any | None = None
+            get_all_positions = getattr(client, "get_all_positions", None)
+            if callable(get_all_positions):
+                positions_resp = get_all_positions()
+            else:
+                list_positions = getattr(client, "list_positions", None)
+                if callable(list_positions):
+                    positions_resp = list_positions()
+            if positions_resp is not None:
+                positions_list = list(positions_resp)
+        except Exception:
+            logger.debug("BROKER_SYNC_POSITIONS_FAILED", exc_info=True)
+
+        return (open_orders_list, positions_list)
+
+    def synchronize_broker_state(self) -> BrokerSyncResult:
+        """Refresh and return broker state snapshot."""
+
+        open_orders, positions = self._fetch_broker_state()
+        try:
+            return self._update_broker_snapshot(open_orders, positions)
+        except Exception:
+            logger.debug("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
+            return super().synchronize_broker_state()
 
     def check_trailing_stops(self) -> None:
         mgr = getattr(self, "_ts_mgr", None)

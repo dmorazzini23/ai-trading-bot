@@ -75,8 +75,9 @@ from ai_trading.data import price_quote_feed
 from ai_trading.data._alpaca_guard import should_import_alpaca_sdk
 from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
-    from ai_trading.risk.engine import RiskEngine, TradeSignal
     from ai_trading.data.bars import TimeFrame
+    from ai_trading.execution.engine import BrokerSyncResult
+    from ai_trading.risk.engine import RiskEngine, TradeSignal
     import pandas as pd
 from ai_trading.utils.time import last_market_session
 try:
@@ -160,7 +161,7 @@ try:
         mark_symbol_stale as guard_mark_symbol_stale,
         shadow_active as guard_shadow_active,
     )
-    from ai_trading.execution.timing import execution_span
+    from ai_trading.execution.timing import execution_span, record_cycle_wall
 except (ImportError, ModuleNotFoundError, AttributeError):
     from types import SimpleNamespace as _SimpleNamespace
 
@@ -177,6 +178,9 @@ except (ImportError, ModuleNotFoundError, AttributeError):
 
     def guard_shadow_active() -> bool:
         return bool(getattr(EXEC_GUARD_STATE, 'active', False))
+
+    def record_cycle_wall(*_a, **_k):
+        return None
 
 from ai_trading.config import (
     get_execution_settings,
@@ -6909,6 +6913,15 @@ class BotMode:
         return params
 
 
+@dataclass(slots=True)
+class ExecutionCycleMetrics:
+    submitted: int = 0
+    open_orders: int = 0
+    positions: int = 0
+    exposure_pct: float = 0.0
+    provider_mode: str = "alpaca"
+
+
 @dataclass
 class BotState:
     """
@@ -6998,6 +7011,7 @@ class BotState:
     # Minute data feed cache scoped to the active trading cycle
     minute_feed_cache: dict[str, str] = field(default_factory=dict)
     coverage_recovery_providers: list[str] = field(default_factory=list)
+    execution_metrics: "ExecutionCycleMetrics" = field(default_factory=ExecutionCycleMetrics)
 
     # Intraday price reliability metadata populated from fetch_minute_df_safe
     price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
@@ -18653,6 +18667,95 @@ def _current_qty(ctx, symbol: str) -> int:
         return 0
 
 
+def _delta_quantity(
+    order_side: str | None,
+    target_qty: int,
+    position_qty: int,
+    open_buy_qty: int,
+    open_sell_qty: int,
+) -> int:
+    """Return delta order quantity accounting for open orders."""
+
+    if target_qty <= 0:
+        return 0
+
+    side = (order_side or "").strip().lower()
+    long_position = max(position_qty, 0)
+    short_position = max(-position_qty, 0)
+    open_buy = max(open_buy_qty, 0)
+    open_sell = max(open_sell_qty, 0)
+
+    if side in {"buy", "cover"}:
+        delta = target_qty - (long_position + open_buy - open_sell)
+    elif side == "sell_short":
+        delta = target_qty - (short_position + open_sell - open_buy)
+    else:  # sell to reduce or exit longs
+        effective_open = max(open_sell - open_buy, 0)
+        available = long_position
+        delta = min(target_qty - effective_open, available)
+    try:
+        return max(int(round(delta)), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | None) -> None:
+    """Update execution metrics from *snapshot* and emit structured log."""
+
+    open_orders_count = 0
+    positions_count = 0
+    if snapshot is not None:
+        try:
+            open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
+        except Exception:
+            open_orders_count = 0
+        try:
+            positions_count = len(getattr(snapshot, "positions", ()) or ())
+        except Exception:
+            positions_count = 0
+
+    metrics = getattr(state, "execution_metrics", None)
+    if metrics is not None:
+        try:
+            metrics.open_orders = int(open_orders_count)
+        except Exception:
+            metrics.open_orders = open_orders_count
+        try:
+            metrics.positions = int(positions_count)
+        except Exception:
+            metrics.positions = positions_count
+
+    logger.info(
+        "BROKER_SYNC",
+        extra={"open_orders": open_orders_count, "positions": positions_count},
+    )
+
+
+def _log_execution_summary(metrics: "ExecutionCycleMetrics") -> None:
+    """Emit consolidated execution summary for the active cycle."""
+
+    submitted = getattr(metrics, "submitted", 0)
+    open_orders = getattr(metrics, "open_orders", 0)
+    positions = getattr(metrics, "positions", 0)
+    exposure_pct = getattr(metrics, "exposure_pct", 0.0)
+    provider_mode = getattr(metrics, "provider_mode", "alpaca") or "alpaca"
+    try:
+        exposure_value = round(float(exposure_pct), 2)
+    except Exception:
+        exposure_value = 0.0
+
+    logger.info(
+        "EXEC_SUMMARY",
+        extra={
+            "submitted": int(submitted),
+            "open": int(open_orders),
+            "positions": int(positions),
+            "exposure_pct": exposure_value,
+            "provider": provider_mode,
+        },
+    )
+
+
 def _recent_rebalance_flag(ctx: BotContext, symbol: str) -> bool:
     """Return ``False`` and clear any rebalance timestamp."""
     if symbol in ctx.rebalance_buys:
@@ -22861,6 +22964,13 @@ def run_multi_strategy(ctx) -> None:
         )
 
         try:
+            target_qty = int(round(float(qty)))
+        except (TypeError, ValueError):
+            target_qty = 0
+        if target_qty <= 0:
+            continue
+
+        try:
             order_type = 'market' if price is None else 'limit'
             order_kwargs = {
                 'order_type': order_type,
@@ -22904,6 +23014,36 @@ def run_multi_strategy(ctx) -> None:
                 logger.error("ORDER_INTENT_BLOCKED", extra=intent_decision.details)
                 continue
             expected_sides = set(intent_decision.expected_sides) or {intent_decision.order_side}
+            open_buy_qty = open_sell_qty = 0
+            engine_for_delta = getattr(ctx, "execution_engine", None)
+            if engine_for_delta is not None and hasattr(engine_for_delta, "open_order_totals"):
+                try:
+                    open_buy_qty, open_sell_qty = engine_for_delta.open_order_totals(sig.symbol)
+                except Exception:
+                    open_buy_qty = open_sell_qty = 0
+            position_qty = _current_qty(ctx, sig.symbol)
+            delta_qty = _delta_quantity(
+                intent_decision.order_side,
+                target_qty,
+                position_qty,
+                open_buy_qty,
+                open_sell_qty,
+            )
+            logger.info(
+                "DELTA_BREAKDOWN",
+                extra={
+                    "symbol": sig.symbol,
+                    "order_side": intent_decision.order_side,
+                    "target": target_qty,
+                    "position": position_qty,
+                    "open_buy": open_buy_qty,
+                    "open_sell": open_sell_qty,
+                    "delta": delta_qty,
+                },
+            )
+            if delta_qty <= 0:
+                continue
+            qty = delta_qty
             result = ctx.execution_engine.execute_order(
                 sig.symbol,
                 intent_decision.order_side,
@@ -22911,6 +23051,10 @@ def run_multi_strategy(ctx) -> None:
                 **order_kwargs,
             )
             if result is not None:
+                try:
+                    state.execution_metrics.submitted += 1
+                except Exception:
+                    pass
                 actual_side_norm = _normalize_order_side_value(getattr(result, "side", None))
                 if actual_side_norm is None:
                     actual_side_norm = _normalize_order_side_value(intent_decision.order_side)
@@ -24235,6 +24379,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     import uuid
 
     loop_id = str(uuid.uuid4())
+    execution_stage_start: float | None = None
     acquired = run_lock.acquire(blocking=False)
     if not acquired:
         logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
@@ -24284,6 +24429,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
             return  # skip work when market closed
         loop_start = monotonic_time()
+        state.execution_metrics = ExecutionCycleMetrics()
         ensure_alpaca_attached(runtime)
         api = getattr(runtime, "api", None)
         if api is None:
@@ -24674,6 +24820,26 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
             run_multi_strategy(runtime)
             try:
+                cfg_for_summary = get_trading_config()
+            except COMMON_EXC:
+                cfg_for_summary = None
+            broker_snapshot = None
+            post_sync_enabled = True
+            if cfg_for_summary is not None:
+                try:
+                    post_sync_enabled = bool(getattr(cfg_for_summary, "post_submit_broker_sync", True))
+                except (TypeError, ValueError):
+                    post_sync_enabled = True
+            if post_sync_enabled:
+                engine_obj = getattr(runtime, "execution_engine", None)
+                if engine_obj is not None and hasattr(engine_obj, "synchronize_broker_state"):
+                    try:
+                        broker_snapshot = engine_obj.synchronize_broker_state()
+                    except Exception:
+                        logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
+            if broker_snapshot is not None:
+                _record_broker_sync_metrics(state, broker_snapshot)
+            try:
                 risk_engine.refresh_positions(runtime.api)
                 pos_list = runtime.api.list_positions()
                 state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
@@ -24683,6 +24849,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 state.short_positions = {
                     s for s, q in state.position_cache.items() if q < 0
                 }
+                try:
+                    state.execution_metrics.positions = len(pos_list)
+                except Exception:
+                    pass
                 if runtime.execution_engine:
                     trailing_hook = getattr(
                         runtime.execution_engine, "check_trailing_stops", None
@@ -24740,6 +24910,20 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     if equity > 0
                     else 0.0
                 )
+                try:
+                    state.execution_metrics.exposure_pct = float(exposure)
+                except Exception:
+                    pass
+                provider_mode = "alpaca"
+                try:
+                    if getattr(state, "prefer_backup_quotes", False) or provider_monitor.is_disabled("alpaca"):
+                        provider_mode = "backup/synthetic"
+                    elif provider_monitor.is_disabled("alpaca_sip"):
+                        provider_mode = "backup/synthetic"
+                except Exception:
+                    if getattr(state, "prefer_backup_quotes", False):
+                        provider_mode = "backup/synthetic"
+                state.execution_metrics.provider_mode = provider_mode
                 logger.info(
                     f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
                 )
@@ -24785,6 +24969,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     len(positions),
                     adaptive_cap,
                 )
+                log_exec_summary = True
+                if cfg_for_summary is not None:
+                    try:
+                        log_exec_summary = bool(getattr(cfg_for_summary, "log_exec_summary_enabled", True))
+                    except (TypeError, ValueError):
+                        log_exec_summary = True
+                if log_exec_summary:
+                    _log_execution_summary(state.execution_metrics)
             except (
                 APIError,
                 TimeoutError,
@@ -24840,6 +25032,15 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             raise
         finally:
             try:
+                if execution_stage_start is not None:
+                    try:
+                        record_cycle_wall(
+                            max(0.0, monotonic_time() - execution_stage_start),
+                            {"stage": "cycle_execute"},
+                        )
+                    except Exception:
+                        pass
+                    execution_stage_start = None
                 cfg = get_trading_config()
                 stale_ratio = float(getattr(cfg, "execution_stale_ratio_shadow", 0.30))
             except COMMON_EXC:
@@ -26187,6 +26388,8 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         provider_disabled = not bool(primary_provider_fn())
     if provider_disabled:
         _PRICE_SOURCE[symbol] = _ALPACA_DISABLED_SENTINEL
+        if not prefer_backup:
+            return None
         prefer_backup = True
 
     preferred_feed = _prefer_feed_this_cycle()

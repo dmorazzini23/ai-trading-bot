@@ -36,6 +36,9 @@ All notable changes to this project will be documented in this file.
 - Core: ignore SIP failover preferences when entitlement checks fail and log a once-per-process notice for operators.
 
 ### Added
+- Execution & Config: expose `TRADING__POST_SUBMIT_BROKER_SYNC`,
+  `TRADING__DEGRADED_FEED_MODE`, and related defaults for degraded feed
+  pricing, broker-state rollups, and execution-cycle logging.
 - Cache fallback data provider usage to skip redundant Alpaca requests
   for the same symbol and window.
 - **Python**: restrict supported version to >=3.12,<3.13
