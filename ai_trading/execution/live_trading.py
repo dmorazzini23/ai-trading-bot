@@ -1620,6 +1620,7 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         limit_has_price = bool(order_data.get("limit_price"))
+        price_gate_required = require_quotes and not closing_position and not limit_has_price
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -1781,7 +1782,7 @@ class ExecutionEngine:
         bid = ask = None
         quote_age_ms: float | None = None
         synthetic_quote = False
-        if require_quotes and not closing_position and not limit_has_price:
+        if price_gate_required:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             if isinstance(kwargs, dict):
                 candidate = kwargs.get("quote")
@@ -2037,6 +2038,7 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         limit_has_price = bool(order_data.get("limit_price"))
+        price_gate_required = require_quotes and not closing_position and not limit_has_price
 
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
@@ -2202,7 +2204,7 @@ class ExecutionEngine:
             )
             return None
 
-        if require_quotes and not closing_position and not limit_has_price:
+        if price_gate_required:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             if isinstance(kwargs, dict):
                 candidate = kwargs.get("quote")
@@ -2266,7 +2268,8 @@ class ExecutionEngine:
                 has_ba = float(bid) > 0 and float(ask) > 0
             except (TypeError, ValueError):
                 has_ba = False
-        price_gate_ok = fresh and has_ba
+        if price_gate_required:
+            price_gate_ok = fresh and has_ba
 
         start_time = time.time()
         explicit_limit = ("limit_price" in order_data) or ("stop_price" in order_data)
@@ -2485,6 +2488,7 @@ class ExecutionEngine:
         quote_ts = None
         quote_age_ms: float | None = None
         synthetic_quote = False
+        price_gate_required = False
         price_gate_ok = True
 
         side_token = getattr(side, "value", side)
@@ -2756,7 +2760,7 @@ class ExecutionEngine:
             },
         )
 
-        if not price_gate_ok:
+        if price_gate_required and not price_gate_ok:
             gate_log_extra = {
                 "symbol": symbol,
                 "side": mapped_side,
