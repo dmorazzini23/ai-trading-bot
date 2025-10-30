@@ -70,6 +70,7 @@ from ai_trading.logging import (
 )
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
+from ai_trading.telemetry import runtime_state
 
 # --- SAFETY: Provide a module-level default for `_state` ------------------------------------
 # Some nested helper functions in this module (e.g., `_record_minute_fallback`) were designed
@@ -192,6 +193,7 @@ from ai_trading.data.metrics import (
 )
 from ai_trading.data.provider_monitor import (
     activate_data_kill_switch,
+    canonical_provider,
     provider_monitor,
     record_minute_gap_event,
     record_unauthorized_sip_event,
@@ -1525,6 +1527,7 @@ _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
 # primary-provider attempts for slightly shifted windows in the same cycle.
 _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
+_FALLBACK_SUPPRESS_UNTIL: dict[tuple[str, str], float] = {}
 _BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
 _BACKUP_SKIP_WINDOW = timedelta(minutes=10)
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
@@ -2098,8 +2101,38 @@ def _mark_fallback(
         fallback_name = provider_for_register.split("_", 1)[1]
     elif provider_for_register:
         fallback_name = str(provider_for_register)
-    # Emit once per unique (symbol, timeframe, window)
-    if key not in _FALLBACK_WINDOWS:
+    window_key = (symbol, timeframe)
+    now_monotonic = monotonic_time()
+    decision_window = getattr(provider_monitor, "decision_window_seconds", 120)
+    try:
+        cooldown_hint = max(float(decision_window), float(_FALLBACK_TTL_SECONDS))
+    except (TypeError, ValueError):
+        cooldown_hint = float(_FALLBACK_TTL_SECONDS)
+    suppress_until = _FALLBACK_SUPPRESS_UNTIL.get(window_key, 0.0)
+    should_emit = (
+        key not in _FALLBACK_WINDOWS
+        and (suppress_until <= 0.0 or now_monotonic >= suppress_until)
+    )
+    _FALLBACK_SUPPRESS_UNTIL[window_key] = now_monotonic + cooldown_hint
+
+    fallback_reason = log_extra.get("fallback_reason")
+    if fallback_reason == "close_column_all_nan":
+        feed_for_guard: str | None = None
+        if from_provider and from_provider.startswith("alpaca_"):
+            feed_for_guard = from_provider.split("_", 1)[1]
+        if feed_for_guard is None and feed_hint is not None:
+            feed_for_guard = feed_hint
+        if feed_for_guard is None and resolved_feed:
+            feed_for_guard = resolved_feed
+        _should_disable_alpaca_on_empty(
+            feed_for_guard,
+            reason="close_column_all_nan",
+            symbol=symbol,
+            timeframe=timeframe,
+            fallback_feed=fallback_name or resolved_feed or provider_for_register,
+        )
+
+    if should_emit:
         log_backup_provider_used(
             provider_for_register,
             symbol=symbol,
@@ -2109,22 +2142,6 @@ def _mark_fallback(
             extra=log_extra,
             logger=logger,
         )
-        fallback_reason = log_extra.get("fallback_reason")
-        if fallback_reason == "close_column_all_nan":
-            feed_for_guard: str | None = None
-            if from_provider and from_provider.startswith("alpaca_"):
-                feed_for_guard = from_provider.split("_", 1)[1]
-            if feed_for_guard is None and feed_hint is not None:
-                feed_for_guard = feed_hint
-            if feed_for_guard is None and resolved_feed:
-                feed_for_guard = resolved_feed
-            _should_disable_alpaca_on_empty(
-                feed_for_guard,
-                reason="close_column_all_nan",
-                symbol=symbol,
-                timeframe=timeframe,
-                fallback_feed=fallback_name or resolved_feed or provider_for_register,
-            )
         skip_switchover = False
         if from_provider:
             try:
@@ -2148,6 +2165,8 @@ def _mark_fallback(
                     target_key = str(provider_for_register)
             if from_key == "alpaca_iex" and not sip_allowed and target_key == "alpaca_sip":
                 skip_switchover = True
+        else:
+            skip_switchover = False
         if not skip_switchover:
             provider_monitor.record_switchover(
                 from_provider or "alpaca",
@@ -2176,6 +2195,32 @@ def _mark_fallback(
     except Exception:
         pass
     _FALLBACK_UNTIL[(symbol, timeframe)] = now_s + cooldown_seconds
+    primary_label = from_provider or "alpaca"
+    active_label = provider_for_register
+    backup_label = provider_hint or provider_for_register
+    try:
+        primary_canon = canonical_provider(primary_label)
+    except Exception:
+        primary_canon = str(primary_label)
+    try:
+        active_canon = canonical_provider(active_label)
+    except Exception:
+        active_canon = str(active_label)
+    backup_canon = None
+    if backup_label:
+        try:
+            backup_canon = canonical_provider(backup_label)
+        except Exception:
+            backup_canon = str(backup_label)
+    using_backup_flag = active_canon != primary_canon
+    runtime_state.update_data_provider_state(
+        primary=primary_canon,
+        active=active_canon,
+        backup=backup_canon,
+        using_backup=using_backup_flag,
+        reason=log_extra.get("fallback_reason") or reason,
+        cooldown_sec=cooldown_seconds,
+    )
     if _frame_has_rows(fallback_df):
         _set_backup_skip(symbol, timeframe)
 
@@ -2242,20 +2287,42 @@ def _clear_minute_fallback_state(
     if tf_key in _FALLBACK_UNTIL:
         _FALLBACK_UNTIL.pop(tf_key, None)
         cleared = True
+    if tf_key in _FALLBACK_SUPPRESS_UNTIL:
+        _FALLBACK_SUPPRESS_UNTIL.pop(tf_key, None)
+        cleared = True
     if tf_key in _BACKUP_SKIP_UNTIL:
         _clear_backup_skip(symbol, timeframe)
         cleared = True
-    if cleared and primary_label and backup_label:
+    if cleared:
+        if primary_label and backup_label:
+            try:
+                provider_monitor.update_data_health(
+                    primary_label,
+                    backup_label,
+                    healthy=True,
+                    reason="primary_recovered",
+                    severity="good",
+                )
+            except Exception:
+                pass
         try:
-            provider_monitor.update_data_health(
-                primary_label,
-                backup_label,
-                healthy=True,
-                reason="primary_recovered",
-                severity="good",
-            )
+            primary_canon = canonical_provider(primary_label or "alpaca")
         except Exception:
-            pass
+            primary_canon = primary_label or "alpaca"
+        backup_canon = None
+        if backup_label:
+            try:
+                backup_canon = canonical_provider(backup_label)
+            except Exception:
+                backup_canon = backup_label
+        runtime_state.update_data_provider_state(
+            primary=primary_canon,
+            active=primary_canon,
+            backup=backup_canon,
+            using_backup=False,
+            reason="primary_recovered",
+            cooldown_sec=0.0,
+        )
     return cleared
 
 

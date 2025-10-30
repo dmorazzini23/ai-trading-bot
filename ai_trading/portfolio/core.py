@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from ai_trading.logging import get_logger
+from ai_trading.telemetry import runtime_state
+import math
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ai_trading.data.bars import (
     StockBarsRequest,
@@ -184,6 +186,40 @@ def log_portfolio_summary(ctx) -> None:
                 if isinstance(price, (int, float)):
                     total += abs(price * int(p.qty))
             exposure = (total / equity * 100) if equity > 0 else 0.0
+        pending_notional = 0.0
+        pending_pct = 0.0
+        pending_symbols: dict[str, int] = {}
+        pending_orders_list: list[Any] = []
+        engine = getattr(ctx, 'execution_engine', None)
+        if engine is not None and hasattr(engine, 'get_pending_orders'):
+            try:
+                pending_orders_list = engine.get_pending_orders()
+            except Exception:
+                pending_orders_list = []
+        if pending_orders_list:
+            for pending in pending_orders_list:
+                symbol_val = getattr(pending, 'symbol', None)
+                qty_val = getattr(pending, 'qty', getattr(pending, 'quantity', 0))
+                try:
+                    qty_float = abs(float(qty_val))
+                except (TypeError, ValueError):
+                    continue
+                price_val = getattr(pending, 'limit_price', None)
+                if price_val in (None, 0):
+                    price_val = getattr(pending, 'price', None)
+                if price_val in (None, 0) and symbol_val:
+                    price_val = get_latest_price(ctx, symbol_val)
+                try:
+                    price_float = float(price_val)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(price_float) or price_float <= 0:
+                    continue
+                pending_notional += price_float * qty_float
+                if symbol_val:
+                    pending_symbols[symbol_val] = pending_symbols.get(symbol_val, 0) + int(round(qty_float))
+            if equity > 0:
+                pending_pct = (pending_notional / equity) * 100.0
         try:
             adaptive_cap = ctx.risk_engine._adaptive_global_cap()
         except AttributeError:
@@ -191,14 +227,25 @@ def log_portfolio_summary(ctx) -> None:
         except (TypeError, ValueError) as e:
             logger.debug('Risk engine calculation error: %s', e)
             adaptive_cap = 0.0
+        runtime_state.update_broker_status(connected=True)
         logger.info(
-            'Portfolio summary (%s): cash=$%.2f, equity=$%.2f, exposure=%.2f%%, positions=%d',
+            'Portfolio summary (%s): cash=$%.2f, equity=$%.2f, exposure=%.2f%%, positions=%d, pending_exposure=%.2f%%',
             position_source,
             cash,
             equity,
             exposure,
             len(positions),
+            pending_pct,
         )
+        if pending_orders_list:
+            logger.info(
+                'PENDING_ORDERS',
+                extra={
+                    'count': len(pending_orders_list),
+                    'notional': round(pending_notional, 2),
+                    'symbols': pending_symbols,
+                },
+            )
         logger.info(
             'Weights vs positions (%s): weights=%s, positions=%s, cash=$%.2f',
             position_source,
@@ -208,12 +255,16 @@ def log_portfolio_summary(ctx) -> None:
         )
         logger.info('CYCLE SUMMARY adaptive_cap=%.1f', adaptive_cap)
     except TimeoutError:
+        runtime_state.update_broker_status(connected=False, last_error='timeout')
         logger.error('Portfolio summary timed out', extra={'component': 'portfolio_summary', 'error_type': 'timeout'})
     except (AttributeError, KeyError) as exc:
+        runtime_state.update_broker_status(connected=False, last_error=str(exc))
         logger.warning('Portfolio summary failed - missing attribute/key: %s', exc, extra={'component': 'portfolio_summary', 'error_type': 'attribute'})
     except (ValueError, TypeError) as exc:
+        runtime_state.update_broker_status(connected=False, last_error=str(exc))
         logger.warning('Portfolio summary failed - data conversion error: %s', exc, extra={'component': 'portfolio_summary', 'error_type': 'data'})
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError) as exc:
+        runtime_state.update_broker_status(connected=False, last_error=str(exc))
         logger.warning(
             'Portfolio summary failed - unexpected error: %s',
             exc,

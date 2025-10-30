@@ -62,6 +62,14 @@ _STATE_CACHE: Any | None = None
 _RUNTIME_CACHE: Any | None = None
 _RUNTIME_CFG_SNAPSHOT: dict[str, Any] | None = None
 
+
+def _http_profile_logging_enabled() -> bool:
+    try:
+        return bool(get_env("HTTP_PROFILE_LOG_ENABLED", "0", cast=bool))
+    except Exception:
+        raw = os.getenv("HTTP_PROFILE_LOG_ENABLED", "").strip().lower()
+        return raw in {"1", "true", "yes"}
+
 # Detect Alpaca SDK availability without importing heavy modules
 def _safe_find_spec(module_name: str):
     try:
@@ -1642,10 +1650,16 @@ def main(argv: list[str] | None = None) -> None:
                         except Exception:
                             pass
                         set_global_session(session)
-                        logger.info(
-                            "HTTP_PROFILE_CLOSED",
-                            extra={"retries": 1, "backoff_factor": 0.1, "connect_timeout": connect_timeout, "read_timeout": read_timeout},
-                        )
+                        if _http_profile_logging_enabled():
+                            logger.info(
+                                "HTTP_PROFILE_CLOSED",
+                                extra={
+                                    "retries": 1,
+                                    "backoff_factor": 0.1,
+                                    "connect_timeout": connect_timeout,
+                                    "read_timeout": read_timeout,
+                                },
+                            )
                     else:
                         # Restore configured profile
                         connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
@@ -1674,15 +1688,16 @@ def main(argv: list[str] | None = None) -> None:
                         except Exception:
                             pass
                         set_global_session(session)
-                        logger.info(
-                            "HTTP_PROFILE_OPEN",
-                            extra={
-                                "retries": getattr(S, "http_total_retries", 3),
-                                "backoff_factor": getattr(S, "http_backoff_factor", 0.3),
-                                "connect_timeout": connect_timeout,
-                                "read_timeout": read_timeout,
-                            },
-                        )
+                        if _http_profile_logging_enabled():
+                            logger.info(
+                                "HTTP_PROFILE_OPEN",
+                                extra={
+                                    "retries": getattr(S, "http_total_retries", 3),
+                                    "backoff_factor": getattr(S, "http_backoff_factor", 0.3),
+                                    "connect_timeout": connect_timeout,
+                                    "read_timeout": read_timeout,
+                                },
+                            )
                     _http_closed_profile = closed
                 except Exception:
                     pass

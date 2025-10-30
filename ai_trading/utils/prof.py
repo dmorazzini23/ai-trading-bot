@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -59,15 +60,20 @@ def StageTimer(logger: Any, stage_name: str, *, override_ms: float | None = None
         level = _resolve_timing_level()
         if level is None:
             return
-        dt_ms = override_ms
-        if dt_ms is None:
-            dt_ms = int((time.perf_counter() - t0) * 1000)
+        raw_ms: float
+        if override_ms is None:
+            raw_ms = (time.perf_counter() - t0) * 1000.0
         else:
             try:
-                dt_ms = int(max(0.0, float(dt_ms)))
+                raw_ms = float(override_ms)
             except (TypeError, ValueError):
-                dt_ms = int((time.perf_counter() - t0) * 1000)
-        payload = {"stage": stage_name, "elapsed_ms": dt_ms, **extra}
+                raw_ms = (time.perf_counter() - t0) * 1000.0
+        if not math.isfinite(raw_ms) or raw_ms < 0.0:
+            raw_ms = 0.0
+        dt_ms_int = 0
+        if raw_ms > 0.0:
+            dt_ms_int = 1 if raw_ms < 1.0 else int(math.ceil(raw_ms))
+        payload = {"stage": stage_name, "elapsed_ms": dt_ms_int, **extra}
         try:
             if logger.isEnabledFor(level):
                 _log_at_level(logger, level, "STAGE_TIMING", extra=payload)

@@ -5,6 +5,7 @@ import types
 import pytest
 
 import ai_trading.data.fetch as data_fetcher
+from ai_trading.telemetry import runtime_state
 
 pd = pytest.importorskip("pandas")
 
@@ -16,6 +17,11 @@ def _restore_globals(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_FALLBACK_METADATA", {}, raising=False)
     monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {}, raising=False)
     monkeypatch.setattr(data_fetcher, "_SIP_DISALLOWED_WARNED", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_runtime_state():
+    runtime_state.update_data_provider_state(primary="alpaca", active="alpaca", backup=None, using_backup=False, reason=None, cooldown_sec=0.0)
 
 
 def _dt_range():
@@ -144,3 +150,53 @@ def test_clear_minute_fallback_state_clears_all_metadata(monkeypatch):
     assert key not in data_fetcher._FALLBACK_METADATA
     assert tf_key not in data_fetcher._FALLBACK_UNTIL
     assert calls == [("alpaca_iex", "yahoo", True, "primary_recovered", "good")]
+
+
+def test_fallback_logging_suppressed_within_window(monkeypatch, caplog):
+    start, end = _dt_range()
+    timestamps = pd.date_range(start=start, periods=3, freq="1min", tz=UTC)
+    fallback_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.2, 1.3, 1.4],
+            "low": [0.9, 1.0, 1.1],
+            "close": [1.05, 1.15, 1.25],
+            "volume": [100, 110, 120],
+        }
+    )
+
+    class _Monitor(_DummyProviderMonitor):
+        decision_window_seconds = 300
+
+    monkeypatch.setattr(data_fetcher, "provider_monitor", _Monitor())
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_METADATA", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_SUPPRESS_UNTIL", {}, raising=False)
+
+    with caplog.at_level(logging.INFO):
+        data_fetcher._mark_fallback(
+            "AAPL",
+            "1Min",
+            start,
+            end,
+            from_provider="alpaca_iex",
+            fallback_df=fallback_df,
+            resolved_provider="yahoo",
+        )
+        data_fetcher._mark_fallback(
+            "AAPL",
+            "1Min",
+            start + timedelta(minutes=1),
+            end + timedelta(minutes=1),
+            from_provider="alpaca_iex",
+            fallback_df=fallback_df,
+            resolved_provider="yahoo",
+        )
+
+    using_backup_logs = [record for record in caplog.records if record.message == "USING_BACKUP_PROVIDER"]
+    assert len(using_backup_logs) == 1
+    provider_state = runtime_state.observe_data_provider_state()
+    assert provider_state["using_backup"] is True
+    assert provider_state["active"] == "yahoo"

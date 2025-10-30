@@ -107,6 +107,7 @@ from ai_trading.logging import (
     logger_once,
 )
 from ai_trading.logging.emit_once import emit_once
+from ai_trading.telemetry import runtime_state
 from ai_trading.diagnostics.env_diag import gather_alpaca_diag, log_env_diag
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
@@ -22255,25 +22256,50 @@ def _ensure_executable_quote(
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
     slippage_bps = _slippage_setting_bps()
     reference_valid = reference_price is not None and math.isfinite(reference_price) and reference_price > 0.0
-    fallback_permitted = reference_valid and (
-        allow_reference_fallback or allow_last_close or not require_realtime_nbbo
-    )
+    fallback_permitted = reference_valid and allow_reference_fallback
+
+    def _publish_quote_state(
+        allowed: bool,
+        reason_text: str | None,
+        *,
+        details: Mapping[str, Any] | None = None,
+        synthetic: bool = False,
+        status: str = "ok",
+    ) -> None:
+        payload = dict(details or {})
+        runtime_state.update_quote_status(
+            allowed=allowed,
+            reason=reason_text,
+            age_sec=payload.get("age_sec"),
+            synthetic=synthetic,
+            bid=payload.get("bid"),
+            ask=payload.get("ask"),
+            status=status,
+        )
 
     quote = _fetch_quote(ctx, symbol)
     if quote is None and require_bid_ask:
         missing_details = {"bid": None, "ask": None}
-        if not fallback_permitted:
-            return QuoteGateDecision(False, "missing_bid_ask", missing_details)
-        if not reference_valid:
-            return QuoteGateDecision(False, "missing_bid_ask", missing_details)
-        return _synthetic_quote_decision(
-            symbol,
-            float(reference_price),
-            reason="missing_bid_ask",
-            slippage_bps=slippage_bps,
-        )
+        if fallback_permitted:
+            decision = _synthetic_quote_decision(
+                symbol,
+                float(reference_price),
+                reason="missing_bid_ask",
+                slippage_bps=slippage_bps,
+            )
+            _publish_quote_state(
+                decision.executable,
+                decision.reason,
+                details=decision.details,
+                synthetic=True,
+                status="synthetic",
+            )
+            return decision
+        _publish_quote_state(False, "missing_bid_ask", details=missing_details, status="unavailable")
+        return QuoteGateDecision(False, "missing_bid_ask", missing_details)
 
     fallback_detected, fallback_reason = _quote_is_fallback(quote)
+    quote_is_fallback = fallback_detected
     if fallback_detected and not fallback_permitted:
         fallback_detail_reason = fallback_reason or "missing_bid_ask"
         details = {"fallback_quote": True, "fallback_reason": fallback_detail_reason}
@@ -22283,6 +22309,7 @@ def _ensure_executable_quote(
             provider="alpaca",
             metadata={"symbol": symbol, **details},
         )
+        _publish_quote_state(False, decision_reason, details=details, synthetic=True, status="fallback_blocked")
         return QuoteGateDecision(False, decision_reason, details)
 
     gate_decision = _evaluate_quote_gate(
@@ -22306,12 +22333,20 @@ def _ensure_executable_quote(
                 ask_missing = gate_decision.details.get("ask") is None
                 if bid_missing or ask_missing:
                     fallback_reason = "missing_bid_ask"
-            return _synthetic_quote_decision(
+            decision = _synthetic_quote_decision(
                 symbol,
                 float(reference_price),
                 reason=fallback_reason,
                 slippage_bps=slippage_bps,
             )
+            _publish_quote_state(
+                decision.executable,
+                decision.reason,
+                details=decision.details,
+                synthetic=True,
+                status="synthetic",
+            )
+            return decision
         if reference_valid:
             logger.warning(
                 "QUOTE_GATE_FALLBACK_DISABLED",
@@ -22334,6 +22369,8 @@ def _ensure_executable_quote(
                 symbol,
                 reason,
             )
+        status_label = "stale" if reason == "stale_quote" else "rejected"
+        _publish_quote_state(False, reason, details=gate_decision.details, synthetic=quote_is_fallback, status=status_label)
         return gate_decision
 
     if (
@@ -22349,27 +22386,44 @@ def _ensure_executable_quote(
             gap_ratio = abs(mid - reference_price) / reference_price
             if gap_ratio > gap_limit:
                 if fallback_permitted:
-                    return _synthetic_quote_decision(
+                    decision = _synthetic_quote_decision(
                         symbol,
                         float(reference_price),
                         reason="gap_ratio_exceeded",
                         slippage_bps=slippage_bps,
                     )
+                    _publish_quote_state(
+                        decision.executable,
+                        decision.reason,
+                        details=decision.details,
+                        synthetic=True,
+                        status="synthetic",
+                    )
+                    return decision
                 logger.info(
                     "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio>limit",
                     symbol,
                 )
+                gap_details = {
+                    "reference_price": reference_price,
+                    "mid": mid,
+                    "gap_ratio": gap_ratio,
+                    "gap_limit": gap_limit,
+                }
+                _publish_quote_state(
+                    False,
+                    "gap_ratio_exceeded",
+                    details=gap_details,
+                    synthetic=quote_is_fallback,
+                    status="rejected",
+                )
                 return QuoteGateDecision(
                     False,
                     "gap_ratio_exceeded",
-                    {
-                        "reference_price": reference_price,
-                        "mid": mid,
-                        "gap_ratio": gap_ratio,
-                        "gap_limit": gap_limit,
-                    },
+                    gap_details,
                 )
 
+    _publish_quote_state(True, None, details=gate_decision.details, synthetic=quote_is_fallback, status="ready")
     return gate_decision
 
 
@@ -22424,19 +22478,23 @@ def _log_price_source(
     ask: float | None = None,
     mid: float | None = None,
 ) -> None:
-    message = f"QUOTE_SOURCE_{source.upper()}"
-    logger.info(
-        message,
-        extra={
-            "symbol": symbol,
-            "reason": reason,
-            "limit_price": float(limit_price),
-            "bid": _format_price_component(bid),
-            "ask": _format_price_component(ask),
-            "mid": _format_price_component(mid),
-            "side": side,
-            "slippage_bps": float(slippage_bps),
-        },
+    payload = {
+        "symbol": symbol,
+        "source": source,
+        "reason": reason,
+        "limit_price": float(limit_price),
+        "bid": _format_price_component(bid),
+        "ask": _format_price_component(ask),
+        "mid": _format_price_component(mid),
+        "side": side,
+        "slippage_bps": float(slippage_bps),
+    }
+    log_throttled_event(
+        logger,
+        f"ORDER_PRICE_CONTEXT:{symbol}:{side}:{source}",
+        level=logging.INFO,
+        extra=payload,
+        message="ORDER_PRICE_CONTEXT",
     )
 
 
@@ -24803,12 +24861,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             processed, row_counts = [], {}
             for attempt in range(retries):
                 with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
-                    with StageTimer(
-                        logger, "INDICATORS_COMPUTE_MS", symbols=len(symbols)
-                    ):
-                        processed, row_counts = _process_symbols(
-                            symbols, current_cash, alpha_model, regime_ok
-                        )
+                    processed, row_counts = _process_symbols(
+                        symbols, current_cash, alpha_model, regime_ok
+                    )
                 if processed:
                     if attempt:
                         logger.info(

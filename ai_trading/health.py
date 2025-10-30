@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
+from ai_trading.telemetry import runtime_state
+
 try:  # pragma: no cover - optional dependency
     from flask import Flask, jsonify
 except Exception:  # pragma: no cover - stub for tests when flask missing
@@ -106,11 +108,38 @@ class HealthCheck:
             except Exception:
                 pass
 
+            try:
+                provider_state = runtime_state.observe_data_provider_state()
+            except Exception:
+                provider_state = {}
+            try:
+                quote_state = runtime_state.observe_quote_status()
+            except Exception:
+                quote_state = {}
+            try:
+                broker_state = runtime_state.observe_broker_status()
+            except Exception:
+                broker_state = {}
+
+            provider_section = {
+                "primary": provider_state.get("primary"),
+                "active": provider_state.get("active"),
+                "backup": provider_state.get("backup"),
+                "using_backup": bool(provider_state.get("using_backup")),
+                "reason": provider_state.get("reason"),
+                "updated": provider_state.get("updated"),
+                "cooldown_sec": provider_state.get("cooldown_sec"),
+            }
+
             payload = {
                 "ok": ok,
                 "alpaca": alpaca_payload,
                 "ts": datetime.now(UTC).isoformat(),
                 "service": service_name,
+                "primary_data_provider": provider_section,
+                "fallback_active": bool(provider_section.get("using_backup")),
+                "quotes_status": quote_state,
+                "broker_connectivity": broker_state,
             }
             if err:
                 payload["error"] = err

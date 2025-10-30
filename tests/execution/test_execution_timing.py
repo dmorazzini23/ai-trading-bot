@@ -33,3 +33,25 @@ def test_execution_span_records_non_zero_duration(caplog):
     ]
     assert stage_records
     assert any(getattr(record, "elapsed_ms", 0) >= int(total * 1000) for record in stage_records)
+
+
+def test_stage_timer_minimum_elapsed_ms():
+    logger = logging.getLogger("ai_trading.utils.prof.test")
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Capture()
+    logger.addHandler(handler)
+    try:
+        logger.setLevel(logging.DEBUG)
+        with StageTimer(logger, "TINY", override_ms=0.2):
+            pass
+    finally:
+        logger.removeHandler(handler)
+
+    tiny = [record for record in records if getattr(record, "stage", None) == "TINY"]
+    assert tiny
+    assert tiny[0].elapsed_ms == 1

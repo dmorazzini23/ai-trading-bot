@@ -4,11 +4,19 @@ import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.config.runtime import reload_trading_config
 from ai_trading.core import bot_engine
+from ai_trading.telemetry import runtime_state
 
 
-def test_ensure_executable_quote_synthetic_when_last_close_allowed(monkeypatch):
+@pytest.fixture(autouse=True)
+def _reset_runtime_state():
+    runtime_state.update_quote_status(allowed=False, reason=None, status="reset", synthetic=False)
+
+
+def test_ensure_executable_quote_requires_override_for_synthetic(monkeypatch):
     monkeypatch.setenv("EXECUTION_ALLOW_LAST_CLOSE", "1")
     reload_trading_config()
     ctx = SimpleNamespace(data_client=object())
@@ -21,10 +29,26 @@ def test_ensure_executable_quote_synthetic_when_last_close_allowed(monkeypatch):
         reference_price=150.0,
     )
 
-    assert decision
-    assert decision.details["synthetic"] is True
-    assert math.isclose(decision.details["reference_price"], 150.0)
-    assert decision.details["bid"] < decision.details["ask"]
+    assert not decision
+    assert decision.reason == "missing_bid_ask"
+    quote_state = runtime_state.observe_quote_status()
+    assert quote_state["allowed"] is False
+    assert quote_state["reason"] == "missing_bid_ask"
+
+    with_override = bot_engine._ensure_executable_quote(
+        ctx,
+        "AAPL",
+        reference_price=150.0,
+        allow_reference_fallback=True,
+    )
+
+    assert with_override
+    assert with_override.details["synthetic"] is True
+    assert math.isclose(with_override.details["reference_price"], 150.0)
+    assert with_override.details["bid"] < with_override.details["ask"]
+    quote_state = runtime_state.observe_quote_status()
+    assert quote_state["allowed"] is True
+    assert quote_state["synthetic"] is True
 
     monkeypatch.delenv("EXECUTION_ALLOW_LAST_CLOSE", raising=False)
     reload_trading_config()

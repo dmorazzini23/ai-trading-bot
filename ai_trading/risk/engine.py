@@ -1,5 +1,6 @@
 from __future__ import annotations
 from ai_trading.logging import get_logger
+import logging
 import math
 import builtins
 import os
@@ -362,7 +363,11 @@ class RiskEngine:
                 payload.update(details)
             except (TypeError, ValueError):
                 payload["details_error"] = "unmergeable"
-        logger.warning("PORTFOLIO_VOLATILITY_FALLBACK", extra=payload)
+        level = logging.WARNING
+        if reason in {"no_returns", "std_failed"}:
+            payload.setdefault("note", "cold_start")
+            level = logging.INFO
+        logger.log(level, "PORTFOLIO_VOLATILITY_FALLBACK", extra=payload)
         self._volatility_alerted = True
 
     def _get_atr_data(self, symbol: str, lookback: int = 14) -> float | None:
