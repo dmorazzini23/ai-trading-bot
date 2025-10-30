@@ -19,7 +19,7 @@ import sys
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, cast
 from types import SimpleNamespace
 from collections import OrderedDict, deque
-from collections.abc import Mapping as MappingABC
+from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
@@ -8722,34 +8722,6 @@ class DataFetcher:
                 provenance = True
             return _emit_daily_fetch_result(df, cache=provenance)
 
-        # STRICT: memo must short-circuit without consulting other caches
-        if memo_store is not None:
-            direct_entries: list[tuple[tuple[str, ...], Any | None]] = []
-            for candidate_key in (canonical_memo_key, memo_key, legacy_memo_key):
-                try:
-                    if candidate_key in memo_store:
-                        direct_entries.append((candidate_key, memo_store[candidate_key]))
-                    else:
-                        direct_entries.append((candidate_key, None))
-                except COMMON_EXC:
-                    direct_entries.append((candidate_key, None))
-            effective_ttl = memo_ttl if memo_ttl > 0 else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
-            for lookup_key, entry in direct_entries:
-                fresh, memo_df = _memo_is_fresh(entry, now=memo_now, ttl=effective_ttl)
-                if fresh and memo_df is not None:
-                    memo_payload = (memo_now, memo_df)
-                    for target_key, payload in (
-                        (canonical_memo_key, memo_payload),
-                        (memo_key, memo_payload),
-                        (legacy_memo_key, memo_payload),
-                    ):
-                        try:
-                            memo_store[target_key] = payload
-                        except COMMON_EXC:
-                            continue
-                    # Return immediately; DO NOT probe daily cache or other stores
-                    return _emit_cache_hit(memo_df, reason="memo")
-
         def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
             if isinstance(entry, tuple) and len(entry) == 2:
                 first, second = entry
@@ -8758,6 +8730,16 @@ class DataFetcher:
                 if isinstance(second, (int, float)):
                     return float(second), first
                 return None, None
+            if isinstance(entry, IteratorABC):
+                try:
+                    first_item = next(entry)
+                except StopIteration:
+                    return None, None, None
+                ts_value, payload_value, normalized_pair = _normalize_memo_entry(first_item)
+                payload = payload_value if payload_value is not None else first_item
+                if normalized_pair is None and payload is not None:
+                    normalized_pair = (ts_value, payload)
+                return ts_value, payload, normalized_pair
             if isinstance(entry, MappingABC):
                 payload: Any | None = None
                 ts_value: Any | None = None
@@ -8970,6 +8952,17 @@ class DataFetcher:
                 if normalized is not None:
                     return normalized
                 return entry_ts, None
+            if isinstance(entry, IteratorABC):
+                try:
+                    first_item = next(entry)
+                except StopIteration:
+                    return None, None
+                entry_ts, entry_payload, normalized = _normalize_memo_entry(first_item)
+                if entry_payload is not None:
+                    return entry_ts, entry_payload
+                if normalized is not None:
+                    return normalized
+                return entry_ts, first_item
             return None, entry
 
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
@@ -9038,6 +9031,37 @@ class DataFetcher:
 
         memo_ready = False
         memo_payload: Any | None = None
+
+        # STRICT: memo must short-circuit without consulting other caches
+        if memo_store is not None:
+            effective_ttl = memo_ttl if memo_ttl > 0 else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
+            memo_keys = (canonical_memo_key, memo_key, legacy_memo_key)
+            for candidate_key in memo_keys:
+                try:
+                    entry = memo_store[candidate_key]
+                except KeyError:
+                    continue
+                except COMMON_EXC:
+                    continue
+                entry_ts, entry_payload = _extract_memo_payload(entry)
+                if entry_payload is None:
+                    continue
+                if entry_ts is not None and entry_ts <= 0.0:
+                    continue
+                if (
+                    effective_ttl > 0
+                    and entry_ts is not None
+                    and (memo_now - float(entry_ts)) > effective_ttl
+                ):
+                    continue
+                normalized_pair = (memo_now, entry_payload)
+                with cache_lock:
+                    for target_key in memo_keys:
+                        try:
+                            memo_store[target_key] = normalized_pair
+                        except COMMON_EXC:
+                            continue
+                return _emit_cache_hit(entry_payload, reason="memo")
 
         for memo_lookup_key in (memo_key, legacy_memo_key):
             entry_ts, entry_payload = _extract_memo_payload(
@@ -18457,7 +18481,15 @@ def _enter_short(
             },
         )
 
-    target_weight_short = ctx.portfolio_weights.get(symbol, 0.0)
+    weights_obj = getattr(ctx, "portfolio_weights", None)
+    if isinstance(weights_obj, MappingABC):
+        weights = weights_obj
+    else:
+        weights = {}
+    try:
+        target_weight_short = float(weights.get(symbol, 0.0))
+    except (TypeError, ValueError):
+        target_weight_short = 0.0
     intent_decision_short = _resolve_order_intent(
         ctx,
         state,
@@ -22228,6 +22260,19 @@ def _ensure_executable_quote(
     )
 
     quote = _fetch_quote(ctx, symbol)
+    if quote is None and require_bid_ask:
+        missing_details = {"bid": None, "ask": None}
+        if not fallback_permitted:
+            return QuoteGateDecision(False, "missing_bid_ask", missing_details)
+        if not reference_valid:
+            return QuoteGateDecision(False, "missing_bid_ask", missing_details)
+        return _synthetic_quote_decision(
+            symbol,
+            float(reference_price),
+            reason="missing_bid_ask",
+            slippage_bps=slippage_bps,
+        )
+
     fallback_detected, fallback_reason = _quote_is_fallback(quote)
     if fallback_detected and not fallback_permitted:
         fallback_detail_reason = fallback_reason or "missing_bid_ask"
@@ -22255,10 +22300,16 @@ def _ensure_executable_quote(
                 gate_decision.details = {}
         fallback_ok = fallback_permitted
         if fallback_ok:
+            fallback_reason = reason
+            if isinstance(gate_decision.details, dict):
+                bid_missing = gate_decision.details.get("bid") is None
+                ask_missing = gate_decision.details.get("ask") is None
+                if bid_missing or ask_missing:
+                    fallback_reason = "missing_bid_ask"
             return _synthetic_quote_decision(
                 symbol,
                 float(reference_price),
-                reason=reason,
+                reason=fallback_reason,
                 slippage_bps=slippage_bps,
             )
         if reference_valid:
@@ -26404,64 +26455,102 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     env_feed = _sanitize_alpaca_feed(configured_env) if configured_env is not None else None
     intraday_raw = _get_intraday_feed()
     configured_feed = _sanitize_alpaca_feed(intraday_raw)
-    requested_token: str | None = None
-    if env_feed is not None:
-        requested_feed = env_feed
-        if isinstance(configured_env, str):
-            requested_token = configured_env.strip()
-        else:
-            requested_token = configured_env
-    else:
-        requested_feed = preferred_feed or configured_feed
-        if preferred_feed is not None:
-            requested_token = str(preferred_feed)
-        else:
-            requested_token = str(intraday_raw) if intraday_raw is not None else None
-    configured_raw = (
-        configured_env
-        if configured_env is not None
-        else (preferred_feed if preferred_feed is not None else intraday_raw)
-    )
-    explicit_invalid_feed = False
-    sanitized_token: str | None = None
-    if requested_token is not None:
-        try:
-            requested_token_normalized = str(requested_token).strip().lower()
-        except Exception:
-            requested_token_normalized = None
-        if requested_token_normalized:
-            sanitized_token = _sanitize_alpaca_feed(requested_token_normalized)
-            explicit_invalid_feed = sanitized_token is None
-    candidate_for_resolution = sanitized_token if sanitized_token is not None else requested_feed
-    alpaca_feed: str | None = None
-    if not explicit_invalid_feed:
-        if symbol:
-            alpaca_feed = price_quote_feed.resolve(symbol, candidate_for_resolution)
-        else:
-            alpaca_feed = price_quote_feed.ensure_entitled_feed(candidate_for_resolution, None)
+    configured_raw: str | None = None
 
-    raw_alpaca_feed = alpaca_feed
-    invalid_alpaca_feed = explicit_invalid_feed or raw_alpaca_feed not in {"iex", "sip"}
-    if not invalid_alpaca_feed and configured_raw not in (None, ""):
-        sanitized_configured = _sanitize_alpaca_feed(configured_raw)
-        if sanitized_configured is None:
-            invalid_alpaca_feed = True
-            raw_alpaca_feed = None
-            alpaca_feed = None
+    candidate_rows: list[tuple[str, Any | None, str | None]] = [
+        ("preferred", preferred_feed, None),
+        ("env", configured_env, env_feed),
+        ("intraday", intraday_raw, configured_feed),
+    ]
+
+    explicit_invalid_feed = False
+    requested_feed: str | None = None
+    for source, token, sanitized_override in candidate_rows:
+        if token is None:
+            continue
+        try:
+            token_text = str(token).strip()
+        except Exception:
+            token_text = None
+        if not token_text:
+            continue
+        configured_raw = token_text
+        sanitized_value = sanitized_override
+        if sanitized_value is None:
+            sanitized_value = _sanitize_alpaca_feed(token_text.lower())
+        if sanitized_value in {"iex", "sip"}:
+            requested_feed = sanitized_value
+            explicit_invalid_feed = False
+            break
+        if source == "preferred":
+            # Prefer next fallback but remember original token for diagnostics
+            continue
+        explicit_invalid_feed = True
+        break
+
+    if requested_feed is None and not explicit_invalid_feed:
+        requested_feed = configured_feed if configured_feed in {"iex", "sip"} else None
+        if requested_feed is not None and configured_raw is None:
+            configured_raw = str(requested_feed)
+
+    if (
+        not explicit_invalid_feed
+        and intraday_raw is not None
+    ):
+        try:
+            intraday_token = str(intraday_raw).strip()
+        except Exception:
+            intraday_token = None
+        if intraday_token:
+            if configured_feed not in {"iex", "sip"}:
+                explicit_invalid_feed = True
+                requested_feed = None
+                configured_raw = intraday_token
 
     sip_env_flag = bool(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
     sip_flagged = bool(
         getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
         or sip_env_flag
     )
-    sip_lockout_active = False
-    if not pytest_running:
-        # ``_sip_lockout_active`` mirrors the complex pricing path behaviour and
-        # ensures runtime SIP lockouts skip Alpaca entirely until cleared.
-        sip_lockout_active = sip_flagged or _sip_lockout_active()
+    try:
+        runtime_sip_lock = bool(_sip_lockout_active())
+    except COMMON_EXC:
+        runtime_sip_lock = False
+    if pytest_running:
+        sip_lockout_active = False
+    else:
+        sip_lockout_active = sip_flagged or runtime_sip_lock
+
+    candidate_for_resolution = requested_feed
+    skip_entitlement_resolution = explicit_invalid_feed or (not pytest_running and sip_flagged)
+    alpaca_feed: str | None = None
+    if not skip_entitlement_resolution:
+        if symbol:
+            alpaca_feed = price_quote_feed.resolve(symbol, candidate_for_resolution)
+        else:
+            alpaca_feed = price_quote_feed.ensure_entitled_feed(candidate_for_resolution, None)
+    elif explicit_invalid_feed:
+        _PRICE_SOURCE[symbol] = "alpaca_invalid_feed"
+    elif pytest_running and sip_flagged and _PRICE_SOURCE.get(symbol) != "alpaca_invalid_feed":
+        _PRICE_SOURCE[symbol] = "alpaca_sip_locked"
+
+    raw_alpaca_feed = alpaca_feed
+    invalid_alpaca_feed = explicit_invalid_feed or (
+        not skip_entitlement_resolution and raw_alpaca_feed not in {"iex", "sip"}
+    )
+    if not invalid_alpaca_feed and configured_raw not in (None, ""):
+        try:
+            sanitized_configured = _sanitize_alpaca_feed(configured_raw)
+        except Exception:
+            sanitized_configured = None
+        if sanitized_configured is None:
+            invalid_alpaca_feed = True
+            raw_alpaca_feed = None
+            alpaca_feed = None
+            _PRICE_SOURCE[symbol] = "alpaca_invalid_feed"
 
     sanitized_quote_feed = _sanitized_alpaca_feed_for_quote(raw_alpaca_feed)
-    sip_locked = sip_lockout_active
+    sip_locked = bool(sip_lockout_active)
     if sanitized_quote_feed is None:
         if raw_alpaca_feed == "sip":
             sip_locked = True
@@ -26470,11 +26559,14 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         alpaca_feed = sanitized_quote_feed
         if sip_lockout_active:
             alpaca_feed = None
-        elif alpaca_feed == "sip" and not pytest_running:
-            sip_locked = sip_flagged
+        elif alpaca_feed == "sip" and sip_flagged:
+            sip_locked = True
 
-    if sip_lockout_active and symbol:
-        _cache_cycle_fallback_feed_helper("iex", symbol=symbol)
+    if sip_lockout_active:
+        if symbol:
+            _cache_cycle_fallback_feed_helper("iex", symbol=symbol)
+        if _PRICE_SOURCE.get(symbol) not in {"alpaca_invalid_feed", "alpaca_auth_failed"}:
+            _PRICE_SOURCE[symbol] = "alpaca_sip_locked"
 
     skip_alpaca = (
         prefer_backup
@@ -26491,6 +26583,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             key=f"alpaca_invalid_feed_skipped:{configured_raw}",
             extra={"provider": "alpaca", "requested_feed": configured_raw, "symbol": symbol},
         )
+        _PRICE_SOURCE[symbol] = "alpaca_invalid_feed"
         alpaca_feed = None
 
     if sip_locked:

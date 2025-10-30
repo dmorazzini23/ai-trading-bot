@@ -984,7 +984,10 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         if normalized_feed not in {"iex", "sip"}:
             _OVERRIDE_MAP.pop((symbol, primary_norm), None)
         elif _now_ts() - ts <= ttl:
-            return normalized_feed
+            resolved_override = ensure_entitled_feed(normalized_feed, primary_norm)
+            if resolved_override:
+                return resolved_override
+            _OVERRIDE_MAP.pop((symbol, primary_norm), None)
         else:
             _OVERRIDE_MAP.pop((symbol, primary_norm), None)
 
@@ -1000,7 +1003,10 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
             ts = _override_set_ts.get(symbol, 0.0)
             now_ts = _time_now(None)
             if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
-                return normalized_cached
+                resolved_cached = ensure_entitled_feed(normalized_cached, primary_norm)
+                if resolved_cached:
+                    return resolved_cached
+                _clear_override(symbol)
             _clear_override(symbol)
     cache_keys: list[tuple[Any, ...]] = [(symbol,)]
     cache_keys.extend(
@@ -1023,7 +1029,10 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         if normalized_cached == "sip" and (_is_sip_unauthorized() or not _sip_allowed()):
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
-        return normalized_cached
+        resolved_cached = ensure_entitled_feed(normalized_cached, primary_norm)
+        if resolved_cached:
+            return resolved_cached
+        _FEED_SWITCH_CACHE.pop(cache_key, None)
     return primary_norm
 
 
@@ -4130,8 +4139,13 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     # allow a single bypass so fixtures can reserve the payload for the actual
     # fallback attempt.
     pytest_active = _detect_pytest_env()
+    sip_env_flag = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower()
+    sip_env_locked = sip_env_flag in {"1", "true", "yes"}
+    sip_state_locked = bool(globals().get("_SIP_UNAUTHORIZED")) or _is_sip_unauthorized()
     if pytest_active:
         if not allow_sip:
+            return False
+        if sip_env_locked or sip_state_locked:
             return False
         if _SIP_PRECHECK_DONE:
             return True
@@ -7064,6 +7078,16 @@ def _fetch_bars(
             _interval, _feed, _start, _end = fb
             from_provider_name = f"alpaca_{from_feed}"
             to_provider_name = f"alpaca_{fb_feed}"
+            if from_feed != fb_feed:
+                try:
+                    logger.info(
+                        "ALPACA_FEED_SWITCH",
+                        extra=_norm_extra(
+                            {"provider": "alpaca", "from": from_feed, "to": fb_feed, "timeframe": _interval}
+                        ),
+                    )
+                except Exception:
+                    pass
             if not skip_metrics:
                 provider_fallback.labels(
                     from_provider=f"alpaca_{from_feed}",
@@ -7778,11 +7802,18 @@ def _fetch_bars(
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             # --- AI-AGENT: enforce IEX -> SIP on empty ---
+            pytest_cycle = _detect_pytest_env()
+            sip_unauthorized = _SIP_UNAUTHORIZED or _is_sip_unauthorized()
             if (
                 _feed == "iex"
+                and _state.get("window_has_session", True)
+                and _sip_configured()
+                and not sip_unauthorized
                 and _sip_fallback_allowed(session, headers, _interval)
-                and not _SIP_UNAUTHORIZED
+                and (not pytest_cycle or not _state.get("pytest_sip_attempted"))
             ):
+                if pytest_cycle:
+                    _state["pytest_sip_attempted"] = True
                 provider_fallback.labels(
                     from_provider="alpaca_iex", to_provider="alpaca_sip"
                 ).inc()

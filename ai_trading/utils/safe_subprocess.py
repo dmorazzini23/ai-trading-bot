@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import subprocess
 from dataclasses import dataclass
 from typing import Optional, Sequence
@@ -46,11 +47,15 @@ def safe_subprocess_run(
     requested_check = popen_kwargs.pop("check", check)
     text_mode = popen_kwargs.pop("text", text)
 
-    # Treat non-positive timeout values as "no timeout" so callers can disable the guard explicitly.
-    if timeout is not None and timeout <= 0:
-        effective_timeout = None
+    if timeout is None:
+        effective_timeout = SUBPROCESS_TIMEOUT_DEFAULT
     else:
-        effective_timeout = timeout
+        try:
+            effective_timeout = float(timeout)
+        except (TypeError, ValueError):
+            effective_timeout = SUBPROCESS_TIMEOUT_DEFAULT
+        if not math.isfinite(effective_timeout) or effective_timeout <= 0:
+            effective_timeout = SUBPROCESS_TIMEOUT_DEFAULT
 
     try:
         completed = subprocess.run(
@@ -65,7 +70,7 @@ def safe_subprocess_run(
         stderr = _normalize_stream(getattr(exc, "stderr", None))
         log.warning(
             "SAFE_SUBPROCESS_TIMEOUT",
-            extra={"cmd": cmd, "timeout": timeout if timeout is not None else effective_timeout},
+            extra={"cmd": cmd, "timeout": effective_timeout},
         )
         result = SafeSubprocessResult(stdout, stderr, 124, True)
         exc.stdout = stdout

@@ -670,13 +670,6 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     requested_norm = (str(requested).strip().lower() if requested else None)
     entitled = _get_entitled_feeds(client)
     cache_entry = _ENTITLE_CACHE.get(cache_key)
-    cached_resolved: str | None = None
-    if isinstance(cache_entry, _EntitlementCacheEntry):
-        cached_resolved = cache_entry.resolved
-    elif isinstance(cache_entry, Mapping):
-        cached_resolved = cache_entry.get("resolved")  # type: ignore[assignment]
-    else:
-        cached_resolved = None
 
     if _env_explicit_false("ALPACA_ALLOW_SIP") or _env_explicit_false("ALPACA_SIP_ENTITLED"):
         entitled.discard("sip")
@@ -695,27 +688,27 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if not pytest_active:
         pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST"))
 
-    resolved = cached_resolved if cached_resolved in {"sip", "iex"} else None
-    if resolved == "sip" and (("sip" not in entitled) or (sip_unauthorized and not pytest_active)):
-        resolved = None
-    if resolved == "iex" and resolved not in entitled:
-        resolved = None
+    sip_available = "sip" in entitled
+    iex_available = "iex" in entitled or not entitled
+    sip_preferred = sip_available and (not sip_unauthorized or pytest_active)
 
-    if resolved is None:
-        if requested_norm and requested_norm in entitled:
-            resolved = requested_norm
-        elif "sip" in entitled and (not sip_unauthorized or pytest_active):
-            resolved = "sip"
-        elif "iex" in entitled:
-            resolved = "iex"
-        else:
-            resolved = "iex"
+    if sip_preferred:
+        resolved = "sip"
+    elif requested_norm and requested_norm in entitled and requested_norm != "sip":
+        resolved = requested_norm
+    elif iex_available:
+        resolved = "iex"
+    else:
+        resolved = "iex"
 
     if isinstance(cache_entry, _EntitlementCacheEntry):
+        cache_entry.feeds = set(entitled)
         cache_entry.resolved = resolved
     elif isinstance(cache_entry, dict):
         cache_entry["resolved"] = resolved
         _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled), cache_entry.get("generation"), resolved)
+    else:
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled), None, resolved)
 
     return resolved
 

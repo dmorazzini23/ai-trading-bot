@@ -2544,6 +2544,7 @@ class ExecutionEngine:
             limit_price is not None
             or limit_price_kwarg is not None
             or manual_stop_price is not None
+            or price_alias is not None
         )
 
         order_type_normalized = order_type_initial
@@ -2729,6 +2730,7 @@ class ExecutionEngine:
             and degraded_mode == "widen"
             and order_type_normalized in {"limit", "stop_limit"}
             and degraded_widen_bps > 0
+            and not manual_limit_requested
         ):
             base_for_widen = basis_price
             if base_for_widen is None and limit_for_log is not None:

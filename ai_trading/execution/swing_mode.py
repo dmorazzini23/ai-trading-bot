@@ -115,7 +115,8 @@ class SwingTradingMode:
         if not self.enabled:
             return True, "swing_mode_disabled"
 
-        now_et = datetime.now(MARKET_TZ)
+        now_utc = datetime.now(timezone.utc)
+        now_et = now_utc.astimezone(MARKET_TZ)
         entry = self.position_entry_times.get(symbol)
         if entry is None:
             return True, "no_entry_time_recorded"

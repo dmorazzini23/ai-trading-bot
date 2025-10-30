@@ -1262,9 +1262,8 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 ready_signal.set()
             return
 
-        break
-
-    run_flask_app(port, ready_signal)
+        run_flask_app(port, ready_signal)
+        return
 
 
 def _assert_singleton_api(settings) -> None:
