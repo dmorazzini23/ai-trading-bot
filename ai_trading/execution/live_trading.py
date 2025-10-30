@@ -4726,7 +4726,10 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 pass
 
 
-AlpacaExecutionEngine = ExecutionEngine
+# Export the live-capable engine under the canonical name used by the selector
+# so runtime selection for paper/live picks the class that implements broker sync.
+ExecutionEngine = LiveTradingExecutionEngine
+AlpacaExecutionEngine = LiveTradingExecutionEngine
 
 
 __all__ = [
