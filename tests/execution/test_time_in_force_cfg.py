@@ -18,3 +18,15 @@ def test_tif_from_trading_config(monkeypatch):
 
     monkeypatch.delenv("EXECUTION_TIME_IN_FORCE", raising=False)
     reload_trading_config()
+
+
+def test_tif_defaults_to_gtc_when_unset(monkeypatch):
+    monkeypatch.delenv("EXECUTION_TIME_IN_FORCE", raising=False)
+    monkeypatch.delenv("ALPACA_TIME_IN_FORCE", raising=False)
+    reload_trading_config()
+
+    engine = LiveTradingExecutionEngine(ctx=SimpleNamespace())
+    engine._refresh_settings()
+
+    resolved = engine._resolve_time_in_force(None)
+    assert resolved == "gtc"
