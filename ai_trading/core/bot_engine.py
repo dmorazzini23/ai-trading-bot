@@ -22256,7 +22256,10 @@ def _ensure_executable_quote(
     gap_limit = float(getattr(cfg, "gap_ratio_limit", 0.0) or 0.0)
     slippage_bps = _slippage_setting_bps()
     reference_valid = reference_price is not None and math.isfinite(reference_price) and reference_price > 0.0
-    fallback_permitted = reference_valid and allow_reference_fallback
+    fallback_policy_enabled = True
+    if cfg is not None:
+        fallback_policy_enabled = bool(getattr(cfg, "execution_allow_fallback_price", True))
+    fallback_permitted = reference_valid and (allow_reference_fallback or fallback_policy_enabled)
 
     def _publish_quote_state(
         allowed: bool,

@@ -48,6 +48,7 @@ def _run(order):
         stop_targets={},
         take_profit_targets={},
     )
+    ctx.allow_short_selling = True
     state = SimpleNamespace(trade_cooldowns={}, last_trade_direction={})
     feat_df = pd.DataFrame({"atr": [1]})
 
