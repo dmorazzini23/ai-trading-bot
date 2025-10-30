@@ -18,6 +18,7 @@ def _reset_runtime_state():
 
 def test_ensure_executable_quote_requires_override_for_synthetic(monkeypatch):
     monkeypatch.setenv("EXECUTION_ALLOW_LAST_CLOSE", "1")
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "0")
     reload_trading_config()
     ctx = SimpleNamespace(data_client=object())
     monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
@@ -51,10 +52,12 @@ def test_ensure_executable_quote_requires_override_for_synthetic(monkeypatch):
     assert quote_state["synthetic"] is True
 
     monkeypatch.delenv("EXECUTION_ALLOW_LAST_CLOSE", raising=False)
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
     reload_trading_config()
 
 
 def test_ensure_executable_quote_requires_bid_ask_by_default(monkeypatch):
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "0")
     reload_trading_config()
     ctx = SimpleNamespace(data_client=object())
     monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
@@ -68,6 +71,9 @@ def test_ensure_executable_quote_requires_bid_ask_by_default(monkeypatch):
 
     assert not decision
     assert decision.reason == "missing_bid_ask"
+
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
 
 
 def test_allow_reference_fallback_override(monkeypatch):
@@ -87,6 +93,28 @@ def test_allow_reference_fallback_override(monkeypatch):
     assert decision
     assert decision.details["synthetic"] is True
     assert decision.details["fallback_reason"] == "missing_bid_ask"
+
+
+def test_reference_fallback_enabled_by_config(monkeypatch):
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "1")
+    reload_trading_config()
+    ctx = SimpleNamespace(data_client=object())
+    monkeypatch.setattr(bot_engine, "_stock_quote_request_ready", lambda: True)
+    monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: None)
+
+    decision = bot_engine._ensure_executable_quote(
+        ctx,
+        "IBM",
+        reference_price=111.11,
+    )
+
+    assert decision
+    assert decision.details["synthetic"] is True
+    assert decision.details.get("reference_price") == 111.11
+    assert decision.details.get("fallback_reason") == "missing_bid_ask"
+
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
 
 
 def test_gap_ratio_exceeded_uses_synthetic(monkeypatch):

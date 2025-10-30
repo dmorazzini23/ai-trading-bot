@@ -45,6 +45,7 @@ if "flask" not in sys.modules:  # pragma: no cover - optional dependency shim
     flask_stub.Flask = _Flask
     sys.modules["flask"] = flask_stub
 
+from ai_trading.config.runtime import reload_trading_config
 from ai_trading.core import bot_engine
 
 
@@ -695,6 +696,9 @@ def test_enter_long_price_gate_missing_bid_ask(monkeypatch, caplog):
     ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
     ctx.data_client = object()
 
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "0")
+    reload_trading_config()
+
     _patch_price_gate_common(monkeypatch, symbol, 100.0)
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_a, **_k: types.SimpleNamespace())
     submit_mock = MagicMock(return_value=None)
@@ -721,6 +725,9 @@ def test_enter_long_price_gate_missing_bid_ask(monkeypatch, caplog):
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
     submit_mock.assert_not_called()
 
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
+
 
 def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
@@ -728,6 +735,9 @@ def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
     symbol = "AAPL"
     ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
     ctx.data_client = object()
+
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "0")
+    reload_trading_config()
 
     _patch_price_gate_common(monkeypatch, symbol, 100.0)
     stale_ts = datetime.now(UTC) - timedelta(minutes=10)
@@ -764,6 +774,9 @@ def test_enter_long_price_gate_stale_quote(monkeypatch, caplog):
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
     submit_mock.assert_not_called()
 
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
+
 
 def test_enter_long_price_gate_negative_spread(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
@@ -771,6 +784,9 @@ def test_enter_long_price_gate_negative_spread(monkeypatch, caplog):
     symbol = "AAPL"
     ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
     ctx.data_client = object()
+
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "0")
+    reload_trading_config()
 
     _patch_price_gate_common(monkeypatch, symbol, 100.0)
     monkeypatch.setattr(
@@ -805,6 +821,9 @@ def test_enter_long_price_gate_negative_spread(monkeypatch, caplog):
     )
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
     submit_mock.assert_not_called()
+
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
 
 
 def test_quote_gate_helper_reasons():
@@ -850,6 +869,9 @@ def test_enter_long_price_gate_gap_ratio(monkeypatch, caplog):
     ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
     ctx.data_client = object()
 
+    monkeypatch.setenv("EXECUTION_ALLOW_FALLBACK_PRICE", "0")
+    reload_trading_config()
+
     _patch_price_gate_common(monkeypatch, symbol, 100.0)
     monkeypatch.setattr(
         bot_engine,
@@ -880,6 +902,9 @@ def test_enter_long_price_gate_gap_ratio(monkeypatch, caplog):
         for record in caplog.records
     )
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
+
+    monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)
+    reload_trading_config()
 
 
 def _build_dummy_short_context(pd, symbol):
@@ -913,6 +938,7 @@ def _build_dummy_short_context(pd, symbol):
         market_open=time(6, 30),
         market_close=time(13, 0),
     )
+    ctx.allow_short_selling = True
 
     state = bot_engine.BotState()
 

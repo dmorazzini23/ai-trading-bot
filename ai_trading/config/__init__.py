@@ -282,6 +282,7 @@ class ExecutionSettingsSnapshot:
     slippage_limit_bps: int
     price_provider_order: tuple[str, ...]
     data_feed_intraday: str
+    time_in_force: str | None = None
 
 
 def get_execution_settings() -> ExecutionSettingsSnapshot:
@@ -298,6 +299,9 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
         data_feed_intraday=str(
             getattr(cfg, "data_feed_intraday", DATA_FEED_INTRADAY) or DATA_FEED_INTRADAY
         ).lower(),
+        time_in_force=(
+            (str(getattr(cfg, "execution_time_in_force", "")).strip().lower() or None)
+        ),
     )
 
 

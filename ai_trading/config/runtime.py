@@ -142,6 +142,20 @@ _VALID_PRICE_PROVIDERS = {
 }
 
 
+_VALID_TIME_IN_FORCE = ("day", "gtc", "opg", "cls", "ioc", "fok")
+
+
+def _parse_time_in_force(raw: str) -> str | None:
+    value = _strip_inline_comment(raw).strip().lower()
+    if not value:
+        return None
+    if value not in _VALID_TIME_IN_FORCE:
+        raise ValueError(
+            "EXECUTION_TIME_IN_FORCE must be one of: day, gtc, opg, cls, ioc, fok"
+        )
+    return value
+
+
 def _parse_price_provider_order(raw: str) -> tuple[str, ...]:
     """Parse comma separated provider order ensuring supported identifiers."""
 
@@ -522,6 +536,14 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="bool",
         default=True,
         description="Allow fallback pricing sources when primary NBBO quotes are unavailable.",
+    ),
+    ConfigSpec(
+        field="execution_time_in_force",
+        env=("EXECUTION_TIME_IN_FORCE", "ALPACA_TIME_IN_FORCE"),
+        cast=_parse_time_in_force,
+        default=None,
+        description="Default time-in-force for orders (day, gtc, opg, cls, ioc, fok).",
+        choices=_VALID_TIME_IN_FORCE + (None,),
     ),
     ConfigSpec(
         field="post_submit_broker_sync",
