@@ -564,7 +564,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="degraded_feed_mode",
         env=("TRADING__DEGRADED_FEED_MODE",),
         cast="str",
-        default="block",
+        default="widen",
         description="Policy when market data is degraded (widen or block new entries).",
         choices=("widen", "block"),
     ),
@@ -609,7 +609,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="nbbo_required_for_limit",
         env=("NBBO_REQUIRED_FOR_LIMIT",),
         cast="bool",
-        default=True,
+        default=False,
         description="Require NBBO quotes for limit pricing; fallback to last trade when false.",
     ),
     ConfigSpec(
