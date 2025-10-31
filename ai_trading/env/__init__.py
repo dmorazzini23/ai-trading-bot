@@ -5,6 +5,8 @@ import importlib.util
 import logging
 import os
 
+from ai_trading.utils.env import refresh_alpaca_credentials_cache
+
 def _ensure_dotenv_module() -> tuple[object | None, bool]:
     """Return (module, resolved) ensuring ``dotenv_values`` availability."""
 
@@ -81,6 +83,10 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
     _ENV_LOADED = True
     if loaded:
         _log_env_loaded(source)
+        try:
+            refresh_alpaca_credentials_cache()
+        except Exception:  # pragma: no cover - keep env init resilient
+            pass
 
 
 __all__ = ["ensure_dotenv_loaded", "load_dotenv_if_present", "PYTHON_DOTENV_RESOLVED"]

@@ -160,3 +160,37 @@ def test_degraded_feed_block_prevents_submission(monkeypatch, caplog) -> None:
 
     block_records = [rec for rec in caplog.records if rec.msg == "DEGRADED_FEED_BLOCK_ENTRY"]
     assert block_records, "Block diagnostics not emitted"
+
+
+def test_nbbo_required_blocks_degraded_quotes(monkeypatch, caplog) -> None:
+    """NBBO requirement should block synthetic quotes even when a limit is provided."""
+
+    engine = DummyLiveEngine()
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "block")
+    monkeypatch.setenv("NBBO_REQUIRED_FOR_LIMIT", "true")
+    from ai_trading.config.management import reload_trading_config
+
+    reload_trading_config()
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    result = engine.execute_order(
+        "MSFT",
+        "buy",
+        5,
+        order_type="limit",
+        limit_price=300.0,
+        quote=_quote_payload(),
+        annotations={"price_source": "backup"},
+    )
+
+    assert result is None
+    assert engine.last_submitted is None
+
+    emitted = {rec.msg for rec in caplog.records}
+    assert "DEGRADED_FEED_BLOCK_ENTRY" in emitted or "ORDER_SKIPPED_PRICE_GATED" in emitted
+
+    monkeypatch.delenv("TRADING__DEGRADED_FEED_MODE", raising=False)
+    monkeypatch.delenv("NBBO_REQUIRED_FOR_LIMIT", raising=False)
+    reload_trading_config()

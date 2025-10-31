@@ -1620,7 +1620,26 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         limit_has_price = bool(order_data.get("limit_price"))
-        price_gate_required = require_quotes and not closing_position and not limit_has_price
+        cfg: Any | None = None
+        require_nbbo = False
+        if cfg is None:
+            try:
+                cfg = get_trading_config()
+            except Exception:
+                cfg = None
+        if cfg is not None and not require_nbbo:
+            try:
+                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", require_nbbo))
+            except Exception:
+                pass
+        if cfg is not None:
+            try:
+                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", require_nbbo))
+            except Exception:
+                require_nbbo = False
+        base_gate_required = require_quotes and not closing_position and not limit_has_price
+        nbbo_gate_prefetch = require_nbbo and not closing_position
+        price_gate_required = base_gate_required
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
             get_asset = getattr(trading_client, "get_asset", None)
@@ -1782,17 +1801,26 @@ class ExecutionEngine:
         bid = ask = None
         quote_age_ms: float | None = None
         synthetic_quote = False
-        if price_gate_required:
+        fallback_age: float | int | None = None
+        fallback_error: str | None = None
+        provider_for_log = "alpaca"
+        degrade_active = False
+        if price_gate_required or nbbo_gate_prefetch:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             if isinstance(kwargs, dict):
                 candidate = kwargs.get("quote")
                 if isinstance(candidate, Mapping):
                     quote_payload = candidate  # type: ignore[assignment]
-            fallback_age = None
-            fallback_error = None
+            provider_source = None
             if isinstance(annotations, Mapping):
                 fallback_age = annotations.get("fallback_quote_age")
                 fallback_error = annotations.get("fallback_quote_error")
+                provider_source = (
+                    annotations.get("price_source")
+                    or annotations.get("source")
+                    or annotations.get("quote_source")
+                    or annotations.get("fallback_source")
+                )
                 if quote_payload is None:
                     candidate_quote = annotations.get("quote")
                     if isinstance(candidate_quote, Mapping):
@@ -1814,6 +1842,71 @@ class ExecutionEngine:
             if quote_dict is not None:
                 bid = quote_dict.get("bid") or quote_dict.get("bp")
                 ask = quote_dict.get("ask") or quote_dict.get("ap")
+                ts_candidate = (
+                    quote_dict.get("ts")
+                    or quote_dict.get("timestamp")
+                    or quote_dict.get("t")
+                )
+                if hasattr(ts_candidate, "isoformat"):
+                    quote_ts = ts_candidate  # type: ignore[assignment]
+                    try:
+                        quote_age_ms = max(
+                            0.0,
+                            (datetime.now(UTC) - quote_ts.astimezone(UTC)).total_seconds() * 1000.0,
+                        )
+                    except Exception:
+                        quote_age_ms = quote_age_ms
+            if quote_age_ms is None and isinstance(fallback_age, (int, float)):
+                try:
+                    quote_age_ms = max(0.0, float(fallback_age) * 1000.0)
+                except (TypeError, ValueError):
+                    quote_age_ms = quote_age_ms
+
+            if isinstance(quote_payload, Mapping):
+                synthetic_quote = bool(quote_payload.get("synthetic"))
+                details = quote_payload.get("details")
+                if isinstance(details, Mapping):
+                    synthetic_quote = synthetic_quote or bool(details.get("synthetic"))
+                provider_source = provider_source or quote_payload.get("provider") or quote_payload.get("source")
+            else:
+                synthetic_quote = bool(getattr(quote_payload, "synthetic", False))
+
+            try:
+                provider_source_str = str(provider_source).strip().lower() if provider_source is not None else ""
+            except Exception:
+                provider_source_str = ""
+
+            degrade_due_provider = bool(
+                synthetic_quote or (provider_source_str and not provider_source_str.startswith("alpaca"))
+            )
+            provider_for_log = "backup/synthetic" if degrade_due_provider else "alpaca"
+            min_quote_fresh_ms = 1500
+            if cfg is not None:
+                try:
+                    min_quote_fresh_ms = max(
+                        0,
+                        int(getattr(cfg, "min_quote_freshness_ms", min_quote_fresh_ms)),
+                    )
+                except (TypeError, ValueError):
+                    min_quote_fresh_ms = 1500
+            degrade_due_age = False
+            if quote_age_ms is not None:
+                degrade_due_age = quote_age_ms > float(min_quote_fresh_ms)
+            elif isinstance(fallback_age, (int, float)):
+                try:
+                    degrade_due_age = float(fallback_age) * 1000.0 > float(min_quote_fresh_ms)
+                except (TypeError, ValueError):
+                    degrade_due_age = False
+            try:
+                degrade_due_monitor = bool(
+                    is_safe_mode_active()
+                    or provider_monitor.is_disabled("alpaca")
+                    or provider_monitor.is_disabled("alpaca_sip")
+                )
+            except Exception:
+                degrade_due_monitor = is_safe_mode_active()
+            degrade_active = degrade_due_provider or degrade_due_age or degrade_due_monitor
+            nbbo_gate_required = require_nbbo and degrade_active and not closing_position
 
             ok, reason = can_execute(
                 quote_dict,
@@ -1823,6 +1916,10 @@ class ExecutionEngine:
             if isinstance(fallback_error, str) and fallback_error:
                 ok = False
                 reason = fallback_error
+            if nbbo_gate_required:
+                ok = False
+                if not reason:
+                    reason = "nbbo_required"
 
             if not ok:
                 log_reason = reason or "price_gate_failed"
@@ -1838,6 +1935,10 @@ class ExecutionEngine:
                         "ask": None if ask is None else _safe_float(ask),
                         "fallback_error": fallback_error,
                         "fallback_age": fallback_age,
+                        "provider": provider_for_log,
+                        "nbbo_required": nbbo_gate_required,
+                        "degraded": degrade_active,
+                        "quote_age_ms": quote_age_ms,
                     },
                 )
                 return None
@@ -2038,7 +2139,20 @@ class ExecutionEngine:
 
         require_quotes = _require_bid_ask_quotes()
         limit_has_price = bool(order_data.get("limit_price"))
-        price_gate_required = require_quotes and not closing_position and not limit_has_price
+        cfg = None
+        require_nbbo = False
+        try:
+            cfg = get_trading_config()
+        except Exception:
+            cfg = None
+        if cfg is not None:
+            try:
+                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", require_nbbo))
+            except Exception:
+                require_nbbo = False
+        base_gate_required = require_quotes and not closing_position and not limit_has_price
+        nbbo_gate_prefetch = require_nbbo and not closing_position
+        price_gate_required = base_gate_required
 
         if str(side).strip().lower() == "sell" and not closing_position:
             trading_client = getattr(self, "trading_client", None)
@@ -2204,7 +2318,7 @@ class ExecutionEngine:
             )
             return None
 
-        if price_gate_required:
+        if price_gate_required or nbbo_gate_prefetch:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
             if isinstance(kwargs, dict):
                 candidate = kwargs.get("quote")
@@ -2268,7 +2382,7 @@ class ExecutionEngine:
                 has_ba = float(bid) > 0 and float(ask) > 0
             except (TypeError, ValueError):
                 has_ba = False
-        if price_gate_required:
+        if price_gate_required or nbbo_gate_prefetch:
             price_gate_ok = fresh and has_ba
 
         start_time = time.time()
@@ -2554,6 +2668,23 @@ class ExecutionEngine:
         elif resolved_limit_price is not None:
             order_type_normalized = "limit"
 
+        require_quotes = _require_bid_ask_quotes()
+        limit_has_price = bool(manual_limit_requested or resolved_limit_price is not None)
+        cfg: Any | None = None
+        require_nbbo = False
+        try:
+            cfg = get_trading_config()
+        except Exception:
+            cfg = None
+        if cfg is not None:
+            try:
+                require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", require_nbbo))
+            except Exception:
+                require_nbbo = False
+        base_gate_required = require_quotes and not closing_position and not limit_has_price
+        nbbo_gate_prefetch = require_nbbo and not closing_position
+        price_gate_required = base_gate_required
+
         fallback_buffer_bps = 0
         if using_fallback_price and not manual_limit_requested:
             fallback_buffer_bps = _fallback_limit_buffer_bps()
@@ -2688,6 +2819,11 @@ class ExecutionEngine:
         degrade_due_provider = provider_for_log != "alpaca"
         degrade_active = degrade_due_provider or degrade_due_age or degrade_due_monitor
 
+        nbbo_gate_required = require_nbbo and degrade_active and not closing_position
+        if nbbo_gate_required and (synthetic_quote or provider_for_log != "alpaca"):
+            price_gate_ok = False
+        price_gate_required = base_gate_required or nbbo_gate_required
+
         limit_for_log = resolved_limit_price if resolved_limit_price is not None else price_for_limit
         if limit_for_log is None and basis_price is not None:
             limit_for_log = basis_price
@@ -2730,7 +2866,7 @@ class ExecutionEngine:
             and degraded_mode == "widen"
             and order_type_normalized in {"limit", "stop_limit"}
             and degraded_widen_bps > 0
-            and not manual_limit_requested
+            and not closing_position
         ):
             base_for_widen = basis_price
             if base_for_widen is None and limit_for_log is not None:
@@ -2771,14 +2907,15 @@ class ExecutionEngine:
                 "ask": None if ask is None else float(ask),
                 "fallback_error": locals().get("fallback_error"),
                 "fallback_age": locals().get("fallback_age"),
+                "provider": provider_for_log,
+                "mode": degraded_mode,
+                "nbbo_required": nbbo_gate_required,
+                "degraded": bool(degrade_active),
             }
-            if degrade_active and degraded_mode == "widen" and limit_for_log is not None:
+            if limit_for_log is not None:
                 gate_log_extra["limit"] = float(limit_for_log)
-                gate_log_extra["mode"] = degraded_mode
-                logger.warning("ORDER_PRICE_GATE_BYPASSED", extra=gate_log_extra)
-            else:
-                logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
-                return None
+            logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
+            return None
 
         if self._broker_lock_suppressed(
             symbol=symbol,
