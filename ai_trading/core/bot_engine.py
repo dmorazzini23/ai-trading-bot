@@ -8788,27 +8788,29 @@ class DataFetcher:
             )
             # Only execute extended lookups when memo miss occurs
             for lookup_key in (canonical_lookup, legacy_lookup, *additional_lookups):
-                entry = None
                 try:
-                    if lookup_key in memo_store:
-                        entry = memo_store[lookup_key]
+                    entry = memo_store[lookup_key]
+                except KeyError:
+                    continue
                 except COMMON_EXC:
-                    entry = None
-                if entry is None:
                     continue
                 ts_value, memo_df = _memo_unpack(entry)
-                if memo_df is not None and _memo_fresh(ts_value):
-                    memo_payload = (memo_now, memo_df)
-                    for target_key, payload in (
-                        (canonical_lookup, memo_payload),
-                        (range_lookup, memo_payload),
-                        (legacy_lookup, memo_payload),
-                    ):
+                if memo_df is None or not _memo_fresh(ts_value):
+                    continue
+                memo_payload = (memo_now, memo_df)
+                target_keys = {
+                    canonical_lookup,
+                    range_lookup,
+                    legacy_lookup,
+                    lookup_key,
+                }
+                with cache_lock:
+                    for target_key in target_keys:
                         try:
-                            memo_store[target_key] = payload
+                            memo_store[target_key] = memo_payload
                         except COMMON_EXC:
                             continue
-                    return _emit_cache_hit(memo_df, reason="memo")
+                return _emit_cache_hit(memo_df, reason="memo")
 
         min_interval = self._daily_fetch_min_interval(ctx)
         now_monotonic = precomputed_monotonic
@@ -22322,20 +22324,24 @@ def _ensure_executable_quote(
     )
     if not gate_decision:
         reason = gate_decision.reason or "missing_bid_ask"
-        gate_decision.reason = reason
         if not isinstance(gate_decision.details, dict):
             try:
                 gate_decision.details = dict(gate_decision.details or {})
             except Exception:
                 gate_decision.details = {}
+        details_dict: dict[str, Any] = (
+            gate_decision.details if isinstance(gate_decision.details, dict) else {}
+        )
+        bid_missing = details_dict.get("bid") is None
+        ask_missing = details_dict.get("ask") is None
+        if bid_missing or ask_missing:
+            reason = "missing_bid_ask"
+        gate_decision.reason = reason
         fallback_ok = fallback_permitted
         if fallback_ok:
             fallback_reason = reason
-            if isinstance(gate_decision.details, dict):
-                bid_missing = gate_decision.details.get("bid") is None
-                ask_missing = gate_decision.details.get("ask") is None
-                if bid_missing or ask_missing:
-                    fallback_reason = "missing_bid_ask"
+            if bid_missing or ask_missing:
+                fallback_reason = "missing_bid_ask"
             decision = _synthetic_quote_decision(
                 symbol,
                 float(reference_price),

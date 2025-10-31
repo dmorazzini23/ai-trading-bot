@@ -2132,6 +2132,30 @@ def _mark_fallback(
             fallback_feed=fallback_name or resolved_feed or provider_for_register,
         )
 
+    allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip()
+    allow_override = globals().get("_ALLOW_SIP")
+    try:
+        sip_configured = bool(_sip_configured())
+    except Exception:
+        sip_configured = False
+    sip_allowed = sip_configured and (
+        allow_env == "1" or (allow_override is not None and bool(allow_override))
+    )
+    skip_switchover = False
+    if from_provider:
+        try:
+            from_key = str(from_provider).strip().lower()
+        except Exception:
+            from_key = str(from_provider)
+        target_key = None
+        if provider_for_register is not None:
+            try:
+                target_key = str(provider_for_register).strip().lower()
+            except Exception:
+                target_key = str(provider_for_register)
+        if from_key == "alpaca_iex" and not sip_allowed and target_key == "alpaca_sip":
+            skip_switchover = True
+
     if should_emit:
         log_backup_provider_used(
             provider_for_register,
@@ -2142,36 +2166,12 @@ def _mark_fallback(
             extra=log_extra,
             logger=logger,
         )
-        skip_switchover = False
-        if from_provider:
-            try:
-                from_key = str(from_provider).strip().lower()
-            except Exception:
-                from_key = str(from_provider)
-            allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip()
-            allow_override = globals().get("_ALLOW_SIP")
-            try:
-                sip_configured = bool(_sip_configured())
-            except Exception:
-                sip_configured = False
-            sip_allowed = sip_configured and (
-                allow_env == "1" or (allow_override is not None and bool(allow_override))
-            )
-            target_key = None
-            if provider_for_register is not None:
-                try:
-                    target_key = str(provider_for_register).strip().lower()
-                except Exception:
-                    target_key = str(provider_for_register)
-            if from_key == "alpaca_iex" and not sip_allowed and target_key == "alpaca_sip":
-                skip_switchover = True
-        else:
-            skip_switchover = False
-        if not skip_switchover:
-            provider_monitor.record_switchover(
-                from_provider or "alpaca",
-                provider_for_register,
-            )
+
+    if not skip_switchover:
+        provider_monitor.record_switchover(
+            from_provider or "alpaca",
+            provider_for_register,
+        )
     _FALLBACK_WINDOWS.add(key)
     if fallback_name:
         fallback_clean = str(fallback_name).strip().lower()
@@ -8562,6 +8562,19 @@ def _fetch_bars(
                 if result is not None:
                     return result
             key = (symbol, _interval)
+            if (
+                not data
+                and fallback is None
+                and _feed == "iex"
+                and _sip_configured()
+                and not _is_sip_unauthorized()
+                and _sip_fallback_allowed(session, headers, _interval)
+            ):
+                result = _attempt_fallback((_interval, "sip", _start, _end))
+                if result is not None:
+                    if not getattr(result, "empty", True):
+                        _IEX_EMPTY_COUNTS.pop(key, None)
+                    return result
             sip_locked = _is_sip_unauthorized()
             if (
                 _feed == "iex"

@@ -606,9 +606,14 @@ def _get_or_create_loop_semaphore(
                 if record.limit != resolved_limit
             ]
         for host in stale_hosts:
+            previous = host_map.get(host)
             host_map[host] = _SemaphoreRecord(
                 _build_semaphore(resolved_limit, version), resolved_limit, version
             )
+            if previous is not None:
+                _RETIRED_SEMAPHORES.append(previous.semaphore)
+        if len(_RETIRED_SEMAPHORES) > 8:
+            del _RETIRED_SEMAPHORES[:-8]
 
     record = host_map.get(hostname)
     if record is not None and record.limit == resolved_limit and record.version == version:
@@ -616,7 +621,12 @@ def _get_or_create_loop_semaphore(
         return record.semaphore
 
     semaphore = _build_semaphore(resolved_limit, version)
+    previous_record = host_map.get(hostname)
     host_map[hostname] = _SemaphoreRecord(semaphore, resolved_limit, version)
+    if previous_record is not None:
+        _RETIRED_SEMAPHORES.append(previous_record.semaphore)
+        if len(_RETIRED_SEMAPHORES) > 8:
+            del _RETIRED_SEMAPHORES[:-8]
     return semaphore
 
 

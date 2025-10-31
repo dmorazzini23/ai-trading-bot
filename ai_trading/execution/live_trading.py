@@ -2730,6 +2730,7 @@ class ExecutionEngine:
             and degraded_mode == "widen"
             and order_type_normalized in {"limit", "stop_limit"}
             and degraded_widen_bps > 0
+            and not manual_limit_requested
         ):
             base_for_widen = basis_price
             if base_for_widen is None and limit_for_log is not None:

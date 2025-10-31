@@ -278,13 +278,18 @@ def log_trade(
             "reward": "",
         }
 
+    permission_repair_attempted: dict[Path, bool] = {}
     for path in targets:
         def _run_with_fix(action: Callable[[], None]) -> bool:
             try:
                 action()
                 return True
             except PermissionError as first_exc:
-                repaired = fix_file_permissions(path)
+                repaired = False
+                already_attempted = permission_repair_attempted.get(path, False)
+                if not already_attempted:
+                    repaired = fix_file_permissions(path)
+                    permission_repair_attempted[path] = True
                 try:
                     action()
                     return True

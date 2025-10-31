@@ -269,7 +269,7 @@ def _validate_trading_api(api: Any) -> bool:
             )
             return False
     if adapted_api:
-        log_once.info("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
+        log_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
         warned_adapter = True
 
     try:
@@ -286,7 +286,7 @@ def _validate_trading_api(api: Any) -> bool:
     elif wrapped_client is not None and isinstance(wrapped_client, TradingClient):
         pass
     elif not warned_adapter:
-        log_once.info("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
+        log_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
         warned_adapter = True
     return True
 

@@ -39,6 +39,13 @@ class _LazyModule(ModuleType):
     def __getattr__(self, item: str):  # pragma: no cover - exercised via tests
         return getattr(self._load(), item)
 
+    def submit_order(self, *args, **kwargs):
+        """Proxy order submission to the real Alpaca module without reloading twice."""
+
+        module = self._load()
+        submit = getattr(module, "submit_order")
+        return submit(*args, **kwargs)
+
 
 def ensure_alpaca_api() -> ModuleType:
     """Register a lazy loader for ``ai_trading.alpaca_api``.
