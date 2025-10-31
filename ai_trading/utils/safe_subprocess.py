@@ -47,35 +47,46 @@ def safe_subprocess_run(
     requested_check = popen_kwargs.pop("check", check)
     text_mode = popen_kwargs.pop("text", text)
 
+    timeout_param: float | None
     if timeout is None:
-        effective_timeout = SUBPROCESS_TIMEOUT_DEFAULT
+        timeout_param = SUBPROCESS_TIMEOUT_DEFAULT
     else:
         try:
-            effective_timeout = float(timeout)
+            normalized_timeout = float(timeout)
         except (TypeError, ValueError):
-            effective_timeout = SUBPROCESS_TIMEOUT_DEFAULT
-        if not math.isfinite(effective_timeout) or effective_timeout <= 0:
-            effective_timeout = SUBPROCESS_TIMEOUT_DEFAULT
+            normalized_timeout = SUBPROCESS_TIMEOUT_DEFAULT
+        if not math.isfinite(normalized_timeout):
+            timeout_param = SUBPROCESS_TIMEOUT_DEFAULT
+        elif normalized_timeout <= 0:
+            timeout_param = None
+        else:
+            timeout_param = normalized_timeout
+
+    run_kwargs = dict(popen_kwargs)
+    if timeout_param is not None:
+        run_kwargs["timeout"] = timeout_param
+    else:
+        run_kwargs.pop("timeout", None)
 
     try:
         completed = subprocess.run(
             cmd,
-            timeout=effective_timeout,
             check=False,
             text=text_mode,
-            **popen_kwargs,
+            **run_kwargs,
         )
     except subprocess.TimeoutExpired as exc:
         stdout = _normalize_stream(getattr(exc, "output", None))
         stderr = _normalize_stream(getattr(exc, "stderr", None))
-        log.warning(
-            "SAFE_SUBPROCESS_TIMEOUT",
-            extra={"cmd": cmd, "timeout": effective_timeout},
-        )
         result = SafeSubprocessResult(stdout, stderr, 124, True)
         exc.stdout = stdout
         exc.stderr = stderr
         exc.result = result
+        exc.timeout = timeout_param
+        log.warning(
+            "SAFE_SUBPROCESS_TIMEOUT",
+            extra={"cmd": cmd, "timeout": timeout_param},
+        )
         raise
     except (OSError, subprocess.SubprocessError) as exc:
         result = _coerce_exception_result(exc, cmd)

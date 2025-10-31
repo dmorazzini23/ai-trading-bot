@@ -542,13 +542,7 @@ def reload_host_limit_if_env_changed(_session: object | None = None) -> HostLimi
         return snapshot
 
     if env_changed:
-        try:
-            _clear_all_loop_semaphores()
-        except Exception:
-            _HOST_SEMAPHORES.clear()
-            _RETIRED_SEMAPHORES.clear()
-        _invalidate_fallback_pooling_state()
-        _LIMIT_CACHE = None
+        reset_host_semaphores(clear_limit_cache=True)
         cache = None
 
     limit, version = _resolve_limit()
@@ -635,8 +629,7 @@ def get_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
 
     loop = asyncio.get_running_loop()
     host = _normalize_host(hostname)
-    reload_host_limit_if_env_changed()
-    snapshot = get_host_limit_snapshot()
+    snapshot = reload_host_limit_if_env_changed()
     pooling_state = _get_pooling_limit_state()
     if pooling_state is not None:
         pooling_limit, pooling_version = pooling_state

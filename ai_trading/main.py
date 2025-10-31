@@ -1263,15 +1263,17 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                     ready_signal.set()
                 return
             continue
+        else:
+            break
 
-        if should_stop():
-            logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
-            if ready_signal is not None:
-                ready_signal.set()
-            return
-
-        run_flask_app(port, ready_signal)
+    if should_stop():
+        logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
+        if ready_signal is not None:
+            ready_signal.set()
         return
+
+    run_flask_app(port, ready_signal)
+    return
 
 
 def _assert_singleton_api(settings) -> None:

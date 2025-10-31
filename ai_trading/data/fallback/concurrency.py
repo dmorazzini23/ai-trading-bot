@@ -168,8 +168,29 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     if _POOLING_LIMIT_STATE is not None:
         expected_version = _POOLING_LIMIT_STATE[1]
 
+    current_loop = asyncio.get_running_loop()
+    semaphore_loop = getattr(semaphore, "_loop", None)
+    if semaphore_loop is None:
+        semaphore_loop = getattr(semaphore, "_bound_loop", None)
+
     actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
     actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
+
+    if semaphore_loop is not None and semaphore_loop is not current_loop:
+        refreshed: asyncio.Semaphore | None = None
+        if callable(_pooling_refresh_host_semaphore):
+            try:
+                refreshed = _pooling_refresh_host_semaphore(loop=current_loop)
+            except Exception:
+                refreshed = None
+        if isinstance(refreshed, asyncio.Semaphore):
+            semaphore = refreshed
+            actual_version = getattr(semaphore, "_ai_trading_host_limit_version", actual_version)
+            actual_limit = getattr(semaphore, "_ai_trading_host_limit", actual_limit)
+            semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
+        else:
+            _invalidate_pooling_snapshot()
+            return None
 
     if (
         expected_version is not None
@@ -185,6 +206,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
             semaphore = refreshed
             actual_version = getattr(semaphore, "_ai_trading_host_limit_version", actual_version)
             actual_limit = getattr(semaphore, "_ai_trading_host_limit", actual_limit)
+            semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
 
     if isinstance(actual_limit, int) and isinstance(actual_version, int):
         normalised = _normalise_pooling_state((actual_limit, actual_version))

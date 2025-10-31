@@ -1072,27 +1072,42 @@ def _ensure_entitled_feed(client, feed):  # type: ignore[override]
     choose 'sip'. Otherwise, delegate to original.
     """
 
-    if _is_test_mode():
-        import os
-
-        allow = os.getenv("ALPACA_ALLOW_SIP")
-        unauthorized = os.getenv("ALPACA_SIP_UNAUTHORIZED")
-        has_sip = os.getenv("ALPACA_HAS_SIP")
-        if (
-            not _env_explicit_false("ALPACA_ALLOW_SIP")
-            and not _env_explicit_false("ALPACA_SIP_ENTITLED")
-            and not _env_explicit_false("ALPACA_HAS_SIP")
-            and (allow is None or allow == "1")
-            and unauthorized not in ("1", "true", "True")
-        ):
-            getter = globals().get("_get_entitled_feeds")
-            if callable(getter):
-                try:
-                    feeds = set(getter(client))  # type: ignore[misc]
-                except (AttributeError, TypeError, ValueError):
-                    feeds = set()
-                if "sip" in feeds:
-                    return "sip"
+    resolved = feed
     if _ensure_entitled_feed_orig:
-        return _ensure_entitled_feed_orig(client, feed)  # type: ignore[misc]
-    return feed
+        resolved = _ensure_entitled_feed_orig(client, feed)  # type: ignore[misc]
+
+    if not _is_test_mode():
+        return resolved
+
+    allow_flag = not _env_explicit_false("ALPACA_ALLOW_SIP")
+    entitled_flag = not _env_explicit_false("ALPACA_SIP_ENTITLED")
+    has_flag = not _env_explicit_false("ALPACA_HAS_SIP")
+    unauthorized = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower()
+    sip_locked = unauthorized in {"1", "true", "yes"}
+
+    if not (allow_flag and entitled_flag and has_flag):
+        return resolved
+    if sip_locked:
+        return resolved
+
+    getter = globals().get("_get_entitled_feeds")
+    feeds: set[str] = set()
+    if callable(getter):
+        try:
+            feeds = set(getter(client))  # type: ignore[misc]
+        except (AttributeError, TypeError, ValueError):
+            feeds = set()
+    if "sip" not in feeds:
+        return resolved
+
+    cache_key = _entitle_cache_key(client)
+    cache_entry = _ENTITLE_CACHE.get(cache_key)
+    if isinstance(cache_entry, _EntitlementCacheEntry):
+        cache_entry.resolved = "sip"
+        cache_entry.feeds = set(feeds)
+    elif isinstance(cache_entry, dict):
+        cache_entry["resolved"] = "sip"
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(feeds), cache_entry.get("generation"), "sip")
+    else:
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(feeds), None, "sip")
+    return "sip"

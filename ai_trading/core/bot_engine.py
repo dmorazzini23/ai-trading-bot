@@ -8647,9 +8647,11 @@ class DataFetcher:
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
         fetch_date = end_ts.date()
         timeframe_key = "1Day"
-        memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
+        start_iso = start_ts.isoformat()
+        end_iso = end_ts.isoformat()
+        canonical_memo_key = (symbol, timeframe_key, start_iso, end_iso)
+        memo_key = (symbol, timeframe_key, start_iso, end_iso)
         legacy_memo_key = (symbol, fetch_date.isoformat())
-        canonical_memo_key = (symbol, timeframe_key)
         be_module = (
             sys.modules.get("ai_trading.core.bot_engine")
             or sys.modules.get(__name__)
@@ -8657,8 +8659,16 @@ class DataFetcher:
         memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
         additional_lookups: tuple[tuple[str, ...], ...] = ()
-        memo_now = float(monotonic_fn())
-        precomputed_monotonic = memo_now
+        monotonic_stamp: float | None = None
+
+        def _monotonic_now() -> float:
+            nonlocal monotonic_stamp
+            if monotonic_stamp is None:
+                try:
+                    monotonic_stamp = float(monotonic_fn())
+                except Exception:
+                    monotonic_stamp = 0.0
+            return monotonic_stamp
 
         result_logged = False
 
@@ -8723,60 +8733,16 @@ class DataFetcher:
                 provenance = True
             return _emit_daily_fetch_result(df, cache=provenance)
 
-        def _memo_unpack(entry: Any) -> tuple[float | None, Any | None]:
-            if isinstance(entry, tuple) and len(entry) == 2:
-                first, second = entry
-                if isinstance(first, (int, float)):
-                    return float(first), second
-                if isinstance(second, (int, float)):
-                    return float(second), first
-                return None, None
-            if isinstance(entry, IteratorABC):
-                try:
-                    first_item = next(entry)
-                except StopIteration:
-                    return None, None, None
-                ts_value, payload_value, normalized_pair = _normalize_memo_entry(first_item)
-                payload = payload_value if payload_value is not None else first_item
-                if normalized_pair is None and payload is not None:
-                    normalized_pair = (ts_value, payload)
-                return ts_value, payload, normalized_pair
-            if isinstance(entry, MappingABC):
-                payload: Any | None = None
-                ts_value: Any | None = None
-                for ts_key in ("ts", "timestamp", "time", "monotonic"):
-                    ts_candidate = None
-                    with suppress(Exception):  # tolerate custom mappings
-                        ts_candidate = entry.get(ts_key)  # type: ignore[call-arg]
-                    if ts_candidate is not None:
-                        ts_value = ts_candidate
-                        break
-                for payload_key in ("df", "data", "value", "result", "payload"):
-                    payload_candidate = None
-                    with suppress(Exception):  # tolerate custom mappings
-                        payload_candidate = entry.get(payload_key)  # type: ignore[call-arg]
-                    if payload_candidate is not None:
-                        payload = payload_candidate
-                        break
-                ts_normalized: float | None = None
-                if isinstance(ts_value, (int, float)):
-                    ts_normalized = float(ts_value)
-                else:
-                    try:
-                        ts_normalized = float(ts_value) if ts_value is not None else None
-                    except (TypeError, ValueError):
-                        ts_normalized = None
-                return ts_normalized, payload
-            return None, None
-
-        def _memo_fresh(ts: float | None) -> bool:
-            return memo_ttl <= 0.0 or ts is None or (memo_now - float(ts) <= memo_ttl)
-
         if memo_store is not None:
             canonical_lookup = canonical_memo_key
             range_lookup = memo_key
             legacy_lookup = legacy_memo_key
-            additional_lookups: tuple[tuple[str, ...], ...] = (
+            effective_ttl = (
+                memo_ttl
+                if memo_ttl > 0.0
+                else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
+            )
+            additional_lookups = (
                 range_lookup,
                 (symbol, "daily"),
                 ("daily", symbol),
@@ -8786,18 +8752,36 @@ class DataFetcher:
                 (f"daily:{symbol}",),
                 (f"{symbol}:daily",),
             )
-            # Only execute extended lookups when memo miss occurs
-            for lookup_key in (canonical_lookup, legacy_lookup, *additional_lookups):
+            primary_order = (canonical_lookup, range_lookup, legacy_lookup)
+            secondary_order = tuple(
+                key for key in additional_lookups if key not in primary_order
+            )
+
+            def _resolve_memo_entry(
+                key: tuple[str, ...],
+            ) -> tuple[float | None, Any | None, tuple[float, Any] | None]:
                 try:
-                    entry = memo_store[lookup_key]
+                    entry = memo_store[key]
                 except KeyError:
-                    continue
+                    return None, None, None
                 except COMMON_EXC:
+                    return None, None, None
+                return _extract_memo_payload(entry)
+
+            for lookup_key in (*primary_order, *secondary_order):
+                entry_ts, entry_payload, _ = _resolve_memo_entry(lookup_key)
+                if entry_payload is None:
                     continue
-                ts_value, memo_df = _memo_unpack(entry)
-                if memo_df is None or not _memo_fresh(ts_value):
+                if entry_ts is not None and entry_ts <= 0.0:
                     continue
-                memo_payload = (memo_now, memo_df)
+                if effective_ttl > 0.0 and entry_ts is not None:
+                    current = _monotonic_now()
+                    if current - float(entry_ts) > effective_ttl:
+                        continue
+                    stamp = current
+                else:
+                    stamp = _monotonic_now()
+                normalized = (stamp, entry_payload)
                 target_keys = {
                     canonical_lookup,
                     range_lookup,
@@ -8807,13 +8791,16 @@ class DataFetcher:
                 with cache_lock:
                     for target_key in target_keys:
                         try:
-                            memo_store[target_key] = memo_payload
+                            memo_store[target_key] = normalized
                         except COMMON_EXC:
                             continue
-                return _emit_cache_hit(memo_df, reason="memo")
+                return _emit_cache_hit(entry_payload, reason="memo")
+
+        if monotonic_stamp is None:
+            monotonic_stamp = _monotonic_now()
+        now_monotonic = float(monotonic_stamp)
 
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = precomputed_monotonic
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
@@ -8918,55 +8905,72 @@ class DataFetcher:
                 return ts_value, None, None
             return None, None, None
 
-        def _extract_memo_payload(entry: Any) -> tuple[float | None, Any | None]:
+        def _extract_memo_payload(
+            entry: Any,
+        ) -> tuple[float | None, Any | None, tuple[float, Any] | None]:
             if entry is None:
-                return None, None
+                return None, None, None
             if isinstance(entry, tuple):
                 entry_ts, entry_payload, normalized = _normalize_memo_entry(entry)
                 if entry_payload is not None:
                     if entry_ts is None and entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
                         entry_ts = float(entry[0])
-                    return entry_ts, entry_payload
+                    return entry_ts, entry_payload, (entry_ts, entry_payload) if entry_ts is not None else normalized
                 if normalized is not None:
-                    return normalized
+                    return normalized[0], normalized[1], normalized
                 if entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
-                    return float(entry[0]), None
-                return entry_ts, None
+                    ts_value = float(entry[0])
+                    return ts_value, None, (ts_value, None)
+                return entry_ts, None, normalized
             if isinstance(entry, list):
                 if not entry:
-                    return None, None
+                    return None, None, None
                 if len(entry) >= 2:
                     entry_ts, entry_payload, normalized = _normalize_memo_entry(tuple(entry[:2]))
                     if entry_payload is not None:
                         if entry_ts is None and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
                             entry_ts = float(entry[0])
-                        return entry_ts, entry_payload
+                        return entry_ts, entry_payload, (entry_ts, entry_payload) if entry_ts is not None else normalized
                     if normalized is not None:
-                        return normalized
+                        return normalized[0], normalized[1], normalized
                 for item in entry:
-                    nested_ts, nested_payload = _extract_memo_payload(item)
+                    nested_ts, nested_payload, nested_normalized = _extract_memo_payload(item)
                     if nested_payload is not None:
-                        return nested_ts, nested_payload
-                return None, None
+                        normalized_pair = nested_normalized or (
+                            (nested_ts, nested_payload)
+                            if nested_ts is not None
+                            else None
+                        )
+                        return nested_ts, nested_payload, normalized_pair
+                return None, None, None
             if isinstance(entry, MappingABC):
                 entry_ts, entry_payload, normalized = _normalize_memo_entry(entry)
                 if entry_payload is not None:
-                    return entry_ts, entry_payload
+                    return entry_ts, entry_payload, (entry_ts, entry_payload) if entry_ts is not None else normalized
                 if normalized is not None:
-                    return normalized
-                return entry_ts, None
+                    return normalized[0], normalized[1], normalized
+                return entry_ts, None, normalized
             if isinstance(entry, IteratorABC):
                 try:
                     first_item = next(entry)
                 except StopIteration:
-                    return None, None
+                    return None, None, None
                 entry_ts, entry_payload, normalized = _normalize_memo_entry(first_item)
                 if entry_payload is not None:
-                    return entry_ts, entry_payload
+                    if entry_ts is None and isinstance(first_item, (tuple, list)) and first_item:
+                        head = first_item[0]
+                        if isinstance(head, (int, float)):
+                            entry_ts = float(head)
+                    normalized_pair = (
+                        normalized if normalized is not None else (entry_ts, entry_payload)
+                    )
+                    return entry_ts, entry_payload, normalized_pair
                 if normalized is not None:
-                    return normalized
-                return entry_ts, first_item
-            return None, entry
+                    return normalized[0], normalized[1], normalized
+                return entry_ts, first_item, (
+                    (entry_ts, first_item) if entry_ts is not None else None
+                )
+            return None, entry, None
 
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
             store = _DAILY_FETCH_MEMO
@@ -9046,7 +9050,7 @@ class DataFetcher:
                     continue
                 except COMMON_EXC:
                     continue
-                entry_ts, entry_payload = _extract_memo_payload(entry)
+                entry_ts, entry_payload, _normalized = _extract_memo_payload(entry)
                 if entry_payload is None:
                     continue
                 if entry_ts is not None and entry_ts <= 0.0:
@@ -9054,10 +9058,11 @@ class DataFetcher:
                 if (
                     effective_ttl > 0
                     and entry_ts is not None
-                    and (memo_now - float(entry_ts)) > effective_ttl
+                    and entry_ts > 0.0
+                    and (now_monotonic - float(entry_ts)) > effective_ttl
                 ):
                     continue
-                normalized_pair = (memo_now, entry_payload)
+                normalized_pair = (now_monotonic, entry_payload)
                 with cache_lock:
                     for target_key in memo_keys:
                         try:
@@ -9067,7 +9072,7 @@ class DataFetcher:
                 return _emit_cache_hit(entry_payload, reason="memo")
 
         for memo_lookup_key in (memo_key, legacy_memo_key):
-            entry_ts, entry_payload = _extract_memo_payload(
+            entry_ts, entry_payload, _normalized = _extract_memo_payload(
                 _memo_get_entry(memo_lookup_key)
             )
             if entry_payload is None:
@@ -9145,12 +9150,12 @@ class DataFetcher:
         memo_hit = False
 
         combined_keys = (canonical_memo_key, memo_key, legacy_memo_key) + additional_lookups
-        memo_entries: list[tuple[float | None, Any | None]] = []
+        memo_entries: list[tuple[float | None, Any | None, tuple[float, Any] | None]] = []
         for key in combined_keys:
             memo_entries.append(_extract_memo_payload(_memo_get_entry(key)))
         memo_payload: Any | None = None
         memo_timestamp: float | None = None
-        for entry_ts, entry_payload in memo_entries:
+        for entry_ts, entry_payload, _entry_normalized in memo_entries:
             if memo_payload is None and entry_payload is not None:
                 memo_payload = entry_payload
             if entry_ts is None:
@@ -26492,6 +26497,16 @@ def get_latest_price(
 
 def _get_latest_price_simple(symbol: str, *_, **__):
     prefer_backup = bool(__.get("prefer_backup", False))
+    feed_override_raw = __.get("feed")
+    override_token: str | None = None
+    override_sanitized: str | None = None
+    if feed_override_raw is not None:
+        try:
+            override_token = str(feed_override_raw).strip()
+        except Exception:
+            override_token = None
+        if override_token:
+            override_sanitized = _sanitize_alpaca_feed(override_token.lower())
     _PRICE_SOURCE.pop(symbol, None)
 
     pytest_running = _pytest_running()
@@ -26522,6 +26537,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     configured_raw: str | None = None
 
     candidate_rows: list[tuple[str, Any | None, str | None]] = [
+        ("override", override_token, override_sanitized),
         ("preferred", preferred_feed, None),
         ("env", configured_env, env_feed),
         ("intraday", intraday_raw, configured_feed),
@@ -26580,13 +26596,10 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         runtime_sip_lock = bool(_sip_lockout_active())
     except COMMON_EXC:
         runtime_sip_lock = False
-    if pytest_running:
-        sip_lockout_active = False
-    else:
-        sip_lockout_active = sip_flagged or runtime_sip_lock
+    sip_lockout_active = sip_flagged or runtime_sip_lock
 
     candidate_for_resolution = requested_feed
-    skip_entitlement_resolution = explicit_invalid_feed or (not pytest_running and sip_flagged)
+    skip_entitlement_resolution = explicit_invalid_feed or sip_lockout_active
     alpaca_feed: str | None = None
     if not skip_entitlement_resolution:
         if symbol:
@@ -26595,7 +26608,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             alpaca_feed = price_quote_feed.ensure_entitled_feed(candidate_for_resolution, None)
     elif explicit_invalid_feed:
         _PRICE_SOURCE[symbol] = "alpaca_invalid_feed"
-    elif pytest_running and sip_flagged and _PRICE_SOURCE.get(symbol) != "alpaca_invalid_feed":
+    elif sip_lockout_active and _PRICE_SOURCE.get(symbol) != "alpaca_invalid_feed":
         _PRICE_SOURCE[symbol] = "alpaca_sip_locked"
 
     raw_alpaca_feed = alpaca_feed

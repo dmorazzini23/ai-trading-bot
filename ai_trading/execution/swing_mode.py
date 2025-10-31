@@ -115,6 +115,10 @@ class SwingTradingMode:
         if not self.enabled:
             return True, "swing_mode_disabled"
 
+        allow_override = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip()
+        if allow_override == "1":
+            return True, "env_override_allow_same_day_exit"
+
         now_utc = datetime.now(timezone.utc)
         now_et = now_utc.astimezone(MARKET_TZ)
         entry = self.position_entry_times.get(symbol)

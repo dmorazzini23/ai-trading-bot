@@ -285,24 +285,33 @@ def log_trade(
                 action()
                 return True
             except PermissionError as first_exc:
-                repaired = False
                 already_attempted = permission_repair_attempted.get(path, False)
+                repaired = False
                 if not already_attempted:
-                    repaired = fix_file_permissions(path)
+                    repaired = bool(fix_file_permissions(path))
                     permission_repair_attempted[path] = True
-                try:
-                    action()
-                    return True
-                except PermissionError:
-                    logger.error(
-                        "TRADE_LOG_WRITE_PERMISSION_DENIED",
-                        extra={
-                            "path": str(path),
-                            "repaired": bool(repaired),
-                            "error": str(first_exc),
-                        },
-                    )
-                    return False
+                    try:
+                        action()
+                        return True
+                    except PermissionError as second_exc:
+                        logger.error(
+                            "TRADE_LOG_WRITE_PERMISSION_DENIED",
+                            extra={
+                                "path": str(path),
+                                "repaired": repaired,
+                                "error": str(second_exc),
+                            },
+                        )
+                        return False
+                logger.error(
+                    "TRADE_LOG_WRITE_PERMISSION_DENIED",
+                    extra={
+                        "path": str(path),
+                        "repaired": False,
+                        "error": str(first_exc),
+                    },
+                )
+                return False
 
         if not _run_with_fix(lambda: _ensure_file_header(path, headers)):
             return
