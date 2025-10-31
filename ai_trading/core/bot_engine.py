@@ -15023,6 +15023,49 @@ def submit_order(
     **exec_kwargs: Any,
 ) -> Order | None:
     """Submit an order using the institutional execution engine."""
+    exec_kwargs = dict(exec_kwargs)
+
+    annotations_raw = exec_kwargs.get("annotations")
+    if isinstance(annotations_raw, MappingABC):
+        annotations: dict[str, Any] = dict(annotations_raw)
+    elif annotations_raw is None:
+        annotations = {}
+    else:
+        try:
+            annotations = dict(annotations_raw)
+        except Exception:
+            annotations = {}
+
+    price_source_label = None
+    try:
+        price_source_label = get_price_source(symbol)
+    except Exception:
+        price_source_label = None
+
+    if price_source_label not in (None, ""):
+        annotations["price_source"] = price_source_label
+
+    fallback_flag = bool(
+        exec_kwargs.get("using_fallback_price")
+        or annotations.get("using_fallback_price")
+    )
+    if not fallback_flag and price_source_label not in (None, ""):
+        try:
+            fallback_flag = not _is_primary_price_source(str(price_source_label))
+        except Exception:
+            pass
+    if fallback_flag:
+        annotations["using_fallback_price"] = True
+        exec_kwargs["using_fallback_price"] = True
+
+    if annotations:
+        exec_kwargs["annotations"] = annotations
+    else:
+        exec_kwargs.pop("annotations", None)
+
+    if exec_kwargs.get("price_hint") is None and price is not None:
+        exec_kwargs["price_hint"] = price
+
     if not market_is_open():
         logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
         return None
@@ -23118,6 +23161,11 @@ def run_multi_strategy(ctx) -> None:
                     price_source_label = _price_source
             except Exception:
                 price_source_label = None
+            if price_source_label in (None, ""):
+                try:
+                    price_source_label = get_price_source(sig.symbol)
+                except Exception:
+                    price_source_label = None
             if price_source_label is not None:
                 annotations['price_source'] = price_source_label
             # Mark fallback usage when the source is not Alpaca (e.g., yahoo/feature_close)

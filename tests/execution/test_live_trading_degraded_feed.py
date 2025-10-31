@@ -198,6 +198,24 @@ def test_nbbo_required_blocks_degraded_quotes(monkeypatch, caplog) -> None:
     reload_trading_config()
 
 
+def test_broker_kwargs_preserve_degraded_hints() -> None:
+    """Filtered kwargs must retain annotations and degraded pricing hints."""
+
+    payload = {
+        "annotations": {"price_source": "backup"},
+        "using_fallback_price": True,
+        "price_hint": 101.23,
+        "client_order_id": "abc123",
+    }
+
+    filtered = live_trading._broker_kwargs_for_route("limit", payload)
+
+    assert filtered is not payload
+    assert filtered["annotations"]["price_source"] == "backup"
+    assert filtered["using_fallback_price"] is True
+    assert filtered["price_hint"] == pytest.approx(101.23)
+
+
 def test_realtime_nbbo_gate_skips_degraded_openings(monkeypatch, caplog) -> None:
     """Require real-time NBBO should skip degraded openings and emit diagnostic."""
 

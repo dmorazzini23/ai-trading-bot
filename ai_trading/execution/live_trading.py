@@ -171,12 +171,7 @@ def _broker_kwargs_for_route(route: str, extra: Mapping[str, Any] | None) -> dic
 
     if not extra:
         return {}
-    sanitized: dict[str, Any] = {}
-    for key, value in extra.items():
-        if key in {"using_fallback_price", "price_hint"}:
-            continue
-        sanitized[key] = value
-    return sanitized
+    return dict(extra)
 
 try:  # pragma: no cover - defensive import guard for optional extras
     from ai_trading.config.management import get_env as _config_get_env
@@ -3020,6 +3015,8 @@ class ExecutionEngine:
 
         order_kwargs["using_fallback_price"] = using_fallback_price
         order_kwargs["price_hint"] = price_hint
+        if annotations:
+            order_kwargs["annotations"] = annotations
 
         if downgraded_to_market_initial or downgraded_to_market_degraded:
             order_kwargs.pop("limit_price", None)

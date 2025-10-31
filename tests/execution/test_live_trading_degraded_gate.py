@@ -69,3 +69,40 @@ def test_synthetic_quotes_blocked_when_nbbo_required(monkeypatch, caplog) -> Non
     monkeypatch.delenv("TRADING__DEGRADED_FEED_MODE", raising=False)
     monkeypatch.delenv("NBBO_REQUIRED_FOR_LIMIT", raising=False)
     reload_trading_config()
+
+
+def test_synthetic_quotes_block_short_orders(monkeypatch, caplog) -> None:
+    """Short entries should also gate when NBBO is required."""
+
+    engine = DummyLiveEngine()
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "block")
+    monkeypatch.setenv("NBBO_REQUIRED_FOR_LIMIT", "true")
+    from ai_trading.config.management import reload_trading_config
+
+    reload_trading_config()
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    result = engine.execute_order(
+        "AAPL",
+        "short",
+        5,
+        order_type="limit",
+        limit_price=100.0,
+        annotations={"price_source": "backup", "quote": _synthetic_quote_payload()},
+    )
+
+    assert result is None
+    assert engine.last_submitted is None
+
+    emitted_messages = {
+        record.msg
+        for record in caplog.records
+        if record.name == "ai_trading.execution.live_trading"
+    }
+    assert "DEGRADED_FEED_BLOCK_ENTRY" in emitted_messages or "ORDER_SKIPPED_PRICE_GATED" in emitted_messages
+
+    monkeypatch.delenv("TRADING__DEGRADED_FEED_MODE", raising=False)
+    monkeypatch.delenv("NBBO_REQUIRED_FOR_LIMIT", raising=False)
+    reload_trading_config()
