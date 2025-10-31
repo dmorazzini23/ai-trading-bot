@@ -2650,6 +2650,7 @@ class ExecutionEngine:
 
         order_type_normalized = order_type_initial
         downgraded_to_market_initial = False
+        downgraded_to_market_degraded = False
         if resolved_limit_price is None and order_type_normalized == "limit":
             order_type_normalized = "market"
         elif resolved_limit_price is not None:
@@ -2658,6 +2659,8 @@ class ExecutionEngine:
         require_quotes = _require_bid_ask_quotes()
         cfg: Any | None = None
         require_nbbo = False
+        require_realtime_nbbo = True
+        market_on_degraded = False
         try:
             cfg = get_trading_config()
         except Exception:
@@ -2667,6 +2670,14 @@ class ExecutionEngine:
                 require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
             except Exception:
                 require_nbbo = False
+            try:
+                require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", True))
+            except Exception:
+                require_realtime_nbbo = True
+            try:
+                market_on_degraded = bool(getattr(cfg, "execution_market_on_degraded", False))
+            except Exception:
+                market_on_degraded = False
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
@@ -2791,6 +2802,14 @@ class ExecutionEngine:
                 degraded_widen_bps = max(0, int(getattr(cfg, "degraded_feed_limit_widen_bps", degraded_widen_bps)))
             except (TypeError, ValueError):
                 degraded_widen_bps = 0
+            try:
+                require_realtime_nbbo = bool(getattr(cfg, "execution_require_realtime_nbbo", require_realtime_nbbo))
+            except Exception:
+                require_realtime_nbbo = True
+            try:
+                market_on_degraded = bool(getattr(cfg, "execution_market_on_degraded", market_on_degraded))
+            except Exception:
+                market_on_degraded = False
 
         degrade_due_age = quote_age_ms is not None and quote_age_ms > float(min_quote_fresh_ms)
         try:
@@ -2805,6 +2824,39 @@ class ExecutionEngine:
         degrade_active = degrade_due_provider or degrade_due_age or degrade_due_monitor
         nbbo_gate_required = require_nbbo and degrade_active and not closing_position
         price_gate_required = (require_quotes or nbbo_gate_required) and not closing_position
+
+        if (
+            require_realtime_nbbo
+            and degrade_active
+            and not closing_position
+        ):
+            logger.warning(
+                "ORDER_SKIPPED_PRICE_GATED",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "provider": provider_for_log,
+                    "age_ms": age_ms_int,
+                    "mode": degraded_mode,
+                    "degraded": True,
+                    "reason": "realtime_nbbo_required",
+                },
+            )
+            return None
+
+        if (
+            degrade_active
+            and market_on_degraded
+            and not closing_position
+        ):
+            order_type_normalized = "market"
+            resolved_limit_price = None
+            price_for_limit = None
+            kwargs.pop("price", None)
+            kwargs.pop("limit_price", None)
+            kwargs.pop("stop_price", None)
+            kwargs.pop("stop_limit_price", None)
+            downgraded_to_market_degraded = True
 
         limit_for_log = resolved_limit_price if resolved_limit_price is not None else price_for_limit
         if limit_for_log is None and basis_price is not None:
@@ -2948,9 +3000,10 @@ class ExecutionEngine:
         order_kwargs["using_fallback_price"] = using_fallback_price
         order_kwargs["price_hint"] = price_hint
 
-        if downgraded_to_market_initial:
+        if downgraded_to_market_initial or downgraded_to_market_degraded:
             order_kwargs.pop("limit_price", None)
             order_kwargs.pop("stop_price", None)
+            order_kwargs.pop("stop_limit_price", None)
 
         price_for_slippage = price_for_limit if price_for_limit is not None else resolved_limit_price
         if price_for_slippage is not None:
@@ -2998,18 +3051,25 @@ class ExecutionEngine:
         asset_class_for_log = order_kwargs.get("asset_class")
         price_hint_str = str(price_hint) if price_hint is not None else None
 
-        if downgraded_to_market_initial:
-            logger.warning(
-                "ORDER_DOWNGRADED_TO_MARKET",
-                extra={
-                    "symbol": symbol,
-                    "side": mapped_side,
-                    "quantity": qty,
-                    "client_order_id": client_order_id,
-                    "price_hint": price_hint_str,
-                    "using_fallback_price": True,
-                },
-            )
+        if downgraded_to_market_initial or downgraded_to_market_degraded:
+            downgrade_extra = {
+                "symbol": symbol,
+                "side": mapped_side,
+                "quantity": qty,
+                "client_order_id": client_order_id,
+            }
+            downgrade_extra["price_hint"] = price_hint_str
+            if downgraded_to_market_initial and using_fallback_price:
+                downgrade_extra["using_fallback_price"] = True
+            if downgraded_to_market_degraded:
+                downgrade_extra.update(
+                    {
+                        "provider": provider_for_log,
+                        "degraded": True,
+                        "mode": degraded_mode,
+                    }
+                )
+            logger.warning("ORDER_DOWNGRADED_TO_MARKET", extra=downgrade_extra)
 
         order_type_submitted = order_type_normalized
         order: Any | None = None
@@ -3256,7 +3316,7 @@ class ExecutionEngine:
                 "type": order_type_normalized,
                 "tif": time_in_force,
                 "extended_hours": extended_hours,
-                "order_id": str(execution_result),
+                "order_id": str(order_id_display) if order_id_display is not None else None,
                 "ignored_keys": tuple(sorted(ignored_keys)) if ignored_keys else (),
             },
         )

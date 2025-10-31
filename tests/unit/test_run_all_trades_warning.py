@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import types
 import sys
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -204,8 +204,15 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
 
     eng.run_all_trades_worker(state, runtime)
 
-    info_mock.assert_called_once_with("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped")
-    warn_mock.assert_called_once_with("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
+    info_mock.assert_has_calls(
+        [
+            call("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"),
+            call("ALPACA_API_ADAPTER", key="alpaca_api_adapter"),
+        ],
+        any_order=True,
+    )
+    assert info_mock.call_count == 2
+    warn_mock.assert_not_called()
     assert api.called_with is not None
     assert "filter" in api.called_with
     assert api.called_with["filter"].statuses == [OrderStatus.OPEN]

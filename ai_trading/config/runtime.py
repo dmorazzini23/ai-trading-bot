@@ -516,6 +516,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Require real-time NBBO quotes instead of synthetic fallbacks.",
     ),
     ConfigSpec(
+        field="execution_market_on_degraded",
+        env=("EXECUTION_MARKET_ON_DEGRADED",),
+        cast="bool",
+        default=False,
+        description="When market data is degraded, convert entries to market orders instead of blocking.",
+    ),
+    ConfigSpec(
         field="execution_max_staleness_sec",
         env=("EXECUTION_MAX_STALENESS_SEC", "AI_TRADING_EXEC_MAX_STALENESS_SEC"),
         cast="int",
