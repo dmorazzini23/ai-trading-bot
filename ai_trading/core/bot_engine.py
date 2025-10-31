@@ -23104,6 +23104,21 @@ def run_multi_strategy(ctx) -> None:
             }
             if price is not None:
                 order_kwargs['price'] = price
+                # Provide a price hint to the execution layer for slippage logs
+                order_kwargs['price_hint'] = price
+            # Propagate quote/price source so execution can enforce degraded feed gates
+            annotations: dict[str, Any] = {}
+            try:
+                ps_norm = (str(_price_source).strip().lower()) if _price_source is not None else ""
+            except Exception:
+                ps_norm = ""
+            if _price_source is not None:
+                annotations['price_source'] = _price_source
+            # Mark fallback usage when the price source is not Alpaca (e.g., yahoo/feature_close)
+            if ps_norm and not ps_norm.startswith("alpaca"):
+                annotations['using_fallback_price'] = True
+            if annotations:
+                order_kwargs['annotations'] = annotations
             # Wire ATR-based bracket targets when available on context
             try:
                 sl = getattr(getattr(ctx, 'stop_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
