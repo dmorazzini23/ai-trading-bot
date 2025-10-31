@@ -9443,7 +9443,7 @@ def get_minute_df(
             _register_backup_skip()
         return frame
 
-    def _log_primary_failure(reason: str) -> None:
+    def _log_primary_failure(reason: str, *, status: int | None = None) -> None:
         nonlocal primary_failure_logged
         if primary_failure_logged:
             return
@@ -9455,7 +9455,13 @@ def get_minute_df(
             _log_sip_unavailable(symbol, "1Min")
         logger.warning(
             "ALPACA_FETCH_FAILED",
-            extra={"symbol": symbol, "err": str(reason)},
+            extra={
+                "symbol": symbol,
+                "err": str(reason),
+                "feed": normalized_feed or requested_feed or _DEFAULT_FEED,
+                "resolved_feed": resolved_backup_feed or normalized_feed or _DEFAULT_FEED,
+                "status": status,
+            },
         )
         primary_failure_logged = True
 
