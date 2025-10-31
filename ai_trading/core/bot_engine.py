@@ -8733,95 +8733,7 @@ class DataFetcher:
                 provenance = True
             return _emit_daily_fetch_result(df, cache=provenance)
 
-        if memo_store is not None:
-            canonical_lookup = canonical_memo_key
-            range_lookup = memo_key
-            legacy_lookup = legacy_memo_key
-            effective_ttl = (
-                memo_ttl
-                if memo_ttl > 0.0
-                else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
-            )
-            additional_lookups = (
-                range_lookup,
-                (symbol, "daily"),
-                ("daily", symbol),
-                ("daily", symbol, fetch_date.isoformat()),
-                ("daily", symbol, timeframe_key),
-                (symbol, "1Day"),
-                (f"daily:{symbol}",),
-                (f"{symbol}:daily",),
-            )
-            primary_order = (canonical_lookup, range_lookup, legacy_lookup)
-            secondary_order = tuple(
-                key for key in additional_lookups if key not in primary_order
-            )
-
-            def _resolve_memo_entry(
-                key: tuple[str, ...],
-            ) -> tuple[float | None, Any | None, tuple[float, Any] | None]:
-                try:
-                    entry = memo_store[key]
-                except KeyError:
-                    return None, None, None
-                except COMMON_EXC:
-                    return None, None, None
-                return _extract_memo_payload(entry)
-
-            for lookup_key in (*primary_order, *secondary_order):
-                entry_ts, entry_payload, _ = _resolve_memo_entry(lookup_key)
-                if entry_payload is None:
-                    continue
-                if entry_ts is not None and entry_ts <= 0.0:
-                    continue
-                if effective_ttl > 0.0 and entry_ts is not None:
-                    current = _monotonic_now()
-                    if current - float(entry_ts) > effective_ttl:
-                        continue
-                    stamp = current
-                else:
-                    stamp = _monotonic_now()
-                normalized = (stamp, entry_payload)
-                target_keys = {
-                    canonical_lookup,
-                    range_lookup,
-                    legacy_lookup,
-                    lookup_key,
-                }
-                with cache_lock:
-                    for target_key in target_keys:
-                        try:
-                            memo_store[target_key] = normalized
-                        except COMMON_EXC:
-                            continue
-                return _emit_cache_hit(entry_payload, reason="memo")
-
-        if monotonic_stamp is None:
-            monotonic_stamp = _monotonic_now()
-        now_monotonic = float(monotonic_stamp)
-
-        min_interval = self._daily_fetch_min_interval(ctx)
-        ttl_window = (
-            _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
-        )
-
-        effective_feed = self._resolve_feed(
-            getattr(
-                self.settings,
-                "data_feed",
-                getattr(self.settings, "alpaca_data_feed", None),
-            )
-        )
-        planned_provider = self._planned_daily_provider(effective_feed)
-        error_key = (symbol, fetch_date.isoformat())
-
-        cached_df: Any | None = None
-        cached_reason: str | None = None
-        fallback_entry: (
-            tuple[Any | None, str | None, str | None, tuple[str, str, str] | None]
-            | None
-        ) = None
-
+        # Memo helpers must be defined before memo_store lookups invoke them.
         def _coerce_memo_timestamp(value: Any) -> float | None:
             try:
                 ts = float(value)
@@ -8971,6 +8883,95 @@ class DataFetcher:
                     (entry_ts, first_item) if entry_ts is not None else None
                 )
             return None, entry, None
+
+        if memo_store is not None:
+            canonical_lookup = canonical_memo_key
+            range_lookup = memo_key
+            legacy_lookup = legacy_memo_key
+            effective_ttl = (
+                memo_ttl
+                if memo_ttl > 0.0
+                else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
+            )
+            additional_lookups = (
+                range_lookup,
+                (symbol, "daily"),
+                ("daily", symbol),
+                ("daily", symbol, fetch_date.isoformat()),
+                ("daily", symbol, timeframe_key),
+                (symbol, "1Day"),
+                (f"daily:{symbol}",),
+                (f"{symbol}:daily",),
+            )
+            primary_order = (canonical_lookup, range_lookup, legacy_lookup)
+            secondary_order = tuple(
+                key for key in additional_lookups if key not in primary_order
+            )
+
+            def _resolve_memo_entry(
+                key: tuple[str, ...],
+            ) -> tuple[float | None, Any | None, tuple[float, Any] | None]:
+                try:
+                    entry = memo_store[key]
+                except KeyError:
+                    return None, None, None
+                except COMMON_EXC:
+                    return None, None, None
+                return _extract_memo_payload(entry)
+
+            for lookup_key in (*primary_order, *secondary_order):
+                entry_ts, entry_payload, _ = _resolve_memo_entry(lookup_key)
+                if entry_payload is None:
+                    continue
+                if entry_ts is not None and entry_ts <= 0.0:
+                    continue
+                if effective_ttl > 0.0 and entry_ts is not None:
+                    current = _monotonic_now()
+                    if current - float(entry_ts) > effective_ttl:
+                        continue
+                    stamp = current
+                else:
+                    stamp = _monotonic_now()
+                normalized = (stamp, entry_payload)
+                target_keys = {
+                    canonical_lookup,
+                    range_lookup,
+                    legacy_lookup,
+                    lookup_key,
+                }
+                with cache_lock:
+                    for target_key in target_keys:
+                        try:
+                            memo_store[target_key] = normalized
+                        except COMMON_EXC:
+                            continue
+                return _emit_cache_hit(entry_payload, reason="memo")
+
+        if monotonic_stamp is None:
+            monotonic_stamp = _monotonic_now()
+        now_monotonic = float(monotonic_stamp)
+
+        min_interval = self._daily_fetch_min_interval(ctx)
+        ttl_window = (
+            _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
+        )
+
+        effective_feed = self._resolve_feed(
+            getattr(
+                self.settings,
+                "data_feed",
+                getattr(self.settings, "alpaca_data_feed", None),
+            )
+        )
+        planned_provider = self._planned_daily_provider(effective_feed)
+        error_key = (symbol, fetch_date.isoformat())
+
+        cached_df: Any | None = None
+        cached_reason: str | None = None
+        fallback_entry: (
+            tuple[Any | None, str | None, str | None, tuple[str, str, str] | None]
+            | None
+        ) = None
 
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
             store = _DAILY_FETCH_MEMO

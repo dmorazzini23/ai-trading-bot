@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import UTC, datetime, time as dt_time, timedelta
 import sys
 import types
@@ -187,6 +188,48 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     updated_stamp, updated_df = be._DAILY_FETCH_MEMO[memo_key]
     assert updated_df is cached_df
     assert updated_stamp > first_stamp
+
+
+def test_daily_fetch_memo_primary_lookup_uses_helpers(monkeypatch):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "SPY"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+
+    def _unexpected_fetch(*_args, **_kwargs):  # pragma: no cover - guard regression
+        raise AssertionError("daily fetch should not hit provider when memo entry exists")
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", _unexpected_fetch)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
+    canonical_key = (symbol, "1Day", start_ts.isoformat(), end_ts.isoformat())
+    memo_payload = {"memo": "payload"}
+    memo_store: dict[tuple[str, ...], tuple[float, dict[str, str]]] = {
+        canonical_key: (5.0, memo_payload)
+    }
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
+    monkeypatch.setattr(be.time, "monotonic", lambda: 10.0)
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    assert result is memo_payload
+    assert canonical_key in memo_store
+    refreshed_stamp, refreshed_payload = memo_store[canonical_key]
+    assert refreshed_payload is memo_payload
+    assert refreshed_stamp > 5.0
 
 
 @pytest.mark.parametrize(
