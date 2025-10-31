@@ -2825,6 +2825,27 @@ class ExecutionEngine:
         nbbo_gate_required = require_nbbo and degrade_active and not closing_position
         price_gate_required = (require_quotes or nbbo_gate_required) and not closing_position
 
+        # Surface the resolved gating inputs to help diagnose degraded-feed behaviour
+        try:
+            if not closing_position and (require_realtime_nbbo or nbbo_gate_required):
+                logger.info(
+                    "DEGRADED_GATE_PREFLIGHT",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "provider": provider_for_log,
+                        "age_ms": age_ms_int,
+                        "degrade_due_age": bool(degrade_due_age),
+                        "degrade_due_provider": bool(degrade_due_provider),
+                        "degrade_due_monitor": bool(degrade_due_monitor),
+                        "degraded": bool(degrade_active),
+                        "require_realtime_nbbo": bool(require_realtime_nbbo),
+                        "nbbo_gate_required": bool(nbbo_gate_required),
+                    },
+                )
+        except Exception:
+            pass
+
         if (
             require_realtime_nbbo
             and degrade_active

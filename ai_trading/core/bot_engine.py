@@ -23132,6 +23132,8 @@ def run_multi_strategy(ctx) -> None:
             using_fallback = any(ps and not ps.startswith("alpaca") for ps in ps_norm_all)
             if using_fallback:
                 annotations['using_fallback_price'] = True
+                # Also surface at top-level for execution hinting
+                order_kwargs['using_fallback_price'] = True
             if annotations:
                 order_kwargs['annotations'] = annotations
             # Wire ATR-based bracket targets when available on context

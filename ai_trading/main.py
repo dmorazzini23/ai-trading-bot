@@ -392,6 +392,18 @@ def run_cycle() -> None:
         return
 
     cfg = TradingConfig.from_env()
+    try:
+        logger.info(
+            "EXEC_CONFIG_RESOLVED",
+            extra={
+                "execution_require_realtime_nbbo": bool(getattr(cfg, "execution_require_realtime_nbbo", True)),
+                "degraded_feed_mode": str(getattr(cfg, "degraded_feed_mode", "widen")),
+                "execution_market_on_degraded": bool(getattr(cfg, "execution_market_on_degraded", False)),
+                "min_quote_freshness_ms": int(getattr(cfg, "min_quote_freshness_ms", 1500)),
+            },
+        )
+    except Exception:
+        pass
 
     # Carry through a pre-resolved max position size if available on Settings.
     S = get_settings()
