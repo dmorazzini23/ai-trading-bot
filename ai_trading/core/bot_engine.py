@@ -23108,14 +23108,29 @@ def run_multi_strategy(ctx) -> None:
                 order_kwargs['price_hint'] = price
             # Propagate quote/price source so execution can enforce degraded feed gates
             annotations: dict[str, Any] = {}
+            # Prefer the immediate quote_source when available; fall back to the
+            # resolved limit price source from _resolve_limit_price
+            price_source_label: Any = None
             try:
-                ps_norm = (str(_price_source).strip().lower()) if _price_source is not None else ""
+                if 'quote_source' in locals() and quote_source is not None:
+                    price_source_label = quote_source
+                elif _price_source is not None:
+                    price_source_label = _price_source
             except Exception:
-                ps_norm = ""
-            if _price_source is not None:
-                annotations['price_source'] = _price_source
-            # Mark fallback usage when the price source is not Alpaca (e.g., yahoo/feature_close)
-            if ps_norm and not ps_norm.startswith("alpaca"):
+                price_source_label = None
+            if price_source_label is not None:
+                annotations['price_source'] = price_source_label
+            # Mark fallback usage when the source is not Alpaca (e.g., yahoo/feature_close)
+            try:
+                ps_norm_all = [
+                    str(x).strip().lower()
+                    for x in (quote_source, _price_source)
+                    if x is not None
+                ]
+            except Exception:
+                ps_norm_all = []
+            using_fallback = any(ps and not ps.startswith("alpaca") for ps in ps_norm_all)
+            if using_fallback:
                 annotations['using_fallback_price'] = True
             if annotations:
                 order_kwargs['annotations'] = annotations
