@@ -1249,16 +1249,14 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 )
                 raise PortInUseError(port, pid) from exc
 
-            if _probe_local_api_health(port):
-                logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
-                logger.info(
-                    "API_STARTUP_ABORTED",
-                    extra={"port": port, "reason": "existing_api"},
-                )
-                raise ExistingApiDetected(port) from exc
-
             if elapsed >= wait_window:
                 logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
+                if _probe_local_api_health(port):
+                    logger.info(
+                        "API_STARTUP_ABORTED",
+                        extra={"port": port, "reason": "existing_api"},
+                    )
+                    raise ExistingApiDetected(port) from exc
                 logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "port_timeout"},
