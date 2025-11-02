@@ -1137,7 +1137,7 @@ def _sdk_submit(
         legacy_kwargs["client_order_id"] = idempotency_key
 
     # Optional retry wrapper for SDK submit
-    disable_retry = client is not None
+    disable_retry = client is None
     try:
         if os.getenv("PYTEST_RUNNING"):
             disable_retry = True

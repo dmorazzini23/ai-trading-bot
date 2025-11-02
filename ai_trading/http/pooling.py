@@ -176,6 +176,9 @@ def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapsho
     cache = _LIMIT_CACHE
     limit = max(1, int(limit))
     version = int(version)
+    if version <= _LIMIT_VERSION:
+        version = _LIMIT_VERSION + 1
+
     if cache is None:
         cache = _ResolvedLimitCache(
             env_key=None,
@@ -195,8 +198,6 @@ def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapsho
             env_snapshot=env_snapshot,
         )
     _LIMIT_CACHE = cache
-    if version <= _LIMIT_VERSION:
-        version = _LIMIT_VERSION + 1
     _LIMIT_VERSION = version
     return HostLimitSnapshot(limit, version)
 
