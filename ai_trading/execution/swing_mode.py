@@ -133,7 +133,7 @@ class SwingTradingMode:
         entry_et = entry_dt.astimezone(MARKET_TZ)
 
         if entry_et.date() == now_et.date():
-            return False, "same_day"
+            return False, "same_day_trade_blocked"
 
         return True, "different_day"
     
