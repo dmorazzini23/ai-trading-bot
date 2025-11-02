@@ -620,6 +620,49 @@ SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
 LAST_RUN_PEAK_SIMULTANEOUS_WORKERS: int = 0
+_HOST_PERMITS_HELD: int = 0
+
+
+def _update_peak_counters(peak_this_run: int) -> None:
+    """Update global peak counters using ``peak_this_run``."""
+
+    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
+
+    adjusted_peak = max(0, int(peak_this_run))
+    LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = adjusted_peak
+
+    try:
+        current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
+    except (TypeError, ValueError):
+        current_peak = 0
+
+    if adjusted_peak > current_peak:
+        PEAK_SIMULTANEOUS_WORKERS = adjusted_peak
+        if _http_host_limit is not None:
+            try:
+                _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
+            except Exception:
+                pass
+        if callable(_pooling_record_concurrency):
+            try:
+                _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
+            except Exception:
+                pass
+
+
+def _increment_host_permits() -> None:
+    """Increment the in-use host permit counter."""
+
+    global _HOST_PERMITS_HELD
+    _HOST_PERMITS_HELD += 1
+
+
+def _release_host_permit() -> None:
+    """Decrement the in-use host permit counter without going negative."""
+
+    global _HOST_PERMITS_HELD
+    if _HOST_PERMITS_HELD > 0:
+        _HOST_PERMITS_HELD -= 1
 
 if _http_host_limit is not None:
     try:
@@ -634,9 +677,10 @@ if _http_host_limit is not None:
 def reset_peak_simultaneous_workers() -> None:
     """Reset ``PEAK_SIMULTANEOUS_WORKERS`` to ``0`` for test isolation."""
 
-    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
+    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, _HOST_PERMITS_HELD
     PEAK_SIMULTANEOUS_WORKERS = 0
     LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = 0
+    _HOST_PERMITS_HELD = 0
 
 
 def reset_tracking_state(*, reset_peak: bool = True) -> None:
@@ -644,6 +688,8 @@ def reset_tracking_state(*, reset_peak: bool = True) -> None:
 
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
+    global _HOST_PERMITS_HELD
+    _HOST_PERMITS_HELD = 0
     if reset_peak:
         reset_peak_simultaneous_workers()
 
@@ -726,6 +772,7 @@ async def run_with_concurrency(
                     # If host semaphore acquisition fails, proceed without holding a permit.
                     return None
                 self._acquired = True
+                _increment_host_permits()
                 return None
 
             async def __aexit__(
@@ -736,7 +783,10 @@ async def run_with_concurrency(
             ) -> None:
                 if self._semaphore is not None and self._acquired:
                     self._acquired = False
-                    self._semaphore.release()
+                    try:
+                        self._semaphore.release()
+                    finally:
+                        _release_host_permit()
 
         return _HostPermit(host_semaphore)
 
@@ -805,29 +855,12 @@ async def run_with_concurrency(
 
     async def _mark_worker_start() -> None:
         nonlocal active_workers, peak_this_run
-        global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
 
         async with active_lock:
             active_workers += 1
             if active_workers > peak_this_run:
                 peak_this_run = active_workers
-                LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = peak_this_run
-                if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-                    try:
-                        current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
-                    except (TypeError, ValueError):
-                        current_peak = 0
-                    PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
-                    if _http_host_limit is not None:
-                        try:
-                            _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
-                        except Exception:
-                            pass
-                    if callable(_pooling_record_concurrency):
-                        try:
-                            _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
-                        except Exception:
-                            pass
+                _update_peak_counters(peak_this_run)
 
     async def _mark_worker_end(started: bool) -> None:
         nonlocal active_workers
@@ -889,20 +922,7 @@ async def run_with_concurrency(
         for task in tasks:
             task.cancel()
         await _drain_cancelled_tasks(tasks)
-        LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = max(
-            LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run
-        )
-        if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-            try:
-                current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
-            except (TypeError, ValueError):
-                current_peak = 0
-            PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
-            if _http_host_limit is not None:
-                try:
-                    _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
-                except Exception:
-                    pass
+        _update_peak_counters(peak_this_run)
         raise
     for task, outcome in zip(tasks, outcomes):
         symbol = task_to_symbol.get(task)
@@ -912,23 +932,7 @@ async def run_with_concurrency(
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 
-    LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = max(LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run)
-    if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-        try:
-            current_peak = int(PEAK_SIMULTANEOUS_WORKERS)
-        except (TypeError, ValueError):
-            current_peak = 0
-        PEAK_SIMULTANEOUS_WORKERS = max(current_peak, int(peak_this_run))
-        if _http_host_limit is not None:
-            try:
-                _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
-            except Exception:
-                pass
-        if callable(_pooling_record_concurrency):
-            try:
-                _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
-            except Exception:
-                pass
+    _update_peak_counters(peak_this_run)
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 

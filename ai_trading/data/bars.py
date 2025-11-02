@@ -676,11 +676,11 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
 
     entitled_lower = {feed.lower() for feed in entitled}
 
-    if requested_norm and requested_norm in entitled_lower:
+    if requested_norm == "sip" and "sip" in entitled_lower:
+        resolved = "sip"
+    elif requested_norm and requested_norm in entitled_lower:
         resolved = requested_norm
-    elif "iex" in entitled_lower or not entitled_lower:
-        resolved = "iex"
-    elif "sip" in entitled_lower and requested_norm is None:
+    elif "sip" in entitled_lower:
         resolved = "sip"
     else:
         resolved = "iex"

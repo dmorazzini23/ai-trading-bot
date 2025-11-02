@@ -231,12 +231,18 @@ def _record_session_last_request(session_obj, method, url, params, headers):
     try:
         if session_obj is None:
             return
+        params_dict = dict(params or {})
         session_obj.last_request = SimpleNamespace(
             method=method,
             url=str(url),
-            params=dict(params or {}),
+            params=params_dict,
             headers=dict(headers or {}),
         )
+        calls = _state.setdefault("calls", {})
+        feed_value = params_dict.get("feed")
+        if feed_value is not None:
+            feeds = calls.setdefault("feeds", [])
+            feeds.append(str(feed_value))
     except Exception:
         return
 
@@ -7077,6 +7083,9 @@ def _fetch_bars(
         global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count, _ALPACA_DISABLED_ALERTED
         _register_provider_attempt(_feed)
 
+        if fallback is None:
+            _state.pop("forced_sip_attempted", None)
+
         if session is None or not hasattr(session, "get"):
             raise ValueError("session_required")
 
@@ -7912,15 +7921,21 @@ def _fetch_bars(
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             # --- AI-AGENT: enforce IEX -> SIP on empty ---
             pytest_cycle = _detect_pytest_env()
+            sip_allowed = (
+                _sip_fallback_allowed(session, headers, _interval)
+                if not pytest_cycle
+                else True
+            )
             if (
                 _feed == "iex"
                 and _state.get("window_has_session", True)
                 and _sip_configured()
-                and _sip_fallback_allowed(session, headers, _interval)
-                and (not pytest_cycle or not _state.get("pytest_sip_attempted"))
+                and sip_allowed
+                and not _state.get("forced_sip_attempted")
             ):
                 if pytest_cycle:
                     _state["pytest_sip_attempted"] = True
+                _state["forced_sip_attempted"] = True
                 provider_fallback.labels(
                     from_provider="alpaca_iex", to_provider="alpaca_sip"
                 ).inc()

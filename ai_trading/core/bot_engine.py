@@ -8886,6 +8886,9 @@ class DataFetcher:
                 )
             return None, entry, None
 
+        monotonic_stamp = _monotonic_now()
+        now_monotonic = float(monotonic_stamp)
+
         if memo_store is not None:
             canonical_lookup = canonical_memo_key
             range_lookup = memo_key
@@ -8922,18 +8925,7 @@ class DataFetcher:
                     continue
                 if entry_ts is not None and entry_ts <= 0.0:
                     continue
-                if normalized_pair is None:
-                    base_stamp = entry_ts if entry_ts is not None else 0.0
-                    normalized_pair = (base_stamp, entry_payload)
-                stamp_value = normalized_pair[0]
-                try:
-                    stamp_float = float(stamp_value)
-                except (TypeError, ValueError):
-                    stamp_float = float(entry_ts) if entry_ts is not None else 0.0
-                if not math.isfinite(stamp_float):
-                    stamp_float = float(entry_ts) if entry_ts is not None else 0.0
-                refreshed_stamp = stamp_float + 1e-9
-                normalized_pair = (refreshed_stamp, entry_payload)
+                normalized_pair = (now_monotonic, entry_payload)
                 target_keys = {
                     canonical_lookup,
                     range_lookup,
@@ -8947,10 +8939,6 @@ class DataFetcher:
                         except COMMON_EXC:
                             continue
                 return _emit_cache_hit(entry_payload, reason="memo")
-
-        if monotonic_stamp is None:
-            monotonic_stamp = _monotonic_now()
-        now_monotonic = float(monotonic_stamp)
 
         min_interval = self._daily_fetch_min_interval(ctx)
         ttl_window = (
@@ -22397,7 +22385,7 @@ def _ensure_executable_quote(
         )
         bid_missing = details_dict.get("bid") is None
         ask_missing = details_dict.get("ask") is None
-        if (bid_missing or ask_missing) and reason not in {"stale_quote", "negative_spread"}:
+        if bid_missing or ask_missing:
             reason = "missing_bid_ask"
         gate_decision.reason = reason
         fallback_ok = fallback_permitted
@@ -26174,20 +26162,6 @@ def get_latest_price(
     primary_failure_labels: set[str] = set()
 
     pytest_running = _pytest_running()
-    now_utc = datetime.now(UTC)
-    lookback_start = now_utc - timedelta(days=5)
-    backup_fetch_fn = getattr(data_fetcher_module, "_backup_get_bars", None)
-
-    if prefer_backup and callable(backup_fetch_fn):
-        try:
-            backup_df = backup_fetch_fn(symbol, lookback_start, now_utc, "1d")
-        except COMMON_EXC:
-            backup_df = None
-        else:
-            backup_close = _resolve_latest_close(backup_df)
-            if backup_close is not None:
-                _PRICE_SOURCE[symbol] = "backup_daily_close"
-                return backup_close
 
     provider_disabled = False
     primary_provider_fn = getattr(
@@ -26434,33 +26408,6 @@ def get_latest_price(
                 price_source = "alpaca_bid_degraded"
             winning_provider = price_source
             return _finalize_return()
-
-        if (
-            callable(backup_fetch_fn)
-            and not backup_checked
-            and (last_price is None or last_price <= 0)
-            and (bid_price is None or bid_price <= 0)
-        ):
-            backup_checked = True
-            fallback_now = datetime.now(UTC)
-            fallback_start = fallback_now - timedelta(days=5)
-            try:
-                backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
-            except COMMON_EXC:
-                backup_df = None
-                backup_frame_obtained = False
-            else:
-                backup_frame_obtained = True
-                backup_close = _resolve_latest_close(backup_df)
-                if backup_close is not None:
-                    _PRICE_SOURCE[symbol] = "yahoo"
-                    return backup_close
-            if (
-                backup_df is not None
-                and backup_frame_obtained
-                and _PRICE_SOURCE.get(symbol) not in {"alpaca_auth_failed", "yahoo_invalid"}
-            ):
-                _PRICE_SOURCE[symbol] = "yahoo_invalid"
 
         if primary_requires_quote:
             degraded = _resolve_cached_quote_bid(symbol, cache)
@@ -26802,48 +26749,12 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     if force_yahoo_only:
         backup_fetch_fn = None
     backup_checked = False
-    if prefer_backup and callable(backup_fetch_fn):
-        backup_checked = True
-        fallback_now = datetime.now(UTC)
-        fallback_start = fallback_now - timedelta(days=5)
-        try:
-            backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
-        except COMMON_EXC:
-            backup_df = None
-            backup_frame_obtained = False
-        else:
-            backup_frame_obtained = True
-            backup_close = _resolve_latest_close(backup_df)
-            if backup_close is not None:
-                _PRICE_SOURCE[symbol] = "yahoo"
-                return backup_close
-        if (
-            _PRICE_SOURCE.get(symbol) != "alpaca_auth_failed"
-            and backup_df is not None
-            and backup_frame_obtained
-        ):
-            _PRICE_SOURCE[symbol] = "yahoo_invalid"
-    elif not use_alpaca and callable(backup_fetch_fn):
-        backup_checked = True
-        fallback_now = datetime.now(UTC)
-        fallback_start = fallback_now - timedelta(days=5)
-        try:
-            backup_df = backup_fetch_fn(symbol, fallback_start, fallback_now, "1d")
-        except COMMON_EXC:
-            backup_df = None
-            backup_frame_obtained = False
-        else:
-            backup_frame_obtained = True
-            backup_close = _resolve_latest_close(backup_df)
-            if backup_close is not None:
-                _PRICE_SOURCE[symbol] = "yahoo"
-                return backup_close
-        if (
-            backup_df is not None
-            and backup_frame_obtained
-            and _PRICE_SOURCE.get(symbol) not in {"alpaca_auth_failed", "yahoo_invalid"}
-        ):
-            _PRICE_SOURCE[symbol] = "yahoo_invalid"
+    backup_deferred_reason: str | None = None
+    if callable(backup_fetch_fn):
+        if prefer_backup:
+            backup_deferred_reason = "prefer_backup"
+        elif not use_alpaca:
+            backup_deferred_reason = "skip_alpaca"
     cache: dict[str, Any] = {}
     if force_yahoo_only:
         cache["disable_backup_fetchers"] = True
@@ -26956,6 +26867,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             continue
 
     if callable(backup_fetch_fn) and not backup_checked:
+        backup_checked = True
         fallback_now = datetime.now(UTC)
         fallback_start = fallback_now - timedelta(days=5)
         try:
@@ -26967,7 +26879,10 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             backup_frame_obtained = True
             backup_close = _resolve_latest_close(backup_df)
             if backup_close is not None:
-                _PRICE_SOURCE[symbol] = "yahoo"
+                if backup_deferred_reason == "prefer_backup":
+                    _PRICE_SOURCE[symbol] = "backup_daily_close"
+                else:
+                    _PRICE_SOURCE[symbol] = "yahoo"
                 return backup_close
         if (
             backup_df is not None

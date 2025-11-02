@@ -1230,7 +1230,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     except Exception as _exc:  # pragma: no cover - defensive
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
 
-    retry_budget = min(max(wait_window, 0.0), 3.0)
+    retry_budget = max(wait_window, 0.0)
     retry_deadline = start_time + retry_budget
     retry_attempts = 0
 

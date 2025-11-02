@@ -177,6 +177,7 @@ def _broker_kwargs_for_route(route: str, extra: Mapping[str, Any] | None) -> dic
     if route_norm in {"limit", "stop_limit", "stop"}:
         allowed_keys.add("limit_price")
         allowed_keys.add("stop_price")
+        allowed_keys.add("asset_class")
     if route_norm == "stop_limit":
         allowed_keys.add("stop_limit_price")
     result: dict[str, Any] = {}
