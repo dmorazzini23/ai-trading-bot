@@ -11118,7 +11118,12 @@ if "_FETCH_BARS_WRAPPED" not in globals():
         except Exception:
             pass
 
+        # Extract wrapper-only flags; do not forward to the original impl
         return_meta = bool(kwargs.pop("return_meta", False))
+        sip_retry_flag = bool(kwargs.get("_sip_retry", False))
+        # Ensure internal flags are not passed to the original function
+        _orig_kwargs = dict(kwargs)
+        _orig_kwargs.pop("_sip_retry", None)
         try:
             df = _FETCH_BARS_ORIG(
                 symbol,
@@ -11127,7 +11132,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 interval,
                 *args,
                 return_meta=return_meta,
-                **kwargs,
+                **_orig_kwargs,
             )
         except EmptyBarsError as err:
             state_obj = globals().get("_state")
@@ -11150,13 +11155,22 @@ if "_FETCH_BARS_WRAPPED" not in globals():
 
         feed_token = kwargs.get("feed")
         normalized_feed = str(feed_token).strip().lower() if feed_token else None
-        sip_retry_requested = bool(kwargs.get("_sip_retry"))
+        # Use the captured flag value (kwargs may have been cleaned for ORIG)
+        sip_retry_requested = bool(sip_retry_flag)
+        # Only allow SIP retry during active trading windows
+        window_has_session = True
+        try:
+            _whs = _window_has_trading_session(ensure_datetime(start), ensure_datetime(end))
+            window_has_session = bool(_whs)
+        except Exception:
+            window_has_session = True
         sip_retry_enabled = (
             not sip_retry_requested
             and normalized_feed in (None, "", "iex")
             and _sip_allowed()
             and _sip_configured()
             and not bool(globals().get("_SIP_UNAUTHORIZED", False))
+            and window_has_session
         )
 
         if sip_retry_enabled:
@@ -11167,7 +11181,8 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 retry_kwargs["_sip_retry"] = True
                 retry_kwargs["feed"] = "sip"
                 try:
-                    df = _FETCH_BARS_ORIG(
+                    # Route through the wrapper so internal flags are handled
+                    df = _fetch_bars(
                         symbol,
                         start,
                         end,
