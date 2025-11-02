@@ -4,6 +4,7 @@ import asyncio
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
 try:  # requests is optional
     import requests  # type: ignore
@@ -55,6 +56,8 @@ except ImportError:  # pragma: no cover - fallback when urllib3 missing
             pass
 
 
+from contextlib import AbstractAsyncContextManager, contextmanager
+from typing import Iterator
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
 
 
@@ -100,6 +103,130 @@ _pool_stats = {
     "responses": 0,
     "errors": 0,
 }
+
+
+class _HostLimiterState:
+    __slots__ = ("limit", "semaphore", "inflight", "peak")
+
+    def __init__(self, limit: int) -> None:
+        normalized = max(1, int(limit))
+        self.limit = normalized
+        self.semaphore = threading.BoundedSemaphore(normalized)
+        self.inflight = 0
+        self.peak = 0
+
+    def set_limit(self, new_limit: int) -> None:
+        normalized = max(1, int(new_limit))
+        if normalized == self.limit:
+            return
+        adjusted = max(normalized, self.inflight if self.inflight > 0 else 1)
+        semaphore = threading.BoundedSemaphore(adjusted)
+        permits = min(self.inflight, adjusted)
+        for _ in range(permits):
+            semaphore.acquire(blocking=False)
+        self.limit = adjusted
+        self.semaphore = semaphore
+
+
+_HOST_LIMITERS: dict[str, _HostLimiterState] = {}
+_HOST_LIMIT_LOCK = threading.RLock()
+_DEFAULT_HOST_LIMIT = max(1, _pool_stats["per_host"])
+
+
+def _coerce_host_limit(value: object | None) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return max(1, int(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_host_limit() -> int:
+    candidate: object | None = None
+    try:
+        from ai_trading.config.management import get_env as _get_env  # type: ignore
+    except Exception:  # pragma: no cover - during early bootstrap
+        _get_env = None
+    if _get_env is not None:
+        try:
+            candidate = _get_env("HTTP_MAX_CONNS_PER_HOST", None)
+        except Exception:
+            candidate = None
+    if candidate in (None, ""):
+        candidate = os.getenv("HTTP_MAX_CONNS_PER_HOST")
+    limit = _coerce_host_limit(candidate)
+    return limit if limit is not None else _DEFAULT_HOST_LIMIT
+
+
+def _host_from_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc or ""
+    except Exception:
+        host = ""
+    host = host.strip().lower()
+    return host or "default"
+
+
+def _get_host_state(host: str, desired_limit: int) -> _HostLimiterState:
+    with _HOST_LIMIT_LOCK:
+        state = _HOST_LIMITERS.get(host)
+        if state is None:
+            state = _HostLimiterState(desired_limit)
+            _HOST_LIMITERS[host] = state
+        else:
+            state.set_limit(desired_limit)
+        return state
+
+
+@contextmanager
+def host_slot(host: str | None) -> Iterator[None]:
+    """Limit concurrent requests to *host* using a bounded semaphore."""
+
+    host_key = (host or "default").strip().lower() or "default"
+    desired_limit = _resolve_host_limit()
+    state = _get_host_state(host_key, desired_limit)
+    state.semaphore.acquire()
+    try:
+        with _HOST_LIMIT_LOCK:
+            state.inflight += 1
+            if state.inflight > state.peak:
+                state.peak = state.inflight
+        yield
+    finally:
+        with _HOST_LIMIT_LOCK:
+            state.inflight = max(0, state.inflight - 1)
+        state.semaphore.release()
+
+
+def reset_host_limit_state() -> None:
+    """Reset host limiter bookkeeping (intended for tests)."""
+
+    with _HOST_LIMIT_LOCK:
+        _HOST_LIMITERS.clear()
+
+
+def host_limit_snapshot(host: str | None = None) -> dict[str, int]:
+    """Return ``{"limit": int, "inflight": int, "peak": int}`` for *host*."""
+
+    host_key = (host or "default").strip().lower() or "default"
+    with _HOST_LIMIT_LOCK:
+        state = _HOST_LIMITERS.get(host_key)
+        if state is None:
+            limit = _resolve_host_limit()
+            return {"limit": limit, "inflight": 0, "peak": 0}
+        return {"limit": state.limit, "inflight": state.inflight, "peak": state.peak}
+
+
+def reload_host_limit() -> int:
+    """Refresh all host limiters using the latest environment configuration."""
+
+    new_limit = _resolve_host_limit()
+    with _HOST_LIMIT_LOCK:
+        for state in _HOST_LIMITERS.values():
+            state.set_limit(new_limit)
+    return new_limit
 
 
 def _get_session_timeout() -> float | int | None:
@@ -237,10 +364,12 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
     retries, backoff, max_backoff, jitter = _retry_config()
     excs = (RequestException, RequestsRequestException, JSONDecodeError, TimeoutError, OSError, ValueError)
     attempt = {"n": 0}
+    host_key = _host_from_url(url)
 
     def _do_request() -> requests.Response:
         try:
-            return sess.request(method, url, **kwargs)
+            with host_slot(host_key):
+                return sess.request(method, url, **kwargs)
         except excs as e:
             attempt["n"] += 1
             log_fn = _log.warning if attempt["n"] == 1 else _log.debug
@@ -298,8 +427,11 @@ def request_json(
     timeout = clamp_request_timeout(timeout)
     sess = _get_session()
 
+    host_key = _host_from_url(url)
+
     def _fetch() -> requests.Response:
-        return sess.request(method, url, headers=headers, params=params, timeout=timeout)
+        with host_slot(host_key):
+            return sess.request(method, url, headers=headers, params=params, timeout=timeout)
 
     for attempt in range(1, retries + 1):
         try:
@@ -399,4 +531,8 @@ __all__ = [
     "pool_stats",
     "map_get",
     "clamp_request_timeout",
+    "host_slot",
+    "host_limit_snapshot",
+    "reset_host_limit_state",
+    "reload_host_limit",
 ]

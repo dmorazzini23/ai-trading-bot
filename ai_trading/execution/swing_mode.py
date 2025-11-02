@@ -141,7 +141,7 @@ class SwingTradingMode:
             entry_before_close = entry_et.time() < MARKET_CLOSE
             if allow_after_close == "1" and after_close_now and entry_before_close:
                 return True, "after_market_close"
-            return False, "same_day_trade_blocked"
+            return False, "same_day"
 
         if today_et > entry_date:
             return True, "different_day"

@@ -8599,21 +8599,10 @@ class DataFetcher:
     ) -> Any:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
-        time_monotonic = getattr(time, "monotonic", None)
-        if callable(time_monotonic):
-            monotonic_fn: Callable[[], float] = time_monotonic
-        else:
-            be_module = sys.modules.get(__name__)
-            module_monotonic = (
-                getattr(be_module, "monotonic_time", None)
-                if be_module is not None
-                else None
-            )
-            monotonic_fn = (
-                module_monotonic
-                if callable(module_monotonic)
-                else monotonic_time
-            )
+        try:
+            now_monotonic = float(time.monotonic())
+        except Exception:
+            now_monotonic = float(monotonic_time())
 
         try:  # lazy import to avoid hard dependency at import time
             from ai_trading.market.calendars import is_trading_day as _is_trading_day
@@ -8661,16 +8650,6 @@ class DataFetcher:
         memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
         additional_lookups: tuple[tuple[str, ...], ...] = ()
-        monotonic_stamp: float | None = None
-
-        def _monotonic_now() -> float:
-            nonlocal monotonic_stamp
-            if monotonic_stamp is None:
-                try:
-                    monotonic_stamp = float(monotonic_fn())
-                except Exception:
-                    monotonic_stamp = 0.0
-            return monotonic_stamp
 
         result_logged = False
 
@@ -8886,9 +8865,6 @@ class DataFetcher:
                 )
             return None, entry, None
 
-        monotonic_stamp = _monotonic_now()
-        now_monotonic = float(monotonic_stamp)
-
         if memo_store is not None:
             canonical_lookup = canonical_memo_key
             range_lookup = memo_key
@@ -9002,29 +8978,6 @@ class DataFetcher:
             setter = getattr(_DAILY_FETCH_MEMO, "__setitem__", None)
             if callable(setter):
                 setter(key, payload)
-
-        def _memo_pop_entry(key: tuple[str, ...]) -> None:
-            popper = getattr(_DAILY_FETCH_MEMO, "pop", None)
-            if callable(popper):
-                try:
-                    popper(key, None)
-                    return
-                except TypeError:
-                    try:
-                        popper(key)
-                        return
-                    except COMMON_EXC:
-                        pass
-                except COMMON_EXC:
-                    return
-            deleter = getattr(_DAILY_FETCH_MEMO, "__delitem__", None)
-            if callable(deleter):
-                try:
-                    deleter(key)
-                except KeyError:
-                    pass
-                except COMMON_EXC:
-                    pass
 
         memo_ready = False
         memo_payload: Any | None = None
@@ -9324,10 +9277,7 @@ class DataFetcher:
                     payload = counterpart_payload
                 has_payload = payload is not None
                 if not has_payload:
-                    # Entry missing data; remove to avoid repeated lookups.
-                    _memo_pop_entry(key)
-                    if key == memo_key and counterpart != key:
-                        _memo_pop_entry(counterpart)
+                    # Entry missing data; skip without mutating shared memo store.
                     return False
                 if effective_ts is not None and effective_ts <= 0.0:
                     age: float | None = float("inf")
@@ -9353,10 +9303,6 @@ class DataFetcher:
                         "memo",
                         None,
                     )
-                if age is not None and age > ttl_window:
-                    _memo_pop_entry(key)
-                    if key == memo_key and counterpart != key:
-                        _memo_pop_entry(counterpart)
                 return False
 
             if _apply_memo_entry(memo_key, counterpart=legacy_memo_key):
@@ -9610,7 +9556,7 @@ class DataFetcher:
             )
 
         with cache_lock:
-            stamp = float(monotonic_fn())
+            stamp = now_monotonic
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
@@ -22385,13 +22331,14 @@ def _ensure_executable_quote(
         )
         bid_missing = details_dict.get("bid") is None
         ask_missing = details_dict.get("ask") is None
-        if bid_missing or ask_missing:
+        is_stale = reason == "stale_quote"
+        if not is_stale and (bid_missing or ask_missing):
             reason = "missing_bid_ask"
         gate_decision.reason = reason
         fallback_ok = fallback_permitted
         if fallback_ok:
             fallback_reason = reason
-            if bid_missing or ask_missing:
+            if not is_stale and (bid_missing or ask_missing):
                 fallback_reason = "missing_bid_ask"
             decision = _synthetic_quote_decision(
                 symbol,
@@ -26749,12 +26696,6 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     if force_yahoo_only:
         backup_fetch_fn = None
     backup_checked = False
-    backup_deferred_reason: str | None = None
-    if callable(backup_fetch_fn):
-        if prefer_backup:
-            backup_deferred_reason = "prefer_backup"
-        elif not use_alpaca:
-            backup_deferred_reason = "skip_alpaca"
     cache: dict[str, Any] = {}
     if force_yahoo_only:
         cache["disable_backup_fetchers"] = True
@@ -26879,10 +26820,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             backup_frame_obtained = True
             backup_close = _resolve_latest_close(backup_df)
             if backup_close is not None:
-                if backup_deferred_reason == "prefer_backup":
-                    _PRICE_SOURCE[symbol] = "backup_daily_close"
-                else:
-                    _PRICE_SOURCE[symbol] = "yahoo"
+                _PRICE_SOURCE[symbol] = "yahoo"
                 return backup_close
         if (
             backup_df is not None

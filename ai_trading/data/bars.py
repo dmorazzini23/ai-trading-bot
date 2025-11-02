@@ -676,23 +676,32 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
 
     entitled_lower = {feed.lower() for feed in entitled}
 
-    if requested_norm == "sip" and "sip" in entitled_lower:
-        resolved = "sip"
-    elif requested_norm and requested_norm in entitled_lower:
+    resolved: str
+    if requested_norm and requested_norm in entitled_lower:
         resolved = requested_norm
     elif "sip" in entitled_lower:
         resolved = "sip"
+    elif "iex" in entitled_lower:
+        resolved = "iex"
     else:
         resolved = "iex"
 
+    highest_entitled: str | None = None
+    if "sip" in entitled_lower:
+        highest_entitled = "sip"
+    elif "iex" in entitled_lower:
+        highest_entitled = "iex"
+    else:
+        highest_entitled = resolved
+
     if isinstance(cache_entry, _EntitlementCacheEntry):
         cache_entry.feeds = set(entitled_lower)
-        cache_entry.resolved = resolved
+        cache_entry.resolved = highest_entitled
     elif isinstance(cache_entry, dict):
-        cache_entry["resolved"] = resolved
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), cache_entry.get("generation"), resolved)
+        cache_entry["resolved"] = highest_entitled
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), cache_entry.get("generation"), highest_entitled)
     else:
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), None, resolved)
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), None, highest_entitled)
 
     return resolved
 

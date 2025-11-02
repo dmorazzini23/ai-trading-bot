@@ -279,28 +279,42 @@ def log_trade(
         }
 
     for path in targets:
-        def _run_with_fix(action: Callable[[], None]) -> bool:
-            repaired_once = False
-            repair_success = False
-            while True:
+        def _attempt_with_fix(phase: str, action: Callable[[], None]) -> bool:
+            try:
+                action()
+                return True
+            except PermissionError as exc:
+                payload = {"path": str(path), "phase": phase, "error": str(exc)}
+                logger.warning("TRADE_LOG_PERMISSION_DENIED", extra=payload)
+                try:
+                    repaired = bool(fix_file_permissions(path))
+                except Exception as fix_exc:  # pragma: no cover - defensive logging
+                    logger.exception(
+                        "TRADE_LOG_PERMISSION_FIX_FAILED",
+                        extra={"path": str(path), "phase": phase, "error": str(fix_exc)},
+                    )
+                    return False
+                if not repaired:
+                    logger.error(
+                        "TRADE_LOG_PERMISSION_UNRESOLVED",
+                        extra=payload,
+                    )
+                    return False
                 try:
                     action()
                     return True
-                except PermissionError as exc:
-                    if repaired_once:
-                        logger.error(
-                            "TRADE_LOG_WRITE_PERMISSION_DENIED",
-                            extra={
-                                "path": str(path),
-                                "repaired": repair_success,
-                                "error": str(exc),
-                            },
-                        )
-                        return False
-                    repair_success = bool(fix_file_permissions(path))
-                    repaired_once = True
+                except PermissionError as retry_exc:
+                    logger.error(
+                        "TRADE_LOG_PERMISSION_RETRY_FAILED",
+                        extra={
+                            "path": str(path),
+                            "phase": phase,
+                            "error": str(retry_exc),
+                        },
+                    )
+                    return False
 
-        if not _run_with_fix(lambda: _ensure_file_header(path, headers)):
+        if not _attempt_with_fix("header", lambda: _ensure_file_header(path, headers)):
             return
 
         def _write_row() -> None:
@@ -308,5 +322,5 @@ def log_trade(
                 writer = csv.DictWriter(f, fieldnames=headers)
                 writer.writerow(row)
 
-        if not _run_with_fix(_write_row):
+        if not _attempt_with_fix("write", _write_row):
             return

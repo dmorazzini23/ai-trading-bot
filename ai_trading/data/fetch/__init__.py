@@ -7936,6 +7936,10 @@ def _fetch_bars(
                 if pytest_cycle:
                     _state["pytest_sip_attempted"] = True
                 _state["forced_sip_attempted"] = True
+                force_flag_applied = False
+                if pytest_cycle:
+                    _state["force_sip_request"] = True
+                    force_flag_applied = True
                 provider_fallback.labels(
                     from_provider="alpaca_iex", to_provider="alpaca_sip"
                 ).inc()
@@ -7944,10 +7948,15 @@ def _fetch_bars(
                     extra=_norm_extra({"provider": "alpaca", "from": "iex", "to": "sip"}),
                 )
                 _cycle_set_fallback_feed(symbol, "sip", timeframe=_interval)
-                fb_df = _attempt_fallback(
-                    (_interval, "sip", _start, _end),
-                    skip_metrics=False,
-                )
+                try:
+                    fb_df = _attempt_fallback(
+                        (_interval, "sip", _start, _end),
+                        skip_metrics=False,
+                        skip_check=pytest_cycle,
+                    )
+                finally:
+                    if force_flag_applied:
+                        _state.pop("force_sip_request", None)
                 _state["stop"] = True
                 if fb_df is not None and not getattr(fb_df, "empty", True):
                     return fb_df

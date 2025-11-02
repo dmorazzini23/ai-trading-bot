@@ -600,6 +600,7 @@ def _get_wait_window(settings: Any) -> float:
         "wait_window",
         "api_port_wait_window",
         "api_port_retry_window",
+        "port_retry_window_secs",
         "startup_wait_window",
         "api_port_wait_seconds",
     ):
@@ -611,13 +612,6 @@ def _get_wait_window(settings: Any) -> float:
         except (TypeError, ValueError):
             continue
     return 0.0
-
-
-def _bind_probe(port: int) -> None:
-    """Attempt to bind *port* to confirm availability."""
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("0.0.0.0", port))
 
 config: Any | None = None
 register_signal_handlers()
@@ -1235,10 +1229,14 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     retry_attempts = 0
 
     while True:
+        probe: socket.socket | None = None
         try:
-            _bind_probe(port)
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.bind(("0.0.0.0", port))
         except OSError as exc:
             if exc.errno != errno.EADDRINUSE:
+                if probe is not None:
+                    probe.close()
                 raise
             now_monotonic = time.monotonic()
             elapsed = now_monotonic - start_time
@@ -1285,6 +1283,12 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             continue
         else:
             break
+        finally:
+            if probe is not None:
+                try:
+                    probe.close()
+                except OSError:
+                    pass
 
     if should_stop():
         logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})

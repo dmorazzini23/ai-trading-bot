@@ -6,123 +6,111 @@ import threading
 from contextlib import contextmanager
 from typing import Iterator
 
+try:  # Prefer config-managed environment lookups when available.
+    from ai_trading.config.management import get_env  # type: ignore
+except Exception:  # pragma: no cover - fallback when config management unavailable
 
-def _sanitize_limit(value: int) -> int:
-    """Clamp *value* to the minimum supported host concurrency."""
-
-    if value < 1:
-        return 1
-    return value
-
-
-def _initial_host_limit() -> int:
-    raw = os.getenv("AI_HTTP_HOST_LIMIT", "3")
-    try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        value = 6
-    return _sanitize_limit(value)
+    def get_env(key: str, default: object | None = None, *, cast: object | None = None) -> object | None:  # type: ignore[override]
+        return os.getenv(key, default)  # type: ignore[arg-type]
 
 
-def _read_env_limit(default: int) -> int:
-    resolved = _resolve_priority_env_limit()
-    if resolved is None:
-        return default
-    return resolved
-
-
-_ENV_LIMIT_KEYS: tuple[str, ...] = (
+_ENV_PRIORITY: tuple[str, ...] = (
+    "AI_TRADING_FALLBACK_CONCURRENCY",
     "AI_TRADING_HTTP_HOST_LIMIT",
-    "HTTP_MAX_WORKERS",
     "AI_TRADING_HOST_LIMIT",
     "HTTP_MAX_PER_HOST",
+    "HTTP_MAX_WORKERS",
     "AI_HTTP_HOST_LIMIT",
 )
+_DEFAULT_LIMIT = 3
+
+_semaphore: threading.BoundedSemaphore | None = None
+_fallback_limit_value: int | None = None
+_fallback_inflight: int = 0
+_fallback_peak: int = 0
+_counter_lock = threading.Lock()
 
 
-def _resolve_priority_env_limit() -> int | None:
-    for key in _ENV_LIMIT_KEYS:
-        raw = os.getenv(key)
-        if raw in (None, ""):
-            continue
+def _coerce_limit(value: object | None) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return max(1, int(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_limit_from_env() -> int:
+    for key in _ENV_PRIORITY:
+        candidate = None
         try:
-            value = int(str(raw).strip())
-        except (TypeError, ValueError):
-            continue
-        return _sanitize_limit(value)
-    return None
+            candidate = get_env(key, None)
+        except Exception:
+            candidate = None
+        if candidate in (None, ""):
+            candidate = os.getenv(key)
+        limit = _coerce_limit(candidate)
+        if limit is not None:
+            return limit
+    return _DEFAULT_LIMIT
 
 
-_HOST_LIMIT: int = _resolve_priority_env_limit() or _initial_host_limit()
-_peak_concurrency: int = 0
-_active: int = 0
-_pending_limit: int | None = None
-_lock = threading.RLock()
-_condition = threading.Condition(_lock)
-
-
-def _apply_pending_limit_locked() -> None:
-    global _pending_limit
-
-    if _pending_limit is None:
+def _ensure_semaphore() -> None:
+    global _semaphore, _fallback_limit_value
+    if _semaphore is not None:
         return
-    pending = _pending_limit
-    if _active <= pending:
-        _pending_limit = None
-        _condition.notify_all()
+    limit = _resolve_limit_from_env()
+    _semaphore = threading.BoundedSemaphore(limit)
+    _fallback_limit_value = limit
 
 
-def begin_fallback_submission_wave() -> None:
-    """Refresh the limiter configuration using the latest environment value."""
-
-    global _HOST_LIMIT, _pending_limit
-
-    limit = _read_env_limit(_HOST_LIMIT)
-    if limit == _HOST_LIMIT:
-        return
-    with _condition:
-        _HOST_LIMIT = limit
-        if _active <= limit:
-            _pending_limit = None
-            _condition.notify_all()
-        else:
-            _pending_limit = limit
-            _condition.notify_all()
+def _rebuild_semaphore(new_limit: int) -> None:
+    global _semaphore, _fallback_limit_value
+    adjusted_limit = max(new_limit, max(_fallback_inflight, 1))
+    semaphore = threading.BoundedSemaphore(adjusted_limit)
+    permits_in_use = min(_fallback_inflight, adjusted_limit)
+    for _ in range(permits_in_use):
+        # Non-blocking acquire trims the available permits to match inflight usage.
+        semaphore.acquire(blocking=False)
+    _semaphore = semaphore
+    _fallback_limit_value = adjusted_limit
 
 
-def _maybe_refresh_limit_for_new_wave() -> None:
-    with _lock:
-        if _active != 0:
-            return
-    begin_fallback_submission_wave()
+def reload_fallback_limit() -> int:
+    """Refresh the concurrency limit from environment settings."""
+
+    limit = _resolve_limit_from_env()
+    with _counter_lock:
+        _rebuild_semaphore(limit)
+    return int(_fallback_limit_value or limit)
 
 
 def _acquire_slot() -> None:
-    global _active, _peak_concurrency
-
-    with _condition:
-        while _active >= _HOST_LIMIT:
-            _condition.wait()
-        _active += 1
-        if _active > _peak_concurrency:
-            _peak_concurrency = _active
+    _ensure_semaphore()
+    assert _semaphore is not None  # For type checkers
+    _semaphore.acquire()
+    global _fallback_inflight, _fallback_peak
+    with _counter_lock:
+        _fallback_inflight += 1
+        if _fallback_inflight > _fallback_peak:
+            _fallback_peak = _fallback_inflight
 
 
 def _release_slot() -> None:
-    global _active
-
-    with _condition:
-        if _active > 0:
-            _active -= 1
-        else:
-            _active = 0
-        _apply_pending_limit_locked()
-        _condition.notify_all()
+    global _fallback_inflight
+    assert _semaphore is not None  # _ensure_semaphore guarantees initialization
+    with _counter_lock:
+        if _fallback_inflight > 0:
+            _fallback_inflight -= 1
+        else:  # Defensive clamp when release is called more than acquire.
+            _fallback_inflight = 0
+    _semaphore.release()
 
 
 @contextmanager
-def limit_concurrency() -> Iterator[None]:
-    _maybe_refresh_limit_for_new_wave()
+def fallback_slot() -> Iterator[None]:
+    """Context manager that limits concurrent fallback fetch attempts."""
+
     _acquire_slot()
     try:
         yield
@@ -131,28 +119,53 @@ def limit_concurrency() -> Iterator[None]:
 
 
 @contextmanager
-def fallback_slot() -> Iterator[None]:
-    with limit_concurrency():
+def limit_concurrency() -> Iterator[None]:
+    """Backwards-compatible alias for :func:`fallback_slot`."""
+
+    with fallback_slot():
         yield
 
 
 def get_peak_concurrency() -> int:
-    return _peak_concurrency
+    """Return the highest number of concurrent fallback slots observed."""
+
+    with _counter_lock:
+        return _fallback_peak
 
 
 def get_active_slots() -> int:
-    with _lock:
-        return _active
+    """Return the number of in-flight fallback operations."""
+
+    with _counter_lock:
+        return _fallback_inflight
 
 
 def get_configured_host_limit() -> int:
-    return _HOST_LIMIT
+    """Return the currently configured fallback concurrency limit."""
+
+    _ensure_semaphore()
+    return int(_fallback_limit_value or _DEFAULT_LIMIT)
+
+
+def reset_fallback_counters(reset_limit: bool = False) -> None:
+    """Reset inflight counters and optionally rebuild the semaphore."""
+
+    global _fallback_inflight, _fallback_peak
+    with _counter_lock:
+        _fallback_inflight = 0
+        _fallback_peak = 0
+        if reset_limit:
+            limit = _resolve_limit_from_env()
+            _rebuild_semaphore(limit)
+        elif _semaphore is not None and _fallback_limit_value is not None:
+            _rebuild_semaphore(_fallback_limit_value)
 
 
 __all__ = [
-    "limit_concurrency",
     "fallback_slot",
-    "begin_fallback_submission_wave",
+    "limit_concurrency",
+    "reload_fallback_limit",
+    "reset_fallback_counters",
     "get_peak_concurrency",
     "get_active_slots",
     "get_configured_host_limit",
