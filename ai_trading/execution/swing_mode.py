@@ -119,8 +119,7 @@ class SwingTradingMode:
         if allow_override == "1":
             return True, "env_override_allow_same_day_exit"
 
-        now_utc = datetime.now(timezone.utc)
-        now_et = now_utc.astimezone(MARKET_TZ)
+        now_et = datetime.now(MARKET_TZ)
         entry = self.position_entry_times.get(symbol)
         if entry is None:
             return True, "no_entry_time_recorded"
@@ -131,15 +130,10 @@ class SwingTradingMode:
         entry_dt = entry
         if entry_dt.tzinfo is None:
             entry_dt = entry_dt.replace(tzinfo=MARKET_TZ)
-        try:
-            entry_et = entry_dt.astimezone(MARKET_TZ)
-        except (ValueError, AttributeError, TypeError):
-            entry_et = entry_dt
-            if entry_et.tzinfo is None:
-                entry_et = entry_et.replace(tzinfo=MARKET_TZ)
+        entry_et = entry_dt.astimezone(MARKET_TZ)
 
         if entry_et.date() == now_et.date():
-            return False, "same_day_trade_blocked"
+            return False, "same_day"
 
         return True, "different_day"
     

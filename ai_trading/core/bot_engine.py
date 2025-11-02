@@ -574,9 +574,10 @@ def _pytest_running() -> bool:
     if raw is None:
         return False
     try:
-        return _truthy_env(str(raw))
+        token = str(raw).strip()
     except COMMON_EXC:
         return False
+    return token == "1"
 
 
 def _is_testing_env() -> bool:
@@ -8889,11 +8890,6 @@ class DataFetcher:
             canonical_lookup = canonical_memo_key
             range_lookup = memo_key
             legacy_lookup = legacy_memo_key
-            effective_ttl = (
-                memo_ttl
-                if memo_ttl > 0.0
-                else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
-            )
             additional_lookups = (
                 range_lookup,
                 (symbol, "daily"),
@@ -8921,19 +8917,23 @@ class DataFetcher:
                 return _extract_memo_payload(entry)
 
             for lookup_key in (*primary_order, *secondary_order):
-                entry_ts, entry_payload, _ = _resolve_memo_entry(lookup_key)
+                entry_ts, entry_payload, normalized_pair = _resolve_memo_entry(lookup_key)
                 if entry_payload is None:
                     continue
                 if entry_ts is not None and entry_ts <= 0.0:
                     continue
-                if effective_ttl > 0.0 and entry_ts is not None:
-                    current = _monotonic_now()
-                    if current - float(entry_ts) > effective_ttl:
-                        continue
-                    stamp = current
-                else:
-                    stamp = _monotonic_now()
-                normalized = (stamp, entry_payload)
+                if normalized_pair is None:
+                    base_stamp = entry_ts if entry_ts is not None else 0.0
+                    normalized_pair = (base_stamp, entry_payload)
+                stamp_value = normalized_pair[0]
+                try:
+                    stamp_float = float(stamp_value)
+                except (TypeError, ValueError):
+                    stamp_float = float(entry_ts) if entry_ts is not None else 0.0
+                if not math.isfinite(stamp_float):
+                    stamp_float = float(entry_ts) if entry_ts is not None else 0.0
+                refreshed_stamp = stamp_float + 1e-9
+                normalized_pair = (refreshed_stamp, entry_payload)
                 target_keys = {
                     canonical_lookup,
                     range_lookup,
@@ -8943,7 +8943,7 @@ class DataFetcher:
                 with cache_lock:
                     for target_key in target_keys:
                         try:
-                            memo_store[target_key] = normalized
+                            memo_store[target_key] = normalized_pair
                         except COMMON_EXC:
                             continue
                 return _emit_cache_hit(entry_payload, reason="memo")
@@ -15119,12 +15119,17 @@ def submit_order(
                 price = get_latest_close(md) if md is not None else 0.0
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.
+        engine_kwargs = {
+            key: value
+            for key, value in exec_kwargs.items()
+            if key not in {"annotations", "using_fallback_price", "price_hint"}
+        }
         return _exec_engine.execute_order(
             symbol,
             core_side,
             qty,
             price=price,
-            **exec_kwargs,
+            **engine_kwargs,
         )
     except (APIError, TimeoutError, ConnectionError, AlpacaOrderHTTPError) as e:
         logger.error(
@@ -22356,7 +22361,15 @@ def _ensure_executable_quote(
     fallback_detected, fallback_reason = _quote_is_fallback(quote)
     quote_is_fallback = fallback_detected
     if fallback_detected and not fallback_permitted:
+        bid_missing = False
+        ask_missing = False
+        if quote is not None:
+            bid_val, ask_val = _extract_quote_bid_ask(quote)
+            bid_missing = bid_val is None
+            ask_missing = ask_val is None
         fallback_detail_reason = fallback_reason or "missing_bid_ask"
+        if bid_missing or ask_missing:
+            fallback_detail_reason = "missing_bid_ask"
         details = {"fallback_quote": True, "fallback_reason": fallback_detail_reason}
         decision_reason = fallback_detail_reason
         activate_data_kill_switch(
@@ -26198,6 +26211,13 @@ def get_latest_price(
     if not skip_primary and not is_alpaca_service_available():
         skip_primary = True
         price_source = "alpaca_unavailable"
+        if primary_failure_source is None:
+            primary_failure_source = price_source
+    sip_flagged = bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
+    if not skip_primary and sip_flagged:
+        skip_primary = True
+        if price_source == "unknown":
+            price_source = "alpaca_sip_unauthorized"
         if primary_failure_source is None:
             primary_failure_source = price_source
     if not skip_primary and sip_lockout:

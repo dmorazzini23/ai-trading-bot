@@ -1230,14 +1230,18 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     except Exception as _exc:  # pragma: no cover - defensive
         logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
 
+    retry_budget = min(max(wait_window, 0.0), 3.0)
+    retry_deadline = start_time + retry_budget
+    retry_attempts = 0
+
     while True:
         try:
             _bind_probe(port)
         except OSError as exc:
             if exc.errno != errno.EADDRINUSE:
                 raise
-
-            elapsed = time.monotonic() - start_time
+            now_monotonic = time.monotonic()
+            elapsed = now_monotonic - start_time
             pid = get_pid_on_port(port)
             conflict_extra = {"port": port}
             if pid:
@@ -1248,15 +1252,16 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                     extra={"port": port, "reason": "port_in_use", "pid": pid},
                 )
                 raise PortInUseError(port, pid) from exc
-
-            if elapsed >= wait_window:
+            elif _probe_local_api_health(port):
                 logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
-                if _probe_local_api_health(port):
-                    logger.info(
-                        "API_STARTUP_ABORTED",
-                        extra={"port": port, "reason": "existing_api"},
-                    )
-                    raise ExistingApiDetected(port) from exc
+                logger.info(
+                    "API_STARTUP_ABORTED",
+                    extra={"port": port, "reason": "existing_api"},
+                )
+                raise ExistingApiDetected(port) from exc
+
+            if now_monotonic >= retry_deadline:
+                logger.warning("HEALTHCHECK_PORT_CONFLICT", extra=conflict_extra)
                 logger.info(
                     "API_STARTUP_ABORTED",
                     extra={"port": port, "reason": "port_timeout"},
@@ -1266,7 +1271,12 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                     message=f"port {port} busy (transient) after {wait_window}s",
                 ) from exc
 
-            time.sleep(0.1)
+            retry_attempts += 1
+            sleep_window = min(0.5, 0.05 * retry_attempts)
+            remaining = retry_deadline - now_monotonic
+            if remaining <= 0:
+                remaining = 0
+            time.sleep(min(sleep_window, remaining) if remaining > 0 else 0.05)
             if should_stop():
                 logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
                 if ready_signal is not None:

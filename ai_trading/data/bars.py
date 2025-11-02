@@ -659,11 +659,9 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     Resolve the actual Alpaca feed to use given entitlements.
 
     Rules:
-      - If 'sip' is entitled, prefer 'sip'.
-      - Else if 'iex' is entitled, use 'iex'.
-      - Else default to 'iex'.
-    The 'requested' value is sanitized to lower-case but does not override an
-    upgrade to SIP if SIP is entitled.
+      - If the requested feed is explicitly entitled, return it.
+      - Otherwise downgrade to ``iex`` (when available or by default).
+      - Cache the resolved value so entitlement shrinkage is reflected.
     """
 
     cache_key = _entitle_cache_key(client)
@@ -676,31 +674,25 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if _env_explicit_false("ALPACA_HAS_SIP"):
         entitled.discard("sip")
 
-    sip_available = "sip" in entitled
-    iex_available = "iex" in entitled or not entitled
-    # Entitlement resolution should be pure: if SIP is entitled and not
-    # explicitly disabled via env overrides, prefer SIP regardless of prior
-    # authorization cache state. Any authorization handling occurs in the data
-    # fetch layer.
-    sip_preferred = sip_available
+    entitled_lower = {feed.lower() for feed in entitled}
 
-    if sip_preferred:
-        resolved = "sip"
-    elif requested_norm and requested_norm in entitled and requested_norm != "sip":
+    if requested_norm and requested_norm in entitled_lower:
         resolved = requested_norm
-    elif iex_available:
+    elif "iex" in entitled_lower or not entitled_lower:
         resolved = "iex"
+    elif "sip" in entitled_lower and requested_norm is None:
+        resolved = "sip"
     else:
         resolved = "iex"
 
     if isinstance(cache_entry, _EntitlementCacheEntry):
-        cache_entry.feeds = set(entitled)
+        cache_entry.feeds = set(entitled_lower)
         cache_entry.resolved = resolved
     elif isinstance(cache_entry, dict):
         cache_entry["resolved"] = resolved
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled), cache_entry.get("generation"), resolved)
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), cache_entry.get("generation"), resolved)
     else:
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled), None, resolved)
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), None, resolved)
 
     return resolved
 

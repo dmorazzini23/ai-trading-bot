@@ -558,24 +558,30 @@ def _yahoo_fallback_allowed(symbol: str, timeframe: str | None = None, *, force:
 
 def _resolve_host_limit() -> tuple[str | None, int]:
     candidates = (
-        ("AI_TRADING_HTTP_HOST_LIMIT", os.getenv("AI_TRADING_HTTP_HOST_LIMIT")),
-        ("HTTP_MAX_WORKERS", os.getenv("HTTP_MAX_WORKERS")),
-        ("AI_TRADING_HOST_LIMIT", os.getenv("AI_TRADING_HOST_LIMIT")),
-        ("HTTP_MAX_PER_HOST", os.getenv("HTTP_MAX_PER_HOST")),
-        ("AI_HTTP_HOST_LIMIT", os.getenv("AI_HTTP_HOST_LIMIT")),
+        "AI_TRADING_HTTP_HOST_LIMIT",
+        "HTTP_MAX_WORKERS",
+        "AI_TRADING_HOST_LIMIT",
+        "HTTP_MAX_PER_HOST",
+        "AI_HTTP_HOST_LIMIT",
     )
     raw_value_selected: str | None = None
     resolved_limit: int | None = None
-    for key, raw_value in candidates:
-        if raw_value in (None, ""):
+    for key in candidates:
+        try:
+            env_value = get_env(key, None)
+        except Exception:
+            env_value = None
+        if env_value is None:
+            env_value = os.getenv(key)
+        if env_value in (None, ""):
             continue
         try:
-            candidate = int(str(raw_value).strip())
+            candidate = int(str(env_value).strip())
         except (TypeError, ValueError):
             continue
         if candidate <= 0:
             continue
-        raw_value_selected = raw_value
+        raw_value_selected = str(env_value)
         resolved_limit = candidate
         break
     if resolved_limit is None:
@@ -11136,6 +11142,42 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 if empty_frame is not None:
                     return (empty_frame, {}) if return_meta else empty_frame
             raise
+
+        def _extract_frame(candidate: Any) -> Any:
+            if return_meta and isinstance(candidate, tuple) and candidate:
+                return candidate[0]
+            return candidate
+
+        feed_token = kwargs.get("feed")
+        normalized_feed = str(feed_token).strip().lower() if feed_token else None
+        sip_retry_requested = bool(kwargs.get("_sip_retry"))
+        sip_retry_enabled = (
+            not sip_retry_requested
+            and normalized_feed in (None, "", "iex")
+            and _sip_allowed()
+            and _sip_configured()
+            and not bool(globals().get("_SIP_UNAUTHORIZED", False))
+        )
+
+        if sip_retry_enabled:
+            primary_frame = _extract_frame(df)
+            primary_empty = primary_frame is None or getattr(primary_frame, "empty", False)
+            if primary_empty:
+                retry_kwargs = dict(kwargs)
+                retry_kwargs["_sip_retry"] = True
+                retry_kwargs["feed"] = "sip"
+                try:
+                    df = _FETCH_BARS_ORIG(
+                        symbol,
+                        start,
+                        end,
+                        interval,
+                        *args,
+                        return_meta=return_meta,
+                        **retry_kwargs,
+                    )
+                except EmptyBarsError:
+                    raise
 
         try:
             import pandas as _pd
