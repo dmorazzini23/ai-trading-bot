@@ -676,21 +676,13 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if _env_explicit_false("ALPACA_HAS_SIP"):
         entitled.discard("sip")
 
-    fetch_state = getattr(data_fetcher, "_state", {})
-    sip_unauthorized = False
-    if isinstance(fetch_state, Mapping):
-        sip_unauthorized = bool(fetch_state.get("sip_unauthorized"))
-    sip_unauthorized = sip_unauthorized or bool(getattr(data_fetcher, "_SIP_UNAUTHORIZED", False))
-    try:
-        pytest_active = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
-    except (RuntimeError, TypeError, ValueError):
-        pytest_active = False
-    if not pytest_active:
-        pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST"))
-
     sip_available = "sip" in entitled
     iex_available = "iex" in entitled or not entitled
-    sip_preferred = sip_available and (not sip_unauthorized or pytest_active)
+    # Entitlement resolution should be pure: if SIP is entitled and not
+    # explicitly disabled via env overrides, prefer SIP regardless of prior
+    # authorization cache state. Any authorization handling occurs in the data
+    # fetch layer.
+    sip_preferred = sip_available
 
     if sip_preferred:
         resolved = "sip"

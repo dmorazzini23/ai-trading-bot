@@ -55,10 +55,8 @@ def safe_subprocess_run(
             normalized_timeout = float(timeout)
         except (TypeError, ValueError):
             normalized_timeout = SUBPROCESS_TIMEOUT_DEFAULT
-        if not math.isfinite(normalized_timeout):
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
             timeout_param = SUBPROCESS_TIMEOUT_DEFAULT
-        elif normalized_timeout <= 0:
-            timeout_param = None
         else:
             timeout_param = normalized_timeout
 

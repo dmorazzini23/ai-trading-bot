@@ -422,6 +422,13 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 'refreshed_at': _CACHE.ts.isoformat(),
             },
         )
+    if force_refresh:
+        _CACHE.value = None
+        _CACHE.ts = None
+        _CACHE.equity = None
+        _CACHE.equity_error = None
+        _CACHE.last_equity = None
+        _CACHE.last_equity_ts = None
     if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
     # Use public alias so callers/tests can patch equity retrieval.

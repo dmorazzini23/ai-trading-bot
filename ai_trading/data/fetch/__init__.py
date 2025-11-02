@@ -71,6 +71,7 @@ from ai_trading.logging import (
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
 from ai_trading.telemetry import runtime_state
+from ai_trading.timeframe import TimeFrame
 
 # --- SAFETY: Provide a module-level default for `_state` ------------------------------------
 # Some nested helper functions in this module (e.g., `_record_minute_fallback`) were designed
@@ -965,6 +966,16 @@ def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
     _cycle_feed_override[symbol] = normalized_feed
     _override_set_ts[symbol] = _time_now()
     _remember_fallback_for_cycle(_get_cycle_id(), symbol, tf_norm, normalized_feed)
+
+
+def _cycle_set_fallback_feed(symbol: str, feed: str, timeframe: str | TimeFrame = "1Min") -> None:
+    """Record the desired fallback feed for the current cycle."""
+
+    try:
+        tf_value = _canon_tf(timeframe if isinstance(timeframe, str) else str(timeframe))
+    except Exception:
+        tf_value = _canon_tf("1Min")
+    _record_override(symbol, feed, timeframe=tf_value)
 
 
 def _clear_override(symbol: str) -> None:
@@ -2157,6 +2168,15 @@ def _mark_fallback(
             skip_switchover = True
 
     if should_emit:
+        cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
+        usage_key = (str(symbol).upper(), str(timeframe))
+        if usage_key not in bucket:
+            extra = {"provider": provider_for_register, "symbol": symbol}
+            reason_extra = log_extra.get("fallback_reason")
+            if reason_extra:
+                extra["reason"] = reason_extra
+            logger.info("USING_BACKUP_PROVIDER", extra=extra)
+            bucket.add(usage_key)
         log_backup_provider_used(
             provider_for_register,
             symbol=symbol,
@@ -4183,10 +4203,9 @@ def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZE
     key = (symbol, timeframe)
     if key in _SIP_UNAVAILABLE_LOGGED:
         return
-    if _detect_pytest_env():
-        raw = os.getenv("ALPACA_SIP_UNAUTHORIZED", "")
-        if not raw or raw.strip().lower() not in {"1", "true", "yes"}:
-            return
+    # Always emit the unauthorized log so tests can assert behavior. Downstream
+    # filters can control noise via logging configuration rather than muting the
+    # source event.
     extra = {"provider": "alpaca", "feed": "sip", "symbol": symbol, "timeframe": timeframe}
     if reason == "UNAUTHORIZED_SIP":
         extra["status"] = "unauthorized"
@@ -5226,19 +5245,14 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 cur_end = min(cur_start + chunk_span, end_dt)
                 frames.append(_yahoo_get_bars(symbol, cur_start, cur_end, interval))
                 cur_start = cur_end
-        _, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
+        cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         key = (str(symbol).upper(), str(interval))
         reason_extra = _consume_bootstrap_backup_reason()
         if key not in bucket:
-            dedupe_key = f"USING_BACKUP_PROVIDER:{normalized}:{str(symbol).upper()}"
-            ttl = getattr(settings, "logging_dedupe_ttl_s", 0)
-            if provider_log_deduper.should_log(dedupe_key, int(ttl)):
-                extra = {"provider": provider, "symbol": symbol}
-                if reason_extra:
-                    extra.update(reason_extra)
-                logger.info("USING_BACKUP_PROVIDER", extra=extra)
-            else:
-                record_provider_log_suppressed("USING_BACKUP_PROVIDER")
+            extra = {"provider": provider, "symbol": symbol}
+            if reason_extra:
+                extra.update(reason_extra)
+            logger.info("USING_BACKUP_PROVIDER", extra=extra)
             bucket.add(key)
         if frames:
             if pd_local is not None:
@@ -7892,12 +7906,10 @@ def _fetch_bars(
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             # --- AI-AGENT: enforce IEX -> SIP on empty ---
             pytest_cycle = _detect_pytest_env()
-            sip_unauthorized = _SIP_UNAUTHORIZED or _is_sip_unauthorized()
             if (
                 _feed == "iex"
                 and _state.get("window_has_session", True)
                 and _sip_configured()
-                and not sip_unauthorized
                 and _sip_fallback_allowed(session, headers, _interval)
                 and (not pytest_cycle or not _state.get("pytest_sip_attempted"))
             ):
@@ -7910,6 +7922,7 @@ def _fetch_bars(
                     "ALPACA_FEED_SWITCH",
                     extra=_norm_extra({"provider": "alpaca", "from": "iex", "to": "sip"}),
                 )
+                _cycle_set_fallback_feed(symbol, "sip", timeframe=_interval)
                 fb_df = _attempt_fallback(
                     (_interval, "sip", _start, _end),
                     skip_metrics=False,
