@@ -11120,10 +11120,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
 
         # Extract wrapper-only flags; do not forward to the original impl
         return_meta = bool(kwargs.pop("return_meta", False))
-        sip_retry_flag = bool(kwargs.get("_sip_retry", False))
-        # Ensure internal flags are not passed to the original function
-        _orig_kwargs = dict(kwargs)
-        _orig_kwargs.pop("_sip_retry", None)
+        sip_retry_flag = bool(kwargs.pop("_sip_retry", False))
         try:
             df = _FETCH_BARS_ORIG(
                 symbol,
@@ -11132,7 +11129,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 interval,
                 *args,
                 return_meta=return_meta,
-                **_orig_kwargs,
+                **kwargs,
             )
         except EmptyBarsError as err:
             state_obj = globals().get("_state")
