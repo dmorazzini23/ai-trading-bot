@@ -64,7 +64,8 @@ def safe_subprocess_run(
     run_kwargs["text"] = text_mode
 
     if capture_output and "stdout" not in run_kwargs and "stderr" not in run_kwargs:
-        run_kwargs["capture_output"] = True
+        run_kwargs["stdout"] = subprocess.PIPE
+        run_kwargs["stderr"] = subprocess.PIPE
     if timeout_param is not None:
         run_kwargs["timeout"] = timeout_param
 

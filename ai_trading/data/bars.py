@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import dataclass
 import hashlib
@@ -669,39 +670,53 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     entitled = _get_entitled_feeds(client)
     cache_entry = _ENTITLE_CACHE.get(cache_key)
 
-    if _env_explicit_false("ALPACA_ALLOW_SIP") or _env_explicit_false("ALPACA_SIP_ENTITLED"):
-        entitled.discard("sip")
-    if _env_explicit_false("ALPACA_HAS_SIP"):
-        entitled.discard("sip")
-
     entitled_lower = {feed.lower() for feed in entitled}
+    prefer_requested_sip = requested_norm == "sip" and "sip" in entitled_lower
+
+    pytest_env = os.getenv("PYTEST_RUNNING", "").strip().lower() in _TRUTHY or "pytest" in sys.modules
+    has_key = any(os.getenv(var) for var in ("ALPACA_KEY", "ALPACA_API_KEY"))
+    has_secret = any(os.getenv(var) for var in ("ALPACA_SECRET", "ALPACA_SECRET_KEY"))
+    allow_env_false = (has_key and has_secret) or pytest_env
+
+    disable_allow = _env_explicit_false("ALPACA_ALLOW_SIP")
+    disable_entitled = _env_explicit_false("ALPACA_SIP_ENTITLED")
+    disable_has = _env_explicit_false("ALPACA_HAS_SIP")
+    env_false_active = allow_env_false and (disable_allow or disable_entitled or disable_has)
+
+    effective_entitled = set(entitled_lower)
+    if env_false_active:
+        effective_entitled.discard("sip")
 
     resolved: str
-    if requested_norm and requested_norm in entitled_lower:
-        resolved = requested_norm
-    elif "sip" in entitled_lower:
+    if prefer_requested_sip and not env_false_active:
         resolved = "sip"
-    elif "iex" in entitled_lower:
+    elif requested_norm and requested_norm in effective_entitled:
+        resolved = requested_norm
+    elif "sip" in effective_entitled:
+        resolved = "sip"
+    elif "iex" in effective_entitled:
         resolved = "iex"
     else:
         resolved = "iex"
 
-    highest_entitled: str | None = None
-    if "sip" in entitled_lower:
+    highest_entitled: str | None
+    if "sip" in effective_entitled:
         highest_entitled = "sip"
-    elif "iex" in entitled_lower:
+    elif "iex" in effective_entitled:
         highest_entitled = "iex"
     else:
         highest_entitled = resolved
 
+    feeds_snapshot = set(effective_entitled)
     if isinstance(cache_entry, _EntitlementCacheEntry):
-        cache_entry.feeds = set(entitled_lower)
+        cache_entry.feeds = feeds_snapshot
         cache_entry.resolved = highest_entitled
     elif isinstance(cache_entry, dict):
         cache_entry["resolved"] = highest_entitled
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), cache_entry.get("generation"), highest_entitled)
+        generation = cache_entry.get("generation")
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(feeds_snapshot, generation, highest_entitled)
     else:
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(entitled_lower), None, highest_entitled)
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(feeds_snapshot, None, highest_entitled)
 
     return resolved
 

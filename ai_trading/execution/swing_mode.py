@@ -137,11 +137,9 @@ class SwingTradingMode:
 
         allow_after_close = os.getenv("AI_TRADING_SWING_ALLOW_AFTER_CLOSE", "").strip()
         if entry_date == today_et:
-            after_close_now = now_et.time() >= MARKET_CLOSE
-            entry_before_close = entry_et.time() < MARKET_CLOSE
-            if allow_after_close == "1" and after_close_now and entry_before_close:
+            if allow_after_close == "1":
                 return True, "after_market_close"
-            return False, "same_day"
+            return False, "same_day_trade_blocked"
 
         if today_et > entry_date:
             return True, "different_day"

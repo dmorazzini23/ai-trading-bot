@@ -8720,9 +8720,19 @@ class DataFetcher:
                 ts = float(value)
             except (TypeError, ValueError):
                 return None
-            if not math.isfinite(ts) or ts <= 0.0:
+            if not math.isfinite(ts):
                 return None
             return ts
+
+        def _memo_pair(
+            ts_value: float | None,
+            payload_value: Any | None,
+        ) -> tuple[float, Any] | None:
+            if ts_value is None or payload_value is None:
+                return None
+            if ts_value <= 0.0:
+                return None
+            return ts_value, payload_value
 
         def _normalize_memo_entry(
             entry: Any,
@@ -8732,16 +8742,12 @@ class DataFetcher:
                 ts_first = _coerce_memo_timestamp(first)
                 if ts_first is not None:
                     payload = second if second is not None else None
-                    normalized_pair = (
-                        (ts_first, payload) if payload is not None else None
-                    )
+                    normalized_pair = _memo_pair(ts_first, payload)
                     return ts_first, payload, normalized_pair
                 ts_second = _coerce_memo_timestamp(second)
                 if ts_second is not None:
                     payload = first if first is not None else None
-                    normalized_pair = (
-                        (ts_second, payload) if payload is not None else None
-                    )
+                    normalized_pair = _memo_pair(ts_second, payload)
                     return ts_second, payload, normalized_pair
                 payload = second if second is not None else first
                 return None, payload, None
@@ -8789,11 +8795,7 @@ class DataFetcher:
                             payload = value
                             break
                 if payload is not None:
-                    normalized_pair = (
-                        (ts_value, payload)
-                        if ts_value is not None
-                        else None
-                    )
+                    normalized_pair = _memo_pair(ts_value, payload)
                     return ts_value, payload, normalized_pair
                 return ts_value, None, None
             return None, None, None
@@ -8808,12 +8810,13 @@ class DataFetcher:
                 if entry_payload is not None:
                     if entry_ts is None and entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
                         entry_ts = float(entry[0])
-                    return entry_ts, entry_payload, (entry_ts, entry_payload) if entry_ts is not None else normalized
+                    normalized_pair = _memo_pair(entry_ts, entry_payload)
+                    return entry_ts, entry_payload, normalized_pair or normalized
                 if normalized is not None:
                     return normalized[0], normalized[1], normalized
                 if entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
                     ts_value = float(entry[0])
-                    return ts_value, None, (ts_value, None)
+                    return ts_value, None, None
                 return entry_ts, None, normalized
             if isinstance(entry, list):
                 if not entry:
@@ -8823,23 +8826,21 @@ class DataFetcher:
                     if entry_payload is not None:
                         if entry_ts is None and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
                             entry_ts = float(entry[0])
-                        return entry_ts, entry_payload, (entry_ts, entry_payload) if entry_ts is not None else normalized
+                        normalized_pair = _memo_pair(entry_ts, entry_payload)
+                        return entry_ts, entry_payload, normalized_pair or normalized
                     if normalized is not None:
                         return normalized[0], normalized[1], normalized
                 for item in entry:
                     nested_ts, nested_payload, nested_normalized = _extract_memo_payload(item)
                     if nested_payload is not None:
-                        normalized_pair = nested_normalized or (
-                            (nested_ts, nested_payload)
-                            if nested_ts is not None
-                            else None
-                        )
+                        normalized_pair = nested_normalized or _memo_pair(nested_ts, nested_payload)
                         return nested_ts, nested_payload, normalized_pair
                 return None, None, None
             if isinstance(entry, MappingABC):
                 entry_ts, entry_payload, normalized = _normalize_memo_entry(entry)
                 if entry_payload is not None:
-                    return entry_ts, entry_payload, (entry_ts, entry_payload) if entry_ts is not None else normalized
+                    normalized_pair = _memo_pair(entry_ts, entry_payload)
+                    return entry_ts, entry_payload, normalized_pair or normalized
                 if normalized is not None:
                     return normalized[0], normalized[1], normalized
                 return entry_ts, None, normalized
@@ -8854,15 +8855,12 @@ class DataFetcher:
                         head = first_item[0]
                         if isinstance(head, (int, float)):
                             entry_ts = float(head)
-                    normalized_pair = (
-                        normalized if normalized is not None else (entry_ts, entry_payload)
-                    )
+                    normalized_pair = normalized or _memo_pair(entry_ts, entry_payload)
                     return entry_ts, entry_payload, normalized_pair
                 if normalized is not None:
                     return normalized[0], normalized[1], normalized
-                return entry_ts, first_item, (
-                    (entry_ts, first_item) if entry_ts is not None else None
-                )
+                fallback_pair = _memo_pair(entry_ts, first_item)
+                return entry_ts, first_item, fallback_pair
             return None, entry, None
 
         if memo_store is not None:
@@ -9200,8 +9198,23 @@ class DataFetcher:
             normalized_pair = (now_monotonic, payload)
             with cache_lock:
                 _memo_set_entry(canonical_memo_key, normalized_pair)
-                _memo_set_entry(candidate_key, normalized_pair)
-                if counterpart_key != candidate_key:
+                _memo_set_entry(memo_key, normalized_pair)
+                _memo_set_entry(legacy_memo_key, normalized_pair)
+                if candidate_key not in {
+                    canonical_memo_key,
+                    memo_key,
+                    legacy_memo_key,
+                }:
+                    _memo_set_entry(candidate_key, normalized_pair)
+                if (
+                    counterpart_key != candidate_key
+                    and counterpart_key
+                    not in {
+                        canonical_memo_key,
+                        memo_key,
+                        legacy_memo_key,
+                    }
+                ):
                     _memo_set_entry(counterpart_key, normalized_pair)
             return _emit_cache_hit(payload, reason="memo")
 
@@ -9295,6 +9308,10 @@ class DataFetcher:
                     refresh_df = payload
                     refresh_source = "memo"
                     memo_ready = True
+                    normalized_now = (now_monotonic, payload)
+                    _memo_set_entry(canonical_memo_key, normalized_now)
+                    _memo_set_entry(memo_key, normalized_now)
+                    _memo_set_entry(legacy_memo_key, normalized_now)
                     return True
                 if fallback_entry is None:
                     fallback_entry = (
@@ -22331,9 +22348,12 @@ def _ensure_executable_quote(
         )
         bid_missing = details_dict.get("bid") is None
         ask_missing = details_dict.get("ask") is None
-        is_stale = reason == "stale_quote"
-        if not is_stale and (bid_missing or ask_missing):
+        quote_missing = quote is None
+        if quote_missing or bid_missing or ask_missing:
             reason = "missing_bid_ask"
+        is_stale = reason == "stale_quote"
+        if quote_missing or bid_missing or ask_missing:
+            details_dict.setdefault("fallback_reason", "missing_bid_ask")
         gate_decision.reason = reason
         fallback_ok = fallback_permitted
         if fallback_ok:

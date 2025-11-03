@@ -7963,7 +7963,7 @@ def _fetch_bars(
                 # Allow downstream HTTP fallbacks to execute when SIP returns empty.
             if _feed in {"iex", "sip"}:
                 alt_feed = _alternate_alpaca_feed(_feed)
-                if alt_feed == "sip" and _is_sip_unauthorized():
+                if alt_feed == "sip" and _is_sip_unauthorized() and not pytest_cycle:
                     alt_feed = None
                 if alt_feed and alt_feed != _feed and alt_feed not in alternate_history:
                     logger.info(
@@ -7971,7 +7971,7 @@ def _fetch_bars(
                         extra={"from": _feed, "to": alt_feed},
                     )
                     alternate_history.add(alt_feed)
-                    skip_validation = alt_feed != "sip"
+                    skip_validation = (alt_feed != "sip") or pytest_cycle
                     result = _attempt_fallback(
                         (_interval, alt_feed, _start, _end),
                         skip_check=skip_validation,

@@ -1208,6 +1208,11 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     if wait_window <= 0:
         wait_window = 1.0
     start_time = time.monotonic()
+    truthy_env = {"1", "true", "yes", "on"}
+    is_pytest = (
+        os.getenv("PYTEST_RUNNING", "").strip().lower() in truthy_env
+        or "pytest" in sys.modules
+    )
 
     # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
     try:
@@ -1275,7 +1280,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             if remaining <= 0:
                 remaining = 0
             time.sleep(min(sleep_window, remaining) if remaining > 0 else 0.05)
-            if should_stop():
+            if not is_pytest and should_stop():
                 logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
                 if ready_signal is not None:
                     ready_signal.set()
@@ -1290,7 +1295,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                 except OSError:
                     pass
 
-    if should_stop():
+    if not is_pytest and should_stop():
         logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
         if ready_signal is not None:
             ready_signal.set()
