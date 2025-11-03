@@ -6,6 +6,7 @@ import pytest
 
 from ai_trading.config.management import (
     enforce_alpaca_feed_policy,
+    get_trading_config,
     reload_trading_config,
 )
 
@@ -28,13 +29,22 @@ def _reset_config(monkeypatch):
     reload_trading_config()
 
 
-def test_config_alpaca_feed_validation_requires_sip(monkeypatch):
+def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     monkeypatch.setenv("DATA_PROVIDER", "alpaca")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     reload_trading_config()
 
-    with pytest.raises(RuntimeError, match="Alpaca data provider requires SIP"):
-        enforce_alpaca_feed_policy()
+    info = enforce_alpaca_feed_policy()
+
+    assert info is not None
+    assert info.get("status") == "fallback"
+    assert info.get("fallback_provider") == "yahoo"
+
+    cfg = get_trading_config()
+    assert str(cfg.data_provider).lower() == "yahoo"
+    assert tuple(cfg.data_provider_priority)[0] == "yahoo"
+    # Original feed setting remains unchanged
+    assert os.environ.get("ALPACA_DATA_FEED") == "iex"
 
 
 def test_config_alpaca_feed_defaults_to_sip(monkeypatch):
@@ -45,5 +55,5 @@ def test_config_alpaca_feed_defaults_to_sip(monkeypatch):
 
     info = enforce_alpaca_feed_policy()
 
-    assert info == {"provider": "alpaca", "feed": "sip"}
+    assert info == {"provider": "alpaca", "feed": "sip", "status": "sip"}
     assert os.environ.get("ALPACA_DATA_FEED") == "sip"

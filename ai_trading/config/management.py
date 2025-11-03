@@ -402,7 +402,11 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
         return None
 
     if not provider_normalized.startswith("alpaca"):
-        return {"provider": provider_normalized, "feed": str(getattr(cfg, "alpaca_data_feed", "") or "")}
+        return {
+            "provider": provider_normalized,
+            "feed": str(getattr(cfg, "alpaca_data_feed", "") or ""),
+            "status": "non_alpaca",
+        }
 
     env_candidates = (
         os.getenv("ALPACA_DATA_FEED"),
@@ -417,10 +421,30 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
         feed_normalized = "sip"
 
     if feed_normalized != "sip":
-        raise RuntimeError(
-            "Alpaca data provider requires SIP market data. Set ALPACA_DATA_FEED=sip (or ALPACA_FEED=sip) "
-            "and ensure your Alpaca account has SIP entitlements."
-        )
+        priority_raw = getattr(cfg, "data_provider_priority", ()) or ()
+        fallback_priority: list[str] = [
+            str(provider).strip()
+            for provider in priority_raw
+            if not str(provider).strip().lower().startswith("alpaca")
+        ]
+        if not fallback_priority:
+            fallback_priority = ["yahoo"]
+        fallback_primary = fallback_priority[0]
+        try:
+            cfg.update(
+                data_provider=fallback_primary,
+                data_provider_priority=tuple(fallback_priority),
+            )
+        except Exception:
+            pass
+        return {
+            "provider": provider_normalized,
+            "feed": feed_normalized,
+            "status": "fallback",
+            "fallback_provider": fallback_primary,
+            "fallback_priority": tuple(fallback_priority),
+            "reason": "alpaca_feed_requires_sip",
+        }
 
     if os.getenv("ALPACA_DATA_FEED") in (None, "") and os.getenv("ALPACA_FEED") in (None, ""):
         os.environ["ALPACA_DATA_FEED"] = "sip"
@@ -431,7 +455,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
         cfg.update(alpaca_data_feed="sip")
     except Exception:
         pass
-    return {"provider": provider_normalized, "feed": "sip"}
+    return {"provider": provider_normalized, "feed": "sip", "status": "sip"}
 
 
 SEED = get_trading_config().seed

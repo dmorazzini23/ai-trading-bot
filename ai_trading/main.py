@@ -250,17 +250,13 @@ def preflight_import_health() -> bool:
         )
     else:
         logger.info("IMPORT_PREFLIGHT_OK")
-        try:
-            feed_snapshot = enforce_alpaca_feed_policy()
-        except RuntimeError as exc:
-            logger.error(
-                "ALPACA_FEED_VALIDATION_FAILED",
-                extra={"error": str(exc)},
-            )
-            feed_validation_failed = True
-        else:
-            if feed_snapshot:
-                logger.info("ALPACA_PROVIDER_PREFLIGHT", extra=feed_snapshot)
+        feed_snapshot = enforce_alpaca_feed_policy()
+        if feed_snapshot:
+            status = feed_snapshot.get("status")
+            log_fn = logger.info
+            if status == "fallback":
+                log_fn = logger.warning
+            log_fn("ALPACA_PROVIDER_PREFLIGHT", extra=feed_snapshot)
 
     ensure_trade_log_path()
     return not failures and not feed_validation_failed
