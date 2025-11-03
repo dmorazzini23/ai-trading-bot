@@ -427,8 +427,11 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
             normalized = str(provider).strip()
             if normalized and not normalized.lower().startswith("alpaca"):
                 fallback_priority.append(normalized)
+        finnhub_available = bool(os.getenv("FINNHUB_API_KEY"))
+        if finnhub_available and "finnhub" not in (p.lower() for p in fallback_priority):
+            fallback_priority.insert(0, "finnhub")
         if not fallback_priority:
-            fallback_priority = ["yahoo"]
+            fallback_priority = ["finnhub" if finnhub_available else "yahoo"]
         fallback_primary = fallback_priority[0]
         os.environ["DATA_PROVIDER"] = fallback_primary
         os.environ["DATA_PROVIDER_PRIORITY"] = ",".join(fallback_priority)

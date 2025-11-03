@@ -36,6 +36,7 @@ def _reset_config(monkeypatch):
 def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     monkeypatch.setenv("DATA_PROVIDER", "alpaca")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
     reload_trading_config()
 
     info = enforce_alpaca_feed_policy()
@@ -55,6 +56,20 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     assert os.environ.get("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS") == "50"
     # Original feed setting remains unchanged
     assert os.environ.get("ALPACA_DATA_FEED") == "iex"
+
+
+def test_config_alpaca_feed_prefers_finnhub_when_available(monkeypatch):
+    monkeypatch.setenv("DATA_PROVIDER", "alpaca")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    monkeypatch.setenv("FINNHUB_API_KEY", "test_key")
+    reload_trading_config()
+
+    info = enforce_alpaca_feed_policy()
+
+    assert info is not None
+    assert info.get("fallback_provider") == "finnhub"
+    assert os.environ.get("DATA_PROVIDER") == "finnhub"
+    assert os.environ.get("DATA_PROVIDER_PRIORITY", "").startswith("finnhub")
 
 
 def test_config_alpaca_feed_defaults_to_sip(monkeypatch):
