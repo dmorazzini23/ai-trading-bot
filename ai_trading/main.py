@@ -1519,8 +1519,12 @@ def main(argv: list[str] | None = None) -> None:
             },
         )
         raise SystemExit(1)
+    provider_for_log = getattr(config, "data_provider", None) or os.environ.get("DATA_PROVIDER") or "unknown"
     logger.info(
-        "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca", S.alpaca_data_feed, S.alpaca_adjustment
+        "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=%s",
+        getattr(S, "alpaca_data_feed", ""),
+        getattr(S, "alpaca_adjustment", ""),
+        provider_for_log,
     )
     # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
     # Labeled stage timings: fetch/compute/execute

@@ -16,10 +16,14 @@ def _reset_config(monkeypatch):
     """Ensure trading config reloads with test-specific environment."""
 
     # Snapshot original env values to restore after each test.
-    original_env = {
-        key: os.environ.get(key)
-        for key in ("DATA_PROVIDER", "ALPACA_DATA_FEED", "DATA_FEED")
-    }
+    watched_keys = (
+        "DATA_PROVIDER",
+        "ALPACA_DATA_FEED",
+        "DATA_FEED",
+        "DATA_PROVIDER_PRIORITY",
+        "TRADING__DEGRADED_FEED_MODE",
+    )
+    original_env = {key: os.environ.get(key) for key in watched_keys}
     yield
     for key, value in original_env.items():
         if value is None:
@@ -46,6 +50,7 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
 
     assert os.environ.get("DATA_PROVIDER") == "yahoo"
     assert os.environ.get("DATA_PROVIDER_PRIORITY") == "yahoo"
+    assert os.environ.get("TRADING__DEGRADED_FEED_MODE") == "widen"
     # Original feed setting remains unchanged
     assert os.environ.get("ALPACA_DATA_FEED") == "iex"
 

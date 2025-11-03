@@ -432,8 +432,11 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
         fallback_primary = fallback_priority[0]
         os.environ["DATA_PROVIDER"] = fallback_primary
         os.environ["DATA_PROVIDER_PRIORITY"] = ",".join(fallback_priority)
+        if os.getenv("TRADING__DEGRADED_FEED_MODE") in (None, ""):
+            os.environ["TRADING__DEGRADED_FEED_MODE"] = "widen"
         try:
             reload_trading_config()
+            cfg = get_trading_config()
         except Exception:
             pass
         return {
@@ -442,6 +445,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
             "status": "fallback",
             "fallback_provider": fallback_primary,
             "fallback_priority": tuple(fallback_priority),
+            "degraded_mode": os.environ.get("TRADING__DEGRADED_FEED_MODE", "widen"),
             "reason": "alpaca_feed_requires_sip",
         }
 
