@@ -2720,6 +2720,16 @@ class ExecutionEngine:
         fallback_buffer_bps = 0
         if using_fallback_price and not manual_limit_requested:
             fallback_buffer_bps = _fallback_limit_buffer_bps()
+            if cfg is not None:
+                try:
+                    widen_candidate = getattr(cfg, "degraded_feed_limit_widen_bps", None)
+                except Exception:
+                    widen_candidate = None
+                if widen_candidate not in (None, ""):
+                    try:
+                        fallback_buffer_bps = max(0, int(widen_candidate))
+                    except (TypeError, ValueError):
+                        fallback_buffer_bps = max(0, int(fallback_buffer_bps or 0))
             if fallback_buffer_bps > 0:
                 base_price_candidate = price_for_limit or price_hint or resolved_limit_price or price_alias
                 adjusted_price: float | None = None
@@ -2892,19 +2902,21 @@ class ExecutionEngine:
             and degrade_active
             and not closing_position
         ):
-            logger.warning(
-                "ORDER_SKIPPED_PRICE_GATED",
-                extra={
-                    "symbol": symbol,
-                    "side": mapped_side,
-                    "provider": provider_for_log,
-                    "age_ms": age_ms_int,
-                    "mode": degraded_mode,
-                    "degraded": True,
-                    "reason": "realtime_nbbo_required",
-                },
-            )
-            return None
+            downgrade_allowed = bool(market_on_degraded)
+            gate_extra = {
+                "symbol": symbol,
+                "side": mapped_side,
+                "provider": provider_for_log,
+                "age_ms": age_ms_int,
+                "mode": degraded_mode,
+                "degraded": True,
+                "reason": "realtime_nbbo_required",
+            }
+            if downgrade_allowed:
+                gate_extra["downgraded_to_market"] = True
+            logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_extra)
+            if not downgrade_allowed:
+                return None
 
         if (
             degrade_active

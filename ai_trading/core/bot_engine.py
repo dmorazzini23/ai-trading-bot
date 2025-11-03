@@ -5376,6 +5376,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     if df is not None:
         df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
     active_feed = current_feed
+    staleness_reference: datetime | None = None
 
     def _attempt_stale_recovery(
         *,
@@ -5521,6 +5522,39 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 feed_name,
             )
         return None
+
+    low_bar_threshold = max(60, intraday_lookback // 2)
+    if df is not None and low_bar_threshold > 0:
+        try:
+            current_len = int(len(df))
+        except COMMON_EXC:
+            current_len = 0
+        if current_len < low_bar_threshold:
+            recovery_payload = _attempt_stale_recovery(
+                stale_details=["low_bar_count"],
+                current_feed=active_feed,
+                start_dt=start_dt,
+                end_dt=end_dt,
+            )
+            if recovery_payload is not None:
+                (
+                    candidate_df,
+                    candidate_end,
+                    candidate_staleness_reference,
+                    candidate_now,
+                    candidate_feed,
+                ) = recovery_payload
+                try:
+                    candidate_len = int(len(candidate_df))
+                except COMMON_EXC:
+                    candidate_len = 0
+                if candidate_len > current_len:
+                    df = candidate_df
+                    end_dt = candidate_end
+                    staleness_reference = candidate_staleness_reference
+                    now_utc = candidate_now
+                    active_feed = candidate_feed
+                    current_len = candidate_len
 
     def _coverage_metrics(
         frame: pd.DataFrame | None,
@@ -5971,7 +6005,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         raise DataFetchError("minute_data_unavailable")
 
     # Check data freshness before proceeding with trading logic
-    staleness_reference = now_utc if market_open_now else end_dt
+    if staleness_reference is None:
+        staleness_reference = now_utc if market_open_now else end_dt
 
     try:
         staleness._ensure_data_fresh(
@@ -20208,7 +20243,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     close = frame["close"].astype(float)
     hl = frame[["high", "low"]].astype(float)
 
-    min_required = 26
+    min_required = 20
     if len(frame) < min_required:
         return frame.iloc[0:0]
 
