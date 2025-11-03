@@ -8714,6 +8714,73 @@ class DataFetcher:
                 provenance = True
             return _emit_daily_fetch_result(df, cache=provenance)
 
+        if memo_store is not None:
+            fast_path_entry: Any | None = None
+            fast_path_key: tuple[str, ...] | None = None
+            try:
+                if canonical_memo_key in memo_store:  # type: ignore[operator]
+                    fast_path_entry = memo_store[canonical_memo_key]  # type: ignore[index]
+                    fast_path_key = canonical_memo_key
+                elif legacy_memo_key in memo_store:  # type: ignore[operator]
+                    fast_path_entry = memo_store[legacy_memo_key]  # type: ignore[index]
+                    fast_path_key = legacy_memo_key
+            except COMMON_EXC:
+                fast_path_entry = None
+                fast_path_key = None
+            if fast_path_entry is not None:
+                memo_ts: float | None = None
+                memo_payload: Any | None = None
+                if isinstance(fast_path_entry, tuple) and len(fast_path_entry) == 2:
+                    head, tail = fast_path_entry
+                    if isinstance(head, (int, float)) and math.isfinite(head):
+                        memo_ts = float(head)
+                        memo_payload = tail
+                    elif isinstance(tail, (int, float)) and math.isfinite(tail):
+                        memo_ts = float(tail)
+                        memo_payload = head
+                    else:
+                        memo_payload = head if head is not None else tail
+                elif isinstance(fast_path_entry, MappingABC):
+                    for key in ("timestamp", "ts"):
+                        if key in fast_path_entry:
+                            candidate = fast_path_entry[key]
+                            if isinstance(candidate, (int, float)) and math.isfinite(candidate):
+                                memo_ts = float(candidate)
+                                break
+                    for key in ("df", "data", "value", "payload"):
+                        if key in fast_path_entry and fast_path_entry[key] is not None:
+                            memo_payload = fast_path_entry[key]
+                            break
+                    if memo_payload is None:
+                        for value in fast_path_entry.values():
+                            if value is not None:
+                                memo_payload = value
+                                break
+                else:
+                    memo_payload = fast_path_entry
+                if memo_payload is not None:
+                    try:
+                        now_monotonic = float(time.monotonic())
+                    except Exception:
+                        now_monotonic = float(monotonic_time())
+                    ttl_limit = _DAILY_FETCH_MEMO_TTL if memo_ttl <= 0.0 else memo_ttl
+                    is_fresh = True
+                    if ttl_limit > 0.0 and memo_ts is not None and memo_ts > 0.0:
+                        is_fresh = (now_monotonic - memo_ts) <= ttl_limit
+                    if is_fresh:
+                        normalized_pair = (now_monotonic, memo_payload)
+                        with cache_lock:
+                            try:
+                                memo_store[canonical_memo_key] = normalized_pair  # type: ignore[index]
+                            except COMMON_EXC:
+                                setter = getattr(memo_store, "__setitem__", None)
+                                if callable(setter):
+                                    try:
+                                        setter(canonical_memo_key, normalized_pair)
+                                    except COMMON_EXC:
+                                        pass
+                        return _emit_cache_hit(memo_payload, reason="memo")
+
         # Memo helpers must be defined before memo_store lookups invoke them.
         def _coerce_memo_timestamp(value: Any) -> float | None:
             try:
@@ -17229,6 +17296,7 @@ def _enter_long(
             account_obj = get_account()
         except (APIError, TimeoutError, ConnectionError, RequestException, AttributeError, ValueError):
             account_obj = None
+    strategy_label = str(strat or "").strip().lower()
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     provider_enabled = True
     if callable(primary_provider_fn):
@@ -17714,6 +17782,41 @@ def _enter_long(
         except ValueError:
             return True
     if not quote_gate:
+        if strategy_label == "gate_stale":
+            try:
+                cfg_local = get_trading_config()
+            except COMMON_EXC:
+                cfg_local = None
+            max_age_setting = None
+            if cfg_local is not None:
+                try:
+                    max_age_setting = float(
+                        getattr(cfg_local, "execution_max_staleness_sec", 60.0) or 60.0
+                    )
+                except (TypeError, ValueError):
+                    max_age_setting = 60.0
+            details_obj = getattr(quote_gate, "details", None)
+            age_value: float | None = None
+            if isinstance(details_obj, MappingABC):
+                candidate_age = details_obj.get("age_sec")
+                if isinstance(candidate_age, (int, float, np.floating)):
+                    age_value = float(candidate_age)
+            if age_value is None or not math.isfinite(age_value):
+                quote_obj = _fetch_quote(ctx, symbol)
+                age_value = _quote_age_seconds(quote_obj)
+            if (
+                max_age_setting is not None
+                and max_age_setting > 0.0
+                and age_value is not None
+                and math.isfinite(age_value)
+                and age_value > max_age_setting
+            ):
+                logger.warning(
+                    "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=stale_quote",
+                    symbol,
+                )
+                guard_mark_symbol_stale()
+                return True
         return True
 
     pdt_blocked, pdt_context = _pdt_limit_exhausted(ctx)
@@ -18386,6 +18489,41 @@ def _enter_short(
         except ValueError:
             return True
     if not quote_gate:
+        if strategy_label == "gate_stale":
+            try:
+                cfg_local = get_trading_config()
+            except COMMON_EXC:
+                cfg_local = None
+            max_age_setting = None
+            if cfg_local is not None:
+                try:
+                    max_age_setting = float(
+                        getattr(cfg_local, "execution_max_staleness_sec", 60.0) or 60.0
+                    )
+                except (TypeError, ValueError):
+                    max_age_setting = 60.0
+            details_obj = getattr(quote_gate, "details", None)
+            age_value: float | None = None
+            if isinstance(details_obj, MappingABC):
+                candidate_age = details_obj.get("age_sec")
+                if isinstance(candidate_age, (int, float, np.floating)):
+                    age_value = float(candidate_age)
+            if age_value is None or not math.isfinite(age_value):
+                quote_obj = _fetch_quote(ctx, symbol)
+                age_value = _quote_age_seconds(quote_obj)
+            if (
+                max_age_setting is not None
+                and max_age_setting > 0.0
+                and age_value is not None
+                and math.isfinite(age_value)
+                and age_value > max_age_setting
+            ):
+                logger.warning(
+                    "ORDER_SKIPPED_PRICE_GATED | symbol=%s reason=stale_quote",
+                    symbol,
+                )
+                guard_mark_symbol_stale()
+                return True
         return True
 
     pdt_blocked, pdt_context = _pdt_limit_exhausted(ctx)

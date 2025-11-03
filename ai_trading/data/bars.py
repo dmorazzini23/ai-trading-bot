@@ -671,8 +671,6 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     cache_entry = _ENTITLE_CACHE.get(cache_key)
 
     entitled_lower = {feed.lower() for feed in entitled}
-    prefer_requested_sip = requested_norm == "sip" and "sip" in entitled_lower
-
     pytest_env = os.getenv("PYTEST_RUNNING", "").strip().lower() in _TRUTHY or "pytest" in sys.modules
     has_key = any(os.getenv(var) for var in ("ALPACA_KEY", "ALPACA_API_KEY"))
     has_secret = any(os.getenv(var) for var in ("ALPACA_SECRET", "ALPACA_SECRET_KEY"))
@@ -688,19 +686,17 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
         effective_entitled.discard("sip")
 
     resolved: str
-    if prefer_requested_sip and not env_false_active:
-        resolved = "sip"
-    elif requested_norm and requested_norm in effective_entitled:
-        resolved = requested_norm
-    elif "sip" in effective_entitled:
+    if not env_false_active and "sip" in effective_entitled:
         resolved = "sip"
     elif "iex" in effective_entitled:
         resolved = "iex"
+    elif requested_norm and requested_norm in effective_entitled:
+        resolved = requested_norm
     else:
         resolved = "iex"
 
     highest_entitled: str | None
-    if "sip" in effective_entitled:
+    if not env_false_active and "sip" in effective_entitled:
         highest_entitled = "sip"
     elif "iex" in effective_entitled:
         highest_entitled = "iex"

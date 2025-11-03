@@ -44,7 +44,7 @@ def _resolve_log_path() -> str:
 TRADE_LOG_FILE = _resolve_log_path()
 
 
-def fix_file_permissions(path: str | os.PathLike) -> bool:
+def fix_file_permissions(path: str | os.PathLike, _header: list[str] | None = None) -> bool:
     """Best-effort permissions repair hook used by tests.
 
     Returns True when a repair function was invoked.
@@ -279,7 +279,12 @@ def log_trade(
         }
 
     for path in targets:
-        def _attempt_with_fix(phase: str, action: Callable[[], None]) -> bool:
+        def _attempt_with_fix(
+            phase: str,
+            action: Callable[[], None],
+            *,
+            header_fields: list[str] | None = None,
+        ) -> bool:
             try:
                 action()
                 return True
@@ -287,7 +292,7 @@ def log_trade(
                 payload = {"path": str(path), "phase": phase, "error": str(exc)}
                 logger.warning("TRADE_LOG_PERMISSION_DENIED", extra=payload)
                 try:
-                    repaired = bool(fix_file_permissions(path))
+                    repaired = bool(fix_file_permissions(path, header_fields))
                 except Exception as fix_exc:  # pragma: no cover - defensive logging
                     logger.exception(
                         "TRADE_LOG_PERMISSION_FIX_FAILED",
@@ -314,7 +319,11 @@ def log_trade(
                     )
                     return False
 
-        if not _attempt_with_fix("header", lambda: _ensure_file_header(path, headers)):
+        if not _attempt_with_fix(
+            "header",
+            lambda: _ensure_file_header(path, headers),
+            header_fields=headers,
+        ):
             return
 
         def _write_row() -> None:
@@ -322,5 +331,5 @@ def log_trade(
                 writer = csv.DictWriter(f, fieldnames=headers)
                 writer.writerow(row)
 
-        if not _attempt_with_fix("write", _write_row):
+        if not _attempt_with_fix("write", _write_row, header_fields=headers):
             return

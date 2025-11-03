@@ -16,7 +16,7 @@ import warnings
 import weakref
 from collections import deque
 from datetime import UTC, datetime, timedelta
-from threading import Lock
+from threading import Lock, Semaphore
 from contextlib import suppress, contextmanager
 from types import GeneratorType, SimpleNamespace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
@@ -1531,6 +1531,10 @@ _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
 _FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
 _FETCH_BARS_BACKOFF_CAP = float(os.getenv("FETCH_BARS_BACKOFF_CAP", "5"))
 _MIN_RATE_LIMIT_SLEEP_SECONDS = 1.0
+_HOST_LIMIT_DEFAULT = 4
+_HOST_LIMIT_LOCK = Lock()
+_HOST_LIMIT_STATE: dict[str, Any] = {"env": None, "value": _HOST_LIMIT_DEFAULT}
+_HOST_SEMAPHORES: dict[str, Semaphore] = {}
 _MINUTE_GAP_WARNING_THRESHOLD = max(
     0, int(os.getenv("MINUTE_GAP_WARNING_THRESHOLD", "3"))
 )
@@ -5844,6 +5848,86 @@ def _ensure_http_client():
         return None
 
 
+def _parse_host_limit(raw: Any) -> int:
+    """Return a sane integer host limit derived from *raw*."""
+
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return _HOST_LIMIT_DEFAULT
+    if value <= 0:
+        return _HOST_LIMIT_DEFAULT
+    return value
+
+
+def _resolve_env_host_limit() -> tuple[str | None, int]:
+    """Return ``(signature, limit)`` for the configured HTTP_HOST_LIMIT."""
+
+    try:
+        raw_value = get_env("HTTP_HOST_LIMIT", "")
+    except Exception:
+        raw_value = ""
+    if raw_value is None:
+        text = ""
+    else:
+        try:
+            text = str(raw_value).strip()
+        except Exception:
+            text = ""
+    if not text:
+        return None, _HOST_LIMIT_DEFAULT
+    return text, _parse_host_limit(text)
+
+
+def _current_host_limit() -> int:
+    """Return the active per-host limit, refreshing cached state when needed."""
+
+    signature, limit = _resolve_env_host_limit()
+    with _HOST_LIMIT_LOCK:
+        cached_env = _HOST_LIMIT_STATE.get("env")
+        cached_value = int(_HOST_LIMIT_STATE.get("value", _HOST_LIMIT_DEFAULT))
+        if signature != cached_env or cached_value != limit:
+            _HOST_LIMIT_STATE["env"] = signature
+            _HOST_LIMIT_STATE["value"] = limit
+            _HOST_SEMAPHORES.clear()
+        return int(_HOST_LIMIT_STATE["value"])
+
+
+def _host_semaphore_for_url(url: str) -> Semaphore | None:
+    """Return the semaphore guarding *url*'s host:port pair."""
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    host = parsed.hostname or ""
+    if not host:
+        netloc = parsed.netloc
+        if not netloc:
+            return None
+        host = netloc.split("@")[-1]
+    port = parsed.port
+    if port is None:
+        if parsed.scheme == "https":
+            port = 443
+        elif parsed.scheme == "http":
+            port = 80
+        else:
+            port = 443
+    host_key = f"{host}:{port}"
+    limit = _current_host_limit()
+    if limit <= 0:
+        return None
+    with _HOST_LIMIT_LOCK:
+        semaphore = _HOST_SEMAPHORES.get(host_key)
+        current_limit = getattr(semaphore, "_ai_trading_limit", None) if semaphore is not None else None
+        if semaphore is None or current_limit != limit:
+            semaphore = Semaphore(limit)
+            setattr(semaphore, "_ai_trading_limit", limit)
+            _HOST_SEMAPHORES[host_key] = semaphore
+        return semaphore
+
+
 def _ensure_pandas():
     global pd
     if pd is None:
@@ -5943,28 +6027,42 @@ def _session_get(
     Otherwise prefer the session object to benefit from shared connection pooling.
     """
 
-    if getattr(sess, "get", None):
+    semaphore = _host_semaphore_for_url(url)
+    acquired = False
+    if semaphore is not None:
         try:
-            response = sess.get(url, params=params, headers=headers, timeout=timeout)
-            if response is not None:
-                return response
+            semaphore.acquire()
+            acquired = True
         except Exception:
-            if _pytest_active():
-                raise
-            pass
-    requests_mod = _ensure_requests()
-    get_fn = getattr(requests_mod, "get", None)
-    if callable(get_fn):
-        try:
-            return get_fn(url, params=params, headers=headers, timeout=timeout)
-        except Exception:
-            pass
-    return SimpleNamespace(
-        status_code=599,
-        text="",
-        headers={},
-        json=lambda: {},
-    )
+            acquired = False
+    try:
+        if getattr(sess, "get", None):
+            try:
+                response = sess.get(url, params=params, headers=headers, timeout=timeout)
+                if response is not None:
+                    return response
+            except Exception:
+                if _pytest_active():
+                    raise
+        requests_mod = _ensure_requests()
+        get_fn = getattr(requests_mod, "get", None)
+        if callable(get_fn):
+            try:
+                return get_fn(url, params=params, headers=headers, timeout=timeout)
+            except Exception:
+                pass
+        return SimpleNamespace(
+            status_code=599,
+            text="",
+            headers={},
+            json=lambda: {},
+        )
+    finally:
+        if acquired:
+            try:
+                semaphore.release()
+            except Exception:
+                pass
 
 
 def _get_alpaca_data_base_url() -> str:
@@ -6785,7 +6883,31 @@ def _fetch_bars(
         if skip_until_dt <= now:
             _clear_backup_skip(symbol, _interval)
             skip_until_dt = None
-    if isinstance(skip_until_dt, datetime) and skip_until_dt > now:
+    skip_window_active = isinstance(skip_until_dt, datetime) and skip_until_dt > now
+    if skip_window_active and tf_key in _SKIPPED_SYMBOLS:
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_interval = interval_map.get(_interval)
+        if fb_interval:
+            skip_payload = {
+                "provider": "alpaca",
+                "feed": _feed,
+                "timeframe": _interval,
+                "symbol": symbol,
+                "skip_until": skip_until_dt.isoformat() if isinstance(skip_until_dt, datetime) else None,
+                "skip_flagged": True,
+            }
+            try:
+                skip_payload["start"] = _start.isoformat()
+                skip_payload["end"] = _end.isoformat()
+            except Exception:
+                pass
+            logger.info(
+                "PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE",
+                extra=_norm_extra(skip_payload),
+            )
+            fallback_df = _run_backup_fetch(fb_interval, from_provider=f"alpaca_{_feed}")
+            return _finalize_frame(fallback_df)
+    if skip_window_active:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_interval = interval_map.get(_interval)
         if fb_interval:
@@ -9120,6 +9242,16 @@ def _fetch_bars(
             )
             _push_to_caplog("ALPACA_EMPTY_RESPONSE_THRESHOLD", level=logging.INFO)
             break
+        if empty_attempts < max_retries:
+            try:
+                backoff_seconds = min(
+                    _FETCH_BARS_BACKOFF_BASE ** empty_attempts,
+                    _FETCH_BARS_BACKOFF_CAP,
+                )
+            except Exception:
+                backoff_seconds = 0.0
+            if backoff_seconds > 0:
+                time.sleep(backoff_seconds)
         # Otherwise, loop to give the provider another chance
     if df is not None and not getattr(df, "empty", True):
         pending = _state.get("pending_recover")
@@ -9135,6 +9267,17 @@ def _fetch_bars(
     if providers_attempted:
         attempts_count = len(providers_attempted)
         _ALPACA_SYMBOL_FAILURES[symbol] = _ALPACA_SYMBOL_FAILURES.get(symbol, 0) + attempts_count
+    market_open_now = True
+    try:
+        market_open_now = is_market_open()
+    except Exception:
+        market_open_now = True
+    outside_hours = _outside_market_hours(_start, _end)
+    if (df is None or getattr(df, "empty", True)) and (not market_open_now or outside_hours):
+        raise EmptyBarsError(
+            "market_closed",
+            f"market_closed: symbol={symbol}, timeframe={_interval}",
+        )
     window_allows_backup = _state.get("window_has_session", True) or short_circuit_empty
     if (
         _ENABLE_HTTP_FALLBACK
@@ -9645,7 +9788,10 @@ def get_minute_df(
                         now_dt = None
                     if now_dt is not None and converted_until > now_dt:
                         skip_window_active = True
-        if skip_primary_due_to_fallback or (fallback_allowed_flag and skip_window_active):
+        if skip_window_active:
+            skip_primary_due_to_fallback = True
+            forced_skip_engaged = True
+        elif skip_primary_due_to_fallback:
             skip_primary_due_to_fallback = True
         elif window_has_session:
             if finnhub_key_present:

@@ -83,7 +83,7 @@ def safe_subprocess_run(
             "SAFE_SUBPROCESS_TIMEOUT",
             extra={"cmd": cmd, "timeout": timeout_param},
         )
-        raise
+        raise exc
     except (OSError, subprocess.SubprocessError) as exc:
         result = _coerce_exception_result(exc, cmd)
         log.warning(
