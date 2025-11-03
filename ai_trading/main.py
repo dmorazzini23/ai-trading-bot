@@ -122,6 +122,7 @@ from ai_trading.config.management import (
     _resolve_alpaca_env,
     TradingConfig,
     enforce_alpaca_feed_policy,
+    get_trading_config,
 )
 from ai_trading.metrics import get_histogram, get_counter
 from ai_trading.utils.env import alpaca_credential_status
@@ -189,6 +190,34 @@ def _reset_warmup_cooldown_timestamp() -> None:
                 setattr(state, "last_run_at", None)
         except Exception:
             return
+
+
+def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
+    """Log the resolved feed/provider configuration after any fallbacks."""
+
+    provider_for_log = getattr(cfg_obj, "data_provider", None) or os.environ.get("DATA_PROVIDER") or "unknown"
+    feed_for_log = getattr(settings, "alpaca_data_feed", "")
+    adjustment_for_log = getattr(settings, "alpaca_adjustment", "")
+    try:
+        trading_cfg = get_trading_config()
+    except Exception:
+        trading_cfg = None
+    if trading_cfg is not None:
+        provider_candidate = getattr(trading_cfg, "data_provider", None)
+        if provider_candidate:
+            provider_for_log = provider_candidate
+        feed_candidate = getattr(trading_cfg, "alpaca_data_feed", None)
+        if feed_candidate:
+            feed_for_log = feed_candidate
+        adj_candidate = getattr(trading_cfg, "alpaca_adjustment", None)
+        if adj_candidate:
+            adjustment_for_log = adj_candidate
+    logger.info(
+        "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=%s",
+        str(feed_for_log or ""),
+        str(adjustment_for_log or ""),
+        str(provider_for_log or "unknown"),
+    )
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -1519,13 +1548,7 @@ def main(argv: list[str] | None = None) -> None:
             },
         )
         raise SystemExit(1)
-    provider_for_log = getattr(config, "data_provider", None) or os.environ.get("DATA_PROVIDER") or "unknown"
-    logger.info(
-        "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=%s",
-        getattr(S, "alpaca_data_feed", ""),
-        getattr(S, "alpaca_adjustment", ""),
-        provider_for_log,
-    )
+    _emit_data_config_log(S, config)
     # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
     # Labeled stage timings: fetch/compute/execute
     _cycle_stage_seconds = get_histogram("cycle_stage_seconds", "Cycle stage duration seconds", ["stage"])  # type: ignore[arg-type]
