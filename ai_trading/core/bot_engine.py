@@ -194,6 +194,7 @@ from ai_trading.broker.alpaca_credentials import check_alpaca_available
 from ai_trading import portfolio  # expose portfolio module for tests/monkeypatching
 from ai_trading.utils import portfolio_lock  # expose lock for tests/monkeypatching
 from ai_trading.meta_learning.persistence import load_trade_history
+from ai_trading.telemetry import runtime_state
 
 
 _PENDING_ORDER_STATUSES = frozenset({"new", "pending_new"})
@@ -23504,6 +23505,40 @@ def _param(runtime, key, default):
     return default
 
 
+def _resolve_data_provider_degraded() -> tuple[bool, str | None]:
+    """Return ``(degraded, reason)`` based on telemetry and provider monitor state."""
+
+    reason: str | None = None
+    try:
+        snapshot = runtime_state.observe_data_provider_state()
+    except Exception:
+        snapshot = {}
+
+    if snapshot:
+        status = snapshot.get("status")
+        using_backup = bool(snapshot.get("using_backup"))
+        if using_backup:
+            reason = snapshot.get("reason") or "using_backup_provider"
+            return True, reason
+        if status and str(status).lower() not in {"healthy", "ok"}:
+            reason = snapshot.get("reason") or str(status)
+            return True, reason
+
+    safe_reason = safe_mode_reason()
+    if safe_reason:
+        return True, safe_reason
+
+    disabled_check = getattr(provider_monitor, "is_disabled", None)
+    if callable(disabled_check):
+        try:
+            if disabled_check("alpaca"):
+                return True, "provider_disabled"
+        except Exception:
+            pass
+
+    return False, None
+
+
 def _truncate_degraded_candidates(symbols: list[str], runtime) -> list[str]:
     """Limit candidate list when the primary provider is degraded."""
 
@@ -23634,18 +23669,16 @@ def _prepare_run(
         symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
-    degraded_cycle = False
-    disabled_check = getattr(provider_monitor, "is_disabled", None)
-    if callable(disabled_check):
-        try:
-            degraded_cycle = bool(disabled_check("alpaca"))
-        except (RuntimeError, ValueError, KeyError, TypeError, AttributeError):
-            degraded_cycle = False
-    if safe_mode_reason():
-        degraded_cycle = True
+    degraded_cycle, degrade_reason = _resolve_data_provider_degraded()
     if degraded_cycle and symbols:
         symbols = _truncate_degraded_candidates(symbols, runtime)
         runtime.tickers = symbols
+    setattr(runtime, "_data_degraded", bool(degraded_cycle))
+    if degrade_reason:
+        setattr(runtime, "_data_degraded_reason", degrade_reason)
+    else:
+        if hasattr(runtime, "_data_degraded_reason"):
+            delattr(runtime, "_data_degraded_reason")
     guard_begin_cycle(universe_size=len(symbols), degraded=degraded_cycle)
     try:
         summary = pre_trade_health_check(runtime, symbols)
@@ -23695,6 +23728,8 @@ def _process_symbols(
 
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
+    data_degraded = bool(getattr(ctx, "_data_degraded", False))
+    degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
 
     cycle_budget = get_cycle_budget_context()
 
@@ -23739,6 +23774,13 @@ def _process_symbols(
             )
 
     for symbol in symbols:
+        if data_degraded:
+            logger.warning(
+                "DEGRADED_FEED_SKIP_SYMBOL",
+                extra={"symbol": symbol, "reason": degrade_reason},
+            )
+            processed.append(symbol)
+            continue
         now = datetime.now(UTC)
         if _trade_limit_reached(state, now):
             _log_trade_quota_once()
