@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 
 from ai_trading.health import HealthCheck
@@ -16,7 +15,7 @@ def test_health_endpoint_reports_runtime_state():
     response = client.get("/healthz")
 
     assert response.status_code == 200
-    payload = json.loads(response.data.decode("utf-8"))
+    payload = response.get_json()
     assert payload["service"] == "ai-trading"
     assert payload["fallback_active"] is True
     provider_info = payload["primary_data_provider"]

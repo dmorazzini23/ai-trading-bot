@@ -73,6 +73,22 @@ def _make_engine(monkeypatch, response):
         "_execute_with_retry",
         types.MethodType(lambda self, func, *args, **kwargs: func(*args, **kwargs), engine),
     )
+    monkeypatch.setattr(
+        live_trading,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(
+            nbbo_required_for_limit=False,
+            execution_require_realtime_nbbo=False,
+            execution_market_on_degraded=False,
+            degraded_feed_mode="widen",
+            degraded_feed_limit_widen_bps=0,
+            min_quote_freshness_ms=1500,
+        ),
+    )
+    monkeypatch.setattr(live_trading.provider_monitor, "is_disabled", lambda *_a, **_k: False)
+    monkeypatch.setattr(live_trading, "_require_bid_ask_quotes", lambda: False)
+    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
+    monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
     return engine
 
 

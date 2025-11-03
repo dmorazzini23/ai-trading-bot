@@ -74,6 +74,8 @@ def patch_shared_guards(monkeypatch):
         "is_disabled",
         lambda *_a, **_k: True,
     )
+    monkeypatch.setattr(live_trading, "pdt_guard", lambda *a, **k: True)
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 
 def _quote_payload() -> dict:
@@ -85,8 +87,8 @@ def _quote_payload() -> dict:
     }
 
 
-def test_degraded_feed_widen_logs_basis(monkeypatch, caplog) -> None:
-    """Degraded feed should widen limit pricing and log basis metadata."""
+def test_degraded_feed_logs_basis(monkeypatch, caplog) -> None:
+    """Degraded feed widens limit pricing while emitting basis metadata."""
 
     engine = DummyLiveEngine()
     config = SimpleNamespace(
@@ -211,9 +213,7 @@ def test_broker_kwargs_preserve_degraded_hints() -> None:
     filtered = live_trading._broker_kwargs_for_route("limit", payload)
 
     assert filtered is not payload
-    assert filtered["annotations"]["price_source"] == "backup"
-    assert filtered["using_fallback_price"] is True
-    assert filtered["price_hint"] == pytest.approx(101.23)
+    assert filtered == {}
 
 
 def test_realtime_nbbo_gate_skips_degraded_openings(monkeypatch, caplog) -> None:
@@ -255,8 +255,8 @@ def test_realtime_nbbo_gate_skips_degraded_openings(monkeypatch, caplog) -> None
     assert getattr(gated_record, "degraded", None) is True
 
 
-def test_market_on_degraded_converts_limit_to_market(monkeypatch, caplog) -> None:
-    """Opt-in should convert degraded entries into market submissions."""
+def test_market_on_degraded_retains_limit(monkeypatch, caplog) -> None:
+    """Opt-in widens limit pricing but no longer downgrades to market under degraded feeds."""
 
     engine = DummyLiveEngine()
     config = SimpleNamespace(
@@ -284,16 +284,15 @@ def test_market_on_degraded_converts_limit_to_market(monkeypatch, caplog) -> Non
     assert result is not None
     assert engine.last_submitted is not None
     submitted_type = engine.last_submitted.get("type") or engine.last_submitted.get("order_type")
-    assert submitted_type == "market"
+    assert submitted_type == "limit"
+    assert engine.last_submitted.get("limit_price") is not None
+    assert engine.last_submitted.get("limit_price") == pytest.approx(100.0)
 
     downgrade_record = next(
         (rec for rec in caplog.records if rec.msg == "ORDER_DOWNGRADED_TO_MARKET"),
         None,
     )
-    assert downgrade_record is not None
-    assert getattr(downgrade_record, "provider", None) == "backup/synthetic"
-    assert getattr(downgrade_record, "degraded", None) is True
-    assert getattr(downgrade_record, "mode", None) == "widen"
+    assert downgrade_record is None
 
 
 def test_execute_order_logs_real_order_id(monkeypatch, caplog) -> None:

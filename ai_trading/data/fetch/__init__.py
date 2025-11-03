@@ -88,6 +88,25 @@ _state: dict[str, Any] = {}
 _BOOTSTRAP_PRIMARY_ONCE = True
 _BOOTSTRAP_BACKUP_REASON: dict[str, object] | None = None
 
+_DATA_HEALTH_LOCK = Lock()
+try:
+    _DATA_FAILURE_THRESHOLD = max(1, int(get_env("DATA_PROVIDER_DEGRADED_THRESHOLD", 3, cast=int)))
+except Exception:
+    _DATA_FAILURE_THRESHOLD = 3
+try:
+    _DATA_FAILURE_WINDOW = max(
+        1.0,
+        float(get_env("DATA_PROVIDER_DEGRADED_WINDOW", 60, cast=float)),
+    )
+except Exception:
+    _DATA_FAILURE_WINDOW = 60.0
+_DATA_HEALTH_STATE: dict[str, Any] = {
+    "consecutive_failures": 0,
+    "first_failure_monotonic": 0.0,
+    "status": "healthy",
+    "last_error_at": None,
+}
+
 
 def _should_bootstrap_primary_first() -> bool:
     raw = os.getenv("AI_TRADING_BOOTSTRAP_PRIMARY_ONLY", "1").strip()
@@ -223,6 +242,58 @@ from .metrics import inc_provider_fallback, register_provider_disable
 from .validators import validate_adjustment, validate_feed
 from .._alpaca_guard import should_import_alpaca_sdk
 from .fallback_concurrency import fallback_slot
+
+
+def _record_provider_failure_event(reason: str | None = None) -> None:
+    """Track sustained Alpaca data provider failures."""
+
+    now_mono = monotonic_time()
+    error_iso = datetime.now(UTC).isoformat()
+    with _DATA_HEALTH_LOCK:
+        state = _DATA_HEALTH_STATE
+        consecutive = int(state.get("consecutive_failures", 0)) + 1
+        first_failure = float(state.get("first_failure_monotonic") or 0.0)
+        if consecutive == 1 or first_failure <= 0.0:
+            first_failure = now_mono
+        elif now_mono - first_failure > _DATA_FAILURE_WINDOW:
+            consecutive = 1
+            first_failure = now_mono
+        state["consecutive_failures"] = consecutive
+        state["first_failure_monotonic"] = first_failure
+        state["last_error_at"] = error_iso
+        status = state.get("status", "healthy")
+        if consecutive >= _DATA_FAILURE_THRESHOLD and (now_mono - first_failure) <= _DATA_FAILURE_WINDOW:
+            status = "degraded"
+        state["status"] = status
+        payload = {
+            "status": status,
+            "consecutive_failures": consecutive,
+            "last_error_at": error_iso,
+        }
+    runtime_state.update_data_provider_state(
+        status=payload["status"],
+        consecutive_failures=payload["consecutive_failures"],
+        last_error_at=payload["last_error_at"],
+        reason=reason,
+    )
+
+
+def _record_provider_success_event() -> None:
+    """Reset provider degradation counters after recovery."""
+
+    with _DATA_HEALTH_LOCK:
+        state = _DATA_HEALTH_STATE
+        state["consecutive_failures"] = 0
+        state["first_failure_monotonic"] = 0.0
+        state["status"] = "healthy"
+        state["last_error_at"] = None
+    runtime_state.update_data_provider_state(
+        status="healthy",
+        consecutive_failures=0,
+        last_error_at=None,
+        reason="recovered",
+    )
+
 
 # --- AI-AGENT: request bookkeeping for tests ---
 def _record_session_last_request(session_obj, method, url, params, headers):
@@ -2351,6 +2422,7 @@ def _clear_minute_fallback_state(
                 backup_canon = canonical_provider(backup_label)
             except Exception:
                 backup_canon = backup_label
+        _record_provider_success_event()
         runtime_state.update_data_provider_state(
             primary=primary_canon,
             active=primary_canon,
@@ -9649,6 +9721,7 @@ def get_minute_df(
                 "status": status,
             },
         )
+        _record_provider_failure_event(str(reason) if reason is not None else None)
         primary_failure_logged = True
 
     def _minute_backup_get_bars(
@@ -9671,6 +9744,8 @@ def get_minute_df(
         fallback_tags = minute_metrics.get("fallback_tags")
         if (prefer_fallback or minute_metrics.get("fallback_emitted")) and isinstance(fallback_tags, dict):
             selected_tags = dict(fallback_tags)
+        if not prefer_fallback and not minute_metrics.get("fallback_emitted"):
+            _record_provider_success_event()
         _incr("data.fetch.success", value=1.0, tags=selected_tags)
         minute_metrics["success_emitted"] = True
         minute_metrics["fallback_emitted"] = False

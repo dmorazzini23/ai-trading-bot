@@ -11,7 +11,7 @@ def test_log_trade_calls_fix_permissions_on_parent_dir_failure(monkeypatch, tmp_
     def raise_perm(_p):
         raise PermissionError("denied")
 
-    def fix(_p):
+    def fix(_p, *_headers):
         called["hit"] = True
         return True
 
@@ -34,7 +34,7 @@ def test_log_trade_calls_fix_permissions_on_file_header_failure(monkeypatch, tmp
 
     called = {"fix": 0}
 
-    def fix(_p):
+    def fix(_p, *_headers):
         called["fix"] += 1
         return True
 

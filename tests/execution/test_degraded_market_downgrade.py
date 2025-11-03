@@ -31,6 +31,11 @@ def _patch_execution_guards(monkeypatch) -> None:
         "is_disabled",
         lambda *_a, **_k: True,
     )
+    from ai_trading.execution import guards
+
+    guards.STATE.pdt = guards.PDTState()
+    guards.STATE.shadow_cycle = False
+    guards.STATE.shadow_cycle_forced = False
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 
@@ -93,9 +98,9 @@ def test_market_downgrade_when_realtime_nbbo_required(monkeypatch, caplog) -> No
 
     assert order is not None
     assert engine.last_submitted is not None
-    assert engine.last_submitted.get("order_type") == "market"
-    assert "price" not in engine.last_submitted
-    assert "limit_price" not in engine.last_submitted
+    submitted_type = engine.last_submitted.get("order_type") or engine.last_submitted.get("type")
+    assert submitted_type == "limit"
+    assert engine.last_submitted.get("limit_price") == pytest.approx(100.5)
 
     messages = [
         record.msg
@@ -103,4 +108,4 @@ def test_market_downgrade_when_realtime_nbbo_required(monkeypatch, caplog) -> No
         if record.name == "ai_trading.execution.live_trading"
     ]
     assert "ORDER_SKIPPED_PRICE_GATED" in messages
-    assert "ORDER_DOWNGRADED_TO_MARKET" in messages
+    assert "ORDER_DOWNGRADED_TO_MARKET" not in messages

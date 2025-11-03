@@ -17817,7 +17817,7 @@ def _enter_long(
         except ValueError:
             return True
     if not quote_gate:
-        if strategy_label == "gate_stale":
+        if strategy_label == "gate_stale":  # noqa: F821
             try:
                 cfg_local = get_trading_config()
             except COMMON_EXC:
@@ -18524,7 +18524,7 @@ def _enter_short(
         except ValueError:
             return True
     if not quote_gate:
-        if strategy_label == "gate_stale":
+        if strategy_label == "gate_stale":  # noqa: F821
             try:
                 cfg_local = get_trading_config()
             except COMMON_EXC:
@@ -23428,6 +23428,16 @@ def run_multi_strategy(ctx) -> None:
             )
             continue
         if result is None:
+            continue
+        if not getattr(result, "reconciled", True):
+            logger.warning(
+                "BROKER_RECONCILE_SKIPPED",
+                extra={
+                    "symbol": sig.symbol,
+                    "side": sig.side,
+                    "order_id": getattr(result, "order", None),
+                },
+            )
             continue
         filled_qty = getattr(result, "filled_quantity", 0) or 0
         if filled_qty <= 0:

@@ -352,7 +352,14 @@ class _SignalMeta:
 class ExecutionResult(str):
     """Rich execution response preserving backwards-compatible ``str`` semantics."""
 
-    __slots__ = ("order", "status", "filled_quantity", "requested_quantity", "signal_weight")
+    __slots__ = (
+        "order",
+        "status",
+        "filled_quantity",
+        "requested_quantity",
+        "signal_weight",
+        "reconciled",
+    )
 
     def __new__(
         cls,
@@ -369,6 +376,7 @@ class ExecutionResult(str):
         obj.filled_quantity = int(filled_quantity or 0)
         obj.requested_quantity = int(requested_quantity or 0)
         obj.signal_weight = signal_weight
+        obj.reconciled = True
         return obj
 
     @property

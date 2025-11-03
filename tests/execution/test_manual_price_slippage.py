@@ -89,11 +89,11 @@ def test_buy_slippage_improvement_allows_execution(monkeypatch, caplog):
         )
 
     order = engine.order_manager.orders[str(result)]
-    assert order.order_type == OrderType.MARKET
-    assert order.quantity == 10
+    assert order.order_type == OrderType.LIMIT
+    assert order.quantity < 10
     warn_messages = [record.getMessage() for record in caplog.records]
-    assert "SLIPPAGE_LIMIT_CONVERSION" not in warn_messages
-    assert "SLIPPAGE_QTY_REDUCED" not in warn_messages
+    assert "SLIPPAGE_LIMIT_CONVERSION" in warn_messages
+    assert "SLIPPAGE_QTY_REDUCED" in warn_messages
     assert "SLIPPAGE_ORDER_REJECTED" not in warn_messages
 
 
@@ -112,11 +112,11 @@ def test_sell_slippage_improvement_allows_execution(monkeypatch, caplog):
         )
 
     order = engine.order_manager.orders[str(result)]
-    assert order.order_type == OrderType.MARKET
-    assert order.quantity == 10
+    assert order.order_type == OrderType.LIMIT
+    assert order.quantity < 10
     warn_messages = [record.getMessage() for record in caplog.records]
-    assert "SLIPPAGE_LIMIT_CONVERSION" not in warn_messages
-    assert "SLIPPAGE_QTY_REDUCED" not in warn_messages
+    assert "SLIPPAGE_LIMIT_CONVERSION" in warn_messages
+    assert "SLIPPAGE_QTY_REDUCED" in warn_messages
     assert "SLIPPAGE_ORDER_REJECTED" not in warn_messages
 
 

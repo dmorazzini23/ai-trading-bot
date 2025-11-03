@@ -384,6 +384,56 @@ def derive_cap_from_settings(
     return float(fallback)
 
 
+def enforce_alpaca_feed_policy() -> dict[str, str] | None:
+    """Ensure Alpaca provider configurations default to SIP feed with strict validation."""
+
+    try:
+        cfg = get_trading_config()
+    except Exception as exc:
+        raise RuntimeError(f"Unable to load trading configuration: {exc}") from exc
+
+    provider_primary = getattr(cfg, "data_provider", None)
+    if not provider_primary:
+        priority = getattr(cfg, "data_provider_priority", ())
+        if priority:
+            provider_primary = priority[0]
+    provider_normalized = str(provider_primary or "").strip().lower()
+    if not provider_normalized:
+        return None
+
+    if not provider_normalized.startswith("alpaca"):
+        return {"provider": provider_normalized, "feed": str(getattr(cfg, "alpaca_data_feed", "") or "")}
+
+    env_candidates = (
+        os.getenv("ALPACA_DATA_FEED"),
+        os.getenv("DATA_FEED"),
+        os.getenv("ALPACA_FEED"),
+    )
+    explicit_feed = next((value for value in env_candidates if value not in (None, "")), None)
+
+    feed_value = explicit_feed or getattr(cfg, "alpaca_data_feed", None) or ""
+    feed_normalized = str(feed_value).strip().lower() or "sip"
+    if explicit_feed is None and feed_normalized != "sip":
+        feed_normalized = "sip"
+
+    if feed_normalized != "sip":
+        raise RuntimeError(
+            "Alpaca data provider requires SIP market data. Set ALPACA_DATA_FEED=sip (or ALPACA_FEED=sip) "
+            "and ensure your Alpaca account has SIP entitlements."
+        )
+
+    if os.getenv("ALPACA_DATA_FEED") in (None, "") and os.getenv("ALPACA_FEED") in (None, ""):
+        os.environ["ALPACA_DATA_FEED"] = "sip"
+    if os.getenv("ALPACA_ALLOW_SIP") in (None, "") and os.getenv("ALPACA_HAS_SIP") in (None, ""):
+        os.environ.setdefault("ALPACA_ALLOW_SIP", "1")
+        os.environ.setdefault("ALPACA_HAS_SIP", "1")
+    try:
+        cfg.update(alpaca_data_feed="sip")
+    except Exception:
+        pass
+    return {"provider": provider_normalized, "feed": "sip"}
+
+
 SEED = get_trading_config().seed
 MAX_EMPTY_RETRIES = get_trading_config().max_empty_retries
 
@@ -398,6 +448,7 @@ __all__ = [
     "is_shadow_mode",
     "validate_required_env",
     "validate_alpaca_credentials",
+    "enforce_alpaca_feed_policy",
     "_resolve_alpaca_env",
     "get_config_schema",
     "from_env_relaxed",

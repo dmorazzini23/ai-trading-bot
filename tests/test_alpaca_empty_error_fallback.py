@@ -75,12 +75,14 @@ def test_error_empty_switches_to_backup(monkeypatch):
 
     out1 = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
     assert out1 is not None and not out1.empty
-    assert req.calls == 1
+    # First invocation attempts both IEX and SIP feeds before falling back.
+    assert req.calls == 2
     assert backup_calls["count"] == 1
 
     out2 = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
     assert out2 is not None and not out2.empty
-    assert req.calls == 1
+    # Subsequent invocations should rely on the backup without new Alpaca calls.
+    assert req.calls == 2
     assert backup_calls["count"] == 2
 
     assert ("AAPL", "1Min") not in fetch._ALPACA_EMPTY_ERROR_COUNTS

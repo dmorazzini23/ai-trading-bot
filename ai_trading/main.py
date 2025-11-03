@@ -121,6 +121,7 @@ from ai_trading.config.management import (
     reload_env,
     _resolve_alpaca_env,
     TradingConfig,
+    enforce_alpaca_feed_policy,
 )
 from ai_trading.metrics import get_histogram, get_counter
 from ai_trading.utils.env import alpaca_credential_status
@@ -221,6 +222,7 @@ def preflight_import_health() -> bool:
         logger.info("IMPORT_PREFLIGHT_SKIPPED", extra={"reason": "env_override"})
         return True
 
+    feed_validation_failed = False
     core_modules = [
         "ai_trading.core.bot_engine",
         "ai_trading.risk.engine",
@@ -248,9 +250,20 @@ def preflight_import_health() -> bool:
         )
     else:
         logger.info("IMPORT_PREFLIGHT_OK")
+        try:
+            feed_snapshot = enforce_alpaca_feed_policy()
+        except RuntimeError as exc:
+            logger.error(
+                "ALPACA_FEED_VALIDATION_FAILED",
+                extra={"error": str(exc)},
+            )
+            feed_validation_failed = True
+        else:
+            if feed_snapshot:
+                logger.info("ALPACA_PROVIDER_PREFLIGHT", extra=feed_snapshot)
 
     ensure_trade_log_path()
-    return not failures
+    return not failures and not feed_validation_failed
 
 
 def should_enforce_strict_import_preflight() -> bool:
@@ -1812,6 +1825,22 @@ def main(argv: list[str] | None = None) -> None:
                             _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
                         except Exception:
                             pass
+                    if budget is not None:
+                        try:
+                            elapsed_ms = int(max(0.0, budget.elapsed_ms()))
+                            budget_ms = int(max(0.0, budget.ms))
+                        except Exception:
+                            elapsed_ms = None
+                            budget_ms = None
+                        if elapsed_ms is not None and budget_ms is not None:
+                            logger.info(
+                                "CYCLE_COMPUTE_BUDGET",
+                                extra={
+                                    "elapsed_ms": elapsed_ms,
+                                    "budget_ms": budget_ms,
+                                    "status": "OVER" if budget.over_budget() else "OK",
+                                },
+                            )
                 except (ValueError, TypeError):
                     logger.exception("run_cycle failed")
             except Exception:

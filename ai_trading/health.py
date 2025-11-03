@@ -129,7 +129,23 @@ class HealthCheck:
                 "reason": provider_state.get("reason"),
                 "updated": provider_state.get("updated"),
                 "cooldown_sec": provider_state.get("cooldown_sec"),
+                "status": provider_state.get("status"),
+                "consecutive_failures": provider_state.get("consecutive_failures"),
+                "last_error_at": provider_state.get("last_error_at"),
             }
+            broker_section = {
+                "connected": bool(broker_state.get("connected")),
+                "status": broker_state.get("status") or ("reachable" if broker_state.get("connected") else "unreachable"),
+                "latency_ms": broker_state.get("latency_ms"),
+                "last_error": broker_state.get("last_error"),
+                "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
+            }
+
+            if provider_section.get("status") == "down" or broker_section["status"] == "unreachable":
+                ok = False
+            health_status = "healthy"
+            if not ok or provider_section.get("status") not in {"healthy", None} or broker_section["status"] == "unreachable":
+                health_status = "degraded"
 
             payload = {
                 "ok": ok,
@@ -139,7 +155,8 @@ class HealthCheck:
                 "primary_data_provider": provider_section,
                 "fallback_active": bool(provider_section.get("using_backup")),
                 "quotes_status": quote_state,
-                "broker_connectivity": broker_state,
+                "broker_connectivity": broker_section,
+                "status": health_status,
             }
             if err:
                 payload["error"] = err

@@ -28,6 +28,9 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "using_backup": False,
     "reason": None,
     "updated": None,
+    "status": "unknown",
+    "consecutive_failures": 0,
+    "last_error_at": None,
 }
 _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "status": "unknown",
@@ -44,6 +47,8 @@ _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "latency_ms": None,
     "last_error": None,
     "updated": None,
+    "status": "unknown",
+    "last_order_ack_ms": None,
 }
 
 _provider_state: dict[str, Any] = dict(_DEFAULT_PROVIDER_STATE)
@@ -66,6 +71,9 @@ def update_data_provider_state(
     using_backup: bool | None = None,
     reason: str | None = None,
     cooldown_sec: float | None = None,
+    status: str | None = None,
+    consecutive_failures: int | None = None,
+    last_error_at: str | None = None,
 ) -> None:
     """Record current data provider routing."""
 
@@ -85,6 +93,15 @@ def update_data_provider_state(
             updates["cooldown_sec"] = max(0.0, float(cooldown_sec))
         except (TypeError, ValueError):
             pass
+    if status is not None:
+        updates["status"] = status
+    if consecutive_failures is not None:
+        try:
+            updates["consecutive_failures"] = max(0, int(consecutive_failures))
+        except (TypeError, ValueError):
+            pass
+    if last_error_at is not None:
+        updates["last_error_at"] = last_error_at
     with _LOCK:
         global _provider_state
         _provider_state = _merge_state(_provider_state, updates)
@@ -140,6 +157,8 @@ def update_broker_status(
     connected: bool | None = None,
     latency_ms: float | None = None,
     last_error: str | None = None,
+    status: str | None = None,
+    last_order_ack_ms: float | None = None,
 ) -> None:
     """Record recent broker connectivity observations."""
 
@@ -153,6 +172,13 @@ def update_broker_status(
             pass
     if last_error is not None:
         updates["last_error"] = last_error
+    if status is not None:
+        updates["status"] = status
+    if last_order_ack_ms is not None:
+        try:
+            updates["last_order_ack_ms"] = max(0.0, float(last_order_ack_ms))
+        except (TypeError, ValueError):
+            pass
     with _LOCK:
         global _broker_status
         _broker_status = _merge_state(_broker_status, updates)

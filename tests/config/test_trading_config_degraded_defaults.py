@@ -19,7 +19,7 @@ def test_degraded_feed_defaults(monkeypatch):
     cfg = runtime.get_trading_config()
 
     assert cfg.post_submit_broker_sync is True
-    assert cfg.min_quote_freshness_ms == 1500
-    assert cfg.degraded_feed_mode == "widen"
-    assert cfg.degraded_feed_limit_widen_bps == 8
+    assert cfg.min_quote_freshness_ms == 2500
+    assert cfg.degraded_feed_mode == "block"
+    assert cfg.degraded_feed_limit_widen_bps == 50
     assert cfg.log_exec_summary_enabled is True

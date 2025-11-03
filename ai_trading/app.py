@@ -7,6 +7,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from ai_trading.logging import get_logger
+from ai_trading.telemetry import runtime_state
 from ai_trading.utils.optional_dep import missing
 try:
     from flask import jsonify as _jsonify
@@ -409,13 +410,50 @@ def create_app():
         from datetime import UTC, datetime
 
         ok = bool(app.config.get("_ENV_VALID"))
+        try:
+            provider_state = runtime_state.observe_data_provider_state()
+        except Exception:
+            provider_state = {}
+        try:
+            broker_state = runtime_state.observe_broker_status()
+        except Exception:
+            broker_state = {}
+
+        provider_status = provider_state.get("status") or ("degraded" if provider_state.get("using_backup") else "healthy")
+        provider_payload = {
+            "name": provider_state.get("active") or provider_state.get("primary"),
+            "status": provider_status,
+            "using_backup": bool(provider_state.get("using_backup")),
+            "reason": provider_state.get("reason"),
+            "consecutive_failures": provider_state.get("consecutive_failures"),
+            "last_error_at": provider_state.get("last_error_at"),
+        }
+
+        broker_status = broker_state.get("status") or ("reachable" if broker_state.get("connected") else "unreachable")
+        broker_payload = {
+            "status": broker_status,
+            "connected": bool(broker_state.get("connected")),
+            "latency_ms": broker_state.get("latency_ms"),
+            "last_error": broker_state.get("last_error"),
+            "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
+        }
+
+        health_status = "healthy"
+        if provider_status not in {"healthy", None} or broker_status == "unreachable" or not ok:
+            health_status = "degraded"
+
+        overall_ok = ok and provider_status != "down" and broker_status != "unreachable"
+
         payload = {
-            "ok": ok,
+            "ok": overall_ok,
             "ts": datetime.now(UTC).isoformat(),
             "service": "ai-trading",
+            "status": health_status,
+            "data_provider": provider_payload,
+            "broker": broker_payload,
         }
         err = app.config.get("_ENV_ERR")
-        if not ok and err:
+        if not overall_ok and err:
             payload["error"] = err
         return jsonify(payload)
 

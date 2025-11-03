@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
 from ai_trading.logging import get_logger, log_pdt_enforcement
+from ai_trading.telemetry import runtime_state
 from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
@@ -210,6 +211,27 @@ except Exception as exc:  # pragma: no cover - fallback when optional deps missi
         extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
     )
     _config_get_env = None
+
+
+def _resolve_ack_timeout_seconds() -> float:
+    default_timeout = 15.0
+    resolver = _config_get_env
+    if resolver is None:
+        return default_timeout
+    try:
+        configured = resolver("ORDER_ACK_TIMEOUT_SECONDS", None, cast=float)
+    except Exception:
+        configured = None
+    if configured in (None, ""):
+        return default_timeout
+    try:
+        timeout = float(configured)
+    except (TypeError, ValueError):
+        return default_timeout
+    return max(1.0, timeout)
+
+
+_ACK_TIMEOUT_SECONDS = _resolve_ack_timeout_seconds()
 
 
 def _require_bid_ask_quotes() -> bool:
@@ -2150,6 +2172,8 @@ class ExecutionEngine:
             "time_in_force": resolved_tif,
             "client_order_id": client_order_id,
         }
+        if order_data.get("limit_price") is None:
+            order_data.pop("limit_price", None)
         # Optional bracket fields
         tp = kwargs.get("take_profit")
         sl = kwargs.get("stop_loss")
@@ -2410,22 +2434,6 @@ class ExecutionEngine:
 
         start_time = time.time()
         explicit_limit = ("limit_price" in order_data) or ("stop_price" in order_data)
-        downgraded_logged = False
-        if using_fallback_price and not explicit_limit:
-            order_data["type"] = "market"
-            order_data.pop("limit_price", None)
-            order_data.pop("stop_price", None)
-            logger.warning(
-                "ORDER_DOWNGRADED_TO_MARKET",
-                extra={
-                    "symbol": symbol,
-                    "side": side_lower,
-                    "quantity": quantity,
-                    "client_order_id": client_order_id,
-                    "using_fallback_price": True,
-                },
-            )
-            downgraded_logged = True
         logger.info(
             "Submitting limit order",
             extra={
@@ -2477,59 +2485,17 @@ class ExecutionEngine:
             )
 
             if should_retry_market:
-                retry_order = dict(order_data)
-                retry_order["type"] = "market"
-                retry_order.pop("limit_price", None)
-                retry_order.pop("stop_price", None)
-                if not downgraded_logged:
-                    logger.warning(
-                        "ORDER_DOWNGRADED_TO_MARKET",
-                        extra={
-                            "symbol": symbol,
-                            "side": side_lower,
-                            "quantity": quantity,
-                            "client_order_id": client_order_id,
-                            "using_fallback_price": True,
-                        },
-                    )
-                    downgraded_logged = True
-                try:
-                    result = self._execute_with_retry(
-                        self._submit_order_to_alpaca, retry_order
-                    )
-                except NonRetryableBrokerError as retry_exc:
-                    metadata_retry_raw = _extract_api_error_metadata(retry_exc)
-                    metadata_retry = (
-                        metadata_retry_raw if isinstance(metadata_retry_raw, dict) else {}
-                    )
-                    detail_retry = metadata_retry.get("detail")
-                    retry_extra = {
+                logger.warning(
+                    "QUOTE_QUALITY_BLOCKED",
+                    extra={
                         "symbol": symbol,
-                        "side": side_lower,
-                        "quantity": quantity,
-                        "client_order_id": client_order_id,
-                        "order_type": "market",
-                        "using_fallback_price": True,
-                        "code": metadata_retry.get("code"),
-                        "detail": detail_retry,
-                    }
-                    logger.warning("ALPACA_ORDER_REJECTED_RETRY", extra=retry_extra)
-                    skipped_retry = dict(retry_extra)
-                    skipped_retry["reason"] = "retry_failed"
-                    if asset_class:
-                        skipped_retry["asset_class"] = asset_class
-                    if price_hint is not None:
-                        skipped_retry["price_hint"] = str(price_hint)
-                    logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_retry)
-                    detail_retry_extra = dict(skipped_retry)
-                    detail_retry_extra["detail"] = detail_retry or str(retry_exc)
-                    logger.warning(
-                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
-                        extra=detail_retry_extra,
-                    )
-                    return None
-                else:
-                    order_type_initial = "market"
+                        "reason": "broker_rejected_degraded_quote",
+                        "synthetic": True,
+                        "price_source": annotations.get("price_source"),
+                        "detail": detail_primary,
+                    },
+                )
+                return None
             else:
                 skipped_extra = dict(alpaca_extra)
                 skipped_extra["reason"] = str(exc)
@@ -2642,6 +2608,8 @@ class ExecutionEngine:
             raise ValueError(f"execute_order invalid qty={qty}")
 
         mapped_side = self._map_core_side(side)
+        client = getattr(self, "trading_client", None)
+        submit_started_at = time.monotonic()
 
         time_in_force_alias = kwargs.pop("tif", None)
         extended_hours = kwargs.get("extended_hours")
@@ -2685,8 +2653,6 @@ class ExecutionEngine:
         )
 
         order_type_normalized = order_type_initial
-        downgraded_to_market_initial = False
-        downgraded_to_market_degraded = False
         if resolved_limit_price is None and order_type_normalized == "limit":
             order_type_normalized = "market"
         elif resolved_limit_price is not None:
@@ -2761,15 +2727,6 @@ class ExecutionEngine:
                     )
                 else:
                     fallback_buffer_bps = 0
-
-        if (
-            using_fallback_price
-            and not manual_limit_requested
-            and order_type_normalized in {"limit", "stop_limit"}
-            and fallback_buffer_bps <= 0
-        ):
-            order_type_normalized = "market"
-            downgraded_to_market_initial = True
 
         provider_source = (
             annotations.get("price_source")
@@ -2912,35 +2869,48 @@ class ExecutionEngine:
                 "degraded": True,
                 "reason": "realtime_nbbo_required",
             }
-            if downgrade_allowed:
-                gate_extra["downgraded_to_market"] = True
             logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_extra)
             if not downgrade_allowed:
                 return None
 
-        if (
-            degrade_active
-            and market_on_degraded
-            and not closing_position
-        ):
-            order_type_normalized = "market"
-            resolved_limit_price = None
-            price_for_limit = None
-            kwargs.pop("price", None)
-            kwargs.pop("limit_price", None)
-            kwargs.pop("stop_price", None)
-            kwargs.pop("stop_limit_price", None)
-            downgraded_to_market_degraded = True
-
         limit_for_log = resolved_limit_price if resolved_limit_price is not None else price_for_limit
         if limit_for_log is None and basis_price is not None:
             limit_for_log = basis_price
+
+        quality_reason = None
+        if isinstance(annotations, Mapping):
+            quality_reason = (
+                annotations.get("fallback_reason")
+                or annotations.get("quote_reason")
+                or annotations.get("reason")
+            )
+        if quality_reason is None:
+            if synthetic_quote:
+                quality_reason = "synthetic_quote"
+            elif using_fallback_price:
+                quality_reason = "fallback_price"
+            elif degrade_due_age:
+                quality_reason = "stale_quote"
+            elif degrade_due_provider:
+                quality_reason = "provider_mismatch"
+            elif degrade_due_monitor:
+                quality_reason = "provider_disabled"
 
         if (
             degrade_active
             and degraded_mode == "block"
             and not closing_position
         ):
+            logger.warning(
+                "QUOTE_QUALITY_BLOCKED",
+                extra={
+                    "symbol": symbol,
+                    "reason": quality_reason or "degraded_feed",
+                    "synthetic": bool(synthetic_quote or using_fallback_price),
+                    "provider": provider_for_log,
+                    "age_ms": age_ms_int,
+                },
+            )
             logger.info(
                 "LIMIT_BASIS",
                 extra={
@@ -3034,6 +3004,22 @@ class ExecutionEngine:
         ):
             return None
 
+        pre_positions_map: dict[str, float] = {}
+        pre_cash_balance: float | None = None
+        if client is not None:
+            try:
+                _, positions_before = self._fetch_broker_state()
+            except Exception:
+                logger.debug("BROKER_PREFETCH_FAILED", extra={"symbol": symbol}, exc_info=True)
+            else:
+                pre_positions_map = _positions_to_quantity_map(positions_before)
+            try:
+                _, cash_before = self._fetch_account_state()
+            except Exception:
+                logger.debug("ACCOUNT_PREFETCH_FAILED", extra={"symbol": symbol}, exc_info=True)
+            else:
+                pre_cash_balance = cash_before
+
         order_kwargs: dict[str, Any] = {}
         time_in_force = kwargs.get("time_in_force")
         if time_in_force is None and time_in_force_alias is not None:
@@ -3075,11 +3061,6 @@ class ExecutionEngine:
         order_kwargs["price_hint"] = price_hint
         if annotations:
             order_kwargs["annotations"] = annotations
-
-        if downgraded_to_market_initial or downgraded_to_market_degraded:
-            order_kwargs.pop("limit_price", None)
-            order_kwargs.pop("stop_price", None)
-            order_kwargs.pop("stop_limit_price", None)
 
         price_for_slippage = price_for_limit if price_for_limit is not None else resolved_limit_price
         if price_for_slippage is not None:
@@ -3127,25 +3108,43 @@ class ExecutionEngine:
         asset_class_for_log = order_kwargs.get("asset_class")
         price_hint_str = str(price_hint) if price_hint is not None else None
 
-        if downgraded_to_market_initial or downgraded_to_market_degraded:
-            downgrade_extra = {
-                "symbol": symbol,
-                "side": mapped_side,
-                "quantity": qty,
-                "client_order_id": client_order_id,
-            }
-            downgrade_extra["price_hint"] = price_hint_str
-            if downgraded_to_market_initial and using_fallback_price:
-                downgrade_extra["using_fallback_price"] = True
-            if downgraded_to_market_degraded:
-                downgrade_extra.update(
-                    {
+        if using_fallback_price and not manual_limit_requested:
+            fallback_limit_price = price_for_limit or price_hint or resolved_limit_price
+            fallback_value: float | None = None
+            if fallback_limit_price is not None:
+                try:
+                    fallback_value = float(fallback_limit_price)
+                except (TypeError, ValueError):
+                    fallback_value = None
+            if fallback_value is None or not math.isfinite(fallback_value) or fallback_value <= 0:
+                logger.warning(
+                    "QUOTE_QUALITY_BLOCKED",
+                    extra={
+                        "symbol": symbol,
+                        "reason": quality_reason or "fallback_price_unavailable",
+                        "synthetic": True,
                         "provider": provider_for_log,
-                        "degraded": True,
-                        "mode": degraded_mode,
-                    }
+                        "age_ms": age_ms_int,
+                    },
                 )
-            logger.warning("ORDER_DOWNGRADED_TO_MARKET", extra=downgrade_extra)
+                return None
+            resolved_limit_price = fallback_value
+            price_for_limit = fallback_value
+            order_kwargs["price"] = fallback_value
+            limit_for_log = fallback_value
+            if price_hint is None:
+                price_hint = fallback_value
+            logger.info(
+                "FALLBACK_LIMIT_ENFORCED",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "quantity": qty,
+                    "limit_price": fallback_value,
+                    "client_order_id": client_order_id,
+                    "buffer_bps": fallback_buffer_bps if fallback_buffer_bps else 0,
+                },
+            )
 
         order_type_submitted = order_type_normalized
         order: Any | None = None
@@ -3272,13 +3271,64 @@ class ExecutionEngine:
             return None
 
         final_order = order
-        client = getattr(self, "trading_client", None)
-        order_id_hint = _extract_value(final_order, "id", "order_id")
-        client_order_id_hint = _extract_value(final_order, "client_order_id")
-        final_status = _extract_value(final_order, "status") or "submitted"
+        order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
+            final_order, qty
+        )
+        final_status = status
+
+        ack_logged = False
+        reject_logged = False
+        last_status_logged: str | None = None
+        ack_timed_out = False
+
+        def _status_payload() -> dict[str, Any]:
+            return {
+                "symbol": symbol,
+                "side": mapped_side,
+                "order_id": str(order_id) if order_id is not None else None,
+                "client_order_id": str(client_order_id) if client_order_id is not None else None,
+                "quantity": qty,
+            }
+
+        def _handle_status_transition(status_value: Any, *, source: str) -> None:
+            nonlocal ack_logged, reject_logged, last_status_logged
+            status_text = str(status_value or "").lower()
+            if not status_text or status_text == last_status_logged:
+                return
+            last_status_logged = status_text
+            payload = _status_payload()
+            payload["status"] = status_text
+            payload["source"] = source
+            elapsed_ms = int(max(0.0, (time.monotonic() - submit_started_at) * 1000.0))
+            if status_text in {"accepted", "partially_filled", "filled"} and not ack_logged:
+                ack_logged = True
+                payload["latency_ms"] = elapsed_ms
+                logger.info("ORDER_ACK_RECEIVED", extra=payload)
+                runtime_state.update_broker_status(
+                    connected=True,
+                    latency_ms=elapsed_ms,
+                    last_error=None,
+                    status="reachable",
+                    last_order_ack_ms=elapsed_ms,
+                )
+            if status_text == "partially_filled":
+                payload["filled_qty"] = float(filled_qty or 0)
+                logger.info("ORDER_FILL_PROGRESS", extra=payload)
+            if status_text == "filled":
+                payload["filled_qty"] = float(filled_qty or 0)
+                logger.info("ORDER_FILL_CONFIRMED", extra=payload)
+            if status_text in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}:
+                if not reject_logged:
+                    logger.warning("ORDER_REJECTED", extra=payload)
+                    reject_logged = True
+
+        _handle_status_transition(status, source="initial")
+
         if client is not None:
-            poll_deadline = time.monotonic() + 3.0
-            poll_interval = 0.25
+            order_id_hint = _extract_value(final_order, "id", "order_id")
+            client_order_id_hint = _extract_value(final_order, "client_order_id")
+            poll_deadline = submit_started_at + _ACK_TIMEOUT_SECONDS
+            poll_interval = 0.5
             terminal_statuses = {
                 "filled",
                 "partially_filled",
@@ -3308,16 +3358,29 @@ class ExecutionEngine:
                 if refreshed is None:
                     break
                 final_order = refreshed
-                refreshed_status = _extract_value(refreshed, "status")
-                if refreshed_status:
-                    final_status = refreshed_status
+                order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
+                    final_order, qty
+                )
+                final_status = status
+                _handle_status_transition(final_status, source="poll")
                 if str(final_status).lower() in terminal_statuses:
                     break
                 time.sleep(poll_interval)
+                poll_interval = min(poll_interval * 1.5, 2.0)
+            if not ack_logged:
+                ack_timed_out = True
+                timeout_payload = _status_payload()
+                timeout_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
+                logger.error("ORDER_ACK_TIMEOUT", extra=timeout_payload)
+                runtime_state.update_broker_status(
+                    connected=False,
+                    last_error="ack_timeout",
+                    status="unreachable",
+                )
+                final_status = "ack_timeout"
+                status = "ack_timeout"
 
-        order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
-            final_order, qty
-        )
+        _handle_status_transition(status, source="final")
 
         if not (order_id or client_order_id):
             logger.error(
@@ -3344,6 +3407,15 @@ class ExecutionEngine:
             },
         )
 
+        order_id_display = order_id or client_order_id
+        order_status_lower = str(status).lower() if status is not None else None
+        symbol_key = symbol.upper()
+        reconciled = not ack_timed_out
+        position_changed = False
+        cash_changed = False
+        reconcile_summary: dict[str, Any] | None = None
+        post_cash_balance: float | None = None
+
         open_orders_count: int | None = None
         positions_count: int | None = None
         open_orders_list: list[Any] = []
@@ -3352,6 +3424,30 @@ class ExecutionEngine:
             open_orders_list, positions_list = self._fetch_broker_state()
             open_orders_count = len(open_orders_list)
             positions_count = len(positions_list)
+            post_positions_map = _positions_to_quantity_map(positions_list)
+            _, post_cash_candidate = self._fetch_account_state()
+            post_cash_balance = post_cash_candidate
+            pre_qty = pre_positions_map.get(symbol_key, 0.0)
+            post_qty = post_positions_map.get(symbol_key, 0.0)
+            try:
+                position_changed = not math.isclose(post_qty, pre_qty, rel_tol=1e-6, abs_tol=0.0001)
+            except Exception:
+                position_changed = post_qty != pre_qty
+            if pre_cash_balance is not None and post_cash_balance is not None:
+                try:
+                    cash_changed = not math.isclose(post_cash_balance, pre_cash_balance, rel_tol=1e-6, abs_tol=0.05)
+                except Exception:
+                    cash_changed = post_cash_balance != pre_cash_balance
+            reconcile_summary = {
+                "symbol": symbol,
+                "order_id": str(order_id_display) if order_id_display is not None else None,
+                "client_order_id": str(client_order_id) if client_order_id is not None else None,
+                "status": order_status_lower,
+                "pre_position": pre_positions_map.get(symbol_key, 0.0),
+                "post_position": post_qty,
+                "pre_cash": pre_cash_balance,
+                "post_cash": post_cash_balance,
+            }
             if positions_list:
                 self._update_position_tracker_snapshot(positions_list)
             try:
@@ -3362,8 +3458,31 @@ class ExecutionEngine:
                     extra={"symbol": symbol},
                     exc_info=True,
                 )
+            if reconcile_summary is not None:
+                try:
+                    filled_indicator = float(filled_qty or 0)
+                except (TypeError, ValueError):
+                    filled_indicator = 0.0
+                expected_settlement = (
+                    order_status_lower in {"filled", "partially_filled"}
+                    and filled_indicator > 0.0
+                )
+                reconcile_summary.update(
+                    {
+                        "position_changed": position_changed,
+                        "cash_changed": cash_changed,
+                        "ack_timed_out": ack_timed_out,
+                    }
+                )
+                if ack_timed_out:
+                    reconciled = False
+                elif expected_settlement and not (position_changed or cash_changed):
+                    reconciled = False
+                    logger.error("BROKER_RECONCILE_MISMATCH", extra=reconcile_summary)
+                logger.info("BROKER_RECONCILE_SUMMARY", extra=reconcile_summary)
+        else:
+            reconciled = False
 
-        order_id_display = order_id or client_order_id
         logger.info(
             "BROKER_STATE_AFTER_SUBMIT",
             extra={
@@ -3373,6 +3492,7 @@ class ExecutionEngine:
                 "final_status": status,
                 "open_orders": open_orders_count,
                 "positions": positions_count,
+                "reconciled": reconciled,
             },
         )
 
@@ -3383,6 +3503,9 @@ class ExecutionEngine:
             requested_qty,
             None if signal_weight is None else float(signal_weight),
         )
+        setattr(execution_result, "reconciled", reconciled)
+        if not reconciled:
+            execution_result.status = "failed"
 
         logger.info(
             "EXEC_ENGINE_EXECUTE_ORDER",
@@ -4976,6 +5099,22 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             logger.debug("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
             return super().synchronize_broker_state()
 
+    def _fetch_account_state(self) -> tuple[Any | None, float | None]:
+        """Return broker account object and cash balance when available."""
+
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return (None, None)
+        get_account = getattr(client, "get_account", None)
+        if not callable(get_account):
+            return (None, None)
+        try:
+            account = get_account()
+        except Exception:
+            logger.debug("BROKER_ACCOUNT_FETCH_FAILED", exc_info=True)
+            return (None, None)
+        return account, _extract_cash_balance(account)
+
     def check_trailing_stops(self) -> None:
         mgr = getattr(self, "_ts_mgr", None)
         if hasattr(mgr, "recalc_all"):
@@ -5006,3 +5145,48 @@ def _fallback_limit_buffer_bps() -> int:
     if buffer < 0:
         buffer = 0
     return buffer
+
+
+def _extract_cash_balance(account: Any) -> float | None:
+    """Best-effort extraction of a cash balance from an account payload."""
+
+    if account is None:
+        return None
+    for attr in ("cash", "cash_balance", "buying_power", "available_cash"):
+        value = getattr(account, attr, None)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _positions_to_quantity_map(positions: Iterable[Any]) -> dict[str, float]:
+    """Convert broker position payloads to a normalized quantity mapping."""
+
+    quantities: dict[str, float] = {}
+    for entry in positions or ():
+        symbol = getattr(entry, "symbol", None) or getattr(entry, "asset_symbol", None)
+        if not symbol:
+            continue
+        qty_value = None
+        for attr in ("qty", "quantity", "qty_available", "position"):
+            qty_candidate = getattr(entry, attr, None)
+            if qty_candidate not in (None, ""):
+                qty_value = qty_candidate
+                break
+        if qty_value is None and isinstance(entry, Mapping):  # type: ignore[arg-type]
+            qty_value = entry.get("qty") or entry.get("quantity")
+        if qty_value is None:
+            continue
+        try:
+            qty_float = float(qty_value)
+        except (TypeError, ValueError):
+            try:
+                qty_float = float(str(qty_value))
+            except (TypeError, ValueError):
+                continue
+        quantities[str(symbol).upper()] = qty_float
+    return quantities

@@ -662,6 +662,13 @@ def record_stay(*, provider: str, reason: str, cooldown: int) -> None:
     """Log a stay decision for ``provider`` with the supplied ``reason``."""
 
     normalized = _normalize_provider(provider)
+    now = monotonic_time()
+    key = (normalized, reason)
+    last_logged = _STAY_LOG_TS.get(key)
+    if last_logged is not None and (now - last_logged) < _STAY_LOG_INTERVAL:
+        record_provider_log_suppressed(f"stay:{normalized}:{reason}")
+        return
+    _STAY_LOG_TS[key] = now
     logger.info(
         "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
         _canonical_label(normalized),
@@ -671,6 +678,8 @@ def record_stay(*, provider: str, reason: str, cooldown: int) -> None:
 
 
 _DEFAULT_DECISION_SECS = 120
+_STAY_LOG_TS: dict[tuple[str, str], float] = {}
+_STAY_LOG_INTERVAL = 60.0
 
 
 def _decision_window_seconds() -> int:

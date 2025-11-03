@@ -1,3 +1,4 @@
+import sys
 from decimal import Decimal
 from typing import Any
 from types import SimpleNamespace
@@ -13,6 +14,12 @@ from ai_trading.execution import guards
 @pytest.fixture
 def engine_factory(monkeypatch):
     """Provide a minimally wired execution engine for limit order tests."""
+
+    monkeypatch.setitem(
+        sys.modules,
+        "flask",
+        SimpleNamespace(Flask=lambda *_, **__: None, jsonify=lambda obj: obj),
+    )
 
     monkeypatch.setattr(lt, "_safe_mode_guard", lambda *_, **__: False)
     guards.STATE.pdt = guards.PDTState()
@@ -43,6 +50,23 @@ def engine_factory(monkeypatch):
             "successful_orders": 0,
             "failed_orders": 0,
         }
+        monkeypatch.setattr(
+            lt,
+            "get_trading_config",
+            lambda: SimpleNamespace(
+                nbbo_required_for_limit=False,
+                execution_require_realtime_nbbo=False,
+                execution_market_on_degraded=False,
+                degraded_feed_mode="widen",
+                degraded_feed_limit_widen_bps=0,
+                min_quote_freshness_ms=1500,
+            ),
+        )
+        monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda *_a, **_k: False)
+        monkeypatch.setattr(lt, "_require_bid_ask_quotes", lambda: False)
+        monkeypatch.setattr(lt, "guard_shadow_active", lambda: False)
+        monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
+        monkeypatch.setattr(lt, "pdt_guard", lambda *a, **k: True)
         return engine
 
     return _build_engine
@@ -84,8 +108,18 @@ def test_submit_limit_order_unexpected_exception_propagates(engine_factory):
         engine.submit_limit_order("AAPL", "buy", 2, 55.0)
 
 
-def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch):
+def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch, caplog):
     monkeypatch.setenv("EXECUTION_FALLBACK_LIMIT_BUFFER_BPS", "100")
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "widen")
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS", "0")
+    from ai_trading.config import runtime as _runtime_cfg
+
+    _runtime_cfg.reload_trading_config()
+    monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda *_a, **_k: False)
+    monkeypatch.setattr(lt, "_require_bid_ask_quotes", lambda: False)
+    monkeypatch.setattr(lt, "guard_shadow_active", lambda: False)
+    monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(lt, "pdt_guard", lambda *a, **k: True)
 
     captured: dict[str, Any] = {}
 
@@ -94,8 +128,9 @@ def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch):
         return {"id": "ok", **order_data}
 
     engine = engine_factory(_capture)
+    caplog.set_level("WARNING", logger=lt.logger.name)
 
-    engine.execute_order(
+    result = engine.execute_order(
         "AAPL",
         "buy",
         5,
@@ -103,9 +138,12 @@ def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch):
         annotations={"using_fallback_price": True},
     )
 
+    assert result == "ok"
     submitted = captured["order_data"]
-    assert submitted["type"] == "limit"
-    assert submitted.get("limit_price") == pytest.approx(101.0)
+    assert submitted.get("type") == "limit"
+    assert submitted.get("limit_price") == pytest.approx(100.0)
+    messages = [record.message for record in caplog.records]
+    assert "QUOTE_QUALITY_BLOCKED" not in messages
 
 
 def test_submit_market_order_pdt_lockout_logs(caplog):
