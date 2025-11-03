@@ -85,3 +85,41 @@ def test_process_symbols_skips_when_degraded(monkeypatch, caplog):
     assert processed == ["AAPL", "MSFT"]
     assert row_counts == {}
     assert any(record.msg == "DEGRADED_FEED_SKIP_SYMBOL" for record in caplog.records)
+
+
+def test_process_symbols_detects_degrade_mid_cycle(monkeypatch, caplog):
+    runtime = SimpleNamespace(
+        _data_degraded=False,
+        _data_degraded_reason=None,
+        execution_engine=None,
+    )
+    monkeypatch.setattr(bot_engine, "get_ctx", lambda: runtime)
+    monkeypatch.setattr(
+        bot_engine,
+        "state",
+        SimpleNamespace(
+            position_cache={},
+            trade_cooldowns={},
+            last_trade_direction={},
+        ),
+    )
+
+    detections = iter([(True, "using_backup"), (True, "using_backup")])
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_data_provider_degraded",
+        lambda: next(detections, (True, "using_backup")),
+    )
+
+    caplog.set_level(logging.WARNING, logger=bot_engine.logger.name)
+
+    processed, _ = bot_engine._process_symbols(
+        ["AAPL", "MSFT"],
+        current_cash=100000.0,
+        model=None,
+        regime_ok=True,
+    )
+
+    assert processed == ["AAPL", "MSFT"]
+    assert any(record.msg == "DEGRADED_FEED_ACTIVE" for record in caplog.records)

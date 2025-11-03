@@ -23730,6 +23730,7 @@ def _process_symbols(
     ctx = get_ctx()
     data_degraded = bool(getattr(ctx, "_data_degraded", False))
     degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
+    degrade_announce_logged = False
 
     cycle_budget = get_cycle_budget_context()
 
@@ -23774,7 +23775,21 @@ def _process_symbols(
             )
 
     for symbol in symbols:
+        if not data_degraded:
+            detected, detected_reason = _resolve_data_provider_degraded()
+            if detected:
+                data_degraded = True
+                degrade_reason = detected_reason or degrade_reason
+                setattr(ctx, "_data_degraded", True)
+                if degrade_reason:
+                    setattr(ctx, "_data_degraded_reason", degrade_reason)
         if data_degraded:
+            if not degrade_announce_logged:
+                logger.warning(
+                    "DEGRADED_FEED_ACTIVE",
+                    extra={"reason": degrade_reason},
+                )
+                degrade_announce_logged = True
             logger.warning(
                 "DEGRADED_FEED_SKIP_SYMBOL",
                 extra={"symbol": symbol, "reason": degrade_reason},
