@@ -422,19 +422,18 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
 
     if feed_normalized != "sip":
         priority_raw = getattr(cfg, "data_provider_priority", ()) or ()
-        fallback_priority: list[str] = [
-            str(provider).strip()
-            for provider in priority_raw
-            if not str(provider).strip().lower().startswith("alpaca")
-        ]
+        fallback_priority: list[str] = []
+        for provider in priority_raw:
+            normalized = str(provider).strip()
+            if normalized and not normalized.lower().startswith("alpaca"):
+                fallback_priority.append(normalized)
         if not fallback_priority:
             fallback_priority = ["yahoo"]
         fallback_primary = fallback_priority[0]
+        os.environ["DATA_PROVIDER"] = fallback_primary
+        os.environ["DATA_PROVIDER_PRIORITY"] = ",".join(fallback_priority)
         try:
-            cfg.update(
-                data_provider=fallback_primary,
-                data_provider_priority=tuple(fallback_priority),
-            )
+            reload_trading_config()
         except Exception:
             pass
         return {

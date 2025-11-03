@@ -43,6 +43,9 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     cfg = get_trading_config()
     assert str(cfg.data_provider).lower() == "yahoo"
     assert tuple(cfg.data_provider_priority)[0] == "yahoo"
+
+    assert os.environ.get("DATA_PROVIDER") == "yahoo"
+    assert os.environ.get("DATA_PROVIDER_PRIORITY") == "yahoo"
     # Original feed setting remains unchanged
     assert os.environ.get("ALPACA_DATA_FEED") == "iex"
 
