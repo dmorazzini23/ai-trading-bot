@@ -43,6 +43,7 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     assert info is not None
     assert info.get("status") == "fallback"
     assert info.get("fallback_provider") == "yahoo"
+    assert info.get("widen_bps") == 50
 
     cfg = get_trading_config()
     assert str(cfg.data_provider).lower() == "yahoo"
@@ -51,6 +52,7 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     assert os.environ.get("DATA_PROVIDER") == "yahoo"
     assert os.environ.get("DATA_PROVIDER_PRIORITY") == "yahoo"
     assert os.environ.get("TRADING__DEGRADED_FEED_MODE") == "widen"
+    assert os.environ.get("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS") == "50"
     # Original feed setting remains unchanged
     assert os.environ.get("ALPACA_DATA_FEED") == "iex"
 
