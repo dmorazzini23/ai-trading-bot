@@ -435,7 +435,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
         fallback_primary = fallback_priority[0]
         os.environ["DATA_PROVIDER"] = fallback_primary
         os.environ["DATA_PROVIDER_PRIORITY"] = ",".join(fallback_priority)
-        os.environ["TRADING__DEGRADED_FEED_MODE"] = "widen"
+        os.environ["TRADING__DEGRADED_FEED_MODE"] = "block"
         if os.getenv("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS") in (None, ""):
             os.environ["TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS"] = "50"
         try:
@@ -449,7 +449,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
             "status": "fallback",
             "fallback_provider": fallback_primary,
             "fallback_priority": tuple(fallback_priority),
-            "degraded_mode": os.environ.get("TRADING__DEGRADED_FEED_MODE", "widen"),
+            "degraded_mode": os.environ.get("TRADING__DEGRADED_FEED_MODE", "block"),
             "widen_bps": int(os.environ.get("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS", "50")),
             "reason": "alpaca_feed_requires_sip",
         }

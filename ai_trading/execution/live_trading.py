@@ -3367,6 +3367,48 @@ class ExecutionEngine:
                     break
                 time.sleep(poll_interval)
                 poll_interval = min(poll_interval * 1.5, 2.0)
+            status_lower = str(status or "").lower()
+            if not ack_timed_out and status_lower not in terminal_statuses:
+                pending_payload = _status_payload()
+                pending_payload["status"] = status_lower or "pending"
+                pending_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
+                logger.warning("ORDER_PENDING_NO_TERMINAL", extra=pending_payload)
+                cancel_target = None
+                if order_id_hint:
+                    cancel_target = str(order_id_hint)
+                elif client_order_id_hint:
+                    cancel_target = str(client_order_id_hint)
+                cancel_success = False
+                if cancel_target:
+                    try:
+                        self._cancel_order_alpaca(cancel_target)
+                    except Exception as exc:
+                        logger.error(
+                            "ORDER_PENDING_CANCEL_FAILED",
+                            extra={
+                                **pending_payload,
+                                "order_id": cancel_target,
+                                "error": str(exc),
+                            },
+                            exc_info=True,
+                        )
+                    else:
+                        cancel_success = True
+                        logger.warning(
+                            "ORDER_PENDING_CANCELLED",
+                            extra={**pending_payload, "order_id": cancel_target},
+                        )
+                        status = "cancelled"
+                        final_status = status
+                        status_lower = "cancelled"
+                        _handle_status_transition(status_lower, source="cancel")
+                if not cancel_success:
+                    ack_timed_out = True
+                    runtime_state.update_broker_status(
+                        connected=False,
+                        last_error="order_pending_no_terminal",
+                        status="unreachable",
+                    )
             if not ack_logged:
                 ack_timed_out = True
                 timeout_payload = _status_payload()
@@ -3410,7 +3452,7 @@ class ExecutionEngine:
         order_id_display = order_id or client_order_id
         order_status_lower = str(status).lower() if status is not None else None
         symbol_key = symbol.upper()
-        reconciled = not ack_timed_out
+        reconciled = (not ack_timed_out) and (order_status_lower in {"filled", "partially_filled"})
         position_changed = False
         cash_changed = False
         reconcile_summary: dict[str, Any] | None = None

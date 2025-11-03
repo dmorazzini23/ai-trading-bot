@@ -23504,6 +23504,41 @@ def _param(runtime, key, default):
     return default
 
 
+def _truncate_degraded_candidates(symbols: list[str], runtime) -> list[str]:
+    """Limit candidate list when the primary provider is degraded."""
+
+    if not symbols:
+        return symbols
+    cfg_limit = None
+    try:
+        cfg_obj = getattr(runtime, "cfg", None)
+        if cfg_obj is not None:
+            cfg_limit = getattr(cfg_obj, "degraded_max_candidates", None)
+    except Exception:
+        cfg_limit = None
+
+    max_candidates: int | None = None
+    if cfg_limit not in (None, "", 0):
+        try:
+            max_candidates = int(cfg_limit)
+        except (TypeError, ValueError):
+            max_candidates = None
+    if max_candidates is None:
+        try:
+            max_candidates = int(get_env("TRADING__DEGRADED_MAX_CANDIDATES", "3", cast=int))
+        except Exception:
+            max_candidates = 3
+    if max_candidates <= 0:
+        max_candidates = 1
+    if len(symbols) <= max_candidates:
+        return symbols
+    logger.warning(
+        "DEGRADED_CANDIDATES_TRUNCATED",
+        extra={"original": len(symbols), "truncated": max_candidates},
+    )
+    return symbols[:max_candidates]
+
+
 def ensure_data_fetcher(runtime) -> DataFetcher:
     """Ensure a market data fetcher is attached to ``runtime``.
 
@@ -23608,6 +23643,9 @@ def _prepare_run(
             degraded_cycle = False
     if safe_mode_reason():
         degraded_cycle = True
+    if degraded_cycle and symbols:
+        symbols = _truncate_degraded_candidates(symbols, runtime)
+        runtime.tickers = symbols
     guard_begin_cycle(universe_size=len(symbols), degraded=degraded_cycle)
     try:
         summary = pre_trade_health_check(runtime, symbols)

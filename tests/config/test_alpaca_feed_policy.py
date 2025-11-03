@@ -52,7 +52,7 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
 
     assert os.environ.get("DATA_PROVIDER") == "yahoo"
     assert os.environ.get("DATA_PROVIDER_PRIORITY") == "yahoo"
-    assert os.environ.get("TRADING__DEGRADED_FEED_MODE") == "widen"
+    assert os.environ.get("TRADING__DEGRADED_FEED_MODE") == "block"
     assert os.environ.get("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS") == "50"
     # Original feed setting remains unchanged
     assert os.environ.get("ALPACA_DATA_FEED") == "iex"

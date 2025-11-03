@@ -69,6 +69,28 @@ class _MismatchStubClient(_AckStubClient):
         return SimpleNamespace(cash="10000", buying_power="10000")
 
 
+class _NoFillStubClient(_AckStubClient):
+    def submit_order(self, *args, **kwargs):
+        self._polls = 0
+        return {"id": "order-1", "status": "accepted", "filled_qty": "0"}
+
+    def get_order_by_id(self, order_id: str):
+        self._polls += 1
+        return {"id": order_id, "status": "accepted", "filled_qty": "0"}
+
+    def get_order_by_client_order_id(self, client_order_id: str):
+        return self.get_order_by_id(client_order_id)
+
+    def get_all_positions(self):
+        return []
+
+    def list_positions(self):
+        return []
+
+    def get_account(self):
+        return SimpleNamespace(cash="10000", buying_power="10000")
+
+
 @pytest.fixture(autouse=True)
 def _fast_ack(monkeypatch):
     monkeypatch.setattr("ai_trading.execution.live_trading._ACK_TIMEOUT_SECONDS", 0.05)
@@ -147,3 +169,25 @@ def test_broker_reconcile_mismatch(monkeypatch, caplog):
     assert result is not None
     assert getattr(result, "reconciled", True) is False
     assert any(record.msg == "BROKER_RECONCILE_MISMATCH" for record in caplog.records)
+
+
+def test_order_pending_no_terminal_status_cancelled(monkeypatch, caplog):
+    engine = _build_engine(_NoFillStubClient())
+    _prime_engine(engine, monkeypatch)
+    cancel_calls: list[str] = []
+    monkeypatch.setattr(
+        engine,
+        "_cancel_order_alpaca",
+        lambda order_id: cancel_calls.append(order_id) or True,
+    )
+    caplog.set_level(logging.INFO)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert getattr(result, "reconciled", True) is False
+    assert result.status == "failed"
+    assert cancel_calls == ["order-1"]
+    msgs = {record.msg for record in caplog.records}
+    assert "ORDER_PENDING_NO_TERMINAL" in msgs
+    assert "ORDER_PENDING_CANCELLED" in msgs
