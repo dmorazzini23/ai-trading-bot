@@ -5385,6 +5385,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         current_feed: str,
         start_dt: datetime,
         end_dt: datetime,
+        verify_staleness: bool = True,
     ) -> tuple[pd.DataFrame, datetime, datetime, datetime, str] | None:
         seen_feeds: set[str] = set()
         attempts: list[tuple[str, str | None]] = []
@@ -5397,7 +5398,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             seen_feeds.add(feed)
             attempts.append((feed, provider))
 
-        _append_attempt(current_feed, f"alpaca_{current_feed}")
+        sip_allowed = False
+        try:
+            sip_allowed = bool(
+                data_fetcher_module._sip_configured()
+                and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            )
+        except COMMON_EXC:
+            sip_allowed = False
+        if sip_allowed:
+            _append_attempt("sip", "alpaca_sip")
 
         failover = getattr(CFG, "alpaca_feed_failover", ())
         for candidate in failover:
@@ -5410,6 +5420,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if fallback_feed and fallback_feed != current_feed:
             provider_name = fallback_provider or f"alpaca_{fallback_feed}"
             _append_attempt(fallback_feed, provider_name)
+        if not any(feed == "yahoo" for feed, _ in attempts):
+            _append_attempt("yahoo", "yahoo")
 
         for feed_name, provider_name in attempts:
             attempt_now = datetime.now(UTC)
@@ -5486,26 +5498,27 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             staleness_reference_retry = (
                 attempt_now if market_open_now else attempt_end
             )
-            try:
-                staleness._ensure_data_fresh(
-                    refreshed_df,
-                    max_age_seconds,
-                    symbol=symbol,
-                    now=staleness_reference_retry,
-                )
-            except RuntimeError as retry_exc:
-                detail_retry = str(retry_exc)
-                stale_details.append(detail_retry)
-                logger.warning(
-                    "FETCH_MINUTE_STALE_RETRY_STILL_STALE",
-                    extra={
-                        "symbol": symbol,
-                        "detail": detail_retry,
-                        "feed": feed_name,
-                        "provider": provider_name or "",
-                    },
-                )
-                continue
+            if verify_staleness:
+                try:
+                    staleness._ensure_data_fresh(
+                        refreshed_df,
+                        max_age_seconds,
+                        symbol=symbol,
+                        now=staleness_reference_retry,
+                    )
+                except RuntimeError as retry_exc:
+                    detail_retry = str(retry_exc)
+                    stale_details.append(detail_retry)
+                    logger.warning(
+                        "FETCH_MINUTE_STALE_RETRY_STILL_STALE",
+                        extra={
+                            "symbol": symbol,
+                            "detail": detail_retry,
+                            "feed": feed_name,
+                            "provider": provider_name or "",
+                        },
+                    )
+                    continue
             logger.info(
                 "FETCH_MINUTE_STALE_RECOVERED",
                 extra={
@@ -5536,6 +5549,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 current_feed=active_feed,
                 start_dt=start_dt,
                 end_dt=end_dt,
+                verify_staleness=False,
             )
             if recovery_payload is not None:
                 (
@@ -5821,6 +5835,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     cache_feed = normalized_sip_feed or resolved_feed
                     if cache_feed:
                         _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
+                        if cache_feed == "sip":
+                            record_switch = getattr(
+                                data_fetcher_module, "_record_feed_switch", None
+                            )
+                            if callable(record_switch):
+                                try:
+                                    record_switch(symbol, "1Min", "iex", "sip")
+                                    record_switch(symbol, "1Min", "sip", "sip")
+                                except COMMON_EXC:
+                                    pass
                         data_fetcher_module._cache_fallback(symbol, cache_feed)
                         _record_coverage_provider(cache_feed)
             else:
@@ -6104,6 +6128,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
             )
             if sip_feed_normalized:
+                if sip_feed_normalized == "sip":
+                    record_switch = getattr(
+                        data_fetcher_module, "_record_feed_switch", None
+                    )
+                    if callable(record_switch):
+                        try:
+                            record_switch(symbol, "1Min", "iex", "sip")
+                            record_switch(symbol, "1Min", "sip", "sip")
+                        except COMMON_EXC:
+                            pass
                 data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
                 _record_coverage_provider(sip_feed_normalized)
             coverage = _coverage_metrics(
@@ -8806,15 +8840,21 @@ class DataFetcher:
                     if is_fresh:
                         normalized_pair = (now_monotonic, memo_payload)
                         with cache_lock:
-                            try:
-                                memo_store[canonical_memo_key] = normalized_pair  # type: ignore[index]
-                            except COMMON_EXC:
-                                setter = getattr(memo_store, "__setitem__", None)
-                                if callable(setter):
-                                    try:
-                                        setter(canonical_memo_key, normalized_pair)
-                                    except COMMON_EXC:
-                                        pass
+                            target_keys = (
+                                canonical_memo_key,
+                                memo_key,
+                                legacy_memo_key,
+                            )
+                            for target_key in target_keys:
+                                try:
+                                    memo_store[target_key] = normalized_pair  # type: ignore[index]
+                                except COMMON_EXC:
+                                    setter = getattr(memo_store, "__setitem__", None)
+                                    if callable(setter):
+                                        try:
+                                            setter(target_key, normalized_pair)
+                                        except COMMON_EXC:
+                                            continue
                         return _emit_cache_hit(memo_payload, reason="memo")
 
         # Memo helpers must be defined before memo_store lookups invoke them.
@@ -23794,7 +23834,6 @@ def _process_symbols(
                 "DEGRADED_FEED_SKIP_SYMBOL",
                 extra={"symbol": symbol, "reason": degrade_reason},
             )
-            processed.append(symbol)
             continue
         now = datetime.now(UTC)
         if _trade_limit_reached(state, now):

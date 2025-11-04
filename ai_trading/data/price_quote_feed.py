@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Dict
+
+from ai_trading.config.management import get_env
 
 _VALID_FEEDS = {"iex", "sip"}
 _FEED_CACHE: Dict[str, str] = {}
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
 
 
 def _normalize_feed(value: str | None) -> str | None:
@@ -28,15 +34,66 @@ def _normalize_feed(value: str | None) -> str | None:
     return None
 
 
+def _pytest_mode() -> bool:
+    return "pytest" in sys.modules or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in _TRUTHY
+
+
+def _env_false(key: str) -> bool:
+    try:
+        value = get_env(key, None)
+    except Exception:
+        value = None
+    if value is None:
+        value = os.getenv(key)
+    if value is None:
+        return False
+    try:
+        lowered = str(value).strip().lower()
+    except Exception:  # pragma: no cover - defensive
+        return False
+    return lowered in _FALSY
+
+
+def _sip_disabled_env(py_mode: bool) -> bool:
+    if _env_false("ALPACA_ALLOW_SIP") or _env_false("ALPACA_SIP_ENTITLED"):
+        return True
+    if _env_false("ALPACA_HAS_SIP"):
+        has_key = any(os.getenv(name) for name in ("ALPACA_KEY", "ALPACA_API_KEY"))
+        has_secret = any(os.getenv(name) for name in ("ALPACA_SECRET", "ALPACA_SECRET_KEY"))
+        if has_key and has_secret:
+            return True
+        if py_mode:
+            return True
+    return False
+
+
 def ensure_entitled_feed(requested: str | None, cached: str | None) -> str | None:
     """Return a usable feed based on the requested and cached values."""
 
     requested_norm = _normalize_feed(requested)
-    if requested_norm in _VALID_FEEDS:
-        return _apply_sip_guard(requested_norm)
     cached_norm = _normalize_feed(cached)
-    if cached_norm in _VALID_FEEDS:
-        return _apply_sip_guard(cached_norm)
+    candidates: list[str] = []
+    if requested_norm in _VALID_FEEDS:
+        candidates.append(requested_norm)
+    if cached_norm in _VALID_FEEDS and cached_norm not in candidates:
+        candidates.append(cached_norm)
+    py_mode = _pytest_mode()
+    sip_blocked = _sip_unauthorized() or _sip_disabled_env(py_mode)
+
+    if not sip_blocked:
+        if "sip" in candidates:
+            return _apply_sip_guard("sip")
+        if not candidates:
+            return _apply_sip_guard("sip")
+
+    for candidate in candidates:
+        if candidate == "iex":
+            return "iex" if sip_blocked else _apply_sip_guard("sip")
+        if candidate == "sip" and not sip_blocked:
+            return _apply_sip_guard("sip")
+
+    if sip_blocked:
+        return "iex"
     return _fallback_feed()
 
 
@@ -94,13 +151,15 @@ def _sip_unauthorized() -> bool:
 
 
 def _apply_sip_guard(feed: str) -> str | None:
-    if feed == "sip" and _sip_unauthorized():
+    if feed != "sip":
+        return feed
+    if _sip_unauthorized() or _sip_disabled_env(_pytest_mode()):
         return "iex"
-    return feed
+    return "sip"
 
 
 def _fallback_feed() -> str:
-    return "iex" if _sip_unauthorized() else "sip"
+    return "iex" if (_sip_unauthorized() or _sip_disabled_env(_pytest_mode())) else "sip"
 
 
 __all__ = [

@@ -219,7 +219,7 @@ from ai_trading.data.provider_monitor import (
     record_unauthorized_sip_event,
 )
 from ai_trading.core.daily_fetch_memo import get_daily_df_memoized
-from ai_trading.data.fetch_yf import fetch_yf_batched
+from ai_trading.data.fetch_yf import fetch_yf_batched, normalize_yf_interval
 from ai_trading.data.price_quote_feed import ensure_entitled_feed
 from .normalize import normalize_ohlcv_df
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
@@ -718,6 +718,8 @@ def reload_host_limit_if_env_changed(session: HTTPSession | None = None) -> tupl
                 meta["reserved"] = 0
             if int(meta.get("pending", 0)) < 0:
                 meta["pending"] = 0
+        _HOST_LIMIT_STATE["env"] = raw
+        _HOST_LIMIT_STATE["value"] = limit
         return _HOST_LIMIT_ENV
 
 
@@ -9346,6 +9348,12 @@ def _fetch_bars(
         market_open_now = True
     outside_hours = _outside_market_hours(_start, _end)
     if (df is None or getattr(df, "empty", True)) and (not market_open_now or outside_hours):
+        meta_state = _state.get("meta")
+        sip_meta_flag = False
+        if isinstance(meta_state, dict):
+            sip_meta_flag = bool(meta_state.get("sip_unauthorized"))
+        if sip_meta_flag or bool(_state.get("sip_unauthorized")) or bool(_state.get("skip_backup_after_fallback")):
+            return _finalize_frame(pd.DataFrame())
         raise EmptyBarsError(
             "market_closed",
             f"market_closed: symbol={symbol}, timeframe={_interval}",
@@ -9358,7 +9366,7 @@ def _fetch_bars(
         and not _state.get("skip_backup_after_fallback")
     ):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
-        y_int = interval_map.get(_interval)
+        y_int = normalize_yf_interval(interval_map.get(_interval))
         providers_tried = set(_state["providers"])
         can_use_sip = _sip_configured() and not _is_sip_unauthorized()
         yahoo_allowed = (can_use_sip and {"iex", "sip"}.issubset(providers_tried) and max_fb >= 2) or (
