@@ -906,6 +906,45 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
 
 logger = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
+_DATA_RETRY_SETTINGS_CACHE: tuple[int, float] | None = None
+_DATA_RETRY_SETTINGS_LOCK = Lock()
+_DATA_RETRY_SETTINGS_LOGGED = False
+
+
+def _resolve_data_retry_settings() -> tuple[int, float]:
+    """Resolve retry attempts and delay from environment with clamping."""
+
+    global _DATA_RETRY_SETTINGS_CACHE, _DATA_RETRY_SETTINGS_LOGGED
+    with _DATA_RETRY_SETTINGS_LOCK:
+        if _DATA_RETRY_SETTINGS_CACHE is not None:
+            return _DATA_RETRY_SETTINGS_CACHE
+        try:
+            attempts_raw = get_env("DATA_SOURCE_RETRY_ATTEMPTS", 2, cast=int)
+        except Exception:
+            attempts_raw = 2
+        try:
+            delay_raw = get_env("DATA_SOURCE_RETRY_DELAY_SECONDS", 0.5, cast=float)
+        except Exception:
+            delay_raw = 0.5
+        try:
+            attempts = int(attempts_raw)
+        except (TypeError, ValueError):
+            attempts = 2
+        attempts = max(0, min(5, attempts))
+        try:
+            delay = float(delay_raw)
+        except (TypeError, ValueError):
+            delay = 0.5
+        delay = max(0.0, min(5.0, delay))
+        _DATA_RETRY_SETTINGS_CACHE = (attempts, delay)
+        if not _DATA_RETRY_SETTINGS_LOGGED:
+            get_logger(__name__).info(
+                "DATA_RETRY_SETTINGS",
+                extra={"attempts": attempts, "delay_seconds": delay},
+            )
+            _DATA_RETRY_SETTINGS_LOGGED = True
+        return _DATA_RETRY_SETTINGS_CACHE
+
 
 def _current_position_qty(ctx: Any, symbol: str) -> int:
     """Return current position quantity for *symbol*.
@@ -25238,9 +25277,12 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 time.sleep(1.0)
                 return
 
-            retries = 3
+            retry_attempts, retry_delay = _resolve_data_retry_settings()
+            attempts_limit = max(1, retry_attempts)
             processed, row_counts = [], {}
-            for attempt in range(retries):
+            attempts_used = 0
+            for attempt in range(attempts_limit):
+                attempts_used = attempt + 1
                 with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
                     processed, row_counts = _process_symbols(
                         symbols, current_cash, alpha_model, regime_ok
@@ -25249,10 +25291,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     if attempt:
                         logger.info(
                             "DATA_SOURCE_RETRY_SUCCESS",
-                            extra={"attempt": attempt + 1, "symbols": symbols},
+                            extra={"attempt": attempts_used, "symbols": symbols},
                         )
                     break
-                time.sleep(2)
+                if attempt < attempts_limit - 1 and retry_delay > 0.0:
+                    time.sleep(retry_delay)
 
             # AI-AGENT-REF: abort only if all symbols returned zero rows
             if sum(row_counts.values()) == 0:
@@ -25272,13 +25315,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
                 logger.info(
                     "DATA_SOURCE_RETRY_FAILED",
-                    extra={"attempts": retries, "symbols": symbols},
+                    extra={"attempts": attempts_used or attempts_limit, "symbols": symbols},
                 )
                 # AI-AGENT-REF: exit immediately on repeated data failure
                 return
             zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
             skipped = [s for s in symbols if s not in processed]
-            attempts_used = attempt + 1
+            if attempts_used == 0:
+                attempts_used = attempts_limit
             success = not skipped and not zero_row_symbols
             if attempts_used > 1 or skipped or zero_row_symbols:
                 logger.info(

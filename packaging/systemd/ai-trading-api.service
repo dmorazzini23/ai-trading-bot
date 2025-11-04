@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Trading API (Gunicorn)
+After=network.target
+Requires=ai-trading.service
+
+[Service]
+Type=simple
+User=aiuser
+Group=aiuser
+WorkingDirectory=/home/aiuser/ai-trading-bot
+Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
+ExecStart=/home/aiuser/ai-trading-bot/venv/bin/gunicorn --workers 2 --threads 4 --bind 0.0.0.0:9001 'ai_trading.app:create_app()'
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

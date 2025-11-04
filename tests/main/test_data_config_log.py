@@ -23,6 +23,7 @@ def test_emit_data_config_log_prefers_trading_config_values(monkeypatch, caplog)
         data_provider="finnhub",
         alpaca_data_feed="sip",
         alpaca_adjustment="split",
+        alpaca_feed_ignored=False,
     )
     monkeypatch.setattr(main, "get_trading_config", lambda: fallback_cfg)
     settings = SimpleNamespace(alpaca_data_feed="iex", alpaca_adjustment="raw")
@@ -35,3 +36,22 @@ def test_emit_data_config_log_prefers_trading_config_values(monkeypatch, caplog)
     assert "feed=sip" in message
     assert "adjustment=split" in message
     assert "provider=finnhub" in message
+
+
+def test_emit_data_config_log_appends_note_when_feed_ignored(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=main.logger.name)
+    fallback_cfg = SimpleNamespace(
+        data_provider="finnhub",
+        alpaca_data_feed="sip",
+        alpaca_adjustment="split",
+        alpaca_feed_ignored=True,
+    )
+    monkeypatch.setattr(main, "get_trading_config", lambda: fallback_cfg)
+    settings = SimpleNamespace(alpaca_data_feed="sip", alpaca_adjustment="split")
+    config = SimpleNamespace(data_provider="finnhub")
+
+    main._emit_data_config_log(settings, config)
+
+    record = next(rec for rec in caplog.records if rec.getMessage().startswith("DATA_CONFIG"))
+    assert "note=feed only used with alpaca* providers" in record.getMessage()
+    assert getattr(record, "note", None) == "feed only used with alpaca* providers"

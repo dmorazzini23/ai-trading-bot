@@ -16,12 +16,18 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics  # 200 if e
 
 Set `RUN_HEALTHCHECK=1` in the environment to enable the Flask endpoints.
 
+When `RUN_HEALTHCHECK=1` and `HEALTHCHECK_PORT` equals `API_PORT`, the API process serves `/healthz` on that shared port; point probes at `http://<host>:<API_PORT>/healthz` in this mode to avoid stale health targets.
+
+The combined Flask process still prints the standard "Serving Flask app ..." banner once on startup; this is expected when running without Gunicorn and does not imply debug mode.
+
 `HEALTH_TICK_SECONDS` (alias `AI_TRADING_HEALTH_TICK_SECONDS`) controls how often
 the scheduler emits health ticks. The default is **300 seconds**. Production
 deployments should keep the interval at or above **30 seconds**; lower values
 are accepted for tests, but the runtime clamps the cadence back to 30 seconds
 and logs `HEALTH_TICK_INTERVAL_BELOW_RECOMMENDED` so operators know the
 override is only intended for short-lived scenarios.
+
+Systemd journal prefixes log entries with the host timezone while the structured application payload remains UTC; convert journal timestamps to UTC when correlating with bot logs.
 
 ### Singleton guard
 

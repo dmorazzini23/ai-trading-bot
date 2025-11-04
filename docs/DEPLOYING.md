@@ -48,3 +48,11 @@ SIP entitlements are restored before switching the intraday feed to `sip`.
    `TRADING_PARAMS_VALIDATED`/`DATA_PROVIDER_READY` logs.
 4. For SIP, call `alpaca-proxy/data/v2/stocks/AAPL/bars` with the deployment
    credentials to verify the consolidated feed before enabling live trading.
+
+## API Serving Options
+
+The default `ai-trading.service` unit launches the trader and its built-in Flask API in a single process. This keeps operational overhead low and is the recommended mode for lab environments or managed rollouts where the systemd unit supervises everything.
+
+For production environments that prefer a hardened HTTP stack, deploy the companion `packaging/systemd/ai-trading-api.service`. It runs `gunicorn --workers 2 --threads 4 --bind 0.0.0.0:9001 'ai_trading.app:create_app()'`, letting systemd supervise a dedicated API process while the trading loop continues to run under `ai-trading.service`. Use this split when API uptime requirements differ from the trading loop, or when an ingress controller expects a WSGI server instead of Flask's development server.
+
+When both services are active, ensure probes and load balancers target the Gunicorn port (`9001` by default) and keep the single-process unit available for scenarios where a combined deployment is simpler (edge devices, QA sandboxes, etc.).

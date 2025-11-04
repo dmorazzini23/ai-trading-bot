@@ -64,11 +64,20 @@ _RUNTIME_CFG_SNAPSHOT: dict[str, Any] | None = None
 
 
 def _http_profile_logging_enabled() -> bool:
+    truthy = {"1", "true", "yes", "on"}
     try:
-        return bool(get_env("HTTP_PROFILE_LOG_ENABLED", "0", cast=bool))
+        value = get_env("HTTP_PROFILE_LOG_ENABLED", "0", cast=bool)
     except Exception:
         raw = os.getenv("HTTP_PROFILE_LOG_ENABLED", "").strip().lower()
-        return raw in {"1", "true", "yes"}
+        return raw in truthy
+    if isinstance(value, str):
+        return value.strip().lower() in truthy
+    if isinstance(value, bool):
+        return value
+    try:
+        return bool(int(value))
+    except Exception:
+        return bool(value)
 
 # Detect Alpaca SDK availability without importing heavy modules
 def _safe_find_spec(module_name: str):
@@ -212,12 +221,31 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
         adj_candidate = getattr(trading_cfg, "alpaca_adjustment", None)
         if adj_candidate:
             adjustment_for_log = adj_candidate
-    logger.info(
-        "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=%s",
+    provider_normalized = str(provider_for_log or "unknown").strip().lower()
+    feed_normalized = str(feed_for_log or "").strip().lower()
+    mismatch_detected = False
+    if trading_cfg is not None:
+        mismatch_detected = bool(getattr(trading_cfg, "alpaca_feed_ignored", False))
+    if not mismatch_detected and feed_normalized in {"iex", "sip"}:
+        mismatch_detected = provider_normalized not in {"alpaca", "alpaca_iex", "alpaca_sip"}
+    note_msg = None
+    if mismatch_detected:
+        note_msg = "feed only used with alpaca* providers"
+    log_message = "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=%s" % (
         str(feed_for_log or ""),
         str(adjustment_for_log or ""),
         str(provider_for_log or "unknown"),
     )
+    if note_msg:
+        log_message = f"{log_message} note={note_msg}"
+    log_extra = {
+        "feed": str(feed_for_log or ""),
+        "adjustment": str(adjustment_for_log or ""),
+        "provider": str(provider_for_log or "unknown"),
+    }
+    if note_msg:
+        log_extra["note"] = note_msg
+    logger.info(log_message, extra=log_extra)
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -285,7 +313,30 @@ def preflight_import_health() -> bool:
             log_fn = logger.info
             if status == "fallback":
                 log_fn = logger.warning
-            log_fn("ALPACA_PROVIDER_PREFLIGHT", extra=feed_snapshot)
+            log_extra = dict(feed_snapshot)
+            if log_fn is logger.warning or status == "fallback":
+                context_extra: dict[str, Any] = {}
+                candidate_cfg = None
+                try:
+                    candidate_cfg = get_trading_config()
+                except Exception:
+                    candidate_cfg = None
+                settings_obj = None
+                try:
+                    settings_obj = get_settings()
+                except Exception:
+                    settings_obj = None
+                for attr in ("paper", "alpaca_base_url", "alpaca_has_sip", "alpaca_allow_sip"):
+                    value = None
+                    if candidate_cfg is not None and hasattr(candidate_cfg, attr):
+                        value = getattr(candidate_cfg, attr)
+                    if value is None and settings_obj is not None and hasattr(settings_obj, attr):
+                        value = getattr(settings_obj, attr)
+                    if value is not None:
+                        context_extra[attr] = value
+                if context_extra:
+                    log_extra.update(context_extra)
+            log_fn("ALPACA_PROVIDER_PREFLIGHT", extra=log_extra)
 
     ensure_trade_log_path()
     return not failures and not feed_validation_failed

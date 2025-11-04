@@ -20,6 +20,9 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 logger = logging.getLogger(__name__)
 
 _LEGACY_BROKER_PREFIX = "AP" "CA_"
+_ALPACA_PROVIDER_KEYS = frozenset({"alpaca", "alpaca_iex", "alpaca_sip"})
+_FEED_IGNORE_LOGGED = False
+_FEED_IGNORE_LOCK = threading.Lock()
 
 
 def _reject_legacy_apca_env() -> None:
@@ -1900,6 +1903,20 @@ class TradingConfig:
                     "configured. See docs/DEPLOYING.md#alpaca-feed-selection for setup guidance."
                 )
             )
+        provider_normalized = str(values.get("data_provider") or "").strip().lower()
+        feed_value = str(values.get("alpaca_data_feed") or "").strip().lower()
+        feed_ignored = False
+        if feed_value in {"iex", "sip"} and provider_normalized and provider_normalized not in _ALPACA_PROVIDER_KEYS:
+            feed_ignored = True
+            with _FEED_IGNORE_LOCK:
+                global _FEED_IGNORE_LOGGED
+                if not _FEED_IGNORE_LOGGED:
+                    logger.info(
+                        "FEED_IGNORED_NON_ALPACA_PROVIDER",
+                        extra={"provider": provider_normalized, "feed": feed_value},
+                    )
+                    _FEED_IGNORE_LOGGED = True
+        values["alpaca_feed_ignored"] = feed_ignored
 
         # Derived convenience fields expected by legacy callers.
         values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
