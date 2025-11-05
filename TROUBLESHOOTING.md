@@ -249,6 +249,22 @@ orders. Expect to see `PRIMARY_PROVIDER_FALLBACK_ACTIVE` alongside
 `BACKUP_PROVIDER_USED` in logs. Validate Alpaca's status page and data feed
 configuration before re-enabling the primary provider.
 
+#### Degraded-feed routing (minute vs. daily)
+
+- The runtime telemetry now tags each fallback with the timeframe that
+  triggered it (`runtime_state.observe_data_provider_state()["timeframes"]`).
+- When only daily bars fall back (e.g., Yahoo 1Day), intraday trading keeps the
+  full candidate set and continues processing symbols.
+- Intraday fallbacks ("1Min", "5Min", etc.) still mark the cycle as degraded,
+  but the engine now truncates the candidate list instead of skipping every
+  symbol. Look for `DEGRADED_FEED_ACTIVE fatal=False` in the scheduler logs.
+- Fatal degradations (`fatal=True` in the same log message) indicate safe-mode
+  triggers, provider disablement, or hard outages; the bot will skip symbol
+  processing until the primary feed recovers.
+- To verify the active routing, run `python - <<'PY'` and print
+  `runtime_state.observe_data_provider_state()`; confirm the `timeframes` map
+  only lists the feeds you expect to be degraded.
+
 **Data Provider Diagnostics:**
 
 ```python

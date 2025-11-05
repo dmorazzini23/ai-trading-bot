@@ -2421,6 +2421,7 @@ def _mark_fallback(
         using_backup=using_backup_flag,
         reason=log_extra.get("fallback_reason") or reason,
         cooldown_sec=cooldown_seconds,
+        timeframe=timeframe,
     )
     if _frame_has_rows(fallback_df):
         _set_backup_skip(symbol, timeframe)
@@ -2524,6 +2525,7 @@ def _clear_minute_fallback_state(
             using_backup=False,
             reason="primary_recovered",
             cooldown_sec=0.0,
+            timeframe=timeframe,
         )
     return cleared
 

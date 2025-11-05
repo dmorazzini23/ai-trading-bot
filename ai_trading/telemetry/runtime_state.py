@@ -34,6 +34,7 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "consecutive_failures": 0,
     "last_error_at": None,
     "http_code": None,
+    "timeframes": {},
 }
 _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "status": "unknown",
@@ -79,6 +80,7 @@ def update_data_provider_state(
     consecutive_failures: int | None = None,
     last_error_at: str | None = None,
     http_code: int | None = None,
+    timeframe: str | None = None,
 ) -> None:
     """Record current data provider routing."""
 
@@ -112,8 +114,23 @@ def update_data_provider_state(
             updates["http_code"] = int(http_code)
         except (TypeError, ValueError):
             pass
+    timeframe_key: str | None = None
+    if timeframe is not None:
+        try:
+            candidate = str(timeframe).strip()
+        except Exception:
+            candidate = str(timeframe)
+        timeframe_key = candidate or None
+
     with _LOCK:
         global _provider_state
+        if timeframe_key:
+            current = dict(_provider_state.get("timeframes") or {})
+            if using_backup is not None:
+                current[timeframe_key] = bool(using_backup)
+            elif timeframe_key not in current:
+                current[timeframe_key] = False
+            updates["timeframes"] = current
         _provider_state = _merge_state(_provider_state, updates)
 
 

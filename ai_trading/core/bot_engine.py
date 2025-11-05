@@ -23640,38 +23640,119 @@ def _param(runtime, key, default):
     return default
 
 
-def _resolve_data_provider_degraded() -> tuple[bool, str | None]:
-    """Return ``(degraded, reason)`` based on telemetry and provider monitor state."""
+def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
+    """Return ``(degraded, reason, fatal)`` from telemetry and provider monitor state."""
 
     reason: str | None = None
+    fatal = False
+    degraded = False
+
     try:
         snapshot = runtime_state.observe_data_provider_state()
     except Exception:
         snapshot = {}
 
+    intraday_backup_detected = False
+    backup_detected = False
+
     if snapshot:
-        status = snapshot.get("status")
+        status_raw = snapshot.get("status")
+        status = str(status_raw).strip().lower() if status_raw else ""
+        if snapshot.get("reason") is not None:
+            reason = snapshot.get("reason")
+        timeframe_state = snapshot.get("timeframes")
+        if isinstance(timeframe_state, MappingABC):
+            for tf_key, tf_flag in timeframe_state.items():
+                try:
+                    normalized_tf = str(tf_key).strip().lower()
+                except Exception:
+                    normalized_tf = str(tf_key)
+                if not normalized_tf:
+                    continue
+                try:
+                    flag = bool(tf_flag)
+                except Exception:
+                    flag = False
+                if not flag:
+                    continue
+                backup_detected = True
+                if (
+                    normalized_tf.endswith("min")
+                    or "minute" in normalized_tf
+                    or normalized_tf in {"1m", "1min", "intraday"}
+                ):
+                    intraday_backup_detected = True
         using_backup = bool(snapshot.get("using_backup"))
-        if using_backup:
+        if using_backup and not backup_detected:
+            backup_detected = True
+            intraday_backup_detected = True
+        if status and status not in {"healthy", "ok", "unknown"}:
+            degraded = True
+            if reason is None:
+                reason = str(status_raw) if isinstance(status_raw, str) else status
+            fatal = status in {"down", "offline", "halted", "disabled"}
+        if intraday_backup_detected:
+            degraded = True
+            if reason is None:
+                reason = snapshot.get("reason") or "using_backup_provider"
+        elif backup_detected and reason is None:
             reason = snapshot.get("reason") or "using_backup_provider"
-            return True, reason
-        if status and str(status).lower() not in {"healthy", "ok"}:
-            reason = snapshot.get("reason") or str(status)
-            return True, reason
+
+        reason_lower = str(reason).lower() if isinstance(reason, str) else ""
+        if not fatal and reason_lower:
+            if any(token in reason_lower for token in ("kill_switch", "safe_mode", "halt", "disabled")):
+                fatal = True
 
     safe_reason = safe_mode_reason()
     if safe_reason:
-        return True, safe_reason
+        return True, safe_reason, True
 
     disabled_check = getattr(provider_monitor, "is_disabled", None)
     if callable(disabled_check):
         try:
             if disabled_check("alpaca"):
-                return True, "provider_disabled"
+                return True, "provider_disabled", True
         except Exception:
             pass
 
-    return False, None
+    if degraded and reason is None:
+        reason = "provider_degraded"
+
+    return degraded, reason, fatal
+
+
+def _degrade_state(result: Any) -> tuple[bool, str | None, bool]:
+    """Normalize degraded-state tuples patched by tests or helpers."""
+
+    degraded = False
+    reason: str | None = None
+    fatal = False
+    if isinstance(result, tuple):
+        if result:
+            degraded = bool(result[0])
+        if len(result) >= 2:
+            reason = cast(str | None, result[1])
+        if len(result) >= 3:
+            fatal = bool(result[2])
+        else:
+            fatal = _reason_implies_fatal(reason)
+    else:
+        degraded = bool(result)
+        fatal = False
+    return degraded, reason, fatal
+
+
+def _reason_implies_fatal(reason: str | None) -> bool:
+    if reason is None:
+        return False
+    try:
+        reason_lower = str(reason).strip().lower()
+    except Exception:
+        return False
+    if not reason_lower:
+        return False
+    fatal_tokens = ("kill_switch", "safe_mode", "provider_disabled", "halt", "offline")
+    return any(token in reason_lower for token in fatal_tokens)
 
 
 def _truncate_degraded_candidates(symbols: list[str], runtime) -> list[str]:
@@ -23804,7 +23885,9 @@ def _prepare_run(
         symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
-    degraded_cycle, degrade_reason = _resolve_data_provider_degraded()
+    degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(
+        _resolve_data_provider_degraded()
+    )
     if degraded_cycle and symbols:
         symbols = _truncate_degraded_candidates(symbols, runtime)
         runtime.tickers = symbols
@@ -23814,6 +23897,10 @@ def _prepare_run(
     else:
         if hasattr(runtime, "_data_degraded_reason"):
             delattr(runtime, "_data_degraded_reason")
+    if degraded_cycle:
+        setattr(runtime, "_data_degraded_fatal", bool(degrade_fatal))
+    elif hasattr(runtime, "_data_degraded_fatal"):
+        delattr(runtime, "_data_degraded_fatal")
     guard_begin_cycle(universe_size=len(symbols), degraded=degraded_cycle)
     try:
         summary = pre_trade_health_check(runtime, symbols)
@@ -23865,6 +23952,7 @@ def _process_symbols(
     ctx = get_ctx()
     data_degraded = bool(getattr(ctx, "_data_degraded", False))
     degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
+    degrade_fatal = bool(getattr(ctx, "_data_degraded_fatal", False))
     degrade_announce_logged = False
 
     cycle_budget = get_cycle_budget_context()
@@ -23910,26 +23998,33 @@ def _process_symbols(
             )
 
     for symbol in symbols:
-        if not data_degraded:
-            detected, detected_reason = _resolve_data_provider_degraded()
-            if detected:
+        detected = False
+        if not data_degraded or not degrade_fatal:
+            detected_cycle, detected_reason, detected_fatal = _degrade_state(
+                _resolve_data_provider_degraded()
+            )
+            if detected_cycle:
                 data_degraded = True
+                detected = True
                 degrade_reason = detected_reason or degrade_reason
+                degrade_fatal = bool(degrade_fatal or detected_fatal)
                 setattr(ctx, "_data_degraded", True)
                 if degrade_reason:
                     setattr(ctx, "_data_degraded_reason", degrade_reason)
+                setattr(ctx, "_data_degraded_fatal", degrade_fatal)
         if data_degraded:
-            if not degrade_announce_logged:
+            if not degrade_announce_logged or detected:
                 logger.warning(
                     "DEGRADED_FEED_ACTIVE",
-                    extra={"reason": degrade_reason},
+                    extra={"reason": degrade_reason, "fatal": degrade_fatal},
                 )
                 degrade_announce_logged = True
-            logger.warning(
-                "DEGRADED_FEED_SKIP_SYMBOL",
-                extra={"symbol": symbol, "reason": degrade_reason},
-            )
-            continue
+            if degrade_fatal:
+                logger.warning(
+                    "DEGRADED_FEED_SKIP_SYMBOL",
+                    extra={"symbol": symbol, "reason": degrade_reason},
+                )
+                continue
         now = datetime.now(UTC)
         if _trade_limit_reached(state, now):
             _log_trade_quota_once()
