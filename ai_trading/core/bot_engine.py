@@ -98,7 +98,7 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
-from ai_trading.utils.env import alpaca_credential_status
+from ai_trading.utils.env import alpaca_credential_status, get_alpaca_data_v2_base
 from ai_trading.logging import (
     flush_log_throttle_summaries,
     log_backup_provider_used,
@@ -1165,7 +1165,7 @@ _PRICE_SOURCE: dict[str, str] = {}
 _CANONICAL_FALLBACK_FEEDS = frozenset({"iex", "sip", "yahoo", "finnhub"})
 _ALPACA_COMPATIBLE_FALLBACK_FEEDS = frozenset({"iex", "sip"})
 _ALPACA_DISABLED_SENTINEL = "alpaca_disabled"
-ALPACA_DATA_BASE = "https://data.alpaca.markets/v2"
+ALPACA_DATA_BASE = get_alpaca_data_v2_base()
 _PRIMARY_PRICE_SOURCES = frozenset(
     {
         "alpaca",
@@ -1878,6 +1878,14 @@ def _attempt_alpaca_trade(
                 symbol=symbol,
                 extra={'status': status, 'message': payload_msg, 'error': str(exc)},
             )
+            try:
+                runtime_state.update_data_provider_state(
+                    status='degraded',
+                    reason='alpaca_trade_not_found',
+                    http_code=status,
+                )
+            except Exception:
+                pass
             cache['trade_source'] = 'alpaca_trade_not_found'
             cache['trade_price'] = None
             return None, cache['trade_source']
@@ -1887,6 +1895,14 @@ def _attempt_alpaca_trade(
                 extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
             )
             cache['trade_source'] = 'alpaca_auth_failed'
+            try:
+                runtime_state.update_data_provider_state(
+                    status='down',
+                    reason='alpaca_trade_auth_failed',
+                    http_code=status,
+                )
+            except Exception:
+                pass
         else:
             _log_price_warning(
                 'ALPACA_TRADE_HTTP_ERROR',
@@ -1895,6 +1911,14 @@ def _attempt_alpaca_trade(
                 extra={'status': status, 'error': str(exc)},
             )
             cache['trade_source'] = 'alpaca_trade_http_error'
+            try:
+                runtime_state.update_data_provider_state(
+                    status='error',
+                    reason='alpaca_trade_http_error',
+                    http_code=status,
+                )
+            except Exception:
+                pass
         cache['trade_price'] = None
         return None, cache['trade_source']
     except COMMON_EXC as exc:  # pragma: no cover - defensive
@@ -1953,12 +1977,36 @@ def _attempt_alpaca_quote(
         return None, cache['quote_source']
     except AlpacaOrderHTTPError as exc:
         status = getattr(exc, 'status_code', None)
-        if status in {401, 403}:
+        if status == 404:
+            _log_price_warning(
+                'ALPACA_PRICE_HTTP_ERROR',
+                provider='alpaca_quote',
+                symbol=symbol,
+                extra={'status': status, 'error': str(exc)},
+            )
+            cache['quote_source'] = 'alpaca_quote_not_found'
+            try:
+                runtime_state.update_data_provider_state(
+                    status='degraded',
+                    reason='alpaca_quote_not_found',
+                    http_code=status,
+                )
+            except Exception:
+                pass
+        elif status in {401, 403}:
             logger.error(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
             )
             cache['quote_source'] = 'alpaca_auth_failed'
+            try:
+                runtime_state.update_data_provider_state(
+                    status='down',
+                    reason='alpaca_quote_auth_failed',
+                    http_code=status,
+                )
+            except Exception:
+                pass
         else:
             _log_price_warning(
                 'ALPACA_PRICE_HTTP_ERROR',
@@ -1967,6 +2015,14 @@ def _attempt_alpaca_quote(
                 extra={'status': status, 'error': str(exc)},
             )
             cache['quote_source'] = 'alpaca_http_error'
+            try:
+                runtime_state.update_data_provider_state(
+                    status='error',
+                    reason='alpaca_quote_http_error',
+                    http_code=status,
+                )
+            except Exception:
+                pass
         cache['quote_price'] = None
         return None, cache['quote_source']
     except (
@@ -2057,7 +2113,7 @@ def _attempt_alpaca_minute_close(
     if params_feed:
         params['feed'] = params_feed
     try:
-        payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/bars/latest", params=params)
+        payload = alpaca_get(f"{ALPACA_DATA_BASE}/stocks/{symbol}/bars/latest", params=params)
     except (AlpacaAuthenticationError, AlpacaOrderHTTPError) as exc:
         _log_price_warning(
             'ALPACA_MINUTE_FETCH_FAILED',

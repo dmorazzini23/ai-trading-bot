@@ -13,6 +13,8 @@ __all__ = [
     "observe_quote_status",
     "update_broker_status",
     "observe_broker_status",
+    "update_service_status",
+    "observe_service_status",
 ]
 
 
@@ -31,6 +33,7 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "status": "unknown",
     "consecutive_failures": 0,
     "last_error_at": None,
+    "http_code": None,
 }
 _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "status": "unknown",
@@ -54,6 +57,7 @@ _DEFAULT_BROKER_STATE: dict[str, Any] = {
 _provider_state: dict[str, Any] = dict(_DEFAULT_PROVIDER_STATE)
 _quote_status: dict[str, Any] = dict(_DEFAULT_QUOTE_STATE)
 _broker_status: dict[str, Any] = dict(_DEFAULT_BROKER_STATE)
+_service_status: dict[str, Any] = {"status": "unknown", "updated": _now_iso()}
 
 
 def _merge_state(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -74,6 +78,7 @@ def update_data_provider_state(
     status: str | None = None,
     consecutive_failures: int | None = None,
     last_error_at: str | None = None,
+    http_code: int | None = None,
 ) -> None:
     """Record current data provider routing."""
 
@@ -102,6 +107,11 @@ def update_data_provider_state(
             pass
     if last_error_at is not None:
         updates["last_error_at"] = last_error_at
+    if http_code is not None:
+        try:
+            updates["http_code"] = int(http_code)
+        except (TypeError, ValueError):
+            pass
     with _LOCK:
         global _provider_state
         _provider_state = _merge_state(_provider_state, updates)
@@ -110,6 +120,20 @@ def update_data_provider_state(
 def observe_data_provider_state() -> dict[str, Any]:
     with _LOCK:
         return dict(_provider_state)
+
+
+def update_service_status(*, status: str, reason: str | None = None) -> None:
+    updates: dict[str, Any] = {"status": str(status or "unknown")}
+    if reason is not None:
+        updates["reason"] = reason
+    with _LOCK:
+        global _service_status
+        _service_status = _merge_state(_service_status, updates)
+
+
+def observe_service_status() -> dict[str, Any]:
+    with _LOCK:
+        return dict(_service_status)
 
 
 def update_quote_status(

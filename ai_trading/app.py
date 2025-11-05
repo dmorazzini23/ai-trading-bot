@@ -406,7 +406,7 @@ def create_app():
 
     @app.route('/healthz')
     def healthz():
-        """Minimal liveness probe."""
+        """Minimal liveness probe with provider diagnostics."""
         from datetime import UTC, datetime
 
         ok = bool(app.config.get("_ENV_VALID"))
@@ -418,18 +418,29 @@ def create_app():
             broker_state = runtime_state.observe_broker_status()
         except Exception:
             broker_state = {}
+        try:
+            service_state = runtime_state.observe_service_status()
+        except Exception:
+            service_state = {"status": "unknown"}
 
-        provider_status = provider_state.get("status") or ("degraded" if provider_state.get("using_backup") else "healthy")
+        provider_status = provider_state.get("status") or (
+            "degraded" if provider_state.get("using_backup") else "healthy"
+        )
         provider_payload = {
-            "name": provider_state.get("active") or provider_state.get("primary"),
             "status": provider_status,
-            "using_backup": bool(provider_state.get("using_backup")),
             "reason": provider_state.get("reason"),
+            "http_code": provider_state.get("http_code"),
+            "using_backup": bool(provider_state.get("using_backup")),
+            "active": provider_state.get("active"),
+            "primary": provider_state.get("primary"),
+            "backup": provider_state.get("backup"),
             "consecutive_failures": provider_state.get("consecutive_failures"),
             "last_error_at": provider_state.get("last_error_at"),
         }
 
-        broker_status = broker_state.get("status") or ("reachable" if broker_state.get("connected") else "unreachable")
+        broker_status = broker_state.get("status") or (
+            "reachable" if broker_state.get("connected") else "unreachable"
+        )
         broker_payload = {
             "status": broker_status,
             "connected": bool(broker_state.get("connected")),
@@ -438,23 +449,37 @@ def create_app():
             "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
         }
 
-        health_status = "healthy"
-        if provider_status not in {"healthy", None} or broker_status == "unreachable" or not ok:
-            health_status = "degraded"
-
-        overall_ok = ok and provider_status != "down" and broker_status != "unreachable"
-
+        status = service_state.get("status", "unknown")
         payload = {
-            "ok": overall_ok,
+            "ok": bool(ok),
             "ts": datetime.now(UTC).isoformat(),
             "service": "ai-trading",
-            "status": health_status,
+            "status": status,
             "data_provider": provider_payload,
             "broker": broker_payload,
         }
-        err = app.config.get("_ENV_ERR")
-        if not overall_ok and err:
-            payload["error"] = err
+        if service_state.get("reason"):
+            payload["reason"] = service_state["reason"]
+
+        degrade_reason = provider_state.get("reason")
+        http_code = provider_state.get("http_code")
+        if provider_status not in {None, "healthy", "ready"}:
+            if status not in {"warming_up", "starting"}:
+                payload["status"] = "degraded"
+            if degrade_reason and not payload.get("reason"):
+                payload["reason"] = degrade_reason
+            if http_code is not None:
+                payload.setdefault("http_code", http_code)
+        if broker_status == "unreachable":
+            payload["status"] = "degraded"
+            if not payload.get("reason"):
+                payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
+
+        overall_ok = ok and provider_status != "down" and broker_status != "unreachable"
+        payload["ok"] = bool(overall_ok)
+        env_err = app.config.get("_ENV_ERR")
+        if not overall_ok and env_err and not payload.get("reason"):
+            payload["reason"] = env_err
         return jsonify(payload)
 
     @app.route('/metrics')

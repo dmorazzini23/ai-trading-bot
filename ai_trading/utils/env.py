@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from typing import Mapping
+from urllib.parse import urlparse
 
 from ai_trading.broker.alpaca_credentials import (
     AlpacaCredentials,
@@ -13,6 +14,10 @@ from ai_trading.broker.alpaca_credentials import (
 )
 
 _DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
+_FORBIDDEN_TRADING_HOSTS = {
+    "api.alpaca.markets",
+    "paper-api.alpaca.markets",
+}
 
 _DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None, str | None, str | None] | None = None
 
@@ -91,14 +96,52 @@ def get_alpaca_base_url() -> str:
 
 
 def get_alpaca_data_base_url() -> str:
-    """Return the Alpaca market data base URL with optional override."""
+    """Return the Alpaca market data base URL with optional override.
 
-    override = os.getenv("ALPACA_DATA_BASE_URL", "").strip()
-    if override:
-        normalized = override.rstrip("/")
-        if normalized.lower().startswith(("http://", "https://")):
-            return normalized
-    return _DEFAULT_DATA_BASE_URL
+    The canonical data host is ``https://data.alpaca.markets``. When an
+    override is provided, ensure it does **not** point at the trading API
+    hosts (``api.alpaca.markets`` or ``paper-api.alpaca.markets``) to avoid
+    accidental credential leakage.
+    """
+
+    def _sanitize(candidate: str | None) -> str:
+        raw = (candidate or "").strip()
+        if not raw:
+            raw = _DEFAULT_DATA_BASE_URL
+        if "://" not in raw:
+            raw = f"https://{raw}"
+        parsed = urlparse(raw)
+        host = (parsed.netloc or parsed.path or "").split("/", 1)[0].strip()
+        if not host:
+            host = urlparse(_DEFAULT_DATA_BASE_URL).netloc
+        host_lower = host.lower()
+        if host_lower in _FORBIDDEN_TRADING_HOSTS:
+            return _DEFAULT_DATA_BASE_URL
+        scheme = parsed.scheme.lower() if parsed.scheme else "https"
+        if scheme not in {"http", "https"}:
+            scheme = "https"
+        path = (parsed.path or "").strip()
+        path = path.rstrip("/")
+        if path.lower() == "/v2":
+            path = ""
+        if path and not path.startswith("/"):
+            path = f"/{path}"
+        normalized = f"{scheme}://{host_lower}"
+        if path and path != "/":
+            normalized = f"{normalized}{path}"
+        return normalized.rstrip("/") or _DEFAULT_DATA_BASE_URL
+
+    override = os.getenv("ALPACA_DATA_BASE_URL") or os.getenv("ALPACA_DATA_URL")
+    return _sanitize(override)
+
+
+def get_alpaca_data_v2_base() -> str:
+    """Return the Alpaca data base URL with an ensured ``/v2`` suffix."""
+
+    base = get_alpaca_data_base_url().rstrip("/")
+    if base.lower().endswith("/v2"):
+        return base
+    return f"{base}/v2"
 
 
 def get_alpaca_http_headers() -> dict[str, str]:
