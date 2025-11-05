@@ -111,11 +111,10 @@ def get_alpaca_data_base_url() -> str:
         if "://" not in raw:
             raw = f"https://{raw}"
         parsed = urlparse(raw)
-        host = (parsed.netloc or parsed.path or "").split("/", 1)[0].strip()
-        if not host:
-            host = urlparse(_DEFAULT_DATA_BASE_URL).netloc
-        host_lower = host.lower()
-        if host_lower in _FORBIDDEN_TRADING_HOSTS:
+        hostname = (parsed.hostname or "").strip().lower()
+        if not hostname:
+            hostname = urlparse(_DEFAULT_DATA_BASE_URL).hostname or "data.alpaca.markets"
+        if hostname in _FORBIDDEN_TRADING_HOSTS:
             return _DEFAULT_DATA_BASE_URL
         scheme = parsed.scheme.lower() if parsed.scheme else "https"
         if scheme not in {"http", "https"}:
@@ -126,7 +125,11 @@ def get_alpaca_data_base_url() -> str:
             path = ""
         if path and not path.startswith("/"):
             path = f"/{path}"
-        normalized = f"{scheme}://{host_lower}"
+        port = parsed.port
+        netloc = hostname
+        if port:
+            netloc = f"{netloc}:{port}"
+        normalized = f"{scheme}://{netloc}"
         if path and path != "/":
             normalized = f"{normalized}{path}"
         return normalized.rstrip("/") or _DEFAULT_DATA_BASE_URL
