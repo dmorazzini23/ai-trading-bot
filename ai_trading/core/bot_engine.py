@@ -5468,11 +5468,20 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     if expected_bars <= 0:
         expected_bars = _expected_minute_bars_window(start_dt, end_dt)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
+    primary_expected_bars = expected_bars
 
     if df is not None:
         df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
+    try:
+        primary_actual_bars_initial = int(len(df)) if df is not None else 0
+    except COMMON_EXC:
+        primary_actual_bars_initial = 0
     active_feed = current_feed
     staleness_reference: datetime | None = None
+    early_fallback_attempted = False
+    early_fallback_used = False
+    early_fallback_feed: str | None = None
+    early_fallback_provider: str | None = None
 
     def _attempt_stale_recovery(
         *,
@@ -5659,6 +5668,23 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 except COMMON_EXC:
                     candidate_len = 0
                 if candidate_len > current_len:
+                    early_fallback_attempted = True
+                    early_fallback_used = True
+                    normalized_candidate = (
+                        _normalize_feed_name(candidate_feed) if candidate_feed else None
+                    )
+                    fallback_choice = normalized_candidate or candidate_feed
+                    if fallback_choice:
+                        early_fallback_feed = fallback_choice
+                        if fallback_choice not in cache_key_candidates:
+                            cache_key_candidates.append(fallback_choice)
+                        if fallback_choice == "yahoo":
+                            early_fallback_provider = "yahoo"
+                        elif "sip" in fallback_choice:
+                            early_fallback_provider = "alpaca_sip"
+                        else:
+                            early_fallback_provider = f"alpaca_{fallback_choice}"
+                        _record_coverage_provider(fallback_choice)
                     df = candidate_df
                     end_dt = candidate_end
                     staleness_reference = candidate_staleness_reference
@@ -5702,18 +5728,54 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     insufficient_intraday = bool(coverage["insufficient_intraday"])
     low_coverage = bool(coverage["low_coverage"])
 
-    primary_actual_bars = actual_bars
+    primary_actual_bars = primary_actual_bars_initial
+    primary_threshold = (
+        max(1, int(primary_expected_bars * 0.5))
+        if primary_expected_bars > 0
+        else 0
+    )
+    primary_materially_short = (
+        primary_expected_bars > 0 and primary_actual_bars < primary_threshold
+    )
+    primary_insufficient_intraday = (
+        primary_expected_bars >= intraday_lookback
+        and primary_actual_bars < intraday_lookback
+    )
+    primary_low_coverage = (
+        primary_materially_short or primary_insufficient_intraday
+    )
 
     primary_start_dt = start_dt
     coverage_window_start = start_dt
 
-    fallback_used = False
-    fallback_feed_used: str | None = None
-    fallback_attempted = False
-    fallback_feed: str | None = None
-    fallback_provider: str | None = None
+    fallback_used = early_fallback_used
+    fallback_feed_used: str | None = (
+        early_fallback_feed if early_fallback_used else None
+    )
+    fallback_attempted = early_fallback_attempted
+    fallback_feed: str | None = early_fallback_feed
+    fallback_provider: str | None = early_fallback_provider
     coverage_warning_logged = False
     coverage_warning_context: dict[str, object] | None = None
+    if early_fallback_attempted:
+        coverage_warning_context = {
+            "symbol": symbol,
+            "expected_bars": primary_expected_bars,
+            "primary_expected_bars": primary_expected_bars,
+            "primary_actual_bars": primary_actual_bars,
+            "actual_bars": actual_bars,
+            "primary_materially_short": primary_materially_short,
+            "primary_insufficient_intraday": primary_insufficient_intraday,
+            "from_feed": current_feed,
+            "active_feed": active_feed,
+            "fallback_feed": early_fallback_feed or "",
+            "fallback_provider": early_fallback_provider or "",
+            "fallback_attempted": True,
+            "fallback_used": early_fallback_used,
+            "fallback_exhausted": False,
+            "start": primary_start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        }
 
     if actual_bars < coverage_threshold:
         global _SIP_UNAUTHORIZED_LOGGED
@@ -5770,10 +5832,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         coverage_warning_context = {
             "symbol": symbol,
             "expected_bars": expected_bars,
+            "primary_expected_bars": primary_expected_bars,
             "primary_actual_bars": primary_actual_bars,
             "actual_bars": actual_bars,
             "materially_short": materially_short,
             "insufficient_intraday": insufficient_intraday,
+            "primary_materially_short": primary_materially_short,
+            "primary_insufficient_intraday": primary_insufficient_intraday,
+            "primary_low_coverage": primary_low_coverage,
             "from_feed": current_feed,
             "active_feed": current_feed,
             "fallback_feed": planned_fallback_feed,
@@ -5784,6 +5850,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "start": primary_start_dt.isoformat(),
             "end": end_dt.isoformat(),
         }
+
 
         if materially_short:
             fallback_start_dt = start_dt
@@ -6054,27 +6121,42 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed = "yahoo"
                 fallback_provider = "yahoo"
 
-        if coverage_warning_context is not None and not coverage_warning_logged:
-            coverage_warning_context.update(
-                {
-                    "actual_bars": actual_bars,
-                    "materially_short": materially_short,
-                    "insufficient_intraday": insufficient_intraday,
-                    "active_feed": active_feed,
-                    "fallback_feed": fallback_feed or coverage_warning_context.get("fallback_feed") or "",
-                    "fallback_provider": fallback_provider or coverage_warning_context.get("fallback_provider") or "",
-                    "fallback_attempted": fallback_attempted,
-                    "fallback_used": fallback_used,
-                    "fallback_exhausted": low_coverage,
-                    "start": coverage_window_start.isoformat(),
-                    "end": end_dt.isoformat(),
-                }
-            )
-            logger.warning(
-                "MINUTE_DATA_COVERAGE_WARNING",
-                extra=coverage_warning_context,
-            )
-            coverage_warning_logged = True
+    if (coverage_warning_context is not None or fallback_attempted) and not coverage_warning_logged:
+        warning_payload: dict[str, object]
+        if coverage_warning_context is not None:
+            warning_payload = dict(coverage_warning_context)
+        else:
+            warning_payload = {
+                "symbol": symbol,
+                "expected_bars": expected_bars,
+                "primary_actual_bars": primary_actual_bars,
+                "from_feed": current_feed,
+                "active_feed": active_feed,
+            }
+        warning_payload.update(
+            {
+                "actual_bars": actual_bars,
+                "materially_short": materially_short,
+                "insufficient_intraday": insufficient_intraday,
+                "primary_expected_bars": primary_expected_bars,
+                "primary_materially_short": primary_materially_short,
+                "primary_insufficient_intraday": primary_insufficient_intraday,
+                "primary_low_coverage": primary_low_coverage,
+                "fallback_feed": fallback_feed or warning_payload.get("fallback_feed") or "",
+                "fallback_provider": fallback_provider or warning_payload.get("fallback_provider") or "",
+                "fallback_attempted": fallback_attempted,
+                "fallback_used": fallback_used,
+                "fallback_exhausted": low_coverage,
+                "start": coverage_window_start.isoformat(),
+                "end": end_dt.isoformat(),
+            }
+        )
+        logging.warning("MINUTE_DATA_COVERAGE_WARNING")
+        logger.warning(
+            "MINUTE_DATA_COVERAGE_WARNING",
+            extra=warning_payload,
+        )
+        coverage_warning_logged = True
 
     def _set_minute_feed_cache(feeds: Iterable[str], value: str) -> None:
         if not value:
@@ -6245,15 +6327,47 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             materially_short = bool(coverage["materially_short"])
             insufficient_intraday = bool(coverage["insufficient_intraday"])
             low_coverage = bool(coverage["low_coverage"])
+            if not coverage_warning_logged:
+                warning_payload = {
+                    "symbol": symbol,
+                    "expected_bars": expected_bars,
+                    "primary_expected_bars": primary_expected_bars,
+                    "primary_actual_bars": primary_actual_bars,
+                    "actual_bars": actual_bars,
+                    "materially_short": materially_short,
+                    "insufficient_intraday": insufficient_intraday,
+                    "primary_materially_short": primary_materially_short,
+                    "primary_insufficient_intraday": primary_insufficient_intraday,
+                    "primary_low_coverage": primary_low_coverage,
+                    "from_feed": current_feed,
+                    "active_feed": active_feed,
+                    "fallback_feed": fallback_feed or "",
+                    "fallback_provider": fallback_provider or "",
+                    "fallback_attempted": True,
+                    "fallback_used": True,
+                    "fallback_exhausted": low_coverage,
+                    "start": coverage_window_start.isoformat(),
+                    "end": end_dt.isoformat(),
+                }
+                logging.warning("MINUTE_DATA_COVERAGE_WARNING")
+                logger.warning(
+                    "MINUTE_DATA_COVERAGE_WARNING",
+                    extra=warning_payload,
+                )
+                coverage_warning_logged = True
 
     if low_coverage and not coverage_warning_logged:
         warning_extra = {
             "symbol": symbol,
             "expected_bars": expected_bars,
+            "primary_expected_bars": primary_expected_bars,
             "primary_actual_bars": primary_actual_bars,
             "actual_bars": actual_bars,
             "materially_short": materially_short,
             "insufficient_intraday": insufficient_intraday,
+            "primary_materially_short": primary_materially_short,
+            "primary_insufficient_intraday": primary_insufficient_intraday,
+            "primary_low_coverage": primary_low_coverage,
             "from_feed": current_feed,
             "active_feed": active_feed,
             "fallback_feed": (fallback_feed or ""),
@@ -8930,8 +9044,11 @@ class DataFetcher:
                         now_monotonic = float(monotonic_time())
                     ttl_limit = _DAILY_FETCH_MEMO_TTL if memo_ttl <= 0.0 else memo_ttl
                     is_fresh = True
-                    if ttl_limit > 0.0 and memo_ts is not None and memo_ts > 0.0:
-                        is_fresh = (now_monotonic - memo_ts) <= ttl_limit
+                    if ttl_limit > 0.0 and memo_ts is not None:
+                        if memo_ts <= 0.0:
+                            is_fresh = False
+                        else:
+                            is_fresh = (now_monotonic - memo_ts) <= ttl_limit
                     if is_fresh:
                         normalized_pair = (now_monotonic, memo_payload)
                         with cache_lock:
@@ -16415,6 +16532,7 @@ def _record_price_reliability(
     reliable = True
     reason: str | None = None
     gap_ratio: float | None = None
+    coverage_meta: Mapping[str, Any] | None = None
     if isinstance(attrs, dict):
         reliable = bool(attrs.get("price_reliable", True))
         reason_val = attrs.get("price_reliable_reason")
@@ -16432,15 +16550,45 @@ def _record_price_reliability(
             except (TypeError, ValueError):
                 gap_ratio = None
     mapping[symbol] = (reliable, reason)
-    _update_data_quality(
-        state,
-        symbol,
-        price_reliable=reliable,
-        price_reliable_reason=reason,
-        gap_ratio=gap_ratio,
-        missing_ohlcv=False,
-        stale_data=False,
-    )
+    updates: dict[str, Any] = {
+        "price_reliable": reliable,
+        "price_reliable_reason": reason,
+        "gap_ratio": gap_ratio,
+        "missing_ohlcv": False,
+        "stale_data": False,
+    }
+    if isinstance(coverage_meta, Mapping):
+        provider_canonical = coverage_meta.get("provider_canonical")
+        if provider_canonical is not None:
+            updates["provider_canonical"] = str(provider_canonical)
+        fallback_contiguous = coverage_meta.get("fallback_contiguous")
+        if fallback_contiguous is not None:
+            updates["fallback_contiguous"] = bool(fallback_contiguous)
+        using_fallback_provider = coverage_meta.get("using_fallback_provider")
+        if using_fallback_provider is not None:
+            updates["using_fallback_provider"] = bool(using_fallback_provider)
+        primary_feed_gap = coverage_meta.get("primary_feed_gap")
+        if primary_feed_gap is not None:
+            updates["primary_feed_gap"] = bool(primary_feed_gap)
+        fallback_repaired = coverage_meta.get("fallback_repaired")
+        if fallback_repaired is not None:
+            updates["fallback_repaired"] = bool(fallback_repaired)
+        coverage_expected = coverage_meta.get("expected")
+        if coverage_expected is not None:
+            try:
+                updates["coverage_expected"] = int(coverage_expected)
+            except (TypeError, ValueError):
+                pass
+        coverage_missing = coverage_meta.get("missing_after")
+        if coverage_missing is not None:
+            try:
+                updates["coverage_missing"] = int(coverage_missing)
+            except (TypeError, ValueError):
+                pass
+        last_timestamp = coverage_meta.get("coverage_last_timestamp") or coverage_meta.get("window_end")
+        if isinstance(last_timestamp, datetime):
+            updates["coverage_last_timestamp"] = last_timestamp
+    _update_data_quality(state, symbol, **updates)
 
 
 def _fetch_feature_data(
@@ -17039,6 +17187,29 @@ _fallback_quote_max_age_seconds.cache_clear = _fallback_quote_max_age_seconds_ca
 _fallback_quote_max_age_seconds.cache_info = _fallback_quote_max_age_seconds_cached.cache_info  # type: ignore[attr-defined]
 
 
+def _derive_synthetic_fallback_quote(quality: Mapping[str, Any]) -> tuple[float, datetime] | None:
+    provider = str(quality.get("provider_canonical") or quality.get("fallback_provider") or "").strip().lower()
+    if provider != "yahoo":
+        return None
+    if not bool(quality.get("fallback_contiguous")):
+        return None
+    last_ts_obj = quality.get("coverage_last_timestamp") or quality.get("coverage_window_end")
+    if not isinstance(last_ts_obj, datetime):
+        return None
+    if last_ts_obj.tzinfo is None:
+        last_ts = last_ts_obj.replace(tzinfo=UTC)
+    else:
+        try:
+            last_ts = last_ts_obj.astimezone(UTC)
+        except Exception:
+            return None
+    try:
+        age = max(0.0, (datetime.now(UTC) - last_ts).total_seconds())
+    except Exception:
+        return None
+    return age, last_ts
+
+
 def _fallback_quote_newer_than_last_close(
     quote_ts: datetime | None, now: datetime
 ) -> bool:
@@ -17302,14 +17473,17 @@ def _evaluate_data_gating(
             )
             annotations["fallback_quote_ok"] = bool(ok)
             annotations["fallback_quote_limit"] = max_fallback_age
+            fallback_quote_reason_label: str | None = None
             if ok:
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = None
+                annotations["fallback_quote_source"] = "alpaca"
                 _update_data_quality(
                     state,
                     symbol,
                     fallback_quote_age=age,
                     fallback_quote_error=None,
+                    fallback_quote_source="alpaca",
                 )
                 fallback_ok = True
             else:
@@ -17317,17 +17491,42 @@ def _evaluate_data_gating(
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = reason_label
                 annotations["fallback_quote_ok"] = False
+                annotations["fallback_quote_source"] = "alpaca"
                 if reason_label in _TRANSIENT_FALLBACK_REASONS:
                     reasons.append(reason_label)
                 else:
                     fatal_reasons.append(reason_label)
                 fallback_ok = False
+                fallback_quote_reason_label = reason_label
                 _update_data_quality(
                     state,
                     symbol,
                     fallback_quote_age=age,
                     fallback_quote_error=reason_label,
+                    fallback_quote_source="alpaca",
                 )
+            if fallback_ok is not True:
+                synthetic = _derive_synthetic_fallback_quote(quality)
+                if synthetic is not None:
+                    synthetic_age, _synthetic_ts = synthetic
+                    fallback_ok = True
+                    annotations["fallback_quote_ok"] = True
+                    annotations["fallback_quote_age"] = synthetic_age
+                    annotations["fallback_quote_error"] = None
+                    annotations["fallback_quote_source"] = "synthetic"
+                    if fallback_quote_reason_label:
+                        if fallback_quote_reason_label in fatal_reasons:
+                            fatal_reasons.remove(fallback_quote_reason_label)
+                        while fallback_quote_reason_label in reasons:
+                            reasons.remove(fallback_quote_reason_label)
+                        fallback_quote_reason_label = None
+                    _update_data_quality(
+                        state,
+                        symbol,
+                        fallback_quote_age=synthetic_age,
+                        fallback_quote_error=None,
+                        fallback_quote_source="synthetic",
+                    )
     else:
         if fallback_source and not quality.get("price_reliable", True):
             fatal_reasons.append(quality.get("price_reliable_reason") or "unreliable_price")
