@@ -134,6 +134,7 @@ from ai_trading.config.management import (
     get_trading_config,
 )
 from ai_trading.metrics import get_histogram, get_counter
+from ai_trading.telemetry import runtime_state
 from ai_trading.utils.env import alpaca_credential_status
 
 
@@ -1512,6 +1513,10 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    try:
+        runtime_state.update_service_status(status="warming_up", reason="startup")
+    except Exception:
+        logger.debug("SERVICE_STATUS_WARMUP_INIT_FAILED", exc_info=True)
     # Initialize TradingConfig-backed overrides (import-safe)
     try:
         from ai_trading.core import bot_engine as _be
@@ -1530,6 +1535,33 @@ def main(argv: list[str] | None = None) -> None:
             logger.warning("API_PORT_CONFLICT_IGNORED_UNDER_TEST")
         else:
             raise SystemExit(errno.EADDRINUSE) from exc
+    api_ready = threading.Event()
+    api_error = threading.Event()
+    api_thread = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
+    api_thread.start()
+    try:
+        if api_error.wait(timeout=2):
+            raise getattr(api_error, "exception", RuntimeError("API failed to start"))
+        if not api_ready.wait(timeout=5):
+            if not api_thread.is_alive():
+                raise RuntimeError("API thread terminated unexpectedly during startup")
+            logger.warning(
+                "API_STARTUP_LAGGING",
+                extra={"note": "health endpoints may remain warming_up during warm-up"},
+            )
+    except PortInUseError as exc:
+        logger.critical(
+            "API_PORT_CONFLICT_FATAL",
+            extra={"port": exc.port, "pid": exc.pid},
+        )
+        raise SystemExit(errno.EADDRINUSE) from exc
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        logger.error("API_STARTUP_DEGRADED", exc_info=exc)
+        api_error.set()
+        try:
+            runtime_state.update_service_status(status="degraded", reason="api_start_failed")
+        except Exception:
+            logger.debug("SERVICE_STATUS_API_DEGRADED_UPDATE_FAILED", exc_info=True)
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     try:
         if not _is_market_open_base():
@@ -1661,28 +1693,18 @@ def main(argv: list[str] | None = None) -> None:
     if not warmup_ok:
         logger.info("Warm-up run_cycle completed with recovery")
     _reset_warmup_cooldown_timestamp()
-    api_ready = threading.Event()
-    api_error = threading.Event()
-    t = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
-    t.start()
-    # Wait for the API to bind; treat configured port conflicts as fatal.
     try:
-        if api_error.wait(timeout=2):
-            raise getattr(api_error, "exception", RuntimeError("API failed to start"))
-        if not api_ready.wait(timeout=10):
-            if not t.is_alive():
-                raise RuntimeError("API thread terminated unexpectedly during startup")
-            logger.warning("API startup taking longer than expected, proceeding with degraded functionality")
-    except PortInUseError as exc:
-        logger.critical(
-            "API_PORT_CONFLICT_FATAL",
-            extra={"port": exc.port, "pid": exc.pid},
-        )
-        raise SystemExit(errno.EADDRINUSE) from exc
-    except (RuntimeError, TimeoutError, OSError) as e:
-        # Degrade gracefully for other failures so trading can continue.
-        logger.error("API_STARTUP_DEGRADED", exc_info=e)
-        api_error.set()
+        if api_error.is_set():
+            reason = "api_start_failed"
+            if not warmup_ok:
+                reason = "warmup_recovered_api_failed"
+            runtime_state.update_service_status(status="degraded", reason=reason)
+        elif warmup_ok:
+            runtime_state.update_service_status(status="ready")
+        else:
+            runtime_state.update_service_status(status="ready", reason="warmup_recovered")
+    except Exception:
+        logger.debug("SERVICE_STATUS_READY_UPDATE_FAILED", exc_info=True)
     S = get_settings()
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
 

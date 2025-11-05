@@ -244,7 +244,9 @@ from .._alpaca_guard import should_import_alpaca_sdk
 from .fallback_concurrency import fallback_slot
 
 
-def _record_provider_failure_event(reason: str | None = None) -> None:
+def _record_provider_failure_event(
+    reason: str | None = None, *, http_code: int | None = None
+) -> None:
     """Track sustained Alpaca data provider failures."""
 
     now_mono = monotonic_time()
@@ -275,6 +277,7 @@ def _record_provider_failure_event(reason: str | None = None) -> None:
         consecutive_failures=payload["consecutive_failures"],
         last_error_at=payload["last_error_at"],
         reason=reason,
+        http_code=http_code,
     )
 
 
@@ -3990,6 +3993,55 @@ def _normalize_feed_name(feed: str | None) -> str:
     return normalized or "iex"
 
 
+def _env_source_override(timeframe: str) -> tuple[str, ...] | None:
+    """Return provider override tuple for the given timeframe, if configured."""
+
+    tf = (timeframe or "").strip().lower()
+    if tf in {"1min", "minute", "minutes", "intraday"}:
+        env_key = "MINUTE_SOURCE"
+    elif tf in {"1day", "1d", "daily", "day"}:
+        env_key = "DAILY_SOURCE"
+    else:
+        return None
+
+    try:
+        raw_value = get_env(env_key)
+    except Exception:
+        raw_value = os.getenv(env_key)
+    normalized = str(raw_value or "").strip().lower()
+    if not normalized or normalized in {"auto", "default"}:
+        return None
+
+    if normalized in {"yfinance", "yf"}:
+        normalized = "yahoo"
+
+    if normalized.startswith("alpaca_"):
+        suffix = normalized.split("_", 1)[1] or "iex"
+        suffix = suffix.lower()
+        if suffix not in {"iex", "sip"}:
+            suffix = "iex"
+        return (f"alpaca_{suffix}",)
+
+    if normalized == "alpaca":
+        feed_candidates: list[str] = []
+        for key in ("ALPACA_DATA_FEED", "DATA_FEED_INTRADAY", "ALPACA_DEFAULT_FEED"):
+            try:
+                candidate = get_env(key)
+            except Exception:
+                candidate = os.getenv(key)
+            if candidate:
+                feed_candidates.append(str(candidate).strip().lower())
+        for candidate in feed_candidates:
+            if candidate in {"iex", "sip"}:
+                return (f"alpaca_{candidate}",)
+        return ("alpaca_iex",)
+
+    if normalized in {"yahoo", "finnhub"}:
+        return (normalized,)
+
+    return (normalized,)
+
+
 def refresh_default_feed(feed: str | None = None) -> str:
     """Refresh the module-level default feed from *feed* or current settings."""
 
@@ -6145,7 +6197,7 @@ def _get_alpaca_data_base_url() -> str:
     try:
         base_url = get_alpaca_data_base_url()
     except Exception:
-        base_url = os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+        base_url = "https://data.alpaca.markets"
     base_url = (base_url or "https://data.alpaca.markets").strip()
     if not base_url:
         base_url = "https://data.alpaca.markets"
@@ -6420,6 +6472,12 @@ def _fetch_bars(
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
+    forced_provider_label: str | None = None
+    override_forced = _env_source_override(tf_norm)
+    if override_forced:
+        candidate = (override_forced[0] or "").strip().lower()
+        if candidate and not candidate.startswith("alpaca_"):
+            forced_provider_label = candidate
     force_no_session_attempts = False
     prelogged_empty_metric = False
     no_session_feeds: tuple[str, ...] = ()
@@ -6828,6 +6886,21 @@ def _fetch_bars(
             return _empty_ohlcv_frame(pd)
         return frame
 
+    if forced_provider_label in {"yahoo", "finnhub"}:
+        if forced_provider_label == "yahoo":
+            interval_code = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+            try:
+                yahoo_df = _yahoo_get_bars(symbol, _start, _end, interval=interval_code)
+            except Exception:
+                yahoo_df = pd.DataFrame()
+            annotated = _annotate_df_source(yahoo_df, provider="yahoo", feed="yahoo")
+            processed = _post_process(annotated, symbol=symbol, timeframe=_interval)
+            return _finalize_frame(processed)
+        if forced_provider_label == "finnhub":
+            finnhub_df = _minute_df_from_finnhub(symbol, _start, _end)
+            processed = _post_process(finnhub_df, symbol=symbol, timeframe=_interval)
+            return _finalize_frame(processed)
+
     if no_session_window:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -6857,7 +6930,7 @@ def _fetch_bars(
             if session is not None:
                 _session_get(
                     session,
-                    f"https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+                    f"{_get_alpaca_data_base_url()}/v2/stocks/{symbol}/bars",
                     params={},
                     headers={},
                     timeout=1,
@@ -9540,6 +9613,9 @@ def get_minute_df(
 
     Also updates in-memory minute cache for freshness checks."""
     pd = _ensure_pandas()
+    forced_provider: str | None = None
+    forced_provider_label: str | None = None
+    forced_feed: str | None = None
     last_complete_evaluations = 0
 
     def _evaluate_last_complete(
@@ -9559,6 +9635,17 @@ def get_minute_df(
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     pytest_active = _detect_pytest_env()
+    override_sources = _env_source_override("1Min")
+    forced_provider = (
+        override_sources[0].strip().lower() if override_sources and override_sources[0] else None
+    )
+    if forced_provider:
+        if forced_provider.startswith("alpaca_"):
+            forced_feed = forced_provider.split("_", 1)[1] or "iex"
+        else:
+            forced_provider_label = forced_provider
+    if forced_feed:
+        feed = forced_feed
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
@@ -9567,7 +9654,7 @@ def get_minute_df(
         _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
         fallback_window_used = False
     fallback_metadata: dict[str, str] | None = None
-    skip_primary_due_to_fallback = False
+    skip_primary_due_to_fallback = bool(forced_provider_label)
     skip_due_to_metadata = False
     fallback_ttl_active = False
     if fallback_window_used:
@@ -9613,6 +9700,13 @@ def get_minute_df(
         fallback_allowed_flag = bool(_ENABLE_HTTP_FALLBACK)
     else:
         fallback_allowed_flag = http_fallback_env.strip().lower() not in {"0", "false", "no", "off"}
+
+    if forced_provider_label:
+        backup_provider_str = forced_provider_label
+        backup_provider_normalized = forced_provider_label
+        resolved_backup_provider = forced_provider_label
+        resolved_backup_feed = forced_provider_label
+        fallback_allowed_flag = True
 
     ttl_until: int | None = None
     now_s_cached: int | None = None
@@ -9729,7 +9823,9 @@ def get_minute_df(
                 "status": status,
             },
         )
-        _record_provider_failure_event(str(reason) if reason is not None else None)
+        _record_provider_failure_event(
+            str(reason) if reason is not None else None, http_code=status
+        )
         primary_failure_logged = True
 
     def _minute_backup_get_bars(
@@ -9912,13 +10008,21 @@ def get_minute_df(
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = finnhub_key_present
     use_finnhub = enable_finnhub and bool(has_finnhub)
+    if forced_provider_label == "finnhub":
+        enable_finnhub = True
+        use_finnhub = bool(has_finnhub)
+    elif forced_provider_label:
+        use_finnhub = False
     finnhub_disabled_requested = False
     df = None
     primary_frame_acquired = False
     last_empty_error: EmptyBarsError | None = None
     provider_str, backup_normalized = _resolve_backup_provider()
     backup_label = (backup_normalized or provider_str.lower() or "").strip()
-    primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
+    if forced_provider_label:
+        primary_label = forced_provider_label
+    else:
+        primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
     primary_failure_logged = False
     allow_empty_override = False
 
@@ -9949,8 +10053,10 @@ def get_minute_df(
             elif until:
                 return True
         return False
+    if forced_provider_label:
+        skip_primary_due_to_fallback = True
     force_primary_fetch = not skip_primary_due_to_fallback
-    if pytest_active and not force_primary_fetch:
+    if pytest_active and not force_primary_fetch and not forced_provider_label:
         force_primary_fetch = True
     if backup_label:
         prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
@@ -10351,7 +10457,40 @@ def get_minute_df(
             _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
             switch_recorded = True
     if (not primary_frame_acquired) and (df is None or getattr(df, "empty", True)):
-        if fallback_frame is not None and not getattr(fallback_frame, "empty", True):
+        if forced_provider_label == "yahoo":
+            try:
+                yahoo_raw = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+            except Exception:
+                yahoo_raw = None
+                if pd is not None:
+                    yahoo_raw = pd.DataFrame()
+            yahoo_frame = _annotate_df_source(
+                yahoo_raw,
+                provider="yahoo",
+                feed="yahoo",
+            )
+            df = _track_backup_frame(yahoo_frame)
+            used_backup = True
+            if df is not None and not getattr(df, "empty", True):
+                fallback_frame = df
+        elif forced_provider_label == "finnhub":
+            try:
+                finnhub_frame = _minute_df_from_finnhub(symbol, start_dt, end_dt)
+            except Exception:
+                finnhub_frame = None
+            if finnhub_frame is None or getattr(finnhub_frame, "empty", True):
+                df = finnhub_frame
+                finnhub_disabled_requested = True
+            else:
+                annotated_finnhub = _annotate_df_source(
+                    finnhub_frame,
+                    provider="finnhub",
+                    feed="finnhub",
+                )
+                df = _track_backup_frame(annotated_finnhub)
+                used_backup = True
+                fallback_frame = df
+        elif fallback_frame is not None and not getattr(fallback_frame, "empty", True):
             df = fallback_frame
         elif use_finnhub:
             finnhub_df = None
@@ -10386,7 +10525,11 @@ def get_minute_df(
             )
         else:
             log_finnhub_disabled(symbol)
-    if (not primary_frame_acquired) and (df is None or getattr(df, "empty", True)):
+    if (
+        not forced_provider_label
+        and (not primary_frame_acquired)
+        and (df is None or getattr(df, "empty", True))
+    ):
         max_span = _dt.timedelta(days=7)
         total_span = end_dt - start_dt
         if total_span > max_span:
@@ -10815,8 +10958,21 @@ def get_daily_df(
     """Fetch daily bars and ensure canonical OHLCV columns."""
 
     use_alpaca = should_import_alpaca_sdk()
+    override_sources = _env_source_override("1Day")
+    forced_daily_provider = override_sources[0] if override_sources else None
+    if forced_daily_provider and forced_daily_provider.startswith("alpaca_"):
+        feed = forced_daily_provider.split("_", 1)[1]
+    if forced_daily_provider == "yahoo":
+        use_alpaca = False
+    if forced_daily_provider == "finnhub":
+        use_alpaca = False
 
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
+
+    start_dt = ensure_datetime(
+        start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10)
+    )
+    end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
 
     if feed is None:
         tf_key = (symbol, _canon_tf("1Day"))
@@ -10842,10 +10998,17 @@ def get_daily_df(
     bootstrap_reason: str | None = None
     bootstrap_primary: str | None = None
     if not use_alpaca:
-        start_dt = ensure_datetime(start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10))
-        end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
-        df = _safe_backup_get_bars(symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"))
-        if df is None or getattr(df, "empty", False):
+        if forced_daily_provider == "finnhub":
+            df = _finnhub_get_bars(symbol, start_dt, end_dt, interval="1d")
+            if df is not None and not getattr(df, "empty", False):
+                df = _annotate_df_source(df, provider="finnhub", feed="finnhub")
+        else:
+            df = _safe_backup_get_bars(
+                symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d")
+            )
+            if forced_daily_provider == "yahoo":
+                df = _annotate_df_source(df, provider="yahoo", feed="yahoo")
+        if forced_daily_provider is None and (df is None or getattr(df, "empty", False)):
             try:
                 from ai_trading import alpaca_api as _bars_mod
 
@@ -11000,6 +11163,12 @@ def get_daily_df(
         )
         normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
         return _restore_timestamp_column(normalized)
+
+    if forced_daily_provider == "finnhub":
+        finnhub_daily = df
+        if finnhub_daily is None:
+            finnhub_daily = _finnhub_get_bars(symbol, start_dt, end_dt, interval="1d")
+        return _normalize_daily_frame(finnhub_daily, "finnhub")
 
     def _attempt_backup_normalization(source_hint: str) -> Any:
         start_dt = ensure_datetime(

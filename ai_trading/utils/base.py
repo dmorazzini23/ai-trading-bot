@@ -22,6 +22,7 @@ from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import get_logger
 from ai_trading.settings import get_verbose_logging
 from ai_trading.utils.time import monotonic_time
+from ai_trading.utils.env import get_alpaca_data_v2_base
 
 from .locks import portfolio_lock
 from .safe_subprocess import SUBPROCESS_TIMEOUT_DEFAULT, safe_subprocess_run
@@ -266,7 +267,7 @@ def get_current_price(symbol: str) -> float:
         feed = get_env("ALPACA_DATA_FEED", "iex")
         params = {"feed": feed} if feed else None
         data = alpaca_get(
-            f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
+            f"{get_alpaca_data_v2_base()}/stocks/{symbol}/quotes/latest",
             params=params,
         )
         price = float(data.get("ap", 0) or 0)
