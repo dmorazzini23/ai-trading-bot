@@ -480,7 +480,7 @@ class OrderManager:
         self._monitor_thread = None
         self._monitor_running = False
         self._idempotency_cache: OrderIdempotencyCache | None = None
-        self._test_mode = str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes"}
+        self._test_mode = bool(get_env("PYTEST_RUNNING", default=""))
         emit_once(logger, "ORDER_MANAGER_INIT", "info", "OrderManager initialized")
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
@@ -511,7 +511,7 @@ class OrderManager:
         broker APIs and provides useful metadata even in dry‑run tests.
         """
         try:
-            if getattr(order, "order_type", None) == OrderType.MARKET:
+            if not self._test_mode and getattr(order, "order_type", None) == OrderType.MARKET:
                 try:
                     import importlib
 

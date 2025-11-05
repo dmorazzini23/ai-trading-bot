@@ -66,6 +66,7 @@ def _missing(mod: str) -> bool:
 @pytest.fixture(scope="session", autouse=True)
 def _seed_tests() -> None:
     """Ensure deterministic test execution."""
+    os.environ["PYTEST_RUNNING"] = "1"
     os.environ["PYTHONHASHSEED"] = "0"
     random.seed(0)
     if not _missing("numpy"):
