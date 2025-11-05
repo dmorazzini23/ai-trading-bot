@@ -1351,7 +1351,17 @@ def log_backup_provider_used(
             "METRIC_BACKUP_PROVIDER_FAILED",
             extra={"provider": provider, "symbol": symbol},
         )
-    active_logger.warning("BACKUP_PROVIDER_USED", extra=payload)
+    reason_value = (
+        payload.get("reason")
+        or payload.get("fallback_reason")
+        or payload.get("source")
+        or "unspecified"
+    )
+    message = (
+        f"BACKUP_PROVIDER_USED | "
+        f"provider={provider} symbol={symbol} timeframe={timeframe} reason={reason_value}"
+    )
+    active_logger.warning(message, extra=payload)
 
     return payload
 

@@ -1625,6 +1625,89 @@ else:
         "off",
     }
 
+
+def _env_flag_enabled(name: str, default: str = "0") -> bool:
+    """Return boolean flag for *name* using :func:`get_env` with graceful fallback."""
+
+    try:
+        raw_value = get_env(name, default)
+    except Exception:
+        raw_value = os.environ.get(name, default)
+    if raw_value is None:
+        raw_value = default
+    if isinstance(raw_value, bool):
+        return raw_value
+    try:
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value) != 0.0
+    except Exception:
+        pass
+    text = str(raw_value).strip().lower()
+    if not text:
+        return False
+    return text in {"1", "true", "yes", "on", "y"}
+
+
+DATA_HTTP_FALLBACK_INTRADAY = _env_flag_enabled("DATA_HTTP_FALLBACK_INTRADAY", "0")
+DATA_HTTP_FALLBACK_OUT_OF_SESSION = _env_flag_enabled("DATA_HTTP_FALLBACK_OUT_OF_SESSION", "0")
+_INTRADAY_TIMEFRAMES = frozenset({"1Min", "5Min", "15Min", "1Hour"})
+
+
+def _http_fallback_permitted(
+    timeframe: str | None,
+    *,
+    window_has_session: bool | None = None,
+    feed: str | None = None,
+    forced: bool = False,
+    enable_flag: bool | None = None,
+) -> bool:
+    """Return ``True`` when HTTP fallback is allowed for the given window."""
+
+    if forced:
+        return True
+    if enable_flag is None:
+        global_enabled = bool(globals().get("_ENABLE_HTTP_FALLBACK", _ENABLE_HTTP_FALLBACK))
+    else:
+        global_enabled = bool(enable_flag)
+    if not global_enabled:
+        return False
+    if timeframe is None:
+        return global_enabled
+    try:
+        tf_norm = _canon_tf(timeframe)
+    except Exception:
+        tf_norm = str(timeframe or "").strip()
+    if not tf_norm:
+        return global_enabled
+    if tf_norm in _INTRADAY_TIMEFRAMES:
+        if not DATA_HTTP_FALLBACK_INTRADAY:
+            return False
+        if window_has_session is False and tf_norm == "1Min":
+            feed_norm = str(feed or "").strip().lower()
+            if feed_norm.startswith("alpaca_"):
+                feed_norm = feed_norm.split("_", 1)[1]
+            if feed_norm in {"", "alpaca"}:
+                feed_norm = str(_DEFAULT_FEED or "iex").strip().lower()
+            if feed_norm == "iex":
+                return bool(DATA_HTTP_FALLBACK_OUT_OF_SESSION)
+    return global_enabled
+
+
+def _format_backup_usage_message(
+    provider: str | None,
+    symbol: str | None,
+    timeframe: str | None,
+    reason: str | None,
+) -> str:
+    provider_str = str(provider or "unknown")
+    symbol_str = str(symbol or "unknown").upper()
+    timeframe_str = str(timeframe or "unknown")
+    reason_str = str(reason or "unspecified")
+    return (
+        f"USING_BACKUP_PROVIDER | "
+        f"provider={provider_str} symbol={symbol_str} timeframe={timeframe_str} reason={reason_str}"
+    )
+
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
@@ -2267,7 +2350,13 @@ def _mark_fallback(
             reason_extra = log_extra.get("fallback_reason")
             if reason_extra:
                 extra["reason"] = reason_extra
-            logger.info("USING_BACKUP_PROVIDER", extra=extra)
+            message = _format_backup_usage_message(
+                provider_for_register,
+                symbol,
+                timeframe,
+                reason_extra,
+            )
+            logger.info(message, extra=extra)
             bucket.add(usage_key)
         log_backup_provider_used(
             provider_for_register,
@@ -4961,9 +5050,13 @@ def _flatten_and_normalize_ohlcv(
                 short_circuit_flag = bool(fetch_state.get("short_circuit_empty"))
                 outside_window = bool(fetch_state.get("outside_market_hours"))
                 window_has_session = bool(fetch_state.get("window_has_session", True))
-                fallback_allowed = bool(fetch_state.get("fallback_enabled")) or (
-                    not window_has_session and bool(_ENABLE_HTTP_FALLBACK)
-                )
+                fallback_allowed = bool(fetch_state.get("fallback_enabled"))
+                if not fallback_allowed:
+                    fallback_allowed = _http_fallback_permitted(
+                        timeframe,
+                        window_has_session=window_has_session,
+                        feed=fetch_state.get("initial_feed"),
+                    )
                 benign_close = short_circuit_flag or (outside_window and fallback_allowed)
             log_level = logging.WARNING if benign_close else logging.ERROR
             logger.log(log_level, "OHLCV_CLOSE_ALL_NAN", extra=extra)
@@ -5394,7 +5487,15 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             extra = {"provider": provider, "symbol": symbol}
             if reason_extra:
                 extra.update(reason_extra)
-            logger.info("USING_BACKUP_PROVIDER", extra=extra)
+            reason_text = None
+            if isinstance(reason_extra, Mapping):
+                reason_text = (
+                    reason_extra.get("reason")
+                    or reason_extra.get("fallback_reason")
+                    or reason_extra.get("trigger")
+                )
+            message = _format_backup_usage_message(provider, symbol, interval, reason_text)
+            logger.info(message, extra=extra)
             bucket.add(key)
         if frames:
             if pd_local is not None:
@@ -5531,7 +5632,18 @@ def _post_process(
         return df
     if df is None or getattr(df, "empty", True):
         slots = _fallback_slots_remaining_local()
-        if (slots is not None and slots <= 0) and not _ENABLE_HTTP_FALLBACK:
+        fetch_state = globals().get("_state")
+        state_session: bool | None = None
+        state_feed: str | None = None
+        if isinstance(fetch_state, dict):
+            state_session = fetch_state.get("window_has_session")
+            state_feed = fetch_state.get("initial_feed")
+        fallback_allowed_flag = _http_fallback_permitted(
+            timeframe,
+            window_has_session=state_session,
+            feed=state_feed,
+        )
+        if (slots is not None and slots <= 0) and not fallback_allowed_flag:
             tf_label = timeframe or "unknown"
             raise EmptyBarsError(
                 f"alpaca_empty: symbol={symbol}, timeframe={tf_label}, feed=unknown, reason=empty_final"
@@ -6455,12 +6567,15 @@ def _fetch_bars(
     feed = feed if feed not in ("",) else None
     feed, adjustment = _validate_fetch_params(symbol, start_dt, end_dt, timeframe, feed, adjustment)
     globals()["_state"] = {}
+    has_session = _window_has_trading_session(start_dt, end_dt)
+    tf_norm = _canon_tf(timeframe)
+    tf_key = (symbol, tf_norm)
     if pytest_active:
         _ALPACA_DISABLED_ALERTED = False
         _alpaca_disable_count = 0
         _alpaca_empty_streak = 0
         backup_allowed = True
-        if not _ENABLE_HTTP_FALLBACK:
+        if not _http_fallback_permitted(tf_norm, window_has_session=has_session, feed=feed):
             try:
                 backup_allowed = bool(alpaca_empty_to_backup())
             except Exception:
@@ -6469,9 +6584,6 @@ def _fetch_bars(
             _FALLBACK_WINDOWS.clear()
             _FALLBACK_UNTIL.clear()
             _FEED_OVERRIDE_BY_TF.clear()
-    has_session = _window_has_trading_session(start_dt, end_dt)
-    tf_norm = _canon_tf(timeframe)
-    tf_key = (symbol, tf_norm)
     forced_provider_label: str | None = None
     override_forced = _env_source_override(tf_norm)
     if override_forced:
@@ -6513,7 +6625,11 @@ def _fetch_bars(
         if override_env is not None:
             normalized_env = override_env.strip().lower()
             env_allows_http = bool(normalized_env) and normalized_env not in {"0", "false", "no", "off"}
-        http_enabled = bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
+        http_enabled = _http_fallback_permitted(
+            tf_norm,
+            window_has_session=False,
+            feed=feed,
+        )
         if _pytest_active() and not env_allows_http:
             return _empty_ohlcv_frame(pd)
         if not (env_allows_http or http_enabled):
@@ -6825,10 +6941,13 @@ def _fetch_bars(
     if explicit_feed_request and resolved_feed is not None:
         resolved_feed = _feed
     if resolved_feed is None:
-        fallback_prohibited = (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK
-        if fallback_prohibited:
-            resolved_feed = _feed
-        else:
+        fallback_permitted = _http_fallback_permitted(
+            _interval,
+            window_has_session=None,
+            feed=_feed,
+        )
+        fallback_conf_allowed = not (_max_fallbacks_config is not None and _max_fallbacks_config <= 0)
+        if fallback_permitted and fallback_conf_allowed:
             downgrade_reason = get_data_feed_downgrade_reason()
             _state["resolve_feed_none"] = True
             if downgrade_reason == "missing_credentials" and _pytest_active():
@@ -6850,6 +6969,8 @@ def _fetch_bars(
                 )
                 yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
                 return _run_backup_fetch(yf_interval)
+        else:
+            resolved_feed = _feed
     if _pytest_active() or explicit_feed_request:
         _feed = resolved_feed
     else:
@@ -6872,6 +6993,12 @@ def _fetch_bars(
     short_circuit_empty = False
     _state["skip_empty_metrics"] = False
     _state["short_circuit_empty"] = False
+    http_fallback_allowed = _http_fallback_permitted(
+        _interval,
+        window_has_session=window_has_session,
+        feed=_feed,
+    )
+    _state["http_fallback_allowed"] = http_fallback_allowed
     def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
         if candidate is None:
             frame = pd.DataFrame()
@@ -6925,7 +7052,13 @@ def _fetch_bars(
         )
         short_circuit_empty = True
         _state["short_circuit_empty"] = True
-        if _ENABLE_HTTP_FALLBACK:
+        http_fallback_allowed = _http_fallback_permitted(
+            _interval,
+            window_has_session=False,
+            feed=_feed,
+        )
+        _state["http_fallback_allowed"] = http_fallback_allowed
+        if http_fallback_allowed:
             _state["allow_no_session_primary"] = True
             if session is not None:
                 _session_get(
@@ -6966,8 +7099,14 @@ def _fetch_bars(
         else:
             window_has_session = False
             no_session_window = True
+            empty_frame = _empty_ohlcv_frame(pd)
+            return _finalize_frame(empty_frame)
 
-    if no_session_window and not _ENABLE_HTTP_FALLBACK:
+    if no_session_window and not _http_fallback_permitted(
+        _interval,
+        window_has_session=False,
+        feed=_feed,
+    ):
         return _finalize_frame(None)
 
     env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
@@ -6994,7 +7133,12 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+            fallback_permitted = _http_fallback_permitted(
+                _interval,
+                window_has_session=window_has_session,
+                feed=_feed,
+            )
+            if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not fallback_permitted:
                 raise EmptyBarsError(
                     f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=missing_credentials"
                 )
@@ -7058,7 +7202,12 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_interval = interval_map.get(_interval)
         if fb_interval:
-            if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+            fallback_permitted = _http_fallback_permitted(
+                _interval,
+                window_has_session=window_has_session,
+                feed=_feed,
+            )
+            if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not fallback_permitted:
                 _clear_backup_skip(symbol, _interval)
             else:
                 skip_payload = {
@@ -7181,13 +7330,22 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                backup_allowed = _ENABLE_HTTP_FALLBACK
+                backup_allowed = _http_fallback_permitted(
+                    _interval,
+                    window_has_session=window_has_session,
+                    feed=_feed,
+                )
                 if not backup_allowed:
                     try:
                         backup_allowed = _should_use_backup_on_empty()
                     except Exception:
                         backup_allowed = False
-                if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not _ENABLE_HTTP_FALLBACK:
+                fallback_permitted = _http_fallback_permitted(
+                    _interval,
+                    window_has_session=window_has_session,
+                    feed=_feed,
+                )
+                if (_max_fallbacks_config is not None and _max_fallbacks_config <= 0) and not fallback_permitted:
                     raise EmptyBarsError(
                         f"alpaca_empty: symbol={symbol}, timeframe={_interval}, feed={_feed}, reason=provider_disabled"
                     )
@@ -7612,7 +7770,11 @@ def _fetch_bars(
             and fallback is None
             and not _state.get("allow_no_session_primary", False)
         ):
-            if _ENABLE_HTTP_FALLBACK:
+            if _http_fallback_permitted(
+                _interval,
+                window_has_session=_state.get("window_has_session"),
+                feed=_feed,
+            ):
                 return pd.DataFrame()
             empty_frame = _empty_ohlcv_frame(pd)
             if isinstance(empty_frame, pd.DataFrame):
@@ -8008,7 +8170,11 @@ def _fetch_bars(
                         {"provider": "alpaca", "status": "unauthorized", "feed": _feed, "timeframe": _interval}
                     ),
                 )
-            if _state.get("resolve_feed_none") and _ENABLE_HTTP_FALLBACK:
+            if _state.get("resolve_feed_none") and _http_fallback_permitted(
+                _interval,
+                window_has_session=_state.get("window_has_session"),
+                feed=_feed,
+            ):
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
@@ -8254,6 +8420,11 @@ def _fetch_bars(
             planned_backoff: float | None = None
             outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
             _state["outside_market_hours"] = bool(outside_market_hours)
+            http_fallback_allowed = _http_fallback_permitted(
+                _interval,
+                window_has_session=_state.get("window_has_session"),
+                feed=_feed,
+            )
             if attempt <= max_retries and can_retry_timeframe and _state["retries"] < max_retries:
                 if not outside_market_hours:
                     planned_backoff = min(
@@ -8271,14 +8442,14 @@ def _fetch_bars(
                             )
                         )
             should_backoff_first_empty = True
-            if _ENABLE_HTTP_FALLBACK and not outside_market_hours:
+            if http_fallback_allowed and not outside_market_hours:
                 try:
                     remaining_fallbacks = max_data_fallbacks()
                 except Exception:
                     should_backoff_first_empty = True
                 else:
                     should_backoff_first_empty = remaining_fallbacks <= 0
-            http_fallback_requested = bool(_ENABLE_HTTP_FALLBACK)
+            http_fallback_requested = bool(http_fallback_allowed)
             fallback_enabled = bool(fallback) or http_fallback_requested
             if not fallback_enabled:
                 fallback_enabled = _should_use_backup_on_empty()
@@ -8308,7 +8479,7 @@ def _fetch_bars(
                             sip_df = _attempt_fallback((_interval, "sip", _start, _end))
                             if sip_df is not None and not getattr(sip_df, "empty", True):
                                 return sip_df
-                if _ENABLE_HTTP_FALLBACK:
+                if http_fallback_allowed:
                     interval_map = {
                         "1Min": "1m",
                         "5Min": "5m",
@@ -8789,7 +8960,11 @@ def _fetch_bars(
                         ),
                     )
                     http_fallback_df: Any | None = None
-                    if _ENABLE_HTTP_FALLBACK:
+                    if _http_fallback_permitted(
+                        base_interval,
+                        window_has_session=_state.get("window_has_session"),
+                        feed=_feed,
+                    ):
                         interval_map = {
                             "1Min": "1m",
                             "5Min": "5m",
@@ -9049,7 +9224,11 @@ def _fetch_bars(
                 slots_remaining = _fallback_slots_remaining(_state)
                 fallback_available = (
                     (slots_remaining is None or slots_remaining > 0)
-                    or _ENABLE_HTTP_FALLBACK
+                    or _http_fallback_permitted(
+                        _interval,
+                        window_has_session=_state.get("window_has_session"),
+                        feed=_feed,
+                    )
                     or alpaca_empty_to_backup()
                 )
                 if fallback_available and is_market_open() and not _outside_market_hours(_start, _end):
@@ -9086,7 +9265,11 @@ def _fetch_bars(
                                             return sip_df
                                         if no_session_window:
                                             return sip_df
-                        if _ENABLE_HTTP_FALLBACK:
+                        if _http_fallback_permitted(
+                            _interval,
+                            window_has_session=_state.get("window_has_session"),
+                            feed=_feed,
+                        ):
                             interval_map = {
                                 "1Min": "1m",
                                 "5Min": "5m",
@@ -9190,7 +9373,11 @@ def _fetch_bars(
                 slots_remaining = _fallback_slots_remaining(_state)
                 fallback_available = (
                     (slots_remaining is None or slots_remaining > 0)
-                    or _ENABLE_HTTP_FALLBACK
+                    or _http_fallback_permitted(
+                        _interval,
+                        window_has_session=_state.get("window_has_session"),
+                        feed=_feed,
+                    )
                     or alpaca_empty_to_backup()
                 )
                 if fallback_available and is_market_open() and not _outside_market_hours(_start, _end):
@@ -9244,7 +9431,11 @@ def _fetch_bars(
             slots_remaining = _fallback_slots_remaining(_state)
             fallback_available = (
                 (slots_remaining is None or slots_remaining > 0)
-                or _ENABLE_HTTP_FALLBACK
+                or _http_fallback_permitted(
+                    _interval,
+                    window_has_session=_state.get("window_has_session"),
+                    feed=_feed,
+                )
                 or alpaca_empty_to_backup()
             )
             if log_event == "ALPACA_FETCH_RETRY_LIMIT":
@@ -9316,18 +9507,24 @@ def _fetch_bars(
     sip_locked_initial = _is_sip_unauthorized()
     _allow_sip_override = globals().get("_ALLOW_SIP")
     http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
-    http_fallback_enabled = False
+    http_env_enabled = False
     if http_fallback_env is not None:
-        http_fallback_enabled = http_fallback_env.strip().lower() not in {
+        http_env_enabled = http_fallback_env.strip().lower() not in {
             "0",
             "false",
             "no",
             "off",
         }
+    http_fallback_enabled = _http_fallback_permitted(
+        _interval,
+        window_has_session=window_has_session,
+        feed=_feed,
+    )
     explicit_sip_override = (
         _allow_sip_override is not None
         and (
             bool(os.getenv("PYTEST_RUNNING"))
+            or http_env_enabled
             or http_fallback_enabled
         )
     )
@@ -9338,7 +9535,7 @@ def _fetch_bars(
         no_session_window
         and force_no_session_attempts
         and no_session_feeds
-        and not _ENABLE_HTTP_FALLBACK
+        and not http_fallback_enabled
     ):
         prev_allow_primary = _state.get("allow_no_session_primary", False)
         _state["allow_no_session_primary"] = True
@@ -9350,7 +9547,7 @@ def _fetch_bars(
                 _state["allow_no_session_primary"] = True
             else:
                 _state.pop("allow_no_session_primary", None)
-    if (not window_has_session) and fallback is None and not _ENABLE_HTTP_FALLBACK:
+    if (not window_has_session) and fallback is None and not http_fallback_enabled:
         return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
     df = None
@@ -9433,7 +9630,11 @@ def _fetch_bars(
         )
     window_allows_backup = _state.get("window_has_session", True) or short_circuit_empty
     if (
-        _ENABLE_HTTP_FALLBACK
+        _http_fallback_permitted(
+            _interval,
+            window_has_session=_state.get("window_has_session"),
+            feed=_feed,
+        )
         and window_allows_backup
         and (df is None or getattr(df, "empty", True))
         and not _state.get("skip_backup_after_fallback")
@@ -9675,31 +9876,29 @@ def get_minute_df(
         "no_session_forced": bool(not window_has_session),
     }
     tf_key = (symbol, "1Min")
-    if not window_has_session and not _ENABLE_HTTP_FALLBACK:
-        _SKIPPED_SYMBOLS.discard(tf_key)
-        _EMPTY_BAR_COUNTS.pop(tf_key, None)
-        _IEX_EMPTY_COUNTS.pop(tf_key, None)
-        empty_frame = _empty_ohlcv_frame(pd)
-        if empty_frame is not None:
-            return empty_frame
-        pandas_mod = load_pandas()
-        if pandas_mod is not None:
-            try:
-                return pandas_mod.DataFrame()
-            except Exception:
-                pass
-        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-    _ensure_override_state_current()
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
+    http_fallback_allowed = _http_fallback_permitted(
+        "1Min",
+        window_has_session=bool(window_has_session),
+        feed=normalized_feed or _DEFAULT_FEED,
+    )
+    _state["http_fallback_allowed"] = http_fallback_allowed
+    _ensure_override_state_current()
     backup_provider_str, backup_provider_normalized = _resolve_backup_provider()
     resolved_backup_provider = backup_provider_normalized or backup_provider_str
     resolved_backup_feed = backup_provider_normalized or None
 
     http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
     if http_fallback_env is None:
-        fallback_allowed_flag = bool(_ENABLE_HTTP_FALLBACK)
+        fallback_allowed_flag = bool(http_fallback_allowed)
     else:
-        fallback_allowed_flag = http_fallback_env.strip().lower() not in {"0", "false", "no", "off"}
+        env_enabled = http_fallback_env.strip().lower() not in {"0", "false", "no", "off"}
+        fallback_allowed_flag = _http_fallback_permitted(
+            "1Min",
+            window_has_session=bool(window_has_session),
+            feed=normalized_feed or _DEFAULT_FEED,
+            enable_flag=env_enabled,
+        )
 
     if forced_provider_label:
         backup_provider_str = forced_provider_label
@@ -9707,6 +9906,8 @@ def get_minute_df(
         resolved_backup_provider = forced_provider_label
         resolved_backup_feed = forced_provider_label
         fallback_allowed_flag = True
+    http_fallback_allowed = bool(fallback_allowed_flag)
+    _state["http_fallback_allowed"] = http_fallback_allowed
 
     ttl_until: int | None = None
     now_s_cached: int | None = None
@@ -10559,9 +10760,10 @@ def get_minute_df(
             cur_start = start_dt
             while cur_start < end_dt:
                 cur_end = min(cur_start + max_span, end_dt)
-                dfs.append(_minute_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
-                used_backup = True
-                _register_backup_skip()
+                if http_fallback_allowed:
+                    dfs.append(_minute_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
+                    used_backup = True
+                    _register_backup_skip()
                 cur_start = cur_end
             if pd is not None and dfs:
                 df = pd.concat(dfs, ignore_index=True)
@@ -10589,14 +10791,16 @@ def get_minute_df(
                 df = dfs[0]
                 if df is not None and not getattr(df, "empty", True):
                     fallback_frame = df
-            else:
+            elif not http_fallback_allowed:
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
-        else:
+        elif http_fallback_allowed:
             df = _minute_backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
             _register_backup_skip()
             if df is not None and not getattr(df, "empty", True):
                 fallback_frame = df
+        else:
+            df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
 
     if used_backup and df is not None and not getattr(df, "empty", True):
         processed_df = _post_process(df, symbol=symbol, timeframe="1Min")
@@ -10691,7 +10895,8 @@ def get_minute_df(
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
-            return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+            empty_frame = _empty_ohlcv_frame(pd)
+            return empty_frame if empty_frame is not None else (pd.DataFrame() if pd is not None else [])  # type: ignore[return-value]
         if last_empty_error is not None:
             raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
@@ -10699,7 +10904,8 @@ def get_minute_df(
         if allow_empty_return and not backup_attempted:
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
-            return original_df
+            empty_frame = _empty_ohlcv_frame(pd)
+            return empty_frame if empty_frame is not None else original_df
         if last_empty_error is not None:
             raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
@@ -10726,7 +10932,10 @@ def get_minute_df(
         if allow_empty_return and not backup_attempted:
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
-            return original_df if original_df is not None else df
+            if original_df is not None and hasattr(original_df, "columns"):
+                return original_df
+            empty_frame = _empty_ohlcv_frame(pd)
+            return empty_frame if empty_frame is not None else pd.DataFrame()
         if last_empty_error is not None:
             raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")

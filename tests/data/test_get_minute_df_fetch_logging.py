@@ -69,6 +69,8 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
 
     monkeypatch.setattr(data_fetcher, "provider_monitor", _DummyProviderMonitor())
     monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", _fake_yahoo)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_OUT_OF_SESSION", True, raising=False)
     monkeypatch.setattr(data_fetcher, "_SIP_UNAUTHORIZED", True, raising=False)
     monkeypatch.setattr(data_fetcher, "_ALLOW_SIP", True, raising=False)
     monkeypatch.setattr(data_fetcher, "_sip_configured", lambda: True)
@@ -78,7 +80,12 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
         "get_settings",
         lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
     )
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
     monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
     with caplog.at_level(logging.INFO):
         result = data_fetcher.get_minute_df("AAPL", start, end, feed="sip")
@@ -87,7 +94,9 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     assert result.attrs.get("data_provider") == "yahoo"
     assert result.attrs.get("data_feed") == "yahoo"
     assert any(
-        record.message == "USING_BACKUP_PROVIDER" and getattr(record, "provider", None) == "yahoo"
+        record.message.startswith("USING_BACKUP_PROVIDER")
+        and getattr(record, "provider", None) == "yahoo"
+        and "provider=yahoo" in record.message
         for record in caplog.records
     )
     assert any(record.message == "UNAUTHORIZED_SIP" for record in caplog.records)
@@ -174,6 +183,8 @@ def test_fallback_logging_suppressed_within_window(monkeypatch, caplog):
     monkeypatch.setattr(data_fetcher, "_FALLBACK_METADATA", {}, raising=False)
     monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {}, raising=False)
     monkeypatch.setattr(data_fetcher, "_FALLBACK_SUPPRESS_UNTIL", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_OUT_OF_SESSION", True, raising=False)
 
     with caplog.at_level(logging.INFO):
         data_fetcher._mark_fallback(
@@ -195,8 +206,79 @@ def test_fallback_logging_suppressed_within_window(monkeypatch, caplog):
             resolved_provider="yahoo",
         )
 
-    using_backup_logs = [record for record in caplog.records if record.message == "USING_BACKUP_PROVIDER"]
+    using_backup_logs = [
+        record for record in caplog.records if record.message.startswith("USING_BACKUP_PROVIDER")
+    ]
     assert len(using_backup_logs) == 1
+    assert "provider=yahoo" in using_backup_logs[0].message
+    assert "timeframe=1Min" in using_backup_logs[0].message
+    assert "reason=" in using_backup_logs[0].message
     provider_state = runtime_state.observe_data_provider_state()
     assert provider_state["using_backup"] is True
     assert provider_state["active"] == "yahoo"
+
+
+def test_no_session_intraday_skips_backup_when_toggle_disabled(monkeypatch, caplog):
+    start, end = _dt_range()
+    session_stub = types.SimpleNamespace(get=lambda *args, **kwargs: None)
+
+    monkeypatch.setattr(data_fetcher, "_HTTP_SESSION", session_stub, raising=False)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", False, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_OUT_OF_SESSION", False, raising=False)
+    monkeypatch.setattr(data_fetcher, "_ENABLE_HTTP_FALLBACK", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_METADATA", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+
+    with caplog.at_level(logging.INFO):
+        result = data_fetcher.get_minute_df("AAPL", start, end, feed="iex")
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+    assert set(result.columns) >= {"timestamp", "open", "high", "low", "close", "volume"}
+    assert not any("USING_BACKUP_PROVIDER" in record.message for record in caplog.records)
+    assert "DATA_WINDOW_NO_SESSION" in caplog.text
+
+
+def test_no_session_intraday_fallback_reenabled_with_toggle(monkeypatch, caplog):
+    start, end = _dt_range()
+    timestamps = pd.date_range(start=start, periods=3, freq="1min", tz=UTC)
+    yahoo_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.2, 10.3, 10.4],
+            "low": [9.9, 10.0, 10.1],
+            "close": [10.05, 10.15, 10.25],
+            "volume": [1000, 1100, 1200],
+        }
+    )
+
+    session_stub = types.SimpleNamespace(get=lambda *args, **kwargs: types.SimpleNamespace(status_code=200, json=lambda: {}))
+
+    monkeypatch.setattr(data_fetcher, "_HTTP_SESSION", session_stub, raising=False)
+    monkeypatch.setattr(data_fetcher, "_session_get", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: False)
+    monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", lambda *a, **k: yahoo_df.copy(), raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_OUT_OF_SESSION", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_ENABLE_HTTP_FALLBACK", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "provider_monitor", _DummyProviderMonitor())
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_METADATA", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+
+    with caplog.at_level(logging.INFO):
+        result = data_fetcher.get_minute_df("AAPL", start, end, feed="iex")
+
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert result.attrs.get("data_provider") == "yahoo"
+    backup_logs = [record.message for record in caplog.records if record.message.startswith("USING_BACKUP_PROVIDER")]
+    assert backup_logs, "expected backup provider log message"
+    assert any("reason=" in message for message in backup_logs)
