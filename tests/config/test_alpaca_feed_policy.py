@@ -33,7 +33,7 @@ def _reset_config(monkeypatch):
     reload_trading_config()
 
 
-def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
+def test_config_alpaca_iex_allowed_no_fallback(monkeypatch):
     monkeypatch.setenv("DATA_PROVIDER", "alpaca")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
@@ -42,23 +42,23 @@ def test_config_alpaca_feed_without_sip_falls_back(monkeypatch):
     info = enforce_alpaca_feed_policy()
 
     assert info is not None
-    assert info.get("status") == "fallback"
-    assert info.get("fallback_provider") == "yahoo"
-    assert info.get("widen_bps") == 50
+    # No fallback away from Alpaca when using IEX
+    assert info.get("status") in {"alpaca_iex"}
+    assert info.get("provider") == "alpaca"
+    assert info.get("feed") == "iex"
 
     cfg = get_trading_config()
-    assert str(cfg.data_provider).lower() == "yahoo"
-    assert tuple(cfg.data_provider_priority)[0] == "yahoo"
+    # Provider remains Alpaca
+    assert str(cfg.data_provider).lower() == "alpaca"
+    assert tuple(cfg.data_provider_priority)[0].startswith("alpaca")
 
-    assert os.environ.get("DATA_PROVIDER") == "yahoo"
-    assert os.environ.get("DATA_PROVIDER_PRIORITY") == "yahoo"
-    assert os.environ.get("TRADING__DEGRADED_FEED_MODE") == "block"
-    assert os.environ.get("TRADING__DEGRADED_FEED_LIMIT_WIDEN_BPS") == "50"
-    # Original feed setting remains unchanged
+    # Env should not be rewritten to non-Alpaca values
+    assert os.environ.get("DATA_PROVIDER", "alpaca").startswith("alpaca")
+    # Feed remains IEX
     assert os.environ.get("ALPACA_DATA_FEED") == "iex"
 
 
-def test_config_alpaca_feed_prefers_finnhub_when_available(monkeypatch):
+def test_config_alpaca_iex_does_not_switch_even_if_finnhub_available(monkeypatch):
     monkeypatch.setenv("DATA_PROVIDER", "alpaca")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.setenv("FINNHUB_API_KEY", "test_key")
@@ -67,9 +67,10 @@ def test_config_alpaca_feed_prefers_finnhub_when_available(monkeypatch):
     info = enforce_alpaca_feed_policy()
 
     assert info is not None
-    assert info.get("fallback_provider") == "finnhub"
-    assert os.environ.get("DATA_PROVIDER") == "finnhub"
-    assert os.environ.get("DATA_PROVIDER_PRIORITY", "").startswith("finnhub")
+    # Still no fallback; stay on Alpaca
+    assert info.get("status") in {"alpaca_iex"}
+    assert os.environ.get("DATA_PROVIDER", "alpaca").startswith("alpaca")
+    assert os.environ.get("ALPACA_DATA_FEED") == "iex"
 
 
 def test_config_alpaca_feed_defaults_to_sip(monkeypatch):

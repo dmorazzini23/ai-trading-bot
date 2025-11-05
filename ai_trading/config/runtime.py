@@ -796,7 +796,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="data_provider_priority",
         env=("DATA_PROVIDER_PRIORITY",),
         cast="tuple[str]",
-        default=("alpaca_sip", "yahoo"),
+        default=("alpaca_iex", "yahoo"),
         description="Global fetch priority order for data providers.",
     ),
     ConfigSpec(
