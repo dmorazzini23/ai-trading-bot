@@ -17509,24 +17509,38 @@ def _evaluate_data_gating(
                 synthetic = _derive_synthetic_fallback_quote(quality)
                 if synthetic is not None:
                     synthetic_age, _synthetic_ts = synthetic
-                    fallback_ok = True
-                    annotations["fallback_quote_ok"] = True
-                    annotations["fallback_quote_age"] = synthetic_age
-                    annotations["fallback_quote_error"] = None
-                    annotations["fallback_quote_source"] = "synthetic"
-                    if fallback_quote_reason_label:
-                        if fallback_quote_reason_label in fatal_reasons:
-                            fatal_reasons.remove(fallback_quote_reason_label)
-                        while fallback_quote_reason_label in reasons:
-                            reasons.remove(fallback_quote_reason_label)
-                        fallback_quote_reason_label = None
-                    _update_data_quality(
-                        state,
-                        symbol,
-                        fallback_quote_age=synthetic_age,
-                        fallback_quote_error=None,
-                        fallback_quote_source="synthetic",
-                    )
+                    if synthetic_age <= max_fallback_age:
+                        fallback_ok = True
+                        annotations["fallback_quote_ok"] = True
+                        annotations["fallback_quote_age"] = synthetic_age
+                        annotations["fallback_quote_error"] = None
+                        annotations["fallback_quote_source"] = "synthetic"
+                        if fallback_quote_reason_label:
+                            if fallback_quote_reason_label in fatal_reasons:
+                                fatal_reasons.remove(fallback_quote_reason_label)
+                            while fallback_quote_reason_label in reasons:
+                                reasons.remove(fallback_quote_reason_label)
+                            fallback_quote_reason_label = None
+                        _update_data_quality(
+                            state,
+                            symbol,
+                            fallback_quote_age=synthetic_age,
+                            fallback_quote_error=None,
+                            fallback_quote_source="synthetic",
+                        )
+                    else:
+                        annotations["fallback_quote_age"] = synthetic_age
+                        annotations["fallback_quote_source"] = "synthetic"
+                        if not fallback_quote_reason_label:
+                            fallback_quote_reason_label = "fallback_quote_stale"
+                        annotations["fallback_quote_error"] = fallback_quote_reason_label
+                        _update_data_quality(
+                            state,
+                            symbol,
+                            fallback_quote_age=synthetic_age,
+                            fallback_quote_error=fallback_quote_reason_label,
+                            fallback_quote_source="synthetic",
+                        )
     else:
         if fallback_source and not quality.get("price_reliable", True):
             fatal_reasons.append(quality.get("price_reliable_reason") or "unreliable_price")

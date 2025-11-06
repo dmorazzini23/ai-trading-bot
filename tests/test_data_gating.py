@@ -168,7 +168,7 @@ def test_synthetic_fallback_quote_used_when_alpaca_unavailable(monkeypatch):
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
     state = _fresh_state()
     symbol = "XYZ"
-    last_bar = datetime.now(UTC) - timedelta(seconds=45)
+    last_bar = datetime.now(UTC) - timedelta(seconds=4)
     quality_entry = {
         "gap_ratio": 0.0,
         "price_reliable": True,
