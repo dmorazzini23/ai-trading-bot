@@ -37,6 +37,7 @@ from ai_trading.data.metrics import (
     provider_disable_duration_seconds,
     provider_failure_duration_seconds,
 )
+from ai_trading.telemetry.runtime_state import update_data_provider_state
 from ai_trading.utils.time import monotonic_time
 
 
@@ -485,6 +486,10 @@ def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any]) -> N
     if metadata.get("used_backup"):
         stats["used_backup_events"] = int(stats.get("used_backup_events", 0)) + 1
     stats["updated_at"] = datetime.now(UTC).isoformat()
+    try:
+        update_data_provider_state(gap_ratio_recent=ratio_val)
+    except Exception:  # pragma: no cover - telemetry best effort
+        logger.debug("GAP_RATIO_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
 
 
 def _record_event(
