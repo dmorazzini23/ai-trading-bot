@@ -205,6 +205,7 @@ _SAFE_MODE_ACTIVE = False
 _SAFE_MODE_REASON: str | None = None
 _SAFE_MODE_CYCLE_VERSION = 0
 _SAFE_MODE_CYCLE_REASON: str | None = None
+_gap_trigger_cooldown_until: float = 0.0
 
 
 def _mark_cycle_safe_mode(reason: str) -> None:
@@ -505,7 +506,10 @@ def _record_event(
         if not primary_flag:
             return
         _update_gap_diagnostics(provider_key, mutable_metadata)
+    global _gap_trigger_cooldown_until
     now = monotonic_time()
+    if reason == "minute_gap" and now < _gap_trigger_cooldown_until:
+        return
     bucket.append(now)
     cutoff = now - _HALT_EVENT_WINDOW_SECONDS
     while bucket and bucket[0] < cutoff:
@@ -516,6 +520,8 @@ def _record_event(
         if window_span > _SAFE_MODE_EVENT_BURST_WINDOW:
             return
         payload = mutable_metadata if mutable_metadata is not None else metadata
+        if reason == "minute_gap":
+            _gap_trigger_cooldown_until = now + _SAFE_MODE_EVENT_BURST_WINDOW
         _trigger_provider_safe_mode(reason, count=count, metadata=payload)
         if provider_key:
             _gap_event_diagnostics.pop(provider_key, None)

@@ -128,10 +128,11 @@ class HealthCheck:
                 "using_backup": bool(provider_state.get("using_backup")),
                 "reason": provider_state.get("reason"),
                 "updated": provider_state.get("updated"),
-                "cooldown_sec": provider_state.get("cooldown_sec"),
+                "cooldown_seconds_remaining": provider_state.get("cooldown_sec"),
                 "status": provider_state.get("status"),
                 "consecutive_failures": provider_state.get("consecutive_failures"),
                 "last_error_at": provider_state.get("last_error_at"),
+                "gap_ratio_recent": provider_state.get("gap_ratio_recent"),
             }
             broker_section = {
                 "connected": bool(broker_state.get("connected")),
@@ -141,23 +142,32 @@ class HealthCheck:
                 "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
             }
 
-            if provider_section.get("status") == "down" or broker_section["status"] == "unreachable":
-                ok = False
-            health_status = "healthy"
-            if not ok or provider_section.get("status") not in {"healthy", None} or broker_section["status"] == "unreachable":
-                health_status = "degraded"
+            provider_status = provider_section.get("status")
+            provider_disabled = provider_status in {"down", "disabled"}
+            degraded = provider_disabled or provider_section.get("using_backup") or (
+                provider_status not in {None, "healthy"}
+            )
+            if broker_section["status"] == "unreachable":
+                degraded = True
+
+            ok = ok and not provider_disabled and broker_section["status"] != "unreachable"
 
             payload = {
-                "ok": ok,
+                "ok": bool(ok),
                 "alpaca": alpaca_payload,
-                "ts": datetime.now(UTC).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "service": service_name,
                 "primary_data_provider": provider_section,
                 "fallback_active": bool(provider_section.get("using_backup")),
                 "quotes_status": quote_state,
                 "broker_connectivity": broker_section,
-                "status": health_status,
+                "status": "degraded" if degraded else "healthy",
+                "gap_ratio_recent": provider_section.get("gap_ratio_recent"),
+                "cooldown_seconds_remaining": provider_section.get("cooldown_seconds_remaining"),
             }
+            reason_text = provider_section.get("reason")
+            if degraded and reason_text:
+                payload["reason"] = reason_text
             if err:
                 payload["error"] = err
             return jsonify(payload)
