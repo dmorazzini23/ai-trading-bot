@@ -119,7 +119,6 @@ class SwingTradingMode:
         if allow_override == "1":
             return True, "env_override_allow_same_day_exit"
 
-        now_et = datetime.now(MARKET_TZ)
         entry = self.position_entry_times.get(symbol)
         if entry is None:
             return True, "no_entry_time_recorded"
@@ -131,20 +130,25 @@ class SwingTradingMode:
         if entry_dt.tzinfo is None:
             entry_dt = entry_dt.replace(tzinfo=MARKET_TZ)
         entry_et = entry_dt.astimezone(MARKET_TZ)
-
-        entry_date = entry_et.date()
-        today_et = now_et.date()
+        now_utc = datetime.now(timezone.utc)
+        now_et = now_utc.astimezone(MARKET_TZ)
 
         allow_after_close = os.getenv("AI_TRADING_SWING_ALLOW_AFTER_CLOSE", "").strip()
-        if entry_date == today_et:
-            if allow_after_close == "1":
-                return True, "after_market_close"
-            return False, "same_day_trade_blocked"
+        if allow_after_close == "1" and entry_et.date() == now_et.date():
+            return True, "after_market_close"
 
-        if today_et > entry_date:
+        decision = can_exit_today({"opened_at": entry_dt}, now_utc)
+        if decision:
+            if entry_et.date() == now_et.date():
+                return True, "after_market_close"
+            if now_et.date() > entry_et.date():
+                return True, "different_day"
             return True, "different_day"
 
-        return False, "entry_in_future"
+        if entry_et.date() > now_et.date():
+            return False, "entry_in_future"
+
+        return False, "same_day_trade_blocked"
     
     def clear_entry(self, symbol: str):
         """Clear entry time after position is closed."""

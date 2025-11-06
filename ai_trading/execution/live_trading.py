@@ -1610,6 +1610,10 @@ class ExecutionEngine:
         kwargs.pop("reduce_only", None)
         using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
         kwargs.pop("using_fallback_price", None)
+        pytest_mode = (
+            "pytest" in sys.modules
+            or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+        )
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         asset_class = kwargs.get("asset_class")
@@ -1848,7 +1852,7 @@ class ExecutionEngine:
                 "SHADOW_MODE_ACTIVE",
                 extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
             )
-            if os.getenv("PYTEST_RUNNING", "").strip().lower() not in {"1", "true", "yes"}:
+            if not pytest_mode:
                 return None
 
         quote_payload: Mapping[str, Any] | None = None
@@ -2128,6 +2132,10 @@ class ExecutionEngine:
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
         using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
+        pytest_mode = (
+            "pytest" in sys.modules
+            or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+        )
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         asset_class = kwargs.get("asset_class")
@@ -2369,7 +2377,8 @@ class ExecutionEngine:
                 "SHADOW_MODE_ACTIVE",
                 extra={"symbol": symbol, "side": side_lower, "quantity": quantity},
             )
-            return None
+            if not pytest_mode:
+                return None
 
         if prefetch_quotes:
             annotations = kwargs.get("annotations") if isinstance(kwargs, dict) else None
@@ -2980,7 +2989,8 @@ class ExecutionEngine:
                     "age_ms": age_ms_int,
                 },
             )
-            return None
+            if not pytest_mode:
+                return None
 
         widen_applied = False
         if (

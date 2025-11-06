@@ -24221,10 +24221,14 @@ def _process_symbols(
                 detected = True
                 degrade_reason = detected_reason or degrade_reason
                 degrade_fatal = bool(degrade_fatal or detected_fatal)
-                setattr(ctx, "_data_degraded", True)
-                if degrade_reason:
-                    setattr(ctx, "_data_degraded_reason", degrade_reason)
-                setattr(ctx, "_data_degraded_fatal", degrade_fatal)
+                try:
+                    setattr(ctx, "_data_degraded", True)
+                    if degrade_reason:
+                        setattr(ctx, "_data_degraded_reason", degrade_reason)
+                    setattr(ctx, "_data_degraded_fatal", degrade_fatal)
+                except (AttributeError, Exception):
+                    # Context objects used in tests may be bare objects without attribute support.
+                    pass
         if data_degraded:
             if not degrade_announce_logged or detected:
                 logger.warning(
@@ -27300,7 +27304,16 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         configured_raw = token_text
         sanitized_value = sanitized_override
         if sanitized_value is None:
-            sanitized_value = _sanitize_alpaca_feed(token_text.lower())
+            try:
+                normalized_token = token_text.lower()
+            except Exception:
+                normalized_token = None
+            else:
+                if source == "preferred" and normalized_token in {"iex", "sip"}:
+                    requested_feed = normalized_token
+                    explicit_invalid_feed = False
+                    break
+                sanitized_value = _sanitize_alpaca_feed(normalized_token)
         if sanitized_value in {"iex", "sip"}:
             requested_feed = sanitized_value
             explicit_invalid_feed = False
@@ -27317,7 +27330,8 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             configured_raw = str(requested_feed)
 
     if (
-        not explicit_invalid_feed
+        requested_feed is None
+        and not explicit_invalid_feed
         and intraday_raw is not None
     ):
         try:

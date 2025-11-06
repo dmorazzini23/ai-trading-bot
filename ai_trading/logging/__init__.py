@@ -1357,11 +1357,7 @@ def log_backup_provider_used(
         or payload.get("source")
         or "unspecified"
     )
-    message = (
-        f"BACKUP_PROVIDER_USED | "
-        f"provider={provider} symbol={symbol} timeframe={timeframe} reason={reason_value}"
-    )
-    active_logger.warning(message, extra=payload)
+    active_logger.warning("BACKUP_PROVIDER_USED", extra=payload)
 
     return payload
 

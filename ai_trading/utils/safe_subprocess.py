@@ -68,6 +68,8 @@ def safe_subprocess_run(
         run_kwargs["stderr"] = subprocess.PIPE
     if timeout_param is not None:
         run_kwargs["timeout"] = timeout_param
+        if run_kwargs.get("timeout") != timeout_param:  # defensive: ensure override sticks
+            run_kwargs["timeout"] = timeout_param
 
     try:
         completed = subprocess.run(cmd, **run_kwargs)
@@ -83,7 +85,7 @@ def safe_subprocess_run(
             "SAFE_SUBPROCESS_TIMEOUT",
             extra={"cmd": cmd, "timeout": timeout_param},
         )
-        raise exc
+        raise
     except (OSError, subprocess.SubprocessError) as exc:
         result = _coerce_exception_result(exc, cmd)
         log.warning(

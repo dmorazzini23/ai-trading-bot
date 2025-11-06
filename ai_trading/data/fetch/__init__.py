@@ -9975,6 +9975,9 @@ def get_minute_df(
         resolved_backup_feed = forced_provider_label
         fallback_allowed_flag = True
     http_fallback_allowed = bool(fallback_allowed_flag)
+    if not http_fallback_allowed and resolved_backup_provider in {"yahoo", "finnhub"}:
+        http_fallback_allowed = True
+        fallback_allowed_flag = True
     _state["http_fallback_allowed"] = http_fallback_allowed
 
     ttl_until: int | None = None
@@ -10493,7 +10496,7 @@ def get_minute_df(
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
                     _SKIPPED_SYMBOLS.discard(tf_key)
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                cnt = _EMPTY_BAR_COUNTS.get(tf_key, attempt)
+                cnt = max(_EMPTY_BAR_COUNTS.get(tf_key, attempt), attempt)
                 if market_open:
                     if attempt == 1:
                         _log_with_capture(
@@ -10588,6 +10591,14 @@ def get_minute_df(
                             _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
                             switch_recorded = True
                         try:
+                            payload = _format_fallback_payload_df("1Min", alt_feed, start_dt, end_dt)
+                        except Exception:
+                            payload = {"feed": alt_feed, "timeframe": "1Min"}
+                        logger.info(
+                            "DATA_SOURCE_FALLBACK_ATTEMPT",
+                            extra={"provider": "alpaca", "fallback": payload},
+                        )
+                        try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
                             logger.debug(
@@ -10617,6 +10628,7 @@ def get_minute_df(
                                 if _frame_has_rows(df_alt):
                                     primary_frame_acquired = True
                                     mark_success(symbol, "1Min")
+                                    _cache_fallback(symbol, alt_feed, "1Min")
                                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                     _SKIPPED_SYMBOLS.discard(tf_key)
                                     last_empty_error = None
@@ -10635,7 +10647,18 @@ def get_minute_df(
                                     switch_recorded = True
                                 if df_alt is not None:
                                     last_empty_error = None
-                                    return df_alt
+                                    if getattr(df_alt, "empty", True):
+                                        if http_fallback_allowed and not used_backup:
+                                            df_backup = _minute_backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+                                            used_backup = True
+                                            _register_backup_skip()
+                                            if df_backup is not None:
+                                                df = df_backup
+                                                if not getattr(df_backup, "empty", True):
+                                                    fallback_frame = df_backup
+                                                    return df_backup
+                                    else:
+                                        return df_alt
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(
@@ -10861,7 +10884,7 @@ def get_minute_df(
                     fallback_frame = df
             elif not http_fallback_allowed:
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
-        elif http_fallback_allowed:
+        elif http_fallback_allowed and not used_backup:
             df = _minute_backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
             _register_backup_skip()
@@ -11433,6 +11456,23 @@ def get_daily_df(
                 )
                 or source_hint
             )
+        alias_map: dict[str, str] = {}
+        try:
+            columns = getattr(frame, "columns", None)
+        except Exception:
+            columns = None
+        if columns is not None:
+            try:
+                alias_map = _alias_rename_map(columns)
+            except Exception:
+                alias_map = {}
+        if alias_map:
+            rename_fn = getattr(frame, "rename", None)
+            if callable(rename_fn):
+                try:
+                    frame = rename_fn(columns=alias_map)
+                except Exception:
+                    pass
         normalized = ensure_ohlcv_schema(
             frame,
             source=resolved_source or source_hint,
@@ -11519,6 +11559,14 @@ def get_daily_df(
         if fallback_normalized is None:
             return None
         df = fallback_normalized
+    else:
+        if pd_mod is not None and isinstance(df, pd_mod.DataFrame):
+            required_cols = {"timestamp", "open", "high", "low", "close", "volume"}
+            if not required_cols.issubset(df.columns):
+                fallback_normalized = _attempt_backup_normalization(primary_source_hint)
+                if fallback_normalized is None:
+                    return None
+                df = fallback_normalized
     return df
 
 
