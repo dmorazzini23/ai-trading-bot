@@ -21358,11 +21358,16 @@ def screen_universe(
             except COMMON_EXC:
                 screen_settings = None
             try:
-                min_signal_strength = float(
-                    getattr(screen_settings, "screen_min_signal_strength", MIN_SIGNAL_STRENGTH)
-                )
-            except (TypeError, ValueError):
-                min_signal_strength = float(MIN_SIGNAL_STRENGTH)
+                raw_min_signal = getattr(screen_settings, "screen_min_signal_strength", None)
+            except COMMON_EXC:
+                raw_min_signal = None
+            if raw_min_signal in (None, ""):
+                min_signal_strength = 0.0
+            else:
+                try:
+                    min_signal_strength = float(raw_min_signal)
+                except (TypeError, ValueError):
+                    min_signal_strength = float(MIN_SIGNAL_STRENGTH)
             try:
                 min_liquidity = float(getattr(screen_settings, "screen_min_avg_volume", 150_000))
             except (TypeError, ValueError):
@@ -21499,31 +21504,6 @@ def screen_universe(
                         time.sleep(0.1)
                         continue
 
-                    signal_strength = 0.0
-                    try:
-                        signal_strength = float(df["close"].pct_change(5, fill_method=None).iloc[-1])
-                    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
-                        signal_strength = 0.0
-                    if abs(signal_strength) < min_signal_strength:
-                        failed += 1
-                        filtered_out[sym] = "signal_weak"
-                        log_data_quality_event(
-                            "screen_filter",
-                            provider="alpaca",
-                            severity="info",
-                            reason="signal_weak",
-                            symbols=[sym],
-                            context={"signal_strength": signal_strength, "threshold": min_signal_strength},
-                        )
-                        logger.debug(
-                            "[SCREEN_UNIVERSE] %s: signal %.4f below threshold %.4f",
-                            sym,
-                            signal_strength,
-                            min_signal_strength,
-                        )
-                        time.sleep(0.1)
-                        continue
-
                     series = _calc_atr(df)
                     if series.empty or series.dropna().empty:
                         try:
@@ -21554,6 +21534,37 @@ def screen_universe(
                             continue
 
                     atr_val = series.iloc[-1]
+                    signal_strength = 0.0
+                    try:
+                        signal_strength = float(df["close"].pct_change(5, fill_method=None).iloc[-1])
+                    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+                        signal_strength = 0.0
+                    signal_weak = abs(signal_strength) < min_signal_strength
+                    if signal_weak:
+                        atr_available = not series.dropna().empty
+                        validation_valid = bool(validation_result.get("valid"))
+                        if not (validation_valid and atr_available):
+                            failed += 1
+                            filtered_out[sym] = "signal_weak"
+                            log_data_quality_event(
+                                "screen_filter",
+                                provider="alpaca",
+                                severity="info",
+                                reason="signal_weak",
+                                symbols=[sym],
+                                context={
+                                    "signal_strength": signal_strength,
+                                    "threshold": min_signal_strength,
+                                },
+                            )
+                            logger.debug(
+                                "[SCREEN_UNIVERSE] %s: signal %.4f below threshold %.4f",
+                                sym,
+                                signal_strength,
+                                min_signal_strength,
+                            )
+                            time.sleep(0.1)
+                            continue
                     if not pd.isna(atr_val):
                         _SCREEN_CACHE[sym] = float(atr_val)
                         logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
@@ -27319,8 +27330,10 @@ def _get_latest_price_simple(symbol: str, *_, **__):
             explicit_invalid_feed = False
             break
         if source == "preferred":
-            # Prefer next fallback but remember original token for diagnostics
-            continue
+            explicit_invalid_feed = True
+            requested_feed = None
+            configured_raw = token_text
+            break
         explicit_invalid_feed = True
         break
 

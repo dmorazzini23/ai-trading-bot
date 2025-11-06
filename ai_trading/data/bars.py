@@ -669,6 +669,7 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     requested_norm = (str(requested).strip().lower() if requested else None)
     entitled = _get_entitled_feeds(client)
     cache_entry = _ENTITLE_CACHE.get(cache_key)
+    fresh_generation = _extract_generation(client)
 
     entitled_lower = {feed.lower() for feed in entitled}
     pytest_env = os.getenv("PYTEST_RUNNING", "").strip().lower() in _TRUTHY or "pytest" in sys.modules
@@ -707,12 +708,13 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     if isinstance(cache_entry, _EntitlementCacheEntry):
         cache_entry.feeds = feeds_snapshot
         cache_entry.resolved = highest_entitled
+        cache_entry.generation = fresh_generation
     elif isinstance(cache_entry, dict):
         cache_entry["resolved"] = highest_entitled
-        generation = cache_entry.get("generation")
+        generation = cache_entry.get("generation", fresh_generation)
         _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(feeds_snapshot, generation, highest_entitled)
     else:
-        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(feeds_snapshot, None, highest_entitled)
+        _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(feeds_snapshot, fresh_generation, highest_entitled)
 
     return resolved
 

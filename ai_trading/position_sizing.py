@@ -558,20 +558,30 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         _coerce_float(vmax, None) if vmax is not None else None,
     )
     if val <= 0.0:
-        fb = _fallback_max_size(cfg, tcfg)
-        _log.info(
-            "CONFIG_AUTOFIX",
-            extra={
-                'field': 'max_position_size',
-                'given': computed,
-                'fallback': fb,
-                'reason': 'non_positive_computed',
-                'equity': numeric_eq,
-                'capital_cap': cap,
-            },
-        )
-        val = _clamp(fb, vmin, vmax)
-        source = 'fallback'
+        default_based = float(floor(default_eq * cap)) if cap > 0.0 else 0.0
+        default_clamped = _clamp(
+            default_based,
+            _coerce_float(vmin, None) if vmin is not None else None,
+            _coerce_float(vmax, None) if vmax is not None else None,
+        ) if default_based > 0.0 else 0.0
+        if default_clamped > 0.0:
+            val = default_clamped
+            source = 'default_equity'
+        else:
+            fb = _fallback_max_size(cfg, tcfg)
+            _log.info(
+                "CONFIG_AUTOFIX",
+                extra={
+                    'field': 'max_position_size',
+                    'given': computed,
+                    'fallback': fb,
+                    'reason': 'non_positive_computed',
+                    'equity': numeric_eq,
+                    'capital_cap': cap,
+                },
+            )
+            val = _clamp(fb, vmin, vmax)
+            source = 'fallback'
     if env_override is not None:
         val = env_override
         source = 'env_override'

@@ -3577,7 +3577,10 @@ class ExecutionEngine:
                     logger.error("BROKER_RECONCILE_MISMATCH", extra=reconcile_summary)
                 logger.info("BROKER_RECONCILE_SUMMARY", extra=reconcile_summary)
         else:
-            reconciled = False
+            if order_status_lower in {"filled", "partially_filled"} and float(filled_qty or 0) > 0:
+                reconciled = True
+            else:
+                reconciled = False
 
         logger.info(
             "BROKER_STATE_AFTER_SUBMIT",

@@ -1543,6 +1543,7 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     - Otherwise, delegate to ``ensure_utc_datetime``.
     """
     pd_mod = _ensure_pandas()
+
     out_of_bounds = ()
     if pd_mod is not None:
         try:
@@ -7014,14 +7015,24 @@ def _fetch_bars(
             window_has_session=None,
             feed=_feed,
         )
-        fallback_conf_allowed = not (_max_fallbacks_config is not None and _max_fallbacks_config <= 0)
+        fallback_conf_allowed = not (
+            _max_fallbacks_config is not None and _max_fallbacks_config <= 0
+        )
         if fallback_permitted and fallback_conf_allowed:
             downgrade_reason = get_data_feed_downgrade_reason()
             _state["resolve_feed_none"] = True
             if downgrade_reason == "missing_credentials" and _pytest_active():
                 resolved_feed = _feed
             else:
-                provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
+                provider_fallback.labels(
+                    from_provider=f"alpaca_{_feed}", to_provider="yahoo"
+                ).inc()
+                try:
+                    provider_monitor.record_switchover(
+                        f"alpaca_{_feed}", "yahoo"
+                    )
+                except Exception:
+                    pass
                 logger.warning(
                     "ALPACA_FEED_SWITCHOVER",
                     extra=_norm_extra(
@@ -7036,7 +7047,67 @@ def _fetch_bars(
                     ),
                 )
                 yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
-                return _run_backup_fetch(yf_interval)
+                backup_frame = _backup_get_bars(
+                    symbol,
+                    _start,
+                    _end,
+                    interval=yf_interval,
+                )
+                annotated_frame = _annotate_df_source(
+                    backup_frame,
+                    provider="yahoo",
+                    feed="yahoo",
+                )
+                _state["last_fallback_feed"] = "yahoo"
+                processed_frame = _post_process(
+                    annotated_frame,
+                    symbol=symbol,
+                    timeframe=_interval,
+                )
+                if processed_frame is None:
+                    pd_local = _ensure_pandas()
+                    try:
+                        empty_candidate = _empty_ohlcv_frame(pd_local)
+                    except Exception:
+                        empty_candidate = None
+                    if empty_candidate is not None:
+                        processed_frame = empty_candidate
+                    elif pd_local is not None:
+                        try:
+                            processed_frame = pd_local.DataFrame()
+                        except Exception:
+                            processed_frame = None
+                    if processed_frame is None:
+                        try:
+                            pandas_mod = load_pandas()
+                        except Exception:
+                            pandas_mod = None
+                        if pandas_mod is not None:
+                            try:
+                                processed_frame = pandas_mod.DataFrame()
+                            except Exception:  # pragma: no cover - pandas missing
+                                processed_frame = None
+                    if processed_frame is None:
+                        processed_frame = []
+                has_rows = processed_frame is not None and not getattr(processed_frame, "empty", True)
+                tags = _tags(provider="yahoo", feed="yahoo")
+                if has_rows:
+                    _record_fallback_success_metric(tags)
+                    _record_success_metric(tags, prefer_fallback=True)
+                _mark_fallback(
+                    symbol,
+                    _interval,
+                    _start,
+                    _end,
+                    from_provider=f"alpaca_{_feed}",
+                    fallback_feed="yahoo",
+                    fallback_df=processed_frame,
+                    resolved_provider="yahoo",
+                    resolved_feed="yahoo",
+                    reason=_state.get("fallback_reason"),
+                )
+                _state["fallback_reason"] = None
+                return processed_frame
         else:
             resolved_feed = _feed
     if _pytest_active() or explicit_feed_request:
@@ -7907,6 +7978,8 @@ def _fetch_bars(
                 meta["sip_unauthorized"] = True
                 _state["sip_unauthorized"] = True
                 _SIP_UNAUTHORIZED = True
+                _state["stop"] = True
+                _state["forced_sip_attempted"] = True
                 _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
                 try:
                     _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
@@ -8488,6 +8561,9 @@ def _fetch_bars(
             planned_backoff: float | None = None
             outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
             _state["outside_market_hours"] = bool(outside_market_hours)
+            if outside_market_hours:
+                remaining_retries = 0
+                _state["stop"] = True
             http_fallback_allowed = _http_fallback_permitted(
                 _interval,
                 window_has_session=_state.get("window_has_session"),
@@ -9284,11 +9360,13 @@ def _fetch_bars(
                     _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING)
                     _state["abort_logged"] = True
                     return None
-                logger.warning(
-                    "ALPACA_FETCH_RETRY_LIMIT",
-                    extra=_norm_extra({"symbol": symbol, "feed": _feed}),
-                )
-                _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT", level=logging.WARNING)
+                if not _state.get("retry_limit_logged"):
+                    logger.warning(
+                        "ALPACA_FETCH_RETRY_LIMIT",
+                        extra=_norm_extra({"symbol": symbol, "feed": _feed}),
+                    )
+                    _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT", level=logging.WARNING)
+                    _state["retry_limit_logged"] = True
                 slots_remaining = _fallback_slots_remaining(_state)
                 fallback_available = (
                     (slots_remaining is None or slots_remaining > 0)
@@ -9466,23 +9544,26 @@ def _fetch_bars(
             remaining_retries = max_retries - _state["retries"]
             log_event = "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT"
             if not (log_event == "ALPACA_FETCH_ABORTED" and _state.get("abort_logged")):
-                extra_payload = _norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "status": "empty",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "start": _start.isoformat(),
-                        "end": _end.isoformat(),
-                        "correlation_id": _state["corr_id"],
-                        "retries": _state["retries"],
-                        "remaining_retries": remaining_retries,
-                        "reason": reason,
-                    }
-                )
-                logger.warning(log_event, extra=extra_payload)
-                _push_to_caplog(log_event, level=logging.WARNING)
+                if log_event != "ALPACA_FETCH_RETRY_LIMIT" or not _state.get("retry_limit_logged"):
+                    extra_payload = _norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "status": "empty",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": _state["corr_id"],
+                            "retries": _state["retries"],
+                            "remaining_retries": remaining_retries,
+                            "reason": reason,
+                        }
+                    )
+                    logger.warning(log_event, extra=extra_payload)
+                    _push_to_caplog(log_event, level=logging.WARNING)
+                    if log_event == "ALPACA_FETCH_RETRY_LIMIT":
+                        _state["retry_limit_logged"] = True
             payload = {
                 "provider": "alpaca",
                 "status": "empty",
@@ -9507,11 +9588,13 @@ def _fetch_bars(
                 or alpaca_empty_to_backup()
             )
             if log_event == "ALPACA_FETCH_RETRY_LIMIT":
-                logger.warning(
-                    "ALPACA_FETCH_RETRY_LIMIT",
-                    extra=_norm_extra({"symbol": symbol, "feed": _feed}),
-                )
-                _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT", level=logging.WARNING)
+                if not _state.get("retry_limit_logged"):
+                    logger.warning(
+                        "ALPACA_FETCH_RETRY_LIMIT",
+                        extra=_norm_extra({"symbol": symbol, "feed": _feed}),
+                    )
+                    _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT", level=logging.WARNING)
+                    _state["retry_limit_logged"] = True
                 if fallback_available and is_market_open() and not _outside_market_hours(_start, _end):
                     logger.warning(
                         "PERSISTENT_EMPTY_ABORT",
@@ -9685,17 +9768,29 @@ def _fetch_bars(
     except Exception:
         market_open_now = True
     outside_hours = _outside_market_hours(_start, _end)
-    if (df is None or getattr(df, "empty", True)) and (not market_open_now or outside_hours):
-        meta_state = _state.get("meta")
-        sip_meta_flag = False
-        if isinstance(meta_state, dict):
-            sip_meta_flag = bool(meta_state.get("sip_unauthorized"))
-        if sip_meta_flag or bool(_state.get("sip_unauthorized")) or bool(_state.get("skip_backup_after_fallback")):
-            return _finalize_frame(pd.DataFrame())
-        raise EmptyBarsError(
-            "market_closed",
-            f"market_closed: symbol={symbol}, timeframe={_interval}",
+    frame_empty = df is None or getattr(df, "empty", True)
+    window_has_session_flag = bool(_state.get("window_has_session", True))
+    http_allowed_flag = bool(_state.get("http_fallback_allowed"))
+    http_check = _http_fallback_permitted(
+        _interval,
+        window_has_session=window_has_session_flag,
+        feed=_feed,
+    )
+    if frame_empty and (no_session_window or not market_open_now or outside_hours):
+        sip_locked = bool(_state.get("sip_unauthorized")) or bool(_is_sip_unauthorized())
+        backup_allowed = (
+            not window_has_session_flag
+            or http_allowed_flag
+            or http_check
+            or bool(_state.get("short_circuit_empty"))
         )
+        if window_has_session_flag and not sip_locked and not backup_allowed:
+            raise EmptyBarsError(
+                "market_closed",
+                f"market_closed: symbol={symbol}, timeframe={_interval}",
+            )
+        empty_df = _empty_ohlcv_frame(pd)
+        return _finalize_frame(empty_df)
     window_allows_backup = _state.get("window_has_session", True) or short_circuit_empty
     if (
         _http_fallback_permitted(
@@ -11394,6 +11489,44 @@ def get_daily_df(
             )
 
     pd_mod = _ensure_pandas()
+
+    def _empty_daily_frame() -> Any:
+        try:
+            return _empty_ohlcv_frame(pd_mod)
+        except Exception:
+            if pd_mod is not None:
+                try:
+                    return pd_mod.DataFrame(
+                        {
+                            "timestamp": [],
+                            "open": [],
+                            "high": [],
+                            "low": [],
+                            "close": [],
+                            "volume": [],
+                        }
+                    )
+                except Exception:
+                    pass
+            try:
+                pandas_mod = load_pandas()
+            except Exception:
+                pandas_mod = None
+            if pandas_mod is not None:
+                try:
+                    return pandas_mod.DataFrame(
+                        {
+                            "timestamp": [],
+                            "open": [],
+                            "high": [],
+                            "low": [],
+                            "close": [],
+                            "volume": [],
+                        }
+                    )
+                except Exception:
+                    pass
+            return []
     if pd_mod is None:
         return df
 
@@ -11548,7 +11681,7 @@ def get_daily_df(
         )
         fallback_normalized = _attempt_backup_normalization(primary_source_hint)
         if fallback_normalized is None:
-            return None
+            return _empty_daily_frame()
         df = fallback_normalized
     except DataFetchError as exc:
         logger.error(
@@ -11557,7 +11690,7 @@ def get_daily_df(
         )
         fallback_normalized = _attempt_backup_normalization(primary_source_hint)
         if fallback_normalized is None:
-            return None
+            return _empty_daily_frame()
         df = fallback_normalized
     else:
         if pd_mod is not None and isinstance(df, pd_mod.DataFrame):
@@ -11565,8 +11698,10 @@ def get_daily_df(
             if not required_cols.issubset(df.columns):
                 fallback_normalized = _attempt_backup_normalization(primary_source_hint)
                 if fallback_normalized is None:
-                    return None
+                    return _empty_daily_frame()
                 df = fallback_normalized
+    if df is None:
+        return _empty_daily_frame()
     return df
 
 
