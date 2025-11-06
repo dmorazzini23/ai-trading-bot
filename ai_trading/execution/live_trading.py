@@ -344,6 +344,92 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+_ORDER_STATUS_RANK: dict[str, int] = {
+    "new": 10,
+    "pending_new": 15,
+    "accepted": 20,
+    "acknowledged": 20,
+    "pending_replace": 22,
+    "pending_cancel": 24,
+    "pending_cancelled": 25,
+    "pending_cancelled_all": 25,
+    "partially_filled": 30,
+    "filled": 40,
+    "canceled": 40,
+    "cancelled": 40,
+    "expired": 40,
+    "done_for_day": 40,
+    "rejected": 40,
+}
+_TERMINAL_ORDER_STATUSES = frozenset(
+    {"filled", "rejected", "canceled", "cancelled", "expired", "done_for_day"}
+)
+_ACK_TRIGGER_STATUSES = frozenset(
+    {
+        "new",
+        "pending_new",
+        "accepted",
+        "acknowledged",
+        "pending_replace",
+        "partially_filled",
+        "filled",
+    }
+)
+_SUBMITTED_STATUS_MIN_RANK = _ORDER_STATUS_RANK.get("accepted", 20)
+
+
+def _normalize_status(value: Any) -> str | None:
+    """Normalize broker status tokens to lowercase strings."""
+
+    if value is None:
+        return None
+    try:
+        text = str(value).strip().lower()
+    except Exception:
+        return None
+    return text or None
+
+
+def apply_order_status(prev_status: str | None, new_status: Any) -> tuple[str | None, bool]:
+    """Return the monotonic status after applying ``new_status``.
+
+    Parameters
+    ----------
+    prev_status:
+        Previously accepted status token (lowercase) or ``None`` when no status
+        has been recorded.
+    new_status:
+        Candidate status token from the broker payload.
+
+    Returns
+    -------
+    tuple[str | None, bool]
+        ``(decided_status, advanced)`` where ``advanced`` indicates whether the
+        state machine progressed beyond ``prev_status``.
+    """
+
+    normalized_new = _normalize_status(new_status)
+    if normalized_new is None:
+        return prev_status, False
+    normalized_prev = _normalize_status(prev_status)
+    if normalized_prev in _TERMINAL_ORDER_STATUSES:
+        return normalized_prev, False
+    prev_rank = _ORDER_STATUS_RANK.get(normalized_prev, -1 if normalized_prev is None else 0)
+    new_rank = _ORDER_STATUS_RANK.get(
+        normalized_new,
+        prev_rank if normalized_prev is not None else -1,
+    )
+    if normalized_prev is None:
+        return normalized_new, True
+    if normalized_new == normalized_prev:
+        return normalized_prev, False
+    if new_rank > prev_rank:
+        return normalized_new, True
+    if new_rank == prev_rank and normalized_new not in _TERMINAL_ORDER_STATUSES:
+        return normalized_new, normalized_new != normalized_prev
+    return normalized_prev, False
+
+
 def _sanitize_pdt_context(raw_context: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return log-safe PDT context including required summary keys."""
 
@@ -382,6 +468,98 @@ def _extract_value(record: Any, *names: str) -> Any:
         if hasattr(record, name):
             return getattr(record, name)
     return None
+
+
+def _bool_from_record(record: Any, *names: str) -> bool | None:
+    """Return best-effort boolean for ``record`` using ``names`` lookup."""
+
+    value = _extract_value(record, *names)
+    if value is None:
+        return None
+    try:
+        return _safe_bool(value)
+    except Exception:
+        return None
+
+
+def _short_sale_precheck(
+    trading_client: Any,
+    *,
+    symbol: str,
+    side: str,
+    closing_position: bool,
+    account_snapshot: Any | None,
+) -> tuple[bool, dict[str, Any] | None, str | None]:
+    """Validate short-sale prerequisites for Alpaca before submission."""
+
+    if closing_position or str(side).strip().lower() != "sell":
+        return True, None, None
+
+    asset = None
+    asset_detail: str | None = None
+    get_asset = getattr(trading_client, "get_asset", None) if trading_client is not None else None
+    if callable(get_asset):
+        try:
+            asset = get_asset(symbol)
+        except Exception as exc:  # pragma: no cover - defensive broker guard
+            asset_detail = getattr(exc, "__class__", type(exc)).__name__
+    else:
+        asset_detail = "get_asset_unavailable"
+
+    shortable = _bool_from_record(asset, "shortable", "is_shortable", "shortable_flag")
+    easy_to_borrow = _bool_from_record(
+        asset,
+        "easy_to_borrow",
+        "easy_to_borrow_flag",
+        "easy_to_borrow_shares",
+    )
+    marginable = _bool_from_record(asset, "marginable", "marginable_flag", "is_marginable")
+
+    account_shorting = _bool_from_record(
+        account_snapshot,
+        "shorting_enabled",
+        "shorting_enabled_flag",
+        "shorting",
+    )
+    if account_shorting is None:
+        no_shorting_flag = _bool_from_record(account_snapshot, "no_shorting", "no_short")
+        if no_shorting_flag is not None:
+            account_shorting = not no_shorting_flag
+
+    extras = {
+        "symbol": symbol,
+        "side": str(side).lower(),
+        "asset_shortable": bool(shortable),
+        "easy_to_borrow": bool(easy_to_borrow),
+        "marginable": bool(marginable),
+        "account_shorting_enabled": bool(account_shorting),
+    }
+
+    if asset is None:
+        extras["reason"] = "asset_lookup_failed"
+        if asset_detail:
+            extras["detail"] = asset_detail
+        return False, extras, "shortability"
+
+    if shortable is not True or easy_to_borrow is not True:
+        extras["reason"] = (
+            "asset_not_shortable" if shortable is not True else "not_easy_to_borrow"
+        )
+        return False, extras, "shortability"
+
+    if marginable is not True:
+        extras["reason"] = "asset_margin_disabled"
+        return False, extras, "margin"
+
+    if account_snapshot is None:
+        extras["reason"] = "account_snapshot_missing"
+        return False, extras, "shortability"
+
+    if account_shorting is not True:
+        extras["reason"] = "account_shorting_disabled"
+        return False, extras, "shortability"
+
+    return True, extras, None
 
 
 def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any, str, int, int, Any, Any]:
@@ -1689,26 +1867,31 @@ class ExecutionEngine:
                 require_nbbo = False
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
-        if str(side).strip().lower() == "sell" and not closing_position:
-            trading_client = getattr(self, "trading_client", None)
-            get_asset = getattr(trading_client, "get_asset", None)
-            if callable(get_asset):
-                try:
-                    asset = get_asset(symbol)
-                except Exception:
-                    asset = None
-                else:
-                    if not getattr(asset, "shortable", False):
-                        logger.warning(
-                            "ORDER_SKIPPED_NONRETRYABLE | symbol=%s reason=shorting_disabled",
-                            symbol,
-                        )
-                        return None
+        trading_client = getattr(self, "trading_client", None)
         account_snapshot = precheck_order.get("account_snapshot")
         if account_snapshot is None:
             account_snapshot = self._get_account_snapshot()
             if isinstance(precheck_order, dict):
                 precheck_order["account_snapshot"] = account_snapshot
+
+        short_ok, short_extra, short_reason = _short_sale_precheck(
+            trading_client,
+            symbol=symbol,
+            side=side_lower,
+            closing_position=closing_position,
+            account_snapshot=account_snapshot,
+        )
+        if not short_ok:
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            log_name = (
+                "PRECHECK_MARGIN_DISABLED" if short_reason == "margin" else "PRECHECK_SHORTABILITY_FAILED"
+            )
+            if short_extra is not None:
+                logger.warning(log_name, extra=short_extra)
+            else:
+                logger.warning(log_name)
+            return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -1815,38 +1998,6 @@ class ExecutionEngine:
                 )
                 return None
 
-        capacity = _call_preflight_capacity(
-            symbol,
-            side.lower(),
-            price_hint,
-            quantity,
-            self.trading_client,
-            account_snapshot,
-        )
-        if not capacity.can_submit:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            return None
-        if capacity.suggested_qty != quantity:
-            quantity = capacity.suggested_qty
-            order_data["quantity"] = quantity
-
-        logger.debug(
-            "ORDER_PREFLIGHT_READY",
-            extra={
-                "symbol": symbol,
-                "side": side_lower,
-                "quantity": quantity,
-                "order_type": "market",
-                "time_in_force": resolved_tif,
-                "closing_position": closing_position,
-                "using_fallback_price": using_fallback_price,
-                "client_order_id": client_order_id,
-            },
-        )
-
         if guard_shadow_active() and not closing_position:
             logger.info(
                 "SHADOW_MODE_ACTIVE",
@@ -1856,6 +2007,7 @@ class ExecutionEngine:
                 return None
 
         quote_payload: Mapping[str, Any] | None = None
+        quote_dict: dict[str, Any] | None = None
         quote_ts = None
         bid = ask = None
         quote_age_ms: float | None = None
@@ -1885,7 +2037,6 @@ class ExecutionEngine:
                     if isinstance(candidate_quote, Mapping):
                         quote_payload = candidate_quote  # type: ignore[assignment]
 
-            quote_dict: dict[str, Any] | None = None
             if isinstance(quote_payload, Mapping):
                 quote_dict = dict(quote_payload)
             now_utc = datetime.now(UTC)
@@ -2215,26 +2366,31 @@ class ExecutionEngine:
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
-        if str(side).strip().lower() == "sell" and not closing_position:
-            trading_client = getattr(self, "trading_client", None)
-            get_asset = getattr(trading_client, "get_asset", None)
-            if callable(get_asset):
-                try:
-                    asset = get_asset(symbol)
-                except Exception:
-                    asset = None
-                else:
-                    if not getattr(asset, "shortable", False):
-                        logger.warning(
-                            "ORDER_SKIPPED_NONRETRYABLE | symbol=%s reason=shorting_disabled",
-                            symbol,
-                        )
-                        return None
+        trading_client = getattr(self, "trading_client", None)
         account_snapshot = precheck_order.get("account_snapshot")
         if account_snapshot is None:
             account_snapshot = self._get_account_snapshot()
             if isinstance(precheck_order, dict):
                 precheck_order["account_snapshot"] = account_snapshot
+
+        short_ok, short_extra, short_reason = _short_sale_precheck(
+            trading_client,
+            symbol=symbol,
+            side=side_lower,
+            closing_position=closing_position,
+            account_snapshot=account_snapshot,
+        )
+        if not short_ok:
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            log_name = (
+                "PRECHECK_MARGIN_DISABLED" if short_reason == "margin" else "PRECHECK_SHORTABILITY_FAILED"
+            )
+            if short_extra is not None:
+                logger.warning(log_name, extra=short_extra)
+            else:
+                logger.warning(log_name)
+            return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -2257,12 +2413,13 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": kwargs.get("asset_class"),
             }
+
         capacity = _call_preflight_capacity(
             symbol,
-            side.lower(),
+            side_lower,
             limit_price,
             quantity,
-            self.trading_client,
+            trading_client,
             account_snapshot,
         )
         if not capacity.can_submit:
@@ -2949,6 +3106,56 @@ class ExecutionEngine:
             elif degrade_due_monitor:
                 quality_reason = "provider_disabled"
 
+        gap_ratio_value: float | None = None
+        if isinstance(annotations, Mapping):
+            for key in ("gap_ratio", "coverage_gap_ratio", "gap_ratio_recent", "fallback_gap_ratio"):
+                candidate = annotations.get(key)
+                if candidate is None:
+                    continue
+                try:
+                    gap_ratio_value = float(candidate)
+                except (TypeError, ValueError):
+                    continue
+                else:
+                    break
+        quote_timestamp_present = bool(
+            quote_ts
+            or (
+                quote_dict is not None
+                and any(ts_key in quote_dict for ts_key in ("timestamp", "ts", "t"))
+            )
+        )
+        slippage_basis: str | None = None
+        if isinstance(annotations, Mapping):
+            basis_candidate = annotations.get("slippage_basis") or annotations.get("slippage_basis_hint")
+            if basis_candidate:
+                try:
+                    slippage_basis = str(basis_candidate)
+                except Exception:
+                    slippage_basis = None
+        if slippage_basis is None:
+            if price_hint is not None:
+                slippage_basis = "price_hint"
+            elif resolved_limit_price is not None:
+                slippage_basis = "resolved_limit_price"
+            elif using_fallback_price:
+                slippage_basis = "fallback_price"
+            elif synthetic_quote:
+                slippage_basis = "synthetic_quote"
+
+        def _emit_quote_block_log(gate: str, extra: Mapping[str, Any] | None = None) -> None:
+            payload = {
+                "symbol": symbol,
+                "gate": gate,
+                "gap_ratio": gap_ratio_value,
+                "quote_timestamp_present": quote_timestamp_present,
+                "slippage_basis": slippage_basis,
+                "limit_basis": basis_label,
+            }
+            if extra:
+                payload.update(extra)
+            logger.warning("ENTRY_BLOCKED_BY_QUOTE_QUALITY", extra=payload)
+
         if (
             degrade_active
             and degraded_mode == "block"
@@ -2989,8 +3196,16 @@ class ExecutionEngine:
                     "age_ms": age_ms_int,
                 },
             )
-            if not pytest_mode:
-                return None
+            _emit_quote_block_log(
+                "degraded_feed_block",
+                extra={
+                    "provider": provider_for_log,
+                    "mode": degraded_mode,
+                    "age_ms": age_ms_int,
+                    "quality_reason": quality_reason or "degraded_feed",
+                },
+            )
+            return None
 
         widen_applied = False
         if (
@@ -3049,7 +3264,48 @@ class ExecutionEngine:
             if nbbo_gate_required and (provider_for_log != "alpaca" or synthetic_quote):
                 gate_log_extra["reason"] = "nbbo_provider_mismatch"
             logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
+            _emit_quote_block_log(
+                "price_gate",
+                extra={
+                    "provider": provider_for_log,
+                    "nbbo_required": nbbo_gate_required,
+                    "degraded": bool(degrade_active),
+                    "mode": degraded_mode,
+                },
+            )
             return None
+
+        capacity = _call_preflight_capacity(
+            symbol,
+            side_lower,
+            price_hint,
+            quantity,
+            trading_client,
+            account_snapshot,
+        )
+        if not capacity.can_submit:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            return None
+        if capacity.suggested_qty != quantity:
+            quantity = capacity.suggested_qty
+            order_data["quantity"] = quantity
+
+        logger.debug(
+            "ORDER_PREFLIGHT_READY",
+            extra={
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "order_type": "market",
+                "time_in_force": resolved_tif,
+                "closing_position": closing_position,
+                "using_fallback_price": using_fallback_price,
+                "client_order_id": client_order_id,
+            },
+        )
 
         if self._broker_lock_suppressed(
             symbol=symbol,
@@ -3332,8 +3588,10 @@ class ExecutionEngine:
 
         ack_logged = False
         reject_logged = False
-        last_status_logged: str | None = None
         ack_timed_out = False
+        current_status: str | None = None
+        event_sequence = 0
+        order_submitted_logged = False
 
         def _status_payload() -> dict[str, Any]:
             return {
@@ -3345,19 +3603,38 @@ class ExecutionEngine:
             }
 
         def _handle_status_transition(status_value: Any, *, source: str) -> None:
-            nonlocal ack_logged, reject_logged, last_status_logged
-            status_text = str(status_value or "").lower()
-            if not status_text or status_text == last_status_logged:
+            nonlocal ack_logged, reject_logged, current_status, event_sequence, order_submitted_logged, final_status
+            decided_status, advanced = apply_order_status(current_status, status_value)
+            if decided_status is None:
                 return
-            last_status_logged = status_text
+            if not advanced and decided_status == current_status:
+                return
             payload = _status_payload()
-            payload["status"] = status_text
+            prev_status = current_status
+            current_status = decided_status
+            final_status = decided_status
+            payload["status"] = decided_status
             payload["source"] = source
+            payload["prev_status"] = prev_status
+            payload["new_status"] = decided_status
             elapsed_ms = int(max(0.0, (time.monotonic() - submit_started_at) * 1000.0))
-            if status_text in {"accepted", "partially_filled", "filled"} and not ack_logged:
+            event_sequence += 1
+            payload["event_seq"] = event_sequence
+
+            status_rank = _ORDER_STATUS_RANK.get(decided_status, 0)
+            if (
+                not order_submitted_logged
+                and status_rank >= _SUBMITTED_STATUS_MIN_RANK
+                and (decided_status not in _TERMINAL_ORDER_STATUSES or decided_status == "filled")
+            ):
+                logger.info("ORDER_SUBMITTED", extra=dict(payload))
+                order_submitted_logged = True
+
+            if decided_status in _ACK_TRIGGER_STATUSES and not ack_logged:
                 ack_logged = True
-                payload["latency_ms"] = elapsed_ms
-                logger.info("ORDER_ACK_RECEIVED", extra=payload)
+                ack_payload = dict(payload)
+                ack_payload["latency_ms"] = elapsed_ms
+                logger.info("ORDER_ACK_RECEIVED", extra=ack_payload)
                 runtime_state.update_broker_status(
                     connected=True,
                     latency_ms=elapsed_ms,
@@ -3365,13 +3642,15 @@ class ExecutionEngine:
                     status="reachable",
                     last_order_ack_ms=elapsed_ms,
                 )
-            if status_text == "partially_filled":
-                payload["filled_qty"] = float(filled_qty or 0)
-                logger.info("ORDER_FILL_PROGRESS", extra=payload)
-            if status_text == "filled":
-                payload["filled_qty"] = float(filled_qty or 0)
-                logger.info("ORDER_FILL_CONFIRMED", extra=payload)
-            if status_text in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}:
+            if decided_status == "partially_filled":
+                progress_payload = dict(payload)
+                progress_payload["filled_qty"] = float(filled_qty or 0)
+                logger.info("ORDER_FILL_PROGRESS", extra=progress_payload)
+            if decided_status == "filled":
+                fill_payload = dict(payload)
+                fill_payload["filled_qty"] = float(filled_qty or 0)
+                logger.info("ORDER_FILL_CONFIRMED", extra=fill_payload)
+            if decided_status in _TERMINAL_ORDER_STATUSES and decided_status != "filled":
                 if not reject_logged:
                     logger.warning("ORDER_REJECTED", extra=payload)
                     reject_logged = True
@@ -3489,19 +3768,6 @@ class ExecutionEngine:
                 },
             )
             return None
-
-        logger.info(
-            "ORDER_SUBMITTED",
-            extra={
-                "symbol": symbol,
-                "side": mapped_side,
-                "qty": qty,
-                "order_id": str(order_id) if order_id is not None else None,
-                "client_order_id": str(client_order_id) if client_order_id is not None else None,
-                "status": status,
-                "order_type": order_type_normalized,
-            },
-        )
 
         order_id_display = order_id or client_order_id
         order_status_lower = str(status).lower() if status is not None else None
@@ -5230,6 +5496,7 @@ AlpacaExecutionEngine = LiveTradingExecutionEngine
 
 
 __all__ = [
+    "apply_order_status",
     "CapacityCheck",
     "preflight_capacity",
     "submit_market_order",

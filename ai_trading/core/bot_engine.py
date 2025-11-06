@@ -11790,6 +11790,36 @@ class SignalManager:
                 logger.error("Failed to load signal weights: %s", e)
                 return {}
 
+_METALEARN_FALLBACK_SYMBOL_LOGGED: set[str] = set()
+
+
+@lru_cache(maxsize=1)
+def _trade_history_symbol_set() -> set[str]:
+    """Return uppercase symbols observed in trade history."""
+
+    frame, _source = load_trade_history(sync_from_broker=False)
+    if frame is None:
+        return set()
+    try:
+        symbols = frame["symbol"]
+    except Exception:
+        return set()
+    try:
+        iterable = symbols.dropna()  # type: ignore[assignment]
+    except Exception:
+        iterable = (sym for sym in symbols if sym not in (None, ""))
+    normalized: set[str] = set()
+    for raw_sym in iterable:
+        try:
+            sym_text = str(raw_sym).strip()
+        except Exception:
+            continue
+        if not sym_text:
+            continue
+        normalized.add(sym_text.upper())
+    return normalized
+
+
     def evaluate(
         self,
         ctx: BotContext,
@@ -11822,13 +11852,20 @@ class SignalManager:
         performance_data = load_global_signal_performance()
         original_len = len(df)
 
+        symbol_upper = str(ticker or "").upper()
+        history_symbols = _trade_history_symbol_set()
+        symbol_has_history = bool(symbol_upper) and symbol_upper in history_symbols
+
         # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
         if not performance_data:
-            # For new deployments, allow all signal types with warning
-            logger.info(
-                "METALEARN_FALLBACK | No trade history - allowing all signals for new deployment"
-            )
             allowed_tags = None  # None means allow all tags
+            if symbol_upper and not symbol_has_history:
+                if symbol_upper not in _METALEARN_FALLBACK_SYMBOL_LOGGED:
+                    logger.info(
+                        "METALEARN_FALLBACK | symbol=%s reason=no_symbol_history",
+                        symbol_upper,
+                    )
+                    _METALEARN_FALLBACK_SYMBOL_LOGGED.add(symbol_upper)
         else:
             allowed_tags = set(performance_data.keys())
             if not allowed_tags:
@@ -11837,6 +11874,13 @@ class SignalManager:
                 )
                 # Use a basic set of reliable signal types as fallback
                 allowed_tags = {"sma_cross", "bb_squeeze", "rsi_oversold", "momentum"}
+            elif symbol_upper and not symbol_has_history:
+                if symbol_upper not in _METALEARN_FALLBACK_SYMBOL_LOGGED:
+                    logger.info(
+                        "METALEARN_FALLBACK | symbol=%s reason=no_symbol_history",
+                        symbol_upper,
+                    )
+                    _METALEARN_FALLBACK_SYMBOL_LOGGED.add(symbol_upper)
 
         self.load_signal_weights()
 

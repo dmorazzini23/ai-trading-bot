@@ -217,6 +217,8 @@ from ai_trading.data.provider_monitor import (
     provider_monitor,
     record_minute_gap_event,
     record_unauthorized_sip_event,
+    is_safe_mode_active,
+    safe_mode_reason,
 )
 from ai_trading.core.daily_fetch_memo import get_daily_df_memoized
 from ai_trading.data.fetch_yf import fetch_yf_batched, normalize_yf_interval
@@ -1694,20 +1696,105 @@ def _http_fallback_permitted(
     return global_enabled
 
 
-def _format_backup_usage_message(
+def _classify_fallback_reason(
+    reason_hint: str | None,
+    extra: Mapping[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Return canonical fallback reason and detail fields."""
+
+    details: dict[str, Any] = {}
+    metadata = extra or {}
+
+    http_status = metadata.get("http_status") or metadata.get("status_code")
+    status_int: int | None = None
+    if http_status not in (None, ""):
+        try:
+            status_int = int(http_status)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            status_int = None
+    if status_int is not None:
+        details["http_status"] = status_int
+        if status_int == 429:
+            return "rate_limited", details
+        return "http_status", details
+
+    error_obj = metadata.get("error") or metadata.get("exception")
+    if error_obj is not None:
+        details["error"] = str(error_obj)
+    error_type = metadata.get("error_type") or metadata.get("exception_type")
+    if error_type:
+        details["error_type"] = str(error_type)
+
+    gap_ratio_value = metadata.get("gap_ratio") or metadata.get("coverage_gap_ratio")
+    if gap_ratio_value not in (None, ""):
+        try:
+            details["gap_ratio"] = float(gap_ratio_value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+        return "gap_ratio_exceeded", details
+
+    reason_text = (reason_hint or "").strip()
+    reason_lower = reason_text.lower()
+    if reason_lower:
+        if "timeout" in reason_lower:
+            return "timeout", details
+        if "gap_ratio" in reason_lower:
+            details.setdefault("detail", reason_text)
+            return "gap_ratio_exceeded", details
+        if "timestamp" in reason_lower or "quote_ts" in reason_lower:
+            details.setdefault("detail", reason_text)
+            return "quote_timestamp_missing", details
+        if "rate" in reason_lower and "limit" in reason_lower:
+            details.setdefault("detail", reason_text)
+            return "rate_limited", details
+        if "network" in reason_lower:
+            details.setdefault("detail", reason_text)
+            return "network_error", details
+        details.setdefault("detail", reason_text)
+
+    error_type_lower = str(error_type or "").lower()
+    if "timeout" in error_type_lower:
+        return "timeout", details
+    if "connection" in error_type_lower or "network" in error_type_lower:
+        return "network_error", details
+
+    if isinstance(error_obj, TimeoutError):
+        return "timeout", details
+    if isinstance(error_obj, ConnectionError):
+        return "network_error", details
+
+    if error_obj is not None:
+        return "provider_error", details
+
+    if reason_text:
+        return "provider_error", details
+
+    return "unknown_error", details
+
+
+def _build_backup_usage_extra(
     provider: str | None,
     symbol: str | None,
     timeframe: str | None,
-    reason: str | None,
-) -> str:
-    provider_str = str(provider or "unknown")
-    symbol_str = str(symbol or "unknown").upper()
-    timeframe_str = str(timeframe or "unknown")
-    reason_str = str(reason or "unspecified")
-    return (
-        f"USING_BACKUP_PROVIDER | "
-        f"provider={provider_str} symbol={symbol_str} timeframe={timeframe_str} reason={reason_str}"
-    )
+    reason_hint: str | None,
+    metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return structured payload for backup-provider usage logging."""
+
+    reason, detail_fields = _classify_fallback_reason(reason_hint, metadata)
+    payload: dict[str, Any] = {
+        "provider": str(provider or "unknown"),
+        "symbol": str(symbol or "unknown").upper(),
+        "timeframe": str(timeframe or "unknown"),
+        "reason": reason,
+    }
+    for key, value in detail_fields.items():
+        if value is None:
+            continue
+        payload[key] = value
+    if reason_hint and "detail" not in payload and reason_hint != payload["reason"]:
+        payload["detail"] = reason_hint
+    return payload
 
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
@@ -1729,6 +1816,9 @@ _BACKUP_USAGE_MAX_CYCLES = 6
 _YF_WARNING_CACHE: dict[str, dict[str, set[tuple[str, str]]]] = {}
 _YF_WARNING_MAX_CYCLES = 6
 
+_SAFE_MODE_CYCLE_STATE: dict[str, Any] = {"cycle_id": None, "reason": None, "version": 0}
+_SAFE_MODE_LOGGED: set[str] = set()
+
 
 def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tuple[str, set[tuple[str, str]]]:
     """Return the per-cycle set for ``store`` while pruning old entries."""
@@ -1743,6 +1833,51 @@ def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tu
             if len(store) <= max_cycles:
                 break
     return cycle_id, bucket
+
+
+def notify_primary_provider_safe_mode(
+    *,
+    reason: str | None = None,
+    version: int | None = None,
+) -> None:
+    """Record that the current cycle should skip Alpaca minute fetches."""
+
+    cycle_id = _get_cycle_id()
+    state_reason = reason
+    if state_reason is None:
+        try:
+            state_reason = safe_mode_reason()
+        except Exception:
+            state_reason = None
+    marker_version = version
+    marker_reason = None
+    if marker_version is None:
+        try:
+            marker_version, marker_reason = provider_monitor.safe_mode_cycle_marker()
+        except Exception:
+            marker_version = (_SAFE_MODE_CYCLE_STATE.get("version", 0) or 0) + 1
+    if state_reason is None:
+        state_reason = marker_reason or "provider_safe_mode"
+    _SAFE_MODE_CYCLE_STATE.update(
+        {
+            "cycle_id": str(cycle_id),
+            "reason": state_reason,
+            "version": int(marker_version or 0),
+        }
+    )
+    _SAFE_MODE_LOGGED.discard(str(cycle_id))
+
+
+def _cycle_safe_mode_active(current_cycle: str | None = None) -> tuple[bool, str | None]:
+    """Return ``(True, reason)`` if safe mode is active for the active cycle."""
+
+    state_cycle = _SAFE_MODE_CYCLE_STATE.get("cycle_id")
+    if not state_cycle:
+        return (False, None)
+    cycle_id = current_cycle or _get_cycle_id()
+    if str(state_cycle) != str(cycle_id):
+        return (False, None)
+    return (True, _SAFE_MODE_CYCLE_STATE.get("reason"))
 
 
 def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
@@ -2025,6 +2160,28 @@ _alpaca_disable_count = 0
 def is_primary_provider_enabled() -> bool:
     """Return ``True`` when Alpaca minute data is not in a cooldown window."""
 
+    current_cycle = _get_cycle_id()
+    state_cycle = _SAFE_MODE_CYCLE_STATE.get("cycle_id")
+    if state_cycle and str(state_cycle) != str(current_cycle):
+        _SAFE_MODE_CYCLE_STATE["cycle_id"] = None
+        _SAFE_MODE_CYCLE_STATE["reason"] = None
+    cycle_active, cycle_reason = _cycle_safe_mode_active(str(current_cycle))
+    if not cycle_active:
+        try:
+            if is_safe_mode_active():
+                notify_primary_provider_safe_mode(reason=cycle_reason)
+                cycle_active, cycle_reason = _cycle_safe_mode_active(str(current_cycle))
+        except Exception:
+            cycle_active = False
+    if cycle_active:
+        cycle_key = str(current_cycle)
+        if cycle_key not in _SAFE_MODE_LOGGED:
+            logger.info(
+                "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
+                extra={"reason": cycle_reason or "provider_safe_mode"},
+            )
+            _SAFE_MODE_LOGGED.add(cycle_key)
+        return False
     if _alpaca_disabled_until is None:
         return True
     return _dt.datetime.now(UTC) >= _alpaca_disabled_until
@@ -2347,17 +2504,15 @@ def _mark_fallback(
         cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         usage_key = (str(symbol).upper(), str(timeframe))
         if usage_key not in bucket:
-            extra = {"provider": provider_for_register, "symbol": symbol}
             reason_extra = log_extra.get("fallback_reason")
-            if reason_extra:
-                extra["reason"] = reason_extra
-            message = _format_backup_usage_message(
+            usage_extra = _build_backup_usage_extra(
                 provider_for_register,
                 symbol,
                 timeframe,
                 reason_extra,
+                log_extra,
             )
-            logger.info(message, extra=extra)
+            logger.info("USING_BACKUP_PROVIDER", extra=usage_extra)
             bucket.add(usage_key)
         log_backup_provider_used(
             provider_for_register,
@@ -5487,9 +5642,6 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         key = (str(symbol).upper(), str(interval))
         reason_extra = _consume_bootstrap_backup_reason()
         if key not in bucket:
-            extra = {"provider": provider, "symbol": symbol}
-            if reason_extra:
-                extra.update(reason_extra)
             reason_text = None
             if isinstance(reason_extra, Mapping):
                 reason_text = (
@@ -5497,8 +5649,18 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                     or reason_extra.get("fallback_reason")
                     or reason_extra.get("trigger")
                 )
-            message = _format_backup_usage_message(provider, symbol, interval, reason_text)
-            logger.info(message, extra=extra)
+            usage_extra = _build_backup_usage_extra(
+                provider,
+                symbol,
+                interval,
+                reason_text,
+                reason_extra if isinstance(reason_extra, Mapping) else None,
+            )
+            if isinstance(reason_extra, Mapping):
+                for key_name, key_value in reason_extra.items():
+                    if key_name not in usage_extra and key_value is not None:
+                        usage_extra[key_name] = key_value
+            logger.info("USING_BACKUP_PROVIDER", extra=usage_extra)
             bucket.add(key)
         if frames:
             if pd_local is not None:

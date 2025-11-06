@@ -191,6 +191,7 @@ _MIN_RECOVERY_PASSES = _resolve_health_passes_required()
 _DEFAULT_SWITCH_QUIET_SECONDS = 15.0
 
 _HALT_EVENT_WINDOW_SECONDS = 600.0
+_SAFE_MODE_EVENT_BURST_WINDOW = 120.0
 _SIP_AUTH_FAIL_THRESHOLD = 3
 _GAP_EVENT_THRESHOLD = 3
 _HALT_SUPPRESS_SECONDS = 60.0
@@ -202,6 +203,22 @@ _last_halt_reason: str | None = None
 _last_halt_ts: float = 0.0
 _SAFE_MODE_ACTIVE = False
 _SAFE_MODE_REASON: str | None = None
+_SAFE_MODE_CYCLE_VERSION = 0
+_SAFE_MODE_CYCLE_REASON: str | None = None
+
+
+def _mark_cycle_safe_mode(reason: str) -> None:
+    """Increment the safe-mode cycle marker so fetchers can react once per cycle."""
+
+    global _SAFE_MODE_CYCLE_VERSION, _SAFE_MODE_CYCLE_REASON
+    _SAFE_MODE_CYCLE_VERSION += 1
+    _SAFE_MODE_CYCLE_REASON = reason
+
+
+def safe_mode_cycle_marker() -> tuple[int, str | None]:
+    """Return (version, reason) for the most recent safe-mode cycle trigger."""
+
+    return _SAFE_MODE_CYCLE_VERSION, _SAFE_MODE_CYCLE_REASON
 
 
 def _current_intraday_feed() -> str:
@@ -342,6 +359,7 @@ def _trigger_provider_safe_mode(
     _last_halt_ts = now
     _SAFE_MODE_ACTIVE = True
     _SAFE_MODE_REASON = reason
+    _mark_cycle_safe_mode(reason)
 
     metadata_payload: dict[str, Any] = {"provider": "alpaca", "reason": reason, "events": count}
     if metadata:
@@ -380,6 +398,20 @@ def _trigger_provider_safe_mode(
     )
 
     _write_halt_flag(reason, metadata=metadata_payload)
+
+    try:
+        from ai_trading.data import fetch as _data_fetch_mod  # type: ignore
+
+        notify_fn = getattr(_data_fetch_mod, "notify_primary_provider_safe_mode", None)
+        if callable(notify_fn):
+            version, _marker_reason = safe_mode_cycle_marker()
+            notify_fn(reason=reason, version=version)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.debug(
+            "SAFE_MODE_FETCH_NOTIFY_FAILED",
+            extra={"reason": reason},
+            exc_info=True,
+        )
 
     if monitor is not None:
         for provider in ("alpaca", "alpaca_sip"):
@@ -480,6 +512,9 @@ def _record_event(
         bucket.popleft()
     count = len(bucket)
     if count >= threshold:
+        window_span = bucket[-1] - bucket[0] if bucket else 0.0
+        if window_span > _SAFE_MODE_EVENT_BURST_WINDOW:
+            return
         payload = mutable_metadata if mutable_metadata is not None else metadata
         _trigger_provider_safe_mode(reason, count=count, metadata=payload)
         if provider_key:
