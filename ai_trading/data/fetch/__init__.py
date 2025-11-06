@@ -10183,6 +10183,7 @@ def get_minute_df(
     skip_primary_due_to_fallback = bool(forced_provider_label)
     skip_due_to_metadata = False
     fallback_ttl_active = False
+    safe_mode_forced_skip = False
     if fallback_window_used:
         try:
             fallback_metadata = get_fallback_metadata(symbol, "1Min", start_dt, end_dt)
@@ -10272,7 +10273,24 @@ def get_minute_df(
         # Reconsider primary fetch attempts once fallback TTL expires.
         skip_primary_due_to_fallback = False
 
+    current_cycle = _get_cycle_id()
+    cycle_active, cycle_reason = _cycle_safe_mode_active(str(current_cycle))
+    if cycle_active:
+        safe_mode_forced_skip = True
+        skip_primary_due_to_fallback = True
+        if fallback_metadata is None:
+            fallback_metadata = {}
+        fallback_metadata.setdefault("reason", cycle_reason or "provider_safe_mode")
+        fallback_metadata.setdefault("trigger", "provider_safe_mode_cycle")
+        _state["fallback_reason"] = fallback_metadata.get("reason")
+        try:
+            is_primary_provider_enabled()
+        except Exception:
+            pass
+
     forced_skip_engaged = False
+    if safe_mode_forced_skip:
+        forced_skip_engaged = True
     forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
     if forced_skip_until is not None:
         if pytest_active and not fallback_allowed_flag:

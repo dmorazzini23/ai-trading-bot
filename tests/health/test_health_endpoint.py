@@ -18,6 +18,9 @@ def test_health_endpoint_reports_runtime_state():
     payload = response.get_json()
     assert payload["service"] == "ai-trading"
     assert payload["fallback_active"] is True
+    assert "timestamp" in payload
+    assert "cooldown_seconds_remaining" in payload
+    assert "gap_ratio_recent" in payload
     provider_info = payload["primary_data_provider"]
     assert provider_info["active"] == "yahoo"
     assert payload["quotes_status"]["status"] == "stale"

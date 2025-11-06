@@ -34,6 +34,7 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "consecutive_failures": 0,
     "last_error_at": None,
     "http_code": None,
+    "gap_ratio_recent": None,
     "timeframes": {},
 }
 _DEFAULT_QUOTE_STATE: dict[str, Any] = {
@@ -81,6 +82,7 @@ def update_data_provider_state(
     last_error_at: str | None = None,
     http_code: int | None = None,
     timeframe: str | None = None,
+    gap_ratio_recent: float | None = None,
 ) -> None:
     """Record current data provider routing."""
 
@@ -112,6 +114,11 @@ def update_data_provider_state(
     if http_code is not None:
         try:
             updates["http_code"] = int(http_code)
+        except (TypeError, ValueError):
+            pass
+    if gap_ratio_recent is not None:
+        try:
+            updates["gap_ratio_recent"] = max(0.0, float(gap_ratio_recent))
         except (TypeError, ValueError):
             pass
     timeframe_key: str | None = None

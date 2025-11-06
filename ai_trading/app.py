@@ -422,6 +422,10 @@ def create_app():
             service_state = runtime_state.observe_service_status()
         except Exception:
             service_state = {"status": "unknown"}
+        try:
+            quote_state = runtime_state.observe_quote_status()
+        except Exception:
+            quote_state = {}
 
         provider_status = provider_state.get("status") or (
             "degraded" if provider_state.get("using_backup") else "healthy"
@@ -436,6 +440,8 @@ def create_app():
             "backup": provider_state.get("backup"),
             "consecutive_failures": provider_state.get("consecutive_failures"),
             "last_error_at": provider_state.get("last_error_at"),
+            "cooldown_seconds_remaining": provider_state.get("cooldown_sec"),
+            "gap_ratio_recent": provider_state.get("gap_ratio_recent"),
         }
 
         broker_status = broker_state.get("status") or (
@@ -450,33 +456,42 @@ def create_app():
         }
 
         status = service_state.get("status", "unknown")
+        service_reason = service_state.get("reason")
+
+        provider_disabled = provider_payload.get("status") in {"down", "disabled"}
+        broker_down = broker_status == "unreachable"
+        degraded = provider_disabled or provider_payload.get("using_backup") or (
+            provider_payload.get("status") not in {None, "healthy", "ready"}
+        )
+        if broker_down:
+            degraded = True
+
+        overall_ok = bool(ok) and not provider_disabled and not broker_down
+
         payload = {
-            "ok": bool(ok),
-            "ts": datetime.now(UTC).isoformat(),
+            "ok": overall_ok,
+            "timestamp": datetime.now(UTC).isoformat(),
             "service": "ai-trading",
-            "status": status,
+            "status": "degraded" if degraded else status,
             "data_provider": provider_payload,
             "broker": broker_payload,
+            "fallback_active": bool(provider_payload.get("using_backup")),
+            "quotes_status": quote_state,
+            "primary_data_provider": provider_payload,
+            "gap_ratio_recent": provider_payload.get("gap_ratio_recent"),
+            "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
         }
-        if service_state.get("reason"):
-            payload["reason"] = service_state["reason"]
 
-        degrade_reason = provider_state.get("reason")
-        http_code = provider_state.get("http_code")
-        if provider_status not in {None, "healthy", "ready"}:
-            if status not in {"warming_up", "starting"}:
-                payload["status"] = "degraded"
-            if degrade_reason and not payload.get("reason"):
-                payload["reason"] = degrade_reason
-            if http_code is not None:
-                payload.setdefault("http_code", http_code)
-        if broker_status == "unreachable":
-            payload["status"] = "degraded"
-            if not payload.get("reason"):
-                payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
+        if service_reason:
+            payload.setdefault("reason", service_reason)
+        degrade_reason = provider_payload.get("reason")
+        if degraded and degrade_reason:
+            payload.setdefault("reason", degrade_reason)
+        if degraded and provider_payload.get("http_code") is not None:
+            payload.setdefault("http_code", provider_payload.get("http_code"))
+        if broker_down and not payload.get("reason"):
+            payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
 
-        overall_ok = ok and provider_status != "down" and broker_status != "unreachable"
-        payload["ok"] = bool(overall_ok)
         env_err = app.config.get("_ENV_ERR")
         if not overall_ok and env_err and not payload.get("reason"):
             payload["reason"] = env_err

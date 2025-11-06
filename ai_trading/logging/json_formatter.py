@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 import traceback
 from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ai_trading.exc import COMMON_EXC
 
@@ -24,10 +24,11 @@ def _mask_secret(value: str) -> str:
         return '***'
 
 
+_UTC = ZoneInfo("UTC")
+
+
 class JSONFormatter(logging.Formatter):
     """JSON log formatter with optional extra fields and masking."""
-
-    converter = time.gmtime
 
     def __init__(
         self,
@@ -39,6 +40,14 @@ class JSONFormatter(logging.Formatter):
         super().__init__(fmt=None, datefmt=datefmt)
         self._extra_fields = extra_fields or {}
         self._mask_keys = {k.lower() for k in (mask_keys or [])}
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        """Render timestamps in UTC using :mod:`zoneinfo` aware datetimes."""
+
+        dt = datetime.fromtimestamp(record.created, tz=_UTC)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat()
 
     def _json_default(self, obj: Any) -> Any:
         """Fallback serialization for unsupported types."""

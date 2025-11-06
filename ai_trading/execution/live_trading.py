@@ -168,6 +168,17 @@ if TYPE_CHECKING:  # pragma: no cover - import for typing only
 logger = get_logger(__name__)
 
 
+def _log_quote_entry_block(symbol: str, gate: str, extra: Mapping[str, Any] | None = None) -> None:
+    """Emit a structured ENTRY_BLOCKED_BY_QUOTE_QUALITY log."""
+
+    payload: dict[str, Any] = {"symbol": symbol, "gate": gate}
+    if extra:
+        for key, value in extra.items():
+            if value is not None:
+                payload[key] = value
+    logger.warning("ENTRY_BLOCKED_BY_QUOTE_QUALITY", extra=payload)
+
+
 def _broker_kwargs_for_route(route: str, extra: Mapping[str, Any] | None) -> dict[str, Any]:
     """Return broker-safe keyword arguments for *route* without diagnostics."""
 
@@ -514,6 +525,18 @@ def _short_sale_precheck(
         "easy_to_borrow_shares",
     )
     marginable = _bool_from_record(asset, "marginable", "marginable_flag", "is_marginable")
+    ssr_state = _extract_value(
+        asset,
+        "short_sale_restriction",
+        "short_sale_restriction_state",
+        "ssr",
+    )
+    locate_required = _bool_from_record(
+        asset,
+        "locate_required",
+        "shortable_non_marginable",
+        "shortable_non_marginable_flag",
+    )
 
     account_shorting = _bool_from_record(
         account_snapshot,
@@ -526,6 +549,17 @@ def _short_sale_precheck(
         if no_shorting_flag is not None:
             account_shorting = not no_shorting_flag
 
+    account_margin_enabled = _bool_from_record(
+        account_snapshot,
+        "margin_enabled",
+        "marginable",
+        "trading_on_margin",
+    )
+    if account_margin_enabled is None:
+        margin_disabled_flag = _bool_from_record(account_snapshot, "margin_disabled", "no_margin")
+        if margin_disabled_flag is not None:
+            account_margin_enabled = not margin_disabled_flag
+
     extras = {
         "symbol": symbol,
         "side": str(side).lower(),
@@ -533,13 +567,28 @@ def _short_sale_precheck(
         "easy_to_borrow": bool(easy_to_borrow),
         "marginable": bool(marginable),
         "account_shorting_enabled": bool(account_shorting),
+        "account_margin_enabled": bool(account_margin_enabled),
+        "short_sale_restriction": None,
+        "locate_required": bool(locate_required) if locate_required is not None else False,
     }
+
+    if ssr_state is not None:
+        try:
+            extras["short_sale_restriction"] = str(ssr_state)
+        except Exception:
+            extras["short_sale_restriction"] = ssr_state
 
     if asset is None:
         extras["reason"] = "asset_lookup_failed"
         if asset_detail:
             extras["detail"] = asset_detail
         return False, extras, "shortability"
+
+    if extras.get("short_sale_restriction"):
+        ssr_text = str(extras["short_sale_restriction"]).strip().lower()
+        if ssr_text and ssr_text not in {"off", "none", "inactive"}:
+            extras["reason"] = "short_sale_restriction_active"
+            return False, extras, "shortability"
 
     if shortable is not True or easy_to_borrow is not True:
         extras["reason"] = (
@@ -549,6 +598,10 @@ def _short_sale_precheck(
 
     if marginable is not True:
         extras["reason"] = "asset_margin_disabled"
+        return False, extras, "margin"
+
+    if account_margin_enabled is not True:
+        extras["reason"] = "account_margin_disabled"
         return False, extras, "margin"
 
     if account_snapshot is None:
@@ -2667,6 +2720,16 @@ class ExecutionEngine:
                         "detail": detail_primary,
                     },
                 )
+                _log_quote_entry_block(
+                    symbol,
+                    "broker_reject",
+                    extra={
+                        "reason": "broker_rejected_degraded_quote",
+                        "detail": detail_primary,
+                        "price_source": annotations.get("price_source"),
+                        "synthetic": True,
+                    },
+                )
                 return None
             else:
                 skipped_extra = dict(alpaca_extra)
@@ -2786,7 +2849,20 @@ class ExecutionEngine:
             raise ValueError(f"execute_order invalid qty={qty}")
 
         mapped_side = self._map_core_side(side)
-        client = getattr(self, "trading_client", None)
+        try:
+            side_lower = str(mapped_side).lower()
+        except Exception:
+            side_lower = str(mapped_side)
+        try:
+            quantity = int(qty)
+        except Exception:
+            quantity = qty
+        trading_client = getattr(self, "trading_client", None)
+        account_snapshot: Any | None = None
+        client = trading_client
+        resolved_tif: str | None = None
+        client_order_id: str | None = None
+        order_data: dict[str, Any] = {}
         submit_started_at = time.monotonic()
 
         time_in_force_alias = kwargs.pop("tif", None)
@@ -3044,6 +3120,64 @@ class ExecutionEngine:
         price_gate_required = (require_quotes or nbbo_gate_required) and not closing_position
 
         # Surface the resolved gating inputs to help diagnose degraded-feed behaviour
+        gap_ratio_value: float | None = None
+        if isinstance(annotations, Mapping):
+            for key in ("gap_ratio", "coverage_gap_ratio", "gap_ratio_recent", "fallback_gap_ratio"):
+                candidate = annotations.get(key)
+                if candidate is None:
+                    continue
+                try:
+                    gap_ratio_value = float(candidate)
+                except (TypeError, ValueError):
+                    continue
+                else:
+                    break
+        quote_map_for_presence: Mapping[str, Any] | None
+        quote_dict_local = locals().get("quote_dict")
+        quote_payload_local = locals().get("quote_payload")
+        if isinstance(quote_dict_local, Mapping):
+            quote_map_for_presence = quote_dict_local
+        elif isinstance(quote_payload_local, Mapping):
+            quote_map_for_presence = quote_payload_local
+        else:
+            quote_map_for_presence = None
+
+        quote_timestamp_present = bool(
+            quote_ts
+            or (
+                quote_map_for_presence is not None
+                and any(ts_key in quote_map_for_presence for ts_key in ("timestamp", "ts", "t"))
+            )
+        )
+        slippage_basis: str | None = None
+        if isinstance(annotations, Mapping):
+            basis_candidate = annotations.get("slippage_basis") or annotations.get("slippage_basis_hint")
+            if basis_candidate:
+                try:
+                    slippage_basis = str(basis_candidate)
+                except Exception:
+                    slippage_basis = None
+        if slippage_basis is None:
+            if price_hint is not None:
+                slippage_basis = "price_hint"
+            elif resolved_limit_price is not None:
+                slippage_basis = "resolved_limit_price"
+            elif using_fallback_price:
+                slippage_basis = "fallback_price"
+            elif synthetic_quote:
+                slippage_basis = "synthetic_quote"
+
+        def _emit_quote_block_log(gate: str, extra: Mapping[str, Any] | None = None) -> None:
+            payload = {
+                "gap_ratio": gap_ratio_value,
+                "quote_timestamp_present": quote_timestamp_present,
+                "slippage_basis": slippage_basis,
+                "limit_basis": basis_label,
+            }
+            if extra:
+                payload.update(extra)
+            _log_quote_entry_block(symbol, gate, extra=payload)
+
         try:
             if not closing_position and (require_realtime_nbbo or nbbo_gate_required):
                 logger.info(
@@ -3081,6 +3215,14 @@ class ExecutionEngine:
             }
             logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_extra)
             if not downgrade_allowed:
+                _emit_quote_block_log(
+                    "price_gate",
+                    extra=gate_extra
+                    | {
+                        "provider": provider_for_log,
+                        "nbbo_required": nbbo_gate_required,
+                    },
+                )
                 return None
 
         limit_for_log = resolved_limit_price if resolved_limit_price is not None else price_for_limit
@@ -3105,56 +3247,6 @@ class ExecutionEngine:
                 quality_reason = "provider_mismatch"
             elif degrade_due_monitor:
                 quality_reason = "provider_disabled"
-
-        gap_ratio_value: float | None = None
-        if isinstance(annotations, Mapping):
-            for key in ("gap_ratio", "coverage_gap_ratio", "gap_ratio_recent", "fallback_gap_ratio"):
-                candidate = annotations.get(key)
-                if candidate is None:
-                    continue
-                try:
-                    gap_ratio_value = float(candidate)
-                except (TypeError, ValueError):
-                    continue
-                else:
-                    break
-        quote_timestamp_present = bool(
-            quote_ts
-            or (
-                quote_dict is not None
-                and any(ts_key in quote_dict for ts_key in ("timestamp", "ts", "t"))
-            )
-        )
-        slippage_basis: str | None = None
-        if isinstance(annotations, Mapping):
-            basis_candidate = annotations.get("slippage_basis") or annotations.get("slippage_basis_hint")
-            if basis_candidate:
-                try:
-                    slippage_basis = str(basis_candidate)
-                except Exception:
-                    slippage_basis = None
-        if slippage_basis is None:
-            if price_hint is not None:
-                slippage_basis = "price_hint"
-            elif resolved_limit_price is not None:
-                slippage_basis = "resolved_limit_price"
-            elif using_fallback_price:
-                slippage_basis = "fallback_price"
-            elif synthetic_quote:
-                slippage_basis = "synthetic_quote"
-
-        def _emit_quote_block_log(gate: str, extra: Mapping[str, Any] | None = None) -> None:
-            payload = {
-                "symbol": symbol,
-                "gate": gate,
-                "gap_ratio": gap_ratio_value,
-                "quote_timestamp_present": quote_timestamp_present,
-                "slippage_basis": slippage_basis,
-                "limit_basis": basis_label,
-            }
-            if extra:
-                payload.update(extra)
-            logger.warning("ENTRY_BLOCKED_BY_QUOTE_QUALITY", extra=payload)
 
         if (
             degrade_active
@@ -3435,6 +3527,16 @@ class ExecutionEngine:
                         "synthetic": True,
                         "provider": provider_for_log,
                         "age_ms": age_ms_int,
+                    },
+                )
+                _emit_quote_block_log(
+                    "fallback_price_invalid",
+                    extra={
+                        "provider": provider_for_log,
+                        "mode": degraded_mode,
+                        "degraded": bool(degrade_active),
+                        "age_ms": age_ms_int,
+                        "quality_reason": quality_reason or "fallback_price_unavailable",
                     },
                 )
                 return None

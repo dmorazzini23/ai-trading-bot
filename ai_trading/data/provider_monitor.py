@@ -37,6 +37,7 @@ from ai_trading.data.metrics import (
     provider_disable_duration_seconds,
     provider_failure_duration_seconds,
 )
+from ai_trading.telemetry.runtime_state import update_data_provider_state
 from ai_trading.utils.time import monotonic_time
 
 
@@ -205,6 +206,7 @@ _SAFE_MODE_ACTIVE = False
 _SAFE_MODE_REASON: str | None = None
 _SAFE_MODE_CYCLE_VERSION = 0
 _SAFE_MODE_CYCLE_REASON: str | None = None
+_gap_trigger_cooldown_until: float = 0.0
 
 
 def _mark_cycle_safe_mode(reason: str) -> None:
@@ -484,6 +486,10 @@ def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any]) -> N
     if metadata.get("used_backup"):
         stats["used_backup_events"] = int(stats.get("used_backup_events", 0)) + 1
     stats["updated_at"] = datetime.now(UTC).isoformat()
+    try:
+        update_data_provider_state(gap_ratio_recent=ratio_val)
+    except Exception:  # pragma: no cover - telemetry best effort
+        logger.debug("GAP_RATIO_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
 
 
 def _record_event(
@@ -505,7 +511,10 @@ def _record_event(
         if not primary_flag:
             return
         _update_gap_diagnostics(provider_key, mutable_metadata)
+    global _gap_trigger_cooldown_until
     now = monotonic_time()
+    if reason == "minute_gap" and now < _gap_trigger_cooldown_until:
+        return
     bucket.append(now)
     cutoff = now - _HALT_EVENT_WINDOW_SECONDS
     while bucket and bucket[0] < cutoff:
@@ -516,6 +525,8 @@ def _record_event(
         if window_span > _SAFE_MODE_EVENT_BURST_WINDOW:
             return
         payload = mutable_metadata if mutable_metadata is not None else metadata
+        if reason == "minute_gap":
+            _gap_trigger_cooldown_until = now + _SAFE_MODE_EVENT_BURST_WINDOW
         _trigger_provider_safe_mode(reason, count=count, metadata=payload)
         if provider_key:
             _gap_event_diagnostics.pop(provider_key, None)
