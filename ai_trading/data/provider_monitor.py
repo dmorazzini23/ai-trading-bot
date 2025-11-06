@@ -197,6 +197,7 @@ _HALT_SUPPRESS_SECONDS = 60.0
 
 _sip_auth_events: Deque[float] = deque()
 _gap_events: Deque[float] = deque()
+_gap_event_diagnostics: Dict[str, Dict[str, Any]] = {}
 _last_halt_reason: str | None = None
 _last_halt_ts: float = 0.0
 _SAFE_MODE_ACTIVE = False
@@ -346,6 +347,14 @@ def _trigger_provider_safe_mode(
     if metadata:
         metadata_payload.update({k: v for k, v in metadata.items() if k not in metadata_payload})
 
+    provider_key = canonical_provider(str(metadata_payload.get("provider", "alpaca")))
+    if reason == "minute_gap":
+        gap_diag = _gap_event_diagnostics.pop(provider_key, None)
+        if gap_diag:
+            metadata_payload.setdefault("gap_metrics", dict(gap_diag))
+    else:
+        _gap_event_diagnostics.pop(provider_key, None)
+
     monitor = globals().get("provider_monitor")
     alert_manager: AlertManager | None = None
     if monitor is not None:
@@ -383,6 +392,68 @@ def _trigger_provider_safe_mode(
                 )
 
 
+def _minute_gap_event_is_primary(metadata: Mapping[str, Any]) -> tuple[bool, str]:
+    provider_raw_obj = metadata.get("provider")
+    if provider_raw_obj in (None, ""):
+        provider_raw = "alpaca"
+    else:
+        provider_raw = str(provider_raw_obj)
+    provider_canonical = canonical_provider(provider_raw)
+    primary_flag_raw = metadata.get("primary_feed_gap")
+    if primary_flag_raw is not None:
+        return bool(primary_flag_raw), provider_canonical
+    if not provider_canonical.startswith("alpaca"):
+        return False, provider_canonical
+    using_fallback = bool(metadata.get("using_fallback_provider"))
+    residual_flag = metadata.get("residual_gap")
+    if residual_flag is False:
+        return False, provider_canonical
+    if str(provider_raw).strip().lower() == "yahoo":
+        return False, provider_canonical
+    return not using_fallback, provider_canonical
+
+
+def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any]) -> None:
+    stats = _gap_event_diagnostics.setdefault(
+        provider_key,
+        {
+            "provider": provider_key,
+            "events": 0,
+            "total_missing": 0,
+            "max_gap_ratio": 0.0,
+            "last_gap_ratio": 0.0,
+            "used_backup_events": 0,
+        },
+    )
+    stats["events"] += 1
+    try:
+        ratio_val = float(metadata.get("gap_ratio", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        ratio_val = 0.0
+    stats["last_gap_ratio"] = ratio_val
+    if ratio_val > stats.get("max_gap_ratio", 0.0):
+        stats["max_gap_ratio"] = ratio_val
+    try:
+        missing_val = int(metadata.get("missing_after", 0) or 0)
+    except (TypeError, ValueError):
+        missing_val = 0
+    stats["total_missing"] = int(stats.get("total_missing", 0)) + missing_val
+    try:
+        expected_val = int(metadata.get("expected", 0) or 0)
+    except (TypeError, ValueError):
+        expected_val = 0
+    stats["expected"] = expected_val
+    window_end = metadata.get("window_end")
+    if isinstance(window_end, datetime):
+        stats["last_window_end"] = window_end.isoformat()
+    window_start = metadata.get("window_start")
+    if isinstance(window_start, datetime):
+        stats["last_window_start"] = window_start.isoformat()
+    if metadata.get("used_backup"):
+        stats["used_backup_events"] = int(stats.get("used_backup_events", 0)) + 1
+    stats["updated_at"] = datetime.now(UTC).isoformat()
+
+
 def _record_event(
     bucket: Deque[float],
     *,
@@ -390,13 +461,18 @@ def _record_event(
     reason: str,
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
+    provider_key: str | None = None
+    mutable_metadata: dict[str, Any] | None = None
     if reason == "minute_gap" and metadata is not None:
-        provider_name = str(metadata.get("provider", "") or "").strip().lower()
-        residual_flag = metadata.get("residual_gap")
-        if provider_name == "yahoo":
+        if not isinstance(metadata, Mapping):
             return
-        if residual_flag is False:
+        mutable_metadata = dict(metadata)
+        primary_flag, provider_key = _minute_gap_event_is_primary(mutable_metadata)
+        mutable_metadata["provider_canonical"] = provider_key
+        mutable_metadata.setdefault("primary_feed_gap", primary_flag)
+        if not primary_flag:
             return
+        _update_gap_diagnostics(provider_key, mutable_metadata)
     now = monotonic_time()
     bucket.append(now)
     cutoff = now - _HALT_EVENT_WINDOW_SECONDS
@@ -404,7 +480,10 @@ def _record_event(
         bucket.popleft()
     count = len(bucket)
     if count >= threshold:
-        _trigger_provider_safe_mode(reason, count=count, metadata=metadata)
+        payload = mutable_metadata if mutable_metadata is not None else metadata
+        _trigger_provider_safe_mode(reason, count=count, metadata=payload)
+        if provider_key:
+            _gap_event_diagnostics.pop(provider_key, None)
         bucket.clear()
 
 

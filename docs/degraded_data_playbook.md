@@ -24,6 +24,9 @@ What the code already enforces
 - Real‑time NBBO requirement is honored: when degraded and `EXECUTION_REQUIRE_REALTIME_NBBO=1`, entries are skipped with `ORDER_SKIPPED_PRICE_GATED` (reason `realtime_nbbo_required`).
 - Opt‑in market on degraded: with `EXECUTION_MARKET_ON_DEGRADED=1`, the engine downgrades entries to market and logs `ORDER_DOWNGRADED_TO_MARKET` with provider and mode context.
 - Correct order logging: `EXEC_ENGINE_EXECUTE_ORDER` includes the real `order_id`/`client_order_id` for traceability.
+- Safe-mode minute-gap escalation now requires a confirmed Alpaca primary gap. The monitor ignores fallback-only payloads and emits `gap_metrics` (last/peak ratios, missing bars, event counts) when safe mode triggers so you can reconcile the halt.
+- Yahoo fallback minute bars are automatically reindexed/interpolated to produce a contiguous series. Coverage metadata records `fallback_contiguous=True` so downstream gap-ratio checks treat the repaired frame as complete.
+- When Alpaca quotes are unavailable but the fallback minute feed is contiguous, the trade gate synthesizes a quote timestamp from the repaired data. Orders are no longer rejected solely because the Alpaca quote API is offline, provided the fallback coverage remains healthy.
 
 Suggested baseline for production safety
 

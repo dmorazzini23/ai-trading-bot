@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -161,6 +162,44 @@ def test_fallback_gap_ratio_prefers_trading_config(monkeypatch):
     result = bot_engine._fallback_gap_ratio_limit()
 
     assert result == pytest.approx(0.09)
+
+
+def test_synthetic_fallback_quote_used_when_alpaca_unavailable(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
+    state = _fresh_state()
+    symbol = "XYZ"
+    last_bar = datetime.now(UTC) - timedelta(seconds=4)
+    quality_entry = {
+        "gap_ratio": 0.0,
+        "price_reliable": True,
+        "provider_canonical": "yahoo",
+        "fallback_contiguous": True,
+        "coverage_last_timestamp": last_bar,
+    }
+    state.data_quality[symbol] = quality_entry
+    state.price_reliability[symbol] = (True, None)
+
+    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    monkeypatch.setattr(
+        bot_engine,
+        "_check_fallback_quote_age",
+        lambda *_args, **_kwargs: (False, None, "quote_source_unavailable"),
+    )
+
+    decision = bot_engine._evaluate_data_gating(
+        ctx,
+        state,
+        symbol,
+        "yahoo_close",
+        prefer_backup_quote=True,
+    )
+
+    assert decision.block is False
+    assert decision.annotations.get("fallback_quote_source") == "synthetic"
+    assert "quote_source_unavailable" not in decision.reasons
+    quality_meta = state.data_quality[symbol]
+    assert quality_meta.get("fallback_quote_source") == "synthetic"
+    assert quality_meta.get("fallback_quote_error") is None
 
 
 def test_missing_ohlcv_blocks(monkeypatch):

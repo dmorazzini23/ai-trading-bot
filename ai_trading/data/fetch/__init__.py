@@ -5782,6 +5782,50 @@ def _normalize_window_bounds(
     return expected, start_ts.tz_convert("UTC"), end_ts.tz_convert("UTC")
 
 
+def _repair_yahoo_minute_contiguity(
+    df: Any,
+    *,
+    expected_index: Any,
+    existing_index: Any,
+) -> tuple[Any, bool]:
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        return df, False
+    if df is None or getattr(df, "empty", True):
+        return df, False
+    try:
+        base = df.set_index(existing_index)
+    except Exception:
+        return df, False
+    try:
+        repaired = base.reindex(expected_index)
+    except Exception:
+        return df, False
+    repaired.index.name = "timestamp"
+    repaired = repaired.copy()
+    if "timestamp" in repaired.columns:
+        repaired = repaired.drop(columns=["timestamp"])
+    numeric_cols = [col for col in ("open", "high", "low", "close") if col in repaired.columns]
+    try:
+        if numeric_cols:
+            repaired[numeric_cols] = repaired[numeric_cols].interpolate(
+                method="time", limit_direction="both"
+            )
+            repaired[numeric_cols] = repaired[numeric_cols].ffill().bfill()
+        if "close" in repaired.columns:
+            for column in ("open", "high", "low"):
+                if column in repaired.columns:
+                    repaired[column] = repaired[column].fillna(repaired["close"])
+        if "volume" in repaired.columns:
+            repaired["volume"] = repaired["volume"].fillna(0)
+    except Exception:
+        return df, False
+    repaired = repaired.reset_index()
+    if "timestamp" not in repaired.columns and "index" in repaired.columns:
+        repaired.rename(columns={"index": "timestamp"}, inplace=True)
+    return repaired, True
+
+
 def _repair_rth_minute_gaps(
     df: pd.DataFrame | None,
     *,
@@ -5824,6 +5868,7 @@ def _repair_rth_minute_gaps(
         provider_attr = None
     skip_backup_fill = provider_attr == "yahoo"
     used_backup = False
+    yahoo_repaired = False
     if len(missing) > 0 and not skip_backup_fill:
         try:
             missing_start = missing.min()
@@ -5870,6 +5915,15 @@ def _repair_rth_minute_gaps(
             "MINUTE_GAPS_BACKFILLED",
             extra={"symbol": symbol, "window_start": start.isoformat(), "window_end": end.isoformat()},
         )
+    if len(missing) > 0 and skip_backup_fill:
+        repaired_df, yahoo_repaired = _repair_yahoo_minute_contiguity(
+            work_df if mutated else df,
+            expected_index=expected_utc,
+            existing_index=existing_index,
+        )
+        if yahoo_repaired:
+            work_df = repaired_df
+            mutated = True
     if mutated:
         try:
             combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
@@ -5885,6 +5939,12 @@ def _repair_rth_minute_gaps(
         missing_after = 0
         gap_ratio = 0.0
     provider_name = provider_attr or ("yahoo" if skip_backup_fill else "alpaca")
+    provider_canonical = canonical_provider(provider_name)
+    using_fallback_provider = provider_canonical == "yahoo"
+    try:
+        last_timestamp_dt = combined_idx.max().to_pydatetime()
+    except Exception:
+        last_timestamp_dt = None
     metadata: dict[str, object] = {
         "expected": expected_count,
         "missing_after": missing_after,
@@ -5895,6 +5955,12 @@ def _repair_rth_minute_gaps(
         "provider": provider_name,
         "residual_gap": missing_after > 0,
         "tolerated": tolerated,
+        "provider_canonical": provider_canonical,
+        "primary_feed_gap": provider_canonical.startswith("alpaca") and not using_fallback_provider,
+        "using_fallback_provider": using_fallback_provider,
+        "fallback_repaired": yahoo_repaired,
+        "fallback_contiguous": using_fallback_provider and missing_after == 0,
+        "coverage_last_timestamp": last_timestamp_dt,
     }
     if tolerated:
         logger.info(

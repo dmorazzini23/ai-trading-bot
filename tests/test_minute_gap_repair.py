@@ -175,3 +175,30 @@ def test_should_skip_symbol_zero_gap_records_metadata() -> None:
     assert meta["missing_after"] == 0
     assert meta["gap_ratio"] == pytest.approx(0.0)
     assert "skip_flagged" not in meta
+
+
+def test_yahoo_gap_interpolation_restores_contiguity() -> None:
+    tz = ZoneInfo("America/New_York")
+    start_local = datetime(2024, 1, 8, 9, 30, tzinfo=tz)
+    end_local = datetime(2024, 1, 8, 9, 36, tzinfo=tz)
+    expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
+    missing = {expected_local[2].tz_convert("UTC")}
+    yahoo_frame = _build_base_frame(start_local, end_local, missing)
+    yahoo_frame.attrs["data_provider"] = "yahoo"
+
+    repaired, meta, used_backup = fetch_module._repair_rth_minute_gaps(  # type: ignore[attr-defined]
+        yahoo_frame,
+        symbol="AAPL",
+        start=start_local.astimezone(UTC),
+        end=end_local.astimezone(UTC),
+        tz=tz,
+    )
+
+    assert used_backup is False
+    assert meta["missing_after"] == 0
+    assert meta["fallback_repaired"] is True
+    assert meta["fallback_contiguous"] is True
+    assert meta["primary_feed_gap"] is False
+    repaired_index = pd.to_datetime(repaired["timestamp"], utc=True)
+    assert len(repaired_index) == expected_local.size
+    assert repaired_index.is_monotonic_increasing

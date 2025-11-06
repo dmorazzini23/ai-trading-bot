@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from types import SimpleNamespace
+from typing import Any, Dict, Mapping
 
 import pytest
 
@@ -80,3 +81,62 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
 
     monitor.record_success("alpaca")
     assert pm.is_safe_mode_active() is False
+
+
+def test_minute_gap_events_ignore_fallback_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
+    monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
+    triggered: list[tuple[str, int, Mapping[str, Any] | None]] = []
+    diagnostics_snapshots: list[dict[str, Dict[str, Any]]] = []
+
+    original_trigger = pm._trigger_provider_safe_mode
+
+    def _capture_trigger(reason: str, *, count: int, metadata: Mapping[str, Any] | None = None) -> None:
+        snapshot: dict[str, Dict[str, Any]] = {}
+        for key, value in pm._gap_event_diagnostics.items():
+            if isinstance(value, dict):
+                snapshot[key] = dict(value)
+        if snapshot:
+            diagnostics_snapshots.append(snapshot)
+        triggered.append((reason, count, metadata))
+        original_trigger(reason, count=count, metadata=metadata)
+
+    monkeypatch.setattr(pm, "_trigger_provider_safe_mode", _capture_trigger)
+    monkeypatch.setattr(pm, "_write_halt_flag", lambda *_, **__: None)
+
+    fallback_payload = {
+        "provider": "yahoo",
+        "provider_canonical": "yahoo",
+        "primary_feed_gap": False,
+        "using_fallback_provider": True,
+        "residual_gap": True,
+    }
+    for _ in range(pm._GAP_EVENT_THRESHOLD * 2):
+        pm.record_minute_gap_event(fallback_payload)
+
+    assert triggered == []
+    assert len(pm._gap_events) == 0
+
+    primary_payload = {
+        "provider": "alpaca",
+        "provider_canonical": "alpaca",
+        "primary_feed_gap": True,
+        "residual_gap": True,
+        "gap_ratio": 0.05,
+        "missing_after": 5,
+        "expected": 100,
+    }
+    for _ in range(pm._GAP_EVENT_THRESHOLD):
+        pm.record_minute_gap_event(primary_payload)
+
+    assert triggered
+    reason, count, metadata = triggered[-1]
+    assert reason == "minute_gap"
+    assert count == pm._GAP_EVENT_THRESHOLD
+    assert isinstance(metadata, Mapping)
+    assert diagnostics_snapshots
+    last_diag = diagnostics_snapshots[-1].get("alpaca")
+    assert isinstance(last_diag, dict)
+    assert last_diag.get("events") == pm._GAP_EVENT_THRESHOLD
+    assert last_diag.get("max_gap_ratio") == pytest.approx(0.05)
+    assert pm._gap_event_diagnostics == {}
