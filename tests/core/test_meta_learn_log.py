@@ -56,6 +56,7 @@ def _make_engine(monkeypatch, history_symbols: list[str]) -> bot_engine.BotEngin
     )
     monkeypatch.setattr(bot_engine, "load_global_signal_performance", lambda: {})
     engine = bot_engine.BotEngine()
+    manager = engine.ctx.signal_manager
     for name in (
         "signal_momentum",
         "signal_mean_reversion",
@@ -66,7 +67,7 @@ def _make_engine(monkeypatch, history_symbols: list[str]) -> bot_engine.BotEngin
         "signal_obv",
         "signal_vsa",
     ):
-        monkeypatch.setattr(engine, name, _stub_signal(name), raising=False)
+        monkeypatch.setattr(manager, name, _stub_signal(name), raising=False)
     def _evaluate_stub(self, ctx, state, df, ticker, model=None):
         symbol_upper = str(ticker or "").upper()
         history_set = set(history_symbols)
@@ -80,9 +81,9 @@ def _make_engine(monkeypatch, history_symbols: list[str]) -> bot_engine.BotEngin
         return 0, 0.0, "stub"
 
     monkeypatch.setattr(
-        engine,
+        manager,
         "evaluate",
-        MethodType(_evaluate_stub, engine),
+        MethodType(_evaluate_stub, manager),
         raising=False,
     )
     return engine
@@ -100,8 +101,8 @@ def test_meta_learn_logs_once_when_history_missing(monkeypatch, caplog) -> None:
     df = _sample_df()
 
     caplog.set_level(logging.INFO, logger="ai_trading.core.bot_engine")
-    engine.evaluate(ctx, state, df.copy(), "AAPL", model=None)
-    engine.evaluate(ctx, state, df.copy(), "AAPL", model=None)
+    engine.ctx.signal_manager.evaluate(ctx, state, df.copy(), "AAPL", model=None)
+    engine.ctx.signal_manager.evaluate(ctx, state, df.copy(), "AAPL", model=None)
 
     fallback_logs = [rec for rec in caplog.records if "METALEARN_FALLBACK" in rec.message]
     assert len(fallback_logs) == 1
@@ -114,7 +115,7 @@ def test_meta_learn_suppressed_when_history_present(monkeypatch, caplog) -> None
     df = _sample_df()
 
     caplog.set_level(logging.INFO, logger="ai_trading.core.bot_engine")
-    engine.evaluate(ctx, state, df.copy(), "AAPL", model=None)
+    engine.ctx.signal_manager.evaluate(ctx, state, df.copy(), "AAPL", model=None)
 
     fallback_logs = [rec for rec in caplog.records if "METALEARN_FALLBACK" in rec.message]
     assert not fallback_logs

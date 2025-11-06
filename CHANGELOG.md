@@ -78,6 +78,7 @@ All notable changes to this project will be documented in this file.
 - Removed hard `data_client` dependency in risk engine with optional Alpaca client.
 - Added `RLTrader` alias and completed config defaults for stable runtime.
 - **BotContext**: expose portfolio weighting and rebalance attributes on `LazyBotContext` to avoid `AttributeError` during trades.
+- **SignalManager**: restore `evaluate` as an instance method so cached component signals update reliably when invoked from bot contexts.
 - Replaced test mock imports in sentiment module with local stub to avoid leakage.
   - Supports `register_model`, `load_model`, and `latest_for` operations
   - Maintains JSON index for model metadata

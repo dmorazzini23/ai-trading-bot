@@ -11790,36 +11790,6 @@ class SignalManager:
                 logger.error("Failed to load signal weights: %s", e)
                 return {}
 
-_METALEARN_FALLBACK_SYMBOL_LOGGED: set[str] = set()
-
-
-@lru_cache(maxsize=1)
-def _trade_history_symbol_set() -> set[str]:
-    """Return uppercase symbols observed in trade history."""
-
-    frame, _source = load_trade_history(sync_from_broker=False)
-    if frame is None:
-        return set()
-    try:
-        symbols = frame["symbol"]
-    except Exception:
-        return set()
-    try:
-        iterable = symbols.dropna()  # type: ignore[assignment]
-    except Exception:
-        iterable = (sym for sym in symbols if sym not in (None, ""))
-    normalized: set[str] = set()
-    for raw_sym in iterable:
-        try:
-            sym_text = str(raw_sym).strip()
-        except Exception:
-            continue
-        if not sym_text:
-            continue
-        normalized.add(sym_text.upper())
-    return normalized
-
-
     def evaluate(
         self,
         ctx: BotContext,
@@ -11828,26 +11798,8 @@ def _trade_history_symbol_set() -> set[str]:
         ticker: str,
         model: Any,
     ) -> tuple[int, float, str]:
-        """Evaluate all active signals and return a combined decision.
+        """Evaluate all active signals and return a combined decision."""
 
-        Parameters
-        ----------
-        ctx : BotContext
-            Global bot context with API clients and configuration.
-        state : BotState
-            Current mutable bot state used by some signals.
-        df : pandas.DataFrame
-            DataFrame containing indicator columns for ``ticker``.
-        ticker : str
-            Symbol being evaluated.
-        model : Any
-            Optional machine learning model for ``signal_ml``.
-
-        Returns
-        -------
-        tuple[int, float, str]
-            ``(signal, confidence, label)`` where ``signal`` is -1, 0 or 1.
-        """
         signals: list[tuple[int, float, str]] = []
         performance_data = load_global_signal_performance()
         original_len = len(df)
@@ -11947,7 +11899,6 @@ def _trade_history_symbol_set() -> set[str]:
             self.signal_vsa(df, model),
         ]
         # drop skipped signals and those with NaN confidence
-        signals: list[tuple[int, float, str]] = []
         for s in raw:
             if s is None:
                 continue
@@ -11959,12 +11910,42 @@ def _trade_history_symbol_set() -> set[str]:
             # Clearing prevents downstream consumers from reusing a previous evaluation
             self.last_components = []
             return 0.0, 0.0, "no_data"
+
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
         conf_map = {label: w for _, w, label in signals}
         confidence = composite_signal_confidence(conf_map)
         labels = "+".join(conf_map.keys())
         return math.copysign(1, score), confidence, labels
+
+_METALEARN_FALLBACK_SYMBOL_LOGGED: set[str] = set()
+
+
+@lru_cache(maxsize=1)
+def _trade_history_symbol_set() -> set[str]:
+    """Return uppercase symbols observed in trade history."""
+
+    frame, _source = load_trade_history(sync_from_broker=False)
+    if frame is None:
+        return set()
+    try:
+        symbols = frame["symbol"]
+    except Exception:
+        return set()
+    try:
+        iterable = symbols.dropna()  # type: ignore[assignment]
+    except Exception:
+        iterable = (sym for sym in symbols if sym not in (None, ""))
+    normalized: set[str] = set()
+    for raw_sym in iterable:
+        try:
+            sym_text = str(raw_sym).strip()
+        except Exception:
+            continue
+        if not sym_text:
+            continue
+        normalized.add(sym_text.upper())
+    return normalized
 
 
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
