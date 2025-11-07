@@ -5,6 +5,7 @@ from typing import Callable, Any
 
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import get_logger
+from .fallback_order import promote_high_resolution
 from . import EmptyBarsError, is_market_open
 
 pd = load_pandas()
@@ -56,6 +57,8 @@ def fetch_with_retries(
         except EmptyBarsError as exc:
             attempts += 1
             _RETRY_COUNTS[key] = attempts
+            if attempts >= 1:
+                promote_high_resolution(symbol, provider="finnhub")
             if window_has_trading_session is not None and attempts >= 1:
                 try:
                     has_session = window_has_trading_session()
