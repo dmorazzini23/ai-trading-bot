@@ -210,6 +210,66 @@ _DEFAULT_SWITCH_QUIET_SECONDS = 15.0
 
 _HALT_EVENT_WINDOW_SECONDS = 600.0
 _SAFE_MODE_EVENT_BURST_WINDOW = 120.0
+
+
+def _resolve_gap_ratio_trigger() -> float:
+    """Resolve the minimum gap ratio required to count towards safe mode."""
+
+    candidates: list[float] = []
+    try:
+        env_val = get_env("AI_TRADING_GAP_RATIO_SAFE_MODE", None, cast=float)
+    except Exception:
+        env_val = None
+    if env_val is not None:
+        try:
+            candidates.append(float(env_val))
+        except (TypeError, ValueError):
+            pass
+    raw_env = os.getenv("AI_TRADING_GAP_RATIO_SAFE_MODE", "").strip()
+    if raw_env:
+        try:
+            candidates.append(float(raw_env))
+        except (TypeError, ValueError):
+            pass
+    if not candidates:
+        return 0.02
+    try:
+        resolved = max(max(candidates), 0.0)
+    except Exception:
+        resolved = 0.02
+    return resolved
+
+
+def _resolve_gap_missing_trigger() -> int:
+    """Resolve the minimum missing bar count required for safe mode."""
+
+    candidates: list[int] = []
+    try:
+        env_val = get_env("AI_TRADING_GAP_MISSING_SAFE_MODE", None, cast=int)
+    except Exception:
+        env_val = None
+    if env_val is not None:
+        try:
+            candidates.append(int(env_val))
+        except (TypeError, ValueError):
+            pass
+    raw_env = os.getenv("AI_TRADING_GAP_MISSING_SAFE_MODE", "").strip()
+    if raw_env:
+        try:
+            candidates.append(int(raw_env))
+        except (TypeError, ValueError):
+            pass
+    if not candidates:
+        return 3
+    try:
+        resolved = max(max(candidates), 1)
+    except Exception:
+        resolved = 3
+    return resolved
+
+
+_GAP_RATIO_TRIGGER = _resolve_gap_ratio_trigger()
+_GAP_MISSING_TRIGGER = _resolve_gap_missing_trigger()
 _SIP_AUTH_FAIL_THRESHOLD = 3
 _GAP_EVENT_THRESHOLD = 3
 _HALT_SUPPRESS_SECONDS = 60.0
@@ -410,7 +470,21 @@ def _trigger_provider_safe_mode(
     if reason == "minute_gap":
         gap_diag = _gap_event_diagnostics.pop(provider_key, None)
         if gap_diag:
-            metadata_payload.setdefault("gap_metrics", dict(gap_diag))
+            gap_payload = dict(gap_diag)
+            samples = gap_payload.get("samples")
+            if isinstance(samples, deque):
+                gap_payload["samples"] = list(samples)
+            metadata_payload.setdefault("gap_metrics", gap_payload)
+            logger.warning(
+                "PROVIDER_SAFE_MODE_DIAGNOSTICS",
+                extra={
+                    "provider": provider_key,
+                    "events": gap_payload.get("events"),
+                    "max_gap_ratio": gap_payload.get("max_gap_ratio"),
+                    "total_missing": gap_payload.get("total_missing"),
+                    "samples": gap_payload.get("samples"),
+                },
+            )
     else:
         _gap_event_diagnostics.pop(provider_key, None)
 
@@ -510,7 +584,9 @@ def _maybe_clear_safe_mode(
 
 
 def _minute_gap_event_is_primary(metadata: Mapping[str, Any]) -> tuple[bool, str]:
-    provider_raw_obj = metadata.get("provider")
+    provider_raw_obj = metadata.get("primary_provider")
+    if provider_raw_obj in (None, ""):
+        provider_raw_obj = metadata.get("provider")
     if provider_raw_obj in (None, ""):
         provider_raw = "alpaca"
     else:
@@ -530,7 +606,45 @@ def _minute_gap_event_is_primary(metadata: Mapping[str, Any]) -> tuple[bool, str
     return not using_fallback, provider_canonical
 
 
-def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any]) -> None:
+def _safe_iso(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _gap_event_is_severe(metadata: Mapping[str, Any]) -> bool:
+    try:
+        ratio_val = float(metadata.get("gap_ratio", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        ratio_val = 0.0
+    try:
+        missing_val = int(metadata.get("missing_after", 0) or 0)
+    except (TypeError, ValueError):
+        missing_val = 0
+    residual = bool(metadata.get("residual_gap"))
+    used_backup = bool(metadata.get("used_backup"))
+    try:
+        initial_ratio = float(metadata.get("initial_gap_ratio", ratio_val) or 0.0)
+    except (TypeError, ValueError):
+        initial_ratio = ratio_val
+    try:
+        initial_missing = int(metadata.get("initial_missing", missing_val) or 0)
+    except (TypeError, ValueError):
+        initial_missing = missing_val
+    if not residual:
+        if used_backup and (initial_ratio >= _GAP_RATIO_TRIGGER or initial_missing >= _GAP_MISSING_TRIGGER):
+            return True
+        return False
+    if ratio_val >= _GAP_RATIO_TRIGGER:
+        return True
+    if missing_val >= _GAP_MISSING_TRIGGER:
+        return True
+    return False
+
+
+def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any], *, severe: bool) -> None:
     stats = _gap_event_diagnostics.setdefault(
         provider_key,
         {
@@ -569,6 +683,30 @@ def _update_gap_diagnostics(provider_key: str, metadata: Mapping[str, Any]) -> N
     if metadata.get("used_backup"):
         stats["used_backup_events"] = int(stats.get("used_backup_events", 0)) + 1
     stats["updated_at"] = datetime.now(UTC).isoformat()
+    stats["last_severe"] = bool(severe)
+    try:
+        initial_missing_val = int(metadata.get("initial_missing", missing_val) or 0)
+    except (TypeError, ValueError):
+        initial_missing_val = missing_val
+    try:
+        initial_ratio_val = float(metadata.get("initial_gap_ratio", ratio_val) or 0.0)
+    except (TypeError, ValueError):
+        initial_ratio_val = ratio_val
+    sample_payload = {
+        "window_start": _safe_iso(metadata.get("window_start")),
+        "window_end": _safe_iso(metadata.get("window_end")),
+        "missing_after": missing_val,
+        "expected": expected_val,
+        "gap_ratio": ratio_val,
+        "initial_missing": initial_missing_val,
+        "initial_gap_ratio": initial_ratio_val,
+        "severe": bool(severe),
+    }
+    samples_bucket = stats.get("samples")
+    if not isinstance(samples_bucket, deque):
+        samples_bucket = deque(maxlen=5)
+        stats["samples"] = samples_bucket
+    samples_bucket.append(sample_payload)
     try:
         update_data_provider_state(gap_ratio_recent=ratio_val)
     except Exception:  # pragma: no cover - telemetry best effort
@@ -593,7 +731,18 @@ def _record_event(
         mutable_metadata.setdefault("primary_feed_gap", primary_flag)
         if not primary_flag:
             return
-        _update_gap_diagnostics(provider_key, mutable_metadata)
+        severe_gap = _gap_event_is_severe(mutable_metadata)
+        _update_gap_diagnostics(provider_key, mutable_metadata, severe=severe_gap)
+        if not severe_gap:
+            logger.debug(
+                "GAP_EVENT_SUPPRESSED",
+                extra={
+                    "provider": provider_key,
+                    "gap_ratio": mutable_metadata.get("gap_ratio"),
+                    "missing_after": mutable_metadata.get("missing_after"),
+                },
+            )
+            return
     global _gap_trigger_cooldown_until
     now = monotonic_time()
     if reason == "minute_gap" and now < _gap_trigger_cooldown_until:

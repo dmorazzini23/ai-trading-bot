@@ -230,6 +230,20 @@ def _maybe_accept_backup_quote(
     fallback_error = annotations.get("fallback_quote_error")
     if fallback_error and annotations.get("fallback_quote_ok") is False:
         return False, {}
+    fallback_ts = annotations.get("fallback_quote_timestamp") or annotations.get("fallback_quote_iso")
+    fallback_dt = None
+    if isinstance(fallback_ts, datetime):
+        fallback_dt = fallback_ts.astimezone(UTC)
+    elif isinstance(fallback_ts, str) and fallback_ts.strip():
+        try:
+            fallback_dt = datetime.fromisoformat(fallback_ts.strip())
+        except ValueError:
+            fallback_dt = None
+    if fallback_dt is None and fallback_age_s is not None:
+        try:
+            fallback_dt = datetime.now(UTC) - timedelta(seconds=float(fallback_age_s))
+        except Exception:
+            fallback_dt = None
     details = {
         "provider": provider_label,
         "age_ms": round(float(backup_age_ms), 3),
@@ -238,6 +252,8 @@ def _maybe_accept_backup_quote(
         "gap_limit": gap_limit,
         "quote_source": "backup",
     }
+    if fallback_dt is not None:
+        details["timestamp"] = fallback_dt
     return True, details
 
 
@@ -3360,6 +3376,29 @@ class ExecutionEngine:
                         **details,
                     },
                 )
+                fallback_ts = details.get("timestamp")
+                fallback_age_ms = details.get("age_ms")
+                if isinstance(fallback_ts, datetime):
+                    quote_ts = fallback_ts
+                    quote_timestamp_present = True
+                    if fallback_age_ms is None:
+                        try:
+                            fallback_age_ms = (
+                                datetime.now(UTC) - fallback_ts.astimezone(UTC)
+                            ).total_seconds() * 1000.0
+                        except Exception:
+                            fallback_age_ms = None
+                if fallback_age_ms is not None:
+                    try:
+                        quote_age_ms = float(fallback_age_ms)
+                    except (TypeError, ValueError):
+                        quote_age_ms = None
+                    else:
+                        age_ms_int = int(round(float(fallback_age_ms)))
+                        degrade_due_age = quote_age_ms > float(min_quote_fresh_ms)
+                if quote_age_ms is None:
+                    age_ms_int = -1
+                    degrade_due_age = False
         if (
             degrade_active
             and degraded_mode == "block"

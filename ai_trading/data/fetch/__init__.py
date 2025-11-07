@@ -241,7 +241,7 @@ from ai_trading.broker.alpaca_credentials import alpaca_auth_headers
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
 from .metrics import inc_provider_fallback, register_provider_disable
-from .validators import validate_adjustment, validate_feed
+from .validators import record_gap_statistics, validate_adjustment, validate_feed
 from .._alpaca_guard import should_import_alpaca_sdk
 from .fallback_concurrency import fallback_slot
 
@@ -1651,7 +1651,7 @@ def _env_flag_enabled(name: str, default: str = "0") -> bool:
     return text in {"1", "true", "yes", "on", "y"}
 
 
-DATA_HTTP_FALLBACK_INTRADAY = _env_flag_enabled("DATA_HTTP_FALLBACK_INTRADAY", "0")
+DATA_HTTP_FALLBACK_INTRADAY = _env_flag_enabled("DATA_HTTP_FALLBACK_INTRADAY", "1")
 DATA_HTTP_FALLBACK_OUT_OF_SESSION = _env_flag_enabled("DATA_HTTP_FALLBACK_OUT_OF_SESSION", "0")
 _INTRADAY_TIMEFRAMES = frozenset({"1Min", "5Min", "15Min", "1Hour"})
 
@@ -2526,7 +2526,17 @@ def _mark_fallback(
                 reason_extra,
                 log_extra,
             )
-            logger.info("USING_BACKUP_PROVIDER", extra=usage_extra)
+            provider_label = (
+                provider_for_register if provider_for_register is not None else "unknown"
+            )
+            reason_label = reason_extra if reason_extra else "unknown"
+            logger.info(
+                "USING_BACKUP_PROVIDER provider=%s timeframe=%s reason=%s",
+                provider_label,
+                timeframe,
+                reason_label,
+                extra=usage_extra,
+            )
             bucket.add(usage_key)
         log_backup_provider_used(
             provider_for_register,
@@ -5558,7 +5568,10 @@ def _normalize_finnhub_bars(frame: Any) -> pd.DataFrame | Any:
 
 def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     pd_local = _ensure_pandas()
-    if getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False):
+    fetcher_is_stub = getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False)
+    if fetcher_is_stub and os.getenv("FINNHUB_API_KEY"):
+        fetcher_is_stub = False
+    if fetcher_is_stub:
         if pd_local is None:
             return []  # type: ignore[return-value]
         log_finnhub_disabled(symbol)
@@ -5603,9 +5616,19 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     provider = getattr(settings, "backup_data_provider", "yahoo")
     provider_str = str(provider).strip()
     normalized = provider_str.lower()
+
+    promoted = fallback_order.resolve_promoted_provider(symbol, interval=interval)
+    if promoted:
+        if promoted in {"finnhub", "finnhub_low_latency"} and not os.getenv("FINNHUB_API_KEY"):
+            fallback_order.demote_provider(symbol, promoted)
+        else:
+            provider_str = promoted
+            normalized = promoted
+
     if normalized in {"finnhub", "finnhub_low_latency"}:
         finnhub_env = os.getenv("ENABLE_FINNHUB")
         if finnhub_env is not None and finnhub_env.strip().lower() in {"0", "false", "no", "off"}:
+            fallback_order.demote_provider(symbol, provider_str)
             provider_str = "yahoo"
             normalized = "yahoo"
     if normalized in {"finnhub", "finnhub_low_latency"}:
@@ -5621,6 +5644,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             "BACKUP_PROVIDER_EMPTY",
             extra={"provider": provider, "symbol": symbol, "interval": interval},
         )
+        fallback_order.demote_provider(symbol, provider_str)
         provider_str = "yahoo"
         normalized = "yahoo"
     if normalized == "yahoo":
@@ -5674,7 +5698,16 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 for key_name, key_value in reason_extra.items():
                     if key_name not in usage_extra and key_value is not None:
                         usage_extra[key_name] = key_value
-            logger.info("USING_BACKUP_PROVIDER", extra=usage_extra)
+            reason_label = usage_extra.get("reason") if isinstance(usage_extra, Mapping) else None
+            if not reason_label:
+                reason_label = "unknown"
+            logger.info(
+                "USING_BACKUP_PROVIDER provider=%s interval=%s reason=%s",
+                provider,
+                interval,
+                reason_label,
+                extra=usage_extra,
+            )
             bucket.add(key)
         if frames:
             if pd_local is not None:
@@ -6027,6 +6060,7 @@ def _repair_rth_minute_gaps(
     mutated = False
     filled_backup = False
     fallback_provider_hint: str | None = None
+    promoted_provider: str | None = None
     replaced_with_backup = False
 
     def _infer_provider(frame: object) -> str | None:
@@ -6047,6 +6081,8 @@ def _repair_rth_minute_gaps(
         return df, {"expected": expected_count, "missing_after": expected_count, "gap_ratio": 1.0}, False
     existing_index = pd_local.DatetimeIndex(timestamps)
     missing = expected_utc.difference(existing_index)
+    initial_missing_count = int(missing.size)
+    initial_gap_ratio = (initial_missing_count / expected_count) if expected_count else 0.0
     try:
         provider_attr = None
         attrs = getattr(df, "attrs", None)
@@ -6059,6 +6095,9 @@ def _repair_rth_minute_gaps(
     except Exception:
         provider_attr = None
     skip_backup_fill = provider_attr == "yahoo"
+    primary_provider_canonical = canonical_provider(
+        provider_attr if provider_attr else ("yahoo" if skip_backup_fill else "alpaca")
+    )
     used_backup = False
     yahoo_repaired = False
     if len(missing) > 0 and not skip_backup_fill:
@@ -6137,6 +6176,9 @@ def _repair_rth_minute_gaps(
         and (provider_attr or "alpaca").startswith("alpaca")
     )
     if severe_primary_gap:
+        finnhub_api_key = os.getenv("FINNHUB_API_KEY")
+        if finnhub_api_key:
+            promoted_provider = fallback_order.promote_high_resolution(symbol, provider="finnhub")
         try:
             fallback_full = _safe_backup_get_bars(
                 symbol,
@@ -6180,6 +6222,8 @@ def _repair_rth_minute_gaps(
                 provider_guess = _infer_provider(fallback_full)
                 if provider_guess:
                     fallback_provider_hint = fallback_provider_hint or provider_guess
+                elif promoted_provider:
+                    fallback_provider_hint = fallback_provider_hint or promoted_provider
                 try:
                     combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
                 except Exception:
@@ -6198,11 +6242,13 @@ def _repair_rth_minute_gaps(
     if replaced_with_backup and fallback_provider_hint:
         provider_name = fallback_provider_hint
     provider_canonical = canonical_provider(provider_name)
-    using_fallback_provider = bool(fallback_provider_hint and missing_after == 0) or provider_canonical == "yahoo"
+    using_fallback_provider = bool(fallback_provider_hint and used_backup) or provider_canonical == "yahoo"
     try:
         last_timestamp_dt = combined_idx.max().to_pydatetime()
     except Exception:
         last_timestamp_dt = None
+    if fallback_provider_hint is None and promoted_provider:
+        fallback_provider_hint = promoted_provider
     if provider_canonical == "yahoo" and not fallback_provider_hint:
         fallback_provider_hint = provider_name
     metadata: dict[str, object] = {
@@ -6214,9 +6260,12 @@ def _repair_rth_minute_gaps(
         "used_backup": used_backup,
         "provider": provider_name,
         "residual_gap": missing_after > 0,
+        "initial_missing": initial_missing_count,
+        "initial_gap_ratio": initial_gap_ratio,
         "tolerated": tolerated,
         "provider_canonical": provider_canonical,
-        "primary_feed_gap": missing_after > 0 and provider_canonical.startswith("alpaca") and not using_fallback_provider,
+        "primary_provider": primary_provider_canonical,
+        "primary_feed_gap": initial_missing_count > 0 and primary_provider_canonical.startswith("alpaca"),
         "using_fallback_provider": using_fallback_provider,
         "fallback_repaired": yahoo_repaired,
         "fallback_contiguous": using_fallback_provider and missing_after == 0,
@@ -6224,6 +6273,15 @@ def _repair_rth_minute_gaps(
     }
     if fallback_provider_hint:
         metadata["fallback_provider"] = fallback_provider_hint
+    emit_gap_event = (
+        not tolerated
+        and (
+            metadata["residual_gap"]
+            or metadata["primary_feed_gap"]
+            or used_backup
+        )
+    )
+
     if tolerated:
         logger.info(
             "MINUTE_GAPS_TOLERATED",
@@ -6234,7 +6292,7 @@ def _repair_rth_minute_gaps(
                 "window_end": end.isoformat(),
             },
         )
-    elif metadata["residual_gap"]:
+    elif emit_gap_event:
         event_payload = {
             "symbol": symbol,
             "window_start": start.isoformat(),
@@ -6244,7 +6302,9 @@ def _repair_rth_minute_gaps(
             "gap_ratio": gap_ratio,
             "provider": provider_name,
             "used_backup": used_backup,
-            "residual_gap": True,
+            "residual_gap": metadata["residual_gap"],
+            "primary_feed_gap": metadata["primary_feed_gap"],
+            "initial_missing": initial_missing_count,
         }
         try:
             record_minute_gap_event(event_payload)
@@ -6263,6 +6323,15 @@ def _repair_rth_minute_gaps(
         attrs["_coverage_meta"] = metadata
     except Exception:
         pass
+
+    try:
+        record_gap_statistics(symbol, metadata)
+    except Exception:  # pragma: no cover - defensive diagnostics capture
+        logger.debug(
+            "GAP_STATS_RECORD_FAILED",
+            extra={"symbol": symbol, "detail": "metadata_capture_failed"},
+        )
+
     return (work_df if mutated else df), metadata, used_backup
 
 
@@ -10354,9 +10423,6 @@ def get_minute_df(
         resolved_backup_feed = forced_provider_label
         fallback_allowed_flag = True
     http_fallback_allowed = bool(fallback_allowed_flag)
-    if not http_fallback_allowed and resolved_backup_provider in {"yahoo", "finnhub"}:
-        http_fallback_allowed = True
-        fallback_allowed_flag = True
     _state["http_fallback_allowed"] = http_fallback_allowed
 
     ttl_until: int | None = None
@@ -10504,6 +10570,8 @@ def get_minute_df(
         interval: str,
     ) -> Any | None:
         nonlocal backup_attempted
+        if not fallback_allowed_flag:
+            return None
         backup_attempted = True
         return _track_backup_frame(
             _safe_backup_get_bars(symbol_arg, start_arg, end_arg, interval=interval)

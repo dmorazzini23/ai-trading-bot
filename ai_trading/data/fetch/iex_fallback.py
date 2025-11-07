@@ -21,6 +21,7 @@ from typing import Any
 from ai_trading.utils.env import get_alpaca_data_base_url, get_alpaca_http_headers
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import get_logger
+from .fallback_order import demote_provider, promote_high_resolution
 from .metrics import inc_empty_payload, mark_skipped, inc_unauthorized_sip
 
 # Import shared state from the package's ``__init__``.  These variables are
@@ -104,6 +105,7 @@ def fetch_bars(
             },
         )
         feed = "sip"
+        promote_high_resolution(symbol, provider="finnhub")
 
     attempts = 0
     while True:
@@ -125,6 +127,7 @@ def fetch_bars(
             # bypass IEX until it provides data again.
             if feed == "iex":
                 _IEX_EMPTY_COUNTS.pop(key, None)
+                demote_provider(symbol, provider="finnhub")
             _clear_alpaca_failure_events(symbol, timeframe=tf)
             return _to_df(payload)
 
@@ -159,6 +162,7 @@ def fetch_bars(
                     },
                 )
                 feed = "sip"
+                promote_high_resolution(symbol, provider="finnhub")
                 continue
             if _SIP_UNAUTHORIZED:
                 inc_unauthorized_sip("alpaca")
