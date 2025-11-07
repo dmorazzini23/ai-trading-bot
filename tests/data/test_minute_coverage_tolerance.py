@@ -54,4 +54,9 @@ def test_repair_rth_minute_gaps_backfill_suppresses_safe_mode(monkeypatch):
     assert metadata["residual_gap"] is False
     assert repaired is not None
     assert len(repaired) == 3
-    assert events == []
+    assert len(events) == 1
+    event = events[0]
+    assert event["used_backup"] is True
+    assert event["residual_gap"] is False
+    assert event.get("primary_feed_gap") is True
+    assert event.get("initial_missing") == 1

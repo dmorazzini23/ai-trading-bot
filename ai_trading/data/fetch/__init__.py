@@ -6273,6 +6273,15 @@ def _repair_rth_minute_gaps(
     }
     if fallback_provider_hint:
         metadata["fallback_provider"] = fallback_provider_hint
+    emit_gap_event = (
+        not tolerated
+        and (
+            metadata["residual_gap"]
+            or metadata["primary_feed_gap"]
+            or used_backup
+        )
+    )
+
     if tolerated:
         logger.info(
             "MINUTE_GAPS_TOLERATED",
@@ -6283,7 +6292,7 @@ def _repair_rth_minute_gaps(
                 "window_end": end.isoformat(),
             },
         )
-    elif metadata["residual_gap"]:
+    elif emit_gap_event:
         event_payload = {
             "symbol": symbol,
             "window_start": start.isoformat(),
@@ -6293,7 +6302,9 @@ def _repair_rth_minute_gaps(
             "gap_ratio": gap_ratio,
             "provider": provider_name,
             "used_backup": used_backup,
-            "residual_gap": True,
+            "residual_gap": metadata["residual_gap"],
+            "primary_feed_gap": metadata["primary_feed_gap"],
+            "initial_missing": initial_missing_count,
         }
         try:
             record_minute_gap_event(event_payload)
