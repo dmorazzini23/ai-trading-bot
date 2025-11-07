@@ -468,9 +468,10 @@ def create_app():
 
         overall_ok = bool(ok) and not provider_disabled and not broker_down
 
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         payload = {
             "ok": overall_ok,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": timestamp,
             "service": "ai-trading",
             "status": "degraded" if degraded else status,
             "data_provider": provider_payload,

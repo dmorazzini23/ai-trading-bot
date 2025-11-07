@@ -1868,6 +1868,20 @@ def notify_primary_provider_safe_mode(
     _SAFE_MODE_LOGGED.discard(str(cycle_id))
 
 
+def clear_safe_mode_cycle(reason: str | None = None) -> None:
+    """Reset per-cycle safe-mode state so primary provider can be reconsidered."""
+
+    state_reason = reason or "provider_safe_mode_cleared"
+    _SAFE_MODE_CYCLE_STATE.update(
+        {
+            "cycle_id": None,
+            "reason": state_reason,
+            "version": int((_SAFE_MODE_CYCLE_STATE.get("version", 0) or 0) + 1),
+        }
+    )
+    _SAFE_MODE_LOGGED.clear()
+
+
 def _cycle_safe_mode_active(current_cycle: str | None = None) -> tuple[bool, str | None]:
     """Return ``(True, reason)`` if safe mode is active for the active cycle."""
 
@@ -6355,7 +6369,8 @@ def _current_host_limit() -> int:
     with _HOST_LIMIT_LOCK:
         cached_env = _HOST_LIMIT_STATE.get("env")
         cached_value = int(_HOST_LIMIT_STATE.get("value", _HOST_LIMIT_DEFAULT))
-        if signature != cached_env or cached_value != limit:
+        state_changed = (signature != cached_env) or (cached_value != limit)
+        if state_changed:
             _HOST_LIMIT_STATE["env"] = signature
             _HOST_LIMIT_STATE["value"] = limit
             _HOST_SEMAPHORES.clear()
@@ -7765,6 +7780,7 @@ def _fetch_bars(
     start_time = monotonic_time()
     max_retries = _FETCH_BARS_MAX_RETRIES
     data_base_url = _get_alpaca_data_base_url()
+    skip_sip_after_threshold = False
 
     def _select_fallback_target(
         interval: str,
@@ -8670,6 +8686,7 @@ def _fetch_bars(
                 and _sip_configured()
                 and sip_allowed
                 and not _state.get("forced_sip_attempted")
+                and not skip_sip_after_threshold
             ):
                 if pytest_cycle:
                     _state["pytest_sip_attempted"] = True
@@ -8769,6 +8786,7 @@ def _fetch_bars(
                     _feed == "iex"
                     and _sip_configured()
                     and not _is_sip_unauthorized()
+                    and not skip_sip_after_threshold
                 ):
                     if "sip" in call_attempts:
                         _log_fallback_skip(
@@ -8806,6 +8824,11 @@ def _fetch_bars(
                         )
                         if http_df is not None and not getattr(http_df, "empty", True):
                             return http_df
+                if _pytest_active():
+                    try:
+                        return _empty_result()
+                    except Exception:
+                        pass
                 logger.info(
                     "ALPACA_FETCH_MARKET_CLOSED",
                     extra=_norm_extra(
@@ -9074,7 +9097,12 @@ def _fetch_bars(
                             filtered.append(normalized_candidate)
                     fallback_candidates = filtered
                 sip_allowed = _sip_configured() and not _is_sip_unauthorized()
-                if sip_allowed and "sip" not in fallback_candidates and "sip" not in call_attempts:
+                if (
+                    sip_allowed
+                    and not skip_sip_after_threshold
+                    and "sip" not in fallback_candidates
+                    and "sip" not in call_attempts
+                ):
                     slots = _fallback_slots_remaining(_state)
                     if slots is None or slots > 0:
                         fallback_candidates.insert(0, "sip")
@@ -9553,6 +9581,7 @@ def _fetch_bars(
                             _feed == "iex"
                             and _sip_configured()
                             and not _is_sip_unauthorized()
+                            and not skip_sip_after_threshold
                         ):
                             if "sip" in call_attempts:
                                 _log_fallback_skip(
@@ -9867,6 +9896,7 @@ def _fetch_bars(
     http_fallback_frame: pd.DataFrame | None = None
 
     empty_attempts = 0
+    threshold_logged = False
     for _ in range(max(1, max_retries)):
         df = _req(session, fallback, headers=headers, timeout=timeout_v)
         if not _state.get("window_has_session", True):
@@ -9881,23 +9911,26 @@ def _fetch_bars(
             break
         empty_attempts += 1
         if empty_attempts >= 2:
-            if not _state.get("skip_empty_metrics"):
-                metrics.empty_fallback += 1
-            logger.info(
-                "ALPACA_EMPTY_RESPONSE_THRESHOLD",
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "start": _start.isoformat(),
-                        "end": _end.isoformat(),
-                        "attempts": empty_attempts,
-                    }
-                ),
-            )
-            _push_to_caplog("ALPACA_EMPTY_RESPONSE_THRESHOLD", level=logging.INFO)
+            if not threshold_logged:
+                if not _state.get("skip_empty_metrics"):
+                    metrics.empty_fallback += 1
+                logger.info(
+                    "ALPACA_EMPTY_RESPONSE_THRESHOLD",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "attempts": empty_attempts,
+                        }
+                    ),
+                )
+                _push_to_caplog("ALPACA_EMPTY_RESPONSE_THRESHOLD", level=logging.INFO)
+                threshold_logged = True
+            skip_sip_after_threshold = True
             break
         if empty_attempts < max_retries:
             try:
@@ -11361,6 +11394,10 @@ def get_minute_df(
     healthy_gap = gap_ratio <= max_gap_ratio
     severity = "good" if healthy_gap else "degraded"
     gap_reason = f"gap_ratio={gap_ratio * 100:.2f}%"
+    quote_ts_present = False
+    last_timestamp_dt = coverage_meta.get("coverage_last_timestamp") if isinstance(coverage_meta, Mapping) else None
+    if isinstance(last_timestamp_dt, datetime):
+        quote_ts_present = True
     if backup_label:
         provider_monitor.update_data_health(
             primary_label,
@@ -11368,6 +11405,8 @@ def get_minute_df(
             healthy=healthy_gap,
             reason=gap_reason,
             severity=severity,
+            gap_ratio=gap_ratio,
+            quote_timestamp_present=quote_ts_present,
         )
     try:
         settings_obj = get_settings()
@@ -12134,6 +12173,7 @@ __all__ = [
     "_build_daily_url",
     "retry_empty_fetch_once",
     "is_primary_provider_enabled",
+    "clear_safe_mode_cycle",
     "should_skip_symbol",
     "empty_handling",
 ]

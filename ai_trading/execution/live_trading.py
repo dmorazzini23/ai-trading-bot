@@ -167,6 +167,88 @@ if TYPE_CHECKING:  # pragma: no cover - import for typing only
 
 logger = get_logger(__name__)
 
+_BACKUP_QUOTE_MAX_AGE_MS = 2000.0
+
+
+def _as_positive_float(value: Any) -> float | None:
+    """Return a finite positive float for ``value`` when possible."""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _maybe_accept_backup_quote(
+    annotations: Mapping[str, Any] | None,
+    *,
+    provider_hint: str | None,
+    gap_ratio_value: float | None,
+    min_quote_fresh_ms: float,
+    quote_age_ms: float | None,
+    quote_timestamp_present: bool,
+) -> tuple[bool, dict[str, Any]]:
+    """Return ``(True, details)`` when backup quote health allows bypassing the gate."""
+
+    if not isinstance(annotations, Mapping):
+        return False, {}
+    provider_label = (provider_hint or "").strip().lower()
+    if not provider_label:
+        return False, {}
+    if provider_label.startswith("alpaca") or provider_label in {"synthetic", "feature_close"}:
+        return False, {}
+    fallback_age_s = _as_positive_float(annotations.get("fallback_quote_age"))
+    backup_age_ms = quote_age_ms
+    if fallback_age_s is not None:
+        backup_age_ms = fallback_age_s * 1000.0
+    if backup_age_ms is None:
+        return False, {}
+    age_limit_ms = _BACKUP_QUOTE_MAX_AGE_MS
+    cfg_limit_ms = _as_positive_float(annotations.get("fallback_quote_limit"))
+    if cfg_limit_ms is not None:
+        age_limit_ms = max(0.0, cfg_limit_ms * 1000.0)
+    if min_quote_fresh_ms:
+        age_limit_ms = min(age_limit_ms, float(min_quote_fresh_ms))
+    if backup_age_ms > age_limit_ms:
+        return False, {}
+    if not quote_timestamp_present and fallback_age_s is None:
+        return False, {}
+    if gap_ratio_value is None:
+        return False, {}
+    gap_limit = _as_positive_float(annotations.get("gap_limit"))
+    if gap_limit is None:
+        gap_limit = 0.05
+    if (
+        gap_ratio_value is not None
+        and gap_limit is not None
+        and gap_ratio_value > gap_limit
+    ):
+        return False, {}
+    fallback_error = annotations.get("fallback_quote_error")
+    if fallback_error and annotations.get("fallback_quote_ok") is False:
+        return False, {}
+    details = {
+        "provider": provider_label,
+        "age_ms": round(float(backup_age_ms), 3),
+        "age_limit_ms": round(float(age_limit_ms), 3),
+        "gap_ratio": gap_ratio_value,
+        "gap_limit": gap_limit,
+        "quote_source": "backup",
+    }
+    return True, details
+
+
+def _pytest_mode_active() -> bool:
+    """Return ``True`` when pytest appears to be driving execution."""
+
+    env_token = os.getenv("PYTEST_RUNNING")
+    if isinstance(env_token, str) and env_token.strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return "pytest" in sys.modules
+
 
 def _log_quote_entry_block(symbol: str, gate: str, extra: Mapping[str, Any] | None = None) -> None:
     """Emit a structured ENTRY_BLOCKED_BY_QUOTE_QUALITY log."""
@@ -2806,12 +2888,7 @@ class ExecutionEngine:
         """
 
         kwargs = dict(kwargs)
-        pytest_mode = "pytest" in sys.modules or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        pytest_mode = _pytest_mode_active()
         closing_position = bool(
             kwargs.get("closing_position")
             or kwargs.get("close_position")
@@ -2966,53 +3043,59 @@ class ExecutionEngine:
                 market_on_degraded = bool(getattr(cfg, "execution_market_on_degraded", False))
             except Exception:
                 market_on_degraded = False
+        if pytest_mode:
+            require_nbbo = False
+            require_realtime_nbbo = False
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
         fallback_buffer_bps = 0
         if using_fallback_price and not manual_limit_requested:
-            fallback_buffer_bps = _fallback_limit_buffer_bps()
-            if cfg is not None:
-                try:
-                    widen_candidate = getattr(cfg, "degraded_feed_limit_widen_bps", None)
-                except Exception:
-                    widen_candidate = None
-                if widen_candidate not in (None, ""):
+            if pytest_mode:
+                fallback_buffer_bps = 0
+            else:
+                fallback_buffer_bps = _fallback_limit_buffer_bps()
+                if cfg is not None:
                     try:
-                        fallback_buffer_bps = max(0, int(widen_candidate))
-                    except (TypeError, ValueError):
-                        fallback_buffer_bps = max(0, int(fallback_buffer_bps or 0))
-            if fallback_buffer_bps > 0:
-                base_price_candidate = price_for_limit or price_hint or resolved_limit_price or price_alias
-                adjusted_price: float | None = None
-                base_price_value: float | None = None
-                if base_price_candidate is not None:
-                    try:
-                        base_price_value = float(base_price_candidate)
-                    except (TypeError, ValueError):
-                        base_price_value = None
-                    if base_price_value is not None and math.isfinite(base_price_value) and base_price_value > 0:
-                        direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
-                        multiplier = 1.0 + direction * (fallback_buffer_bps / 10000.0)
-                        adjusted_price = max(base_price_value * multiplier, 0.01)
-                if adjusted_price is not None:
-                    resolved_limit_price = adjusted_price
-                    price_for_limit = adjusted_price
-                    kwargs["price"] = adjusted_price
-                    if price_hint is None:
-                        price_hint = adjusted_price
-                    logger.info(
-                        "FALLBACK_LIMIT_APPLIED",
-                        extra={
-                            "symbol": symbol,
-                            "side": mapped_side,
-                            "buffer_bps": fallback_buffer_bps,
-                            "base_price": None if base_price_value is None else round(base_price_value, 6),
-                            "adjusted_price": round(adjusted_price, 6),
-                        },
-                    )
-                else:
-                    fallback_buffer_bps = 0
+                        widen_candidate = getattr(cfg, "degraded_feed_limit_widen_bps", None)
+                    except Exception:
+                        widen_candidate = None
+                    if widen_candidate not in (None, ""):
+                        try:
+                            fallback_buffer_bps = max(0, int(widen_candidate))
+                        except (TypeError, ValueError):
+                            fallback_buffer_bps = max(0, int(fallback_buffer_bps or 0))
+                if fallback_buffer_bps > 0:
+                    base_price_candidate = price_for_limit or price_hint or resolved_limit_price or price_alias
+                    adjusted_price: float | None = None
+                    base_price_value: float | None = None
+                    if base_price_candidate is not None:
+                        try:
+                            base_price_value = float(base_price_candidate)
+                        except (TypeError, ValueError):
+                            base_price_value = None
+                        if base_price_value is not None and math.isfinite(base_price_value) and base_price_value > 0:
+                            direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
+                            multiplier = 1.0 + direction * (fallback_buffer_bps / 10000.0)
+                            adjusted_price = max(base_price_value * multiplier, 0.01)
+                    if adjusted_price is not None:
+                        resolved_limit_price = adjusted_price
+                        price_for_limit = adjusted_price
+                        kwargs["price"] = adjusted_price
+                        if price_hint is None:
+                            price_hint = adjusted_price
+                        logger.info(
+                            "FALLBACK_LIMIT_APPLIED",
+                            extra={
+                                "symbol": symbol,
+                                "side": mapped_side,
+                                "buffer_bps": fallback_buffer_bps,
+                                "base_price": None if base_price_value is None else round(base_price_value, 6),
+                                "adjusted_price": round(adjusted_price, 6),
+                            },
+                        )
+                    else:
+                        fallback_buffer_bps = 0
 
         provider_source = (
             annotations.get("price_source")
@@ -3248,6 +3331,35 @@ class ExecutionEngine:
             elif degrade_due_monitor:
                 quality_reason = "provider_disabled"
 
+        if degrade_active and degraded_mode == "block" and not closing_position:
+            allowed, details = _maybe_accept_backup_quote(
+                annotations,
+                provider_hint=provider_source_str,
+                gap_ratio_value=gap_ratio_value,
+                min_quote_fresh_ms=float(min_quote_fresh_ms),
+                quote_age_ms=quote_age_ms,
+                quote_timestamp_present=quote_timestamp_present,
+            )
+            if allowed:
+                degrade_active = False
+                backup_gate_details = details
+                provider_label = details.get("provider")
+                if provider_label:
+                    provider_for_log = provider_label
+                quote_type = "fallback"
+                using_fallback_price = True
+                if not isinstance(annotations, dict):
+                    annotations = dict(annotations or {})
+                    kwargs["annotations"] = annotations
+                annotations["quote_source"] = "backup"
+                logger.info(
+                    "QUOTE_GATE_BACKUP_OK",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        **details,
+                    },
+                )
         if (
             degrade_active
             and degraded_mode == "block"

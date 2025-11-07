@@ -2,7 +2,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import floor
+from math import floor, isclose
 from typing import Any
 from types import SimpleNamespace
 import os
@@ -27,6 +27,7 @@ class _Cache:
     equity_ts: datetime | None = None
     equity_source: str | None = None
     equity_recovered_logged: bool = False
+    capital_cap: float | None = None
 
 
 _CACHE = _Cache()
@@ -363,6 +364,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         if env_override is not None:
             now = _now_utc()
             _CACHE.value, _CACHE.ts = (env_override, now)
+            _CACHE.capital_cap = None
             return (
                 env_override,
                 {
@@ -413,6 +415,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             )
             _update_equity_cache(eq, source=_CACHE.equity_source, error=_CACHE.equity_error)
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
+        _CACHE.capital_cap = None
         return (
             cur,
             {
@@ -429,7 +432,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         _CACHE.equity_error = None
         _CACHE.last_equity = None
         _CACHE.last_equity_ts = None
-    if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
+        _CACHE.capital_cap = None
+    cached_cap = _CACHE.capital_cap
+    cap_matches = cached_cap is not None and isclose(cached_cap, cap, rel_tol=1e-9, abs_tol=1e-9)
+    if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None) and cap_matches:
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
     # Use public alias so callers/tests can patch equity retrieval.
     eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
@@ -539,6 +545,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         )
         val = _clamp(fb, vmin, vmax)
         _CACHE.value, _CACHE.ts = (val, _now_utc())
+        _CACHE.capital_cap = cap
         return (
             val,
             {
@@ -586,6 +593,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         val = env_override
         source = 'env_override'
     _CACHE.value, _CACHE.ts = (val, _now_utc())
+    _CACHE.capital_cap = cap
     return (
         val,
         {

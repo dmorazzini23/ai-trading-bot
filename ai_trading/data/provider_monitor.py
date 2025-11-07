@@ -167,6 +167,22 @@ def _resolve_health_passes_required() -> int:
         return 4
 
 
+def _resolve_safe_mode_recovery_passes() -> int:
+    """Return the consecutive health passes required to clear safe mode."""
+
+    candidate: int | None = None
+    try:
+        candidate = get_env("AI_TRADING_SAFE_MODE_HEALTH_PASSES", None, cast=int)
+    except Exception:
+        candidate = None
+    if candidate is None:
+        candidate = _resolve_health_passes_required()
+    try:
+        return max(int(candidate), 1)
+    except Exception:
+        return 3
+
+
 def _resolve_primary_dwell_seconds() -> float:
     """Return dwell window (seconds) before switching primary providers again."""
 
@@ -189,6 +205,7 @@ def _resolve_primary_dwell_seconds() -> float:
 
 _MIN_RECOVERY_SECONDS = _resolve_switch_cooldown_seconds()
 _MIN_RECOVERY_PASSES = _resolve_health_passes_required()
+_SAFE_MODE_RECOVERY_TARGET = _resolve_safe_mode_recovery_passes()
 _DEFAULT_SWITCH_QUIET_SECONDS = 15.0
 
 _HALT_EVENT_WINDOW_SECONDS = 600.0
@@ -206,6 +223,8 @@ _SAFE_MODE_ACTIVE = False
 _SAFE_MODE_REASON: str | None = None
 _SAFE_MODE_CYCLE_VERSION = 0
 _SAFE_MODE_CYCLE_REASON: str | None = None
+_SAFE_MODE_HEALTHY_PASSES = 0
+_SAFE_MODE_RECOVERY_TARGET = 0
 _gap_trigger_cooldown_until: float = 0.0
 
 
@@ -299,6 +318,23 @@ def _write_halt_flag(reason: str, metadata: Mapping[str, Any] | None = None) -> 
     logger.warning("HALT_FLAG_WRITTEN", extra=payload)
 
 
+def _clear_halt_flag() -> None:
+    """Remove an on-disk halt flag if one was written."""
+
+    path = _resolve_halt_flag_path()
+    if not os.path.exists(path):
+        return
+    try:
+        os.remove(path)
+    except OSError as exc:  # pragma: no cover - filesystem guard
+        logger.warning(
+            "HALT_FLAG_CLEAR_FAILED",
+            extra={"path": path, "error": str(exc)},
+        )
+        return
+    logger.info("HALT_FLAG_REMOVED", extra={"path": path})
+
+
 def is_safe_mode_active() -> bool:
     """Return ``True`` if the provider monitor has triggered safe mode."""
 
@@ -353,6 +389,7 @@ def _trigger_provider_safe_mode(
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
     global _last_halt_reason, _last_halt_ts, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+    global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_RECOVERY_TARGET
 
     now = monotonic_time()
     if _last_halt_reason == reason and (now - _last_halt_ts) < _HALT_SUPPRESS_SECONDS:
@@ -361,6 +398,8 @@ def _trigger_provider_safe_mode(
     _last_halt_ts = now
     _SAFE_MODE_ACTIVE = True
     _SAFE_MODE_REASON = reason
+    _SAFE_MODE_RECOVERY_TARGET = _resolve_safe_mode_recovery_passes()
+    _SAFE_MODE_HEALTHY_PASSES = 0
     _mark_cycle_safe_mode(reason)
 
     metadata_payload: dict[str, Any] = {"provider": "alpaca", "reason": reason, "events": count}
@@ -424,6 +463,50 @@ def _trigger_provider_safe_mode(
                     "PROVIDER_SAFE_MODE_DISABLE_FAILED",
                     extra={"provider": provider, "reason": reason},
                 )
+
+
+def _maybe_clear_safe_mode(
+    *,
+    success: bool,
+    gap_ratio: float | None,
+    quote_timestamp_present: bool | None,
+    disabled_until: datetime | None,
+) -> None:
+    """Clear provider safe mode once health passes meet the recovery threshold."""
+
+    global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+
+    if not _SAFE_MODE_ACTIVE:
+        _SAFE_MODE_HEALTHY_PASSES = 0
+        return
+    if not success or not quote_timestamp_present:
+        _SAFE_MODE_HEALTHY_PASSES = 0
+        return
+    _SAFE_MODE_HEALTHY_PASSES = min(_SAFE_MODE_HEALTHY_PASSES + 1, _SAFE_MODE_RECOVERY_TARGET)
+    if _SAFE_MODE_HEALTHY_PASSES < _SAFE_MODE_RECOVERY_TARGET:
+        return
+    if disabled_until and datetime.now(UTC) < disabled_until:
+        return
+    _SAFE_MODE_ACTIVE = False
+    _SAFE_MODE_REASON = None
+    _SAFE_MODE_HEALTHY_PASSES = 0
+    _clear_halt_flag()
+    logger.info(
+        "PROVIDER_SAFE_MODE_CLEARED",
+        extra={
+            "provider": "alpaca",
+            "passes": _SAFE_MODE_RECOVERY_TARGET,
+            "gap_ratio": gap_ratio,
+        },
+    )
+    try:
+        from ai_trading.data import fetch as _data_fetch_mod  # type: ignore
+
+        clear_fn = getattr(_data_fetch_mod, "clear_safe_mode_cycle", None)
+        if callable(clear_fn):
+            clear_fn()
+    except Exception:  # pragma: no cover - optional telemetry
+        logger.debug("SAFE_MODE_FETCH_CLEAR_FAILED", exc_info=True)
 
 
 def _minute_gap_event_is_primary(metadata: Mapping[str, Any]) -> tuple[bool, str]:
@@ -961,6 +1044,12 @@ class ProviderMonitor:
         _MIN_RECOVERY_PASSES = _resolve_health_passes_required()
         self.min_recovery_seconds = _MIN_RECOVERY_SECONDS
         self.recovery_passes_required = _MIN_RECOVERY_PASSES
+        global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+        global _SAFE_MODE_RECOVERY_TARGET
+        _SAFE_MODE_HEALTHY_PASSES = 0
+        _SAFE_MODE_ACTIVE = False
+        _SAFE_MODE_REASON = None
+        _SAFE_MODE_RECOVERY_TARGET = _resolve_safe_mode_recovery_passes()
 
     def _refresh_runtime_limits(self) -> None:
         """Refresh cached cooldown and quiet window values from configuration."""
@@ -1363,7 +1452,14 @@ class ProviderMonitor:
             self._last_switchover_passes = 0
             self._last_switchover_ts = now_wall
 
-    def record_health_pass(self, success: bool, provider: str | None = None) -> None:
+    def record_health_pass(
+        self,
+        success: bool,
+        provider: str | None = None,
+        *,
+        gap_ratio: float | None = None,
+        quote_timestamp_present: bool | None = None,
+    ) -> None:
         """Record the outcome of a provider health probe for switchover dwell."""
 
         target = provider or self._last_switchover_provider
@@ -1378,6 +1474,13 @@ class ProviderMonitor:
             self._last_switchover_passes = min(self._last_switchover_passes + 1, 10_000)
         else:
             self._last_switchover_passes = 0
+        disabled_until = self.disabled_until.get(normalized or target)
+        _maybe_clear_safe_mode(
+            success=success,
+            gap_ratio=gap_ratio,
+            quote_timestamp_present=quote_timestamp_present,
+            disabled_until=disabled_until,
+        )
 
     def disable(
         self,
@@ -1538,6 +1641,8 @@ class ProviderMonitor:
         healthy: bool,
         reason: str,
         severity: str | None = None,
+        gap_ratio: float | None = None,
+        quote_timestamp_present: bool | None = None,
     ) -> str:
         """Update health state and potentially switch providers.
 
@@ -1578,7 +1683,12 @@ class ProviderMonitor:
                 state["decision_until"] = None
         now = datetime.now(UTC)
         active = str(state.get("active", primary))
-        self.record_health_pass(bool(healthy), provider=active)
+        self.record_health_pass(
+            bool(healthy),
+            provider=active,
+            gap_ratio=gap_ratio,
+            quote_timestamp_present=quote_timestamp_present,
+        )
         last_switch = state.get("last_switch")
         consecutive = int(state.get("consecutive_passes", 0))
         decision_until = state.get("decision_until")

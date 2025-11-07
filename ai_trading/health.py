@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
+from ai_trading.logging import get_logger
 from ai_trading.telemetry import runtime_state
 
 try:  # pragma: no cover - optional dependency
@@ -155,7 +156,7 @@ class HealthCheck:
             payload = {
                 "ok": bool(ok),
                 "alpaca": alpaca_payload,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "service": service_name,
                 "primary_data_provider": provider_section,
                 "fallback_active": bool(provider_section.get("using_backup")),
@@ -184,7 +185,19 @@ class HealthCheck:
 
         host = self._get_ctx_attr("host", "0.0.0.0")
         port = int(self._get_ctx_attr("port", 9001))
-        self.app.run(host=host, port=port)
+        try:
+            self.app.run(host=host, port=port)
+        except OSError as exc:
+            logger.warning(
+                "HEALTHCHECK_PORT_CONFLICT",
+                extra={"host": host, "port": port, "error": str(exc)},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "HEALTH_SERVER_START_FAILED",
+                extra={"host": host, "port": port, "error": str(exc)},
+            )
 
 
 __all__ = ["HealthCheck"]
+logger = get_logger(__name__)

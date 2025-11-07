@@ -45,9 +45,12 @@ class JSONFormatter(logging.Formatter):
         """Render timestamps in UTC using :mod:`zoneinfo` aware datetimes."""
 
         dt = datetime.fromtimestamp(record.created, tz=_UTC)
-        if datefmt:
-            return dt.strftime(datefmt)
-        return dt.isoformat()
+        formatted = dt.isoformat(timespec="milliseconds")
+        if formatted.endswith("+00:00"):
+            formatted = f"{formatted[:-6]}Z"
+        elif not formatted.endswith("Z"):
+            formatted = f"{formatted}Z"
+        return formatted
 
     def _json_default(self, obj: Any) -> Any:
         """Fallback serialization for unsupported types."""

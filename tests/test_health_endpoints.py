@@ -1,0 +1,53 @@
+from types import SimpleNamespace
+
+import pytest
+
+from ai_trading.app import create_app
+from ai_trading.health import HealthCheck
+from ai_trading.telemetry import runtime_state
+
+
+@pytest.fixture(autouse=True)
+def _stub_runtime_state(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "backup": "yahoo",
+        "using_backup": False,
+        "status": "healthy",
+        "consecutive_failures": 0,
+        "gap_ratio_recent": 0.0,
+    }
+    broker_state = {
+        "status": "reachable",
+        "connected": True,
+        "latency_ms": 12.5,
+        "last_error": None,
+    }
+    service_state = {"status": "ready"}
+    quote_state = {"status": "aligned"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+
+
+def test_app_health_endpoint_shared_port():
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ok"] is True
+    assert payload["service"] == "ai-trading"
+    assert payload["timestamp"].endswith("Z")
+
+
+def test_standalone_health_server_handler():
+    ctx = SimpleNamespace(host="127.0.0.1", port=0, service="ai-trading")
+    checker = HealthCheck(ctx=ctx)
+    client = checker.app.test_client()
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] in {"healthy", "degraded"}

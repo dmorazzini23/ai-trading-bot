@@ -56,9 +56,6 @@ def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
     if now_local.date() > opened_local.date():
         return True
 
-    if now_local.time() >= MARKET_CLOSE and opened_local.time() < MARKET_CLOSE:
-        return True
-
     return False
 
 

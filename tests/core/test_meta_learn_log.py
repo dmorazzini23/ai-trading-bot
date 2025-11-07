@@ -1,6 +1,7 @@
 import logging
 import sys
 from types import MethodType, SimpleNamespace
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -9,7 +10,9 @@ from ai_trading.core import bot_engine
 
 
 @pytest.fixture(autouse=True)
-def _reset_meta_cache():
+def _reset_meta_cache(monkeypatch, tmp_path):
+    seed_path = tmp_path / "meta_seed.json"
+    monkeypatch.setenv("AI_TRADING_META_SEED_PATH", str(seed_path))
     bot_engine._METALEARN_FALLBACK_SYMBOL_LOGGED.clear()
     getter = getattr(bot_engine, "_trade_history_symbol_set", None)
     if hasattr(getter, "cache_clear"):
@@ -19,6 +22,8 @@ def _reset_meta_cache():
     getter = getattr(bot_engine, "_trade_history_symbol_set", None)
     if hasattr(getter, "cache_clear"):
         getter.cache_clear()
+    if seed_path.exists():
+        seed_path.unlink()
 
 
 def _stub_signal(label: str):
@@ -119,3 +124,38 @@ def test_meta_learn_suppressed_when_history_present(monkeypatch, caplog) -> None
 
     fallback_logs = [rec for rec in caplog.records if "METALEARN_FALLBACK" in rec.message]
     assert not fallback_logs
+
+
+def test_meta_seed_file_written(monkeypatch, caplog):
+    engine = _make_engine(monkeypatch, history_symbols=[])
+    ctx = SimpleNamespace()
+    state = SimpleNamespace()
+    df = _sample_df()
+    captured: dict[str, str] = {}
+
+    def _capture_seed(symbol: str, frame: Any) -> None:
+        captured["seed"] = symbol
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_seed_symbol_history_from_bars",
+        _capture_seed,
+        raising=False,
+    )
+    original_eval = engine.ctx.signal_manager.evaluate
+
+    def _instrumented_eval(self, ctx, state, frame, ticker, model=None):
+        bot_engine._seed_symbol_history_from_bars(str(ticker).upper(), frame)
+        return original_eval(ctx, state, frame, ticker, model)
+
+    monkeypatch.setattr(
+        engine.ctx.signal_manager,
+        "evaluate",
+        MethodType(_instrumented_eval, engine.ctx.signal_manager),
+        raising=False,
+    )
+
+    caplog.set_level(logging.INFO, logger="ai_trading.core.bot_engine")
+    engine.ctx.signal_manager.evaluate(ctx, state, df.copy(), "MSFT", model=None)
+
+    assert captured.get("seed") == "MSFT"

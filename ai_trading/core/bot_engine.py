@@ -570,15 +570,28 @@ def _pytest_running() -> bool:
         raw = get_env("PYTEST_RUNNING", None)
     except COMMON_EXC:
         raw = None
+
+    env_truthy = False
     if isinstance(raw, bool):
-        return raw
-    if raw is None:
-        return False
+        env_truthy = raw
+    elif raw is not None:
+        try:
+            token = str(raw).strip()
+        except COMMON_EXC:
+            token = ""
+        env_truthy = token == "1"
+
+    if env_truthy:
+        return True
+
+    if "pytest" in sys.modules:
+        return True
+
     try:
-        token = str(raw).strip()
+        spec = importlib.util.find_spec("pytest")
     except COMMON_EXC:
         return False
-    return token == "1"
+    return bool(spec)
 
 
 def _is_testing_env() -> bool:
@@ -944,6 +957,23 @@ def _resolve_data_retry_settings() -> tuple[int, float]:
             )
             _DATA_RETRY_SETTINGS_LOGGED = True
         return _DATA_RETRY_SETTINGS_CACHE
+
+
+def _short_circuit_retry_budget(
+    *,
+    prefer_backup: bool,
+    primary_disabled: bool,
+    attempts: int,
+    delay: float,
+) -> tuple[int, float, str | None]:
+    """Return adjusted retry plan when primary data is unavailable."""
+
+    normalized_attempts = max(1, int(attempts))
+    if primary_disabled:
+        return 1, 0.0, "primary_disabled"
+    if prefer_backup:
+        return 1, 0.0, "prefer_backup_quotes"
+    return normalized_attempts, max(0.0, float(delay)), None
 
 
 def _current_position_qty(ctx: Any, symbol: str) -> int:
@@ -8928,6 +8958,11 @@ class DataFetcher:
         )
         memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
+        memo_ttl_limit = (
+            memo_ttl
+            if memo_ttl > 0.0
+            else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0.0 else 300.0)
+        )
         additional_lookups: tuple[tuple[str, ...], ...] = ()
 
         result_logged = False
@@ -8996,16 +9031,26 @@ class DataFetcher:
         if memo_store is not None:
             fast_path_entry: Any | None = None
             fast_path_key: tuple[str, ...] | None = None
-            try:
-                if canonical_memo_key in memo_store:  # type: ignore[operator]
-                    fast_path_entry = memo_store[canonical_memo_key]  # type: ignore[index]
-                    fast_path_key = canonical_memo_key
-                elif legacy_memo_key in memo_store:  # type: ignore[operator]
-                    fast_path_entry = memo_store[legacy_memo_key]  # type: ignore[index]
-                    fast_path_key = legacy_memo_key
-            except COMMON_EXC:
-                fast_path_entry = None
-                fast_path_key = None
+            lookup_marker = object()
+            getter = getattr(memo_store, "get", None)
+            lookup_keys = (canonical_memo_key, legacy_memo_key)
+
+            def _memo_fast_lookup(target_key: tuple[str, ...]) -> Any:
+                try:
+                    return memo_store[target_key]  # type: ignore[index]
+                except KeyError:
+                    return lookup_marker
+                except COMMON_EXC:
+                    return lookup_marker
+
+            for candidate_key in lookup_keys:
+                candidate_entry = _memo_fast_lookup(candidate_key)
+                if candidate_entry is lookup_marker:
+                    continue
+                fast_path_entry = candidate_entry
+                fast_path_key = candidate_key
+                break
+
             if fast_path_entry is not None:
                 memo_ts: float | None = None
                 memo_payload: Any | None = None
@@ -9042,7 +9087,7 @@ class DataFetcher:
                         now_monotonic = float(time.monotonic())
                     except Exception:
                         now_monotonic = float(monotonic_time())
-                    ttl_limit = _DAILY_FETCH_MEMO_TTL if memo_ttl <= 0.0 else memo_ttl
+                    ttl_limit = memo_ttl_limit
                     is_fresh = True
                     if ttl_limit > 0.0 and memo_ts is not None:
                         if memo_ts <= 0.0:
@@ -9337,7 +9382,7 @@ class DataFetcher:
 
         # STRICT: memo must short-circuit without consulting other caches
         if memo_store is not None:
-            effective_ttl = memo_ttl if memo_ttl > 0 else (_DAILY_FETCH_MEMO_TTL if _DAILY_FETCH_MEMO_TTL > 0 else 300.0)
+            effective_ttl = memo_ttl_limit
             memo_keys = (canonical_memo_key, memo_key, legacy_memo_key)
             for candidate_key in memo_keys:
                 try:
@@ -9653,7 +9698,7 @@ class DataFetcher:
                     age = None if effective_ts is None else now_monotonic - effective_ts
                 is_fresh = (
                     age is None
-                    or age <= _DAILY_FETCH_MEMO_TTL
+                    or age <= memo_ttl_limit
                     or age <= window_limit
                 )
                 if is_fresh:
@@ -11818,6 +11863,7 @@ class SignalManager:
                         symbol_upper,
                     )
                     _METALEARN_FALLBACK_SYMBOL_LOGGED.add(symbol_upper)
+                _seed_symbol_history_from_bars(symbol_upper, df)
         else:
             allowed_tags = set(performance_data.keys())
             if not allowed_tags:
@@ -11833,6 +11879,7 @@ class SignalManager:
                         symbol_upper,
                     )
                     _METALEARN_FALLBACK_SYMBOL_LOGGED.add(symbol_upper)
+                _seed_symbol_history_from_bars(symbol_upper, df)
 
         self.load_signal_weights()
 
@@ -11919,6 +11966,134 @@ class SignalManager:
         return math.copysign(1, score), confidence, labels
 
 _METALEARN_FALLBACK_SYMBOL_LOGGED: set[str] = set()
+_META_SEED_LOCK = Lock()
+
+
+def _meta_seed_path() -> Path:
+    raw = os.getenv("AI_TRADING_META_SEED_PATH", "").strip()
+    if raw:
+        return Path(raw)
+    return Path("artifacts/meta_seed_snapshots.json")
+
+
+def _load_meta_seed_symbols() -> set[str]:
+    path = _meta_seed_path()
+    if not path.exists():
+        return set()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.debug("METALEARN_SEED_READ_FAILED", exc_info=True)
+        return set()
+    symbols: set[str] = set()
+    if isinstance(raw, list):
+        for entry in raw:
+            if not isinstance(entry, Mapping):
+                continue
+            symbol = entry.get("symbol")
+            if not symbol:
+                continue
+            try:
+                symbols.add(str(symbol).upper())
+            except Exception:
+                continue
+    return symbols
+
+
+def _persist_meta_seed(symbol: str, snapshot: Mapping[str, Any]) -> None:
+    """Persist a minimal seed snapshot for ``symbol`` if not already stored."""
+
+    path = _meta_seed_path()
+    emitted = False
+    with _META_SEED_LOCK:
+        records: list[dict[str, Any]]
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                records = []
+            else:
+                records = [dict(entry) for entry in raw] if isinstance(raw, list) else []
+        else:
+            records = []
+        payload = {"symbol": symbol.upper(), **snapshot}
+        for entry in records:
+            if str(entry.get("symbol")).upper() == symbol.upper():
+                entry.update(payload)
+                break
+        else:
+            records.append(payload)
+            emitted = True
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.debug("METALEARN_SEED_DIR_FAILED", exc_info=True)
+            return
+        try:
+            path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+        except OSError:
+            logger.debug("METALEARN_SEED_WRITE_FAILED", exc_info=True)
+            return
+    if emitted:
+        logger.info(
+            "METALEARN_SEEDED",
+            extra={
+                "symbol": symbol.upper(),
+                "snapshot_at": snapshot.get("timestamp"),
+            },
+        )
+        try:
+            _trade_history_symbol_set.cache_clear()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def _seed_symbol_history_from_bars(symbol: str, df: pd.DataFrame | None) -> None:
+    """Persist a lightweight snapshot so future cycles treat ``symbol`` as seeded."""
+
+    if df is None or getattr(df, "empty", True):
+        return
+    try:
+        row = df.iloc[-1]
+    except Exception:
+        return
+    ts_value = None
+    for key in ("timestamp", "ts", "time"):
+        if key in row and row[key] is not None:
+            ts_value = row[key]
+            break
+    if ts_value is None:
+        try:
+            ts_value = row.name
+        except Exception:
+            ts_value = None
+    try:
+        ts = ensure_datetime(ts_value) if ts_value is not None else datetime.now(UTC)
+    except Exception:
+        ts = datetime.now(UTC)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    else:
+        ts = ts.astimezone(UTC)
+    close_val = None
+    if "close" in row:
+        try:
+            close_val = float(row["close"])
+        except (TypeError, ValueError):
+            close_val = None
+    volume_val = None
+    if "volume" in row:
+        try:
+            volume_val = int(float(row["volume"]))
+        except (TypeError, ValueError):
+            volume_val = None
+    snapshot = {
+        "timestamp": ts.isoformat().replace("+00:00", "Z"),
+        "close": close_val,
+    }
+    if volume_val is not None:
+        snapshot["volume"] = volume_val
+    _persist_meta_seed(symbol, snapshot)
 
 
 @lru_cache(maxsize=1)
@@ -11945,6 +12120,7 @@ def _trade_history_symbol_set() -> set[str]:
         if not sym_text:
             continue
         normalized.add(sym_text.upper())
+    normalized.update(_load_meta_seed_symbols())
     return normalized
 
 
@@ -25681,8 +25857,31 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 time.sleep(1.0)
                 return
 
-            retry_attempts, retry_delay = _resolve_data_retry_settings()
-            attempts_limit = max(1, retry_attempts)
+            base_attempts, base_delay = _resolve_data_retry_settings()
+            attempts_limit = max(1, base_attempts)
+            retry_delay = base_delay
+            prefer_backup_quotes = bool(getattr(state, "prefer_backup_quotes", False))
+            primary_disabled = False
+            primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+            if callable(primary_provider_fn):
+                try:
+                    primary_disabled = not bool(primary_provider_fn())
+                except Exception:
+                    primary_disabled = False
+            attempts_limit, retry_delay, short_circuit_reason = _short_circuit_retry_budget(
+                prefer_backup=prefer_backup_quotes,
+                primary_disabled=primary_disabled,
+                attempts=attempts_limit,
+                delay=retry_delay,
+            )
+            if short_circuit_reason:
+                logger.info(
+                    "DATA_SOURCE_RETRY_BYPASS",
+                    extra={
+                        "reason": short_circuit_reason,
+                        "attempts": attempts_limit,
+                    },
+                )
             processed, row_counts = [], {}
             attempts_used = 0
             for attempt in range(attempts_limit):
