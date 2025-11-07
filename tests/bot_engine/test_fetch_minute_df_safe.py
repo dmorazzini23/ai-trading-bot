@@ -2,8 +2,11 @@ import logging
 import sys
 import types
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
+from ai_trading.data import fetch as data_fetch
+from ai_trading.data import provider_monitor
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.prof import SoftBudget
 
@@ -142,6 +145,73 @@ def _short_intraday_defaults(monkeypatch):
 def _sample_df():
     pd = load_pandas()
     return pd.DataFrame({"close": [1.0]}, index=[pd.Timestamp("2024-01-01", tz="UTC")])
+
+
+def test_repair_rth_minute_gaps_recovers_truncated_primary_frame(monkeypatch):
+    pd = load_pandas()
+    tz = ZoneInfo("America/New_York")
+    start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+    end = datetime(2024, 1, 2, 17, 30, tzinfo=UTC)
+
+    expected_index = pd.date_range(start, end, freq="min", inclusive="left", tz="UTC")
+    truncated_index = expected_index[40:]
+
+    primary = pd.DataFrame(
+        {
+            "timestamp": truncated_index,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1_000,
+        }
+    )
+    primary.attrs["data_provider"] = "alpaca"
+
+    fallback_frame = pd.DataFrame(
+        {
+            "timestamp": expected_index,
+            "open": 99.5,
+            "high": 101.5,
+            "low": 99.0,
+            "close": 100.25,
+            "volume": 900,
+        }
+    )
+    fallback_frame.attrs["data_provider"] = "yahoo"
+
+    def fake_backup(symbol, start_dt, end_dt, interval):  # noqa: D401 - test stub
+        return fallback_frame.copy()
+
+    events: list[dict[str, object]] = []
+
+    monkeypatch.setattr(data_fetch, "_safe_backup_get_bars", fake_backup)
+    monkeypatch.setattr(
+        provider_monitor,
+        "record_minute_gap_event",
+        lambda payload: events.append(payload),
+    )
+
+    repaired, meta, used_backup = data_fetch._repair_rth_minute_gaps(
+        primary,
+        symbol="ADBE",
+        start=start,
+        end=end,
+        tz=tz,
+    )
+
+    assert used_backup is True
+    assert meta["expected"] == len(expected_index)
+    assert meta["gap_ratio"] <= 0.05
+    assert meta["missing_after"] == 0
+    assert meta["residual_gap"] is False
+    assert meta["primary_feed_gap"] is False
+    assert meta.get("using_fallback_provider") is True
+    assert events == []
+
+    assert isinstance(repaired, pd.DataFrame)
+    assert len(repaired) == meta["expected"]
+    assert meta.get("fallback_provider") == "yahoo"
 
 
 def test_fetch_minute_df_safe_returns_dataframe(monkeypatch):

@@ -6026,6 +6026,21 @@ def _repair_rth_minute_gaps(
     work_df = df
     mutated = False
     filled_backup = False
+    fallback_provider_hint: str | None = None
+    replaced_with_backup = False
+
+    def _infer_provider(frame: object) -> str | None:
+        try:
+            attrs = getattr(frame, "attrs", None)
+        except Exception:
+            return None
+        if not isinstance(attrs, dict):
+            return None
+        for key in ("data_provider", "fallback_provider", "provider"):
+            value = attrs.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
     try:
         timestamps = pd_local.to_datetime(df["timestamp"], utc=True)
     except Exception:
@@ -6087,6 +6102,9 @@ def _repair_rth_minute_gaps(
                     if "index" in work_df.columns and "timestamp" not in work_df.columns:
                         work_df.rename(columns={"index": "timestamp"}, inplace=True)
                     mutated = True
+                    provider_guess = _infer_provider(fallback_df)
+                    if provider_guess:
+                        fallback_provider_hint = fallback_provider_hint or provider_guess
     if filled_backup:
         logger.info(
             "MINUTE_GAPS_BACKFILLED",
@@ -6108,20 +6126,85 @@ def _repair_rth_minute_gaps(
             combined_idx = pd_local.DatetimeIndex([])
     else:
         combined_idx = existing_index
-    missing_after = int(expected_utc.difference(combined_idx).size)
+    missing_index = expected_utc.difference(combined_idx)
+    missing_after = int(missing_index.size)
     gap_ratio = (missing_after / expected_count) if expected_count else 0.0
+
+    severe_primary_gap = (
+        missing_after > 0
+        and gap_ratio > 0.05
+        and not skip_backup_fill
+        and (provider_attr or "alpaca").startswith("alpaca")
+    )
+    if severe_primary_gap:
+        try:
+            fallback_full = _safe_backup_get_bars(
+                symbol,
+                start_utc.to_pydatetime(),
+                (end_utc + pd_local.Timedelta(minutes=1)).to_pydatetime(),
+                interval="1m",
+            )
+        except Exception:
+            fallback_full = None
+        else:
+            fallback_full = _post_process(
+                fallback_full,
+                symbol=symbol,
+                timeframe="1Min",
+            )
+        if fallback_full is not None and not getattr(fallback_full, "empty", True):
+            try:
+                fb_idx_full = pd_local.to_datetime(fallback_full["timestamp"], utc=True)
+            except Exception:
+                fb_idx_full = pd_local.DatetimeIndex([])
+            fallback_full = fallback_full.set_index(fb_idx_full)
+            base_df = work_df if mutated else df
+            try:
+                base_idx = pd_local.to_datetime(base_df["timestamp"], utc=True)
+            except Exception:
+                base_idx = pd_local.DatetimeIndex([])
+            combined = pd_local.concat([
+                base_df.set_index(base_idx),
+                fallback_full.loc[fallback_full.index.intersection(expected_utc)],
+            ])
+            combined = combined[~combined.index.duplicated(keep="first")]
+            combined.sort_index(inplace=True)
+            combined = combined.loc[combined.index.intersection(expected_utc)]
+            if not combined.empty:
+                work_df = combined.reset_index()
+                if "index" in work_df.columns and "timestamp" not in work_df.columns:
+                    work_df.rename(columns={"index": "timestamp"}, inplace=True)
+                mutated = True
+                filled_backup = True
+                used_backup = True
+                provider_guess = _infer_provider(fallback_full)
+                if provider_guess:
+                    fallback_provider_hint = fallback_provider_hint or provider_guess
+                try:
+                    combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
+                except Exception:
+                    combined_idx = pd_local.DatetimeIndex([])
+                missing_index = expected_utc.difference(combined_idx)
+                missing_after = int(missing_index.size)
+                gap_ratio = (missing_after / expected_count) if expected_count else 0.0
+                replaced_with_backup = missing_after == 0
+
     tolerated = False
     if missing_after and gap_ratio <= 0.015:
         tolerated = True
         missing_after = 0
         gap_ratio = 0.0
     provider_name = provider_attr or ("yahoo" if skip_backup_fill else "alpaca")
+    if replaced_with_backup and fallback_provider_hint:
+        provider_name = fallback_provider_hint
     provider_canonical = canonical_provider(provider_name)
-    using_fallback_provider = provider_canonical == "yahoo"
+    using_fallback_provider = bool(fallback_provider_hint and missing_after == 0) or provider_canonical == "yahoo"
     try:
         last_timestamp_dt = combined_idx.max().to_pydatetime()
     except Exception:
         last_timestamp_dt = None
+    if provider_canonical == "yahoo" and not fallback_provider_hint:
+        fallback_provider_hint = provider_name
     metadata: dict[str, object] = {
         "expected": expected_count,
         "missing_after": missing_after,
@@ -6133,12 +6216,14 @@ def _repair_rth_minute_gaps(
         "residual_gap": missing_after > 0,
         "tolerated": tolerated,
         "provider_canonical": provider_canonical,
-        "primary_feed_gap": provider_canonical.startswith("alpaca") and not using_fallback_provider,
+        "primary_feed_gap": missing_after > 0 and provider_canonical.startswith("alpaca") and not using_fallback_provider,
         "using_fallback_provider": using_fallback_provider,
         "fallback_repaired": yahoo_repaired,
         "fallback_contiguous": using_fallback_provider and missing_after == 0,
         "coverage_last_timestamp": last_timestamp_dt,
     }
+    if fallback_provider_hint:
+        metadata["fallback_provider"] = fallback_provider_hint
     if tolerated:
         logger.info(
             "MINUTE_GAPS_TOLERATED",
@@ -6172,6 +6257,9 @@ def _repair_rth_minute_gaps(
     try:
         attrs = target_df.attrs  # type: ignore[attr-defined]
         attrs.setdefault("symbol", symbol)
+        if replaced_with_backup and fallback_provider_hint:
+            attrs["data_provider"] = fallback_provider_hint
+            attrs["fallback_provider"] = fallback_provider_hint
         attrs["_coverage_meta"] = metadata
     except Exception:
         pass
