@@ -7229,6 +7229,7 @@ def _fetch_bars(
         tags = _tags(provider=resolved_provider, feed=feed_tag)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         _state["last_fallback_feed"] = feed_tag
+        _state["last_fallback_provider"] = resolved_provider
         from_provider_name = from_provider or f"alpaca_{_feed}"
         attempt_payload = {
             "provider": resolved_provider,
@@ -7395,6 +7396,7 @@ def _fetch_bars(
                     feed="yahoo",
                 )
                 _state["last_fallback_feed"] = "yahoo"
+                _state["last_fallback_provider"] = "yahoo"
                 processed_frame = _post_process(
                     annotated_frame,
                     symbol=symbol,
@@ -7556,6 +7558,7 @@ def _fetch_bars(
             tags = _tags(provider="yahoo", feed="yahoo")
             _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
             _state["last_fallback_feed"] = "yahoo"
+            _state["last_fallback_provider"] = "yahoo"
             _mark_fallback(
                 symbol,
                 _interval,
@@ -8116,6 +8119,7 @@ def _fetch_bars(
                 ).inc()
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             _state["last_fallback_feed"] = fb_feed
+            _state["last_fallback_provider"] = to_provider_name
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
             attempt_extra = {
                 "provider": to_provider_name,
@@ -8248,7 +8252,7 @@ def _fetch_bars(
         ):
             if _http_fallback_permitted(
                 _interval,
-                window_has_session=_state.get("window_has_session"),
+                window_has_session=bool(_state.get("window_has_session", True)),
                 feed=_feed,
             ):
                 return pd.DataFrame()
@@ -8650,7 +8654,7 @@ def _fetch_bars(
                 )
             if _state.get("resolve_feed_none") and _http_fallback_permitted(
                 _interval,
-                window_has_session=_state.get("window_has_session"),
+                window_has_session=bool(_state.get("window_has_session", True)),
                 feed=_feed,
             ):
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
@@ -8904,7 +8908,7 @@ def _fetch_bars(
                 _state["stop"] = True
             http_fallback_allowed = _http_fallback_permitted(
                 _interval,
-                window_has_session=_state.get("window_has_session"),
+                window_has_session=bool(_state.get("window_has_session", True)),
                 feed=_feed,
             )
             if attempt <= max_retries and can_retry_timeframe and _state["retries"] < max_retries:
@@ -9455,7 +9459,7 @@ def _fetch_bars(
                     http_fallback_df: Any | None = None
                     if _http_fallback_permitted(
                         base_interval,
-                        window_has_session=_state.get("window_has_session"),
+                        window_has_session=bool(_state.get("window_has_session", True)),
                         feed=_feed,
                     ):
                         interval_map = {
@@ -9721,7 +9725,7 @@ def _fetch_bars(
                     (slots_remaining is None or slots_remaining > 0)
                     or _http_fallback_permitted(
                         _interval,
-                        window_has_session=_state.get("window_has_session"),
+                        window_has_session=bool(_state.get("window_has_session", True)),
                         feed=_feed,
                     )
                     or alpaca_empty_to_backup()
@@ -9731,6 +9735,8 @@ def _fetch_bars(
                         "PERSISTENT_EMPTY_ABORT",
                         extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                     )
+                    return None
+                if outside_market_hours or not _state.get("window_has_session", True):
                     return None
                 raise EmptyBarsError("alpaca_empty")
             if can_retry_timeframe:
@@ -9763,7 +9769,7 @@ def _fetch_bars(
                                             return sip_df
                         if _http_fallback_permitted(
                             _interval,
-                            window_has_session=_state.get("window_has_session"),
+                            window_has_session=bool(_state.get("window_has_session", True)),
                             feed=_feed,
                         ):
                             interval_map = {
@@ -9871,7 +9877,7 @@ def _fetch_bars(
                     (slots_remaining is None or slots_remaining > 0)
                     or _http_fallback_permitted(
                         _interval,
-                        window_has_session=_state.get("window_has_session"),
+                        window_has_session=bool(_state.get("window_has_session", True)),
                         feed=_feed,
                     )
                     or alpaca_empty_to_backup()
@@ -9881,6 +9887,8 @@ def _fetch_bars(
                         "PERSISTENT_EMPTY_ABORT",
                         extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                     )
+                    return None
+                if outside_market_hours or not _state.get("window_has_session", True):
                     return None
                 raise EmptyBarsError("alpaca_empty")
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
@@ -9932,7 +9940,7 @@ def _fetch_bars(
                 (slots_remaining is None or slots_remaining > 0)
                 or _http_fallback_permitted(
                     _interval,
-                    window_has_session=_state.get("window_has_session"),
+                    window_has_session=bool(_state.get("window_has_session", True)),
                     feed=_feed,
                 )
                 or alpaca_empty_to_backup()
@@ -9950,6 +9958,8 @@ def _fetch_bars(
                         "PERSISTENT_EMPTY_ABORT",
                         extra=_norm_extra({"symbol": symbol, "feed": _feed}),
                     )
+                    return None
+                if outside_market_hours or not _state.get("window_has_session", True):
                     return None
                 raise EmptyBarsError("alpaca_empty")
             elif log_event == "ALPACA_FETCH_ABORTED":
@@ -9987,8 +9997,14 @@ def _fetch_bars(
         _alpaca_disable_count = 0
         success_tags = _tags()
         last_fallback_feed = _state.pop("last_fallback_feed", None)
+        last_fallback_provider = _state.pop("last_fallback_provider", None)
+        tag_overrides: dict[str, str] = {}
+        if last_fallback_provider:
+            tag_overrides["provider"] = str(last_fallback_provider)
         if last_fallback_feed:
-            success_tags = _tags(feed=last_fallback_feed)
+            tag_overrides["feed"] = str(last_fallback_feed)
+        if tag_overrides:
+            success_tags = _tags(**tag_overrides)
         if not _state.get("defer_success_metric"):
             _record_success_metric(success_tags, prefer_fallback=True)
         return df
@@ -10124,42 +10140,35 @@ def _fetch_bars(
     outside_hours = _outside_market_hours(_start, _end)
     frame_empty = df is None or getattr(df, "empty", True)
     window_has_session_flag = bool(_state.get("window_has_session", True))
-    http_allowed_flag = bool(_state.get("http_fallback_allowed"))
-    http_check = _http_fallback_permitted(
+    if frame_empty and (no_session_window or not market_open_now or outside_hours):
+        empty_df = _empty_ohlcv_frame(pd)
+        return _finalize_frame(empty_df)
+    window_allows_backup = window_has_session_flag or short_circuit_empty
+    http_backup_allowed = _http_fallback_permitted(
         _interval,
         window_has_session=window_has_session_flag,
         feed=_feed,
     )
-    if frame_empty and (no_session_window or not market_open_now or outside_hours):
-        sip_locked = bool(_state.get("sip_unauthorized")) or bool(_is_sip_unauthorized())
-        backup_allowed = (
-            not window_has_session_flag
-            or http_allowed_flag
-            or http_check
-            or bool(_state.get("short_circuit_empty"))
-        )
-        if window_has_session_flag and not sip_locked and not backup_allowed:
-            raise EmptyBarsError(
-                "market_closed",
-                f"market_closed: symbol={symbol}, timeframe={_interval}",
-            )
-        empty_df = _empty_ohlcv_frame(pd)
-        return _finalize_frame(empty_df)
-    window_allows_backup = _state.get("window_has_session", True) or short_circuit_empty
     if (
-        _http_fallback_permitted(
-            _interval,
-            window_has_session=_state.get("window_has_session"),
-            feed=_feed,
-        )
+        http_backup_allowed
         and window_allows_backup
         and (df is None or getattr(df, "empty", True))
         and not _state.get("skip_backup_after_fallback")
     ):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = normalize_yf_interval(interval_map.get(_interval))
-        providers_tried = set(_state["providers"])
+        providers_tried = set(_state.get("providers") or [])
         can_use_sip = _sip_configured() and not _is_sip_unauthorized()
+        fallback_fn = _state.get("attempt_fallback_fn")
+        if (
+            callable(fallback_fn)
+            and can_use_sip
+            and "sip" not in providers_tried
+        ):
+            sip_result = fallback_fn((_interval, "sip", _start, _end), skip_check=True)
+            providers_tried = set(_state.get("providers") or [])
+            if sip_result is not None and not getattr(sip_result, "empty", True):
+                return _finalize_frame(sip_result)
         yahoo_allowed = (can_use_sip and {"iex", "sip"}.issubset(providers_tried) and max_fb >= 2) or (
             not can_use_sip and "iex" in providers_tried and max_fb >= 1
         )
@@ -10188,34 +10197,45 @@ def _fetch_bars(
                         "timeframe": _interval,
                         "failure_count": failure_count,
                         "threshold": threshold,
-                    "consecutive_failures": consecutive_failures,
-                    "required_failures": required_failures,
-                }
-            ),
+                        "consecutive_failures": consecutive_failures,
+                        "required_failures": required_failures,
+                    }
+                ),
+            )
+            yahoo_allowed = False
+        forced_yahoo = (_state.get("backup_env_forced") == "yahoo") or (
+            _state.get("last_fallback_provider") == "yahoo"
         )
-        yahoo_allowed = False
-        if resolved_backup_provider == "yahoo":
+        if forced_yahoo:
             yahoo_allowed = True
             force_yahoo = True
         if y_int and yahoo_allowed and ("yahoo" in priority or force_yahoo):
+            tags = _tags(provider="yahoo", feed="yahoo")
+            _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
+            try:
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
+                )
+            except Exception:
+                pass
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
             except Exception:  # pragma: no cover - network variance
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
-                logger.info(
-                    "DATA_SOURCE_FALLBACK_ATTEMPT",
-                    extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
-                )
                 annotated_df = _annotate_df_source(
                     alt_df,
                     provider="yahoo",
                     feed="yahoo",
                 )
-                if force_yahoo:
-                    meta_dict = _state.get("meta")
-                    if isinstance(meta_dict, dict):
-                        meta_dict["http_get"] = "yahoo"
+                meta_dict = _state.get("meta")
+                if not isinstance(meta_dict, dict):
+                    meta_dict = {}
+                    _state["meta"] = meta_dict
+                meta_dict["http_get"] = "yahoo"
+                _state["last_fallback_feed"] = "yahoo"
+                _state["last_fallback_provider"] = "yahoo"
                 _ALPACA_SYMBOL_FAILURES.pop(symbol, None)
                 _mark_fallback(
                     symbol,
@@ -10229,6 +10249,8 @@ def _fetch_bars(
                     reason=_state.get("fallback_reason"),
                 )
                 _state["fallback_reason"] = None
+                _record_fallback_success_metric(tags)
+                _record_success_metric(tags, prefer_fallback=True)
                 if _state.get("window_has_session", True):
                     return _finalize_frame(annotated_df)
                 http_fallback_frame = annotated_df

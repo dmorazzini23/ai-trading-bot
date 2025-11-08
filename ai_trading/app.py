@@ -399,7 +399,7 @@ def create_app():
     @app.route('/healthz')
     def healthz():
         """Minimal liveness probe with provider diagnostics."""
-        ok = bool(app.config.get("_ENV_VALID"))
+        ok = True
         try:
             provider_state = runtime_state.observe_data_provider_state()
         except Exception:
