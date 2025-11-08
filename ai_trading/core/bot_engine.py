@@ -2413,8 +2413,9 @@ def _cache_cycle_fallback_feed_helper(
         feed, symbol=symbol
     )
 
-    func = globals().get("_cache_cycle_fallback_feed")
-    if callable(func) and func is not _CACHE_CYCLE_FALLBACK_FEED_CANONICAL:
+    module_obj = sys.modules.get(__name__)
+    func = getattr(module_obj, "_cache_cycle_fallback_feed", None)
+    if callable(func):
         try:
             func(feed, symbol=symbol)
         except TypeError as exc:
@@ -5550,17 +5551,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             seen_feeds.add(normalized_feed)
             attempts.append((feed, provider))
 
-        sip_allowed = False
-        try:
-            sip_allowed = bool(
-                data_fetcher_module._sip_configured()
-                and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-            )
-        except COMMON_EXC:
-            sip_allowed = False
-        if sip_allowed:
-            _append_attempt("sip", "alpaca_sip")
-
         failover = getattr(CFG, "alpaca_feed_failover", ())
         for candidate in failover:
             if not candidate:
@@ -6020,6 +6010,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 df = sip_df
                 start_dt = fallback_start_dt
                 expected_bars = fallback_expected_bars
+                sip_full_cover = sip_bars >= fallback_expected_bars
                 coverage = _coverage_metrics(
                     df,
                     expected=expected_bars,
@@ -6030,6 +6021,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
+                if not sip_full_cover:
+                    low_coverage = True
                 normalized_sip_feed = (
                     "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
                 )
@@ -6054,6 +6047,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     cache_feed = normalized_sip_feed or resolved_feed
                     if cache_feed:
                         _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
+                        module_obj = sys.modules.get(__name__)
+                        cache_hook = getattr(module_obj, "_cache_cycle_fallback_feed", None)
+                        if callable(cache_hook):
+                            try:
+                                cache_hook(cache_feed, symbol=symbol)
+                            except TypeError:
+                                try:
+                                    cache_hook(cache_feed)
+                                except TypeError:
+                                    pass
                         if cache_feed == "sip":
                             record_switch = getattr(
                                 data_fetcher_module, "_record_feed_switch", None
@@ -6093,7 +6096,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed = "sip"
             fallback_provider = "alpaca_sip"
 
-        if not fallback_used:
+        if not fallback_used or low_coverage:
             fallback_attempted = True
             log_backup_provider_used(
                 "yahoo",
@@ -6154,6 +6157,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     _fallback_normalized,
                     _fallback_cached,
                 ) = _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
+                module_obj = sys.modules.get(__name__)
+                cache_hook = getattr(module_obj, "_cache_cycle_fallback_feed", None)
+                if callable(cache_hook):
+                    try:
+                        cache_hook("yahoo", symbol=symbol)
+                    except TypeError:
+                        try:
+                            cache_hook("yahoo")
+                        except TypeError:
+                            pass
                 fallback_feed_used = (
                     _fallback_cached
                     or _fallback_sanitized
@@ -6244,6 +6257,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 ts_obj.pop(feed_name, None)
 
     if fallback_used and fallback_feed_used:
+        if fallback_feed_used != "sip":
+            _purge_minute_feed_cache(["sip"])
         fallback_cache_key = fallback_feed_used
         feeds_to_cache: list[str] = []
         if configured_feed:

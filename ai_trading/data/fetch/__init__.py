@@ -6251,6 +6251,10 @@ def _repair_rth_minute_gaps(
         fallback_provider_hint = promoted_provider
     if provider_canonical == "yahoo" and not fallback_provider_hint:
         fallback_provider_hint = provider_name
+    primary_feed_gap = initial_missing_count > 0 and primary_provider_canonical.startswith("alpaca")
+    if replaced_with_backup and missing_after == 0:
+        primary_feed_gap = False
+
     metadata: dict[str, object] = {
         "expected": expected_count,
         "missing_after": missing_after,
@@ -6265,7 +6269,7 @@ def _repair_rth_minute_gaps(
         "tolerated": tolerated,
         "provider_canonical": provider_canonical,
         "primary_provider": primary_provider_canonical,
-        "primary_feed_gap": initial_missing_count > 0 and primary_provider_canonical.startswith("alpaca"),
+        "primary_feed_gap": primary_feed_gap,
         "using_fallback_provider": using_fallback_provider,
         "fallback_repaired": yahoo_repaired,
         "fallback_contiguous": using_fallback_provider and missing_after == 0,
