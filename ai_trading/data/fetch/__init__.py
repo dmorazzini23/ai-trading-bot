@@ -6561,6 +6561,8 @@ def _host_semaphore_for_url(url: str) -> Semaphore | None:
         return None
     with _HOST_LIMIT_LOCK:
         semaphore = _HOST_SEMAPHORES.get(host_key)
+        if not isinstance(semaphore, Semaphore):
+            semaphore = None
         current_limit = getattr(semaphore, "_ai_trading_limit", None) if semaphore is not None else None
         if semaphore is None or current_limit != limit:
             semaphore = Semaphore(limit)
@@ -10186,12 +10188,15 @@ def _fetch_bars(
                         "timeframe": _interval,
                         "failure_count": failure_count,
                         "threshold": threshold,
-                        "consecutive_failures": consecutive_failures,
-                        "required_failures": required_failures,
-                    }
-                ),
-            )
-            yahoo_allowed = False
+                    "consecutive_failures": consecutive_failures,
+                    "required_failures": required_failures,
+                }
+            ),
+        )
+        yahoo_allowed = False
+        if resolved_backup_provider == "yahoo":
+            yahoo_allowed = True
+            force_yahoo = True
         if y_int and yahoo_allowed and ("yahoo" in priority or force_yahoo):
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
@@ -10415,6 +10420,18 @@ def get_minute_df(
             feed=normalized_feed or _DEFAULT_FEED,
             enable_flag=env_enabled,
         )
+
+    backup_env_override = os.getenv("BACKUP_DATA_PROVIDER")
+    if backup_env_override is None:
+        backup_env_override = os.getenv("BACKUP_PROVIDER")
+    backup_env_value = (backup_env_override or "").strip().lower()
+    if backup_env_value:
+        _state["backup_env_override"] = backup_env_value
+        if backup_env_value in {"none", "disabled", "off"}:
+            fallback_allowed_flag = False
+        elif backup_env_value in {"yahoo", "finnhub"}:
+            fallback_allowed_flag = True
+            _state["backup_env_forced"] = backup_env_value
 
     if forced_provider_label:
         backup_provider_str = forced_provider_label

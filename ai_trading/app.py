@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime
 
 from ai_trading.logging import get_logger
 from ai_trading.telemetry import runtime_state
@@ -48,6 +49,8 @@ _ALPACA_BOOL_KEYS = {
     "shadow_mode",
 }
 
+_SERVICE_NAME = "ai-trading"
+
 
 def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
     """Return a fresh Alpaca payload seeded with required keys."""
@@ -62,6 +65,23 @@ def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
             elif key in normalised:
                 normalised[key] = value
     return normalised
+
+
+def _normalize_health_payload(raw: Mapping | None) -> dict[str, Any]:
+    """Return payload that always includes ok/service/timestamp/alpaca keys."""
+
+    payload = dict(raw or {})
+    payload.setdefault("service", _SERVICE_NAME)
+    timestamp_val = payload.get("timestamp")
+    if not timestamp_val:
+        try:
+            payload["timestamp"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        except Exception:
+            payload["timestamp"] = ""
+    payload.setdefault("ok", False)
+    payload["ok"] = bool(payload["ok"])
+    payload["alpaca"] = _normalise_alpaca_section(payload.get("alpaca"))
+    return payload
 
 
 def create_app():
@@ -99,44 +119,23 @@ def create_app():
     def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
         """Return a JSON ``Response`` with a resilient fallback."""
 
-        def _normalise_payload(raw: dict | None) -> dict:
-            """Return a shallow copy with defensive defaults."""
+        primary_payload = _normalize_health_payload(data)
+        fallback_payload = _normalize_health_payload(fallback) if fallback else None
 
-            base = dict(raw or {})
-            base.setdefault("ok", False)
-            base["ok"] = bool(base.get("ok", False))
-            base["alpaca"] = _normalise_alpaca_section(base.get("alpaca"))
-            return base
-
-        def _ensure_core_fields(payload: dict) -> dict:
-            """Ensure ``ok`` and ``alpaca`` keys exist with safe defaults."""
-
-            normalised = dict(payload or {})
-            normalised.setdefault("ok", False)
-            normalised["ok"] = bool(normalised.get("ok", False))
-            normalised["alpaca"] = _normalise_alpaca_section(normalised.get("alpaca"))
-            return normalised
-
-        def _merge_payloads(primary: dict, secondary: dict) -> dict:
-            """Merge fallback data into the canonical payload."""
-
-            merged = _ensure_core_fields(dict(secondary)) if secondary else _ensure_core_fields({})
-            primary = _ensure_core_fields(dict(primary))
-
-            merged_alpaca = _normalise_alpaca_section(merged.get("alpaca"))
-            primary_alpaca = _normalise_alpaca_section(primary.get("alpaca"))
-            merged_alpaca.update(primary_alpaca)
-            merged["alpaca"] = _normalise_alpaca_section(merged_alpaca)
-
-            for key, value in primary.items():
+        merged_payload = primary_payload
+        if fallback_payload is not None:
+            merged_payload = dict(fallback_payload)
+            merged_alpaca = dict(fallback_payload.get("alpaca", {}))
+            merged_alpaca.update(primary_payload.get("alpaca", {}))
+            merged_payload["alpaca"] = _normalise_alpaca_section(merged_alpaca)
+            for key, value in primary_payload.items():
                 if key == "alpaca":
                     continue
                 if key == "ok":
-                    merged["ok"] = bool(value)
+                    merged_payload["ok"] = bool(value)
                 else:
-                    merged[key] = value
-
-            return _ensure_core_fields(merged)
+                    merged_payload[key] = value
+            merged_payload = _normalize_health_payload(merged_payload)
 
         def _stamp_fallback_meta(
             payload: dict,
@@ -166,16 +165,8 @@ def create_app():
             payload["meta"] = meta
             return payload
 
-        canonical_payload = _ensure_core_fields(_normalise_payload(data))
-        fallback_payload = (
-            _ensure_core_fields(_normalise_payload(fallback))
-            if fallback is not None
-            else {}
-        )
-
-        response_payload = _merge_payloads(canonical_payload, fallback_payload)
         sanitized_payload = _stamp_fallback_meta(
-            _ensure_core_fields(dict(response_payload)), used=False, reasons=[]
+            dict(merged_payload), used=False, reasons=[]
         )
 
         func = globals().get("jsonify")
@@ -218,15 +209,16 @@ def create_app():
                 sanitized_payload, used=True, reasons=fallback_reasons
             )
 
-        final_payload = _ensure_core_fields(dict(sanitized_payload))
+        final_payload = _normalize_health_payload(dict(sanitized_payload))
 
         if fallback_used:
             final_payload["ok"] = False
 
         message_candidates: list[str] = []
+        base_fallback_payload = fallback_payload or {}
         existing_error = final_payload.get("error")
         if existing_error is None:
-            existing_error = fallback_payload.get("error") or canonical_payload.get("error")
+            existing_error = base_fallback_payload.get("error") or primary_payload.get("error")
         existing_error_str: str | None = None
         if isinstance(existing_error, str):
             existing_error_str = existing_error.strip() or None
@@ -253,7 +245,7 @@ def create_app():
                 else:
                     final_payload["error_details"] = {"messages": merged}
 
-        sanitized_payload = _ensure_core_fields(dict(final_payload))
+        sanitized_payload = _normalize_health_payload(dict(final_payload))
         sanitized_payload = _stamp_fallback_meta(
             sanitized_payload, used=fallback_used, reasons=fallback_reasons
         )
@@ -271,7 +263,7 @@ def create_app():
             ]
             alpaca_section = _normalise_alpaca_section(sanitized_payload.get("alpaca"))
             sanitized_payload = _stamp_fallback_meta(
-                _ensure_core_fields(
+                _normalize_health_payload(
                     {
                         "ok": False,
                         "alpaca": alpaca_section,
@@ -286,7 +278,7 @@ def create_app():
         response_factory = getattr(app, "response_class", None)
         if callable(response_factory):
             sanitized_payload = _stamp_fallback_meta(
-                _ensure_core_fields(dict(sanitized_payload)),
+                _normalize_health_payload(dict(sanitized_payload)),
                 used=fallback_used,
                 reasons=fallback_reasons,
             )
@@ -298,7 +290,7 @@ def create_app():
         # tuple convention. Callers running under a real Flask stack will already
         # receive a wrapped ``Response`` above, preserving status semantics.
         sanitized_payload = _stamp_fallback_meta(
-            _ensure_core_fields(dict(sanitized_payload)),
+            _normalize_health_payload(dict(sanitized_payload)),
             used=fallback_used,
             reasons=fallback_reasons,
         )
@@ -407,8 +399,6 @@ def create_app():
     @app.route('/healthz')
     def healthz():
         """Minimal liveness probe with provider diagnostics."""
-        from datetime import UTC, datetime
-
         ok = bool(app.config.get("_ENV_VALID"))
         try:
             provider_state = runtime_state.observe_data_provider_state()
@@ -512,7 +502,7 @@ def create_app():
 
         class _ResponseWrapper(Mapping):
             def __init__(self, data: dict, text: str, status_code: int) -> None:
-                self._payload = dict(data)
+                self._payload = _normalize_health_payload(data)
                 self._text = text
                 self.status_code = status_code
 
@@ -549,16 +539,20 @@ def create_app():
                 payload_dict = {"data": payload}
             else:
                 payload_dict = {"data": payload}
+            normalized_payload = _normalize_health_payload(payload_dict)
             try:
-                body = json.dumps(payload_dict, default=str)
+                body = json.dumps(normalized_payload, default=str)
             except Exception:
-                payload_dict = {
-                    "ok": bool(payload_dict.get("ok", False)),
-                    "alpaca": _normalise_alpaca_section(payload_dict.get("alpaca", {})),
-                    "error": str(payload_dict.get("error", "serialization_error")),
-                }
-                body = json.dumps(payload_dict, default=str)
-            return _ResponseWrapper(payload_dict, body, status_code)
+                fallback_payload = _normalize_health_payload(
+                    {
+                        "ok": False,
+                        "alpaca": _normalise_alpaca_section(normalized_payload.get("alpaca")),
+                        "error": str(normalized_payload.get("error", "serialization_error")),
+                    }
+                )
+                normalized_payload = fallback_payload
+                body = json.dumps(normalized_payload, default=str)
+            return _ResponseWrapper(normalized_payload, body, status_code)
 
         def _patched_test_client(*args: Any, **kwargs: Any):
             client = original_test_client(*args, **kwargs)

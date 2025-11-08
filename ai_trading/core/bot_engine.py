@@ -184,7 +184,6 @@ except (ImportError, ModuleNotFoundError, AttributeError):
         return None
 
 from ai_trading.config import (
-    get_execution_settings,
     PRICE_PROVIDER_ORDER,
     DATA_FEED_INTRADAY,
 )
@@ -571,18 +570,19 @@ def _pytest_running() -> bool:
     except COMMON_EXC:
         raw = None
 
-    env_truthy = False
+    env_provided = raw is not None
     if isinstance(raw, bool):
         env_truthy = raw
     elif raw is not None:
         try:
-            token = str(raw).strip()
+            env_truthy = _truthy_env(str(raw))
         except COMMON_EXC:
-            token = ""
-        env_truthy = token == "1"
+            env_truthy = False
+    else:
+        env_truthy = False
 
-    if env_truthy:
-        return True
+    if env_provided:
+        return bool(env_truthy)
 
     if "pytest" in sys.modules:
         return True
@@ -1219,6 +1219,7 @@ _PRICE_PROVIDER_ORDER_CACHE: tuple[str, ...] | None = None
 _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
 _INTRADAY_FEED_CACHE: str | None = None
+_SIP_LOCKED_SYMBOLS: set[str] = set()
 
 _cycle_feature_cache: dict[tuple[int, tuple[str, object]], pd.DataFrame] = {}
 _cycle_feature_cache_cycle: int | None = None
@@ -1402,17 +1403,27 @@ def _is_primary_price_source(source: str) -> bool:
     return normalized in _PRIMARY_PRICE_SOURCES
 
 
+def _load_execution_settings():
+    """Return execution settings with a lazy import to avoid import-time work."""
+
+    try:
+        from ai_trading.config import get_execution_settings as _load_exec_settings
+    except COMMON_EXC:
+        return None
+    try:
+        return _load_exec_settings()
+    except COMMON_EXC:
+        return None
+
+
 def _get_intraday_feed() -> str:
     """Return configured intraday feed preference."""
 
     global _INTRADAY_FEED_CACHE
     if _INTRADAY_FEED_CACHE is not None:
         return _INTRADAY_FEED_CACHE
-    try:
-        settings = get_execution_settings()
-        feed = settings.data_feed_intraday
-    except COMMON_EXC:
-        feed = DATA_FEED_INTRADAY
+    settings = _load_execution_settings()
+    feed = getattr(settings, "data_feed_intraday", DATA_FEED_INTRADAY) if settings is not None else DATA_FEED_INTRADAY
     normalized = str(feed or DATA_FEED_INTRADAY).strip().lower() or "iex"
     _INTRADAY_FEED_CACHE = normalized
     return normalized
@@ -1533,10 +1544,13 @@ def _get_price_provider_order() -> tuple[str, ...]:
     global _PRICE_PROVIDER_ORDER_CACHE
     if _PRICE_PROVIDER_ORDER_CACHE is not None:
         return _PRICE_PROVIDER_ORDER_CACHE
-    try:
-        settings = get_execution_settings()
-        order_seq = tuple(settings.price_provider_order)
-    except COMMON_EXC:
+    settings = _load_execution_settings()
+    if settings is not None:
+        try:
+            order_seq = tuple(settings.price_provider_order)
+        except COMMON_EXC:
+            order_seq = tuple(PRICE_PROVIDER_ORDER)
+    else:
         order_seq = tuple(PRICE_PROVIDER_ORDER)
     if not order_seq:
         order_seq = tuple(PRICE_PROVIDER_ORDER)
@@ -17689,6 +17703,13 @@ def _evaluate_data_gating(
                 fallback_ok = True
             else:
                 reason_label = reason or "fallback_quote_invalid"
+                if (
+                    strict
+                    and max_fallback_age > 0
+                    and age is None
+                    and reason_label in _TRANSIENT_FALLBACK_REASONS
+                ):
+                    reason_label = "fallback_quote_stale"
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = reason_label
                 annotations["fallback_quote_ok"] = False
@@ -27521,8 +27542,8 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     candidate_rows: list[tuple[str, Any | None, str | None]] = [
         ("override", override_token, override_sanitized),
         ("preferred", preferred_feed, None),
-        ("env", configured_env, env_feed),
         ("intraday", intraday_raw, configured_feed),
+        ("env", configured_env, env_feed),
     ]
 
     explicit_invalid_feed = False
@@ -27581,11 +27602,9 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 requested_feed = None
                 configured_raw = intraday_token
 
-    sip_env_flag = bool(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
-    sip_flagged = bool(
-        getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-        or sip_env_flag
-    )
+    sip_env_flag = _truthy_env(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
+    fetch_sip_flag = bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
+    sip_flagged = bool(fetch_sip_flag or sip_env_flag)
     try:
         runtime_sip_lock = bool(_sip_lockout_active())
     except COMMON_EXC:
@@ -27593,7 +27612,14 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     sip_lockout_active = sip_flagged or runtime_sip_lock
     # Under pytest, bypass SIP lockout to exercise primary path
     if pytest_running:
+        sip_flagged = False
         sip_lockout_active = False
+
+    if symbol and not sip_lockout_active and symbol in _SIP_LOCKED_SYMBOLS:
+        _SIP_LOCKED_SYMBOLS.discard(symbol)
+        _cache_cycle_fallback_feed_helper(None, symbol=symbol)
+        if _PRICE_SOURCE.get(symbol) == "alpaca_sip_locked":
+            _PRICE_SOURCE.pop(symbol, None)
 
     candidate_for_resolution = requested_feed
     skip_entitlement_resolution = explicit_invalid_feed or sip_lockout_active
@@ -27639,6 +27665,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
     if sip_lockout_active:
         if symbol:
             _cache_cycle_fallback_feed_helper("iex", symbol=symbol)
+            _SIP_LOCKED_SYMBOLS.add(symbol)
         if _PRICE_SOURCE.get(symbol) not in {"alpaca_invalid_feed", "alpaca_auth_failed"}:
             _PRICE_SOURCE[symbol] = "alpaca_sip_locked"
 
@@ -27650,6 +27677,11 @@ def _get_latest_price_simple(symbol: str, *_, **__):
         or sip_locked
         or alpaca_feed is None
     )
+    if explicit_invalid_feed or sip_lockout_active:
+        skip_alpaca = True
+    cached_source = _PRICE_SOURCE.get(symbol)
+    if cached_source in {"alpaca_invalid_feed", "alpaca_sip_locked"}:
+        skip_alpaca = True
 
     if invalid_alpaca_feed:
         logger_once.warning(

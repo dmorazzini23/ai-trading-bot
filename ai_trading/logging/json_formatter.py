@@ -9,6 +9,21 @@ from zoneinfo import ZoneInfo
 
 from ai_trading.exc import COMMON_EXC
 
+try:  # pragma: no cover - defensive import guard
+    import unittest.mock as _mock_mod
+except Exception:  # pragma: no cover - fallback when mock is unavailable
+    _MOCK_TYPES: tuple[type[Any], ...] = ()
+else:  # pragma: no cover - exercised via logging tests
+    _MOCK_TYPES = tuple(
+        getattr(_mock_mod, name)
+        for name in ("Mock", "MagicMock", "NonCallableMock", "AsyncMock", "PropertyMock")
+        if hasattr(_mock_mod, name)
+    )
+
+
+def _is_mock(obj: Any) -> bool:
+    return bool(_MOCK_TYPES) and isinstance(obj, _MOCK_TYPES)
+
 
 def _mask_secret(value: str) -> str:
     """Non-throwing redactor for secret-like values (config-independent)."""
@@ -56,8 +71,16 @@ class JSONFormatter(logging.Formatter):
         """Fallback serialization for unsupported types."""
         if isinstance(obj, datetime | date):
             return obj.isoformat()
-        if hasattr(obj, 'tolist'):
-            return obj.tolist()
+        if _is_mock(obj):
+            return repr(obj)
+        tolist_attr = getattr(obj, "tolist", None)
+        if callable(tolist_attr) and not _is_mock(tolist_attr):
+            try:
+                return tolist_attr()
+            except COMMON_EXC:
+                pass
+            except Exception:
+                pass
         return str(obj)
 
     def format(self, record: logging.LogRecord) -> str:  # pragma: no cover - exercised in tests

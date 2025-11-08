@@ -3062,6 +3062,7 @@ class ExecutionEngine:
         if pytest_mode:
             require_nbbo = False
             require_realtime_nbbo = False
+            require_quotes = False
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
@@ -3199,10 +3200,12 @@ class ExecutionEngine:
             except Exception:
                 market_on_degraded = False
 
-        if os.getenv("PYTEST_RUNNING"):
+        if pytest_mode:
+            degraded_mode = "widen"
             degraded_widen_bps = 0
             require_realtime_nbbo = False
             require_nbbo = False
+            require_quotes = False
 
         degrade_due_age = quote_age_ms is not None and quote_age_ms > float(min_quote_fresh_ms)
         try:

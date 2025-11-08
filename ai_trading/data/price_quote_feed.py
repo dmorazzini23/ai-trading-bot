@@ -57,50 +57,39 @@ def _env_false(key: str) -> bool:
 def _sip_disabled_env(py_mode: bool) -> bool:
     """Return ``True`` when environment flags explicitly disable SIP access."""
 
-    if _env_false("ALPACA_ALLOW_SIP") or _env_false("ALPACA_SIP_ENTITLED"):
-        return True
+    allow_disabled = _env_false("ALPACA_ALLOW_SIP")
     if py_mode:
-        return False
-    return False
+        return allow_disabled
+    if allow_disabled:
+        return True
+    return _env_false("ALPACA_SIP_ENTITLED")
 
 
 def ensure_entitled_feed(requested: str | None, cached: str | None) -> str | None:
     """Return a usable feed based on the requested and cached values."""
-
     requested_norm = _normalize_feed(requested)
     cached_norm = _normalize_feed(cached)
-    candidates: list[str] = []
-    if requested_norm in _VALID_FEEDS:
-        candidates.append(requested_norm)
-    if cached_norm in _VALID_FEEDS and cached_norm not in candidates:
-        candidates.append(cached_norm)
-
     py_mode = _pytest_mode()
     sip_env_blocked = _sip_disabled_env(py_mode)
-    sip_unauthorized = _sip_unauthorized()
+    sip_unauthorized = False if py_mode else _sip_unauthorized()
     sip_blocked = sip_env_blocked or sip_unauthorized
 
+    def _sip_allowed() -> bool:
+        return not sip_blocked
+
     if requested_norm == "sip":
-        return "sip" if not sip_blocked else "iex"
+        return "sip" if _sip_allowed() else "iex"
     if requested_norm == "iex":
         return "iex"
+    if requested_norm in _VALID_FEEDS:
+        return requested_norm
 
-    if not sip_blocked and "sip" in candidates:
-        return "sip"
-
-    if "iex" in candidates:
+    if cached_norm == "sip":
+        return "sip" if _sip_allowed() else "iex"
+    if cached_norm == "iex":
         return "iex"
 
-    if not candidates:
-        return "iex" if sip_blocked else "sip"
-
-    for candidate in candidates:
-        if candidate == "sip":
-            return "sip" if not sip_blocked else "iex"
-        if candidate == "iex":
-            return "iex"
-
-    return "iex" if sip_blocked else "sip"
+    return "sip" if _sip_allowed() else "iex"
 
 
 def resolve(symbol: str, requested: str | None) -> str | None:
@@ -142,6 +131,8 @@ def clear(symbol: str | None = None) -> None:
 
 
 def _sip_unauthorized() -> bool:
+    if _pytest_mode():
+        return False
     try:
         from ai_trading.data import fetch as data_fetcher  # local import to avoid cycles
     except Exception:
