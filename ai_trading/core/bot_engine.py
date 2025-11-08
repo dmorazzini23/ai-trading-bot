@@ -5527,6 +5527,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     early_fallback_feed: str | None = None
     early_fallback_provider: str | None = None
 
+    fallback_feeds_attempted: set[str] = set()
+
     def _attempt_stale_recovery(
         *,
         stale_details: list[str],
@@ -5534,6 +5536,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         start_dt: datetime,
         end_dt: datetime,
         verify_staleness: bool = True,
+        attempted_feeds: set[str] | None = None,
     ) -> tuple[pd.DataFrame, datetime, datetime, datetime, str] | None:
         seen_feeds: set[str] = set()
         attempts: list[tuple[str, str | None]] = []
@@ -5541,9 +5544,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         def _append_attempt(feed: str | None, provider: str | None) -> None:
             if not feed:
                 return
-            if feed in seen_feeds:
+            normalized_feed = _normalize_feed_name(feed)
+            if normalized_feed in seen_feeds:
                 return
-            seen_feeds.add(feed)
+            seen_feeds.add(normalized_feed)
             attempts.append((feed, provider))
 
         sip_allowed = False
@@ -5572,6 +5576,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             _append_attempt("yahoo", "yahoo")
 
         for feed_name, provider_name in attempts:
+            normalized_attempt = _normalize_feed_name(feed_name)
+            if attempted_feeds and normalized_attempt in attempted_feeds:
+                continue
+            if attempted_feeds is not None:
+                attempted_feeds.add(normalized_attempt)
             attempt_now = datetime.now(UTC)
             attempt_end = attempt_now if market_open_now else end_dt
             fetch_kwargs = _minute_fetch_kwargs(feed=feed_name)
@@ -5698,6 +5707,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 start_dt=start_dt,
                 end_dt=end_dt,
                 verify_staleness=False,
+                attempted_feeds=fallback_feeds_attempted,
             )
             if recovery_payload is not None:
                 (
@@ -5926,9 +5936,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         sip_bars = 0
 
-        if sip_available:
+        if sip_available and "sip" in fallback_feeds_attempted:
+            sip_df = None
+        elif sip_available:
             fallback_attempted = True
             sip_df = None
+            fallback_feeds_attempted.add("sip")
             try:
                 sip_df = get_minute_df(
                     symbol,
@@ -6273,6 +6286,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             current_feed=active_feed,
             start_dt=start_dt,
             end_dt=end_dt,
+            attempted_feeds=fallback_feeds_attempted,
         )
         if recovery_payload is None:
             detail_text = "; ".join(stale_details)
@@ -6308,13 +6322,18 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     low_coverage = bool(coverage["low_coverage"])
 
     if materially_short:
-        sip_recovery_df = _try_sip_recovery(
-            symbol=symbol,
-            expected_bars=expected_bars,
-            primary_actual_bars=primary_actual_bars,
-            start=start_dt,
-            end=end_dt,
-        )
+        if "sip" in fallback_feeds_attempted:
+            sip_recovery_df = None
+        else:
+            sip_recovery_df = _try_sip_recovery(
+                symbol=symbol,
+                expected_bars=expected_bars,
+                primary_actual_bars=primary_actual_bars,
+                start=start_dt,
+                end=end_dt,
+            )
+            if sip_recovery_df is not None:
+                fallback_feeds_attempted.add("sip")
         if sip_recovery_df is not None:
             provider_override, feed_override = _df_provider_info(sip_recovery_df)
             resolved_feed = feed_override or "sip"

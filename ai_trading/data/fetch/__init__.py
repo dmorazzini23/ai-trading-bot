@@ -6998,6 +6998,7 @@ def _fetch_bars(
     force_no_session_attempts = False
     prelogged_empty_metric = False
     no_session_feeds: tuple[str, ...] = ()
+    env_allows_http = False
     if not has_session:
         try:
             logger.info(
@@ -7026,7 +7027,6 @@ def _fetch_bars(
         prelogged_empty_metric = True
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
         override_env = os.getenv("ENABLE_HTTP_FALLBACK")
-        env_allows_http = False
         if override_env is not None:
             normalized_env = override_env.strip().lower()
             env_allows_http = bool(normalized_env) and normalized_env not in {"0", "false", "no", "off"}
@@ -7076,6 +7076,7 @@ def _fetch_bars(
         "no_session_forced": bool(force_no_session_attempts),
         "no_session_feeds": no_session_feeds,
         "window_has_session": bool(has_session),
+        "http_env_enabled": bool(env_allows_http),
     }
     globals()["_state"] = _state
     intraday_timeframe = _interval == "1Min"
@@ -7384,6 +7385,28 @@ def _fetch_bars(
                     ),
                 )
                 yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+                tags = _tags(provider="yahoo", feed="yahoo")
+                attempt_payload = {
+                    "provider": "yahoo",
+                    "from_provider": f"alpaca_{_feed}",
+                    "feed": "yahoo",
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                    "interval": yf_interval,
+                }
+                try:
+                    attempt_payload["start"] = _start.isoformat()
+                    attempt_payload["end"] = _end.isoformat()
+                except Exception:
+                    pass
+                _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
+                try:
+                    logger.info(
+                        "DATA_SOURCE_FALLBACK_ATTEMPT",
+                        extra=_norm_extra(attempt_payload),
+                    )
+                except Exception:
+                    pass
                 backup_frame = _backup_get_bars(
                     symbol,
                     _start,
@@ -7428,7 +7451,6 @@ def _fetch_bars(
                     if processed_frame is None:
                         processed_frame = []
                 has_rows = processed_frame is not None and not getattr(processed_frame, "empty", True)
-                tags = _tags(provider="yahoo", feed="yahoo")
                 if has_rows:
                     _record_fallback_success_metric(tags)
                     _record_success_metric(tags, prefer_fallback=True)
@@ -7577,13 +7599,15 @@ def _fetch_bars(
         else:
             window_has_session = False
             no_session_window = True
-            empty_frame = _empty_ohlcv_frame(pd)
-            return _finalize_frame(empty_frame)
+            _state["window_has_session"] = window_has_session
 
-    if no_session_window and not _http_fallback_permitted(
-        _interval,
-        window_has_session=False,
-        feed=_feed,
+    if no_session_window and not (
+        _http_fallback_permitted(
+            _interval,
+            window_has_session=False,
+            feed=_feed,
+        )
+        or _state.get("http_env_enabled")
     ):
         return _finalize_frame(None)
 
@@ -10052,7 +10076,7 @@ def _fetch_bars(
         no_session_window
         and force_no_session_attempts
         and no_session_feeds
-        and not http_fallback_enabled
+        and not (http_fallback_enabled or http_env_enabled)
     ):
         prev_allow_primary = _state.get("allow_no_session_primary", False)
         _state["allow_no_session_primary"] = True
@@ -10064,7 +10088,7 @@ def _fetch_bars(
                 _state["allow_no_session_primary"] = True
             else:
                 _state.pop("allow_no_session_primary", None)
-    if (not window_has_session) and fallback is None and not http_fallback_enabled:
+    if (not window_has_session) and fallback is None and not (http_fallback_enabled or http_env_enabled):
         return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
     df = None
@@ -10160,11 +10184,14 @@ def _fetch_bars(
         providers_tried = set(_state.get("providers") or [])
         can_use_sip = _sip_configured() and not _is_sip_unauthorized()
         fallback_fn = _state.get("attempt_fallback_fn")
+        call_attempts = _state.setdefault("fallback_feeds_attempted", set())
         if (
             callable(fallback_fn)
             and can_use_sip
             and "sip" not in providers_tried
+            and "sip" not in call_attempts
         ):
+            call_attempts.add("sip")
             sip_result = fallback_fn((_interval, "sip", _start, _end), skip_check=True)
             providers_tried = set(_state.get("providers") or [])
             if sip_result is not None and not getattr(sip_result, "empty", True):

@@ -38,7 +38,7 @@ def sip_disallowed() -> bool:
     has_sip = _coerce_flag(getattr(env, "ALPACA_HAS_SIP", None))
 
     if allow_flag is True:
-        if explicit_entitlement is False:
+        if has_sip is False:
             return True
         return False
 
