@@ -6238,6 +6238,8 @@ def _repair_rth_minute_gaps(
         tolerated = True
         missing_after = 0
         gap_ratio = 0.0
+        if used_backup:
+            replaced_with_backup = True
     provider_name = provider_attr or ("yahoo" if skip_backup_fill else "alpaca")
     if replaced_with_backup and fallback_provider_hint:
         provider_name = fallback_provider_hint
@@ -6253,6 +6255,8 @@ def _repair_rth_minute_gaps(
         fallback_provider_hint = provider_name
     primary_feed_gap = initial_missing_count > 0 and primary_provider_canonical.startswith("alpaca")
     if replaced_with_backup and missing_after == 0:
+        primary_feed_gap = False
+    if used_backup and missing_after == 0:
         primary_feed_gap = False
 
     metadata: dict[str, object] = {
