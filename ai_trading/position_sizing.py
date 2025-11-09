@@ -28,6 +28,7 @@ class _Cache:
     equity_source: str | None = None
     equity_recovered_logged: bool = False
     capital_cap: float | None = None
+    env_override: float | None = None
 
 
 _CACHE = _Cache()
@@ -351,6 +352,12 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     Set ``force_refresh`` to ``True`` to bypass cached values.
     """
     env_override = _parse_env_max_position_size(strict=True)
+    cached_env_override = _CACHE.env_override
+    if env_override is None and cached_env_override is not None:
+        _CACHE.value = None
+        _CACHE.ts = None
+        _CACHE.capital_cap = None
+        _CACHE.env_override = None
     mode = str(getattr(tcfg, 'max_position_mode', getattr(cfg, 'max_position_mode', 'STATIC'))).upper()
     ttl = float(getattr(tcfg, 'dynamic_size_refresh_secs', getattr(cfg, 'dynamic_size_refresh_secs', 3600.0)))
     cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)
@@ -365,6 +372,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             now = _now_utc()
             _CACHE.value, _CACHE.ts = (env_override, now)
             _CACHE.capital_cap = None
+            _CACHE.env_override = env_override
             return (
                 env_override,
                 {
@@ -374,7 +382,8 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                     'refreshed_at': now.isoformat(),
                 },
             )
-        if not force_refresh and _CACHE.value is not None:
+        env_matches = (_CACHE.env_override == env_override)
+        if not force_refresh and _CACHE.value is not None and env_matches:
             return (
                 _CACHE.value,
                 {
@@ -416,6 +425,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             _update_equity_cache(eq, source=_CACHE.equity_source, error=_CACHE.equity_error)
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
         _CACHE.capital_cap = None
+        _CACHE.env_override = env_override
         return (
             cur,
             {
@@ -435,7 +445,14 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         _CACHE.capital_cap = None
     cached_cap = _CACHE.capital_cap
     cap_matches = cached_cap is not None and isclose(cached_cap, cap, rel_tol=1e-9, abs_tol=1e-9)
-    if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None) and cap_matches:
+    env_matches = (_CACHE.env_override == env_override)
+    if (
+        not force_refresh
+        and not _should_refresh(ttl)
+        and (_CACHE.value is not None)
+        and cap_matches
+        and env_matches
+    ):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
     # Use public alias so callers/tests can patch equity retrieval.
     eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
@@ -546,6 +563,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         val = _clamp(fb, vmin, vmax)
         _CACHE.value, _CACHE.ts = (val, _now_utc())
         _CACHE.capital_cap = cap
+        _CACHE.env_override = env_override
         return (
             val,
             {
@@ -594,6 +612,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         source = 'env_override'
     _CACHE.value, _CACHE.ts = (val, _now_utc())
     _CACHE.capital_cap = cap
+    _CACHE.env_override = env_override
     return (
         val,
         {

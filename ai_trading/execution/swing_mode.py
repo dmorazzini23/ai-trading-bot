@@ -131,20 +131,18 @@ class SwingTradingMode:
         now_et = now_utc.astimezone(MARKET_TZ)
 
         allow_after_close = os.getenv("AI_TRADING_SWING_ALLOW_AFTER_CLOSE", "").strip()
-        if allow_after_close == "1" and entry_et.date() == now_et.date():
-            return True, "after_market_close"
-
-        decision = can_exit_today({"opened_at": entry_dt}, now_utc)
-        if decision:
-            if entry_et.date() == now_et.date():
+        same_day_entry = entry_et.date() == now_et.date()
+        if same_day_entry:
+            if allow_after_close == "1" and now_et.time() >= MARKET_CLOSE:
                 return True, "after_market_close"
-            if now_et.date() > entry_et.date():
-                return True, "different_day"
-            return True, "different_day"
+            return False, "same_day_trade_blocked"
 
         if entry_et.date() > now_et.date():
             return False, "entry_in_future"
 
+        decision = can_exit_today({"opened_at": entry_dt}, now_utc)
+        if decision:
+            return True, "different_day"
         return False, "same_day_trade_blocked"
     
     def clear_entry(self, symbol: str):

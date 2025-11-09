@@ -189,8 +189,10 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
             actual_limit = getattr(semaphore, "_ai_trading_host_limit", actual_limit)
             semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
         else:
-            _invalidate_pooling_snapshot()
-            return None
+            semaphore = None
+            semaphore_loop = None
+            actual_limit = None
+            actual_version = None
 
     if (
         expected_version is not None
@@ -785,7 +787,9 @@ async def run_with_concurrency(
                     self._acquired = False
                     try:
                         self._semaphore.release()
-                    finally:
+                    except ValueError:
+                        return
+                    else:
                         _release_host_permit()
 
         return _HostPermit(host_semaphore)

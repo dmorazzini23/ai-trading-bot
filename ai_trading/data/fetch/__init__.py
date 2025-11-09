@@ -843,10 +843,13 @@ def _sip_allowed() -> bool:
             explicit = get_env(key, None, cast=bool)
         except Exception:
             explicit = None
-        if explicit is not None:
-            env_choice = bool(explicit)
-            break
         raw_value = os.getenv(key)
+        if explicit is not None:
+            if raw_value is None and not explicit and _pytest_active():
+                explicit = None
+            else:
+                env_choice = bool(explicit)
+                break
         if raw_value is not None:
             normalized = raw_value.strip().lower()
             if normalized:
@@ -4646,8 +4649,6 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     sip_env_locked = sip_env_flag in {"1", "true", "yes"}
     sip_state_locked = bool(globals().get("_SIP_UNAUTHORIZED")) or _is_sip_unauthorized()
     if pytest_active:
-        if not allow_sip:
-            return False
         if sip_env_locked or sip_state_locked:
             return False
         if _SIP_PRECHECK_DONE:
@@ -6897,14 +6898,18 @@ def retry_empty_fetch_once(
         Mapping used for structured logging of the retry.
     """
 
-    return {
+    payload = {
         "retry_delay": delay,
         "delay": delay,
-        "previous_correlation_id": previous_correlation_id,
         "attempt": attempt,
         "remaining_retries": max_retries - attempt,
         "total_elapsed": total_elapsed,
     }
+
+    if previous_correlation_id:
+        payload["previous_correlation_id"] = previous_correlation_id
+
+    return payload
 
 
 _ALLOWED_FEEDS = {"iex", "sip", "yahoo", None}
@@ -8868,20 +8873,55 @@ def _fetch_bars(
                 _state["empty_metric_emitted"] = True
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
             _record_alpaca_failure_event(symbol, timeframe=_interval)
-            # --- AI-AGENT: enforce IEX -> SIP on empty ---
-            pytest_cycle = _detect_pytest_env()
-            sip_allowed = (
-                _sip_fallback_allowed(session, headers, _interval)
-                if not pytest_cycle
-                else True
+            can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
+            try:
+                market_open_now = is_market_open()
+            except Exception:
+                market_open_now = False
+            outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
+            http_fallback_allowed = _http_fallback_permitted(
+                _interval,
+                window_has_session=bool(_state.get("window_has_session", True)),
+                feed=_feed,
             )
+            try:
+                alpaca_backup_allowed = bool(alpaca_empty_to_backup())
+            except Exception:
+                alpaca_backup_allowed = False
+            fallback_slot_limit: int | None = None
+            try:
+                fallback_slot_limit = int(max_data_fallbacks())
+            except Exception:
+                fallback_slot_limit = None
+            if (
+                (not market_open_now or outside_market_hours)
+                and not http_fallback_allowed
+                and not alpaca_backup_allowed
+            ):
+                _state["stop"] = True
+                raise EmptyBarsError(
+                    "alpaca_empty: symbol="
+                    f"{symbol}, timeframe={_interval}, feed={_feed}, reason=market_closed"
+                )
+            # --- AI-AGENT: enforce IEX -> SIP on empty ---
+            attempt = _state.get("retries", 0) + 1
+            remaining_retries = max(0, max_retries - attempt)
+            retry_cap_exhausted = attempt >= max_retries
+            pytest_cycle = _detect_pytest_env()
+            sip_allowed = _sip_fallback_allowed(session, headers, _interval)
+            sip_locked_backoff = _is_sip_unauthorized()
+            sip_available = _sip_configured()
+            if not sip_available and pytest_cycle and not sip_locked_backoff:
+                sip_available = True
             if (
                 _feed == "iex"
                 and _state.get("window_has_session", True)
-                and _sip_configured()
+                and sip_available
                 and sip_allowed
+                and not sip_locked_backoff
                 and not _state.get("forced_sip_attempted")
                 and not skip_sip_after_threshold
+                and attempt <= max_retries
             ):
                 if pytest_cycle:
                     _state["pytest_sip_attempted"] = True
@@ -8911,7 +8951,8 @@ def _fetch_bars(
                 if fb_df is not None and not getattr(fb_df, "empty", True):
                     return fb_df
                 # Allow downstream HTTP fallbacks to execute when SIP returns empty.
-            if _feed in {"iex", "sip"}:
+            can_attempt_alt_feed = fallback_slot_limit is None or fallback_slot_limit > 0
+            if (not retry_cap_exhausted) and _feed in {"iex", "sip"} and can_attempt_alt_feed:
                 alt_feed = _alternate_alpaca_feed(_feed)
                 if alt_feed == "sip" and _is_sip_unauthorized() and not pytest_cycle:
                     alt_feed = None
@@ -8928,28 +8969,19 @@ def _fetch_bars(
                     )
                     if result is not None and not getattr(result, "empty", True):
                         return result
-            attempt = _state["retries"] + 1
-            remaining_retries = max(0, max_retries - attempt)
-            can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
             planned_retry_meta: dict[str, Any] = {}
             planned_backoff: float | None = None
-            outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
             _state["outside_market_hours"] = bool(outside_market_hours)
             if outside_market_hours:
                 remaining_retries = 0
                 _state["stop"] = True
-            http_fallback_allowed = _http_fallback_permitted(
-                _interval,
-                window_has_session=bool(_state.get("window_has_session", True)),
-                feed=_feed,
-            )
             if attempt <= max_retries and can_retry_timeframe and _state["retries"] < max_retries:
                 if not outside_market_hours:
                     planned_backoff = min(
                         _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
                         _FETCH_BARS_BACKOFF_CAP,
                     )
-                    corr_for_retry = _state.get("corr_id") or prev_corr
+                    corr_for_retry = prev_corr
                     planned_retry_meta = _coerce_json_primitives(
                         retry_empty_fetch_once(
                             delay=planned_backoff,
@@ -8971,8 +9003,10 @@ def _fetch_bars(
             fallback_enabled = bool(fallback) or http_fallback_requested
             if not fallback_enabled:
                 fallback_enabled = _should_use_backup_on_empty()
-            backup_policy_enabled = http_fallback_requested or bool(alpaca_empty_to_backup())
+            backup_policy_enabled = http_fallback_requested or alpaca_backup_allowed
             if outside_market_hours and not backup_policy_enabled and not bool(fallback):
+                fallback_enabled = False
+            if retry_cap_exhausted:
                 fallback_enabled = False
             _state["fallback_enabled"] = bool(fallback_enabled)
             retries_enabled = remaining_retries > 0 and not outside_market_hours
@@ -9120,7 +9154,7 @@ def _fetch_bars(
                 }
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
             persistent_empty = empty_attempts >= 2
-            if persistent_empty:
+            if persistent_empty and not retry_cap_exhausted:
                 fb_candidate = fallback
                 if fb_candidate is None:
                     fb_candidate = _select_fallback_target(_interval, _feed, _start, _end)
@@ -10599,6 +10633,8 @@ def get_minute_df(
 
     def _register_backup_skip() -> None:
         nonlocal backup_skip_engaged
+        if backup_skip_engaged:
+            return
         backup_skip_engaged = True
         try:
             skip_until = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
@@ -10835,6 +10871,9 @@ def get_minute_df(
         primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
     primary_failure_logged = False
     allow_empty_override = False
+    threshold_log_emitted = False
+    last_empty_log_level: int | None = None
+    fetch_retry_cap = max(1, int(globals().get("_FETCH_BARS_MAX_RETRIES", 1)))
 
     def _disable_signal_active(provider_label: str) -> bool:
         try:
@@ -11025,6 +11064,22 @@ def get_minute_df(
                     market_open = is_market_open()
                 except Exception:  # pragma: no cover - defensive
                     market_open = True
+                try:
+                    outside_hours_window = _outside_market_hours(start_dt, end_dt)
+                except Exception:
+                    outside_hours_window = False
+                http_fallback_enabled = bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
+                try:
+                    backup_policy_enabled = bool(alpaca_empty_to_backup())
+                except Exception:
+                    backup_policy_enabled = False
+                if (
+                    (not market_open or outside_hours_window)
+                    and not http_fallback_enabled
+                    and not backup_policy_enabled
+                ):
+                    last_empty_error = e
+                    raise
                 if not market_open and not _state.get("no_session_forced", False):
                     _log_with_capture(
                         logging.INFO,
@@ -11036,19 +11091,24 @@ def get_minute_df(
                     _SKIPPED_SYMBOLS.discard(tf_key)
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 cnt = max(_EMPTY_BAR_COUNTS.get(tf_key, attempt), attempt)
-                if market_open:
+                cap_exhausted = cnt >= fetch_retry_cap
+                if market_open and cnt <= fetch_retry_cap:
                     if attempt == 1:
                         _log_with_capture(
                             logging.INFO,
                             "EMPTY_DATA",
                             extra={"symbol": symbol, "timeframe": "1Min"},
                         )
+                        last_empty_log_level = logging.INFO
                     elif attempt >= _EMPTY_RETRY_THRESHOLD:
-                        _log_with_capture(
-                            logging.WARNING,
-                            "ALPACA_EMPTY_RESPONSE_THRESHOLD",
-                            extra={"symbol": symbol, "timeframe": "1Min", "attempt": attempt},
-                        )
+                        if not threshold_log_emitted:
+                            _log_with_capture(
+                                logging.WARNING,
+                                "ALPACA_EMPTY_RESPONSE_THRESHOLD",
+                                extra={"symbol": symbol, "timeframe": "1Min", "attempt": attempt},
+                            )
+                            threshold_log_emitted = True
+                            last_empty_log_level = logging.WARNING
                 if cnt > _EMPTY_BAR_MAX_RETRIES:
                     _log_with_capture(
                         logging.ERROR,
@@ -11064,7 +11124,7 @@ def get_minute_df(
                     )
                     _SKIPPED_SYMBOLS.add(tf_key)
                     raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}") from e
-                if cnt >= _EMPTY_BAR_THRESHOLD:
+                if (not cap_exhausted) and cnt >= _EMPTY_BAR_THRESHOLD:
                     backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
                     ctx = {
                         "symbol": symbol,
@@ -11082,6 +11142,64 @@ def get_minute_df(
                     attempted_feeds = _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set())
                     current_feed = normalized_feed or _DEFAULT_FEED
                     sip_locked_backoff = _is_sip_unauthorized()
+                    sip_ready = _sip_configured()
+                    allow_sip_override = globals().get("_ALLOW_SIP")
+                    if (
+                        not sip_ready
+                        and _pytest_active()
+                        and not sip_locked_backoff
+                        and allow_sip_override is None
+                    ):
+                        sip_ready = True
+                    force_sip_allowed = (
+                        current_feed != "sip"
+                        and sip_ready
+                        and not sip_locked_backoff
+                    )
+                    if force_sip_allowed:
+                        attempted_feeds.add("sip")
+                        if not forced_threshold_sip_switch_logged:
+                            _record_feed_switch(symbol, "1Min", current_feed, "sip")
+                            forced_threshold_sip_switch_logged = True
+                            switch_recorded = True
+                        df_sip_forced = None
+                        try:
+                            df_sip_forced = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed="sip")
+                        except (EmptyBarsError, ValueError, RuntimeError) as sip_err:
+                            logger.debug(
+                                "ALPACA_ALT_FEED_FAILED",
+                                extra={
+                                    "symbol": symbol,
+                                    "from_feed": normalized_feed or _DEFAULT_FEED,
+                                    "to_feed": "sip",
+                                    "err": str(sip_err),
+                                },
+                            )
+                        else:
+                            if df_sip_forced is not None and not getattr(df_sip_forced, "empty", True):
+                                logger.info(
+                                    "ALPACA_ALT_FEED_SUCCESS",
+                                    extra={
+                                        "symbol": symbol,
+                                        "from_feed": normalized_feed or _DEFAULT_FEED,
+                                        "to_feed": "sip",
+                                        "timeframe": "1Min",
+                                    },
+                                )
+                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                                df_sip_forced = _post_process(df_sip_forced, symbol=symbol, timeframe="1Min")
+                                df_sip_forced = _verify_minute_continuity(df_sip_forced, symbol, backfill=backfill)
+                                if _frame_has_rows(df_sip_forced):
+                                    primary_frame_acquired = True
+                                    mark_success(symbol, "1Min")
+                                    _cache_fallback(symbol, "sip", "1Min")
+                                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                                    _SKIPPED_SYMBOLS.discard(tf_key)
+                                    last_empty_error = None
+                                    return df_sip_forced
+                        if df_sip_forced is not None:
+                            df = df_sip_forced
+                            last_empty_error = None
                     if max_fb >= 1 and len(attempted_feeds) < max_fb:
                         priority_order = list(provider_priority())
                         if not priority_order:
@@ -11198,65 +11316,6 @@ def get_minute_df(
                                                     return df_backup
                                     else:
                                         return df_alt
-                    force_sip_allowed = (
-                        current_feed != "sip"
-                        and _sip_configured()
-                        and not sip_locked_backoff
-                        and not _is_sip_unauthorized()
-                        and "sip" not in attempted_feeds
-                    )
-                    if force_sip_allowed:
-                        attempted_feeds.add("sip")
-                        if not forced_threshold_sip_switch_logged:
-                            _record_feed_switch(symbol, "1Min", current_feed, "sip")
-                            forced_threshold_sip_switch_logged = True
-                            switch_recorded = True
-                        try:
-                            payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
-                        except Exception:
-                            payload = {"feed": "sip", "timeframe": "1Min"}
-                        logger.info(
-                            "DATA_SOURCE_FALLBACK_ATTEMPT",
-                            extra={"provider": "alpaca", "fallback": payload},
-                        )
-                        df_sip_forced = None
-                        try:
-                            df_sip_forced = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed="sip")
-                        except (EmptyBarsError, ValueError, RuntimeError) as sip_err:
-                            logger.debug(
-                                "ALPACA_ALT_FEED_FAILED",
-                                extra={
-                                    "symbol": symbol,
-                                    "from_feed": normalized_feed or _DEFAULT_FEED,
-                                    "to_feed": "sip",
-                                    "err": str(sip_err),
-                                },
-                            )
-                        else:
-                            if df_sip_forced is not None and not getattr(df_sip_forced, "empty", True):
-                                logger.info(
-                                    "ALPACA_ALT_FEED_SUCCESS",
-                                    extra={
-                                        "symbol": symbol,
-                                        "from_feed": normalized_feed or _DEFAULT_FEED,
-                                        "to_feed": "sip",
-                                        "timeframe": "1Min",
-                                    },
-                                )
-                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                                df_sip_forced = _post_process(df_sip_forced, symbol=symbol, timeframe="1Min")
-                                df_sip_forced = _verify_minute_continuity(df_sip_forced, symbol, backfill=backfill)
-                                if _frame_has_rows(df_sip_forced):
-                                    primary_frame_acquired = True
-                                    mark_success(symbol, "1Min")
-                                    _cache_fallback(symbol, "sip", "1Min")
-                                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
-                                    _SKIPPED_SYMBOLS.discard(tf_key)
-                                    last_empty_error = None
-                                    return df_sip_forced
-                        if df_sip_forced is not None:
-                            df = df_sip_forced
-                            last_empty_error = None
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(
@@ -11520,7 +11579,11 @@ def get_minute_df(
     attempt_count_snapshot = max(
         attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot)
     )
-    if not backoff_applied and attempt_count_snapshot >= _EMPTY_BAR_THRESHOLD:
+    if (
+        not backoff_applied
+        and attempt_count_snapshot >= _EMPTY_BAR_THRESHOLD
+        and attempt_count_snapshot < fetch_retry_cap
+    ):
         backoff_delay = min(2 ** (attempt_count_snapshot - _EMPTY_BAR_THRESHOLD), 60)
         ctx = {
             "symbol": symbol,
@@ -11533,6 +11596,7 @@ def get_minute_df(
         _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
         time.sleep(backoff_delay)
         backoff_applied = True
+    allow_window_empty = allow_empty_override and not window_has_session
     if allow_empty_override:
         backup_attempted = False
     allow_empty_return = allow_empty_override or (not window_has_session)
@@ -11580,7 +11644,7 @@ def get_minute_df(
     original_df = df
     # Debug hooks intentionally removed after validation
     if original_df is None:
-        if allow_empty_return and not backup_attempted:
+        if allow_empty_return and (allow_window_empty or not backup_attempted):
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
@@ -11590,7 +11654,7 @@ def get_minute_df(
             raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     if getattr(original_df, "empty", False):
-        if allow_empty_return and not backup_attempted:
+        if allow_empty_return and (allow_window_empty or not backup_attempted):
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             empty_frame = _empty_ohlcv_frame(pd)

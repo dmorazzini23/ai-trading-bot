@@ -456,7 +456,7 @@ def create_app():
         if broker_down:
             degraded = True
 
-        overall_ok = bool(ok) and not provider_disabled and not broker_down
+        overall_ok = not provider_disabled and not broker_down
 
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         payload = {

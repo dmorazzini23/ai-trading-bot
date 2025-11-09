@@ -45,14 +45,14 @@ def safe_subprocess_run(
 
     timeout_param: float | None
     if timeout is None:
-        timeout_param = SUBPROCESS_TIMEOUT_DEFAULT
+        timeout_param = None
     else:
         try:
             normalized_timeout = float(timeout)
         except (TypeError, ValueError):
-            normalized_timeout = SUBPROCESS_TIMEOUT_DEFAULT
-        if not math.isfinite(normalized_timeout):
-            timeout_param = SUBPROCESS_TIMEOUT_DEFAULT
+            normalized_timeout = None
+        if normalized_timeout is None or not math.isfinite(normalized_timeout):
+            timeout_param = None
         elif normalized_timeout <= 0:
             timeout_param = None
         else:
@@ -80,7 +80,7 @@ def safe_subprocess_run(
         exc.stdout = stdout_text
         exc.stderr = stderr_text
         exc.result = result
-        exc.timeout = timeout_param
+        exc.timeout = float(timeout_param) if timeout_param is not None else None
         if timeout_param is not None:
             log.warning(
                 "SAFE_SUBPROCESS_TIMEOUT",

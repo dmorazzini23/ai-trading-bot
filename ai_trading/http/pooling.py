@@ -270,7 +270,7 @@ def _clear_all_loop_semaphores() -> None:
             _HOST_SEMAPHORES.pop(loop, None)
 
 
-def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
+def reset_host_semaphores(*, clear_limit_cache: bool = True, bump_version: bool = True) -> None:
     """Clear cached host semaphores and, optionally, the limit cache.
 
     Resetting the semaphore cache should also advance the cached limit
@@ -293,7 +293,8 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
     # Bump the global version so that future semaphore lookups will treat the
     # cleared cache as a new generation. When we retain the limit cache we
     # rewrite it with the updated version to keep the metadata consistent.
-    _LIMIT_VERSION += 1
+    if bump_version:
+        _LIMIT_VERSION += 1
 
     _invalidate_fallback_pooling_state()
 
@@ -537,7 +538,7 @@ def reload_host_limit_if_env_changed(_session: object | None = None) -> HostLimi
         env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
         env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
         if env_changed:
-            reset_host_semaphores(clear_limit_cache=True)
+            reset_host_semaphores(clear_limit_cache=True, bump_version=False)
         cache = _ensure_limit_cache()
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
         _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
@@ -609,6 +610,7 @@ def _get_or_create_loop_semaphore(
 def get_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
     """Return the semaphore limiting concurrent host requests for the current loop."""
 
+    _purge_closed_loops()
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -809,3 +811,11 @@ __all__ = [
     "testing_reset_host_limits",
     "testing_reset_host_semaphores",
 ]
+def _purge_closed_loops() -> None:
+    for loop in list(_HOST_SEMAPHORES.keys()):
+        try:
+            closed = loop.is_closed()
+        except Exception:  # pragma: no cover - defensive
+            closed = False
+        if closed:
+            _HOST_SEMAPHORES.pop(loop, None)

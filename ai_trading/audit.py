@@ -285,6 +285,22 @@ def log_trade(
             *,
             header_fields: list[str] | None = None,
         ) -> bool:
+            repair_attempted = False
+
+            def _repair_permissions() -> bool:
+                nonlocal repair_attempted
+                if repair_attempted:
+                    return False
+                repair_attempted = True
+                try:
+                    return bool(fix_file_permissions(path, header_fields))
+                except Exception as fix_exc:  # pragma: no cover - defensive logging
+                    logger.exception(
+                        "TRADE_LOG_PERMISSION_FIX_FAILED",
+                        extra={"path": str(path), "phase": phase, "error": str(fix_exc)},
+                    )
+                    return False
+
             try:
                 action()
                 return True
@@ -292,22 +308,8 @@ def log_trade(
                 payload = {"path": str(path), "phase": phase, "error": str(exc)}
                 logger.warning("TRADE_LOG_PERMISSION_DENIED", extra=payload)
                 try:
-                    repaired = bool(fix_file_permissions(path, header_fields))
-                except Exception as fix_exc:  # pragma: no cover - defensive logging
-                    logger.exception(
-                        "TRADE_LOG_PERMISSION_FIX_FAILED",
-                        extra={"path": str(path), "phase": phase, "error": str(fix_exc)},
-                    )
-                    return False
-                if not repaired:
-                    logger.error(
-                        "TRADE_LOG_PERMISSION_UNRESOLVED",
-                        extra=payload,
-                    )
-                    return False
-                try:
+                    _repair_permissions()
                     action()
-                    return True
                 except PermissionError as retry_exc:
                     logger.error(
                         "TRADE_LOG_PERMISSION_RETRY_FAILED",
@@ -318,6 +320,7 @@ def log_trade(
                         },
                     )
                     return False
+                return True
 
         if not _attempt_with_fix(
             "header",
