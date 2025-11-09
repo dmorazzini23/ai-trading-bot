@@ -682,12 +682,20 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     disable_has = _env_explicit_false("ALPACA_HAS_SIP")
     env_false_active = allow_env_false and (disable_allow or disable_entitled or disable_has)
 
+    requested_prefers_sip = (
+        requested_norm == "sip"
+        and "sip" in entitled_lower
+        and not env_false_active
+    )
+
     effective_entitled = set(entitled_lower)
     if env_false_active:
         effective_entitled.discard("sip")
 
     resolved: str
-    if not env_false_active and "sip" in effective_entitled:
+    if requested_prefers_sip:
+        resolved = "sip"
+    elif not env_false_active and "sip" in effective_entitled:
         resolved = "sip"
     elif "iex" in effective_entitled:
         resolved = "iex"

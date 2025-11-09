@@ -8949,16 +8949,16 @@ def _fetch_bars(
                         _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
                         _FETCH_BARS_BACKOFF_CAP,
                     )
-                    if _state["retries"] >= 1:
-                        planned_retry_meta = _coerce_json_primitives(
-                            retry_empty_fetch_once(
-                                delay=planned_backoff,
-                                attempt=attempt,
-                                max_retries=max_retries,
-                                previous_correlation_id=prev_corr,
-                                total_elapsed=monotonic_time() - start_time,
-                            )
+                    corr_for_retry = _state.get("corr_id") or prev_corr
+                    planned_retry_meta = _coerce_json_primitives(
+                        retry_empty_fetch_once(
+                            delay=planned_backoff,
+                            attempt=attempt,
+                            max_retries=max_retries,
+                            previous_correlation_id=corr_for_retry,
+                            total_elapsed=monotonic_time() - start_time,
                         )
+                    )
             should_backoff_first_empty = True
             if http_fallback_allowed and not outside_market_hours:
                 try:
@@ -9858,7 +9858,7 @@ def _fetch_bars(
                                 delay=planned_backoff,
                                 attempt=attempt,
                                 max_retries=max_retries,
-                                previous_correlation_id=prev_corr,
+                                previous_correlation_id=_state.get("corr_id") or prev_corr,
                                 total_elapsed=monotonic_time() - start_time,
                             )
                         )
@@ -10913,6 +10913,7 @@ def get_minute_df(
     override_feed: str | None = None
     proactive_switch = False
     switch_recorded = False
+    forced_threshold_sip_switch_logged = False
 
     finnhub_api_key = os.getenv("FINNHUB_API_KEY")
     if finnhub_api_key and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", True):
@@ -11197,6 +11198,65 @@ def get_minute_df(
                                                     return df_backup
                                     else:
                                         return df_alt
+                    force_sip_allowed = (
+                        current_feed != "sip"
+                        and _sip_configured()
+                        and not sip_locked_backoff
+                        and not _is_sip_unauthorized()
+                        and "sip" not in attempted_feeds
+                    )
+                    if force_sip_allowed:
+                        attempted_feeds.add("sip")
+                        if not forced_threshold_sip_switch_logged:
+                            _record_feed_switch(symbol, "1Min", current_feed, "sip")
+                            forced_threshold_sip_switch_logged = True
+                            switch_recorded = True
+                        try:
+                            payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
+                        except Exception:
+                            payload = {"feed": "sip", "timeframe": "1Min"}
+                        logger.info(
+                            "DATA_SOURCE_FALLBACK_ATTEMPT",
+                            extra={"provider": "alpaca", "fallback": payload},
+                        )
+                        df_sip_forced = None
+                        try:
+                            df_sip_forced = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed="sip")
+                        except (EmptyBarsError, ValueError, RuntimeError) as sip_err:
+                            logger.debug(
+                                "ALPACA_ALT_FEED_FAILED",
+                                extra={
+                                    "symbol": symbol,
+                                    "from_feed": normalized_feed or _DEFAULT_FEED,
+                                    "to_feed": "sip",
+                                    "err": str(sip_err),
+                                },
+                            )
+                        else:
+                            if df_sip_forced is not None and not getattr(df_sip_forced, "empty", True):
+                                logger.info(
+                                    "ALPACA_ALT_FEED_SUCCESS",
+                                    extra={
+                                        "symbol": symbol,
+                                        "from_feed": normalized_feed or _DEFAULT_FEED,
+                                        "to_feed": "sip",
+                                        "timeframe": "1Min",
+                                    },
+                                )
+                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                                df_sip_forced = _post_process(df_sip_forced, symbol=symbol, timeframe="1Min")
+                                df_sip_forced = _verify_minute_continuity(df_sip_forced, symbol, backfill=backfill)
+                                if _frame_has_rows(df_sip_forced):
+                                    primary_frame_acquired = True
+                                    mark_success(symbol, "1Min")
+                                    _cache_fallback(symbol, "sip", "1Min")
+                                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                                    _SKIPPED_SYMBOLS.discard(tf_key)
+                                    last_empty_error = None
+                                    return df_sip_forced
+                        if df_sip_forced is not None:
+                            df = df_sip_forced
+                            last_empty_error = None
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(

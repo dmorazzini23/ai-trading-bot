@@ -53,7 +53,9 @@ os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.1")
 os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("ALPACA_API_KEY", "test-key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test-secret")
-os.environ.setdefault("ALPACA_ALLOW_SIP", "1")
+os.environ["ALPACA_ALLOW_SIP"] = "1"
+os.environ["ALPACA_SIP_ENTITLED"] = "1"
+os.environ["ALPACA_HAS_SIP"] = "1"
 
 
 def _missing(mod: str) -> bool:
@@ -67,6 +69,9 @@ def _missing(mod: str) -> bool:
 def _seed_tests() -> None:
     """Ensure deterministic test execution."""
     os.environ["PYTEST_RUNNING"] = "1"
+    os.environ["ALPACA_ALLOW_SIP"] = "1"
+    os.environ["ALPACA_SIP_ENTITLED"] = "1"
+    os.environ["ALPACA_HAS_SIP"] = "1"
     os.environ["PYTHONHASHSEED"] = "0"
     random.seed(0)
     if not _missing("numpy"):
@@ -77,6 +82,15 @@ def _seed_tests() -> None:
         import torch
 
         torch.manual_seed(0)
+
+
+@pytest.fixture(autouse=True)
+def _force_sip_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure SIP-related env defaults reflect entitlement-friendly state during tests."""
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_SIP_ENTITLED", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
 
 
 def pytest_ignore_collect(path: Path, config: Any) -> bool:
