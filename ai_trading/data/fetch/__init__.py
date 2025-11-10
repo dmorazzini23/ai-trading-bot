@@ -31,6 +31,7 @@ except Exception:  # pragma: no cover - fallback sentinel when requests unavaila
     _requests = None  # type: ignore[assignment]
 from functools import lru_cache
 
+from ai_trading.alpaca_api import get_api_error_cls
 from ai_trading.config import get_trading_config
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import is_generator_stop, monotonic_time
@@ -76,6 +77,7 @@ from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.telemetry import runtime_state
 from ai_trading.timeframe import TimeFrame
 
+APIError = get_api_error_cls()
 # --- SAFETY: Provide a module-level default for `_state` ------------------------------------
 # Some nested helper functions in this module (e.g., `_record_minute_fallback`) were designed
 # to close over a local `_state` dict defined inside `get_minute_df(...)`. In certain runtime
@@ -283,6 +285,7 @@ def _record_provider_failure_event(
         last_error_at=payload["last_error_at"],
         reason=reason,
         http_code=http_code,
+        safe_mode=is_safe_mode_active(),
     )
 
 
@@ -299,7 +302,9 @@ def _record_provider_success_event() -> None:
         consecutive_failures=0,
         last_error_at=None,
         reason="recovered",
+        safe_mode=is_safe_mode_active(),
     )
+    _clear_gap_ratio_state()
 
 
 # --- AI-AGENT: request bookkeeping for tests ---
@@ -1773,6 +1778,23 @@ def _build_backup_usage_extra(
         payload["detail"] = reason_hint
     return payload
 
+
+def _safe_exception_message(exc: Exception | None, *, limit: int = 200) -> str | None:
+    if exc is None:
+        return None
+    message = getattr(exc, "message", None)
+    if isinstance(message, Mapping):
+        message = message.get("message") or message.get("detail") or message.get("error")
+    if not message:
+        message = str(exc)
+    if not isinstance(message, str):
+        message = str(message)
+    if not message:
+        return None
+    if 0 < limit < len(message):
+        return message[:limit]
+    return message
+
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
@@ -2565,6 +2587,7 @@ def _mark_fallback(
         reason=log_extra.get("fallback_reason") or reason,
         cooldown_sec=cooldown_seconds,
         timeframe=timeframe,
+        safe_mode=is_safe_mode_active(),
     )
     if _frame_has_rows(fallback_df):
         _set_backup_skip(symbol, timeframe)
@@ -2646,6 +2669,7 @@ def _clear_minute_fallback_state(
                     healthy=True,
                     reason="primary_recovered",
                     severity="good",
+                    quote_age_ms=None,
                 )
             except Exception:
                 pass
@@ -2668,6 +2692,7 @@ def _clear_minute_fallback_state(
             reason="primary_recovered",
             cooldown_sec=0.0,
             timeframe=timeframe,
+            safe_mode=is_safe_mode_active(),
         )
     return cleared
 
@@ -5862,15 +5887,31 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
     if missing.empty:
         return df
 
+    full_index = pd_local.date_range(ts.min(), ts.max(), freq="1min", tz=ts.tz)
     gap_count = len(missing)
-    logger.warning(
-        "MINUTE_GAPS_DETECTED",
-        extra=_norm_extra({"symbol": symbol, "gap_count": gap_count}),
+    expected_minutes = len(full_index)
+    missing_minutes = max(expected_minutes - len(ts), 0)
+    gap_ratio = (missing_minutes / expected_minutes) if expected_minutes else 0.0
+    gap_log = {
+        "symbol": symbol,
+        "gap_count": gap_count,
+        "missing_minutes": missing_minutes,
+        "expected_minutes": expected_minutes,
+        "gap_ratio": gap_ratio,
+    }
+    logger.warning("MINUTE_GAPS_DETECTED", extra=_norm_extra(gap_log))
+    _record_gap_ratio_state(
+        gap_ratio,
+        metadata={
+            "expected": expected_minutes,
+            "missing_after": missing_minutes,
+            "gap_ratio": gap_ratio,
+            "detector": "verify_minute_continuity",
+        },
     )
     if not backfill:
         return df
 
-    full_index = pd_local.date_range(ts.min(), ts.max(), freq="1min", tz=ts.tz)
     df = df.set_index("timestamp").reindex(full_index)
     df.index.name = "timestamp"
 
@@ -6205,6 +6246,7 @@ def _repair_rth_minute_gaps(
     }
     if fallback_provider_hint:
         metadata["fallback_provider"] = fallback_provider_hint
+    _record_gap_ratio_state(gap_ratio, metadata=metadata)
     emit_gap_event = (
         not tolerated
         and (
@@ -7997,6 +8039,52 @@ def _fetch_bars(
 
         used_backup = False
 
+        def _current_fetch_attempt() -> int:
+            retries_val = 0
+            try:
+                retries_val = int(_state.get("retries", 0))
+            except Exception:
+                retries_val = 0
+            return max(retries_val, 0) + 1
+
+        def _emit_fetch_attempt_log(
+            *,
+            status: int | None = None,
+            error: str | None = None,
+            exception: Exception | None = None,
+            retry_after: float | None = None,
+            extra: Mapping[str, Any] | None = None,
+        ) -> None:
+            payload = _build_fetch_log_extra(
+                extra,
+                symbol=symbol,
+                timeframe=_interval,
+                attempt=_current_fetch_attempt(),
+                status=status,
+                exception=exception,
+                retry_after=retry_after,
+            )
+            log_fetch_attempt("alpaca", status=status, error=error, **payload)
+
+        def _report_provider_health_failure(reason_text: str, *, severity: str = "hard_fail") -> None:
+            primary_val = _state.get("primary_label")
+            backup_val = _state.get("backup_label")
+            if not primary_val or not backup_val:
+                return
+            try:
+                provider_monitor.update_data_health(
+                    primary_val,
+                    backup_val,
+                    healthy=False,
+                    reason=reason_text,
+                    severity=severity,
+                    gap_ratio=_current_gap_ratio(),
+                    quote_timestamp_present=False,
+                    quote_age_ms=None,
+                )
+            except Exception:
+                pass
+
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False,
         ) -> pd.DataFrame | None:
@@ -8303,7 +8391,7 @@ def _fetch_bars(
             attempt_number = int(_state.get("retries", 0)) + 1
             remaining_retries = max(0, max_retries - attempt_number)
             log_extra["remaining_retries"] = remaining_retries
-            log_fetch_attempt("alpaca", error=str(e), **log_extra)
+            _emit_fetch_attempt_log(error="timeout", exception=e, extra=log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -8315,6 +8403,7 @@ def _fetch_bars(
             except Exception:
                 pass
             provider_monitor.record_failure("alpaca", "timeout", str(e))
+            _report_provider_health_failure("timeout")
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             retry_delay = float(_state.get("retry_delay") or 0.0)
             if retry_delay <= 0:
@@ -8362,13 +8451,14 @@ def _fetch_bars(
             attempt = _state["retries"] + 1
             remaining = max_retries - attempt
             log_extra["remaining_retries"] = remaining
-            log_fetch_attempt("alpaca", error=str(e), **log_extra)
+            _emit_fetch_attempt_log(error="connection_error", exception=e, extra=log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
             _incr("data.fetch.connection_error", value=1.0, tags=_tags())
             provider_monitor.record_failure("alpaca", "connection_error", str(e))
+            _report_provider_health_failure("connection_error")
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if fallback_target:
@@ -8428,12 +8518,42 @@ def _fetch_bars(
             attempt = _state["retries"] + 1
             remaining = max_retries - attempt
             log_extra["remaining_retries"] = remaining
-            log_fetch_attempt("alpaca", error=str(e), **log_extra)
+            status_hint: int | None = None
+            response_obj = getattr(e, "response", None)
+            if response_obj is not None:
+                status_hint = getattr(response_obj, "status_code", None)
+                try:
+                    if status_hint is not None:
+                        status_hint = int(status_hint)
+                except (TypeError, ValueError):
+                    status_hint = None
+            error_reason = "request_exception"
+            report_failure = False
+            if isinstance(e, ValueError) and str(e) == "rate_limited":
+                error_reason = "rate_limited"
+                report_failure = True
+            elif status_hint == 429:
+                error_reason = "rate_limited"
+                report_failure = True
+            elif status_hint in (401, 403):
+                error_reason = "unauthorized"
+            elif status_hint is not None and 500 <= status_hint < 600:
+                error_reason = "http_5xx"
+                report_failure = True
+            _emit_fetch_attempt_log(
+                status=status_hint,
+                error=error_reason,
+                exception=e,
+                extra=log_extra,
+            )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
             _incr("data.fetch.error", value=1.0, tags=_tags())
+            if report_failure:
+                provider_monitor.record_failure("alpaca", error_reason, str(e))
+                _report_provider_health_failure(error_reason)
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             fallback_target = fallback or _select_fallback_target(_interval, _feed, _start, _end)
             if fallback_target:
@@ -8525,7 +8645,7 @@ def _fetch_bars(
             log_extra["retry_delay"] = retry_delay
         if status == 400:
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
-            log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra_with_remaining)
+            _emit_fetch_attempt_log(status=status, error="bad_request", extra=log_extra_with_remaining)
             if "invalid feed" in text.lower():
                 provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
                 provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
@@ -8559,7 +8679,7 @@ def _fetch_bars(
             provider_monitor.record_failure(provider_id, "unauthorized")
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
-            log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
+            _emit_fetch_attempt_log(status=status, error="unauthorized", extra=log_extra_with_remaining)
             if _feed == "sip":
                 retry_after_header = None
                 headers_obj = getattr(resp, "headers", None)
@@ -8652,7 +8772,14 @@ def _fetch_bars(
                 cooldown = float(raw_cooldown) if raw_cooldown is not None else None
             except (TypeError, ValueError):
                 cooldown = None
+            _emit_fetch_attempt_log(
+                status=status,
+                error="rate_limited",
+                extra=log_extra_with_remaining,
+                retry_after=cooldown,
+            )
             provider_monitor.record_failure("alpaca", "rate_limited", retry_after=cooldown)
+            _report_provider_health_failure("rate_limited")
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             try:
                 already_disabled = provider_monitor.is_disabled("alpaca")
@@ -9049,7 +9176,7 @@ def _fetch_bars(
                     "remaining_retries": remaining_retries,
                     **log_extra,
                 }
-                log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
+                _emit_fetch_attempt_log(status=status, error="empty", extra=log_payload)
                 logged_attempt = True
                 time.sleep(retry_delay)
                 return _req(session, fallback, headers=headers, timeout=timeout)
@@ -9062,7 +9189,7 @@ def _fetch_bars(
                     "remaining_retries": remaining_retries,
                     **log_extra,
                 }
-                log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
+                _emit_fetch_attempt_log(status=status, error="empty", extra=log_payload)
             persistent_empty = empty_attempts >= 2
             if persistent_empty and not retry_cap_exhausted:
                 fb_candidate = fallback
@@ -9983,7 +10110,7 @@ def _fetch_bars(
         state_retry_delay = _state.get("retry_delay")
         if state_retry_delay is not None and "retry_delay" not in log_extra_success:
             log_extra_success["retry_delay"] = state_retry_delay
-        log_fetch_attempt("alpaca", status=status, **log_extra_success)
+        _emit_fetch_attempt_log(status=status, extra=log_extra_success)
         provider_monitor.record_success("alpaca")
         _ALPACA_DISABLED_ALERTED = False
         _alpaca_disable_count = 0
@@ -10355,6 +10482,8 @@ def get_minute_df(
     forced_provider_label: str | None = None
     forced_feed: str | None = None
     last_complete_evaluations = 0
+    primary_label: str | None = None
+    backup_label: str | None = None
 
     def _evaluate_last_complete(
         fallback: _dt.datetime | None = None,
@@ -10413,6 +10542,7 @@ def get_minute_df(
         "window_has_session": bool(window_has_session),
         "no_session_forced": bool(not window_has_session),
     }
+    _clear_gap_ratio_state()
     tf_key = (symbol, "1Min")
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     http_fallback_allowed = _http_fallback_permitted(
@@ -10425,6 +10555,11 @@ def get_minute_df(
     backup_provider_str, backup_provider_normalized = _resolve_backup_provider()
     resolved_backup_provider = backup_provider_normalized or backup_provider_str
     resolved_backup_feed = backup_provider_normalized or None
+    backup_label = (backup_provider_normalized or (backup_provider_str.lower() if backup_provider_str else "")) or ""
+    backup_label = backup_label.strip()
+    primary_label = forced_provider_label if forced_provider_label else f"alpaca_{normalized_feed or _DEFAULT_FEED}"
+    _state["primary_label"] = primary_label
+    _state["backup_label"] = backup_label
 
     http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
     if http_fallback_env is None:
@@ -10456,6 +10591,10 @@ def get_minute_df(
         resolved_backup_provider = forced_provider_label
         resolved_backup_feed = forced_provider_label
         fallback_allowed_flag = True
+        backup_label = forced_provider_label
+        primary_label = forced_provider_label
+        _state["primary_label"] = primary_label
+        _state["backup_label"] = backup_label
     http_fallback_allowed = bool(fallback_allowed_flag)
     _state["http_fallback_allowed"] = http_fallback_allowed
 
@@ -10663,6 +10802,17 @@ def get_minute_df(
             "feed": str(feed_tag or provider_tag or "unknown"),
             "timeframe": timeframe,
         }
+        coverage_meta_state = _state.get("coverage_meta")
+        if isinstance(coverage_meta_state, Mapping):
+            gap_ratio_value = coverage_meta_state.get("gap_ratio")
+            try:
+                ratio_float = float(gap_ratio_value)
+            except (TypeError, ValueError):
+                ratio_float = None
+            if ratio_float is not None:
+                tags["gap_ratio"] = ratio_float
+                if not _state.get("fallback_reason"):
+                    _state["fallback_reason"] = "gap_ratio_exceeded"
 
         frame_has_rows = _frame_has_rows(frame)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
@@ -10790,11 +10940,6 @@ def get_minute_df(
     primary_frame_acquired = False
     last_empty_error: EmptyBarsError | None = None
     provider_str, backup_normalized = _resolve_backup_provider()
-    backup_label = (backup_normalized or provider_str.lower() or "").strip()
-    if forced_provider_label:
-        primary_label = forced_provider_label
-    else:
-        primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
     primary_failure_logged = False
     allow_empty_override = False
     threshold_log_emitted = False
@@ -11675,9 +11820,17 @@ def get_minute_df(
     severity = "good" if healthy_gap else "degraded"
     gap_reason = f"gap_ratio={gap_ratio * 100:.2f}%"
     quote_ts_present = False
+    quote_age_ms: float | None = None
     last_timestamp_dt = coverage_meta.get("coverage_last_timestamp") if isinstance(coverage_meta, Mapping) else None
     if isinstance(last_timestamp_dt, datetime):
         quote_ts_present = True
+        try:
+            quote_age_ms = max(
+                0.0,
+                (datetime.now(UTC) - last_timestamp_dt.astimezone(UTC)).total_seconds() * 1000.0,
+            )
+        except Exception:
+            quote_age_ms = None
     if backup_label:
         provider_monitor.update_data_health(
             primary_label,
@@ -11687,6 +11840,7 @@ def get_minute_df(
             severity=severity,
             gap_ratio=gap_ratio,
             quote_timestamp_present=quote_ts_present,
+            quote_age_ms=quote_age_ms,
         )
     try:
         settings_obj = get_settings()
@@ -12635,3 +12789,94 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             return df, meta
 
         return df
+def _record_gap_ratio_state(ratio: float | None, *, metadata: Mapping[str, Any] | None = None) -> None:
+    state = globals().get("_state")
+    if not isinstance(state, dict):
+        return
+    if ratio is None:
+        state.pop("gap_ratio", None)
+    else:
+        try:
+            state["gap_ratio"] = float(ratio)
+        except (TypeError, ValueError):
+            state["gap_ratio"] = None
+    if metadata is not None:
+        try:
+            state["coverage_meta"] = dict(metadata)
+        except Exception:
+            state["coverage_meta"] = metadata
+
+
+def _current_gap_ratio(default: float | None = None) -> float | None:
+    state = globals().get("_state")
+    if not isinstance(state, dict):
+        return default
+    ratio = state.get("gap_ratio")
+    if ratio is None:
+        coverage = state.get("coverage_meta")
+        if isinstance(coverage, Mapping):
+            ratio = coverage.get("gap_ratio")
+    if ratio is None:
+        return default
+    try:
+        return float(ratio)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clear_gap_ratio_state() -> None:
+    state = globals().get("_state")
+    if isinstance(state, dict):
+        state.pop("gap_ratio", None)
+        state.pop("coverage_meta", None)
+def _build_fetch_log_extra(
+    extra: Mapping[str, Any] | None,
+    *,
+    symbol: str,
+    timeframe: str | None,
+    attempt: int | None,
+    status: int | None = None,
+    exception: Exception | None = None,
+    retry_after: float | None = None,
+    provider: str = "alpaca",
+) -> dict[str, Any]:
+    payload = dict(extra or {})
+    payload.setdefault("provider", provider)
+    payload["symbol"] = symbol
+    if timeframe:
+        payload.setdefault("timeframe", timeframe)
+        payload.setdefault("interval", timeframe)
+    if attempt is not None:
+        payload["attempt"] = max(int(attempt), 1)
+    gap_ratio = _current_gap_ratio()
+    if gap_ratio is not None:
+        payload["gap_ratio"] = gap_ratio
+    if retry_after is not None:
+        try:
+            payload["retry_after"] = max(0.0, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    if status is not None:
+        try:
+            payload["http_status"] = int(status)
+        except (TypeError, ValueError):
+            pass
+    if exception is not None:
+        payload["exc_type"] = exception.__class__.__name__
+        message = _safe_exception_message(exception)
+        if message:
+            payload["message"] = message
+        if isinstance(exception, APIError):
+            status_attr = getattr(exception, "status_code", None)
+            try:
+                if status_attr is not None:
+                    payload.setdefault("http_status", int(status_attr))
+            except (TypeError, ValueError):
+                pass
+            code_value = getattr(exception, "code", None) or getattr(exception, "error_code", None)
+            if code_value is not None:
+                payload["error_code"] = str(code_value)
+    message_value = payload.get("message")
+    if isinstance(message_value, str) and len(message_value) > 200:
+        payload["message"] = message_value[:200]
+    return payload

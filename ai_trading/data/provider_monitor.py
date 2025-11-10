@@ -153,6 +153,11 @@ def _resolve_health_passes_required() -> int:
         except Exception:
             candidate = None
     if candidate is None:
+        try:
+            candidate = get_env("HEALTH_RECOVERY_PASSES", None, cast=int)
+        except Exception:
+            candidate = None
+    if candidate is None:
         raw = os.getenv("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED", "").strip()
         if raw:
             try:
@@ -171,6 +176,10 @@ def _resolve_safe_mode_recovery_passes() -> int:
     """Return the consecutive health passes required to clear safe mode."""
 
     candidate: int | None = None
+    try:
+        candidate = get_env("HEALTH_RECOVERY_PASSES", None, cast=int)
+    except Exception:
+        candidate = None
     try:
         candidate = get_env("AI_TRADING_SAFE_MODE_HEALTH_PASSES", None, cast=int)
     except Exception:
@@ -286,6 +295,26 @@ _SAFE_MODE_CYCLE_REASON: str | None = None
 _SAFE_MODE_HEALTHY_PASSES = 0
 _SAFE_MODE_RECOVERY_TARGET = 0
 _gap_trigger_cooldown_until: float = 0.0
+
+
+def _quote_recovery_age_limit_ms() -> float:
+    """Return maximum quote age allowed when clearing safe mode."""
+
+    candidate: float | None = None
+    for key in ("QUOTE_MAX_AGE_MS", "TRADING__MIN_QUOTE_FRESHNESS_MS"):
+        try:
+            value = get_env(key, None, cast=float)
+        except Exception:
+            value = None
+        if value is not None:
+            candidate = float(value)
+            break
+    if candidate is None:
+        candidate = 2000.0
+    try:
+        return max(float(candidate), 0.0)
+    except Exception:
+        return 2000.0
 
 
 def _mark_cycle_safe_mode(reason: str) -> None:
@@ -544,6 +573,7 @@ def _maybe_clear_safe_mode(
     success: bool,
     gap_ratio: float | None,
     quote_timestamp_present: bool | None,
+    quote_age_ms: float | None,
     disabled_until: datetime | None,
 ) -> None:
     """Clear provider safe mode once health passes meet the recovery threshold."""
@@ -556,6 +586,17 @@ def _maybe_clear_safe_mode(
     if not success or not quote_timestamp_present:
         _SAFE_MODE_HEALTHY_PASSES = 0
         return
+    age_limit_ms = _quote_recovery_age_limit_ms()
+    if quote_age_ms is None or quote_age_ms > age_limit_ms:
+        _SAFE_MODE_HEALTHY_PASSES = 0
+        return
+    if gap_ratio is not None:
+        try:
+            if float(gap_ratio) > max(float(_GAP_RATIO_TRIGGER), 0.0):
+                _SAFE_MODE_HEALTHY_PASSES = 0
+                return
+        except (TypeError, ValueError):
+            pass
     _SAFE_MODE_HEALTHY_PASSES = min(_SAFE_MODE_HEALTHY_PASSES + 1, _SAFE_MODE_RECOVERY_TARGET)
     if _SAFE_MODE_HEALTHY_PASSES < _SAFE_MODE_RECOVERY_TARGET:
         return
@@ -571,6 +612,7 @@ def _maybe_clear_safe_mode(
             "provider": "alpaca",
             "passes": _SAFE_MODE_RECOVERY_TARGET,
             "gap_ratio": gap_ratio,
+            "quote_age_ms": quote_age_ms,
         },
     )
     try:
@@ -1608,6 +1650,7 @@ class ProviderMonitor:
         *,
         gap_ratio: float | None = None,
         quote_timestamp_present: bool | None = None,
+        quote_age_ms: float | None = None,
     ) -> None:
         """Record the outcome of a provider health probe for switchover dwell."""
 
@@ -1628,8 +1671,20 @@ class ProviderMonitor:
             success=success,
             gap_ratio=gap_ratio,
             quote_timestamp_present=quote_timestamp_present,
+            quote_age_ms=quote_age_ms,
             disabled_until=disabled_until,
         )
+        if success:
+            payload = {
+                "provider": normalized,
+                "passes": self._last_switchover_passes,
+                "required": self.recovery_passes_required,
+            }
+            if gap_ratio is not None:
+                payload["gap_ratio"] = gap_ratio
+            if quote_age_ms is not None:
+                payload["quote_age_ms"] = quote_age_ms
+            logger.info("PROVIDER_HEALTH_PASS", extra=payload)
 
     def disable(
         self,
@@ -1792,6 +1847,7 @@ class ProviderMonitor:
         severity: str | None = None,
         gap_ratio: float | None = None,
         quote_timestamp_present: bool | None = None,
+        quote_age_ms: float | None = None,
     ) -> str:
         """Update health state and potentially switch providers.
 
@@ -1837,6 +1893,7 @@ class ProviderMonitor:
             provider=active,
             gap_ratio=gap_ratio,
             quote_timestamp_present=quote_timestamp_present,
+            quote_age_ms=quote_age_ms,
         )
         last_switch = state.get("last_switch")
         consecutive = int(state.get("consecutive_passes", 0))

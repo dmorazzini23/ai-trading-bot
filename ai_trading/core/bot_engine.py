@@ -17272,6 +17272,7 @@ def _should_skip_order_for_alpaca_unavailable(
             extra={
                 "symbol": symbol,
                 "reason": "fallback_price_source",
+                "block_reason": "fallback_minute_data",
                 "price_source": price_source,
             },
         )
@@ -17949,7 +17950,11 @@ def _enter_long(
         )
         logger.warning(
             "SAFE_MODE_BLOCK",
-            extra={"symbol": symbol, "reason": "primary_provider_disabled"},
+            extra={
+                "symbol": symbol,
+                "reason": "primary_provider_disabled",
+                "block_reason": "provider_disabled",
+            },
         )
         prefer_backup_quote = True
     else:
@@ -17961,6 +17966,7 @@ def _enter_long(
             extra={
                 "symbol": symbol,
                 "reason": safe_mode_reason() or "provider_safe_mode",
+                "block_reason": "provider_disabled",
             },
         )
         return True
@@ -18731,7 +18737,11 @@ def _enter_short(
         )
         logger.warning(
             "SAFE_MODE_BLOCK",
-            extra={"symbol": symbol, "reason": "primary_provider_disabled"},
+            extra={
+                "symbol": symbol,
+                "reason": "primary_provider_disabled",
+                "block_reason": "provider_disabled",
+            },
         )
         prefer_backup_quote = True
     else:
@@ -18743,6 +18753,7 @@ def _enter_short(
             extra={
                 "symbol": symbol,
                 "reason": safe_mode_reason() or "provider_safe_mode",
+                "block_reason": "provider_disabled",
             },
         )
         return True
@@ -19629,6 +19640,7 @@ def trade_logic(
             extra={
                 "symbol": symbol,
                 "reason": safe_mode_reason() or "provider_safe_mode",
+                "block_reason": "provider_disabled",
             },
         )
         return False

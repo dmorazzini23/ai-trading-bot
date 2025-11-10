@@ -35,6 +35,8 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "last_error_at": None,
     "http_code": None,
     "gap_ratio_recent": None,
+    "quote_fresh_ms": None,
+    "safe_mode": False,
     "timeframes": {},
 }
 _DEFAULT_QUOTE_STATE: dict[str, Any] = {
@@ -46,6 +48,9 @@ _DEFAULT_QUOTE_STATE: dict[str, Any] = {
     "bid": None,
     "ask": None,
     "updated": None,
+    "source": None,
+    "last_price": None,
+    "quote_age_ms": None,
 }
 _DEFAULT_BROKER_STATE: dict[str, Any] = {
     "connected": False,
@@ -83,6 +88,8 @@ def update_data_provider_state(
     http_code: int | None = None,
     timeframe: str | None = None,
     gap_ratio_recent: float | None = None,
+    quote_fresh_ms: float | None = None,
+    safe_mode: bool | None = None,
 ) -> None:
     """Record current data provider routing."""
 
@@ -121,6 +128,13 @@ def update_data_provider_state(
             updates["gap_ratio_recent"] = max(0.0, float(gap_ratio_recent))
         except (TypeError, ValueError):
             pass
+    if quote_fresh_ms is not None:
+        try:
+            updates["quote_fresh_ms"] = max(0.0, float(quote_fresh_ms))
+        except (TypeError, ValueError):
+            pass
+    if safe_mode is not None:
+        updates["safe_mode"] = bool(safe_mode)
     timeframe_key: str | None = None
     if timeframe is not None:
         try:
@@ -169,6 +183,9 @@ def update_quote_status(
     bid: float | None = None,
     ask: float | None = None,
     status: str | None = None,
+    source: str | None = None,
+    last_price: float | None = None,
+    quote_age_ms: float | None = None,
 ) -> None:
     """Update snapshot of the most recent quote gate decision."""
 
@@ -190,6 +207,15 @@ def update_quote_status(
         updates["bid"] = bid
     if ask is not None:
         updates["ask"] = ask
+    if source is not None:
+        updates["source"] = source
+    if last_price is not None:
+        updates["last_price"] = last_price
+    if quote_age_ms is not None:
+        try:
+            updates["quote_age_ms"] = max(0.0, float(quote_age_ms))
+        except (TypeError, ValueError):
+            pass
     with _LOCK:
         global _quote_status
         _quote_status = _merge_state(_quote_status, updates)
