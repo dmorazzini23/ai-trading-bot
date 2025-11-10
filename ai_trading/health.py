@@ -134,6 +134,12 @@ class HealthCheck:
                     "quote_fresh_ms": provider_state.get("quote_fresh_ms"),
                     "safe_mode": bool(provider_state.get("safe_mode")),
                 }
+                gap_ratio_recent = provider_state.get("gap_ratio_recent")
+                if gap_ratio_recent is not None:
+                    try:
+                        provider_section["gap_ratio_pct"] = float(gap_ratio_recent) * 100.0
+                    except (TypeError, ValueError):
+                        provider_section["gap_ratio_pct"] = None
                 broker_section = {
                     "connected": bool(broker_state.get("connected")),
                     "status": broker_state.get("status") or ("reachable" if broker_state.get("connected") else "unreachable"),

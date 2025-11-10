@@ -370,6 +370,20 @@ def _max_quote_staleness_seconds() -> int:
         return 60
 
 
+def _quote_gate_max_age_ms() -> float:
+    """Return maximum tolerated quote age for execution gates."""
+
+    try:
+        cfg = get_trading_config()
+    except Exception:
+        return 2000.0
+    raw_value = getattr(cfg, "quote_max_age_ms", 2000)
+    try:
+        return max(0.0, float(raw_value))
+    except (TypeError, ValueError):
+        return 2000.0
+
+
 def _safe_decimal(value: Any) -> Decimal:
     """Return Decimal conversion tolerant to broker SDK types."""
 
@@ -824,6 +838,30 @@ def _extract_api_error_metadata(err: BaseException | None) -> dict[str, Any]:
     if rendered:
         metadata.setdefault("error", rendered)
     return {key: value for key, value in metadata.items() if value not in (None, "")}
+
+
+def _classify_rejection_reason(detail: str | None) -> str | None:
+    if not detail:
+        return None
+    normalized = detail.strip().lower()
+    if not normalized:
+        return None
+    keyword_map = (
+        ("buying power", "insufficient_buying_power"),
+        ("insufficient funds", "insufficient_buying_power"),
+        ("limit up", "limit_up_down"),
+        ("limit down", "limit_up_down"),
+        ("price band", "limit_up_down"),
+        ("increment", "price_increment"),
+        ("minimum price", "price_increment"),
+        ("outside of trading hours", "market_closed"),
+        ("market closed", "market_closed"),
+        ("market is closed", "market_closed"),
+    )
+    for token, reason in keyword_map:
+        if token in normalized:
+            return reason
+    return None
 
 
 _MARKET_ONLY_ERROR_TOKENS = (
@@ -1476,6 +1514,8 @@ class ExecutionEngine:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
         self._cycle_account: Any | None = None
         self._cycle_account_fetched: bool = False
+        self.order_ttl_seconds = 0
+        self.marketable_limit_slippage_bps = 10
         try:
             key, secret = get_alpaca_creds()
         except RuntimeError as exc:
@@ -1723,6 +1763,8 @@ class ExecutionEngine:
         self.shadow_mode = bool(settings.shadow_mode)
         self.order_timeout_seconds = int(settings.order_timeout_seconds)
         self.slippage_limit_bps = int(settings.slippage_limit_bps)
+        self.order_ttl_seconds = int(getattr(settings, "order_ttl_seconds", 20))
+        self.marketable_limit_slippage_bps = int(getattr(settings, "marketable_limit_slippage_bps", 10))
         self.price_provider_order = tuple(settings.price_provider_order)
         self.data_feed_intraday = str(settings.data_feed_intraday or "iex").lower()
         if self._explicit_mode is not None:
@@ -2301,6 +2343,8 @@ class ExecutionEngine:
                 logger.warning("ORDER_SKIPPED_PRICE_GATED", extra=gate_log_extra)
                 return None
 
+        order_data_snapshot = dict(order_data)
+        original_limit_price = order_data.get("limit_price")
         start_time = time.time()
         logger.info(
             "Submitting market order",
@@ -3251,6 +3295,35 @@ class ExecutionEngine:
                 and any(ts_key in quote_map_for_presence for ts_key in ("timestamp", "ts", "t"))
             )
         )
+        quote_max_age_ms = _quote_gate_max_age_ms()
+        primary_quote = provider_for_log == "alpaca" and not synthetic_quote
+        quote_fresh = quote_age_ms is None or quote_age_ms <= quote_max_age_ms
+        if (
+            nbbo_gate_required
+            and not closing_position
+            and (not primary_quote or not quote_fresh)
+        ):
+            bid_value = None
+            ask_value = None
+            last_value = None
+            if isinstance(quote_map_for_presence, Mapping):
+                bid_value = quote_map_for_presence.get("bid") or quote_map_for_presence.get("bp")
+                ask_value = quote_map_for_presence.get("ask") or quote_map_for_presence.get("ap")
+                last_value = quote_map_for_presence.get("last") or quote_map_for_presence.get("close")
+            _log_quote_entry_block(
+                symbol,
+                "primary_quote_required",
+                extra={
+                    "provider": provider_for_log,
+                    "quote_age_ms": quote_age_ms,
+                    "quote_max_age_ms": quote_max_age_ms,
+                    "synthetic": bool(synthetic_quote),
+                    "bid": bid_value,
+                    "ask": ask_value,
+                    "last_price": last_value,
+                },
+            )
+            return None
         slippage_basis: str | None = None
         if isinstance(annotations, Mapping):
             basis_candidate = annotations.get("slippage_basis") or annotations.get("slippage_basis_hint")
@@ -3619,7 +3692,14 @@ class ExecutionEngine:
             order_kwargs["annotations"] = annotations
 
         price_for_slippage = price_for_limit if price_for_limit is not None else resolved_limit_price
-        if price_for_slippage is not None:
+        can_check_slippage = (
+            price_for_slippage is not None
+            and primary_quote
+            and quote_fresh
+            and not synthetic_quote
+            and not using_fallback_price
+        )
+        if can_check_slippage:
             slippage_threshold_bps = 0.0
             hash_fn: Callable[[str], int] | None = None
             try:
@@ -3843,11 +3923,11 @@ class ExecutionEngine:
         final_status = status
 
         ack_logged = False
-        reject_logged = False
         ack_timed_out = False
         current_status: str | None = None
         event_sequence = 0
         order_submitted_logged = False
+        final_cancel_reason: str | None = None
 
         def _status_payload() -> dict[str, Any]:
             return {
@@ -3859,7 +3939,7 @@ class ExecutionEngine:
             }
 
         def _handle_status_transition(status_value: Any, *, source: str) -> None:
-            nonlocal ack_logged, reject_logged, current_status, event_sequence, order_submitted_logged, final_status
+            nonlocal ack_logged, current_status, event_sequence, order_submitted_logged, final_status
             decided_status, advanced = apply_order_status(current_status, status_value)
             if decided_status is None:
                 return
@@ -3906,10 +3986,6 @@ class ExecutionEngine:
                 fill_payload = dict(payload)
                 fill_payload["filled_qty"] = float(filled_qty or 0)
                 logger.info("ORDER_FILL_CONFIRMED", extra=fill_payload)
-            if decided_status in _TERMINAL_ORDER_STATUSES and decided_status != "filled":
-                if not reject_logged:
-                    logger.warning("ORDER_REJECTED", extra=payload)
-                    reject_logged = True
 
         _handle_status_transition(status, source="initial")
 
@@ -3961,7 +4037,7 @@ class ExecutionEngine:
                 pending_payload = _status_payload()
                 pending_payload["status"] = status_lower or "pending"
                 pending_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
-                logger.warning("ORDER_PENDING_NO_TERMINAL", extra=pending_payload)
+                final_cancel_reason = "pending_no_terminal"
                 cancel_target = None
                 if order_id_hint:
                     cancel_target = str(order_id_hint)
@@ -3972,8 +4048,9 @@ class ExecutionEngine:
                     try:
                         self._cancel_order_alpaca(cancel_target)
                     except Exception as exc:
+                        final_cancel_reason = "pending_cancel_failed"
                         logger.error(
-                            "ORDER_PENDING_CANCEL_FAILED",
+                            "ORDER_CANCEL_ERROR",
                             extra={
                                 **pending_payload,
                                 "order_id": cancel_target,
@@ -3983,10 +4060,7 @@ class ExecutionEngine:
                         )
                     else:
                         cancel_success = True
-                        logger.warning(
-                            "ORDER_PENDING_CANCELLED",
-                            extra={**pending_payload, "order_id": cancel_target},
-                        )
+                        final_cancel_reason = "pending_no_terminal"
                         status = "cancelled"
                         final_status = status
                         status_lower = "cancelled"
@@ -4013,6 +4087,45 @@ class ExecutionEngine:
 
         _handle_status_transition(status, source="final")
 
+        ttl_seconds = max(0, int(getattr(self, "order_ttl_seconds", 0)))
+        if (
+            order_type_normalized == "limit"
+            and ttl_seconds > 0
+            and (time.monotonic() - submit_started_at) >= ttl_seconds
+            and status_lower not in terminal_statuses
+        ):
+            previous_pending_id = order_id or client_order_id
+            ttl_snapshot = locals().get("order_data_snapshot", dict(order_data))
+            ttl_limit_price = locals().get("original_limit_price", order_data.get("limit_price"))
+            replacement = self._replace_limit_order_with_marketable(
+                symbol=symbol,
+                side=mapped_side,
+                qty=qty,
+                existing_order_id=previous_pending_id,
+                client_order_id=client_order_id or order_data.get("client_order_id"),
+                order_data_snapshot=ttl_snapshot,
+                limit_price=_safe_float(ttl_limit_price),
+            )
+            if replacement is not None:
+                (
+                    order_obj,
+                    status,
+                    filled_qty,
+                    requested_qty,
+                    order_id,
+                    client_order_id,
+                ) = replacement
+                final_status = status
+                status_lower = str(status).lower()
+                order_id_display = order_id or client_order_id
+                final_cancel_reason = None
+                if previous_pending_id:
+                    self._pending_orders.pop(str(previous_pending_id), None)
+                new_pending_id = order_id or client_order_id
+                if new_pending_id:
+                    pending_entry = self._pending_orders.setdefault(str(new_pending_id), {})
+                    pending_entry["status"] = status_lower or "submitted"
+
         if not (order_id or client_order_id):
             logger.error(
                 "EXEC_ORDER_RESPONSE_INVALID",
@@ -4027,6 +4140,39 @@ class ExecutionEngine:
 
         order_id_display = order_id or client_order_id
         order_status_lower = str(status).lower() if status is not None else None
+        rejection_detail = _extract_value(
+            final_order,
+            "reject_reason",
+            "rejection_reason",
+            "status_message",
+            "reason",
+        )
+        if rejection_detail is not None:
+            rejection_detail = str(rejection_detail)
+        parsed_rejection = _classify_rejection_reason(rejection_detail)
+        final_payload = {
+            "symbol": symbol,
+            "order_id": str(order_id_display) if order_id_display is not None else None,
+            "client_order_id": str(client_order_id) if client_order_id is not None else None,
+            "status": order_status_lower,
+            "quantity": requested_qty,
+            "filled_qty": float(filled_qty or 0),
+        }
+        if order_status_lower == "filled":
+            logger.info("ORDER_FILLED", extra=final_payload)
+        elif order_status_lower in {"canceled", "cancelled", "expired", "done_for_day"}:
+            if final_cancel_reason:
+                final_payload["reason"] = final_cancel_reason
+            logger.info("ORDER_CANCELLED", extra=final_payload)
+        elif order_status_lower == "rejected":
+            if parsed_rejection:
+                final_payload["reason"] = parsed_rejection
+            if rejection_detail:
+                final_payload["message"] = rejection_detail
+            logger.warning("ORDER_REJECTED", extra=final_payload)
+        if order_id_display:
+            self._pending_orders.pop(str(order_id_display), None)
+
         symbol_key = symbol.upper()
         reconciled = (not ack_timed_out) and (order_status_lower in {"filled", "partially_filled"})
         position_changed = False
@@ -4092,6 +4238,11 @@ class ExecutionEngine:
                         "ack_timed_out": ack_timed_out,
                     }
                 )
+                if order_status_lower == "rejected":
+                    if parsed_rejection:
+                        reconcile_summary["rejection_reason"] = parsed_rejection
+                    if rejection_detail:
+                        reconcile_summary["message"] = rejection_detail
                 if ack_timed_out:
                     reconciled = False
                 elif expected_settlement and not (position_changed or cash_changed):
@@ -5281,6 +5432,8 @@ class ExecutionEngine:
                 "time_in_force": tif_token,
                 "client_order_id": order_data.get("client_order_id"),
                 "closing_position": closing_position,
+                "limit_price": order_data.get("limit_price"),
+                "extended_hours": order_data.get("extended_hours"),
             },
         )
         try:
@@ -5297,7 +5450,24 @@ class ExecutionEngine:
                         "client_order_id": mock_id,
                     }
                 elif order_data.get("order_class"):
-                    resp = self.trading_client.submit_order(**alpaca_payload)
+                    try:
+                        resp = self.trading_client.submit_order(**alpaca_payload)
+                    except TypeError as exc:
+                        # Some brokers reject nested bracket kwargs; retry without extras
+                        logger.warning(
+                            "BRACKET_UNSUPPORTED_FALLBACK_LIMIT",
+                            extra={
+                                "symbol": order_data.get("symbol"),
+                                "side": order_data.get("side"),
+                                "error": str(exc),
+                            },
+                        )
+                        cleaned = {
+                            k: v
+                            for k, v in order_data.items()
+                            if k not in {"order_class", "take_profit", "stop_loss"}
+                        }
+                        resp = self.trading_client.submit_order(**cleaned)
                 else:
                     side = (
                         side_enum.BUY
@@ -5341,6 +5511,30 @@ class ExecutionEngine:
                         else:
                             raise
                     resp = self.trading_client.submit_order(order_data=req)
+            if resp is not None:
+                ack_id = _extract_value(resp, "id", "order_id")
+                ack_client_id = _extract_value(resp, "client_order_id")
+                submitted_ts = _extract_value(resp, "submitted_at", "created_at", "timestamp")
+                if isinstance(submitted_ts, datetime):
+                    submitted_iso = submitted_ts.astimezone(UTC).isoformat()
+                elif submitted_ts:
+                    submitted_iso = str(submitted_ts)
+                else:
+                    submitted_iso = None
+                logger.info(
+                    "ALPACA_ORDER_SUBMITTED",
+                    extra={
+                        "symbol": order_data.get("symbol"),
+                        "side": order_data.get("side"),
+                        "qty": qty_payload,
+                        "order_type": order_type,
+                        "time_in_force": tif_token,
+                        "extended_hours": order_data.get("extended_hours"),
+                        "alpaca_order_id": ack_id,
+                        "client_order_id": ack_client_id or order_data.get("client_order_id"),
+                        "submitted_at": submitted_iso,
+                    },
+                )
         except (APIError, TimeoutError, ConnectionError) as e:
             if isinstance(e, APIError) and self._is_opposite_conflict_error(e):
                 symbol = str(order_data.get("symbol") or "")
@@ -5381,112 +5575,77 @@ class ExecutionEngine:
                 },
             )
             raise
-        except TypeError:
-            # Some brokers may not support bracket fields; fallback without bracket
-            if order_data.get("order_class"):
-                logger.warning("BRACKET_UNSUPPORTED_FALLBACK_LIMIT")
-                cleaned = {k: v for k, v in order_data.items() if k not in {"order_class", "take_profit", "stop_loss"}}
-                resp = self.trading_client.submit_order(**cleaned)
 
-        client_order_id = order_data.get("client_order_id")
+    def _replace_limit_order_with_marketable(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: int,
+        existing_order_id: Any | None,
+        client_order_id: Any | None,
+        order_data_snapshot: Mapping[str, Any],
+        limit_price: float | None,
+    ) -> tuple[Any, str, int, int, Any, Any] | None:
+        """Cancel an idle limit order and replace it with a marketable limit."""
 
-        if not resp:
-            fallback_id = f"alpaca-pending-{int(time.time() * 1000)}"
-            logger.warning(
-                "ORDER_SUBMIT_EMPTY_RESPONSE",
-                extra={
-                    "symbol": order_data.get("symbol"),
-                    "qty": order_data.get("quantity"),
-                    "side": order_data.get("side"),
-                    "type": order_data.get("type"),
-                    "client_order_id": client_order_id or fallback_id,
-                },
-            )
-            resolved_client_id = fallback_id
-            return {
-                "id": str(fallback_id),
-                "client_order_id": str(resolved_client_id),
-                "status": "accepted",
-                "symbol": order_data["symbol"],
-                "qty": order_data["quantity"],
-                "limit_price": order_data.get("limit_price"),
-                "raw": None,
-            }
-
-        status = getattr(resp, "status", None)
-        if isinstance(resp, dict):
-            status = resp.get("status", status)
-        if hasattr(status, "value"):
-            status = status.value
-        elif status is not None:
-            status = str(status)
-
-        if isinstance(resp, dict):
-            resp_id = str(resp.get("id", ""))
-            resp_client_id = resp.get("client_order_id", client_order_id)
-            resp_symbol = resp.get("symbol", order_data["symbol"])
-            resp_qty = resp.get("qty", order_data["quantity"])
-            resp_limit = resp.get("limit_price", order_data.get("limit_price"))
-            raw_payload = resp
+        if limit_price is None:
+            return None
+        try:
+            base_price = float(limit_price)
+        except (TypeError, ValueError):
+            return None
+        slippage_bps = max(0, int(getattr(self, "marketable_limit_slippage_bps", 10)))
+        basis = slippage_bps / 10000.0
+        if side.lower() == "buy":
+            replacement_price = base_price * (1 + basis)
         else:
-            resp_id = str(getattr(resp, "id", ""))
-            resp_client_id = getattr(resp, "client_order_id", client_order_id)
-            resp_symbol = getattr(resp, "symbol", order_data["symbol"])
-            resp_qty = getattr(resp, "qty", order_data["quantity"])
-            resp_limit = getattr(resp, "limit_price", order_data.get("limit_price"))
-            raw_payload = getattr(resp, "__dict__", None) or resp
-
-        normalized = {
-            "id": resp_id,
-            "client_order_id": resp_client_id,
-            "status": status,
-            "symbol": resp_symbol,
-            "qty": resp_qty,
-            "limit_price": resp_limit,
-            "raw": raw_payload,
-        }
-
-        fallback_preference: str | None = None
-        if normalized.get("client_order_id"):
-            fallback_preference = str(normalized["client_order_id"])
-        elif client_order_id:
-            fallback_preference = str(client_order_id)
-        if fallback_preference is None:
-            fallback_preference = f"alpaca-pending-{int(time.time() * 1000)}"
-        fallback_id = fallback_preference
-        resolved_id = normalized.get("id")
-        if not resolved_id:
-            resolved_id = fallback_id
-        normalized["id"] = str(resolved_id)
-
-        if not normalized.get("client_order_id"):
-            normalized["client_order_id"] = str(fallback_id)
-
-        if not normalized.get("status"):
-            normalized["status"] = "accepted"
-
-        if not normalized["id"]:
-            logger.warning(
-                "ORDER_SUBMIT_MISSING_ID",
+            replacement_price = base_price * (1 - basis)
+        replacement_payload = dict(order_data_snapshot)
+        replacement_payload["limit_price"] = round(replacement_price, 6)
+        replacement_payload["client_order_id"] = f"{_stable_order_id(symbol, side)}-ttl"
+        if existing_order_id:
+            try:
+                self._cancel_order_alpaca(existing_order_id)
+            except Exception as exc:
+                logger.warning(
+                    "ORDER_TTL_CANCEL_FAILED",
+                    extra={
+                        "symbol": symbol,
+                        "side": side,
+                        "order_id": existing_order_id,
+                        "error": str(exc),
+                    },
+                )
+        try:
+            replacement = self._submit_order_to_alpaca(replacement_payload)
+        except Exception as exc:
+            logger.error(
+                "ORDER_TTL_REPLACE_FAILED",
                 extra={
-                    "symbol": normalized.get("symbol"),
-                    "qty": normalized.get("qty"),
-                    "side": order_data.get("side"),
-                    "type": order_data.get("type"),
-                    "client_order_id": normalized.get("client_order_id"),
+                    "symbol": symbol,
+                    "side": side,
+                    "order_id": existing_order_id,
+                    "error": str(exc),
                 },
+                exc_info=True,
             )
-
-        logger.debug(
-            "ORDER_SUBMIT_OK",
+            return None
+        logger.info(
+            "ORDER_TTL_REPLACE",
             extra={
-                "symbol": normalized["symbol"],
-                "qty": normalized["qty"],
-                "side": order_data.get("side"),
-                "id": normalized["id"],
+                "symbol": symbol,
+                "side": side,
+                "original_order_id": str(existing_order_id) if existing_order_id else None,
+                "original_client_order_id": str(client_order_id) if client_order_id else None,
+                "replacement_client_order_id": replacement_payload.get("client_order_id"),
+                "original_limit_price": limit_price,
+                "replacement_limit_price": replacement_payload["limit_price"],
+                "ttl_seconds": self.order_ttl_seconds,
+                "slippage_bps": slippage_bps,
             },
         )
-        return normalized
+        return _normalize_order_payload(replacement, qty)
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""

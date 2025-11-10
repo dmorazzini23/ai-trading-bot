@@ -122,6 +122,11 @@ from ai_trading.utils.pickle_safe import safe_pickle_load
 from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.core.enums import OrderSide as CoreOrderSide
 
+
+class CycleAbortSafeMode(RuntimeError):
+    """Raised when provider safe mode requires aborting the active cycle."""
+
+
 try:
     importlib.import_module("alpaca.trading.client")
     importlib.import_module("alpaca.data.historical.stock")
@@ -11510,6 +11515,13 @@ else:
     ) + wait_random(0, SENTIMENT_BACKOFF_BASE)
 
 
+def _metafallback_confidence_cap() -> float:
+    try:
+        return max(float(get_env("METALEARN_FALLBACK_CONFIDENCE_CAP", 0.35, cast=float)), 0.0)
+    except Exception:
+        return 0.35
+
+
 class SignalManager:
     def __init__(self) -> None:
         self.momentum_lookback = 5
@@ -11520,6 +11532,7 @@ class SignalManager:
         self._cycle_trade_log: pd.DataFrame | None = None
         self._cycle_trade_log_source: str | None = None
         self._cycle_trade_log_cycle_id: int | None = None
+        self.meta_confidence_capped = False
 
     def begin_cycle(self) -> None:
         """Cache the trade log once per active trading cycle."""
@@ -11892,6 +11905,7 @@ class SignalManager:
     ) -> tuple[int, float, str]:
         """Evaluate all active signals and return a combined decision."""
 
+        self.meta_confidence_capped = False
         signals: list[tuple[int, float, str]] = []
         performance_data = load_global_signal_performance()
         original_len = len(df)
@@ -11910,6 +11924,7 @@ class SignalManager:
                         symbol_upper,
                     )
                     _METALEARN_FALLBACK_SYMBOL_LOGGED.add(symbol_upper)
+                self.meta_confidence_capped = True
                 _seed_symbol_history_from_bars(symbol_upper, df)
         else:
             allowed_tags = set(performance_data.keys())
@@ -11926,6 +11941,7 @@ class SignalManager:
                         symbol_upper,
                     )
                     _METALEARN_FALLBACK_SYMBOL_LOGGED.add(symbol_upper)
+                self.meta_confidence_capped = True
                 _seed_symbol_history_from_bars(symbol_upper, df)
 
         self.load_signal_weights()
@@ -16856,7 +16872,7 @@ def _fetch_feature_data(
     no additional fetch is attempted.
     """
     def _halt(reason: str) -> None:
-        logger.error("DATA_FETCH_EMPTY", extra={"symbol": symbol, "reason": reason})
+        logger.info("COVERAGE_BLOCK", extra={"symbol": symbol, "reason": reason})
         halt_mgr = getattr(ctx, "halt_manager", None)
         if halt_mgr is not None:
             try:
@@ -17551,7 +17567,11 @@ def _extract_quote_timestamp(payload: Any) -> datetime | None:
 
 
 _TRANSIENT_FALLBACK_REASONS = frozenset(
-    {"quote_source_unavailable", "quote_fetch_error", "quote_timestamp_missing"}
+    {
+        "quote_source_unavailable",
+        "quote_fetch_error",
+        "quote_timestamp_missing",
+    }
 )
 _FALLBACK_PRICE_PROVIDERS = frozenset({"yahoo", "bars"})
 _PRIMARY_PRICE_PROVIDERS = frozenset(
@@ -17715,6 +17735,7 @@ def _evaluate_data_gating(
                 fatal_reasons.append(reason_text)
 
         fallback_source = fallback_source or fallback_required
+        fallback_quote_reason_labels: list[str] = []
         if fallback_source:
             max_fallback_age = _fallback_quote_max_age_seconds()
             ok, age, reason = _check_fallback_quote_age(
@@ -17737,23 +17758,23 @@ def _evaluate_data_gating(
                 fallback_ok = True
             else:
                 reason_label = reason or "fallback_quote_invalid"
-                if (
-                    strict
-                    and max_fallback_age > 0
-                    and age is None
-                    and reason_label in _TRANSIENT_FALLBACK_REASONS
-                ):
-                    reason_label = "fallback_quote_stale"
+                original_reason_label = reason_label
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = reason_label
                 annotations["fallback_quote_ok"] = False
                 annotations["fallback_quote_source"] = "alpaca"
+                fallback_quote_reason_labels = [reason_label]
                 if reason_label in _TRANSIENT_FALLBACK_REASONS:
                     reasons.append(reason_label)
+                    if (
+                        original_reason_label
+                        and original_reason_label != reason_label
+                    ):
+                        reasons.append(original_reason_label)
+                        fallback_quote_reason_labels.append(original_reason_label)
                 else:
                     fatal_reasons.append(reason_label)
                 fallback_ok = False
-                fallback_quote_reason_label = reason_label
                 _update_data_quality(
                     state,
                     symbol,
@@ -17771,12 +17792,13 @@ def _evaluate_data_gating(
                         annotations["fallback_quote_age"] = synthetic_age
                         annotations["fallback_quote_error"] = None
                         annotations["fallback_quote_source"] = "synthetic"
-                        if fallback_quote_reason_label:
-                            if fallback_quote_reason_label in fatal_reasons:
-                                fatal_reasons.remove(fallback_quote_reason_label)
-                            while fallback_quote_reason_label in reasons:
-                                reasons.remove(fallback_quote_reason_label)
-                            fallback_quote_reason_label = None
+                        if fallback_quote_reason_labels:
+                            for label in list(fallback_quote_reason_labels):
+                                if label in fatal_reasons:
+                                    fatal_reasons.remove(label)
+                                while label in reasons:
+                                    reasons.remove(label)
+                            fallback_quote_reason_labels.clear()
                         _update_data_quality(
                             state,
                             symbol,
@@ -17787,14 +17809,14 @@ def _evaluate_data_gating(
                     else:
                         annotations["fallback_quote_age"] = synthetic_age
                         annotations["fallback_quote_source"] = "synthetic"
-                        if not fallback_quote_reason_label:
-                            fallback_quote_reason_label = "fallback_quote_stale"
-                        annotations["fallback_quote_error"] = fallback_quote_reason_label
+                        if not fallback_quote_reason_labels:
+                            fallback_quote_reason_labels.append("fallback_quote_stale")
+                        annotations["fallback_quote_error"] = fallback_quote_reason_labels[-1]
                         _update_data_quality(
                             state,
                             symbol,
                             fallback_quote_age=synthetic_age,
-                            fallback_quote_error=fallback_quote_reason_label,
+                            fallback_quote_error=fallback_quote_reason_labels[-1],
                             fallback_quote_source="synthetic",
                         )
     else:
@@ -19431,6 +19453,16 @@ def _evaluate_trade_signal(
         ctx, state, feat_df, symbol, model
     )
     components = ctx.signal_manager.last_components
+    meta_flag = bool(getattr(ctx.signal_manager, "meta_confidence_capped", False))
+
+    def _apply_meta_cap(value: float) -> tuple[float, bool, float | None]:
+        if not meta_flag or not math.isfinite(value):
+            return value, False, None
+        cap_limit = _metafallback_confidence_cap()
+        if value > cap_limit:
+            return cap_limit, True, value
+        return value, False, None
+
     if not components:
         confidence = 0.0
         try:
@@ -19439,11 +19471,21 @@ def _evaluate_trade_signal(
             confidence = 0.0
         if not np.isfinite(confidence):
             confidence = 0.0
+        confidence, capped_flag, confidence_before_cap = _apply_meta_cap(confidence)
+        extra_payload = {
+            "symbol": symbol,
+            "final_score": 0.0,
+            "confidence": confidence,
+            "confidence_capped_due_to_history": capped_flag,
+        }
+        if capped_flag and confidence_before_cap is not None:
+            extra_payload["confidence_before_cap"] = confidence_before_cap
         logger.info(
             "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
             symbol,
             0.0,
             confidence,
+            extra=extra_payload,
         )
         logger.info(
             "SIGNAL_HOLD",
@@ -19461,13 +19503,23 @@ def _evaluate_trade_signal(
     logger.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
     confidence = sum(w for _, w, _ in ctx.signal_manager.last_components)
+    confidence, capped_flag, confidence_before_cap = _apply_meta_cap(confidence)
     strat_components = [lab for _, _, lab in ctx.signal_manager.last_components]
     strat = "+".join(strat_components) if strat_components else "HOLD"
+    extra_payload = {
+        "symbol": symbol,
+        "final_score": final_score,
+        "confidence": confidence,
+        "confidence_capped_due_to_history": capped_flag,
+    }
+    if capped_flag and confidence_before_cap is not None:
+        extra_payload["confidence_before_cap"] = confidence_before_cap
     logger.info(
         "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
         symbol,
         final_score,
         confidence,
+        extra=extra_payload,
     )
     if final_score is None or not np.isfinite(final_score):
         raise ValueError("Invalid or empty signal")
@@ -24246,7 +24298,130 @@ def _reason_implies_fatal(reason: str | None) -> bool:
     return any(token in reason_lower for token in fatal_tokens)
 
 
-def _truncate_degraded_candidates(symbols: list[str], runtime) -> list[str]:
+def _minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
+    if not isinstance(provider_state, MappingABC):
+        return False
+    tf_state = provider_state.get("timeframes")
+    if not isinstance(tf_state, MappingABC):
+        return False
+    for tf_key, flag in tf_state.items():
+        try:
+            normalized = str(tf_key).strip().lower()
+        except Exception:
+            normalized = str(tf_key)
+        if not normalized:
+            continue
+        if normalized.endswith("min") or normalized in {"1m", "1min", "intraday", "minute"}:
+            try:
+                if bool(flag):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _quote_age_limit_ms() -> float:
+    try:
+        return max(float(get_env("QUOTE_MAX_AGE_MS", 2000, cast=float)), 0.0)
+    except Exception:
+        return 2000.0
+
+
+def _quote_age_ms_from_state(state: Mapping[str, Any] | None) -> float | None:
+    if not isinstance(state, MappingABC):
+        return None
+    age_ms = state.get("quote_age_ms")
+    if age_ms is None:
+        age_sec = state.get("age_sec")
+        try:
+            if age_sec is not None:
+                age_ms = float(age_sec) * 1000.0
+        except Exception:
+            age_ms = None
+    if age_ms is None:
+        return None
+    try:
+        value = float(age_ms)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0.0 and math.isfinite(value) else None
+
+
+def _pre_trade_gate() -> bool:
+    """Return True when execution should be blocked before strategy evaluation."""
+
+    if _sip_lockout_active():
+        logger.warning(
+            "EXECUTION_BLOCKED_UNAUTHORIZED_SIP",
+            extra={"reason": "unauthorized_sip"},
+        )
+        return True
+
+    try:
+        provider_state = runtime_state.observe_data_provider_state()
+    except Exception:
+        provider_state = {}
+    safe_mode_active = provider_monitor.is_safe_mode_active()
+    safe_mode_reason_text = safe_mode_reason()
+    provider_status = ""
+    provider_reason = None
+    if isinstance(provider_state, MappingABC):
+        provider_status = str(provider_state.get("status") or "").lower()
+        provider_reason = provider_state.get("reason")
+    provider_disabled = provider_status in {"down", "offline", "halted", "disabled"}
+    disabled_check = getattr(provider_monitor, "is_disabled", None)
+    if not provider_disabled and callable(disabled_check):
+        try:
+            provider_disabled = bool(disabled_check("alpaca"))
+        except Exception:
+            provider_disabled = False
+    fallback_active = _minute_fallback_active(provider_state)
+    try:
+        allow_fallback_quotes = bool(get_env("ALLOW_EXECUTION_ON_FALLBACK_QUOTES", False, cast=bool))
+    except Exception:
+        allow_fallback_quotes = False
+
+    try:
+        quote_state = runtime_state.observe_quote_status()
+    except Exception:
+        quote_state = {}
+    quote_age_ms = _quote_age_ms_from_state(quote_state)
+    max_age_ms = _quote_age_limit_ms()
+    synthetic_quote = bool(quote_state.get("synthetic"))
+    stale_quote = quote_age_ms is not None and quote_age_ms > max_age_ms
+
+    block_reasons: list[str] = []
+    if safe_mode_active or provider_disabled:
+        block_reasons.append("provider_disabled")
+    if fallback_active and not allow_fallback_quotes:
+        block_reasons.append("fallback_minute_data")
+    if synthetic_quote:
+        block_reasons.append("synthetic_quote")
+    if stale_quote:
+        block_reasons.append("stale_quote")
+
+    if not block_reasons:
+        return False
+
+    extra = {
+        "block_reason": block_reasons,
+        "safe_mode": safe_mode_active,
+        "safe_mode_reason": safe_mode_reason_text,
+        "provider_status": provider_status or None,
+        "provider_reason": provider_reason,
+        "fallback_active": fallback_active,
+        "quote_age_ms": quote_age_ms,
+        "quote_max_age_ms": max_age_ms,
+        "quote_source": quote_state.get("source"),
+        "bid": quote_state.get("bid"),
+        "ask": quote_state.get("ask"),
+        "last_price": quote_state.get("last_price"),
+    }
+    logger.warning("EXECUTION_BLOCKED_UNSAFE_QUOTES", extra=extra)
+    return True
+
+
+def _truncate_degraded_candidates(symbols: list[str], runtime, *, reason: str | None = None) -> list[str]:
     """Limit candidate list when the primary provider is degraded."""
 
     if not symbols:
@@ -24274,9 +24449,15 @@ def _truncate_degraded_candidates(symbols: list[str], runtime) -> list[str]:
         max_candidates = 1
     if len(symbols) <= max_candidates:
         return symbols
+    penalty_factor = round(max_candidates / len(symbols), 4)
     logger.warning(
-        "DEGRADED_CANDIDATES_TRUNCATED",
-        extra={"original": len(symbols), "truncated": max_candidates},
+        "SCREEN_DEGRADED_INPUTS",
+        extra={
+            "original": len(symbols),
+            "truncated": max_candidates,
+            "penalty_factor": penalty_factor,
+            "reason": reason or "provider_degraded",
+        },
     )
     return symbols[:max_candidates]
 
@@ -24358,6 +24539,22 @@ def _prepare_run(
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_candidate_universe(runtime, tickers)
+    degraded_snapshot = _resolve_data_provider_degraded()
+    degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(degraded_snapshot)
+    try:
+        cfg_obj = get_trading_config()
+        skip_on_disabled = bool(getattr(cfg_obj, "skip_compute_when_provider_disabled", True))
+    except Exception:
+        skip_on_disabled = True
+    if degraded_cycle and skip_on_disabled and (_reason_implies_fatal(degrade_reason) or degrade_fatal):
+        logger.warning(
+            "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
+            extra={
+                "reason": degrade_reason or safe_mode_reason() or "provider_disabled",
+                "symbol_budget": len(full_watchlist),
+            },
+        )
+        return current_cash, False, []
     try:
         pretrade_data_health(runtime, full_watchlist)
     except DataFetchError:
@@ -24376,11 +24573,8 @@ def _prepare_run(
         symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
-    degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(
-        _resolve_data_provider_degraded()
-    )
     if degraded_cycle and symbols:
-        symbols = _truncate_degraded_candidates(symbols, runtime)
+        symbols = _truncate_degraded_candidates(symbols, runtime, reason=degrade_reason)
         runtime.tickers = symbols
     setattr(runtime, "_data_degraded", bool(degraded_cycle))
     if degrade_reason:
@@ -24396,6 +24590,8 @@ def _prepare_run(
     try:
         summary = pre_trade_health_check(runtime, symbols)
         logger.info("PRE_TRADE_HEALTH", extra=summary)
+        if _pre_trade_gate():
+            return current_cash, False, []
     except (
         APIError,
         TimeoutError,
@@ -24441,6 +24637,8 @@ def _process_symbols(
 
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
+    if provider_monitor.is_safe_mode_active():
+        raise CycleAbortSafeMode(safe_mode_reason() or "provider_safe_mode")
     data_degraded = bool(getattr(ctx, "_data_degraded", False))
     degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
     degrade_fatal = bool(getattr(ctx, "_data_degraded_fatal", False))
@@ -24489,6 +24687,8 @@ def _process_symbols(
             )
 
     for symbol in symbols:
+        if provider_monitor.is_safe_mode_active():
+            raise CycleAbortSafeMode(safe_mode_reason() or "provider_safe_mode")
         detected = False
         if not data_degraded or not degrade_fatal:
             detected_cycle, detected_reason, detected_fatal = _degrade_state(
@@ -24678,7 +24878,7 @@ def _process_symbols(
                 _log_trade_quota_once()
                 return
             def _halt(reason: str) -> None:
-                logger.error("DATA_FETCH_EMPTY", extra={"symbol": symbol, "reason": reason})
+                logger.info("COVERAGE_BLOCK", extra={"symbol": symbol, "reason": reason})
                 halt_mgr = getattr(ctx, "halt_manager", None)
                 if halt_mgr is not None:
                     try:
@@ -25952,10 +26152,17 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             attempts_used = 0
             for attempt in range(attempts_limit):
                 attempts_used = attempt + 1
-                with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
-                    processed, row_counts = _process_symbols(
-                        symbols, current_cash, alpha_model, regime_ok
+                try:
+                    with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
+                        processed, row_counts = _process_symbols(
+                            symbols, current_cash, alpha_model, regime_ok
+                        )
+                except CycleAbortSafeMode as exc:
+                    logger.warning(
+                        "CYCLE_EARLY_EXIT_SAFE_MODE",
+                        extra={"reason": str(exc) or (safe_mode_reason() or "provider_safe_mode")},
                     )
+                    return
                 if processed:
                     if attempt:
                         logger.info(

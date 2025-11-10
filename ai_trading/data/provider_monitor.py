@@ -51,6 +51,28 @@ CANON = {
     "yfinance": "yahoo",
 }
 
+_CRITICAL_REASON_TOKENS = (
+    "gap_ratio",
+    "gap_ratio_exceeded",
+    "rate_limited",
+    "server_error",
+    "empty_bars",
+    "empty_data",
+    "timeout",
+)
+
+
+def _reason_is_critical(reason: str | None) -> bool:
+    if not reason:
+        return False
+    try:
+        normalized = str(reason).strip().lower()
+    except Exception:
+        normalized = str(reason).lower()
+    if not normalized:
+        return False
+    return any(token in normalized for token in _CRITICAL_REASON_TOKENS)
+
 
 def _detect_pytest_env() -> bool:
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
@@ -481,6 +503,8 @@ def _trigger_provider_safe_mode(
     global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_RECOVERY_TARGET
 
     now = monotonic_time()
+    was_active = _SAFE_MODE_ACTIVE
+    previous_reason = _SAFE_MODE_REASON
     if _last_halt_reason == reason and (now - _last_halt_ts) < _HALT_SUPPRESS_SECONDS:
         return
     _last_halt_reason = reason
@@ -536,10 +560,11 @@ def _trigger_provider_safe_mode(
                 extra={"reason": reason},
             )
 
-    logger.error(
-        "PROVIDER_SAFE_MODE_TRIGGERED",
-        extra=metadata_payload,
-    )
+    if not was_active or previous_reason != reason:
+        logger.error(
+            "PROVIDER_SAFE_MODE_TRIGGERED",
+            extra=metadata_payload,
+        )
 
     _write_halt_flag(reason, metadata=metadata_payload)
 
@@ -1682,6 +1707,7 @@ class ProviderMonitor:
             }
             if gap_ratio is not None:
                 payload["gap_ratio"] = gap_ratio
+                payload["gap_ratio_pct"] = round(float(gap_ratio) * 100.0, 4)
             if quote_age_ms is not None:
                 payload["quote_age_ms"] = quote_age_ms
             logger.info("PROVIDER_HEALTH_PASS", extra=payload)
@@ -1905,12 +1931,19 @@ class ProviderMonitor:
         if isinstance(decision_until, datetime) and window_seconds > 0:
             if now < decision_until:
                 window_active = True
-            else:
-                state["decision_until"] = None
-                decision_until = None
+        else:
+            state["decision_until"] = None
+            decision_until = None
+        critical_failure = (not healthy) and _reason_is_critical(reason)
+        if critical_failure:
+            state["decision_until"] = None
+            decision_until = None
+            window_active = False
         normalized_severity = (severity or ("good" if healthy else "degraded")).strip().lower()
         if normalized_severity not in {"good", "degraded", "hard_fail"}:
             normalized_severity = "good" if healthy else "degraded"
+        if critical_failure:
+            normalized_severity = "hard_fail"
 
         using_backup = active == backup
         cooldown_seconds = max(0, int(state.get("cooldown", cooldown_default)))

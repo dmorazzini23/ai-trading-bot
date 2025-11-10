@@ -26,6 +26,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any, Iterable, Mapping
+from zoneinfo import ZoneInfo
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
@@ -169,6 +170,10 @@ def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
 
 
 _SENSITIVE_EXTRA_KEYS = ("api_key", "secret")
+try:
+    _LOG_TIMEZONE = ZoneInfo("UTC")
+except Exception:  # pragma: no cover - zoneinfo fallback
+    _LOG_TIMEZONE = UTC  # type: ignore[assignment]
 
 _SUMMARY_SANITIZE_PATTERN = re.compile(r"[^A-Z0-9]+")
 
@@ -204,6 +209,23 @@ def sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _structured_ts_extra() -> dict[str, Any]:
+    """Return timestamp fields for structured logging with tz offsets."""
+
+    try:
+        now = datetime.now(_LOG_TIMEZONE)
+    except Exception:  # pragma: no cover - timezone fallback
+        now = datetime.now(UTC)
+    try:
+        epoch = float(now.timestamp())
+    except Exception:
+        epoch = time.time()
+    return {
+        "ts": epoch,
+        "ts_iso": now.isoformat(),
+    }
 
 
 class ExtraSanitizerFilter(logging.Filter):
@@ -745,8 +767,13 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
 
     def process(self, msg, kwargs):
         extra = kwargs.get("extra")
-        if extra is not None:
-            kwargs["extra"] = sanitize_extra(extra)
+        payload: dict[str, Any] = {}
+        if isinstance(extra, dict):
+            payload.update(extra)
+        ts_fields = _structured_ts_extra()
+        for key, value in ts_fields.items():
+            payload.setdefault(key, value)
+        kwargs["extra"] = sanitize_extra(payload)
         return (msg, kwargs)
 
 

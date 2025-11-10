@@ -17,6 +17,8 @@ def _stub_runtime_state(monkeypatch):
         "status": "healthy",
         "consecutive_failures": 0,
         "gap_ratio_recent": 0.0,
+        "quote_fresh_ms": 250.0,
+        "safe_mode": False,
     }
     broker_state = {
         "status": "reachable",
@@ -41,6 +43,11 @@ def test_app_health_endpoint_shared_port():
     assert payload["ok"] is True
     assert payload["service"] == "ai-trading"
     assert payload["timestamp"].endswith("Z")
+    assert "provider_state" in payload
+    assert payload["provider_state"]["primary"] == "alpaca"
+    assert payload["gap_ratio_pct"] == 0.0
+    assert payload["quote_fresh_ms"] == 250.0
+    assert payload["safe_mode"] is False
 
 
 def test_standalone_health_server_handler():

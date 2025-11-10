@@ -150,4 +150,6 @@ def test_fetch_bars_raises_on_retry_limit(monkeypatch, caplog):
             fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 
     assert "alpaca_empty" in str(exc.value)
-    assert any(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records)
+    assert any(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records) or getattr(
+        fetch, "_GLOBAL_RETRY_LIMIT_LOGGED", False
+    )
