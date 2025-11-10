@@ -881,6 +881,13 @@ See [docs/provider_configuration.md](docs/provider_configuration.md) for environ
 When this backoff triggers, the system logs the affected symbol, timeframe and
 provider status to aid debugging.
 
+**Degraded feed policy**: set `TRADING__DEGRADED_FEED_MODE=widen` to keep
+trading through Alpaca minute-feed incidents. The engine widens limit prices
+and relies on fallback quotes instead of blocking. Use
+`SKIP_COMPUTE_WHEN_PROVIDER_DISABLED=false` when you want screening to continue
+even if `is_primary_provider_enabled()` reports a cooldown; execution still runs
+under the widen policy regardless of that flag.
+
 #### Machine Learning Configuration
 
 | Parameter | Default | Description |

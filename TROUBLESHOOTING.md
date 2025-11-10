@@ -264,6 +264,11 @@ configuration before re-enabling the primary provider.
 - To verify the active routing, run `python - <<'PY'` and print
   `runtime_state.observe_data_provider_state()`; confirm the `timeframes` map
   only lists the feeds you expect to be degraded.
+- To keep trading during a sustained Alpaca safe mode, set
+  `TRADING__DEGRADED_FEED_MODE=widen`. This widens protective limits and
+  allows fallback quotes instead of blocking orders. The
+  `SKIP_COMPUTE_WHEN_PROVIDER_DISABLED` flag only throttles heavy compute (screening,
+  MetaLearn); execution continues under `widen` even if that flag remains `true`.
 
 **Data Provider Diagnostics:**
 

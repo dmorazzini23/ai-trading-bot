@@ -2235,12 +2235,13 @@ def is_primary_provider_enabled() -> bool:
             cycle_active = False
     if cycle_active:
         cycle_key = str(current_cycle)
-        if cycle_key not in _SAFE_MODE_LOGGED:
-            logger.info(
-                "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
-                extra={"reason": cycle_reason or "provider_safe_mode"},
-            )
-            _SAFE_MODE_LOGGED.add(cycle_key)
+        if cycle_key in _SAFE_MODE_LOGGED:
+            return False
+        logger.info(
+            "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
+            extra={"reason": cycle_reason or "provider_safe_mode"},
+        )
+        _SAFE_MODE_LOGGED.add(cycle_key)
         return False
     if _alpaca_disabled_until is None:
         return True

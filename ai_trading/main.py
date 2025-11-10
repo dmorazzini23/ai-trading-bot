@@ -461,6 +461,7 @@ def run_cycle() -> None:
         set_cycle_budget_context,
         emit_cycle_budget_summary,
         clear_cycle_budget_context,
+        _safe_mode_blocks_trading,
     )
     from ai_trading.core.runtime import (
         build_runtime,
@@ -476,12 +477,38 @@ def run_cycle() -> None:
     # first use so downstream components can safely read from it during startup.
     get_trade_logger()
 
-    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
-        logger.info("PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP")
+    cfg = TradingConfig.from_env()
+
+    skip_compute_when_disabled = bool(getattr(cfg, "skip_compute_when_provider_disabled", True))
+    provider_disabled = False
+    provider_reason = "provider_disabled"
+    provider_check = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    if callable(provider_check):
+        try:
+            provider_disabled = not bool(provider_check())
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "PRIMARY_PROVIDER_STATUS_ERROR",
+                extra={"detail": str(exc), "exc_type": exc.__class__.__name__},
+            )
+            provider_disabled = False
+    if provider_disabled and skip_compute_when_disabled and _safe_mode_blocks_trading():
+        log_extra = {
+            "reason": provider_reason,
+            "skip_compute_when_provider_disabled": skip_compute_when_disabled,
+            "degraded_feed_mode": str(getattr(cfg, "degraded_feed_mode", "block")),
+        }
+        logger.info("PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP", extra=log_extra)
+        cycle_getter = getattr(data_fetcher_module, "_get_cycle_id", None)
+        logged_cycles = getattr(data_fetcher_module, "_SAFE_MODE_LOGGED", None)
+        if callable(cycle_getter) and isinstance(logged_cycles, set):
+            try:
+                logged_cycles.add(str(cycle_getter()))
+            except Exception:  # pragma: no cover - best effort dedupe
+                pass
         _interruptible_sleep(5.0)
         return
 
-    cfg = TradingConfig.from_env()
     try:
         logger.info(
             "EXEC_CONFIG_RESOLVED",

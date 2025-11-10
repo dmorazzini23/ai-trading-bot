@@ -17936,7 +17936,65 @@ def _allow_last_close_execution() -> bool:
         cfg = get_trading_config()
     except COMMON_EXC:
         return False
-    return bool(getattr(cfg, "execution_allow_last_close", False))
+    if bool(getattr(cfg, "execution_allow_last_close", False)):
+        return True
+    if is_safe_mode_active() and not _safe_mode_blocks_trading():
+        return True
+    return False
+
+
+def _safe_mode_blocks_trading() -> bool:
+    """Return ``True`` when the current degraded policy requires blocking trades."""
+
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        return True
+    mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
+    if bool(getattr(cfg, "execution_market_on_degraded", False)):
+        return False
+    return mode == "block"
+
+
+def _mark_ctx_degraded(ctx: BotContext | None, reason: str | None = None, *, fatal: bool = False) -> None:
+    """Set degraded marker attributes on ``ctx`` best-effort."""
+
+    if ctx is None:
+        return
+    try:
+        setattr(ctx, "_data_degraded", True)
+        if reason:
+            setattr(ctx, "_data_degraded_reason", reason)
+        elif hasattr(ctx, "_data_degraded_reason"):
+            delattr(ctx, "_data_degraded_reason")
+        if fatal:
+            setattr(ctx, "_data_degraded_fatal", True)
+    except Exception:  # pragma: no cover - context objects vary in tests
+        return
+
+
+def _log_safe_mode_continue(
+    ctx: BotContext | None,
+    *,
+    stage: str,
+    reason: str,
+    symbol: str | None = None,
+) -> None:
+    """Log a throttled continuation notice when safe mode is degraded but not blocking."""
+
+    extra: dict[str, Any] = {"stage": stage, "reason": reason}
+    if symbol:
+        extra["symbol"] = symbol
+    logged_key = f"{stage}"
+    if ctx is not None:
+        existing = getattr(ctx, "_safe_mode_degraded_logged", None)
+        if not isinstance(existing, set):
+            existing = set()
+        if logged_key in existing:
+            return
+        existing.add(logged_key)
+        setattr(ctx, "_safe_mode_degraded_logged", existing)
+    logger.warning("SAFE_MODE_DEGRADED_CONTINUE", extra=extra)
 
 
 def _enter_long(
@@ -17970,28 +18028,40 @@ def _enter_long(
         _mark_primary_provider_fallback(
             state, symbol, reason="primary_provider_disabled"
         )
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={
-                "symbol": symbol,
-                "reason": "primary_provider_disabled",
-                "block_reason": "provider_disabled",
-            },
-        )
+        if _safe_mode_blocks_trading():
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": "primary_provider_disabled",
+                    "block_reason": "provider_disabled",
+                },
+            )
+        else:
+            logger.warning(
+                "PRIMARY_PROVIDER_DEGRADED",
+                extra={"symbol": symbol, "provider": "alpaca"},
+            )
         prefer_backup_quote = True
     else:
         _clear_primary_provider_fallback(state, symbol, provider="alpaca")
 
     if is_safe_mode_active():
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={
-                "symbol": symbol,
-                "reason": safe_mode_reason() or "provider_safe_mode",
-                "block_reason": "provider_disabled",
-            },
-        )
-        return True
+        reason = safe_mode_reason() or "provider_safe_mode"
+        if _safe_mode_blocks_trading():
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": reason,
+                    "block_reason": "provider_disabled",
+                },
+            )
+            return True
+        prefer_backup_quote = True
+        setattr(state, "prefer_backup_quotes", True)
+        _mark_ctx_degraded(ctx, reason)
+        _log_safe_mode_continue(ctx, stage="enter_long", reason=reason, symbol=symbol)
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -18757,28 +18827,40 @@ def _enter_short(
         _mark_primary_provider_fallback(
             state, symbol, reason="primary_provider_disabled"
         )
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={
-                "symbol": symbol,
-                "reason": "primary_provider_disabled",
-                "block_reason": "provider_disabled",
-            },
-        )
+        if _safe_mode_blocks_trading():
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": "primary_provider_disabled",
+                    "block_reason": "provider_disabled",
+                },
+            )
+        else:
+            logger.warning(
+                "PRIMARY_PROVIDER_DEGRADED",
+                extra={"symbol": symbol, "provider": "alpaca"},
+            )
         prefer_backup_quote = True
     else:
         _clear_primary_provider_fallback(state, symbol, provider="alpaca")
 
     if is_safe_mode_active():
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={
-                "symbol": symbol,
-                "reason": safe_mode_reason() or "provider_safe_mode",
-                "block_reason": "provider_disabled",
-            },
-        )
-        return True
+        reason = safe_mode_reason() or "provider_safe_mode"
+        if _safe_mode_blocks_trading():
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": reason,
+                    "block_reason": "provider_disabled",
+                },
+            )
+            return True
+        prefer_backup_quote = True
+        setattr(state, "prefer_backup_quotes", True)
+        _mark_ctx_degraded(ctx, reason)
+        _log_safe_mode_continue(ctx, stage="enter_short", reason=reason, symbol=symbol)
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -19687,15 +19769,20 @@ def trade_logic(
         _clear_primary_provider_fallback(state, symbol, provider="alpaca")
 
     if is_safe_mode_active():
-        logger.warning(
-            "SAFE_MODE_BLOCK",
-            extra={
-                "symbol": symbol,
-                "reason": safe_mode_reason() or "provider_safe_mode",
-                "block_reason": "provider_disabled",
-            },
-        )
-        return False
+        reason = safe_mode_reason() or "provider_safe_mode"
+        if _safe_mode_blocks_trading():
+            logger.warning(
+                "SAFE_MODE_BLOCK",
+                extra={
+                    "symbol": symbol,
+                    "reason": reason,
+                    "block_reason": "provider_disabled",
+                },
+            )
+            return False
+        setattr(state, "prefer_backup_quotes", True)
+        _mark_ctx_degraded(ctx, reason)
+        _log_safe_mode_continue(ctx, stage="trade_logic", reason=reason, symbol=symbol)
 
     with StageTimer(logger, "DATA_FETCH_TOTAL_MS", symbol=symbol):
         raw_df, feat_df, skip_flag = _fetch_feature_data(
@@ -24391,8 +24478,19 @@ def _pre_trade_gate() -> bool:
     stale_quote = quote_age_ms is not None and quote_age_ms > max_age_ms
 
     block_reasons: list[str] = []
-    if safe_mode_active or provider_disabled:
+    provider_guard = safe_mode_active or provider_disabled
+    policy_blocks = _safe_mode_blocks_trading()
+    if provider_guard and policy_blocks:
         block_reasons.append("provider_disabled")
+    elif provider_guard:
+        reason_text = (
+            safe_mode_reason_text
+            or (provider_reason if isinstance(provider_reason, str) else None)
+            or "provider_disabled"
+        )
+        ctx = get_ctx()
+        _mark_ctx_degraded(ctx, reason_text)
+        _log_safe_mode_continue(ctx, stage="pre_trade_gate", reason=reason_text)
     if fallback_active and not allow_fallback_quotes:
         block_reasons.append("fallback_minute_data")
     if synthetic_quote:
@@ -24637,8 +24735,14 @@ def _process_symbols(
 
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
-    if provider_monitor.is_safe_mode_active():
-        raise CycleAbortSafeMode(safe_mode_reason() or "provider_safe_mode")
+    safe_mode_policy_blocks = _safe_mode_blocks_trading()
+    safe_mode_flag = provider_monitor.is_safe_mode_active()
+    safe_mode_label = safe_mode_reason() or "provider_safe_mode"
+    if safe_mode_flag and safe_mode_policy_blocks:
+        raise CycleAbortSafeMode(safe_mode_label)
+    if safe_mode_flag:
+        _mark_ctx_degraded(ctx, safe_mode_label)
+        _log_safe_mode_continue(ctx, stage="process_symbols", reason=safe_mode_label)
     data_degraded = bool(getattr(ctx, "_data_degraded", False))
     degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
     degrade_fatal = bool(getattr(ctx, "_data_degraded_fatal", False))
@@ -24687,8 +24791,14 @@ def _process_symbols(
             )
 
     for symbol in symbols:
-        if provider_monitor.is_safe_mode_active():
+        safe_mode_now = provider_monitor.is_safe_mode_active()
+        if safe_mode_now and safe_mode_policy_blocks:
             raise CycleAbortSafeMode(safe_mode_reason() or "provider_safe_mode")
+        if safe_mode_now and not data_degraded:
+            degrade_reason = safe_mode_reason() or degrade_reason
+            data_degraded = True
+            _mark_ctx_degraded(ctx, degrade_reason)
+            _log_safe_mode_continue(ctx, stage="process_symbols", reason=degrade_reason)
         detected = False
         if not data_degraded or not degrade_fatal:
             detected_cycle, detected_reason, detected_fatal = _degrade_state(
