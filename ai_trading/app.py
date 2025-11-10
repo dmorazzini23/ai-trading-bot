@@ -1,21 +1,23 @@
 from __future__ import annotations
+
+import json
 import logging
 import os
-import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
-from datetime import UTC, datetime
 
 from ai_trading.logging import get_logger
 from ai_trading.telemetry import runtime_state
 from ai_trading.utils.optional_dep import missing
+
 try:
     from flask import jsonify as _jsonify
 except ImportError as _jsonify_import_error:  # pragma: no cover - exercised via tests
     jsonify = None  # type: ignore[assignment]
 else:  # pragma: no cover - import path only evaluated once
-    jsonify = _jsonify  # noqa: F401
+    jsonify = _jsonify
     _jsonify_import_error = None
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
@@ -26,7 +28,8 @@ _log = get_logger(__name__)
 if missing("ai_trading.metrics", "metrics"):
     _PROM_OK, _PROM_REG = False, None
 else:
-    from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK, REGISTRY as _PROM_REG
+    from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK
+    from ai_trading.metrics import REGISTRY as _PROM_REG
 
 _ALPACA_SECTION_DEFAULTS: dict[str, Any] = {
     "sdk_ok": False,
@@ -54,7 +57,6 @@ _SERVICE_NAME = "ai-trading"
 
 def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
     """Return a fresh Alpaca payload seeded with required keys."""
-
     normalised = dict(_ALPACA_SECTION_DEFAULTS)
     if isinstance(raw, dict):
         for key, value in raw.items():
@@ -69,7 +71,6 @@ def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
 
 def _normalize_health_payload(raw: Mapping | None) -> dict[str, Any]:
     """Return payload that always includes ok/service/timestamp/alpaca keys."""
-
     payload = dict(raw or {})
     payload.setdefault("service", _SERVICE_NAME)
     timestamp_val = payload.get("timestamp")
@@ -88,7 +89,7 @@ def create_app():
     """Create and configure the Flask application."""
     # Bypass any mocked Flask import by resolving the class at call time
     FlaskClass = import_module("flask.app").Flask
-    app: "Flask" = FlaskClass(__name__)
+    app: Flask = FlaskClass(__name__)
     try:
         from ai_trading.diagnostics.http_diag import diag_bp  # type: ignore
     except ImportError:
@@ -103,7 +104,7 @@ def create_app():
     if not isinstance(getattr(app, "config", None), dict):
         app.config = dict(getattr(app, "config", {}))
 
-    get_logger('werkzeug').setLevel(logging.ERROR)
+    get_logger("werkzeug").setLevel(logging.ERROR)
 
     # Cache required env validation once during app startup.
     try:
@@ -118,7 +119,6 @@ def create_app():
 
     def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
         """Return a JSON ``Response`` with a resilient fallback."""
-
         primary_payload = _normalize_health_payload(data)
         fallback_payload = _normalize_health_payload(fallback) if fallback else None
 
@@ -144,7 +144,6 @@ def create_app():
             reasons: list[str] | tuple[str, ...] | None = None,
         ) -> dict:
             """Ensure payload carries structured fallback metadata."""
-
             meta = payload.get("meta")
             if not isinstance(meta, dict):
                 meta = {}
@@ -166,17 +165,19 @@ def create_app():
             return payload
 
         sanitized_payload = _stamp_fallback_meta(
-            dict(merged_payload), used=False, reasons=[]
+            dict(merged_payload), used=False, reasons=[],
         )
 
         func = globals().get("jsonify")
         fallback_used = False
         fallback_reasons: list[str] = []
+        serialization_failed = False
         if callable(func):
             try:
                 response = func(dict(sanitized_payload))
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
+                serialization_failed = True
                 fallback_used = True
                 reason_candidates = [str(exc).strip(), exc.__class__.__name__]
                 fallback_reasons.extend(
@@ -185,7 +186,7 @@ def create_app():
                     if reason
                 )
                 sanitized_payload = _stamp_fallback_meta(
-                    sanitized_payload, used=True, reasons=fallback_reasons
+                    sanitized_payload, used=True, reasons=fallback_reasons,
                 )
             else:
                 has_get_data = callable(getattr(response, "get_data", None))
@@ -200,18 +201,18 @@ def create_app():
         else:
             fallback_used = True
             fallback_reasons.append("jsonify unavailable")
-            if '_jsonify_import_error' in globals() and _jsonify_import_error is not None:
+            if "_jsonify_import_error" in globals() and _jsonify_import_error is not None:
                 import_reason = str(_jsonify_import_error).strip()
                 if import_reason:
                     fallback_reasons.append(import_reason)
                 fallback_reasons.append("ImportError")
             sanitized_payload = _stamp_fallback_meta(
-                sanitized_payload, used=True, reasons=fallback_reasons
+                sanitized_payload, used=True, reasons=fallback_reasons,
             )
 
         final_payload = _normalize_health_payload(dict(sanitized_payload))
 
-        if fallback_used:
+        if serialization_failed:
             final_payload["ok"] = False
 
         message_candidates: list[str] = []
@@ -247,13 +248,14 @@ def create_app():
 
         sanitized_payload = _normalize_health_payload(dict(final_payload))
         sanitized_payload = _stamp_fallback_meta(
-            sanitized_payload, used=fallback_used, reasons=fallback_reasons
+            sanitized_payload, used=fallback_used, reasons=fallback_reasons,
         )
 
         try:
             body = json.dumps(sanitized_payload, default=str)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
+            serialization_failed = True
             extra_reason = str(exc).strip() or exc.__class__.__name__ or "serialization_error"
             fallback_used = True
             fallback_reasons = [
@@ -268,7 +270,7 @@ def create_app():
                         "ok": False,
                         "alpaca": alpaca_section,
                         "error": extra_reason,
-                    }
+                    },
                 ),
                 used=True,
                 reasons=fallback_reasons,
@@ -296,7 +298,7 @@ def create_app():
         )
         return sanitized_payload
 
-    @app.route('/health')
+    @app.route("/health")
     def health():
         """Lightweight liveness probe with Alpaca diagnostics."""
         ok = True
@@ -333,17 +335,18 @@ def create_app():
 
         if alpaca_import_ok:
             try:
-                from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client as _trading_client
+                from ai_trading.core.bot_engine import _resolve_alpaca_env
+                from ai_trading.core.bot_engine import trading_client as _trading_client
                 trading_client = _trading_client
                 key, secret, base_url = _resolve_alpaca_env()
                 base_url = base_url or ""
-                paper = bool(base_url and 'paper' in base_url)
+                paper = bool(base_url and "paper" in base_url)
             except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
                 ok = False
                 record_error(exc)
-                trading_client, key, secret, base_url, paper = (None, None, None, '', False)
+                trading_client, key, secret, base_url, paper = (None, None, None, "", False)
         else:
-            trading_client, key, secret, base_url, paper = (None, None, None, '', False)
+            trading_client, key, secret, base_url, paper = (None, None, None, "", False)
 
         try:
             from ai_trading.config.management import is_shadow_mode
@@ -371,7 +374,7 @@ def create_app():
                 "base_url": base_url,
                 "paper": paper,
                 "shadow_mode": shadow,
-            }
+            },
         )
 
         payload = {
@@ -396,7 +399,7 @@ def create_app():
 
         return _json_response(payload, fallback=fallback_payload)
 
-    @app.route('/healthz')
+    @app.route("/healthz")
     def healthz():
         """Minimal liveness probe with provider diagnostics."""
         ok = True
@@ -434,12 +437,20 @@ def create_app():
             "gap_ratio_recent": provider_state.get("gap_ratio_recent"),
         }
 
-        broker_status = broker_state.get("status") or (
-            "reachable" if broker_state.get("connected") else "unreachable"
-        )
+        broker_connected_raw = broker_state.get("connected")
+        broker_status = broker_state.get("status")
+        if not broker_state:
+            broker_status = "reachable"
+            broker_connected_raw = True
+        elif not broker_status:
+            if broker_connected_raw is None:
+                broker_status = "reachable"
+            else:
+                broker_status = "reachable" if broker_connected_raw else "unreachable"
+        broker_connected = bool(broker_connected_raw)
         broker_payload = {
             "status": broker_status,
-            "connected": bool(broker_state.get("connected")),
+            "connected": broker_connected,
             "latency_ms": broker_state.get("latency_ms"),
             "last_error": broker_state.get("last_error"),
             "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
@@ -488,13 +499,13 @@ def create_app():
             payload["reason"] = env_err
         return jsonify(payload)
 
-    @app.route('/metrics')
+    @app.route("/metrics")
     def metrics():
         """Expose Prometheus metrics if available."""
         if not _PROM_OK:
-            return ('metrics unavailable', 501)
+            return ("metrics unavailable", 501)
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-        return generate_latest(_PROM_REG), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+        return generate_latest(_PROM_REG), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
     original_test_client = getattr(app, "test_client", None)
 
@@ -548,7 +559,7 @@ def create_app():
                         "ok": False,
                         "alpaca": _normalise_alpaca_section(normalized_payload.get("alpaca")),
                         "error": str(normalized_payload.get("error", "serialization_error")),
-                    }
+                    },
                 )
                 normalized_payload = fallback_payload
                 body = json.dumps(normalized_payload, default=str)
@@ -577,7 +588,6 @@ def get_test_client():
     lightweight Flask stub. This helper guards the import and falls back
     gracefully when the testing utilities are missing.
     """
-
     module_name = "flask.testing"
     feature_name = "flask.testing"
 
@@ -606,12 +616,12 @@ def get_test_client():
     return flask_testing.FlaskClient(app)
 
 
-if __name__ == '__main__':
-    if os.getenv('RUN_HEALTHCHECK') == '1':
+if __name__ == "__main__":
+    if os.getenv("RUN_HEALTHCHECK") == "1":
         from ai_trading.config.settings import get_settings
 
         app = create_app()
         s = get_settings()
         port = int(s.healthcheck_port or 9101)
-        app.logger.info('Starting Flask', extra={'port': port})
-        app.run(host='0.0.0.0', port=port)
+        app.logger.info("Starting Flask", extra={"port": port})
+        app.run(host="0.0.0.0", port=port)

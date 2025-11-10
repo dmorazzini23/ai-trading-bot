@@ -43,13 +43,13 @@ else:  # pragma: no cover - exercised in integration tests
     _pooling_host_limit = getattr(_http_pooling, "get_host_limit", None)
     _pooling_get_host_semaphore = getattr(_http_pooling, "get_host_semaphore", None)
     _pooling_reload_host_limit = getattr(
-        _http_pooling, "reload_host_limit_if_env_changed", None
+        _http_pooling, "reload_host_limit_if_env_changed", None,
     )
     _pooling_get_limit_snapshot = getattr(
-        _http_pooling, "get_host_limit_snapshot", None
+        _http_pooling, "get_host_limit_snapshot", None,
     )
     _pooling_refresh_host_semaphore = getattr(
-        _http_pooling, "refresh_host_semaphore", None
+        _http_pooling, "refresh_host_semaphore", None,
     )
     _pooling_record_concurrency = getattr(_http_pooling, "record_concurrency", None)
 
@@ -60,7 +60,6 @@ _LOCAL_POOLING_VERSION: int = 0
 
 def _next_local_pooling_version() -> int:
     """Return a monotonically increasing version for locally computed limits."""
-
     global _LOCAL_POOLING_VERSION
 
     _LOCAL_POOLING_VERSION += 1
@@ -71,17 +70,14 @@ def _next_local_pooling_version() -> int:
 
 def _record_pooling_snapshot(limit: int, version: int) -> None:
     """Persist a normalised pooling snapshot and track the latest version."""
-
     global _POOLING_LIMIT_STATE, _LOCAL_POOLING_VERSION
 
     _POOLING_LIMIT_STATE = (limit, version)
-    if version > _LOCAL_POOLING_VERSION:
-        _LOCAL_POOLING_VERSION = version
+    _LOCAL_POOLING_VERSION = max(_LOCAL_POOLING_VERSION, version)
 
 
 def _invalidate_pooling_snapshot() -> None:
     """Force the next limit lookup to recompute the pooling snapshot."""
-
     global _POOLING_LIMIT_STATE
 
     _POOLING_LIMIT_STATE = None
@@ -89,7 +85,6 @@ def _invalidate_pooling_snapshot() -> None:
 
 def _normalise_pooling_state(snapshot: object | None) -> tuple[int, int] | None:
     """Return ``(limit, version)`` when ``snapshot`` exposes that metadata."""
-
     if snapshot is None:
         return None
 
@@ -105,14 +100,12 @@ def _normalise_pooling_state(snapshot: object | None) -> tuple[int, int] | None:
         version = int(version)
     except (TypeError, ValueError):
         return None
-    if limit < 1:
-        limit = 1
+    limit = max(limit, 1)
     return limit, version
 
 
 def _get_effective_host_limit() -> int | None:
     """Return the currently configured host limit or ``None`` when unset."""
-
     global _POOLING_LIMIT_STATE
 
     if _POOLING_LIMIT_STATE is not None:
@@ -152,7 +145,6 @@ def _get_effective_host_limit() -> int | None:
 
 def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     """Return the shared host-limit semaphore when pooling is available."""
-
     global _POOLING_LIMIT_STATE
 
     if not callable(_pooling_get_host_semaphore):
@@ -176,17 +168,28 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
     actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
 
+    def _refresh_host_semaphore() -> asyncio.Semaphore | None:
+        if not callable(_pooling_refresh_host_semaphore):
+            return None
+        try:
+            refreshed = _pooling_refresh_host_semaphore(loop=current_loop)
+        except TypeError:
+            refreshed = _pooling_refresh_host_semaphore()
+        except Exception:
+            return None
+        if isinstance(refreshed, asyncio.Semaphore):
+            bound_loop = getattr(refreshed, "_loop", None) or getattr(refreshed, "_bound_loop", None)
+            if bound_loop is not None and bound_loop is not current_loop:
+                return None
+            return refreshed
+        return None
+
     if semaphore_loop is not None and semaphore_loop is not current_loop:
-        refreshed: asyncio.Semaphore | None = None
-        if callable(_pooling_refresh_host_semaphore):
-            try:
-                refreshed = _pooling_refresh_host_semaphore(loop=current_loop)
-            except Exception:
-                refreshed = None
+        refreshed = _refresh_host_semaphore()
         if isinstance(refreshed, asyncio.Semaphore):
             semaphore = refreshed
-            actual_version = getattr(semaphore, "_ai_trading_host_limit_version", actual_version)
-            actual_limit = getattr(semaphore, "_ai_trading_host_limit", actual_limit)
+            actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
+            actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
             semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
         else:
             semaphore = None
@@ -195,20 +198,18 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
             actual_version = None
 
     if (
-        expected_version is not None
+        semaphore is not None
+        and expected_version is not None
         and isinstance(actual_version, int)
         and actual_version != expected_version
-        and callable(_pooling_refresh_host_semaphore)
     ):
-        try:
-            refreshed = _pooling_refresh_host_semaphore()
-        except Exception:
+        refreshed = _refresh_host_semaphore()
+        if refreshed is None:
             return None
-        if isinstance(refreshed, asyncio.Semaphore):
-            semaphore = refreshed
-            actual_version = getattr(semaphore, "_ai_trading_host_limit_version", actual_version)
-            actual_limit = getattr(semaphore, "_ai_trading_host_limit", actual_limit)
-            semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
+        semaphore = refreshed
+        actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
+        actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
+        semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
 
     if isinstance(actual_limit, int) and isinstance(actual_version, int):
         normalised = _normalise_pooling_state((actual_limit, actual_version))
@@ -225,7 +226,6 @@ _ASYNCIO_LOCK_NAMES = {"Lock", "Semaphore", "BoundedSemaphore"}
 
 def _collect_asyncio_primitive_types() -> tuple[type, ...]:
     """Return concrete asyncio synchronisation primitive types."""
-
     primitive_types: set[type] = set()
     for attr in _ASYNCIO_PRIMITIVE_NAMES:
         candidate = getattr(asyncio, attr, None)
@@ -252,7 +252,6 @@ def _is_asyncio_primitive(obj: object) -> bool:
 
 def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object:
     """Return a replacement lock/semaphore bound to ``loop`` when necessary."""
-
     obj_type = type(obj)
     type_name = obj_type.__name__
 
@@ -273,7 +272,7 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return obj
 
     if hasattr(obj, "_ai_trading_host_limit") or hasattr(
-        obj, "_ai_trading_host_limit_version"
+        obj, "_ai_trading_host_limit_version",
     ):
         return obj
 
@@ -335,7 +334,6 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
 
 def _normalise_positive_int(value: object) -> int | None:
     """Best-effort coercion of ``value`` to a positive integer."""
-
     try:
         candidate = int(value)
     except (TypeError, ValueError):
@@ -347,7 +345,6 @@ def _normalise_positive_int(value: object) -> int | None:
 
 def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
     """Assign ``value`` to ``target.name`` bypassing frozen guards when possible."""
-
     try:
         setattr(target, name, value)
         return True
@@ -360,7 +357,7 @@ def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
 
 
 def _recreate_dataclass_if_needed(
-    obj: object, mutated_fields: dict[str, object]
+    obj: object, mutated_fields: dict[str, object],
 ) -> object:
     """Return a dataclass instance reflecting ``mutated_fields``.
 
@@ -369,7 +366,6 @@ def _recreate_dataclass_if_needed(
     fields, custom ``__init__``), we fall back to in-place assignment using
     :func:`_assign_dataclass_attr`.
     """
-
     if not mutated_fields:
         return obj
 
@@ -555,7 +551,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
 
     module_name = getattr(obj.__class__, "__module__", "")
     if hasattr(obj, "__dict__") and not isinstance(obj, ModuleType) and module_name.startswith(
-        ("ai_trading", "tests", "__main__")
+        ("ai_trading", "tests", "__main__"),
     ):
         for name, value in list(vars(obj).items()):
             new_value = _scan(value, seen, loop)
@@ -571,7 +567,6 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
 
 def _should_replace_closure_cell(original: object, new_value: object) -> bool:
     """Return ``True`` when ``cell_contents`` should be reassigned."""
-
     if new_value is original:
         return False
 
@@ -599,7 +594,6 @@ def _should_replace_closure_cell(original: object, new_value: object) -> bool:
 
 def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.AbstractEventLoop) -> None:
     """Rebind foreign-loop locks captured in ``worker``'s closure to ``loop``."""
-
     cells = getattr(worker, "__closure__", None)
     if not cells:
         return
@@ -627,7 +621,6 @@ _HOST_PERMITS_HELD: int = 0
 
 def _update_peak_counters(peak_this_run: int) -> None:
     """Update global peak counters using ``peak_this_run``."""
-
     global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
 
     adjusted_peak = max(0, int(peak_this_run))
@@ -654,14 +647,12 @@ def _update_peak_counters(peak_this_run: int) -> None:
 
 def _increment_host_permits() -> None:
     """Increment the in-use host permit counter."""
-
     global _HOST_PERMITS_HELD
     _HOST_PERMITS_HELD += 1
 
 
 def _release_host_permit() -> None:
     """Decrement the in-use host permit counter without going negative."""
-
     global _HOST_PERMITS_HELD
     if _HOST_PERMITS_HELD > 0:
         _HOST_PERMITS_HELD -= 1
@@ -672,13 +663,11 @@ if _http_host_limit is not None:
     except Exception:
         _stored_peak = 0
     else:
-        if _stored_peak > PEAK_SIMULTANEOUS_WORKERS:
-            PEAK_SIMULTANEOUS_WORKERS = _stored_peak
+        PEAK_SIMULTANEOUS_WORKERS = max(PEAK_SIMULTANEOUS_WORKERS, _stored_peak)
 
 
 def reset_peak_simultaneous_workers() -> None:
     """Reset ``PEAK_SIMULTANEOUS_WORKERS`` to ``0`` for test isolation."""
-
     global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, _HOST_PERMITS_HELD
     PEAK_SIMULTANEOUS_WORKERS = 0
     LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = 0
@@ -687,7 +676,6 @@ def reset_peak_simultaneous_workers() -> None:
 
 def reset_tracking_state(*, reset_peak: bool = True) -> None:
     """Clear success and failure tracking sets and optionally reset the peak counter."""
-
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
     global _HOST_PERMITS_HELD
@@ -703,7 +691,6 @@ async def run_with_concurrency(
     timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
-
     reset_tracking_state(reset_peak=False)
 
     global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
@@ -737,7 +724,7 @@ async def run_with_concurrency(
                 host_semaphore = None
         if host_semaphore is not None:
             semaphore_limit = _normalise_positive_int(
-                getattr(host_semaphore, "_ai_trading_host_limit", None)
+                getattr(host_semaphore, "_ai_trading_host_limit", None),
             )
             if semaphore_limit is not None:
                 limit = min(limit, semaphore_limit)
@@ -754,7 +741,7 @@ async def run_with_concurrency(
         """Return an async context manager that manages a host semaphore permit."""
 
         class _HostPermit(AbstractAsyncContextManager[None]):
-            __slots__ = ("_semaphore", "_acquired")
+            __slots__ = ("_acquired", "_semaphore")
 
             def __init__(self, semaphore: asyncio.Semaphore | None) -> None:
                 self._semaphore = semaphore
@@ -762,20 +749,20 @@ async def run_with_concurrency(
 
             async def __aenter__(self) -> None:
                 if self._semaphore is None:
-                    return None
+                    return
                 bound_loop = getattr(self._semaphore, "_loop", None)
                 if bound_loop is not None and bound_loop is not loop:
-                    return None
+                    return
                 try:
                     await self._semaphore.acquire()
                 except asyncio.CancelledError:
                     raise
                 except BaseException:
                     # If host semaphore acquisition fails, proceed without holding a permit.
-                    return None
+                    return
                 self._acquired = True
                 _increment_host_permits()
-                return None
+                return
 
             async def __aexit__(
                 self,
@@ -795,7 +782,7 @@ async def run_with_concurrency(
         return _HostPermit(host_semaphore)
 
     async def _drain_cancelled_tasks(
-        pending_tasks: list[asyncio.Task[None]], *, timeout: float = 1.0
+        pending_tasks: list[asyncio.Task[None]], *, timeout: float = 1.0,
     ) -> list[BaseException | None]:
         """Wait for ``pending_tasks`` to finish after cancellation.
 
@@ -804,7 +791,6 @@ async def run_with_concurrency(
         waits up to ``timeout`` seconds before treating the task as timed out
         and detaching a completion callback that drains its exception.
         """
-
         if not pending_tasks:
             return []
 
@@ -832,7 +818,7 @@ async def run_with_concurrency(
                 break
             wait_timeout = min(timeout_left, 0.2)
             done, still_pending = await asyncio.wait(
-                remaining, timeout=wait_timeout
+                remaining, timeout=wait_timeout,
             )
             for task in done:
                 _record_result(task)
@@ -843,8 +829,8 @@ async def run_with_concurrency(
                 if task.cancelled() and task not in outcomes:
                     outcomes[task] = asyncio.CancelledError()
                 else:
-                    outcomes[task] = asyncio.TimeoutError(
-                        "Task did not finish after cancellation"
+                    outcomes[task] = TimeoutError(
+                        "Task did not finish after cancellation",
                     )
 
                 def _drain(task: asyncio.Task[None]) -> None:
@@ -882,22 +868,21 @@ async def run_with_concurrency(
         results.setdefault(symbol, None)
 
         try:
-            async with concurrency_semaphore:
-                async with _acquire_host_permit():
-                    await _mark_worker_start()
-                    started = True
-                    try:
-                        result = await worker(symbol)
-                    except asyncio.CancelledError:
-                        FAILED_SYMBOLS.add(symbol)
-                        raise
-                    except BaseException:
-                        FAILED_SYMBOLS.add(symbol)
-                    else:
-                        SUCCESSFUL_SYMBOLS.add(symbol)
-                        results[symbol] = result
-                    finally:
-                        await _mark_worker_end(started)
+            async with concurrency_semaphore, _acquire_host_permit():
+                await _mark_worker_start()
+                started = True
+                try:
+                    result = await worker(symbol)
+                except asyncio.CancelledError:
+                    FAILED_SYMBOLS.add(symbol)
+                    raise
+                except BaseException:
+                    FAILED_SYMBOLS.add(symbol)
+                else:
+                    SUCCESSFUL_SYMBOLS.add(symbol)
+                    results[symbol] = result
+                finally:
+                    await _mark_worker_end(started)
         except asyncio.CancelledError:
             FAILED_SYMBOLS.add(symbol)
             raise
@@ -918,7 +903,7 @@ async def run_with_concurrency(
             outcomes = await gather_coro
         else:
             outcomes = await asyncio.wait_for(gather_coro, timeout_s)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         for task in tasks:
             task.cancel()
         outcomes = await _drain_cancelled_tasks(tasks)
@@ -928,7 +913,7 @@ async def run_with_concurrency(
         await _drain_cancelled_tasks(tasks)
         _update_peak_counters(peak_this_run)
         raise
-    for task, outcome in zip(tasks, outcomes):
+    for task, outcome in zip(tasks, outcomes, strict=False):
         symbol = task_to_symbol.get(task)
         if symbol is None:
             continue
@@ -949,7 +934,6 @@ async def run_with_concurrency_limit(
     timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Compatibility alias for ``run_with_concurrency``."""
-
     return await run_with_concurrency(
         symbols,
         worker,
@@ -959,12 +943,12 @@ async def run_with_concurrency_limit(
 
 
 __all__ = [
-    "run_with_concurrency",
-    "run_with_concurrency_limit",
-    "SUCCESSFUL_SYMBOLS",
     "FAILED_SYMBOLS",
-    "PEAK_SIMULTANEOUS_WORKERS",
     "LAST_RUN_PEAK_SIMULTANEOUS_WORKERS",
+    "PEAK_SIMULTANEOUS_WORKERS",
+    "SUCCESSFUL_SYMBOLS",
     "reset_peak_simultaneous_workers",
     "reset_tracking_state",
+    "run_with_concurrency",
+    "run_with_concurrency_limit",
 ]

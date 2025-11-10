@@ -1,17 +1,20 @@
 from __future__ import annotations
+
+import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import floor, isclose
-from typing import Any
-from types import SimpleNamespace
-import os
 from json import JSONDecodeError
+from math import floor, isclose
+from types import SimpleNamespace
+from typing import Any
+
+from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
+from ai_trading.exc import HTTPError, RequestException
 from ai_trading.logging import EmitOnceLogger, get_logger
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
-from ai_trading.exc import HTTPError, RequestException
-from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
+
 _log = get_logger(__name__)
 _once_logger = EmitOnceLogger(_log.logger)
 
@@ -74,10 +77,10 @@ def _parse_env_max_position_size(*, strict: bool) -> float | None:
         return None
     try:
         value = float(env_val)
-    except ValueError as exc:  # noqa: BLE001
+    except ValueError as exc:
         if strict:
             raise ValueError(
-                f"AI_TRADING_MAX_POSITION_SIZE must be numeric, got {env_val!r}"
+                f"AI_TRADING_MAX_POSITION_SIZE must be numeric, got {env_val!r}",
             ) from exc
         _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
         return None
@@ -101,7 +104,6 @@ def _resolve_max_position_size(
     When ``equity`` is ``None`` or non-positive, ``default_equity`` is used
     as the basis for the derived position size.
     """
-
     env_override = _parse_env_max_position_size(strict=True)
     if env_override is not None:
         return (env_override, "env_override")
@@ -112,6 +114,8 @@ def _resolve_max_position_size(
         return (float(provided), "provided")
 
     was_missing_logged = _CACHE.equity_missing_logged
+    env_override = None
+    _CACHE.env_override = None
     if force_refresh:
         _CACHE.equity_missing_logged = False
 
@@ -160,11 +164,11 @@ def _fallback_max_size(cfg, tcfg) -> float:
     env_override = _parse_env_max_position_size(strict=False)
     if env_override is not None:
         return env_override
-    for name in ('max_position_size_fallback', 'max_position_size_default'):
+    for name in ("max_position_size_fallback", "max_position_size_default"):
         v = getattr(tcfg, name, None)
         if v is not None:
             return _coerce_float(v, 8000.0)
-    v = getattr(cfg, 'default_max_position_size', None)
+    v = getattr(cfg, "default_max_position_size", None)
     if v is not None:
         return _coerce_float(v, 8000.0)
     return 8000.0
@@ -177,7 +181,6 @@ def _update_equity_cache(
     error: str | None = None,
 ) -> None:
     """Centralise cache updates so failure paths stay consistent."""
-
     now = _now_utc()
     _CACHE.equity = value
     _CACHE.equity_ts = now if value is not None else None
@@ -191,7 +194,6 @@ def _update_equity_cache(
 
 def _reset_log_throttle(message: str) -> None:
     """Ensure throttle filter does not suppress repeated critical warnings."""
-
     try:
         from ai_trading.logging import _THROTTLE_FILTER
     except Exception:  # pragma: no cover - defensive import
@@ -238,6 +240,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
         The current account equity. ``0.0`` is returned for recoverable
         errors, ``None`` is returned when credentials are missing, and the
         failure reason is recorded in the log payload.
+
     """
     if not force_refresh and _equity_cache_valid():
         return _CACHE.equity
@@ -298,7 +301,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
             status = getattr(resp, "status_code", None)
             if status != 200:
                 err = HTTPError(f"HTTP {status}")
-                setattr(err, "response", resp)
+                err.response = resp
                 raise err
         data = resp.json()
         eq = _coerce_float(data.get("equity"), 0.0)
@@ -358,16 +361,16 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         _CACHE.ts = None
         _CACHE.capital_cap = None
         _CACHE.env_override = None
-    mode = str(getattr(tcfg, 'max_position_mode', getattr(cfg, 'max_position_mode', 'STATIC'))).upper()
-    ttl = float(getattr(tcfg, 'dynamic_size_refresh_secs', getattr(cfg, 'dynamic_size_refresh_secs', 3600.0)))
-    cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)
-    vmin = getattr(tcfg, 'max_position_size_min', None)
-    vmax = getattr(tcfg, 'max_position_size_max', None)
+    mode = str(getattr(tcfg, "max_position_mode", getattr(cfg, "max_position_mode", "STATIC"))).upper()
+    ttl = float(getattr(tcfg, "dynamic_size_refresh_secs", getattr(cfg, "dynamic_size_refresh_secs", 3600.0)))
+    cap = _coerce_float(getattr(tcfg, "capital_cap", 0.0), 0.0)
+    vmin = getattr(tcfg, "max_position_size_min", None)
+    vmax = getattr(tcfg, "max_position_size_max", None)
     default_eq = _coerce_float(
-        getattr(tcfg, 'max_position_equity_fallback', getattr(cfg, 'max_position_equity_fallback', 200000.0)),
+        getattr(tcfg, "max_position_equity_fallback", getattr(cfg, "max_position_equity_fallback", 200000.0)),
         200000.0,
     )
-    if mode != 'AUTO':
+    if mode != "AUTO":
         if env_override is not None:
             now = _now_utc()
             _CACHE.value, _CACHE.ts = (env_override, now)
@@ -376,10 +379,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             return (
                 env_override,
                 {
-                    'mode': mode,
-                    'source': 'env_override',
-                    'capital_cap': cap,
-                    'refreshed_at': now.isoformat(),
+                    "mode": mode,
+                    "source": "env_override",
+                    "capital_cap": cap,
+                    "refreshed_at": now.isoformat(),
                 },
             )
         env_matches = (_CACHE.env_override == env_override)
@@ -387,19 +390,19 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             return (
                 _CACHE.value,
                 {
-                    'mode': mode,
-                    'source': 'cache',
-                    'capital_cap': cap,
-                    'refreshed_at': (_CACHE.ts or _now_utc()).isoformat(),
+                    "mode": mode,
+                    "source": "cache",
+                    "capital_cap": cap,
+                    "refreshed_at": (_CACHE.ts or _now_utc()).isoformat(),
                 },
             )
-        raw_val = getattr(tcfg, 'max_position_size', None)
+        raw_val = getattr(tcfg, "max_position_size", None)
         cur = _coerce_float(raw_val, 0.0)
-        source = 'static'
+        source = "static"
         if cur <= 0.0:
             if raw_val is not None:
-                raise ValueError('max_position_size must be positive')
-            eq = getattr(tcfg, 'equity', getattr(cfg, 'equity', None))
+                raise ValueError("max_position_size must be positive")
+            eq = getattr(tcfg, "equity", getattr(cfg, "equity", None))
             if eq in (None, 0.0):
                 # Allow tests to patch the public alias used by runtime.
                 fetched = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
@@ -407,10 +410,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                     eq = fetched
                     for obj in (cfg, tcfg):
                         try:
-                            setattr(obj, 'equity', eq)
+                            obj.equity = eq
                         except Exception:
                             try:
-                                object.__setattr__(obj, 'equity', eq)
+                                object.__setattr__(obj, "equity", eq)
                             except Exception:  # pragma: no cover - defensive
                                 pass
                 else:
@@ -429,10 +432,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         return (
             cur,
             {
-                'mode': mode,
-                'source': source,
-                'capital_cap': cap,
-                'refreshed_at': _CACHE.ts.isoformat(),
+                "mode": mode,
+                "source": source,
+                "capital_cap": cap,
+                "refreshed_at": _CACHE.ts.isoformat(),
             },
         )
     if force_refresh:
@@ -453,11 +456,11 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         and cap_matches
         and env_matches
     ):
-        return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
+        return (_CACHE.value, {"mode": mode, "source": "cache", "capital_cap": cap, "refreshed_at": (_CACHE.ts or _now_utc()).isoformat()})
     # Use public alias so callers/tests can patch equity retrieval.
     eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
-    failure_reason = getattr(_CACHE, 'equity_error', None)
-    source = _CACHE.equity_source or 'alpaca'
+    failure_reason = getattr(_CACHE, "equity_error", None)
+    source = _CACHE.equity_source or "alpaca"
     numeric_eq: float | None = None
     if eq is not None:
         try:
@@ -466,10 +469,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             numeric_eq = None
     if numeric_eq is None or numeric_eq <= 0.0:
         if failure_reason is None and numeric_eq is not None:
-            failure_reason = 'non_positive_equity'
+            failure_reason = "non_positive_equity"
         candidates = (
-            getattr(cfg, 'equity', None),
-            getattr(tcfg, 'equity', None),
+            getattr(cfg, "equity", None),
+            getattr(tcfg, "equity", None),
             _CACHE.equity,
             _CACHE.last_equity,
         )
@@ -480,22 +483,22 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 continue
             if candidate_val > 0.0:
                 numeric_eq = candidate_val
-                source = 'cached_equity'
-                _CACHE.equity_source = 'cached_equity'
+                source = "cached_equity"
+                _CACHE.equity_source = "cached_equity"
                 break
         if numeric_eq is None or numeric_eq <= 0.0:
-            reason = failure_reason or 'equity_unavailable'
-            _reset_log_throttle('AUTO_SIZING_ABORTED')
+            reason = failure_reason or "equity_unavailable"
+            _reset_log_throttle("AUTO_SIZING_ABORTED")
             _log.error(
-                'AUTO_SIZING_ABORTED',
-                extra={'reason': reason, 'capital_cap': cap},
+                "AUTO_SIZING_ABORTED",
+                extra={"reason": reason, "capital_cap": cap},
             )
-            base_logger = getattr(_log, 'logger', None)
+            base_logger = getattr(_log, "logger", None)
             if base_logger is not None:
                 try:
                     base_logger.error(
-                        'AUTO_SIZING_ABORTED',
-                        extra={'reason': reason, 'capital_cap': cap},
+                        "AUTO_SIZING_ABORTED",
+                        extra={"reason": reason, "capital_cap": cap},
                     )
                 except Exception:  # pragma: no cover - defensive
                     pass
@@ -503,30 +506,30 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 import logging as _logging
 
                 _logging.getLogger().error(
-                    'AUTO_SIZING_ABORTED',
-                    extra={'reason': reason, 'capital_cap': cap},
+                    "AUTO_SIZING_ABORTED",
+                    extra={"reason": reason, "capital_cap": cap},
                 )
                 record = _logging.LogRecord(
-                    name='ai_trading.position_sizing',
+                    name="ai_trading.position_sizing",
                     level=_logging.ERROR,
                     pathname=__file__,
                     lineno=0,
-                    msg='AUTO_SIZING_ABORTED',
+                    msg="AUTO_SIZING_ABORTED",
                     args=(),
                     exc_info=None,
                 )
                 record.reason = reason
                 record.capital_cap = cap
                 _logging.getLogger().handle(record)
-                handler_refs = getattr(_logging, '_handlerList', None)
+                handler_refs = getattr(_logging, "_handlerList", None)
                 if handler_refs:
                     for ref in list(handler_refs):
                         handler = ref() if callable(ref) else None
-                        if handler and handler.__class__.__name__ == 'LogCaptureHandler':
+                        if handler and handler.__class__.__name__ == "LogCaptureHandler":
                             throttle = None
                             try:
-                                for flt in list(getattr(handler, 'filters', [])):
-                                    if flt.__class__.__name__ == 'MessageThrottleFilter':
+                                for flt in list(getattr(handler, "filters", [])):
+                                    if flt.__class__.__name__ == "MessageThrottleFilter":
                                         handler.removeFilter(flt)
                                         throttle = flt
                                         break
@@ -540,24 +543,24 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 pass
             raise RuntimeError(f"AUTO sizing aborted: {reason}")
         _log.info(
-            'AUTO_SIZING_REUSED_EQUITY',
-            extra={'reason': failure_reason, 'capital_cap': cap, 'equity': numeric_eq},
+            "AUTO_SIZING_REUSED_EQUITY",
+            extra={"reason": failure_reason, "capital_cap": cap, "equity": numeric_eq},
         )
-        _update_equity_cache(numeric_eq, source='cached_equity', error=failure_reason)
+        _update_equity_cache(numeric_eq, source="cached_equity", error=failure_reason)
     else:
         numeric_eq = float(numeric_eq)
-        _update_equity_cache(numeric_eq, source='alpaca', error=failure_reason or None)
+        _update_equity_cache(numeric_eq, source="alpaca", error=failure_reason or None)
     if cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
         _log.info(
             "CONFIG_AUTOFIX",
             extra={
-                'field': 'max_position_size',
-                'given': 0.0,
-                'fallback': fb,
-                'reason': 'missing_capital_cap',
-                'equity': numeric_eq,
-                'capital_cap': cap,
+                "field": "max_position_size",
+                "given": 0.0,
+                "fallback": fb,
+                "reason": "missing_capital_cap",
+                "equity": numeric_eq,
+                "capital_cap": cap,
             },
         )
         val = _clamp(fb, vmin, vmax)
@@ -567,13 +570,13 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         return (
             val,
             {
-                'mode': mode,
-                'source': 'fallback',
-                'equity': numeric_eq,
-                'capital_cap': cap,
-                'clamp_min': vmin,
-                'clamp_max': vmax,
-                'refreshed_at': _CACHE.ts.isoformat(),
+                "mode": mode,
+                "source": "fallback",
+                "equity": numeric_eq,
+                "capital_cap": cap,
+                "clamp_min": vmin,
+                "clamp_max": vmax,
+                "refreshed_at": _CACHE.ts.isoformat(),
             },
         )
     computed = float(floor(numeric_eq * cap))
@@ -591,39 +594,36 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         ) if default_based > 0.0 else 0.0
         if default_clamped > 0.0:
             val = default_clamped
-            source = 'default_equity'
+            source = "default_equity"
         else:
             fb = _fallback_max_size(cfg, tcfg)
             _log.info(
                 "CONFIG_AUTOFIX",
                 extra={
-                    'field': 'max_position_size',
-                    'given': computed,
-                    'fallback': fb,
-                    'reason': 'non_positive_computed',
-                    'equity': numeric_eq,
-                    'capital_cap': cap,
+                    "field": "max_position_size",
+                    "given": computed,
+                    "fallback": fb,
+                    "reason": "non_positive_computed",
+                    "equity": numeric_eq,
+                    "capital_cap": cap,
                 },
             )
             val = _clamp(fb, vmin, vmax)
-            source = 'fallback'
-    if env_override is not None:
-        val = env_override
-        source = 'env_override'
+            source = "fallback"
     _CACHE.value, _CACHE.ts = (val, _now_utc())
     _CACHE.capital_cap = cap
     _CACHE.env_override = env_override
     return (
         val,
         {
-            'mode': mode,
-            'source': source,
-            'equity': numeric_eq,
-            'capital_cap': cap,
-            'computed': computed,
-            'clamp_min': vmin,
-            'clamp_max': vmax,
-            'refreshed_at': _CACHE.ts.isoformat(),
+            "mode": mode,
+            "source": source,
+            "equity": numeric_eq,
+            "capital_cap": cap,
+            "computed": computed,
+            "clamp_min": vmin,
+            "clamp_max": vmax,
+            "refreshed_at": _CACHE.ts.isoformat(),
         },
     )
 
@@ -651,8 +651,8 @@ def get_max_position_size(
         fails, the resolver falls back to default sizing.
     force_refresh:
         When ``True`` cached values are ignored.
-    """
 
+    """
     cfg = cfg or SimpleNamespace()
     tcfg = tcfg or cfg
     if auto:
@@ -663,4 +663,4 @@ def get_max_position_size(
     return val
 
 
-__all__ = ["resolve_max_position_size", "get_max_position_size"]
+__all__ = ["get_max_position_size", "resolve_max_position_size"]

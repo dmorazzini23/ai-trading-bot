@@ -223,7 +223,7 @@ def log_trade(
 
     # Use a compact schema for TEST/AUDIT modes to satisfy test expectations
     use_simple = str(extra_info).upper().find("TEST") >= 0 or str(extra_info).upper().find(
-        "AUDIT"
+        "AUDIT",
     ) >= 0
     if use_simple:
         headers = [
@@ -307,8 +307,8 @@ def log_trade(
             except PermissionError as exc:
                 payload = {"path": str(path), "phase": phase, "error": str(exc)}
                 logger.warning("TRADE_LOG_PERMISSION_DENIED", extra=payload)
+                _repair_permissions()
                 try:
-                    _repair_permissions()
                     action()
                 except PermissionError as retry_exc:
                     logger.error(

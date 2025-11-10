@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -25,23 +25,23 @@ SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
 def safe_subprocess_run(
     cmd: Sequence[str],
     *,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     check: bool = False,
     capture_output: bool = True,
     text: bool = True,
     **popen_kwargs,
 ) -> subprocess.CompletedProcess:
-    """
-    Run a subprocess with a hard timeout that surfaces subprocess.TimeoutExpired
+    """Run a subprocess with a hard timeout that surfaces subprocess.TimeoutExpired
     to callers (tests expect this). Never swallow TimeoutExpired.
 
     - If timeout is given and the child hangs, kill it, read remaining IO,
       log a WARNING, and re-raise TimeoutExpired.
     - Mirrors subprocess.run behavior for 'check', 'capture_output', 'text'.
     """
-
     requested_check = popen_kwargs.pop("check", check)
     text_mode = popen_kwargs.pop("text", text)
+    if capture_output:
+        text_mode = True
 
     timeout_param: float | None
     if timeout is None:
@@ -51,9 +51,7 @@ def safe_subprocess_run(
             normalized_timeout = float(timeout)
         except (TypeError, ValueError):
             normalized_timeout = None
-        if normalized_timeout is None or not math.isfinite(normalized_timeout):
-            timeout_param = None
-        elif normalized_timeout <= 0:
+        if normalized_timeout is None or not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
             timeout_param = None
         else:
             timeout_param = normalized_timeout
@@ -61,11 +59,10 @@ def safe_subprocess_run(
     run_kwargs = dict(popen_kwargs)
     run_kwargs.pop("timeout", None)
     run_kwargs["check"] = False
-    run_kwargs["text"] = text_mode
-
-    if capture_output and "stdout" not in run_kwargs and "stderr" not in run_kwargs:
+    if capture_output:
         run_kwargs["stdout"] = subprocess.PIPE
         run_kwargs["stderr"] = subprocess.PIPE
+    run_kwargs["text"] = text_mode
     if timeout_param is not None:
         run_kwargs["timeout"] = timeout_param
         if run_kwargs.get("timeout") != timeout_param:  # defensive: ensure override sticks
@@ -80,12 +77,20 @@ def safe_subprocess_run(
         exc.stdout = stdout_text
         exc.stderr = stderr_text
         exc.result = result
-        exc.timeout = float(timeout_param) if timeout_param is not None else None
+        timeout_value: float | None
         if timeout_param is not None:
-            log.warning(
-                "SAFE_SUBPROCESS_TIMEOUT",
-                extra={"cmd": cmd, "timeout": timeout_param},
-            )
+            timeout_value = float(timeout_param)
+        else:
+            timeout_attr = getattr(exc, "timeout", None)
+            try:
+                timeout_value = float(timeout_attr) if timeout_attr is not None else None
+            except (TypeError, ValueError):
+                timeout_value = None
+        exc.timeout = timeout_value
+        log.warning(
+            "SAFE_SUBPROCESS_TIMEOUT",
+            extra={"cmd": cmd, "timeout": timeout_value},
+        )
         raise
     except (OSError, subprocess.SubprocessError) as exc:
         result = _coerce_exception_result(exc, cmd)
@@ -103,7 +108,7 @@ def safe_subprocess_run(
     return ret
 
 
-def _normalize_stream(stream: Optional[str | bytes]) -> str:
+def _normalize_stream(stream: str | bytes | None) -> str:
     if stream is None:
         return ""
     if isinstance(stream, bytes):
