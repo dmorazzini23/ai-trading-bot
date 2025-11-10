@@ -1232,6 +1232,21 @@ class ProviderMonitor:
 
         self._callbacks[provider] = cb
 
+    def is_safe_mode_active(self) -> bool:
+        """Instance helper for code paths that retain a monitor reference."""
+
+        return is_safe_mode_active()
+
+    def safe_mode_reason(self) -> str | None:
+        """Return the most recent safe-mode reason via the module singleton."""
+
+        return safe_mode_reason()
+
+    def safe_mode_cycle_marker(self) -> tuple[int, str | None]:
+        """Expose the module cycle marker for legacy callers."""
+
+        return safe_mode_cycle_marker()
+
     def reset(self) -> None:
         """Reset mutable provider state for tests and controlled call sites."""
 
