@@ -12841,7 +12841,6 @@ def _build_fetch_log_extra(
     provider: str = "alpaca",
 ) -> dict[str, Any]:
     payload = dict(extra or {})
-    payload.setdefault("provider", provider)
     payload["symbol"] = symbol
     if timeframe:
         payload.setdefault("timeframe", timeframe)
