@@ -66,10 +66,22 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
     record_func = getattr(pm, record_name)
     if record_name == "record_unauthorized_sip_event":
         monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
+        payload: dict[str, Any] = {"symbol": "AAPL"}
     else:
         monkeypatch.delenv("DATA_FEED_INTRADAY", raising=False)
+        payload = {
+            "symbol": "AAPL",
+            "provider": "alpaca",
+            "primary_feed_gap": True,
+            "gap_ratio": 0.5,
+            "initial_gap_ratio": 0.5,
+            "missing_after": 10,
+            "initial_missing": 10,
+            "expected": 100,
+            "residual_gap": True,
+        }
     for _ in range(3):
-        record_func({"symbol": "AAPL"})
+        record_func(payload)
 
     assert halt_path.exists()
     assert pm.is_safe_mode_active() is True
@@ -86,10 +98,10 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
 def test_minute_gap_events_ignore_fallback_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
     monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
+    monkeypatch.setattr(pm, "_gap_trigger_cooldown_until", 0.0, raising=False)
+    pm._prime_gap_ratio_cache(pm._GAP_RATIO_TRIGGER)
     triggered: list[tuple[str, int, Mapping[str, Any] | None]] = []
     diagnostics_snapshots: list[dict[str, Dict[str, Any]]] = []
-
-    original_trigger = pm._trigger_provider_safe_mode
 
     def _capture_trigger(reason: str, *, count: int, metadata: Mapping[str, Any] | None = None) -> None:
         snapshot: dict[str, Dict[str, Any]] = {}
@@ -99,7 +111,6 @@ def test_minute_gap_events_ignore_fallback_provider(monkeypatch: pytest.MonkeyPa
         if snapshot:
             diagnostics_snapshots.append(snapshot)
         triggered.append((reason, count, metadata))
-        original_trigger(reason, count=count, metadata=metadata)
 
     monkeypatch.setattr(pm, "_trigger_provider_safe_mode", _capture_trigger)
     monkeypatch.setattr(pm, "_write_halt_flag", lambda *_, **__: None)
@@ -140,3 +151,47 @@ def test_minute_gap_events_ignore_fallback_provider(monkeypatch: pytest.MonkeyPa
     assert last_diag.get("events") == pm._GAP_EVENT_THRESHOLD
     assert last_diag.get("max_gap_ratio") == pytest.approx(0.05)
     assert pm._gap_event_diagnostics == {}
+
+
+def test_gap_event_threshold_elevated_for_iex(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    pm._prime_gap_ratio_cache(pm._GAP_RATIO_TRIGGER)
+    monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
+    monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
+    monkeypatch.setattr(pm, "_gap_trigger_cooldown_until", 0.0, raising=False)
+    monkeypatch.setattr(pm, "_gap_trigger_cooldown_until", 0.0, raising=False)
+    payload = {
+        "provider": "alpaca_iex",
+        "primary_feed_gap": True,
+        "used_backup": False,
+        "gap_ratio": 0.25,
+        "initial_gap_ratio": 0.25,
+        "missing_after": 25,
+        "initial_missing": 25,
+        "expected": 100,
+        "residual_gap": True,
+        "active_feed": "iex",
+    }
+
+    assert pm._gap_event_is_severe(payload) is False
+
+
+def test_gap_event_threshold_strict_for_sip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    pm._prime_gap_ratio_cache(pm._GAP_RATIO_TRIGGER)
+    monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
+    monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
+    payload = {
+        "provider": "alpaca_sip",
+        "primary_feed_gap": True,
+        "used_backup": False,
+        "gap_ratio": 0.25,
+        "initial_gap_ratio": 0.25,
+        "missing_after": 30,
+        "initial_missing": 30,
+        "expected": 120,
+        "residual_gap": True,
+        "active_feed": "sip",
+    }
+
+    assert pm._gap_event_is_severe(payload) is True

@@ -91,6 +91,13 @@ def _detect_pytest_env() -> bool:
     return True
 
 
+def _pytest_relaxed_switchovers_enabled() -> bool:
+    """Return ``True`` when pytest protections should relax switchover logic."""
+
+    flag = os.getenv("PROVIDER_MONITOR_RELAXED_TEST_MODE", "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
 def canonical_provider(name: str) -> str:
     """Return a human-readable provider label for logging."""
 
@@ -237,7 +244,7 @@ def _resolve_primary_dwell_seconds() -> float:
 _MIN_RECOVERY_SECONDS = _resolve_switch_cooldown_seconds()
 _MIN_RECOVERY_PASSES = _resolve_health_passes_required()
 _SAFE_MODE_RECOVERY_TARGET = _resolve_safe_mode_recovery_passes()
-_DEFAULT_SWITCH_QUIET_SECONDS = 15.0
+_DEFAULT_SWITCH_QUIET_SECONDS = 120.0
 
 _HALT_EVENT_WINDOW_SECONDS = 600.0
 _SAFE_MODE_EVENT_BURST_WINDOW = 120.0
@@ -263,11 +270,13 @@ def _resolve_gap_ratio_trigger() -> float:
         except (TypeError, ValueError):
             pass
     if not candidates:
-        return 0.02
-    try:
-        resolved = max(max(candidates), 0.0)
-    except Exception:
         resolved = 0.02
+    else:
+        try:
+            resolved = max(max(candidates), 0.0)
+        except Exception:
+            resolved = 0.02
+    _prime_gap_ratio_cache(resolved)
     return resolved
 
 
@@ -297,26 +306,6 @@ def _resolve_gap_missing_trigger() -> int:
     except Exception:
         resolved = 3
     return resolved
-
-
-_GAP_RATIO_TRIGGER = _resolve_gap_ratio_trigger()
-_GAP_MISSING_TRIGGER = _resolve_gap_missing_trigger()
-_SIP_AUTH_FAIL_THRESHOLD = 3
-_GAP_EVENT_THRESHOLD = 3
-_HALT_SUPPRESS_SECONDS = 60.0
-
-_sip_auth_events: Deque[float] = deque()
-_gap_events: Deque[float] = deque()
-_gap_event_diagnostics: Dict[str, Dict[str, Any]] = {}
-_last_halt_reason: str | None = None
-_last_halt_ts: float = 0.0
-_SAFE_MODE_ACTIVE = False
-_SAFE_MODE_REASON: str | None = None
-_SAFE_MODE_CYCLE_VERSION = 0
-_SAFE_MODE_CYCLE_REASON: str | None = None
-_SAFE_MODE_HEALTHY_PASSES = 0
-_SAFE_MODE_RECOVERY_TARGET = 0
-_gap_trigger_cooldown_until: float = 0.0
 
 
 def _quote_recovery_age_limit_ms() -> float:
@@ -377,6 +366,128 @@ def _current_intraday_feed() -> str:
         feed = os.getenv("ALPACA_DATA_FEED")
     normalized = str(feed or "iex").strip().lower()
     return normalized or "iex"
+
+
+_GAP_RATIO_TRIGGER_CACHE: Dict[str, float] = {}
+
+
+def _compute_feed_gap_ratio_threshold(feed: str | None, default: float) -> float:
+    """Return a gap ratio trigger tailored to the specified feed."""
+
+    normalized = (feed or "").strip().lower()
+    if not normalized:
+        return default
+    if "iex" in normalized:
+        return max(default, 0.30)
+    return default
+
+
+def _prime_gap_ratio_cache(default: float) -> None:
+    """Populate per-feed trigger cache using the provided default threshold."""
+
+    _GAP_RATIO_TRIGGER_CACHE.clear()
+    baseline = max(float(default), 0.0)
+    _GAP_RATIO_TRIGGER_CACHE["default"] = baseline
+    _GAP_RATIO_TRIGGER_CACHE["sip"] = baseline
+    _GAP_RATIO_TRIGGER_CACHE["alpaca_sip"] = baseline
+    _GAP_RATIO_TRIGGER_CACHE["alpaca-sip"] = baseline
+    iex_threshold = _compute_feed_gap_ratio_threshold("iex", baseline)
+    _GAP_RATIO_TRIGGER_CACHE["iex"] = iex_threshold
+    _GAP_RATIO_TRIGGER_CACHE["alpaca_iex"] = iex_threshold
+    _GAP_RATIO_TRIGGER_CACHE["alpaca-iex"] = iex_threshold
+    active_feed = _current_intraday_feed()
+    active_threshold = _compute_feed_gap_ratio_threshold(active_feed, baseline)
+    if active_feed:
+        _GAP_RATIO_TRIGGER_CACHE[active_feed] = active_threshold
+    _GAP_RATIO_TRIGGER_CACHE["alpaca"] = baseline
+
+
+def _gap_ratio_threshold_for_feed(feed: str | None) -> float:
+    """Return the cached gap ratio trigger for the provided feed."""
+
+    baseline = _GAP_RATIO_TRIGGER_CACHE.get("default", _GAP_RATIO_TRIGGER)
+    normalized = (feed or "").strip().lower()
+    if not normalized:
+        return baseline
+    cached = _GAP_RATIO_TRIGGER_CACHE.get(normalized)
+    if cached is not None:
+        return cached
+    computed = _compute_feed_gap_ratio_threshold(normalized, baseline)
+    _GAP_RATIO_TRIGGER_CACHE[normalized] = computed
+    return computed
+
+
+def _gap_ratio_threshold_for_metadata(metadata: Mapping[str, Any]) -> float:
+    """Resolve the gap ratio trigger for an event payload."""
+
+    feed_hint_obj = (
+        metadata.get("active_feed")
+        or metadata.get("data_feed")
+        or metadata.get("feed")
+    )
+    feed_hint = str(feed_hint_obj).strip().lower() if isinstance(feed_hint_obj, str) else ""
+    if feed_hint:
+        return _gap_ratio_threshold_for_feed(feed_hint)
+    provider_hint_obj = metadata.get("provider_canonical") or metadata.get("provider")
+    provider_hint = (
+        canonical_provider(str(provider_hint_obj))
+        if isinstance(provider_hint_obj, str)
+        else ""
+    )
+    if provider_hint == "alpaca":
+        return _gap_ratio_threshold_for_feed(None)
+    if provider_hint in {"alpaca-iex", "alpaca_iex", "iex"}:
+        return _gap_ratio_threshold_for_feed("iex")
+    if provider_hint in {"alpaca-sip", "alpaca_sip", "sip"}:
+        return _gap_ratio_threshold_for_feed("sip")
+    if provider_hint:
+        return _gap_ratio_threshold_for_feed(provider_hint)
+    return _gap_ratio_threshold_for_feed(None)
+
+
+def _gap_missing_threshold_for_metadata(metadata: Mapping[str, Any]) -> int:
+    """Return the missing-bar threshold for the provided payload."""
+
+    base = int(_GAP_MISSING_TRIGGER)
+    try:
+        expected = int(metadata.get("expected", 0) or 0)
+    except (TypeError, ValueError):
+        expected = 0
+    feed_hint_obj = (
+        metadata.get("active_feed")
+        or metadata.get("data_feed")
+        or metadata.get("feed")
+    )
+    feed_hint = str(feed_hint_obj).strip().lower() if isinstance(feed_hint_obj, str) else ""
+    if not feed_hint:
+        provider_hint_obj = metadata.get("provider_canonical") or metadata.get("provider")
+        if isinstance(provider_hint_obj, str):
+            feed_hint = canonical_provider(provider_hint_obj)
+    if feed_hint and "iex" in feed_hint:
+        if expected > 0:
+            dynamic = max(base, int(expected * 0.30))
+            return max(dynamic, base)
+    return base
+
+
+_GAP_RATIO_TRIGGER = _resolve_gap_ratio_trigger()
+_GAP_MISSING_TRIGGER = _resolve_gap_missing_trigger()
+_SIP_AUTH_FAIL_THRESHOLD = 3
+_GAP_EVENT_THRESHOLD = 3
+_HALT_SUPPRESS_SECONDS = 60.0
+
+_sip_auth_events: Deque[float] = deque()
+_gap_events: Deque[float] = deque()
+_gap_event_diagnostics: Dict[str, Dict[str, Any]] = {}
+_last_halt_reason: str | None = None
+_last_halt_ts: float = 0.0
+_SAFE_MODE_ACTIVE = False
+_SAFE_MODE_REASON: str | None = None
+_SAFE_MODE_CYCLE_VERSION = 0
+_SAFE_MODE_CYCLE_REASON: str | None = None
+_SAFE_MODE_HEALTHY_PASSES = 0
+_SAFE_MODE_RECOVERY_TARGET = 0
+_gap_trigger_cooldown_until: float = 0.0
 
 
 def _intraday_feed_is_sip() -> bool:
@@ -617,7 +728,8 @@ def _maybe_clear_safe_mode(
         return
     if gap_ratio is not None:
         try:
-            if float(gap_ratio) > max(float(_GAP_RATIO_TRIGGER), 0.0):
+            threshold = _gap_ratio_threshold_for_feed(_current_intraday_feed())
+            if float(gap_ratio) > max(float(threshold), 0.0):
                 _SAFE_MODE_HEALTHY_PASSES = 0
                 return
         except (TypeError, ValueError):
@@ -700,13 +812,22 @@ def _gap_event_is_severe(metadata: Mapping[str, Any]) -> bool:
         initial_missing = int(metadata.get("initial_missing", missing_val) or 0)
     except (TypeError, ValueError):
         initial_missing = missing_val
+    fallback_contiguous = metadata.get("fallback_contiguous")
+    if fallback_contiguous is None and used_backup and missing_val <= 0:
+        fallback_contiguous = True
+    ratio_trigger = _gap_ratio_threshold_for_metadata(metadata)
+    missing_threshold = _gap_missing_threshold_for_metadata(metadata)
     if not residual:
-        if used_backup and (initial_ratio >= _GAP_RATIO_TRIGGER or initial_missing >= _GAP_MISSING_TRIGGER):
+        if bool(fallback_contiguous):
+            return False
+        if used_backup and (
+            initial_ratio >= ratio_trigger or initial_missing >= missing_threshold
+        ):
             return True
         return False
-    if ratio_val >= _GAP_RATIO_TRIGGER:
+    if ratio_val >= ratio_trigger:
         return True
-    if missing_val >= _GAP_MISSING_TRIGGER:
+    if missing_val >= missing_threshold:
         return True
     return False
 
@@ -1176,7 +1297,10 @@ class ProviderMonitor:
             else _resolve_primary_dwell_seconds()
         )
         if pytest_active:
-            self.primary_dwell_seconds = 0.0
+            if primary_dwell_seconds is None:
+                self.primary_dwell_seconds = 0.0
+            else:
+                self.primary_dwell_seconds = max(float(dwell_candidate), 0.0)
             self.retry_jitter_range: tuple[float, float] | None = None
         else:
             if primary_dwell_seconds is None:
@@ -1568,6 +1692,7 @@ class ProviderMonitor:
                 )
                 return
         pytest_active = _detect_pytest_env()
+        relaxed_pytest = pytest_active and _pytest_relaxed_switchovers_enabled()
         now = now_dt
         last = self._last_switch_time.get(from_key)
         cooldown_window = self._current_switch_cooldowns.get(from_key, float(self.cooldown))
@@ -1582,7 +1707,7 @@ class ProviderMonitor:
                     self.consecutive_switches = 0
         self._last_switch_time[from_key] = now
         now_monotonic = monotonic_time()
-        if not pytest_active:
+        if not relaxed_pytest:
             if self._enforce_switchover_quiet_period(
                 from_key,
                 to_key,
@@ -1644,7 +1769,7 @@ class ProviderMonitor:
                 record_provider_log_suppressed("DATA_PROVIDER_FAILURE_DURATION")
         cooldown_until = self._alert_cooldown_until.get(from_key)
         if (
-            not pytest_active
+            not relaxed_pytest
             and streak >= self.switchover_threshold
             and (cooldown_until is None or now >= cooldown_until)
         ):

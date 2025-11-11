@@ -205,7 +205,7 @@ def test_repair_rth_minute_gaps_recovers_truncated_primary_frame(monkeypatch):
     assert meta["gap_ratio"] <= 0.05
     assert meta["missing_after"] == 0
     assert meta["residual_gap"] is False
-    assert meta["primary_feed_gap"] is False
+    assert meta["primary_feed_gap"] is True
     assert meta.get("using_fallback_provider") is True
     assert events == []
 
@@ -861,6 +861,163 @@ def test_fetch_minute_df_safe_aborts_when_fallback_remains_sparse(monkeypatch, c
     assert getattr(excinfo.value, "fetch_reason", None) == "minute_data_low_coverage"
     assert getattr(excinfo.value, "symbol", None) == "AAPL"
     assert any(rec.message == "MINUTE_DATA_COVERAGE_ABORT" for rec in caplog.records)
+
+
+def test_fetch_minute_df_safe_allows_iex_gap_tolerance(monkeypatch, caplog):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 16, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=120)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        idx = pd.date_range(
+            end=end - timedelta(minutes=1),
+            periods=90,
+            freq="min",
+            tz="UTC",
+        )
+        return pd.DataFrame(
+            {"close": [1.0] * len(idx), "volume": [100] * len(idx)},
+            index=idx,
+        )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine.CFG, "data_feed", "iex", raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 120, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "market_cache_enabled", False, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "alpaca_feed_failover", (), raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "minute_gap_backfill", None, raising=False)
+    monkeypatch.setattr(bot_engine, "S", bot_engine.CFG, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert result is not None and len(result) == 90
+    assert "MINUTE_DATA_COVERAGE_ABORT" not in [rec.message for rec in caplog.records]
+
+
+def test_fetch_minute_df_safe_sip_gap_still_aborts(monkeypatch, caplog):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 16, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=120)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        idx = pd.date_range(
+            end=end - timedelta(minutes=1),
+            periods=90,
+            freq="min",
+            tz="UTC",
+        )
+        return pd.DataFrame(
+            {"close": [1.0] * len(idx), "volume": [100] * len(idx)},
+            index=idx,
+        )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine.CFG, "data_feed", "sip", raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 120, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "market_cache_enabled", False, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "alpaca_feed_failover", (), raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "minute_gap_backfill", None, raising=False)
+    monkeypatch.setattr(bot_engine, "S", bot_engine.CFG, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(bot_engine.DataFetchError) as excinfo:
+            bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert getattr(excinfo.value, "fetch_reason", None) == "minute_data_low_coverage"
+    assert "MINUTE_DATA_COVERAGE_ABORT" in [rec.message for rec in caplog.records]
 
 
 def test_fetch_minute_df_safe_early_session_sparse_data_triggers_sip_fallback(

@@ -125,7 +125,7 @@ def test_record_switchover_thrashing_disables(monkeypatch, caplog):
         def now(cls, tz=None):  # type: ignore[override]
             return cls.current
 
-    monotonic_values = iter([0.0, 30.0, 60.0])
+    monotonic_values = iter([0.0, 30.0, 60.0, 90.0])
 
     def fake_monotonic_time() -> float:
         return next(monotonic_values)
