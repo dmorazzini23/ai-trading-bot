@@ -47,7 +47,27 @@ def test_minute_source_override_yahoo(monkeypatch):
     stub_df = _stub_frame()
 
     def fake_yahoo(symbol, start, end, interval):
-        return stub_df.copy()
+        frame = stub_df.copy()
+        try:
+            start_ts = start.tz_convert("UTC") if hasattr(start, "tz_convert") else start
+        except Exception:
+            start_ts = start
+        try:
+            end_ts = end.tz_convert("UTC") if hasattr(end, "tz_convert") else end
+        except Exception:
+            end_ts = end
+        if hasattr(frame, "assign"):
+            try:
+                frame = frame.assign(
+                    timestamp=[start_ts, start_ts + (end_ts - start_ts) / 2],
+                )
+            except Exception:
+                frame = frame.copy()
+                frame["timestamp"] = [start_ts, end_ts]
+        else:
+            frame = frame.copy()
+            frame["timestamp"] = [start_ts, end_ts]
+        return frame
 
     monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", fake_yahoo)
 

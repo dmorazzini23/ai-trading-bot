@@ -1743,7 +1743,10 @@ def _classify_fallback_reason(
         details["error_code"] = error_code
     exc_type = metadata.get("exc_type") or metadata.get("error_type") or metadata.get("exception_type")
     if exc_type:
-        details["exc_type"] = str(exc_type)
+        exc_str = str(exc_type)
+        details["exc_type"] = exc_str
+        details.setdefault("error_type", exc_str)
+        details.setdefault("exception_type", exc_str)
     message = metadata.get("message") or metadata.get("error")
     if message:
         details["message"] = str(message)
@@ -1796,6 +1799,8 @@ def _classify_fallback_reason(
     combined_lower = combined_reason.lower()
     if details.get("gap_over_limit"):
         return "gap_ratio_exceeded", details
+    if "timestamp" in combined_lower and "missing" in combined_lower:
+        return "quote_timestamp_missing", details
     if "empty" in combined_lower:
         return "empty_bars", details
     if "rate" in combined_lower and "limit" in combined_lower:
@@ -2772,7 +2777,6 @@ def _clear_minute_fallback_state(
                     healthy=True,
                     reason="primary_recovered",
                     severity="good",
-                    quote_age_ms=None,
                 )
             except Exception:
                 pass
@@ -6357,10 +6361,6 @@ def _repair_rth_minute_gaps(
     if provider_canonical == "yahoo" and not fallback_provider_hint:
         fallback_provider_hint = provider_name
     primary_feed_gap = initial_missing_count > 0 and primary_provider_canonical.startswith("alpaca")
-    if replaced_with_backup and missing_after == 0:
-        primary_feed_gap = False
-    if used_backup and missing_after == 0:
-        primary_feed_gap = False
 
     metadata: dict[str, object] = {
         "expected": expected_count,

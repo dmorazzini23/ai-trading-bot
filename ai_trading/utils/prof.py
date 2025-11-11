@@ -10,6 +10,24 @@ from typing import Any, Callable
 _TIMING_LEVEL_CACHE: tuple[str | None, str | None, int | None] | None = None
 
 
+def _monotonic_ns() -> int:
+    """Return a monotonic clock reading in nanoseconds."""
+
+    monotonic = getattr(time, "monotonic", None)
+    if callable(monotonic):
+        try:
+            return int(monotonic() * 1_000_000_000)
+        except (OSError, ValueError):
+            pass
+    monotonic_ns = getattr(time, "monotonic_ns", None)
+    if callable(monotonic_ns):
+        try:
+            return monotonic_ns()
+        except (OSError, ValueError):
+            pass
+    return time.perf_counter_ns()
+
+
 def _resolve_timing_level() -> int | None:
     """Return the configured log level for stage timing events."""
 
@@ -85,11 +103,11 @@ class SoftBudget:
 
     def __init__(self, millis: int | float):
         self.ms = max(0.0, float(millis))
-        self.start_ns = time.perf_counter_ns()
+        self.start_ns = _monotonic_ns()
         self.start = self.start_ns / 1_000_000_000  # legacy attribute
 
     def __enter__(self) -> "SoftBudget":
-        self.start_ns = time.perf_counter_ns()
+        self.start_ns = _monotonic_ns()
         self.start = self.start_ns / 1_000_000_000
         return self
 
@@ -99,7 +117,7 @@ class SoftBudget:
     def elapsed_ms(self) -> float:
         """Return elapsed milliseconds since the most recent reset."""
 
-        elapsed_ns = time.perf_counter_ns() - self.start_ns
+        elapsed_ns = _monotonic_ns() - self.start_ns
         if elapsed_ns < 0:
             elapsed_ns = 0
         whole_ms = elapsed_ns // 1_000_000

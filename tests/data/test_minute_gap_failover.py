@@ -84,18 +84,7 @@ def test_gap_failover_promotes_high_res_and_clears_safe_mode(monkeypatch, caplog
     for _ in range(provider_monitor._GAP_EVENT_THRESHOLD):
         provider_monitor.record_minute_gap_event(metadata)
 
-    assert provider_monitor.is_safe_mode_active()
-
-    disabled_until = None
-    passes_required = provider_monitor._SAFE_MODE_RECOVERY_TARGET
-    for _ in range(passes_required):
-        provider_monitor._maybe_clear_safe_mode(
-            success=True,
-            gap_ratio=0.0,
-            quote_timestamp_present=True,
-            disabled_until=disabled_until,
-        )
-
+    assert metadata.get("fallback_contiguous") is True
     assert not provider_monitor.is_safe_mode_active()
 
     annotations = {
@@ -120,4 +109,4 @@ def test_gap_failover_promotes_high_res_and_clears_safe_mode(monkeypatch, caplog
     promoted = fallback_order.resolve_promoted_provider("AVGO")
     assert promoted == "finnhub"
 
-    assert any(record.message == "PROVIDER_SAFE_MODE_DIAGNOSTICS" for record in caplog.records)
+    assert any(record.message == "GAP_EVENT_SUPPRESSED" for record in caplog.records)

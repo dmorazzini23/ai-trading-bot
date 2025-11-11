@@ -27,6 +27,7 @@ What the code already enforces
 - Safe-mode minute-gap escalation now requires a confirmed Alpaca primary gap. The monitor ignores fallback-only payloads and emits `gap_metrics` (last/peak ratios, missing bars, event counts) when safe mode triggers so you can reconcile the halt.
 - Yahoo fallback minute bars are automatically reindexed/interpolated to produce a contiguous series. Coverage metadata records `fallback_contiguous=True` so downstream gap-ratio checks treat the repaired frame as complete.
 - When Alpaca quotes are unavailable but the fallback minute feed is contiguous, the trade gate synthesizes a quote timestamp from the repaired data. Orders are no longer rejected solely because the Alpaca quote API is offline, provided the fallback coverage remains healthy.
+- IEX minute coverage tolerates repaired gaps of up to ~25% before halting. Safe-mode thresholds and coverage gating for IEX are documented in the [Provider Configuration](provider_configuration.md) guide.
 
 Suggested baseline for production safety
 

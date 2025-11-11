@@ -5750,11 +5750,29 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     active_feed = candidate_feed
                     current_len = candidate_len
 
+    def _coverage_threshold_scales(feed: str | None) -> tuple[float, float]:
+        normalized_feed = _normalize_feed_name(feed)
+        if not normalized_feed:
+            normalized_feed = _normalize_feed_name(
+                configured_feed or os.getenv("ALPACA_DATA_FEED")
+            )
+        if normalized_feed == "iex":
+            return 0.75, 0.75
+        return 1.0, 1.0
+
+    def _window_minutes(start: datetime, end: datetime) -> int:
+        try:
+            return max(0, int((end - start).total_seconds() // 60))
+        except COMMON_EXC:
+            return 0
+
     def _coverage_metrics(
         frame: pd.DataFrame | None,
         *,
         expected: int,
         intraday_requirement: int,
+        feed: str | None,
+        window_minutes: int,
     ) -> dict[str, object]:
         actual = 0
         if frame is not None:
@@ -5762,43 +5780,73 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 actual = int(len(frame))
             except COMMON_EXC:
                 actual = 0
-        threshold = max(1, int(expected * 0.5)) if expected > 0 else 0
+        threshold_scale, intraday_scale = _coverage_threshold_scales(feed)
+        threshold = max(1, int(expected * 0.5 * threshold_scale)) if expected > 0 else 0
+        cutoff = intraday_requirement
+        if intraday_requirement > 0:
+            cutoff = max(1, int(intraday_requirement * intraday_scale))
         materially_short_local = expected > 0 and actual < threshold
-        insufficient_local = (
-            expected >= intraday_requirement and actual < intraday_requirement
-        )
+        insufficient_local = expected >= cutoff and actual < cutoff
+        normalized_feed = _normalize_feed_name(feed)
+        if (
+            normalized_feed == "sip"
+            and window_minutes >= cutoff
+            and actual < cutoff
+        ):
+            insufficient_local = True
         return {
             "actual": actual,
             "threshold": threshold,
+            "cutoff": cutoff,
             "materially_short": materially_short_local,
             "insufficient_intraday": insufficient_local,
             "low_coverage": materially_short_local or insufficient_local,
+            "threshold_scale": threshold_scale,
+            "intraday_scale": intraday_scale,
+            "window_minutes": window_minutes,
         }
 
+    primary_window_minutes = _window_minutes(start_dt, end_dt)
     coverage = _coverage_metrics(
         df,
         expected=expected_bars,
         intraday_requirement=intraday_lookback,
+        feed=active_feed,
+        window_minutes=primary_window_minutes,
     )
     actual_bars = int(coverage["actual"])
     coverage_threshold = int(coverage["threshold"])
+    coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
     materially_short = bool(coverage["materially_short"])
     insufficient_intraday = bool(coverage["insufficient_intraday"])
     low_coverage = bool(coverage["low_coverage"])
 
     primary_actual_bars = primary_actual_bars_initial
+    primary_threshold_scale, primary_intraday_scale = _coverage_threshold_scales(
+        current_feed
+    )
     primary_threshold = (
-        max(1, int(primary_expected_bars * 0.5))
+        max(1, int(primary_expected_bars * 0.5 * primary_threshold_scale))
         if primary_expected_bars > 0
         else 0
     )
+    primary_cutoff = intraday_lookback
+    if intraday_lookback > 0:
+        primary_cutoff = max(1, int(intraday_lookback * primary_intraday_scale))
     primary_materially_short = (
         primary_expected_bars > 0 and primary_actual_bars < primary_threshold
     )
     primary_insufficient_intraday = (
-        primary_expected_bars >= intraday_lookback
-        and primary_actual_bars < intraday_lookback
+        primary_expected_bars >= primary_cutoff
+        and primary_actual_bars < primary_cutoff
     )
+    normalized_primary_feed = _normalize_feed_name(current_feed)
+    if (
+        normalized_primary_feed == "sip"
+        and primary_window_minutes >= primary_cutoff
+        and primary_actual_bars < primary_cutoff
+    ):
+        primary_insufficient_intraday = True
     primary_low_coverage = (
         primary_materially_short or primary_insufficient_intraday
     )
@@ -5898,6 +5946,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "primary_materially_short": primary_materially_short,
             "primary_insufficient_intraday": primary_insufficient_intraday,
             "primary_low_coverage": primary_low_coverage,
+            "primary_threshold": primary_threshold,
+            "primary_cutoff": primary_cutoff,
+            "primary_window_minutes": primary_window_minutes,
+            "coverage_threshold": coverage_threshold,
+            "coverage_cutoff": coverage_cutoff,
+            "window_minutes": primary_window_minutes,
+            "threshold_scale": coverage.get("threshold_scale", 1.0),
+            "intraday_scale": coverage.get("intraday_scale", 1.0),
             "from_feed": current_feed,
             "active_feed": current_feed,
             "fallback_feed": planned_fallback_feed,
@@ -5931,6 +5987,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_start_dt = session_start_dt
 
         coverage_window_start = fallback_start_dt
+        if coverage_warning_context is not None:
+            coverage_warning_context["window_minutes"] = _window_minutes(
+                fallback_start_dt, end_dt
+            )
         fallback_expected_bars = _count_trading_minutes(fallback_start_dt, end_dt)
         if fallback_expected_bars <= 0:
             fallback_expected_bars = _expected_minute_bars_window(
@@ -6025,16 +6085,31 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 start_dt = fallback_start_dt
                 expected_bars = fallback_expected_bars
                 sip_full_cover = sip_bars >= fallback_expected_bars
+                fallback_window_minutes = _window_minutes(fallback_start_dt, end_dt)
                 coverage = _coverage_metrics(
                     df,
                     expected=expected_bars,
                     intraday_requirement=intraday_lookback,
+                    feed=resolved_feed,
+                    window_minutes=fallback_window_minutes,
                 )
                 actual_bars = int(coverage["actual"])
                 coverage_threshold = int(coverage["threshold"])
+                coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
+                coverage_window_start = fallback_start_dt
+                if coverage_warning_context is not None:
+                    coverage_warning_context.update(
+                        {
+                            "window_minutes": fallback_window_minutes,
+                            "coverage_threshold": coverage_threshold,
+                            "coverage_cutoff": coverage_cutoff,
+                            "threshold_scale": coverage.get("threshold_scale", 1.0),
+                            "intraday_scale": coverage.get("intraday_scale", 1.0),
+                        }
+                    )
                 if not sip_full_cover:
                     low_coverage = True
                 normalized_sip_feed = (
@@ -6142,13 +6217,17 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 df = yahoo_df
                 start_dt = fallback_start_dt
                 expected_bars = fallback_expected_bars
+                fallback_window_minutes = _window_minutes(fallback_start_dt, end_dt)
                 coverage = _coverage_metrics(
                     df,
                     expected=expected_bars,
                     intraday_requirement=intraday_lookback,
+                    feed="yahoo",
+                    window_minutes=fallback_window_minutes,
                 )
                 actual_bars = int(coverage["actual"])
                 coverage_threshold = int(coverage["threshold"])
+                coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
@@ -6156,6 +6235,17 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed = "yahoo"
                 fallback_provider = "yahoo"
                 active_feed = "yahoo"
+                coverage_window_start = fallback_start_dt
+                if coverage_warning_context is not None:
+                    coverage_warning_context.update(
+                        {
+                            "window_minutes": fallback_window_minutes,
+                            "coverage_threshold": coverage_threshold,
+                            "coverage_cutoff": coverage_cutoff,
+                            "threshold_scale": coverage.get("threshold_scale", 1.0),
+                            "intraday_scale": coverage.get("intraday_scale", 1.0),
+                        }
+                    )
                 (
                     _fallback_sanitized,
                     _fallback_normalized,
@@ -6212,6 +6302,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 "primary_materially_short": primary_materially_short,
                 "primary_insufficient_intraday": primary_insufficient_intraday,
                 "primary_low_coverage": primary_low_coverage,
+                "primary_threshold": primary_threshold,
+                "primary_cutoff": primary_cutoff,
+                "primary_window_minutes": primary_window_minutes,
+                "coverage_threshold": coverage_threshold,
+                "coverage_cutoff": coverage_cutoff,
+                "window_minutes": _window_minutes(coverage_window_start, end_dt),
+                "threshold_scale": coverage.get("threshold_scale", 1.0),
+                "intraday_scale": coverage.get("intraday_scale", 1.0),
                 "fallback_feed": fallback_feed or warning_payload.get("fallback_feed") or "",
                 "fallback_provider": fallback_provider or warning_payload.get("fallback_provider") or "",
                 "fallback_attempted": fallback_attempted,
@@ -6334,16 +6432,31 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     expected_bars = _count_trading_minutes(start_dt, end_dt)
     if expected_bars <= 0:
         expected_bars = _expected_minute_bars_window(start_dt, end_dt)
+    window_minutes_current = _window_minutes(start_dt, end_dt)
     coverage = _coverage_metrics(
         df,
         expected=expected_bars,
         intraday_requirement=intraday_lookback,
+        feed=active_feed,
+        window_minutes=window_minutes_current,
     )
     actual_bars = int(coverage["actual"])
     coverage_threshold = int(coverage["threshold"])
+    coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
     materially_short = bool(coverage["materially_short"])
     insufficient_intraday = bool(coverage["insufficient_intraday"])
     low_coverage = bool(coverage["low_coverage"])
+    coverage_window_start = start_dt
+    if coverage_warning_context is not None:
+        coverage_warning_context.update(
+            {
+                "window_minutes": window_minutes_current,
+                "coverage_threshold": coverage_threshold,
+                "coverage_cutoff": coverage_cutoff,
+                "threshold_scale": coverage.get("threshold_scale", 1.0),
+                "intraday_scale": coverage.get("intraday_scale", 1.0),
+            }
+        )
 
     if materially_short:
         if "sip" in fallback_feeds_attempted:
@@ -6405,16 +6518,21 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                             pass
                 data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
                 _record_coverage_provider(sip_feed_normalized)
+            recovery_window_minutes = _window_minutes(start_dt, end_dt)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
                 intraday_requirement=intraday_lookback,
+                feed=active_feed,
+                window_minutes=recovery_window_minutes,
             )
             actual_bars = int(coverage["actual"])
             coverage_threshold = int(coverage["threshold"])
+            coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
             materially_short = bool(coverage["materially_short"])
             insufficient_intraday = bool(coverage["insufficient_intraday"])
             low_coverage = bool(coverage["low_coverage"])
+            coverage_window_start = start_dt
             if not coverage_warning_logged:
                 warning_payload = {
                     "symbol": symbol,
@@ -6436,6 +6554,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     "fallback_exhausted": low_coverage,
                     "start": coverage_window_start.isoformat(),
                     "end": end_dt.isoformat(),
+                    "coverage_threshold": coverage_threshold,
+                    "coverage_cutoff": coverage_cutoff,
+                    "window_minutes": recovery_window_minutes,
+                    "primary_threshold": primary_threshold,
+                    "primary_cutoff": primary_cutoff,
+                    "primary_window_minutes": primary_window_minutes,
+                    "threshold_scale": coverage.get("threshold_scale", 1.0),
+                    "intraday_scale": coverage.get("intraday_scale", 1.0),
                 }
                 logging.warning("MINUTE_DATA_COVERAGE_WARNING")
                 logger.warning(
@@ -6456,6 +6582,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "primary_materially_short": primary_materially_short,
             "primary_insufficient_intraday": primary_insufficient_intraday,
             "primary_low_coverage": primary_low_coverage,
+            "primary_threshold": primary_threshold,
+            "primary_cutoff": primary_cutoff,
+            "primary_window_minutes": primary_window_minutes,
+            "coverage_threshold": coverage_threshold,
+            "coverage_cutoff": coverage_cutoff,
+            "window_minutes": _window_minutes(coverage_window_start, end_dt),
+            "threshold_scale": coverage.get("threshold_scale", 1.0),
+            "intraday_scale": coverage.get("intraday_scale", 1.0),
             "from_feed": current_feed,
             "active_feed": active_feed,
             "fallback_feed": (fallback_feed or ""),
@@ -6490,6 +6624,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "expected_bars": expected_bars,
             "actual_bars": actual_bars,
             "coverage_threshold": coverage_threshold,
+            "coverage_cutoff": coverage_cutoff,
             "intraday_lookback": intraday_lookback,
             "materially_short": materially_short,
             "insufficient_intraday": insufficient_intraday,
@@ -6503,6 +6638,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "fallback_used": fallback_used,
             "fallback_exhausted": True,
             "primary_actual_bars": primary_actual_bars,
+            "primary_threshold": primary_threshold,
+            "primary_cutoff": primary_cutoff,
+            "primary_window_minutes": primary_window_minutes,
+            "window_minutes": _window_minutes(coverage_window_start, end_dt),
+            "threshold_scale": coverage.get("threshold_scale", 1.0),
+            "intraday_scale": coverage.get("intraday_scale", 1.0),
             "start": coverage_window_start.isoformat(),
             "end": end_dt.isoformat(),
         }

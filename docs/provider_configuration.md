@@ -26,6 +26,14 @@ export ENABLE_FINNHUB=1
 - `ALPACA_EMPTY_TO_BACKUP`: when set to `1`, the bot will jump directly to the configured backup provider if every preferred
   Alpaca feed responds with an empty payload.
 
+When `ALPACA_DATA_FEED=iex`, the provider monitor automatically relaxes gap
+detection thresholds. Minute safe-mode alerts now require a ~30% gap on IEX
+data (SIP still uses the legacy 2% trigger), and the bot only aborts a cycle
+for low minute coverage when the repaired frame drops below roughly 75% of the
+intraday lookback window. The SIP feed retains its stricter tolerance so that
+full-tape outages still halt trading promptly. See the
+[Degraded Data Playbook](degraded_data_playbook.md) for operational guidance.
+
 When a fallback feed returns usable data, the system records the switch per `(symbol, timeframe)` and logs `ALPACA_FEED_SWITCH`
 once. Future requests for the same pair use the working feed immediately, eliminating redundant retries against an empty feed.
 

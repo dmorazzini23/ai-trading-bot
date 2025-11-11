@@ -927,7 +927,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="provider_switch_quiet_seconds",
         env=("PROVIDER_SWITCH_QUIET_SECONDS",),
         cast="float",
-        default=15.0,
+        default=120.0,
         description="Quiet period in seconds before repeated provider switchovers are blocked.",
         min_value=0.0,
     ),
