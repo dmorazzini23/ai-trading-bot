@@ -512,8 +512,17 @@ def create_app():
             env_err = app.config.get("_ENV_ERR")
             if not overall_ok and env_err and not payload.get("reason"):
                 payload["reason"] = env_err
-            return jsonify(payload)
+            response_factory = globals().get("jsonify")
+            if callable(response_factory):
+                response = response_factory(payload)
+                try:
+                    response.status_code = 200
+                except Exception:
+                    pass
+                return response
+            return payload, 200
         except Exception as exc:
+            _log.exception("HEALTHZ_HANDLER_FAILED", exc_info=exc)
             fallback_payload = {
                 "ok": False,
                 "status": "degraded",
@@ -521,7 +530,15 @@ def create_app():
                 "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "error": str(exc),
             }
-            return jsonify(fallback_payload), 500
+            response_factory = globals().get("jsonify")
+            if callable(response_factory):
+                response = response_factory(fallback_payload)
+                try:
+                    response.status_code = 500
+                except Exception:
+                    pass
+                return response
+            return fallback_payload, 500
 
     @app.route("/metrics")
     def metrics():

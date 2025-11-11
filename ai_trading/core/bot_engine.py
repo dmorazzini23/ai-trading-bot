@@ -1907,6 +1907,8 @@ def _attempt_alpaca_trade(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
             extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
         )
+        _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
+        cache['alpaca_auth_failed'] = True
         cache['trade_source'] = 'alpaca_auth_failed'
         cache['trade_price'] = None
         return None, cache['trade_source']
@@ -2021,6 +2023,8 @@ def _attempt_alpaca_quote(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
             extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
         )
+        _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
+        cache['alpaca_auth_failed'] = True
         cache['quote_source'] = 'alpaca_auth_failed'
         cache['quote_price'] = None
         return None, cache['quote_source']
@@ -2047,6 +2051,8 @@ def _attempt_alpaca_quote(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
             )
+            _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
+            cache['alpaca_auth_failed'] = True
             cache['quote_source'] = 'alpaca_auth_failed'
             try:
                 runtime_state.update_data_provider_state(
@@ -17542,6 +17548,7 @@ def _coerce_quote_timestamp(value: Any) -> datetime | None:
 def _extract_quote_timestamp(payload: Any) -> datetime | None:
     queue: list[Any] = [payload]
     seen: set[int] = set()
+    timestamp_keys = ("timestamp", "time", "ts", "t", "updated_at")
     while queue:
         candidate = queue.pop()
         ident = id(candidate)
@@ -17550,19 +17557,33 @@ def _extract_quote_timestamp(payload: Any) -> datetime | None:
         seen.add(ident)
         if candidate is None:
             continue
-        for key in ("timestamp", "time", "ts", "t", "updated_at"):
+        for key in timestamp_keys:
             source = None
             if hasattr(candidate, key):
-                source = getattr(candidate, key)
+                try:
+                    source = getattr(candidate, key)
+                except Exception:
+                    source = None
             if source is None and isinstance(candidate, Mapping):
                 source = candidate.get(key)
-            ts = _coerce_quote_timestamp(source)
-            if ts is not None:
-                return ts
+            if source is not None:
+                ts = _coerce_quote_timestamp(source)
+                if ts is not None:
+                    return ts
+        children: list[Any] = []
         if isinstance(candidate, Mapping):
-            for value in candidate.values():
-                if isinstance(value, Mapping):
-                    queue.append(value)
+            children.extend(candidate.values())
+        elif isinstance(candidate, (list, tuple, set, frozenset)):
+            children.extend(candidate)
+        else:
+            attrs = getattr(candidate, "__dict__", None)
+            if isinstance(attrs, Mapping):
+                children.extend(attrs.values())
+        for child in children:
+            if child is None:
+                continue
+            if isinstance(child, (Mapping, list, tuple, set, frozenset)) or hasattr(child, "__dict__"):
+                queue.append(child)
     return None
 
 
@@ -17601,9 +17622,19 @@ def _check_fallback_quote_age(
     data_client = getattr(ctx, "data_client", None)
     if data_client is None:
         return False, None, "quote_source_unavailable"
+    getter = getattr(data_client, "get_stock_latest_quote", None)
+    if not callable(getter):
+        return False, None, "quote_source_unavailable"
     try:
         req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-        quote = data_client.get_stock_latest_quote(req)
+    except COMMON_EXC as exc:
+        logger.warning(
+            "FALLBACK_QUOTE_REQUEST_FAILED",
+            extra={"symbol": symbol, "cause": exc.__class__.__name__, "detail": str(exc)},
+        )
+        return False, None, "quote_source_unavailable"
+    try:
+        quote = getter(req)
     except COMMON_EXC as exc:  # noqa: BLE001 - defensive around SDK variations
         logger.warning(
             "FALLBACK_QUOTE_CHECK_FAILED",
@@ -19588,6 +19619,35 @@ def _evaluate_trade_signal(
     confidence, capped_flag, confidence_before_cap = _apply_meta_cap(confidence)
     strat_components = [lab for _, _, lab in ctx.signal_manager.last_components]
     strat = "+".join(strat_components) if strat_components else "HOLD"
+    if final_score is None or not np.isfinite(final_score):
+        raise ValueError("Invalid or empty signal")
+    try:
+        hold_eps = float(get_env("AI_TRADING_SIGNAL_HOLD_EPS", "0.01", cast=float))
+    except COMMON_EXC:
+        hold_eps = 1e-2
+    if not np.isfinite(final_score) or abs(final_score) <= hold_eps:
+        final_score = 0.0
+        extra_payload = {
+            "symbol": symbol,
+            "final_score": final_score,
+            "confidence": confidence,
+            "confidence_capped_due_to_history": capped_flag,
+        }
+        if capped_flag and confidence_before_cap is not None:
+            extra_payload["confidence_before_cap"] = confidence_before_cap
+        logger.info(
+            "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
+            symbol,
+            final_score,
+            confidence,
+            extra=extra_payload,
+        )
+        logger.info(
+            "SIGNAL_HOLD",
+            extra={"symbol": symbol, "confidence": confidence},
+        )
+        return final_score, confidence, "HOLD"
+    final_score = 1.0 if final_score > 0 else -1.0
     extra_payload = {
         "symbol": symbol,
         "final_score": final_score,
@@ -19603,19 +19663,6 @@ def _evaluate_trade_signal(
         confidence,
         extra=extra_payload,
     )
-    if final_score is None or not np.isfinite(final_score):
-        raise ValueError("Invalid or empty signal")
-    try:
-        hold_eps = float(get_env("AI_TRADING_SIGNAL_HOLD_EPS", "0.01", cast=float))
-    except COMMON_EXC:
-        hold_eps = 1e-2
-    if not np.isfinite(final_score) or abs(final_score) <= hold_eps:
-        final_score = 0.0
-        logger.info(
-            "SIGNAL_HOLD",
-            extra={"symbol": symbol, "confidence": confidence},
-        )
-        return final_score, confidence, "HOLD"
     return final_score, confidence, strat
 
 
@@ -24549,7 +24596,7 @@ def _truncate_degraded_candidates(symbols: list[str], runtime, *, reason: str | 
         return symbols
     penalty_factor = round(max_candidates / len(symbols), 4)
     logger.warning(
-        "SCREEN_DEGRADED_INPUTS",
+        "DEGRADED_CANDIDATES_TRUNCATED",
         extra={
             "original": len(symbols),
             "truncated": max_candidates,
@@ -28159,6 +28206,11 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                     _PRICE_SOURCE[symbol] = str(source)
                 continue
 
+            if source == "alpaca_auth_failed":
+                _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+                _cache_feed_if_allowed(force=True)
+                return None
+
             if price is not None and price > 0:
                 resolved_source = str(source or provider)
                 _PRICE_SOURCE[symbol] = resolved_source
@@ -28196,6 +28248,21 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 _PRICE_SOURCE[symbol] = str(source or provider)
                 return price
             continue
+
+    if cache.get("alpaca_auth_failed"):
+        _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+        return None
+
+    if _PRICE_SOURCE.get(symbol) == "alpaca_auth_failed":
+        return None
+
+    try:
+        alpaca_available = bool(alpaca_api._ALPACA_SERVICE_AVAILABLE)
+    except Exception:
+        alpaca_available = True
+    if attempted_alpaca and not alpaca_available:
+        _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+        return None
 
     if callable(backup_fetch_fn) and not backup_checked:
         backup_checked = True

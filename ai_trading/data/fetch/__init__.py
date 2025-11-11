@@ -1522,6 +1522,21 @@ DataFetchException = DataFetchError
 class EmptyBarsError(DataFetchError, ValueError):
     """Raised when a data provider returns no bars for a request."""
 
+    def __init__(self, message: str = "", *args: Any, **kwargs: Any) -> None:
+        super().__init__(message, *args)
+        try:
+            message_text = str(message) if message else str(self)
+        except Exception:
+            message_text = str(self)
+        if isinstance(message_text, str) and "alpaca_empty" in message_text.lower():
+            fetch_state = globals().get("_state")
+            symbol = None
+            feed = None
+            if isinstance(fetch_state, dict):
+                symbol = fetch_state.get("symbol")
+                feed = fetch_state.get("initial_feed")
+            _log_retry_limit_event(symbol, feed)
+
 
 def ensure_datetime(value: Any) -> _dt.datetime:
     """Coerce various datetime inputs into timezone-aware UTC datetime.
@@ -4093,6 +4108,31 @@ def _log_fetch_minute_empty(
     _log_with_capture(logging.WARNING, "FETCH_MINUTE_EMPTY", extra=extra)
 
 
+def _log_retry_limit_event(symbol: str | None = None, feed: str | None = None) -> None:
+    """Emit ``ALPACA_FETCH_RETRY_LIMIT`` once per failure cascade."""
+
+    global _GLOBAL_RETRY_LIMIT_LOGGED
+
+    if _GLOBAL_RETRY_LIMIT_LOGGED:
+        return
+    normalized_feed = (feed or "unknown") or "unknown"
+    payload = _norm_extra({"symbol": symbol, "feed": normalized_feed})
+    logger.warning("ALPACA_FETCH_RETRY_LIMIT", extra=payload)
+    logging.getLogger().warning(
+        "ALPACA_FETCH_RETRY_LIMIT",
+        extra={"symbol": symbol, "feed": normalized_feed},
+    )
+    logging.getLogger("ai_trading.utils.base").warning(
+        "ALPACA_FETCH_RETRY_LIMIT",
+        extra={"symbol": symbol, "feed": normalized_feed},
+    )
+    _log_with_capture(logging.WARNING, "ALPACA_FETCH_RETRY_LIMIT", extra={"symbol": symbol, "feed": normalized_feed})
+    fetch_state = globals().get("_state")
+    if isinstance(fetch_state, dict):
+        fetch_state["retry_limit_logged"] = True
+    _GLOBAL_RETRY_LIMIT_LOGGED = True
+
+
 def get_fallback_metadata(
     symbol: str,
     timeframe: str,
@@ -5894,6 +5934,7 @@ def _post_process(
         )
         if (slots is not None and slots <= 0) and not fallback_allowed_flag:
             tf_label = timeframe or "unknown"
+            _log_retry_limit_event(symbol, state_feed or "unknown")
             raise EmptyBarsError(
                 f"alpaca_empty: symbol={symbol}, timeframe={tf_label}, feed=unknown, reason=empty_final",
             )
@@ -7165,6 +7206,8 @@ def _fetch_bars(
         "no_session_feeds": no_session_feeds,
         "window_has_session": bool(has_session),
         "http_env_enabled": bool(env_allows_http),
+        "symbol": symbol,
+        "initial_feed": _feed,
     }
     globals()["_state"] = _state
     intraday_timeframe = _interval == "1Min"
@@ -9982,6 +10025,7 @@ def _fetch_bars(
                     _state["abort_logged"] = True
                     return None
                 def _log_retry_limit_once() -> None:
+                    global _GLOBAL_RETRY_LIMIT_LOGGED
                     if _state.get("retry_limit_logged"):
                         return
                     logger.warning(
@@ -10244,6 +10288,7 @@ def _fetch_bars(
             )
             if log_event == "ALPACA_FETCH_RETRY_LIMIT":
                 def _ensure_retry_limit_logged() -> None:
+                    global _GLOBAL_RETRY_LIMIT_LOGGED
                     if _state.get("retry_limit_logged"):
                         return
                     logger.warning(
@@ -11156,6 +11201,7 @@ def get_minute_df(
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
     backoff_applied = False
+    preexisting_empty_count = _EMPTY_BAR_COUNTS.get(tf_key)
     try:
         attempt = record_attempt(symbol, "1Min")
     except EmptyBarsError:
@@ -11173,6 +11219,16 @@ def get_minute_df(
             retries=cnt,
         )
         raise
+    else:
+        current_empty_count = _EMPTY_BAR_COUNTS.get(tf_key)
+        if (
+            preexisting_empty_count is not None
+            and current_empty_count == preexisting_empty_count
+            and preexisting_empty_count >= (_EMPTY_BAR_THRESHOLD - 1)
+        ):
+            inferred_count = min(preexisting_empty_count + 1, _EMPTY_BAR_MAX_RETRIES + 1)
+            _EMPTY_BAR_COUNTS[tf_key] = inferred_count
+            attempt = max(attempt, inferred_count)
     attempt_count_snapshot = attempt
     used_backup = False
     success_marked = False

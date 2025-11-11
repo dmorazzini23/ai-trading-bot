@@ -2948,6 +2948,12 @@ class ExecutionEngine:
         """
 
         kwargs = dict(kwargs)
+        if not hasattr(self, "_pending_orders"):
+            self._pending_orders = {}
+        if not hasattr(self, "stats"):
+            self.stats = {}
+        if not hasattr(self, "order_manager"):
+            self.order_manager = getattr(self, "order_manager", None) or object()
         pytest_mode = _pytest_mode_active()
         closing_position = bool(
             kwargs.get("closing_position")
@@ -4120,11 +4126,15 @@ class ExecutionEngine:
                 order_id_display = order_id or client_order_id
                 final_cancel_reason = None
                 if previous_pending_id:
-                    self._pending_orders.pop(str(previous_pending_id), None)
+                    store = getattr(self, "_pending_orders", None) or {}
+                    store.pop(str(previous_pending_id), None)
+                    self._pending_orders = store
                 new_pending_id = order_id or client_order_id
                 if new_pending_id:
-                    pending_entry = self._pending_orders.setdefault(str(new_pending_id), {})
+                    store = getattr(self, "_pending_orders", None) or {}
+                    pending_entry = store.setdefault(str(new_pending_id), {})
                     pending_entry["status"] = status_lower or "submitted"
+                    self._pending_orders = store
 
         if not (order_id or client_order_id):
             logger.error(
@@ -4171,7 +4181,9 @@ class ExecutionEngine:
                 final_payload["message"] = rejection_detail
             logger.warning("ORDER_REJECTED", extra=final_payload)
         if order_id_display:
-            self._pending_orders.pop(str(order_id_display), None)
+            store = getattr(self, "_pending_orders", None) or {}
+            store.pop(str(order_id_display), None)
+            self._pending_orders = store
 
         symbol_key = symbol.upper()
         reconciled = (not ack_timed_out) and (order_status_lower in {"filled", "partially_filled"})

@@ -681,9 +681,6 @@ class OrderManager:
         """Start order monitoring thread."""
         if self._monitor_running:
             return
-        if self._test_mode:
-            logger.debug("Order monitoring suppressed in test mode")
-            return
         self._monitor_running = True
         self._monitor_thread = threading.Thread(target=self._monitor_orders, daemon=True)
         self._monitor_thread.start()
