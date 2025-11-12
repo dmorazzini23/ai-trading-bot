@@ -32,7 +32,7 @@ def engine_factory(monkeypatch):
     monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
     monkeypatch.setattr(lt, "get_tick_size", lambda symbol: Decimal("0.01"))
 
-    def _build_engine(execute_behavior):
+    def _build_engine(execute_behavior=None, *, use_real_submit: bool = False, trading_client=None):
         engine = object.__new__(lt.ExecutionEngine)
         engine._refresh_settings = lambda: None
         engine.is_initialized = True
@@ -40,10 +40,16 @@ def engine_factory(monkeypatch):
         engine._pre_execution_checks = lambda: True
         engine._get_account_snapshot = lambda: None
         engine._should_skip_for_pdt = lambda _account, _closing: (False, None, {})
-        engine._execute_with_retry = lambda submit_fn, order_data: execute_behavior(order_data)
-        engine._submit_order_to_alpaca = lambda order_data: {"id": "abc123", "order_data": order_data}
+        if execute_behavior is None:
+            engine._execute_with_retry = lambda submit_fn, order_data: submit_fn(order_data)
+        else:
+            engine._execute_with_retry = lambda submit_fn, order_data: execute_behavior(order_data)
+        if use_real_submit:
+            engine._submit_order_to_alpaca = lt.ExecutionEngine._submit_order_to_alpaca.__get__(engine, lt.ExecutionEngine)
+        else:
+            engine._submit_order_to_alpaca = lambda order_data: {"id": "abc123", "order_data": order_data}
         engine.shadow_mode = False
-        engine.trading_client = SimpleNamespace()
+        engine.trading_client = trading_client if trading_client is not None else SimpleNamespace()
         engine.stats = {
             "total_execution_time": 0.0,
             "total_orders": 0,
@@ -80,6 +86,27 @@ def test_submit_limit_order_success_path(engine_factory):
     assert result["id"] == "ok"
     assert engine.stats["successful_orders"] == 1
     assert engine.stats["failed_orders"] == 0
+
+
+def test_submit_limit_order_returns_broker_payload(engine_factory, monkeypatch):
+    submissions: list[dict[str, object]] = []
+
+    def _fake_submit(order_payload):
+        submissions.append(order_payload)
+        return {"id": "broker-ack", "status": "accepted", **order_payload}
+
+    fake_client = SimpleNamespace(submit_order=_fake_submit)
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+
+    engine = engine_factory(None, use_real_submit=True, trading_client=fake_client)
+
+    result = engine.submit_limit_order("AAPL", "buy", 5, 123.45)
+
+    assert result["id"] == "broker-ack"
+    assert result["status"] == "accepted"
+    assert engine.stats["successful_orders"] == 1
+    assert engine.stats["failed_orders"] == 0
+    assert submissions and submissions[0]["symbol"] == "AAPL"
 
 
 def test_submit_limit_order_nonretryable_logs_detail(engine_factory, caplog):

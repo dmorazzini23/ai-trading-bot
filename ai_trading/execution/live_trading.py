@@ -5553,6 +5553,7 @@ class ExecutionEngine:
                         "submitted_at": submitted_iso,
                     },
                 )
+            return resp
         except (APIError, TimeoutError, ConnectionError) as e:
             if isinstance(e, APIError) and self._is_opposite_conflict_error(e):
                 symbol = str(order_data.get("symbol") or "")
