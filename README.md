@@ -888,6 +888,17 @@ and relies on fallback quotes instead of blocking. Use
 even if `is_primary_provider_enabled()` reports a cooldown; execution still runs
 under the widen policy regardless of that flag.
 
+#### Degraded Feed & Signal Controls
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRADING__DEGRADED_FEED_MODE` | `widen` | Choose `block` to pause entries or `widen` to keep trading with relaxed pricing while safe mode is active. |
+| `SKIP_COMPUTE_WHEN_PROVIDER_DISABLED` | `false` | When `true`, skips screening whenever the provider monitor disables Alpaca; keep it `false` to continue generating signals while safe mode resolves. |
+| `METALEARN_FALLBACK_CONFIDENCE_CAP` | `0.35` | Upper bound applied when MetaLearn history is missing; the trade threshold automatically drops to this cap so capped signals can still execute. |
+| `AI_TRADING_GAP_RATIO_LIMIT` / `GAP_RATIO_MAX_PCT` | `0.005` / `5` | Controls how much missing-minute coverage is tolerated before order pricing falls back or safe mode telemetry records a degraded provider. |
+| `EXECUTION_ALLOW_LAST_CLOSE` | `false` | Explicitly allow last-close-only executions; when safe mode + `widen` is active this fallback is automatically enabled even if the flag stays `false`. |
+| `EXECUTION_REQUIRE_REALTIME_NBBO` | `false` | Set to `true` to force real-time NBBO quotes; leave at `false` so the bot can use fallback quotes or synthetic pricing when the feed is degraded. |
+
 #### Machine Learning Configuration
 
 | Parameter | Default | Description |

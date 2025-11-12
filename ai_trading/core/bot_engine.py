@@ -20137,7 +20137,16 @@ def trade_logic(
         logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
         return True
 
-    if final_score > 0 and conf >= get_buy_threshold() and current_qty == 0:
+    local_threshold = get_buy_threshold()
+    meta_capped = bool(getattr(ctx.signal_manager, "meta_confidence_capped", False))
+    if meta_capped:
+        cap_limit = _metafallback_confidence_cap()
+        try:
+            local_threshold = min(float(local_threshold), float(cap_limit))
+        except Exception:
+            local_threshold = min(local_threshold, cap_limit)
+
+    if final_score > 0 and conf >= local_threshold and current_qty == 0:
         if symbol in state.long_positions:
             held = state.position_cache.get(symbol, 0)
             logger.info(
@@ -20148,7 +20157,7 @@ def trade_logic(
             ctx, state, symbol, balance, feat_df, final_score, conf, strat
         )
 
-    if final_score < 0 and conf >= get_buy_threshold() and current_qty == 0:
+    if final_score < 0 and conf >= local_threshold and current_qty == 0:
         if symbol in state.short_positions:
             held = abs(state.position_cache.get(symbol, 0))
             logger.info(
@@ -20167,7 +20176,7 @@ def trade_logic(
     # Else hold / no action
     logger.info(
         f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  "
-        f"final_score={final_score:.4f}  confidence={conf:.4f}"
+        f"final_score={final_score:.4f}  confidence={conf:.4f}  threshold={local_threshold:.4f}"
     )
     return True
 
@@ -23479,9 +23488,13 @@ def _ensure_executable_quote(
     slippage_bps = _slippage_setting_bps()
     reference_valid = reference_price is not None and math.isfinite(reference_price) and reference_price > 0.0
     fallback_policy_enabled = True
+    degraded_mode = "block"
     if cfg is not None:
         fallback_policy_enabled = bool(getattr(cfg, "execution_allow_fallback_price", True))
+        degraded_mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
     fallback_permitted = reference_valid and (allow_reference_fallback or fallback_policy_enabled)
+    if fallback_policy_enabled and degraded_mode == "widen":
+        fallback_permitted = True
 
     def _publish_quote_state(
         allowed: bool,
@@ -23505,7 +23518,7 @@ def _ensure_executable_quote(
     quote = _fetch_quote(ctx, symbol)
     if quote is None and require_bid_ask:
         missing_details = {"bid": None, "ask": None}
-        if fallback_permitted:
+        if fallback_permitted and reference_valid:
             decision = _synthetic_quote_decision(
                 symbol,
                 float(reference_price),
@@ -23569,7 +23582,7 @@ def _ensure_executable_quote(
         if quote_missing or bid_missing or ask_missing:
             details_dict.setdefault("fallback_reason", "missing_bid_ask")
         gate_decision.reason = reason
-        fallback_ok = fallback_permitted
+        fallback_ok = fallback_permitted and reference_valid
         if fallback_ok:
             fallback_reason = reason
             if not is_stale and (bid_missing or ask_missing):
@@ -23626,7 +23639,7 @@ def _ensure_executable_quote(
         if mid is not None and math.isfinite(mid):
             gap_ratio = abs(mid - reference_price) / reference_price
             if gap_ratio > gap_limit:
-                if fallback_permitted:
+                if fallback_permitted and reference_valid:
                     decision = _synthetic_quote_decision(
                         symbol,
                         float(reference_price),
@@ -24610,7 +24623,19 @@ def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
 
     safe_reason = safe_mode_reason()
     if safe_reason:
-        return True, safe_reason, True
+        fatal_reason = False
+        try:
+            reason_lower = str(safe_reason).strip().lower()
+        except Exception:
+            reason_lower = ""
+        kill_tokens = ("kill_switch", "halt", "disabled", "offline")
+        if reason_lower and any(token in reason_lower for token in kill_tokens):
+            fatal_reason = True
+        elif reason_lower in {"minute_gap"} or reason_lower.startswith("data_quality:minute_gap"):
+            fatal_reason = False
+        else:
+            fatal_reason = _reason_implies_fatal(safe_reason)
+        return True, safe_reason, fatal_reason
 
     disabled_check = getattr(provider_monitor, "is_disabled", None)
     if callable(disabled_check):

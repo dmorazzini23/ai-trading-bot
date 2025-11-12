@@ -631,6 +631,7 @@ def _trigger_provider_safe_mode(
         metadata_payload.update({k: v for k, v in metadata.items() if k not in metadata_payload})
 
     provider_key = canonical_provider(str(metadata_payload.get("provider", "alpaca")))
+    degraded_only = False
     if reason == "minute_gap":
         gap_diag = _gap_event_diagnostics.pop(provider_key, None)
         if gap_diag:
@@ -648,6 +649,32 @@ def _trigger_provider_safe_mode(
                     "total_missing": gap_payload.get("total_missing"),
                     "samples": gap_payload.get("samples"),
                 },
+            )
+        used_backup = bool(metadata_payload.get("used_backup"))
+        fallback_contiguous_flag = metadata_payload.get("fallback_contiguous")
+        if isinstance(fallback_contiguous_flag, str):
+            fallback_contiguous = fallback_contiguous_flag.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "contiguous",
+            }
+        else:
+            fallback_contiguous = bool(fallback_contiguous_flag)
+        missing_after_raw = metadata_payload.get("missing_after")
+        missing_after_zero = False
+        if missing_after_raw is not None:
+            try:
+                missing_after_zero = int(float(missing_after_raw)) == 0
+            except (TypeError, ValueError):
+                missing_after_zero = False
+        if used_backup and (fallback_contiguous or missing_after_zero):
+            degraded_only = True
+            metadata_payload["degraded_only"] = True
+            metadata_payload.setdefault("provider_disabled", False)
+            logger.info(
+                "PROVIDER_SAFE_MODE_DEGRADED_ONLY",
+                extra={"provider": provider_key, "reason": reason, "contiguous_fallback": fallback_contiguous},
             )
     else:
         _gap_event_diagnostics.pop(provider_key, None)
@@ -693,7 +720,7 @@ def _trigger_provider_safe_mode(
             exc_info=True,
         )
 
-    if monitor is not None:
+    if monitor is not None and not degraded_only:
         for provider in ("alpaca", "alpaca_sip"):
             try:
                 monitor.disable(provider)

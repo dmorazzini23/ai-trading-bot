@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 import pytest
 
+from ai_trading.core import bot_engine
 from ai_trading.data import fetch
 from ai_trading.data.fetch import notify_primary_provider_safe_mode
 
@@ -79,3 +80,15 @@ def test_safe_mode_cycle_skips_primary(monkeypatch, caplog) -> None:
     assert len(calls) >= 2
     skip_logs_repeat = [rec for rec in caplog.records if rec.msg == "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP"]
     assert not skip_logs_repeat
+
+
+def test_resolve_data_provider_degraded_minutes(monkeypatch):
+    monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: {})
+    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: "minute_gap")
+    monkeypatch.setattr(bot_engine.provider_monitor, "is_disabled", lambda *_args, **_kwargs: False)
+
+    degraded, reason, fatal = bot_engine._resolve_data_provider_degraded()
+
+    assert degraded is True
+    assert reason == "minute_gap"
+    assert fatal is False
