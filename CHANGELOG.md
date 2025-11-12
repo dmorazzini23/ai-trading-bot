@@ -53,6 +53,8 @@ All notable changes to this project will be documented in this file.
 - Monitoring: alert when consecutive provider switchovers exceed threshold.
 
 ### Fixed
+- **Execution**: restore live Alpaca submissions to return broker acknowledgements so success metrics increment for accepted
+  orders.
 - Dev deps: align `packaging` version with `constraints.txt` (25.0) to
   resolve resolver conflicts during `ensure-runtime` install.
 - Risk engine now rounds weight limits to one decimal to avoid floating-point precision issues.
