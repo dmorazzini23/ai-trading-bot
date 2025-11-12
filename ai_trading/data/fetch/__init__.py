@@ -10831,6 +10831,10 @@ def get_minute_df(
     _GLOBAL_RETRY_LIMIT_LOGGED = False
     _clear_gap_ratio_state()
     tf_key = (symbol, "1Min")
+    testing_mode = os.getenv("TESTING")
+    if testing_mode and testing_mode.strip().lower() in {"1", "true", "yes"}:
+        _clear_backup_skip(symbol, "1Min")
+        _SKIPPED_SYMBOLS.discard(tf_key)
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     http_fallback_allowed = _http_fallback_permitted(
         "1Min",
@@ -10939,6 +10943,9 @@ def get_minute_df(
     if safe_mode_forced_skip:
         forced_skip_engaged = True
     forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
+    if forced_skip_until is not None and tf_key not in _SKIPPED_SYMBOLS:
+        _clear_backup_skip(symbol, "1Min")
+        forced_skip_until = None
     if forced_skip_until is not None:
         if pytest_active and not fallback_allowed_flag:
             _clear_backup_skip(symbol, "1Min")

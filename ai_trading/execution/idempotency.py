@@ -191,7 +191,27 @@ class OrderIdempotencyCache:
             key_hash = key.hash()
             if key_hash not in self._cache:
                 return None
-            return self._cache.get(key_hash)
+            entry = self._cache.get(key_hash)
+            if entry is None:
+                return None
+            submitted_at = entry.get("submitted_at") if isinstance(entry, dict) else None
+            ttl_seconds = getattr(self._cache, "ttl", None)
+            if (
+                isinstance(submitted_at, datetime)
+                and isinstance(ttl_seconds, (int, float))
+                and ttl_seconds > 0
+            ):
+                age = (datetime.now(UTC) - submitted_at).total_seconds()
+                if age > ttl_seconds:
+                    try:
+                        del self._cache[key_hash]
+                    except Exception:
+                        try:
+                            self._cache.pop(key_hash, None)  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    return None
+            return entry
 
     def clear_expired(self) -> int:
         """

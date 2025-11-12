@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from ai_trading.logging import get_logger
 from ai_trading.telemetry import runtime_state
+from ai_trading.app import _install_route_tracker, _ensure_test_client
 
 try:  # pragma: no cover - optional dependency
     from flask import Flask, jsonify
@@ -56,9 +57,13 @@ class HealthCheck:
         # ``config`` attribute is a mutable mapping so ``update`` is safe even
         # when the dict is empty.
         self.app = Flask(__name__)
+        if not hasattr(self.app, "config") or not isinstance(self.app.config, dict):
+            setattr(self.app, "config", dict(getattr(self.app, "config", {}) or {}))
         self.app.config.update(self.config)
 
+        route_registry = _install_route_tracker(self.app)
         self._register_routes()
+        _ensure_test_client(self.app, route_registry)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -71,6 +76,16 @@ class HealthCheck:
 
     def _register_routes(self) -> None:
         """Register default health route."""
+
+        def _emit_response(body: dict, status: int = 200):
+            response = jsonify(body)
+            if response is None:
+                return body if status == 200 else (body, status)
+            try:
+                response.status_code = status
+            except Exception:
+                pass
+            return response
 
         @self.app.route("/healthz")
         def _healthz() -> Any:  # pragma: no cover - simple glue
@@ -184,14 +199,18 @@ class HealthCheck:
                     "HEALTH_ENDPOINT_ERROR",
                     extra={"error": str(exc)},
                 )
-                payload = {
-                    "ok": False,
-                    "service": "ai-trading",
-                    "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    "status": "degraded",
-                    "error": str(exc) or exc.__class__.__name__,
-                }
-            return jsonify(payload)
+                payload = _emit_response(
+                    {
+                        "ok": False,
+                        "service": "ai-trading",
+                        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                        "status": "degraded",
+                        "error": str(exc) or exc.__class__.__name__,
+                    },
+                    status=500,
+                )
+                return payload
+            return _emit_response(payload, status=200)
 
     # ------------------------------------------------------------------
     # Public API

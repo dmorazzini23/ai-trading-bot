@@ -29,7 +29,11 @@ def _short_sleep(monkeypatch):
     orig_sleep = time.sleep
 
     def fast_sleep(s):
-        return orig_sleep(0 if s <= 0 else min(s, 0.02))
+        if s <= 0:
+            return orig_sleep(0)
+        if s >= 0.1:
+            return orig_sleep(s)
+        return orig_sleep(min(s, 0.02))
 
     monkeypatch.setattr(time, "sleep", fast_sleep)
     yield
