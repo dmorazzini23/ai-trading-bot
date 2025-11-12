@@ -124,6 +124,7 @@ _HTTP = _HTTPShim()
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
+import sys
 from ai_trading.logging import get_logger
 try:
     from ai_trading.config.management import is_shadow_mode, _resolve_alpaca_env
@@ -771,8 +772,50 @@ def get_bars_df(
     StockBarsRequest = get_stock_bars_request_cls()
 
     _pd = _require_pandas("get_bars_df")
-    module_self = importlib.import_module("ai_trading.alpaca_api")
-    rest = module_self._get_rest(bars=True)
+    rest_factories: list[Any] = []
+    seen_factories: set[int] = set()
+
+    def _add_factory(candidate: Any) -> None:
+        if not callable(candidate):
+            return
+        ident = id(candidate)
+        if ident in seen_factories:
+            return
+        seen_factories.add(ident)
+        rest_factories.append(candidate)
+
+    module_obj = sys.modules.get("ai_trading.alpaca_api")
+    if module_obj is not None:
+        _add_factory(getattr(module_obj, "_get_rest", None))
+    _add_factory(globals().get("_get_rest"))
+    if not rest_factories:  # pragma: no cover - defensive fallback when globals missing
+        module_self = importlib.import_module("ai_trading.alpaca_api")
+        _add_factory(getattr(module_self, "_get_rest", None))
+
+    rest_factories.sort(
+        key=lambda fn: 1 if getattr(fn, "__module__", None) == __name__ else 0
+    )
+
+    rest: Any | None = None
+    last_error: Exception | None = None
+    for factory in rest_factories:
+        try:
+            rest = factory(bars=True)
+        except TypeError as exc:
+            last_error = exc
+            try:
+                rest = factory(True)
+            except TypeError:
+                continue
+        except ImportError as exc:
+            last_error = exc
+            continue
+        if rest is not None:
+            break
+    if rest is None:
+        if last_error is not None:
+            raise RuntimeError("_get_rest unavailable") from last_error
+        raise RuntimeError("_get_rest unavailable")
     feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
     adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
     tf_raw = timeframe
