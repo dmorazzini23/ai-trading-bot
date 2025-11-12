@@ -172,6 +172,7 @@ def create_app():
         fallback_used = False
         fallback_reasons: list[str] = []
         serialization_failed = False
+        jsonify_unavailable = False
         if callable(func):
             try:
                 response = func(dict(sanitized_payload))
@@ -206,13 +207,14 @@ def create_app():
                 if import_reason:
                     fallback_reasons.append(import_reason)
                 fallback_reasons.append("ImportError")
+            jsonify_unavailable = True
             sanitized_payload = _stamp_fallback_meta(
                 sanitized_payload, used=True, reasons=fallback_reasons,
             )
 
         final_payload = _normalize_health_payload(dict(sanitized_payload))
 
-        if serialization_failed:
+        if serialization_failed or jsonify_unavailable:
             final_payload["ok"] = False
 
         message_candidates: list[str] = []

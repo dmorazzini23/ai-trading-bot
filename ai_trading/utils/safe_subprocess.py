@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -68,6 +69,7 @@ def safe_subprocess_run(
         if run_kwargs.get("timeout") != timeout_param:  # defensive: ensure override sticks
             run_kwargs["timeout"] = timeout_param
 
+    start_time = time.monotonic()
     try:
         completed = subprocess.run(cmd, **run_kwargs)
     except subprocess.TimeoutExpired as exc:
@@ -99,9 +101,30 @@ def safe_subprocess_run(
             extra={"cmd": cmd, "returncode": result.returncode, "error": str(exc), "exc_type": type(exc).__name__},
         )
         return result
-
+    elapsed = time.monotonic() - start_time
     stdout_text = _normalize_stream(completed.stdout)
     stderr_text = _normalize_stream(completed.stderr)
+    overshot_timeout = (
+        timeout_param is not None and (elapsed - timeout_param) > 0.001
+    )
+    if overshot_timeout and timeout_param is not None:
+        synthetic_timeout = subprocess.TimeoutExpired(
+            cmd,
+            timeout_param,
+            output=stdout_text,
+            stderr=stderr_text,
+        )
+        timeout_value = float(timeout_param)
+        result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
+        synthetic_timeout.stdout = stdout_text
+        synthetic_timeout.stderr = stderr_text
+        synthetic_timeout.result = result
+        synthetic_timeout.timeout = timeout_value
+        log.warning(
+            "SAFE_SUBPROCESS_TIMEOUT",
+            extra={"cmd": cmd, "timeout": timeout_value},
+        )
+        raise synthetic_timeout
     ret = subprocess.CompletedProcess(cmd, completed.returncode, stdout_text, stderr_text)
     if requested_check and ret.returncode != 0:
         raise subprocess.CalledProcessError(ret.returncode, cmd, ret.stdout, ret.stderr)

@@ -11421,13 +11421,30 @@ def get_minute_df(
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
                     _SKIPPED_SYMBOLS.discard(tf_key)
                     last_empty_error = None
+                    current_feed = str(feed_to_use or initial_feed or "").replace("alpaca_", "")
+                    if (
+                        current_feed == "iex"
+                        and _sip_configured()
+                        and not _is_sip_unauthorized()
+                    ):
+                        if not switch_recorded:
+                            try:
+                                _record_feed_switch(symbol, "1Min", current_feed, "sip")
+                            except Exception:
+                                pass
+                            switch_recorded = True
+                        try:
+                            df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed="sip")
+                        except (EmptyBarsError, ValueError, RuntimeError, AttributeError):
+                            df_alt = None
+                        if df_alt is not None:
+                            return df_alt
                     if not switch_recorded:
                         try:
                             priorities = provider_priority()
                         except Exception:
                             priorities = ()
                         fallback_target: str | None = None
-                        current_feed = str(feed_to_use or initial_feed or "").replace("alpaca_", "")
                         for priority in priorities or ():
                             candidate = str(priority or "").replace("alpaca_", "")
                             if not candidate or candidate == current_feed:

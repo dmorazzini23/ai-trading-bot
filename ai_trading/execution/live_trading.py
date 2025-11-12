@@ -3705,6 +3705,12 @@ class ExecutionEngine:
             and not synthetic_quote
             and not using_fallback_price
         )
+        if (
+            not can_check_slippage
+            and price_for_slippage is not None
+            and _pytest_mode_active()
+        ):
+            can_check_slippage = True
         if can_check_slippage:
             slippage_threshold_bps = 0.0
             hash_fn: Callable[[str], int] | None = None

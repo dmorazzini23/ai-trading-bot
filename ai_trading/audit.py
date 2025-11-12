@@ -287,19 +287,18 @@ def log_trade(
         ) -> bool:
             repair_attempted = False
 
-            def _repair_permissions() -> bool:
+            def _repair_permissions() -> None:
                 nonlocal repair_attempted
                 if repair_attempted:
-                    return False
+                    return
                 repair_attempted = True
                 try:
-                    return bool(fix_file_permissions(path, header_fields))
+                    fix_file_permissions(path, header_fields)
                 except Exception as fix_exc:  # pragma: no cover - defensive logging
                     logger.exception(
                         "TRADE_LOG_PERMISSION_FIX_FAILED",
                         extra={"path": str(path), "phase": phase, "error": str(fix_exc)},
                     )
-                    return False
 
             try:
                 action()

@@ -19,6 +19,7 @@ class _LazyLoader:
 
     def exec_module(self, module: ModuleType) -> None:  # pragma: no cover - thin shim
         del module
+        self._module._load()
         return None
 
 
@@ -59,7 +60,18 @@ class _LazyModule(ModuleType):
         sys.modules[self.__name__] = self
         if self._real is None:
             raise ImportError(f"Failed to load module {self.__name__!r}")
+        self._mirror_real_attributes()
         return self._real
+
+    def _mirror_real_attributes(self) -> None:
+        real = self._real
+        if real is None:
+            return
+        skip = {"_real", "_loading", "__loader__", "__spec__", "__dict__"}
+        for key, value in real.__dict__.items():
+            if key in skip:
+                continue
+            setattr(self, key, value)
 
     def __getattr__(self, item: str):  # pragma: no cover - exercised via tests
         return getattr(self._load(), item)
