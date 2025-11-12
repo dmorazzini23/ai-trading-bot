@@ -139,6 +139,34 @@ except ImportError as exc:  # pragma: no cover - log once when SDK missing
         exc,
     )
 
+
+def _is_alpaca_error_instance(exc: BaseException, attr: str, fallback: type[BaseException]) -> bool:
+    """Return True when *exc* matches the latest Alpaca error class (accounts for reloads)."""
+
+    candidates: list[type[BaseException]] = []
+    if isinstance(fallback, type):
+        candidates.append(fallback)
+    module = sys.modules.get("ai_trading.alpaca_api")
+    if module is not None:
+        fresh_cls = getattr(module, attr, None)
+        if isinstance(fresh_cls, type):
+            candidates.append(fresh_cls)
+    for candidate in candidates:
+        try:
+            if isinstance(exc, candidate):
+                return True
+        except Exception:  # pragma: no cover - defensive guard
+            continue
+    try:
+        return exc.__class__.__name__ == attr
+    except Exception:  # pragma: no cover - defensive guard
+        return False
+
+
+def _is_alpaca_auth_error(exc: BaseException) -> bool:
+    return _is_alpaca_error_instance(exc, "AlpacaAuthenticationError", AlpacaAuthenticationError)
+
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore
@@ -1973,6 +2001,16 @@ def _attempt_alpaca_trade(
         cache['trade_price'] = None
         return None, cache['trade_source']
     except COMMON_EXC as exc:  # pragma: no cover - defensive
+        if _is_alpaca_auth_error(exc):
+            logger.error(
+                'ALPACA_AUTH_PREFLIGHT_FAILED',
+                extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
+            )
+            _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
+            cache['alpaca_auth_failed'] = True
+            cache['trade_source'] = 'alpaca_auth_failed'
+            cache['trade_price'] = None
+            return None, cache['trade_source']
         _log_price_warning('ALPACA_TRADE_FETCH_FAILED', provider='alpaca_trade', symbol=symbol, extra={'error': str(exc)})
         cache['trade_source'] = 'alpaca_trade_error'
         cache['trade_price'] = None
@@ -2010,6 +2048,16 @@ def _attempt_alpaca_quote(
     try:
         alpaca_get, _ = _alpaca_symbols()
     except COMMON_EXC as exc:  # pragma: no cover - defensive guard
+        if _is_alpaca_auth_error(exc):
+            logger.error(
+                'ALPACA_AUTH_PREFLIGHT_FAILED',
+                extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
+            )
+            _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
+            cache['alpaca_auth_failed'] = True
+            cache['quote_source'] = 'alpaca_auth_failed'
+            cache['quote_price'] = None
+            return None, cache['quote_source']
         _log_price_warning('ALPACA_PRICE_ERROR', provider='alpaca_quote', symbol=symbol, extra={'error': str(exc)})
         cache['quote_source'] = 'alpaca_quote_error'
         cache['quote_price'] = None
