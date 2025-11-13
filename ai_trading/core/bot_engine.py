@@ -19572,38 +19572,56 @@ def _enter_short(
             qty = capped_qty
     try:
         asset = ctx.api.get_asset(symbol)
+
+        def _value_disables_short(value: Any) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, (bool, np.bool_)):
+                return bool(value) is False
+            if isinstance(value, (int, float, np.floating)):
+                return float(value) == 0.0
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                return normalized in {"false", "0", "no", "disabled"}
+            return False
+
+        def _attr_disabled(obj: Any, names: tuple[str, ...]) -> bool:
+            for attr_name in names:
+                if _value_disables_short(getattr(obj, attr_name, None)):
+                    return True
+            return False
+
         # Basic shortable flag
-        if hasattr(asset, "shortable") and not getattr(asset, "shortable"):
+        if _attr_disabled(asset, ("shortable",)):
             logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
             return True
         # Easy-to-borrow requirement
-        etb = (
-            getattr(asset, "easy_to_borrow", None)
-            or getattr(asset, "easy_to_borrow_flag", None)
-        )
-        if etb is False:
-            logger.info("SKIP_NOT_EASY_TO_BORROW | symbol=%s", symbol)
+        if _attr_disabled(asset, ("easy_to_borrow", "easy_to_borrow_flag")):
+            logger.info("SKIP_NOT_EASY_TO_BORROW", extra={"symbol": symbol})
             return True
         # Marginable requirement
-        marginable = (
-            getattr(asset, "marginable", None)
-            or getattr(asset, "is_marginable", None)
-            or getattr(asset, "marginable_flag", None)
-        )
-        if marginable is False:
-            logger.info("SKIP_SHORT_ACCOUNT_MARGIN_DISABLED | symbol=%s", symbol)
+        if _attr_disabled(asset, ("marginable", "is_marginable", "marginable_flag")):
+            logger.info(
+                "SKIP_SHORT_ACCOUNT_MARGIN_DISABLED",
+                extra={"symbol": symbol, "scope": "asset"},
+            )
             return True
         # Short sale restriction (SSR) active
-        ssr = (
-            getattr(asset, "short_sale_restriction", None)
-            or getattr(asset, "short_sale_restriction_state", None)
-            or getattr(asset, "ssr", None)
-        )
-        if isinstance(ssr, str):
-            ssr_norm = ssr.strip().lower()
-            if ssr_norm and ssr_norm not in {"off", "none", "inactive"}:
-                logger.info("SKIP_SHORT_SSR_ACTIVE | symbol=%s state=%s", symbol, ssr_norm)
-                return True
+        ssr_state: str | None = None
+        for attr_name in ("short_sale_restriction", "short_sale_restriction_state", "ssr"):
+            candidate = getattr(asset, attr_name, None)
+            if candidate is None:
+                continue
+            candidate_str = str(candidate).strip()
+            if candidate_str:
+                ssr_state = candidate_str.lower()
+                break
+        if ssr_state and ssr_state not in {"off", "none", "inactive"}:
+            logger.info(
+                "SKIP_SHORT_SSR_ACTIVE",
+                extra={"symbol": symbol, "state": ssr_state},
+            )
+            return True
         # Account-level checks for shorting permission and margin
         acct = None
         try:
@@ -19613,25 +19631,26 @@ def _enter_short(
         except Exception:
             acct = None
         if acct is not None:
-            shorting_enabled = (
-                getattr(acct, "shorting_enabled", None)
-                or getattr(acct, "shorting", None)
-            )
-            if shorting_enabled is False:
+            if _attr_disabled(acct, ("shorting_enabled", "shorting")):
                 # Preserve legacy log key used in tests
-                logger.info("SKIP_SHORTING_UNAVAILABLE")
+                logger.info("SKIP_SHORTING_UNAVAILABLE", extra={"symbol": symbol})
                 return True
-            margin_ok = (
-                getattr(acct, "margin_enabled", None)
-                or getattr(acct, "marginable", None)
-            )
-            if margin_ok is False:
-                logger.info("SKIP_SHORT_ACCOUNT_MARGIN_DISABLED | symbol=%s", symbol)
+            if _attr_disabled(acct, ("margin_enabled", "marginable")):
+                logger.info(
+                    "SKIP_SHORT_ACCOUNT_MARGIN_DISABLED",
+                    extra={"symbol": symbol, "scope": "account"},
+                )
                 return True
         # Respect broker-reported borrow availability
         avail = getattr(asset, "shortable_shares", None)
         if avail is not None:
-            qty = min(qty, int(avail))
+            avail_int: int | None
+            try:
+                avail_int = int(float(avail))
+            except (TypeError, ValueError):
+                avail_int = None
+            if avail_int is not None:
+                qty = min(qty, max(0, avail_int))
     except (
         FileNotFoundError,
         PermissionError,

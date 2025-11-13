@@ -48,11 +48,11 @@ class _AckStubClient:
 class _TimeoutStubClient(_AckStubClient):
     def submit_order(self, *args, **kwargs):
         self._polls = 0
-        return {"id": "order-1", "status": "new", "filled_qty": "0"}
+        return {"id": "order-1", "filled_qty": "0"}
 
     def get_order_by_id(self, order_id: str):
         self._polls += 1
-        return {"id": order_id, "status": "new", "filled_qty": "0"}
+        return {"id": order_id, "filled_qty": "0"}
 
     def get_account(self):
         return SimpleNamespace(cash="10000", buying_power="10000")
@@ -149,14 +149,16 @@ def test_order_submit_ack_and_reconcile_success(caplog, monkeypatch):
 def test_order_submit_ack_timeout(monkeypatch, caplog):
     engine = _build_engine(_TimeoutStubClient())
     _prime_engine(engine, monkeypatch)
-    caplog.set_level(logging.ERROR)
+    caplog.set_level(logging.WARNING)
 
     result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
 
     assert result is not None
     assert getattr(result, "reconciled", True) is False
-    assert result.status == "failed"
-    assert any(record.msg == "ORDER_ACK_TIMEOUT" for record in caplog.records)
+    assert result.status == "submitted"
+    msgs = {record.message for record in caplog.records}
+    assert "ORDER_PENDING_NO_TERMINAL" in msgs
+    assert "ORDER_ACK_TIMEOUT" in msgs
 
 
 def test_broker_reconcile_mismatch(monkeypatch, caplog):
@@ -171,7 +173,7 @@ def test_broker_reconcile_mismatch(monkeypatch, caplog):
     assert any(record.msg == "BROKER_RECONCILE_MISMATCH" for record in caplog.records)
 
 
-def test_order_pending_no_terminal_status_cancelled(monkeypatch, caplog):
+def test_ack_timeout_pending_no_cancel(monkeypatch, caplog):
     engine = _build_engine(_NoFillStubClient())
     _prime_engine(engine, monkeypatch)
     cancel_calls: list[str] = []
@@ -186,8 +188,9 @@ def test_order_pending_no_terminal_status_cancelled(monkeypatch, caplog):
 
     assert result is not None
     assert getattr(result, "reconciled", True) is False
-    assert result.status == "failed"
-    assert cancel_calls == ["order-1"]
-    msgs = {record.msg for record in caplog.records}
+    assert result.status == "submitted"
+    assert cancel_calls == []
+    msgs = {record.message for record in caplog.records}
     assert "ORDER_PENDING_NO_TERMINAL" in msgs
-    assert "ORDER_PENDING_CANCELLED" in msgs
+    assert "ORDER_PENDING_CANCELLED" not in msgs
+    assert "ORDER_ACK_TIMEOUT" not in msgs

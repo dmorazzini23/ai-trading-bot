@@ -4062,11 +4062,6 @@ class ExecutionEngine:
                 timeout_payload = _status_payload()
                 timeout_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
                 logger.error("ORDER_ACK_TIMEOUT", extra=timeout_payload)
-                runtime_state.update_broker_status(
-                    connected=False,
-                    last_error="ack_timeout",
-                    status="unreachable",
-                )
 
         _handle_status_transition(status, source="final")
 

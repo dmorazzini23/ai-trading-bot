@@ -521,6 +521,7 @@ class StrategyAllocator:
         self._scale_buy_weights(buys, max_total)
 
         # When provider safe-mode is active, clarify that allocation is theoretical only.
+        total_buy_weight = sum(s.weight for s in buys)
         try:
             from ai_trading.data.provider_monitor import is_safe_mode_active
             degraded = bool(is_safe_mode_active())
@@ -534,7 +535,7 @@ class StrategyAllocator:
         logger.info(
             message,
             len(buys),
-            sum(s.weight for s in buys),
+            total_buy_weight,
             len(sells),
         )
 
