@@ -38,16 +38,30 @@ class _LazyModule(ModuleType):
         if self._real is None and not self._loading:
             self._loading = True
             try:
-                spec = importlib.util.find_spec(self.__name__)
-                if spec is None or spec.loader is None:
-                    raise ImportError(f"Unable to locate spec for {self.__name__!r}")
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[self.__name__] = module
+                # Temporarily remove the placeholder to resolve the real spec/loader,
+                # otherwise ``find_spec`` may return our own lazy spec causing recursion.
+                removed_placeholder = False
+                if sys.modules.get(self.__name__) is self:
+                    sys.modules.pop(self.__name__, None)
+                    removed_placeholder = True
+
                 try:
-                    spec.loader.exec_module(module)
+                    spec = importlib.util.find_spec(self.__name__)
+                    if spec is None or spec.loader is None:
+                        raise ImportError(f"Unable to locate spec for {self.__name__!r}")
+                    module = importlib.util.module_from_spec(spec)
+                    # Ensure relative imports inside the real module can resolve
+                    sys.modules[self.__name__] = module
+                    try:
+                        spec.loader.exec_module(module)
+                    finally:
+                        # Restore the placeholder in sys.modules for future imports
+                        sys.modules[self.__name__] = self
+                    self._real = module
                 finally:
-                    sys.modules[self.__name__] = self
-                self._real = module
+                    if not removed_placeholder and sys.modules.get(self.__name__) is not self:
+                        # Defensive: keep placeholder registered
+                        sys.modules[self.__name__] = self
             finally:
                 self._loading = False
         elif self._real is None and self._loading:
