@@ -520,8 +520,19 @@ class StrategyAllocator:
 
         self._scale_buy_weights(buys, max_total)
 
+        # When provider safe-mode is active, clarify that allocation is theoretical only.
+        try:
+            from ai_trading.data.provider_monitor import is_safe_mode_active
+            degraded = bool(is_safe_mode_active())
+        except Exception:
+            degraded = False
+        message = (
+            "Portfolio allocation (theoretical, degraded feed): %s buys (total weight: %.3f), %s sells"
+            if degraded
+            else "Portfolio allocation: %s buys (total weight: %.3f), %s sells"
+        )
         logger.info(
-            "Portfolio allocation: %s buys (total weight: %.3f), %s sells",
+            message,
             len(buys),
             sum(s.weight for s in buys),
             len(sells),

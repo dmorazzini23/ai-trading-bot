@@ -4046,44 +4046,17 @@ class ExecutionEngine:
                 poll_interval = min(poll_interval * 1.5, 2.0)
             status_lower = str(status or "").lower()
             if not ack_timed_out and status_lower not in terminal_statuses:
+                # Do not auto-cancel on missing ack; leave order pending and rely on broker sync.
                 pending_payload = _status_payload()
                 pending_payload["status"] = status_lower or "pending"
                 pending_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
-                final_cancel_reason = "pending_no_terminal"
-                cancel_target = None
-                if order_id_hint:
-                    cancel_target = str(order_id_hint)
-                elif client_order_id_hint:
-                    cancel_target = str(client_order_id_hint)
-                cancel_success = False
-                if cancel_target:
-                    try:
-                        self._cancel_order_alpaca(cancel_target)
-                    except Exception as exc:
-                        final_cancel_reason = "pending_cancel_failed"
-                        logger.error(
-                            "ORDER_CANCEL_ERROR",
-                            extra={
-                                **pending_payload,
-                                "order_id": cancel_target,
-                                "error": str(exc),
-                            },
-                            exc_info=True,
-                        )
-                    else:
-                        cancel_success = True
-                        final_cancel_reason = "pending_no_terminal"
-                        status = "cancelled"
-                        final_status = status
-                        status_lower = "cancelled"
-                        _handle_status_transition(status_lower, source="cancel")
-                if not cancel_success:
-                    ack_timed_out = True
-                    runtime_state.update_broker_status(
-                        connected=False,
-                        last_error="order_pending_no_terminal",
-                        status="unreachable",
-                    )
+                logger.warning("ORDER_PENDING_NO_TERMINAL", extra=pending_payload)
+                ack_timed_out = True
+                runtime_state.update_broker_status(
+                    connected=False,
+                    last_error="order_pending_no_terminal",
+                    status="unreachable",
+                )
             if not ack_logged:
                 ack_timed_out = True
                 timeout_payload = _status_payload()
@@ -4094,8 +4067,6 @@ class ExecutionEngine:
                     last_error="ack_timeout",
                     status="unreachable",
                 )
-                final_status = "ack_timeout"
-                status = "ack_timeout"
 
         _handle_status_transition(status, source="final")
 
@@ -4294,8 +4265,24 @@ class ExecutionEngine:
             None if signal_weight is None else float(signal_weight),
         )
         setattr(execution_result, "reconciled", reconciled)
+        # Only mark as failed when broker reports a terminal failure.
+        try:
+            order_status_lower = str(status).lower() if status is not None else ""
+        except Exception:
+            order_status_lower = str(status or "")
+        terminal_failures = {
+            "rejected",
+            "canceled",
+            "cancelled",
+            "expired",
+            "done_for_day",
+        }
         if not reconciled:
-            execution_result.status = "failed"
+            if order_status_lower in terminal_failures:
+                execution_result.status = "failed"
+            elif ack_timed_out:
+                # Treat as submitted but not yet reconciled; downstream can track open orders via broker sync
+                execution_result.status = "submitted"
 
         logger.info(
             "EXEC_ENGINE_EXECUTE_ORDER",
