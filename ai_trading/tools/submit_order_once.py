@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Submit a single order and optionally poll status")
+    parser.add_argument("--dotenv", default=None, help="Path to .env to load (optional)")
     parser.add_argument("--symbol", required=True, help="Ticker symbol, e.g., AAPL")
     parser.add_argument("--side", required=True, choices=["buy", "sell"], help="Order side")
     parser.add_argument("--qty", required=True, type=float, help="Quantity to submit")
@@ -45,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from ai_trading.env import ensure_dotenv_loaded
 
-        ensure_dotenv_loaded()
+        ensure_dotenv_loaded(args.dotenv)
     except Exception:
         # Continue; downstream calls will still function with process env
         logger.debug("DOTENV_LOAD_FAILED", exc_info=True)
