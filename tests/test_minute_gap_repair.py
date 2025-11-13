@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import ai_trading.data.fetch as fetch_module
+from ai_trading.data.market_calendar import rth_session_utc
 
 
 def _build_base_frame(start_local: datetime, end_local: datetime, missing: set[pd.Timestamp]) -> pd.DataFrame:
@@ -175,6 +176,51 @@ def test_should_skip_symbol_zero_gap_records_metadata() -> None:
     assert meta["missing_after"] == 0
     assert meta["gap_ratio"] == pytest.approx(0.0)
     assert "skip_flagged" not in meta
+
+
+def test_normalize_window_bounds_limits_to_rth_minutes() -> None:
+    tz = ZoneInfo("America/New_York")
+    window_start = datetime(2024, 1, 9, 0, 0, tzinfo=UTC)
+    window_end = datetime(2024, 1, 9, 23, 59, tzinfo=UTC)
+    session_start_utc, session_end_utc = rth_session_utc(window_start.date())
+    expected_minutes = int((session_end_utc - session_start_utc).total_seconds() / 60)
+
+    expected_local, start_utc, end_utc = fetch_module._normalize_window_bounds(  # type: ignore[attr-defined]
+        window_start,
+        window_end,
+        tz,
+    )
+
+    assert start_utc == window_start
+    assert end_utc == window_end
+    assert len(expected_local) == expected_minutes
+    assert expected_local[0].hour == 9 and expected_local[0].minute == 30
+    assert expected_local[-1].hour == 15 and expected_local[-1].minute == 59
+
+
+def test_should_skip_symbol_ignores_offsession_gap_window() -> None:
+    tz = ZoneInfo("America/New_York")
+    session_start = datetime(2024, 1, 10, 9, 30, tzinfo=tz)
+    session_end = datetime(2024, 1, 10, 16, 0, tzinfo=tz)
+    df = _build_base_frame(session_start, session_end, set())
+    df.attrs["symbol"] = "RTHONLY"
+    fetch_module._SKIP_LOGGED.clear()  # type: ignore[attr-defined]
+
+    window_start = (session_start - timedelta(hours=12)).astimezone(UTC)
+    window_end = (session_end + timedelta(hours=12)).astimezone(UTC)
+    should_skip = fetch_module.should_skip_symbol(
+        df,
+        window=(window_start, window_end),
+        tz=tz,
+        max_gap_ratio=0.05,
+    )
+
+    assert should_skip is False
+    meta = df.attrs.get("_coverage_meta")
+    assert isinstance(meta, dict)
+    assert meta["expected"] == int((session_end - session_start).total_seconds() / 60)
+    assert meta["missing_after"] == 0
+    assert meta["gap_ratio"] == pytest.approx(0.0)
 
 
 def test_yahoo_gap_interpolation_restores_contiguity() -> None:

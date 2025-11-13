@@ -6063,6 +6063,59 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
     return df.reset_index()
 
 
+def _build_trading_minute_index(
+    pd_local: Any,
+    *,
+    tz: ZoneInfo,
+    start_utc: _dt.datetime,
+    end_utc: _dt.datetime,
+) -> pd.DatetimeIndex:
+    """Return a DatetimeIndex covering only RTH minutes between ``start``/``end``."""
+
+    if pd_local is None:
+        raise RuntimeError("pandas required for trading-minute index")
+    if end_utc <= start_utc:
+        return pd_local.DatetimeIndex([], tz=tz)
+
+    expected_parts: list[pd.DatetimeIndex] = []
+    day_cursor = start_utc.date()
+    last_day = end_utc.date()
+    while day_cursor <= last_day:
+        if not is_trading_day(day_cursor):
+            day_cursor += _dt.timedelta(days=1)
+            continue
+        try:
+            session_start, session_end = rth_session_utc(day_cursor)
+        except Exception:
+            day_cursor += _dt.timedelta(days=1)
+            continue
+        window_start = max(session_start, start_utc)
+        window_end = min(session_end, end_utc)
+        if window_end <= window_start:
+            day_cursor += _dt.timedelta(days=1)
+            continue
+        local_start = window_start.astimezone(tz)
+        local_end = window_end.astimezone(tz)
+        idx = pd_local.date_range(
+            local_start,
+            local_end,
+            freq="min",
+            tz=tz,
+            inclusive="left",
+        )
+        if len(idx):
+            expected_parts.append(idx)
+        day_cursor += _dt.timedelta(days=1)
+
+    if not expected_parts:
+        return pd_local.DatetimeIndex([], tz=tz)
+
+    combined = expected_parts[0]
+    for extra in expected_parts[1:]:
+        combined = combined.append(extra)
+    return combined
+
+
 def _normalize_window_bounds(
     start: _dt.datetime,
     end: _dt.datetime,
@@ -6077,16 +6130,15 @@ def _normalize_window_bounds(
     end_ts = pd_local.Timestamp(end)
     if end_ts.tzinfo is None:
         end_ts = end_ts.tz_localize("UTC")
-    start_local = start_ts.tz_convert(tz)
-    end_local = end_ts.tz_convert(tz)
-    expected = pd_local.date_range(
-        start_local,
-        end_local,
-        freq="min",
+    start_utc = start_ts.tz_convert("UTC")
+    end_utc = end_ts.tz_convert("UTC")
+    expected = _build_trading_minute_index(
+        pd_local,
         tz=tz,
-        inclusive="left",
+        start_utc=start_utc.to_pydatetime(),
+        end_utc=end_utc.to_pydatetime(),
     )
-    return expected, start_ts.tz_convert("UTC"), end_ts.tz_convert("UTC")
+    return expected, start_utc, end_utc
 
 
 def _repair_yahoo_minute_contiguity(
