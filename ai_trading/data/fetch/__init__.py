@@ -21,7 +21,7 @@ from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from threading import Lock, Semaphore
 from types import GeneratorType, SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -35,6 +35,9 @@ from ai_trading.alpaca_api import get_api_error_cls
 from ai_trading.config import get_trading_config
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import is_generator_stop, monotonic_time
+
+if TYPE_CHECKING:  # pragma: no cover - import hints for type checkers
+    import pandas as pd
 
 
 def _now_ts() -> float:
@@ -6211,6 +6214,48 @@ def _repair_rth_minute_gaps(
     promoted_provider: str | None = None
     replaced_with_backup = False
 
+    def _extract_minute_indexes(
+        frame: pd.DataFrame | None,
+    ) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
+        empty_index = pd_local.DatetimeIndex([], tz="UTC")
+        if frame is None or getattr(frame, "empty", True):
+            return empty_index, empty_index
+        try:
+            if hasattr(frame, "columns") and "timestamp" in frame.columns:
+                source = frame["timestamp"]
+            else:
+                source = frame.index
+        except Exception:
+            return empty_index, empty_index
+        try:
+            converted = pd_local.to_datetime(source, utc=True, errors="coerce")
+        except Exception:
+            return empty_index, empty_index
+        try:
+            raw_index = pd_local.DatetimeIndex(converted)
+        except Exception:
+            return empty_index, empty_index
+        try:
+            mask = ~raw_index.isna()
+            coverage_index = raw_index[mask]
+        except Exception:
+            coverage_index = raw_index
+        if getattr(coverage_index, "empty", True):
+            tz = getattr(raw_index, "tz", None) or "UTC"
+            try:
+                return raw_index, pd_local.DatetimeIndex([], tz=tz)
+            except Exception:
+                return raw_index, empty_index
+        try:
+            coverage_index = coverage_index.unique()
+        except Exception:
+            coverage_index = pd_local.DatetimeIndex(coverage_index)
+        try:
+            coverage_index = coverage_index.sort_values()
+        except Exception:
+            pass
+        return raw_index, coverage_index
+
     def _infer_provider(frame: object) -> str | None:
         try:
             attrs = getattr(frame, "attrs", None)
@@ -6223,14 +6268,14 @@ def _repair_rth_minute_gaps(
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
-    try:
-        timestamps = pd_local.to_datetime(df["timestamp"], utc=True)
-    except Exception:
+    base_raw_index, coverage_index = _extract_minute_indexes(df)
+    if len(getattr(df, "index", [])) > 0 and coverage_index.empty:
         return df, {"expected": expected_count, "missing_after": expected_count, "gap_ratio": 1.0}, False
-    existing_index = pd_local.DatetimeIndex(timestamps)
-    missing = expected_utc.difference(existing_index)
+    missing = expected_utc.difference(coverage_index)
     initial_missing_count = int(missing.size)
     initial_gap_ratio = (initial_missing_count / expected_count) if expected_count else 0.0
+    combined_index = coverage_index
+    current_raw_index = base_raw_index
     try:
         provider_attr = None
         attrs = getattr(df, "attrs", None)
@@ -6272,16 +6317,22 @@ def _repair_rth_minute_gaps(
                     timeframe="1Min",
                 )
             if fallback_df is not None and not getattr(fallback_df, "empty", True):
-                try:
-                    fb_idx = pd_local.to_datetime(fallback_df["timestamp"], utc=True)
-                except Exception:
-                    fb_idx = pd_local.DatetimeIndex([])
-                fallback_df = fallback_df.set_index(fb_idx)
-                needed = fallback_df.loc[fallback_df.index.intersection(missing)]
+                fb_raw_index, _ = _extract_minute_indexes(fallback_df)
+                if fb_raw_index.empty and not getattr(fallback_df, "empty", True):
+                    fb_raw_index = pd_local.DatetimeIndex([])
+                    fb_coverage = pd_local.DatetimeIndex([])
+                if fb_raw_index.size == getattr(fallback_df, "shape", (0,))[0]:
+                    fallback_df = fallback_df.set_index(fb_raw_index)
+                else:
+                    fallback_df = None
+                if fallback_df is not None:
+                    needed = fallback_df.loc[fallback_df.index.intersection(missing)]
+                else:
+                    needed = pd_local.DataFrame()
                 if not needed.empty:
                     used_backup = True
                     filled_backup = True
-                    base_df = df.set_index(existing_index)
+                    base_df = df.set_index(base_raw_index)
                     combined = pd_local.concat([base_df, needed])
                     combined = combined[~combined.index.duplicated(keep="last")]
                     combined.sort_index(inplace=True)
@@ -6292,6 +6343,7 @@ def _repair_rth_minute_gaps(
                     provider_guess = _infer_provider(fallback_df)
                     if provider_guess:
                         fallback_provider_hint = fallback_provider_hint or provider_guess
+                    current_raw_index, combined_index = _extract_minute_indexes(work_df)
     if filled_backup:
         logger.info(
             "MINUTE_GAPS_BACKFILLED",
@@ -6301,19 +6353,13 @@ def _repair_rth_minute_gaps(
         repaired_df, yahoo_repaired = _repair_yahoo_minute_contiguity(
             work_df if mutated else df,
             expected_index=expected_utc,
-            existing_index=existing_index,
+            existing_index=current_raw_index,
         )
         if yahoo_repaired:
             work_df = repaired_df
             mutated = True
-    if mutated:
-        try:
-            combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
-        except Exception:
-            combined_idx = pd_local.DatetimeIndex([])
-    else:
-        combined_idx = existing_index
-    missing_index = expected_utc.difference(combined_idx)
+            current_raw_index, combined_index = _extract_minute_indexes(work_df)
+    missing_index = expected_utc.difference(combined_index)
     missing_after = int(missing_index.size)
     gap_ratio = (missing_after / expected_count) if expected_count else 0.0
 
@@ -6343,43 +6389,39 @@ def _repair_rth_minute_gaps(
                 timeframe="1Min",
             )
         if fallback_full is not None and not getattr(fallback_full, "empty", True):
-            try:
-                fb_idx_full = pd_local.to_datetime(fallback_full["timestamp"], utc=True)
-            except Exception:
-                fb_idx_full = pd_local.DatetimeIndex([])
-            fallback_full = fallback_full.set_index(fb_idx_full)
-            base_df = work_df if mutated else df
-            try:
-                base_idx = pd_local.to_datetime(base_df["timestamp"], utc=True)
-            except Exception:
-                base_idx = pd_local.DatetimeIndex([])
-            combined = pd_local.concat([
-                base_df.set_index(base_idx),
-                fallback_full.loc[fallback_full.index.intersection(expected_utc)],
-            ])
-            combined = combined[~combined.index.duplicated(keep="first")]
-            combined.sort_index(inplace=True)
-            combined = combined.loc[combined.index.intersection(expected_utc)]
-            if not combined.empty:
-                work_df = combined.reset_index()
-                if "index" in work_df.columns and "timestamp" not in work_df.columns:
-                    work_df.rename(columns={"index": "timestamp"}, inplace=True)
-                mutated = True
-                filled_backup = True
-                used_backup = True
-                provider_guess = _infer_provider(fallback_full)
-                if provider_guess:
-                    fallback_provider_hint = fallback_provider_hint or provider_guess
-                elif promoted_provider:
-                    fallback_provider_hint = fallback_provider_hint or promoted_provider
-                try:
-                    combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
-                except Exception:
-                    combined_idx = pd_local.DatetimeIndex([])
-                missing_index = expected_utc.difference(combined_idx)
-                missing_after = int(missing_index.size)
-                gap_ratio = (missing_after / expected_count) if expected_count else 0.0
-                replaced_with_backup = missing_after == 0
+            fb_raw_full, _ = _extract_minute_indexes(fallback_full)
+            if fb_raw_full.size != getattr(fallback_full, "shape", (0,))[0]:
+                fallback_full = None
+            else:
+                fallback_full = fallback_full.set_index(fb_raw_full)
+            if fallback_full is not None:
+                base_frame = work_df if mutated else df
+                base_index = current_raw_index if mutated else base_raw_index
+                base_df = base_frame.set_index(base_index)
+                combined = pd_local.concat([
+                    base_df,
+                    fallback_full.loc[fallback_full.index.intersection(expected_utc)],
+                ])
+                combined = combined[~combined.index.duplicated(keep="first")]
+                combined.sort_index(inplace=True)
+                combined = combined.loc[combined.index.intersection(expected_utc)]
+                if not combined.empty:
+                    work_df = combined.reset_index()
+                    if "index" in work_df.columns and "timestamp" not in work_df.columns:
+                        work_df.rename(columns={"index": "timestamp"}, inplace=True)
+                    mutated = True
+                    filled_backup = True
+                    used_backup = True
+                    provider_guess = _infer_provider(fallback_full)
+                    if provider_guess:
+                        fallback_provider_hint = fallback_provider_hint or provider_guess
+                    elif promoted_provider:
+                        fallback_provider_hint = fallback_provider_hint or promoted_provider
+                    current_raw_index, combined_index = _extract_minute_indexes(work_df)
+                    missing_index = expected_utc.difference(combined_index)
+                    missing_after = int(missing_index.size)
+                    gap_ratio = (missing_after / expected_count) if expected_count else 0.0
+                    replaced_with_backup = missing_after == 0
 
     gap_ratio_pct = None
     try:
@@ -6405,7 +6447,7 @@ def _repair_rth_minute_gaps(
     provider_canonical = canonical_provider(provider_name)
     using_fallback_provider = bool(fallback_provider_hint and used_backup) or provider_canonical == "yahoo"
     try:
-        last_timestamp_dt = combined_idx.max().to_pydatetime()
+        last_timestamp_dt = combined_index.max().to_pydatetime()
     except Exception:
         last_timestamp_dt = None
     if fallback_provider_hint is None and promoted_provider:
