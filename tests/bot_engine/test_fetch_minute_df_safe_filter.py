@@ -1,4 +1,5 @@
 import pytest
+import logging
 from datetime import UTC, datetime
 
 from ai_trading.utils.lazy_imports import load_pandas
@@ -73,6 +74,65 @@ def test_fetch_minute_df_safe_keeps_zero_volume_for_backup_provider(monkeypatch)
     assert pd.Timestamp("2024-01-01 12:05:00+00:00") not in result.index
     assert pd.Timestamp("2024-01-01 12:03:00+00:00") not in result.index
     assert result.loc[pd.Timestamp("2024-01-01 12:01:00+00:00"), "volume"] == 0
+
+
+def test_fetch_minute_df_safe_allows_zero_volume_alpaca(monkeypatch, caplog):
+    pd = load_pandas()
+    idx = pd.date_range("2024-01-01 12:00:00+00:00", periods=6, freq="min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "high": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "low": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "close": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            "volume": [150, 0, 120, 0, 90, 200],
+            "timestamp": idx,
+        },
+        index=idx,
+    )
+    df.attrs["data_provider"] = "alpaca_iex"
+    gap_events: list[dict] = []
+
+    monkeypatch.setattr(bot_engine, "datetime", _FixedDatetime)
+    monkeypatch.setattr(bot_engine, "_LONGEST_INTRADAY_INDICATOR_MINUTES", 1, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 1, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "longest_intraday_indicator_minutes", 1, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_indicator_window_minutes", 1, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "market_cache_enabled", False, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "data_feed", "iex", raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "minute_gap_backfill", "none", raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end, **_: df)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (
+            datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
+            datetime(2024, 1, 1, 12, 10, tzinfo=UTC),
+        ),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "record_minute_gap_event",
+        lambda payload: gap_events.append(payload),
+    )
+    caplog.set_level(logging.WARNING)
+
+    result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert (result["volume"] == 0).sum() == 2
+    assert not gap_events
+    assert not any(record.message == "MINUTE_GAPS_DETECTED" for record in caplog.records)
 
 
 def test_fetch_minute_df_safe_drops_string_nan_rows(monkeypatch):
