@@ -17603,11 +17603,45 @@ def _gap_ratio_gate_limit_cached(signature: tuple[str | None, ...]) -> float:
 
 
 def _gap_ratio_gate_limit() -> float:
-    return _gap_ratio_gate_limit_cached(_env_signature("AI_TRADING_GAP_LIMIT_BPS"))
+    base = _gap_ratio_gate_limit_cached(_env_signature("AI_TRADING_GAP_LIMIT_BPS"))
+    if _failsoft_mode_active():
+        degraded_ratio = _degraded_gap_limit_ratio()
+        if degraded_ratio > 0.0:
+            return max(base, degraded_ratio)
+    return base
 
 
 _gap_ratio_gate_limit.cache_clear = _gap_ratio_gate_limit_cached.cache_clear  # type: ignore[attr-defined]
 _gap_ratio_gate_limit.cache_info = _gap_ratio_gate_limit_cached.cache_info  # type: ignore[attr-defined]
+
+
+@functools.lru_cache(maxsize=4)
+def _degraded_gap_limit_ratio_cached(signature: tuple[str | None, ...]) -> float:
+    raw = signature[0] if signature else None
+    try:
+        value = float(raw) if raw not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        value = 0.0
+    return max(0.0, value) / 10000.0
+
+
+def _degraded_gap_limit_ratio() -> float:
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+    if cfg is not None:
+        candidate = getattr(cfg, "degraded_gap_limit_bps", None)
+        if candidate not in (None, ""):
+            try:
+                return max(float(candidate), 0.0) / 10000.0
+            except (TypeError, ValueError):
+                pass
+    return _degraded_gap_limit_ratio_cached(_env_signature("TRADING__DEGRADED_GAP_LIMIT_BPS"))
+
+
+_degraded_gap_limit_ratio.cache_clear = _degraded_gap_limit_ratio_cached.cache_clear  # type: ignore[attr-defined]
+_degraded_gap_limit_ratio.cache_info = _degraded_gap_limit_ratio_cached.cache_info  # type: ignore[attr-defined]
 
 
 @functools.lru_cache(maxsize=8)
@@ -18229,6 +18263,49 @@ def _allow_last_close_execution() -> bool:
     return False
 
 
+def _safe_mode_failsoft_enabled() -> bool:
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        return True
+    return bool(getattr(cfg, "safe_mode_failsoft", True))
+
+
+def _provider_backup_available(provider_state: Mapping[str, Any] | None) -> bool:
+    if not isinstance(provider_state, MappingABC):
+        return False
+    if bool(provider_state.get("using_backup")):
+        return True
+    primary = provider_state.get("primary")
+    active = provider_state.get("active")
+    try:
+        if primary and active and str(primary).strip().lower() != str(active).strip().lower():
+            return True
+    except Exception:
+        pass
+    return _minute_fallback_active(provider_state)
+
+
+def _failsoft_mode_active(provider_state: Mapping[str, Any] | None = None) -> bool:
+    if not _safe_mode_failsoft_enabled():
+        return False
+    safe_mode_flag = provider_monitor.is_safe_mode_active()
+    safe_mode_soft = False
+    degraded_marker = getattr(provider_monitor, "safe_mode_degraded_only", None)
+    if callable(degraded_marker) and safe_mode_flag:
+        try:
+            safe_mode_soft = bool(degraded_marker())
+        except Exception:
+            safe_mode_soft = False
+    if provider_state is None:
+        try:
+            provider_state = runtime_state.observe_data_provider_state()
+        except Exception:
+            provider_state = {}
+    backup_ready = safe_mode_flag and _provider_backup_available(provider_state)
+    return safe_mode_soft or backup_ready
+
+
 def _safe_mode_blocks_trading() -> bool:
     """Return ``True`` when the current degraded policy requires blocking trades."""
 
@@ -18236,7 +18313,18 @@ def _safe_mode_blocks_trading() -> bool:
         cfg = get_trading_config()
     except COMMON_EXC:
         return True
+    failsoft_enabled = _safe_mode_failsoft_enabled()
+    if not failsoft_enabled:
+        return True
     mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
+    if failsoft_enabled:
+        degraded_marker = getattr(provider_monitor, "safe_mode_degraded_only", None)
+        if callable(degraded_marker):
+            try:
+                if bool(degraded_marker()):
+                    return False
+            except Exception:
+                pass
     if bool(getattr(cfg, "execution_market_on_degraded", False)):
         return False
     return mode == "block"
@@ -24275,6 +24363,7 @@ def run_multi_strategy(ctx) -> None:
                     end_window = now_local.replace(hour=16, minute=0, second=0, microsecond=0)
 
                 def _gap_ratio_setting() -> float:
+                    env_bps: float | None = None
                     for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
                         try:
                             value = get_env(key, None, cast=float)
@@ -24282,10 +24371,18 @@ def run_multi_strategy(ctx) -> None:
                             continue
                         if value is not None:
                             try:
-                                return max(float(value), 0.0)
+                                env_bps = max(float(value), 0.0)
+                                break
                             except (TypeError, ValueError):
                                 continue
-                    return 5.0
+                    base_bps = env_bps if env_bps is not None else 5.0
+                    data_degraded_flag = bool(getattr(ctx, "_data_degraded", False))
+                    degrade_fatal_flag = bool(getattr(ctx, "_data_degraded_fatal", False))
+                    if data_degraded_flag and not degrade_fatal_flag:
+                        degraded_ratio = _degraded_gap_limit_ratio()
+                        if degraded_ratio > 0.0:
+                            base_bps = max(base_bps, degraded_ratio * 10000.0)
+                    return base_bps
 
                 max_gap_bps = _gap_ratio_setting()
                 max_gap_ratio = max_gap_bps / 10000.0
@@ -24870,6 +24967,9 @@ def _pre_trade_gate() -> bool:
         allow_fallback_quotes = bool(get_env("ALLOW_EXECUTION_ON_FALLBACK_QUOTES", False, cast=bool))
     except Exception:
         allow_fallback_quotes = False
+    failsoft_active = _failsoft_mode_active(provider_state)
+    if failsoft_active:
+        allow_fallback_quotes = True
 
     try:
         quote_state = runtime_state.observe_quote_status()
@@ -24885,9 +24985,7 @@ def _pre_trade_gate() -> bool:
     block_reasons: list[str] = []
     provider_guard = safe_mode_active or provider_disabled
     policy_blocks = _safe_mode_blocks_trading()
-    if provider_guard and policy_blocks:
-        block_reasons.append("provider_disabled")
-    elif provider_guard:
+    if provider_guard:
         reason_text = (
             safe_mode_reason_text
             or (provider_reason if isinstance(provider_reason, str) else None)
@@ -24896,7 +24994,9 @@ def _pre_trade_gate() -> bool:
         ctx = get_ctx()
         _mark_ctx_degraded(ctx, reason_text)
         _log_safe_mode_continue(ctx, stage="pre_trade_gate", reason=reason_text)
-    if fallback_active and not allow_fallback_quotes:
+    if provider_guard and policy_blocks and not failsoft_active:
+        block_reasons.append("provider_disabled")
+    if fallback_active and not (allow_fallback_quotes or failsoft_active):
         block_reasons.append("fallback_minute_data")
     if synthetic_quote:
         block_reasons.append("synthetic_quote")
@@ -25046,10 +25146,13 @@ def _prepare_run(
     degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(degraded_snapshot)
     try:
         cfg_obj = get_trading_config()
-        skip_on_disabled = bool(getattr(cfg_obj, "skip_compute_when_provider_disabled", True))
+        skip_on_disabled = bool(getattr(cfg_obj, "skip_compute_when_provider_disabled", False))
     except Exception:
-        skip_on_disabled = True
-    if degraded_cycle and skip_on_disabled and (_reason_implies_fatal(degrade_reason) or degrade_fatal):
+        skip_on_disabled = False
+    failsoft_cycle = _failsoft_mode_active()
+    if degraded_cycle and skip_on_disabled and not failsoft_cycle and (
+        _reason_implies_fatal(degrade_reason) or degrade_fatal
+    ):
         logger.warning(
             "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
             extra={

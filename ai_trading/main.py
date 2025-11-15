@@ -462,6 +462,7 @@ def run_cycle() -> None:
         emit_cycle_budget_summary,
         clear_cycle_budget_context,
         _safe_mode_blocks_trading,
+        _failsoft_mode_active,
     )
     from ai_trading.core.runtime import (
         build_runtime,
@@ -479,7 +480,7 @@ def run_cycle() -> None:
 
     cfg = TradingConfig.from_env()
 
-    skip_compute_when_disabled = bool(getattr(cfg, "skip_compute_when_provider_disabled", True))
+    skip_compute_when_disabled = bool(getattr(cfg, "skip_compute_when_provider_disabled", False))
     provider_disabled = False
     provider_reason = "provider_disabled"
     provider_check = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
@@ -492,7 +493,8 @@ def run_cycle() -> None:
                 extra={"detail": str(exc), "exc_type": exc.__class__.__name__},
             )
             provider_disabled = False
-    if provider_disabled and skip_compute_when_disabled and _safe_mode_blocks_trading():
+    failsoft_guard = _failsoft_mode_active()
+    if provider_disabled and skip_compute_when_disabled and not failsoft_guard and _safe_mode_blocks_trading():
         log_extra = {
             "reason": provider_reason,
             "skip_compute_when_provider_disabled": skip_compute_when_disabled,

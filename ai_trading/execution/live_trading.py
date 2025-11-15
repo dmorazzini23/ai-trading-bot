@@ -4053,15 +4053,20 @@ class ExecutionEngine:
                 logger.warning("ORDER_PENDING_NO_TERMINAL", extra=pending_payload)
                 ack_timed_out = True
                 runtime_state.update_broker_status(
-                    connected=False,
+                    connected=True,
                     last_error="order_pending_no_terminal",
-                    status="unreachable",
+                    status="degraded",
                 )
             if not ack_logged:
                 ack_timed_out = True
                 timeout_payload = _status_payload()
                 timeout_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
                 logger.error("ORDER_ACK_TIMEOUT", extra=timeout_payload)
+                runtime_state.update_broker_status(
+                    connected=True,
+                    last_error="order_ack_timeout",
+                    status="degraded",
+                )
 
         _handle_status_transition(status, source="final")
 

@@ -555,6 +555,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Permit order execution when only fallback quotes are available (intended for test/demo use).",
     ),
     ConfigSpec(
+        field="safe_mode_failsoft",
+        env=("TRADING__SAFE_MODE_FAILSOFT",),
+        cast="bool",
+        default=True,
+        description="Allow live orders to continue on healthy backup feeds when provider safe mode is triggered.",
+    ),
+    ConfigSpec(
         field="skip_compute_when_provider_disabled",
         env=("SKIP_COMPUTE_WHEN_PROVIDER_DISABLED",),
         cast="bool",
@@ -606,6 +613,14 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="int",
         default=50,
         description="Limit price widening in basis points applied under degraded feed mode when widening is enabled.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="degraded_gap_limit_bps",
+        env=("TRADING__DEGRADED_GAP_LIMIT_BPS",),
+        cast="int",
+        default=1500,
+        description="Gap ratio guard (basis points) applied when degraded trading remains enabled.",
         min_value=0,
     ),
     ConfigSpec(

@@ -7,6 +7,7 @@ import pytest
 import ai_trading.core.bot_engine as bot_engine
 from ai_trading.core.bot_engine import BotState
 from ai_trading.config.runtime import TradingConfig
+from ai_trading.config.management import reload_trading_config
 
 
 @pytest.fixture(autouse=True)
@@ -16,12 +17,14 @@ def clear_gating_caches():
     bot_engine._fallback_gap_ratio_limit.cache_clear()
     bot_engine._fallback_quote_max_age_seconds.cache_clear()
     bot_engine._liquidity_fallback_cap.cache_clear()
+    bot_engine._degraded_gap_limit_ratio.cache_clear()
     yield
     bot_engine._strict_data_gating_enabled.cache_clear()
     bot_engine._gap_ratio_gate_limit.cache_clear()
     bot_engine._fallback_gap_ratio_limit.cache_clear()
     bot_engine._fallback_quote_max_age_seconds.cache_clear()
     bot_engine._liquidity_fallback_cap.cache_clear()
+    bot_engine._degraded_gap_limit_ratio.cache_clear()
 
 
 def _fresh_state() -> BotState:
@@ -162,6 +165,20 @@ def test_fallback_gap_ratio_prefers_trading_config(monkeypatch):
     result = bot_engine._fallback_gap_ratio_limit()
 
     assert result == pytest.approx(0.09)
+
+
+def test_gap_ratio_limit_relaxes_when_failsoft(monkeypatch):
+    monkeypatch.setenv("TRADING__SAFE_MODE_FAILSOFT", "true")
+    monkeypatch.setenv("TRADING__DEGRADED_GAP_LIMIT_BPS", "2500")
+    reload_trading_config()
+    monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_degraded_only", lambda: True)
+    monkeypatch.setattr(bot_engine.provider_monitor, "is_safe_mode_active", lambda: True)
+    monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: {"using_backup": True})
+    bot_engine._gap_ratio_gate_limit.cache_clear()
+
+    result = bot_engine._gap_ratio_gate_limit()
+
+    assert result == pytest.approx(0.25)
 
 
 def test_synthetic_fallback_quote_used_when_alpaca_unavailable(monkeypatch):

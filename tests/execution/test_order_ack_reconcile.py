@@ -194,3 +194,39 @@ def test_ack_timeout_pending_no_cancel(monkeypatch, caplog):
     assert "ORDER_PENDING_NO_TERMINAL" in msgs
     assert "ORDER_PENDING_CANCELLED" not in msgs
     assert "ORDER_ACK_TIMEOUT" not in msgs
+
+
+def test_ack_timeout_does_not_block_followup_orders(monkeypatch, caplog):
+    engine = _build_engine(_TimeoutStubClient())
+    _prime_engine(engine, monkeypatch)
+    status_updates: list[dict] = []
+    monkeypatch.setattr(
+        "ai_trading.execution.live_trading.runtime_state.update_broker_status",
+        lambda **kwargs: status_updates.append(dict(kwargs)),
+    )
+    caplog.set_level(logging.INFO)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert any(update.get("last_error") == "order_ack_timeout" and update.get("connected") for update in status_updates)
+    assert any(update.get("last_error") == "order_pending_no_terminal" for update in status_updates)
+
+    caplog.clear()
+    engine.trading_client = _AckStubClient()
+    submissions: list[str | None] = []
+    original_submit = engine.trading_client.submit_order
+
+    def _record_submit(*args, **kwargs):
+        symbol = kwargs.get("symbol")
+        if not symbol and args:
+            symbol = args[0]
+        submissions.append(symbol)
+        return original_submit(*args, **kwargs)
+
+    monkeypatch.setattr(engine.trading_client, "submit_order", _record_submit)
+
+    followup = engine.execute_order("MSFT", "buy", qty=3, order_type="limit", limit_price=200.0)
+
+    assert followup is not None
+    assert "MSFT" in submissions

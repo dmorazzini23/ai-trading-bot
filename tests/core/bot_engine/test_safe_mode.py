@@ -193,6 +193,47 @@ def test_degraded_mode_allows_trading_on_safe_mode(monkeypatch, caplog):
     assert all(record.message != "SAFE_MODE_BLOCK" for record in caplog.records)
 
 
+def test_pre_trade_gate_allows_backup_when_failsoft(monkeypatch):
+    monkeypatch.setenv("TRADING__SAFE_MODE_FAILSOFT", "true")
+    reload_trading_config()
+
+    provider_state = {
+        "status": "disabled",
+        "using_backup": True,
+        "reason": "minute_gap",
+        "timeframes": {"1m": True},
+    }
+    monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(bot_engine.runtime_state, "observe_quote_status", lambda: {"allowed": True})
+    monkeypatch.setattr(bot_engine.provider_monitor, "is_safe_mode_active", lambda: True)
+    monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_reason", lambda: "minute_gap")
+    monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_degraded_only", lambda: True)
+    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: "minute_gap")
+
+    assert bot_engine._pre_trade_gate() is False
+
+
+def test_pre_trade_gate_blocks_without_failsoft(monkeypatch):
+    monkeypatch.setenv("TRADING__SAFE_MODE_FAILSOFT", "false")
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "block")
+    reload_trading_config()
+
+    provider_state = {
+        "status": "disabled",
+        "using_backup": True,
+        "reason": "minute_gap",
+        "timeframes": {"1m": True},
+    }
+    monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(bot_engine.runtime_state, "observe_quote_status", lambda: {"allowed": True})
+    monkeypatch.setattr(bot_engine.provider_monitor, "is_safe_mode_active", lambda: True)
+    monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_reason", lambda: "minute_gap")
+    monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_degraded_only", lambda: True)
+    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: "minute_gap")
+
+    assert bot_engine._pre_trade_gate() is True
+
+
 def test_last_close_allowed_when_degraded(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
 

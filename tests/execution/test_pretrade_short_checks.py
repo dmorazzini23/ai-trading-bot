@@ -104,3 +104,34 @@ def test_margin_disabled_logs_and_skips(monkeypatch, caplog) -> None:
     entry = records[-1]
     assert entry.reason == "account_margin_disabled"
     assert entry.account_margin_enabled is False
+
+
+def test_shortability_failure_does_not_block_long_order(monkeypatch) -> None:
+    engine = DummyLiveEngine()
+    engine.trading_client = SimpleNamespace(get_asset=lambda _symbol: _asset_payload(shortable=False, easy_to_borrow=False))
+    engine._cycle_account.update({"shorting_enabled": True, "margin_enabled": True})
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    short_result = engine.execute_order(
+        "AAPL",
+        "short",
+        5,
+        order_type="market",
+        quote=_quote_payload(),
+    )
+
+    assert short_result is None
+
+    engine.trading_client = SimpleNamespace(get_asset=lambda _symbol: _asset_payload())
+
+    long_result = engine.execute_order(
+        "MSFT",
+        "buy",
+        5,
+        order_type="market",
+        quote=_quote_payload(),
+    )
+
+    assert long_result is not None
+    assert engine.last_submitted is not None
+    assert engine.last_submitted.get("symbol") == "MSFT"

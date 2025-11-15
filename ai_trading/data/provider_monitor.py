@@ -487,6 +487,7 @@ _SAFE_MODE_CYCLE_VERSION = 0
 _SAFE_MODE_CYCLE_REASON: str | None = None
 _SAFE_MODE_HEALTHY_PASSES = 0
 _SAFE_MODE_RECOVERY_TARGET = 0
+_SAFE_MODE_DEGRADED_ONLY = False
 _gap_trigger_cooldown_until: float = 0.0
 
 
@@ -569,6 +570,19 @@ def safe_mode_reason() -> str | None:
     return _SAFE_MODE_REASON
 
 
+def safe_mode_degraded_only() -> bool:
+    """Return ``True`` when the current safe mode is marked fail-soft."""
+
+    return _SAFE_MODE_DEGRADED_ONLY
+
+
+def _safe_mode_failsoft_enabled() -> bool:
+    try:
+        return bool(get_env("TRADING__SAFE_MODE_FAILSOFT", True, cast=bool))
+    except Exception:
+        return True
+
+
 def activate_data_kill_switch(
     reason: str,
     *,
@@ -611,7 +625,7 @@ def _trigger_provider_safe_mode(
     metadata: Mapping[str, Any] | None = None,
 ) -> None:
     global _last_halt_reason, _last_halt_ts, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
-    global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_RECOVERY_TARGET
+    global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_RECOVERY_TARGET, _SAFE_MODE_DEGRADED_ONLY
 
     now = monotonic_time()
     was_active = _SAFE_MODE_ACTIVE
@@ -679,6 +693,10 @@ def _trigger_provider_safe_mode(
     else:
         _gap_event_diagnostics.pop(provider_key, None)
 
+    failsoft_enabled = _safe_mode_failsoft_enabled()
+    _SAFE_MODE_DEGRADED_ONLY = bool(degraded_only and failsoft_enabled)
+    metadata_payload["failsoft_enabled"] = bool(failsoft_enabled)
+
     monitor = globals().get("provider_monitor")
     alert_manager: AlertManager | None = None
     if monitor is not None:
@@ -704,7 +722,11 @@ def _trigger_provider_safe_mode(
             extra=metadata_payload,
         )
 
-    _write_halt_flag(reason, metadata=metadata_payload)
+    if _SAFE_MODE_DEGRADED_ONLY:
+        payload = {"reason": reason, "provider": provider_key}
+        logger.warning("HALT_FLAG_FAILSOFT_SUPPRESSED", extra=payload)
+    else:
+        _write_halt_flag(reason, metadata=metadata_payload)
 
     try:
         from ai_trading.data import fetch as _data_fetch_mod  # type: ignore
@@ -741,7 +763,7 @@ def _maybe_clear_safe_mode(
 ) -> None:
     """Clear provider safe mode once health passes meet the recovery threshold."""
 
-    global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+    global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON, _SAFE_MODE_DEGRADED_ONLY
 
     if not _SAFE_MODE_ACTIVE:
         _SAFE_MODE_HEALTHY_PASSES = 0
@@ -769,6 +791,7 @@ def _maybe_clear_safe_mode(
     _SAFE_MODE_ACTIVE = False
     _SAFE_MODE_REASON = None
     _SAFE_MODE_HEALTHY_PASSES = 0
+    _SAFE_MODE_DEGRADED_ONLY = False
     _clear_halt_flag()
     logger.info(
         "PROVIDER_SAFE_MODE_CLEARED",
@@ -1427,11 +1450,12 @@ class ProviderMonitor:
         self.min_recovery_seconds = _MIN_RECOVERY_SECONDS
         self.recovery_passes_required = _MIN_RECOVERY_PASSES
         global _SAFE_MODE_HEALTHY_PASSES, _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
-        global _SAFE_MODE_RECOVERY_TARGET
+        global _SAFE_MODE_RECOVERY_TARGET, _SAFE_MODE_DEGRADED_ONLY
         _SAFE_MODE_HEALTHY_PASSES = 0
         _SAFE_MODE_ACTIVE = False
         _SAFE_MODE_REASON = None
         _SAFE_MODE_RECOVERY_TARGET = _resolve_safe_mode_recovery_passes()
+        _SAFE_MODE_DEGRADED_ONLY = False
 
     def _refresh_runtime_limits(self) -> None:
         """Refresh cached cooldown and quiet window values from configuration."""
@@ -1586,9 +1610,10 @@ class ProviderMonitor:
         except Exception:  # pragma: no cover - defensive
             pass
         if provider.startswith("alpaca"):
-            global _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON
+            global _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON, _SAFE_MODE_DEGRADED_ONLY
             _SAFE_MODE_ACTIVE = False
             _SAFE_MODE_REASON = None
+            _SAFE_MODE_DEGRADED_ONLY = False
 
     def _migrate_provider_state(self, old: str, new: str) -> None:
         if not old or old == new:
@@ -2257,6 +2282,7 @@ class ProviderMonitor:
 
 
 provider_monitor = ProviderMonitor()
+setattr(provider_monitor, "safe_mode_degraded_only", safe_mode_degraded_only)
 
 __all__ = [
     "provider_monitor",
