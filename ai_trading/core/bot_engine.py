@@ -5555,6 +5555,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     using_cached_cycle_feed = bool(
         cycle_pref and cycle_pref in _ALPACA_COMPATIBLE_FALLBACK_FEEDS
     )
+    skip_cached_warning = using_cached_cycle_feed
     if using_cached_cycle_feed:
         current_feed = cycle_pref
     # Avoid inheriting per-symbol feed overrides from the lower-level fetch module so
@@ -5942,6 +5943,41 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     recovery_prev_feed = current_feed
     recovery_prev_bars = primary_actual_bars
     recovery_expected_bars = max(primary_expected_bars, 1)
+
+    def _emit_coverage_warning(
+        payload: dict[str, object] | None = None,
+        *,
+        respect_cached: bool = True,
+    ) -> None:
+        nonlocal coverage_warning_logged
+        if coverage_warning_logged:
+            return
+        if respect_cached and skip_cached_warning:
+            return
+        warning_payload: dict[str, object] = {}
+        if coverage_warning_context:
+            warning_payload.update(coverage_warning_context)
+        if payload:
+            warning_payload.update(payload)
+        if not warning_payload:
+            warning_payload = {
+                "symbol": symbol,
+                "expected_bars": expected_bars,
+                "primary_expected_bars": primary_expected_bars,
+                "primary_actual_bars": primary_actual_bars,
+                "actual_bars": actual_bars,
+                "from_feed": current_feed,
+                "active_feed": active_feed,
+                "fallback_attempted": fallback_attempted,
+                "fallback_used": fallback_used,
+                "fallback_feed": fallback_feed or "",
+                "fallback_provider": fallback_provider or "",
+                "start": coverage_window_start.isoformat(),
+                "end": end_dt.isoformat(),
+            }
+        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_payload)
+        coverage_warning_logged = True
+
     if early_fallback_attempted:
         coverage_warning_context = {
             "symbol": symbol,
@@ -6388,11 +6424,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed = "yahoo"
                 fallback_provider = "yahoo"
 
-        skip_cached_warning = using_cached_cycle_feed
         if (
             (coverage_warning_context is not None or fallback_attempted)
             and not coverage_warning_logged
-            and not skip_cached_warning
         ):
             warning_payload: dict[str, object]
             if coverage_warning_context is not None:
@@ -6431,11 +6465,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     "end": end_dt.isoformat(),
                 }
             )
-            logger.warning(
-                "MINUTE_DATA_COVERAGE_WARNING",
-                extra=warning_payload,
-            )
-            coverage_warning_logged = True
+            _emit_coverage_warning(warning_payload)
 
     def _set_minute_feed_cache(feeds: Iterable[str], value: str) -> None:
         if not value:
@@ -6527,8 +6557,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         "start": coverage_window_start.isoformat(),
                         "end": end_dt.isoformat(),
                     }
-                logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_payload)
-                coverage_warning_logged = True
+                _emit_coverage_warning(warning_payload, respect_cached=False)
             _set_minute_feed_cache([resolved_feed_final], resolved_feed_final)
             fallback_feed_used = resolved_feed_final
             fallback_feed = resolved_feed_final
@@ -6567,6 +6596,38 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if failed_fallback_key:
             feeds_to_clear.append(failed_fallback_key)
         _purge_minute_feed_cache(feeds_to_clear)
+
+    if fallback_used and not coverage_warning_logged:
+        fallback_warning: dict[str, object] = {
+            "symbol": symbol,
+            "expected_bars": expected_bars,
+            "primary_expected_bars": primary_expected_bars,
+            "primary_actual_bars": primary_actual_bars,
+            "actual_bars": actual_bars,
+            "materially_short": materially_short,
+            "insufficient_intraday": insufficient_intraday,
+            "primary_materially_short": primary_materially_short,
+            "primary_insufficient_intraday": primary_insufficient_intraday,
+            "primary_low_coverage": primary_low_coverage,
+            "primary_threshold": primary_threshold,
+            "primary_cutoff": primary_cutoff,
+            "primary_window_minutes": primary_window_minutes,
+            "coverage_threshold": coverage_threshold,
+            "coverage_cutoff": coverage_cutoff,
+            "window_minutes": _window_minutes(coverage_window_start, end_dt),
+            "threshold_scale": coverage.get("threshold_scale", 1.0),
+            "intraday_scale": coverage.get("intraday_scale", 1.0),
+            "from_feed": recovery_prev_feed,
+            "active_feed": active_feed,
+            "fallback_feed": fallback_feed or "",
+            "fallback_provider": fallback_provider or "",
+            "fallback_attempted": True,
+            "fallback_used": True,
+            "fallback_exhausted": low_coverage,
+            "start": coverage_window_start.isoformat(),
+            "end": end_dt.isoformat(),
+        }
+        _emit_coverage_warning(fallback_warning)
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
@@ -6752,11 +6813,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     "threshold_scale": coverage.get("threshold_scale", 1.0),
                     "intraday_scale": coverage.get("intraday_scale", 1.0),
                 }
-                logger.warning(
-                    "MINUTE_DATA_COVERAGE_WARNING",
-                    extra=warning_payload,
-                )
-                coverage_warning_logged = True
+                _emit_coverage_warning(warning_payload)
 
     if low_coverage and not coverage_warning_logged:
         warning_extra = {
@@ -6788,8 +6845,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "start": coverage_window_start.isoformat(),
             "end": end_dt.isoformat(),
         }
-        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
-        coverage_warning_logged = True
+        _emit_coverage_warning(warning_extra)
 
     if low_coverage:
         feeds_to_clear: list[str] = []

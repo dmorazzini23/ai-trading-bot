@@ -7926,8 +7926,10 @@ def _fetch_bars(
     tf_key = (symbol, _interval)
     skip_until_dt = _BACKUP_SKIP_UNTIL.get(tf_key)
     if pytest_active and skip_until_dt is not None:
-        _clear_backup_skip(symbol, _interval)
-        skip_until_dt = None
+        preserve_skip = bool(os.getenv("ENABLE_HTTP_FALLBACK"))
+        if not preserve_skip:
+            _clear_backup_skip(symbol, _interval)
+            skip_until_dt = None
     if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
         _clear_backup_skip(symbol, _interval)
         skip_until_dt = None
@@ -11662,9 +11664,10 @@ def get_minute_df(
                         current_feed == "iex"
                         and sip_ready
                         and not sip_locked_backoff
-                        and "sip" not in attempted_feeds
                     )
-                    if force_sip_allowed:
+                    sip_force_consumed = _state.get("threshold_sip_forced")
+                    if force_sip_allowed and not sip_force_consumed:
+                        _state["threshold_sip_forced"] = True
                         attempted_feeds.add("sip")
                         if not forced_threshold_sip_switch_logged:
                             _record_feed_switch(symbol, "1Min", current_feed, "sip")

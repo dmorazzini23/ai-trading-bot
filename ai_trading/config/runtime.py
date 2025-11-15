@@ -603,7 +603,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="degraded_feed_mode",
         env=("TRADING__DEGRADED_FEED_MODE",),
         cast="str",
-        default="widen",
+        default="block",
         description="Policy when market data is degraded (block new entries or widen protective limits).",
         choices=("block", "widen"),
     ),
