@@ -587,7 +587,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="min_quote_freshness_ms",
         env=("TRADING__MIN_QUOTE_FRESHNESS_MS",),
         cast="int",
-        default=3000,
+        default=2500,
         description="Minimum quote freshness in milliseconds before treating data as degraded for limit pricing.",
         min_value=0,
     ),

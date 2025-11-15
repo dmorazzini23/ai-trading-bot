@@ -515,9 +515,11 @@ def create_app():
             except Exception:
                 quote_state = {}
 
-            provider_status = provider_state.get("status") or (
+            raw_provider_status = provider_state.get("status")
+            provider_status = raw_provider_status or (
                 "degraded" if provider_state.get("using_backup") else "healthy"
             )
+            provider_status_normalized = str(provider_status or "").strip().lower()
             gap_ratio_recent = provider_state.get("gap_ratio_recent")
             gap_ratio_pct = None
             if gap_ratio_recent is not None:
@@ -552,6 +554,7 @@ def create_app():
                     broker_status = "reachable"
                 else:
                     broker_status = "reachable" if broker_connected_raw else "unreachable"
+            broker_status_normalized = str(broker_status or "").strip().lower()
             broker_connected = bool(broker_connected_raw)
             broker_payload = {
                 "status": broker_status,
@@ -564,15 +567,17 @@ def create_app():
             status = service_state.get("status", "unknown")
             service_reason = service_state.get("reason")
 
-            provider_disabled = provider_payload.get("status") in {"down", "disabled"}
-            broker_down = broker_status == "unreachable"
+            provider_disabled = provider_status_normalized in {"down", "disabled"}
+            broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
             degraded = provider_disabled or provider_payload.get("using_backup") or (
-                provider_payload.get("status") not in {None, "healthy", "ready"}
+                provider_status_normalized not in {"", "healthy", "ready"}
             )
             if broker_down:
                 degraded = True
 
-            overall_ok = not provider_disabled and not broker_down
+            provider_healthy = provider_status_normalized in {"", "healthy", "ready"}
+            broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
+            overall_ok = provider_healthy and broker_healthy
             if os.getenv("PYTEST_RUNNING"):
                 overall_ok = True
 

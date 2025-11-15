@@ -11386,7 +11386,8 @@ def get_minute_df(
         skip_primary_due_to_fallback = True
     force_primary_fetch = not skip_primary_due_to_fallback
     if pytest_active and not force_primary_fetch and not forced_provider_label:
-        force_primary_fetch = True
+        if not forced_skip_engaged:
+            force_primary_fetch = True
     if backup_label:
         prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
         if skip_primary_due_to_fallback:
@@ -11636,6 +11637,19 @@ def get_minute_df(
                     _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
                     time.sleep(backoff)
                     backoff_applied = True
+                    shrink_window = _dt.timedelta(hours=6)
+                    shrink_start = end_dt - shrink_window
+                    if shrink_start > start_dt:
+                        logger.info(
+                            "ALPACA_EMPTY_BAR_WINDOW_SHRINK",
+                            extra={
+                                "symbol": symbol,
+                                "timeframe": "1Min",
+                                "previous_start": start_dt.isoformat(),
+                                "new_start": shrink_start.isoformat(),
+                            },
+                        )
+                        start_dt = shrink_start
                     alt_feed = None
                     max_fb = max_data_fallbacks()
                     attempted_feeds = _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set())
@@ -12476,6 +12490,51 @@ def get_daily_df(
         # Accept and ignore auxiliary keyword arguments for forward compatibility.
         pass
 
+    resolved_adjustment = adjustment or "raw"
+    if isinstance(resolved_adjustment, str):
+        resolved_adjustment = resolved_adjustment.lower()
+    validate_adjustment(resolved_adjustment)
+
+    alpaca_api_mod: Any | None = None
+
+    def _ensure_alpaca_module() -> Any:
+        nonlocal alpaca_api_mod
+        if alpaca_api_mod is not None:
+            return alpaca_api_mod
+        try:
+            import ai_trading.alpaca_api as _alpaca_mod
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise DataFetchError("DATA_FETCHER_UNAVAILABLE") from exc
+        alpaca_api_mod = _alpaca_mod
+        return alpaca_api_mod
+
+    def _alpaca_get_bars(
+        start_arg: Any,
+        end_arg: Any,
+        *,
+        feed_override: str | None = None,
+    ):
+        module = _ensure_alpaca_module()
+        getter = getattr(module, "get_bars_df", None)
+        if not callable(getter):
+            raise DataFetchError("DATA_FETCHER_UNAVAILABLE")
+        try:
+            return getter(
+                symbol,
+                timeframe="1Day",
+                start=start_arg,
+                end=end_arg,
+                feed=feed_override,
+                adjustment=resolved_adjustment,
+            )
+        except ImportError as exc:  # pragma: no cover - defensive guard
+            raise DataFetchError("DATA_FETCHER_UNAVAILABLE") from exc
+        except RuntimeError as exc:
+            message = str(exc).lower()
+            if "_get_rest unavailable" in message or "stockhistoricaldataclient" in message:
+                raise DataFetchError("DATA_FETCHER_UNAVAILABLE") from exc
+            raise
+
     df: Any = None
     bootstrap_attempted = False
     bootstrap_reason: str | None = None
@@ -12493,32 +12552,15 @@ def get_daily_df(
                 df = _annotate_df_source(df, provider="yahoo", feed="yahoo")
         if forced_daily_provider is None and (df is None or getattr(df, "empty", False)):
             try:
-                from ai_trading import alpaca_api as _bars_mod
-
-                fallback_df = _bars_mod.get_bars_df(
-                    symbol,
-                    timeframe="1Day",
-                    start=start,
-                    end=end,
-                    feed=normalized_feed,
-                    adjustment=adjustment,
-                )
-            except Exception:  # pragma: no cover - optional dependency
+                fallback_df = _alpaca_get_bars(start, end, feed_override=normalized_feed)
+            except DataFetchError:
                 fallback_df = None
             if fallback_df is not None:
                 df = fallback_df
     else:
-        try:
-            from ai_trading.alpaca_api import get_bars_df as _get_bars_df
-        except Exception as exc:  # pragma: no cover - optional dependency
-            raise DataFetchError("Alpaca API unavailable") from exc
+        _ensure_alpaca_module()
 
-    adjustment = adjustment or "raw"
-    if isinstance(adjustment, str):
-        adjustment = adjustment.lower()
-    validate_adjustment(adjustment)
-
-    fetch_error: MissingOHLCVColumnsError | None = None
+    fetch_error: MissingOHLCVColumnsError | DataFetchError | None = None
     if use_alpaca:
         global _BOOTSTRAP_PRIMARY_ONCE
         if _BOOTSTRAP_PRIMARY_ONCE and _should_bootstrap_primary_first():
@@ -12526,14 +12568,7 @@ def get_daily_df(
             bootstrap_attempted = True
             bootstrap_primary = _configured_primary_provider() or "alpaca"
             try:
-                df = _get_bars_df(
-                    symbol,
-                    timeframe="1Day",
-                    start=start,
-                    end=end,
-                    feed=normalized_feed,
-                    adjustment=adjustment,
-                )
+                df = _alpaca_get_bars(start, end, feed_override=normalized_feed)
             except MissingOHLCVColumnsError as exc:
                 fetch_error = exc
                 df = None
@@ -12542,6 +12577,10 @@ def get_daily_df(
                 fetch_error = DataFetchError(str(exc))
                 df = None
                 bootstrap_reason = "import_error"
+            except DataFetchError as exc:
+                fetch_error = MissingOHLCVColumnsError(str(exc))
+                df = None
+                bootstrap_reason = "data_fetch_error"
             except Exception as exc:  # pragma: no cover - defensive bootstrap attempt
                 df = None
                 bootstrap_reason = f"error:{type(exc).__name__}"
@@ -12551,19 +12590,15 @@ def get_daily_df(
                     df = None
         if df is None:
             try:
-                df = _get_bars_df(
-                    symbol,
-                    timeframe="1Day",
-                    start=start,
-                    end=end,
-                    feed=normalized_feed,
-                    adjustment=adjustment,
-                )
+                df = _alpaca_get_bars(start, end, feed_override=normalized_feed)
             except MissingOHLCVColumnsError as exc:
                 fetch_error = exc
                 df = None
             except ImportError as exc:
                 fetch_error = DataFetchError(str(exc))
+                df = None
+            except DataFetchError as exc:
+                fetch_error = MissingOHLCVColumnsError(str(exc))
                 df = None
         else:
             fetch_error = None

@@ -5938,6 +5938,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     fallback_provider: str | None = early_fallback_provider
     coverage_warning_logged = False
     coverage_warning_context: dict[str, object] | None = None
+    coverage_recovery_logged = False
+    recovery_prev_feed = current_feed
+    recovery_prev_bars = primary_actual_bars
+    recovery_expected_bars = max(primary_expected_bars, 1)
     if early_fallback_attempted:
         coverage_warning_context = {
             "symbol": symbol,
@@ -6072,6 +6076,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_start_dt, end_dt
             )
         fallback_expected_bars = max(fallback_expected_bars, 1)
+        recovery_expected_bars = fallback_expected_bars
 
         sip_bars = 0
 
@@ -6156,6 +6161,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         "new_bars": sip_bars,
                     },
                 )
+                coverage_recovery_logged = True
                 df = sip_df
                 start_dt = fallback_start_dt
                 expected_bars = fallback_expected_bars
@@ -6207,25 +6213,27 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     fallback_feed_used = None
                 else:
                     fallback_used = True
-                    fallback_feed_used = normalized_sip_feed or resolved_feed
                     cache_feed = normalized_sip_feed or resolved_feed
-                    if cache_feed:
-                        try:
-                            _cache_cycle_fallback_feed(cache_feed, symbol=symbol)
-                        except TypeError:
-                            _cache_cycle_fallback_feed(cache_feed)
-                        if cache_feed == "sip":
-                            record_switch = getattr(
-                                data_fetcher_module, "_record_feed_switch", None
-                            )
-                            if callable(record_switch):
-                                try:
-                                    record_switch(symbol, "1Min", "iex", "sip")
-                                    record_switch(symbol, "1Min", "sip", "sip")
-                                except COMMON_EXC:
-                                    pass
-                        data_fetcher_module._cache_fallback(symbol, cache_feed)
-                        _record_coverage_provider(cache_feed)
+                    if resolved_feed and resolved_feed != "sip":
+                        fallback_feed_used = resolved_feed
+                        cache_feed = None
+                        fallback_feed = resolved_feed
+                        fallback_provider = resolved_provider or fallback_provider
+                    else:
+                        fallback_feed_used = normalized_sip_feed or resolved_feed
+                        fallback_feed = "sip"
+                        fallback_provider = resolved_provider or "alpaca_sip"
+                    if cache_feed == "sip":
+                        record_switch = getattr(
+                            data_fetcher_module, "_record_feed_switch", None
+                        )
+                        if callable(record_switch):
+                            try:
+                                record_switch(symbol, "1Min", "iex", "sip")
+                                record_switch(symbol, "1Min", "sip", "sip")
+                            except COMMON_EXC:
+                                pass
+                        data_fetcher_module._cache_fallback(symbol, "sip")
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -6292,6 +6300,29 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 yahoo_df = None
 
             if yahoo_df is not None and yahoo_bars > primary_actual_bars:
+                provider_override, feed_override = _df_provider_info(yahoo_df)
+                resolved_feed = feed_override or "yahoo"
+                resolved_provider = provider_override or "yahoo"
+                prev_expected = max(primary_expected_bars or expected_bars or 0, 1)
+                prev_cov = (
+                    primary_actual_bars / prev_expected if prev_expected else 0.0
+                )
+                new_cov = yahoo_bars / max(fallback_expected_bars, 1)
+                event_name = _coverage_recovery_event(resolved_feed)
+                logger.warning(
+                    event_name,
+                    extra={
+                        "symbol": symbol,
+                        "prev_feed": current_feed,
+                        "prev_cov": round(prev_cov, 4),
+                        "new_feed": resolved_feed,
+                        "new_cov": round(new_cov, 4),
+                        "expected_bars": fallback_expected_bars,
+                        "prev_bars": primary_actual_bars,
+                        "new_bars": yahoo_bars,
+                    },
+                )
+                coverage_recovery_logged = True
                 df = yahoo_df
                 start_dt = fallback_start_dt
                 expected_bars = fallback_expected_bars
@@ -6311,7 +6342,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 low_coverage = bool(coverage["low_coverage"])
                 fallback_used = True
                 fallback_feed = "yahoo"
-                fallback_provider = "yahoo"
+                fallback_provider = resolved_provider
                 active_feed = "yahoo"
                 coverage_window_start = fallback_start_dt
                 if coverage_warning_context is not None:
@@ -6357,54 +6388,54 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed = "yahoo"
                 fallback_provider = "yahoo"
 
-    skip_cached_warning = using_cached_cycle_feed
-    if (
-        (coverage_warning_context is not None or fallback_attempted)
-        and not coverage_warning_logged
-        and not skip_cached_warning
-    ):
-        warning_payload: dict[str, object]
-        if coverage_warning_context is not None:
-            warning_payload = dict(coverage_warning_context)
-        else:
-            warning_payload = {
-                "symbol": symbol,
-                "expected_bars": expected_bars,
-                "primary_actual_bars": primary_actual_bars,
-                "from_feed": current_feed,
-                "active_feed": active_feed,
-            }
-        warning_payload.update(
-            {
-                "actual_bars": actual_bars,
-                "materially_short": materially_short,
-                "insufficient_intraday": insufficient_intraday,
-                "primary_expected_bars": primary_expected_bars,
-                "primary_materially_short": primary_materially_short,
-                "primary_insufficient_intraday": primary_insufficient_intraday,
-                "primary_low_coverage": primary_low_coverage,
-                "primary_threshold": primary_threshold,
-                "primary_cutoff": primary_cutoff,
-                "primary_window_minutes": primary_window_minutes,
-                "coverage_threshold": coverage_threshold,
-                "coverage_cutoff": coverage_cutoff,
-                "window_minutes": _window_minutes(coverage_window_start, end_dt),
-                "threshold_scale": coverage.get("threshold_scale", 1.0),
-                "intraday_scale": coverage.get("intraday_scale", 1.0),
-                "fallback_feed": fallback_feed or warning_payload.get("fallback_feed") or "",
-                "fallback_provider": fallback_provider or warning_payload.get("fallback_provider") or "",
-                "fallback_attempted": fallback_attempted,
-                "fallback_used": fallback_used,
-                "fallback_exhausted": low_coverage,
-                "start": coverage_window_start.isoformat(),
-                "end": end_dt.isoformat(),
-            }
-        )
-        logger.warning(
-            "MINUTE_DATA_COVERAGE_WARNING",
-            extra=warning_payload,
-        )
-        coverage_warning_logged = True
+        skip_cached_warning = using_cached_cycle_feed
+        if (
+            (coverage_warning_context is not None or fallback_attempted)
+            and not coverage_warning_logged
+            and not skip_cached_warning
+        ):
+            warning_payload: dict[str, object]
+            if coverage_warning_context is not None:
+                warning_payload = dict(coverage_warning_context)
+            else:
+                warning_payload = {
+                    "symbol": symbol,
+                    "expected_bars": expected_bars,
+                    "primary_actual_bars": primary_actual_bars,
+                    "from_feed": current_feed,
+                    "active_feed": active_feed,
+                }
+            warning_payload.update(
+                {
+                    "actual_bars": actual_bars,
+                    "materially_short": materially_short,
+                    "insufficient_intraday": insufficient_intraday,
+                    "primary_expected_bars": primary_expected_bars,
+                    "primary_materially_short": primary_materially_short,
+                    "primary_insufficient_intraday": primary_insufficient_intraday,
+                    "primary_low_coverage": primary_low_coverage,
+                    "primary_threshold": primary_threshold,
+                    "primary_cutoff": primary_cutoff,
+                    "primary_window_minutes": primary_window_minutes,
+                    "coverage_threshold": coverage_threshold,
+                    "coverage_cutoff": coverage_cutoff,
+                    "window_minutes": _window_minutes(coverage_window_start, end_dt),
+                    "threshold_scale": coverage.get("threshold_scale", 1.0),
+                    "intraday_scale": coverage.get("intraday_scale", 1.0),
+                    "fallback_feed": fallback_feed or warning_payload.get("fallback_feed") or "",
+                    "fallback_provider": fallback_provider or warning_payload.get("fallback_provider") or "",
+                    "fallback_attempted": fallback_attempted,
+                    "fallback_used": fallback_used,
+                    "fallback_exhausted": low_coverage,
+                    "start": coverage_window_start.isoformat(),
+                    "end": end_dt.isoformat(),
+                }
+            )
+            logger.warning(
+                "MINUTE_DATA_COVERAGE_WARNING",
+                extra=warning_payload,
+            )
+            coverage_warning_logged = True
 
     def _set_minute_feed_cache(feeds: Iterable[str], value: str) -> None:
         if not value:
@@ -6434,16 +6465,87 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             if isinstance(ts_obj, dict):
                 ts_obj.pop(feed_name, None)
 
+    if (
+        not coverage_recovery_logged
+        and fallback_attempted
+        and df is not None
+        and not getattr(df, "empty", True)
+    ):
+        provider_override, feed_override = _df_provider_info(df)
+        provider_label = (provider_override or "").strip().lower()
+        resolved_feed_final = (feed_override or provider_override or "").strip()
+        if resolved_feed_final and provider_label and not provider_label.startswith("alpaca"):
+            prev_cov = recovery_prev_bars / max(recovery_expected_bars or 1, 1)
+            try:
+                new_bars_final = int(len(df))
+            except COMMON_EXC:
+                new_bars_final = recovery_expected_bars
+            new_cov = new_bars_final / max(recovery_expected_bars or 1, 1)
+            try:
+                get_minute_df(
+                    symbol,
+                    coverage_window_start,
+                    end_dt,
+                    **_minute_fetch_kwargs(feed=resolved_feed_final),
+                )
+            except COMMON_EXC:
+                pass
+            event_name = _coverage_recovery_event(resolved_feed_final)
+            logger.warning(
+                event_name,
+                extra={
+                    "symbol": symbol,
+                    "prev_feed": recovery_prev_feed,
+                    "prev_cov": round(prev_cov, 4),
+                    "new_feed": resolved_feed_final,
+                    "new_cov": round(new_cov, 4),
+                    "expected_bars": recovery_expected_bars,
+                    "prev_bars": recovery_prev_bars,
+                    "new_bars": new_bars_final,
+                },
+            )
+            try:
+                _cache_cycle_fallback_feed(resolved_feed_final, symbol=symbol)
+            except TypeError:
+                _cache_cycle_fallback_feed(resolved_feed_final)
+            _record_coverage_provider(resolved_feed_final)
+            if not coverage_warning_logged:
+                warning_payload = dict(coverage_warning_context or {})
+                if not warning_payload:
+                    warning_payload = {
+                        "symbol": symbol,
+                        "expected_bars": expected_bars,
+                        "primary_expected_bars": primary_expected_bars,
+                        "primary_actual_bars": primary_actual_bars,
+                        "actual_bars": actual_bars,
+                        "from_feed": recovery_prev_feed,
+                        "active_feed": resolved_feed_final,
+                        "fallback_feed": resolved_feed_final,
+                        "fallback_provider": provider_override or "",
+                        "fallback_attempted": fallback_attempted,
+                        "fallback_used": True,
+                        "start": coverage_window_start.isoformat(),
+                        "end": end_dt.isoformat(),
+                    }
+                logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_payload)
+                coverage_warning_logged = True
+            _set_minute_feed_cache([resolved_feed_final], resolved_feed_final)
+            fallback_feed_used = resolved_feed_final
+            fallback_feed = resolved_feed_final
+            fallback_provider = provider_override or fallback_provider
+            coverage_recovery_logged = True
+
     if fallback_used and fallback_feed_used:
         if fallback_feed_used != "sip":
             _purge_minute_feed_cache(["sip"])
         fallback_cache_key = fallback_feed_used
         feeds_to_cache: list[str] = []
         if fallback_feed_used:
-            try:
-                _cache_cycle_fallback_feed(fallback_feed_used, symbol=symbol)
-            except TypeError:
-                _cache_cycle_fallback_feed(fallback_feed_used)
+            if not coverage_recovery_logged:
+                try:
+                    _cache_cycle_fallback_feed(fallback_feed_used, symbol=symbol)
+                except TypeError:
+                    _cache_cycle_fallback_feed(fallback_feed_used)
             cache_fallback_fn = getattr(data_fetcher_module, "_cache_fallback", None)
             if callable(cache_fallback_fn):
                 try:
@@ -6650,7 +6752,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     "threshold_scale": coverage.get("threshold_scale", 1.0),
                     "intraday_scale": coverage.get("intraday_scale", 1.0),
                 }
-                logging.warning("MINUTE_DATA_COVERAGE_WARNING")
                 logger.warning(
                     "MINUTE_DATA_COVERAGE_WARNING",
                     extra=warning_payload,
@@ -9313,6 +9414,76 @@ class DataFetcher:
             else:
                 provenance = True
             return _emit_daily_fetch_result(df, cache=provenance)
+
+        def _memo_entry_payload(entry: Any) -> tuple[float | None, Any | None]:
+            if entry is None:
+                return None, None
+            if isinstance(entry, tuple):
+                if len(entry) == 2:
+                    head, tail = entry
+                    for value in (head, tail):
+                        if isinstance(value, (int, float)) and math.isfinite(value):
+                            ts = float(value)
+                            payload = tail if value is head else head
+                            return ts, payload
+                    return None, head if head is not None else tail
+                if entry and isinstance(entry[0], (int, float)) and math.isfinite(entry[0]):
+                    return float(entry[0]), entry[1] if len(entry) > 1 else None
+            if isinstance(entry, MappingABC):
+                ts_field = None
+                for key in ("ts", "timestamp", "monotonic", "memo_ts"):
+                    if key in entry:
+                        candidate = entry[key]
+                        if isinstance(candidate, (int, float)) and math.isfinite(candidate):
+                            ts_field = float(candidate)
+                            break
+                payload_field: Any | None = None
+                for key in ("df", "data", "value", "payload", "bars"):
+                    if key in entry and entry[key] is not None:
+                        payload_field = entry[key]
+                        break
+                if payload_field is None:
+                    for value in entry.values():
+                        if value is not None:
+                            payload_field = value
+                            break
+                return ts_field, payload_field
+            return None, entry
+
+        if memo_store is not None:
+            memo_keys = (canonical_memo_key, memo_key, legacy_memo_key)
+            memo_payload: Any | None = None
+            for candidate_key in memo_keys:
+                try:
+                    entry = memo_store[candidate_key]
+                except KeyError:
+                    continue
+                except COMMON_EXC:
+                    continue
+                entry_ts, entry_payload = _memo_entry_payload(entry)
+                if entry_payload is None:
+                    continue
+                if entry_ts is not None and entry_ts <= 0.0:
+                    continue
+                if entry_ts and entry_ts > 0.0 and memo_ttl_limit > 0.0:
+                    if (now_monotonic - float(entry_ts)) > memo_ttl_limit:
+                        continue
+                memo_payload = entry_payload
+                break
+            if memo_payload is not None:
+                normalized_pair = (now_monotonic, memo_payload)
+                with cache_lock:
+                    for target_key in memo_keys:
+                        try:
+                            memo_store[target_key] = normalized_pair
+                        except COMMON_EXC:
+                            setter = getattr(memo_store, "__setitem__", None)
+                            if callable(setter):
+                                try:
+                                    setter(target_key, normalized_pair)
+                                except COMMON_EXC:
+                                    continue
+                return _emit_cache_hit(memo_payload, reason="memo")
 
         if memo_store is not None:
             fast_path_entry: Any | None = None
@@ -25053,6 +25224,13 @@ def _truncate_degraded_candidates(symbols: list[str], runtime, *, reason: str | 
     if len(symbols) <= max_candidates:
         return symbols
     penalty_factor = round(max_candidates / len(symbols), 4)
+    logger.warning(
+        "SCREEN_DEGRADED_INPUTS",
+        extra={
+            "penalty_factor": penalty_factor,
+            "reason": reason or "provider_degraded",
+        },
+    )
     logger.warning(
         "DEGRADED_CANDIDATES_TRUNCATED",
         extra={
