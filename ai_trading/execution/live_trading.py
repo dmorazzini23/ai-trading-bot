@@ -324,7 +324,9 @@ except Exception as exc:  # pragma: no cover - fallback when optional deps missi
 
 
 def _resolve_ack_timeout_seconds() -> float:
-    default_timeout = 15.0
+    """Resolve broker ack timeout (15-30s recommended for live trading)."""
+
+    default_timeout = 20.0
     resolver = _config_get_env
     if resolver is None:
         return default_timeout
@@ -342,6 +344,83 @@ def _resolve_ack_timeout_seconds() -> float:
 
 
 _ACK_TIMEOUT_SECONDS = _resolve_ack_timeout_seconds()
+
+
+def _resolve_bool_env(name: str) -> bool | None:
+    resolver = _config_get_env
+    if resolver is not None:
+        try:
+            value = resolver(name, None, cast=bool)
+        except Exception:
+            value = None
+        if value not in (None, ""):
+            try:
+                return bool(value)
+            except Exception:
+                return None
+    raw = os.getenv(name)
+    if not raw:
+        return None
+    try:
+        return _safe_bool(raw)
+    except Exception:
+        return None
+
+
+def _allow_shorts_configured() -> bool:
+    for key in ("TRADING__ALLOW_SHORTS", "AI_TRADING_ALLOW_SHORT"):
+        flag = _resolve_bool_env(key)
+        if flag is not None:
+            return bool(flag)
+    return True
+
+
+_LONG_ONLY_ACCOUNT_MODE = False
+_LONG_ONLY_ACCOUNT_REASON: str | None = None
+_ACCOUNT_MARGIN_WARNING_LOGGED = False
+_ACCOUNT_SHORTING_WARNING_LOGGED = False
+_CONFIG_LONG_ONLY_LOGGED = False
+
+
+def _long_only_state() -> tuple[bool, str | None]:
+    return _LONG_ONLY_ACCOUNT_MODE, _LONG_ONLY_ACCOUNT_REASON
+
+
+def _mark_long_only_reason(
+    reason: str,
+    *,
+    engine: "ExecutionEngine" | None,
+    context: Mapping[str, Any] | None = None,
+    persist: bool = True,
+) -> None:
+    global _LONG_ONLY_ACCOUNT_MODE, _LONG_ONLY_ACCOUNT_REASON
+    if persist:
+        _LONG_ONLY_ACCOUNT_MODE = True
+        _LONG_ONLY_ACCOUNT_REASON = reason
+    payload = {"reason": reason}
+    if context:
+        payload.update({k: context[k] for k in context.keys() if k not in payload})
+    log_name = "ACCOUNT_SHORTING_DISABLED"
+    global _ACCOUNT_SHORTING_WARNING_LOGGED, _ACCOUNT_MARGIN_WARNING_LOGGED
+    if reason == "account_margin_disabled":
+        log_name = "ACCOUNT_MARGIN_DISABLED"
+        if not _ACCOUNT_MARGIN_WARNING_LOGGED:
+            logger.warning(log_name, extra=payload)
+            _ACCOUNT_MARGIN_WARNING_LOGGED = True
+    elif reason == "account_shorting_disabled":
+        if not _ACCOUNT_SHORTING_WARNING_LOGGED:
+            logger.warning(log_name, extra=payload)
+            _ACCOUNT_SHORTING_WARNING_LOGGED = True
+    elif reason == "config":
+        global _CONFIG_LONG_ONLY_LOGGED
+        if not _CONFIG_LONG_ONLY_LOGGED:
+            logger.info("LONG_ONLY_CONFIG_ENFORCED", extra=payload)
+            _CONFIG_LONG_ONLY_LOGGED = True
+    if engine is not None:
+        try:
+            engine._activate_long_only_mode(reason=reason, context=payload)
+        except Exception:
+            logger.debug("LONG_ONLY_MODE_ACTIVATE_FAILED", exc_info=True)
 
 
 def _require_bid_ask_quotes() -> bool:
@@ -606,6 +685,7 @@ def _bool_from_record(record: Any, *names: str) -> bool | None:
 
 
 def _short_sale_precheck(
+    engine: "ExecutionEngine" | None,
     trading_client: Any,
     *,
     symbol: str,
@@ -615,7 +695,8 @@ def _short_sale_precheck(
 ) -> tuple[bool, dict[str, Any] | None, str | None]:
     """Validate short-sale prerequisites for Alpaca before submission."""
 
-    if closing_position or str(side).strip().lower() != "sell":
+    side_token = str(side).strip().lower() if side is not None else ""
+    if closing_position or side_token != "sell":
         return True, None, None
 
     asset = None
@@ -682,7 +763,41 @@ def _short_sale_precheck(
         "account_margin_enabled": bool(account_margin_enabled),
         "short_sale_restriction": None,
         "locate_required": bool(locate_required) if locate_required is not None else False,
+        "allow_shorts_config": _allow_shorts_configured(),
+        "long_only_source": None,
     }
+
+    config_disallows = not extras["allow_shorts_config"]
+    account_long_only, account_reason = _long_only_state()
+    if config_disallows:
+        extras["reason"] = "long_only_config"
+        extras["long_only_source"] = "config"
+        _mark_long_only_reason("config", engine=engine, context=extras, persist=False)
+        return False, extras, "long_only"
+    if account_long_only:
+        extras["reason"] = account_reason or "long_only_account"
+        extras["long_only_source"] = account_reason or "long_only_account"
+        return False, extras, "long_only"
+
+    if account_margin_enabled is False:
+        extras["reason"] = "account_margin_disabled"
+        extras["long_only_source"] = "account_margin_disabled"
+        _mark_long_only_reason(
+            "account_margin_disabled",
+            engine=engine,
+            context=extras,
+        )
+        return False, extras, "long_only"
+
+    if account_shorting is False:
+        extras["reason"] = "account_shorting_disabled"
+        extras["long_only_source"] = "account_shorting_disabled"
+        _mark_long_only_reason(
+            "account_shorting_disabled",
+            engine=engine,
+            context=extras,
+        )
+        return False, extras, "long_only"
 
     if ssr_state is not None:
         try:
@@ -1508,6 +1623,8 @@ class ExecutionEngine:
         self._pending_orders: dict[str, dict[str, Any]] = {}
         self._broker_locked_until: float = 0.0
         self._broker_lock_reason: str | None = None
+        self._long_only_mode_reason: str | None = None
+        self._long_only_context: dict[str, Any] | None = None
         self._broker_lock_logged: bool = False
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
@@ -2068,6 +2185,7 @@ class ExecutionEngine:
                 precheck_order["account_snapshot"] = account_snapshot
 
         short_ok, short_extra, short_reason = _short_sale_precheck(
+            self,
             trading_client,
             symbol=symbol,
             side=side_lower,
@@ -2077,13 +2195,17 @@ class ExecutionEngine:
         if not short_ok:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
-            log_name = (
-                "PRECHECK_MARGIN_DISABLED" if short_reason == "margin" else "PRECHECK_SHORTABILITY_FAILED"
-            )
-            if short_extra is not None:
-                logger.warning(log_name, extra=short_extra)
+            if short_reason == "long_only":
+                payload = short_extra or {"symbol": symbol, "side": side_lower}
+                logger.info("SHORT_ORDER_SKIPPED_LONG_ONLY_MODE", extra=payload)
             else:
-                logger.warning(log_name)
+                log_name = (
+                    "PRECHECK_MARGIN_DISABLED" if short_reason == "margin" else "PRECHECK_SHORTABILITY_FAILED"
+                )
+                if short_extra is not None:
+                    logger.warning(log_name, extra=short_extra)
+                else:
+                    logger.warning(log_name)
             return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
@@ -2569,6 +2691,7 @@ class ExecutionEngine:
                 precheck_order["account_snapshot"] = account_snapshot
 
         short_ok, short_extra, short_reason = _short_sale_precheck(
+            self,
             trading_client,
             symbol=symbol,
             side=side_lower,
@@ -2578,13 +2701,17 @@ class ExecutionEngine:
         if not short_ok:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
-            log_name = (
-                "PRECHECK_MARGIN_DISABLED" if short_reason == "margin" else "PRECHECK_SHORTABILITY_FAILED"
-            )
-            if short_extra is not None:
-                logger.warning(log_name, extra=short_extra)
+            if short_reason == "long_only":
+                payload = short_extra or {"symbol": symbol, "side": side_lower}
+                logger.info("SHORT_ORDER_SKIPPED_LONG_ONLY_MODE", extra=payload)
             else:
-                logger.warning(log_name)
+                log_name = (
+                    "PRECHECK_MARGIN_DISABLED" if short_reason == "margin" else "PRECHECK_SHORTABILITY_FAILED"
+                )
+                if short_extra is not None:
+                    logger.warning(log_name, extra=short_extra)
+                else:
+                    logger.warning(log_name)
             return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
@@ -3940,6 +4067,8 @@ class ExecutionEngine:
         event_sequence = 0
         order_submitted_logged = False
         final_cancel_reason: str | None = None
+        initial_status_token = _normalize_status(status)
+        initial_ack_status: str | None = None
 
         def _status_payload() -> dict[str, Any]:
             return {
@@ -3951,7 +4080,7 @@ class ExecutionEngine:
             }
 
         def _handle_status_transition(status_value: Any, *, source: str) -> None:
-            nonlocal ack_logged, current_status, event_sequence, order_submitted_logged, final_status
+            nonlocal ack_logged, current_status, event_sequence, order_submitted_logged, final_status, initial_ack_status
             decided_status, advanced = apply_order_status(current_status, status_value)
             if decided_status is None:
                 return
@@ -3979,17 +4108,20 @@ class ExecutionEngine:
                 order_submitted_logged = True
 
             if decided_status in _ACK_TRIGGER_STATUSES and not ack_logged:
-                ack_logged = True
-                ack_payload = dict(payload)
-                ack_payload["latency_ms"] = elapsed_ms
-                logger.info("ORDER_ACK_RECEIVED", extra=ack_payload)
-                runtime_state.update_broker_status(
-                    connected=True,
-                    latency_ms=elapsed_ms,
-                    last_error=None,
-                    status="reachable",
-                    last_order_ack_ms=elapsed_ms,
-                )
+                if source == "initial":
+                    initial_ack_status = decided_status
+                else:
+                    ack_logged = True
+                    ack_payload = dict(payload)
+                    ack_payload["latency_ms"] = elapsed_ms
+                    logger.info("ORDER_ACK_RECEIVED", extra=ack_payload)
+                    runtime_state.update_broker_status(
+                        connected=True,
+                        latency_ms=elapsed_ms,
+                        last_error=None,
+                        status="reachable",
+                        last_order_ack_ms=elapsed_ms,
+                    )
             if decided_status == "partially_filled":
                 progress_payload = dict(payload)
                 progress_payload["filled_qty"] = float(filled_qty or 0)
@@ -4000,6 +4132,10 @@ class ExecutionEngine:
                 logger.info("ORDER_FILL_CONFIRMED", extra=fill_payload)
 
         _handle_status_transition(status, source="initial")
+
+        poll_attempts = 0
+        last_polled_status = initial_status_token
+        last_status_raw = final_status
 
         if client is not None:
             order_id_hint = _extract_value(final_order, "id", "order_id")
@@ -4038,7 +4174,12 @@ class ExecutionEngine:
                 order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
                     final_order, qty
                 )
+                poll_attempts += 1
                 final_status = status
+                last_status_raw = final_status
+                normalized_polled_status = _normalize_status(final_status)
+                if normalized_polled_status:
+                    last_polled_status = normalized_polled_status
                 _handle_status_transition(final_status, source="poll")
                 if str(final_status).lower() in terminal_statuses:
                     break
@@ -4050,6 +4191,12 @@ class ExecutionEngine:
                 pending_payload = _status_payload()
                 pending_payload["status"] = status_lower or "pending"
                 pending_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
+                pending_payload["poll_attempts"] = poll_attempts
+                pending_payload["last_status"] = last_polled_status or status_lower or initial_status_token
+                pending_payload["initial_status"] = initial_status_token
+                pending_payload["status_detail"] = str(last_status_raw) if last_status_raw is not None else None
+                pending_payload["ack_observed"] = bool(initial_ack_status)
+                pending_payload["ack_logged"] = bool(ack_logged)
                 logger.warning("ORDER_PENDING_NO_TERMINAL", extra=pending_payload)
                 ack_timed_out = True
                 runtime_state.update_broker_status(
@@ -4061,6 +4208,13 @@ class ExecutionEngine:
                 ack_timed_out = True
                 timeout_payload = _status_payload()
                 timeout_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
+                timeout_payload["poll_attempts"] = poll_attempts
+                timeout_payload["last_status"] = last_polled_status or status_lower or initial_status_token
+                timeout_payload["initial_status"] = initial_status_token
+                timeout_payload["initial_ack_status"] = initial_ack_status
+                timeout_payload["ack_observed"] = bool(initial_ack_status)
+                timeout_payload["status_detail"] = str(last_status_raw) if last_status_raw is not None else None
+                timeout_payload["ack_logged"] = bool(ack_logged)
                 logger.error("ORDER_ACK_TIMEOUT", extra=timeout_payload)
                 runtime_state.update_broker_status(
                     connected=True,
@@ -4265,6 +4419,7 @@ class ExecutionEngine:
             None if signal_weight is None else float(signal_weight),
         )
         setattr(execution_result, "reconciled", reconciled)
+        setattr(execution_result, "ack_timed_out", ack_timed_out)
         # Only mark as failed when broker reports a terminal failure.
         try:
             order_status_lower = str(status).lower() if status is not None else ""
@@ -4381,7 +4536,31 @@ class ExecutionEngine:
         if value in {"short", "sell_short", "exit"}:
             return "sell"
         if value in {"cover", "long"}:
-            return "buy"
+        return "buy"
+
+    def _activate_long_only_mode(self, *, reason: str, context: Mapping[str, Any] | None = None) -> None:
+        normalized_reason = str(reason or "long_only")
+        previous_reason = getattr(self, "_long_only_mode_reason", None)
+        self._long_only_mode_reason = normalized_reason
+        if context:
+            try:
+                self._long_only_context = {k: context[k] for k in context.keys()}
+            except Exception:
+                self._long_only_context = dict(context)
+        if previous_reason != normalized_reason:
+            logger.info("EXECUTION_LONG_ONLY_MODE", extra={"reason": normalized_reason})
+        ctx_obj = getattr(self, "ctx", None)
+        if ctx_obj is not None:
+            try:
+                setattr(ctx_obj, "allow_short_selling", False)
+            except Exception:
+                logger.debug("CTX_LONG_ONLY_FLAG_SET_FAILED", exc_info=True)
+
+    def long_only_mode_active(self) -> bool:
+        return bool(self._long_only_mode_reason)
+
+    def long_only_mode_reason(self) -> str | None:
+        return self._long_only_mode_reason
         return None
 
     def _order_flip_mode(self) -> str:

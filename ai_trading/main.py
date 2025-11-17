@@ -14,7 +14,7 @@ from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import importlib.util
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Mapping, Tuple
 from types import SimpleNamespace
 from ai_trading.env import ensure_dotenv_loaded
 
@@ -401,6 +401,7 @@ def run_cycle() -> None:
     )
 
     execution_mode = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim").lower()
+    warmup_mode = os.getenv("AI_TRADING_WARMUP_MODE", "").strip().lower() in {"1", "true", "yes"}
     if execution_mode == "disabled":
         _set_alpaca_service_available(False)
         _log_auth_preflight_failure(
@@ -471,7 +472,9 @@ def run_cycle() -> None:
     )
     from ai_trading.config.management import TradingConfig
     from ai_trading.config import get_settings
-    from ai_trading.data import fetch as data_fetcher_module
+from ai_trading.data import fetch as data_fetcher_module
+from ai_trading.data import provider_monitor
+from ai_trading.data.provider_monitor import safe_mode_reason
 
     # Ensure trade log file exists before any trade-log reads occur. The
     # ``get_trade_logger`` helper lazily creates the log and writes the header on
@@ -494,6 +497,31 @@ def run_cycle() -> None:
             )
             provider_disabled = False
     failsoft_guard = _failsoft_mode_active()
+    if warmup_mode:
+        warmup_skip_reason: str | None = None
+        if provider_monitor.is_safe_mode_active():
+            warmup_skip_reason = safe_mode_reason() or "provider_safe_mode"
+        elif provider_disabled:
+            warmup_skip_reason = provider_reason
+        else:
+            try:
+                provider_state_snapshot = runtime_state.observe_data_provider_state()
+            except Exception:
+                provider_state_snapshot = {}
+            if isinstance(provider_state_snapshot, Mapping):
+                status_token = str(provider_state_snapshot.get("status") or "").lower()
+                if status_token in {"degraded", "disabled", "down", "offline"}:
+                    warmup_skip_reason = status_token or "provider_degraded"
+        if warmup_skip_reason:
+            logger.warning(
+                "WARMUP_DEGRADED_SKIP",
+                extra={
+                    "reason": warmup_skip_reason,
+                    "safe_mode": provider_monitor.is_safe_mode_active(),
+                },
+            )
+            _interruptible_sleep(5.0)
+            return
     if provider_disabled and skip_compute_when_disabled and not failsoft_guard and _safe_mode_blocks_trading():
         log_extra = {
             "reason": provider_reason,
@@ -1691,6 +1719,7 @@ def main(argv: list[str] | None = None) -> None:
     _install_signal_handlers()
     ensure_trade_log_path()
     warmup_ok = True
+    os.environ["AI_TRADING_WARMUP_MODE"] = "1"
     try:
         run_cycle()
     except (TypeError, ValueError) as e:
@@ -1719,6 +1748,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1) from e
     else:
         logger.info("Warm-up run_cycle completed")
+    finally:
+        os.environ.pop("AI_TRADING_WARMUP_MODE", None)
     if not warmup_ok:
         logger.info("Warm-up run_cycle completed with recovery")
     _reset_warmup_cooldown_timestamp()

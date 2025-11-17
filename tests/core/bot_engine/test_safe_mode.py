@@ -326,3 +326,22 @@ def test_last_close_allowed_when_degraded(monkeypatch, caplog):
 
     assert orders
     assert all(record.message != "ORDER_SKIPPED_NONRETRYABLE_DETAIL" for record in caplog.records)
+
+
+def test_failsoft_low_coverage_guard(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(bot_engine.provider_monitor, "is_safe_mode_active", lambda: True)
+    monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_degraded_only", lambda: True)
+
+    allowed = bot_engine._should_failsoft_allow_low_coverage(
+        fallback_used=True,
+        relax_ratio=0.5,
+        symbol="AAPL",
+        coverage_threshold=100,
+        actual_bars=20,
+        fallback_feed="yahoo",
+        fallback_provider="yahoo",
+    )
+
+    assert allowed is True
+    assert any(record.message == "DEGRADED_COVERAGE_FAILSOFT_ALLOW" for record in caplog.records)

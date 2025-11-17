@@ -74,6 +74,22 @@ def _reason_is_critical(reason: str | None) -> bool:
     return any(token in normalized for token in _CRITICAL_REASON_TOKENS)
 
 
+def _extract_feed_attempts(metadata: Mapping[str, Any] | None) -> list[str]:
+    feeds: list[str] = []
+    if not isinstance(metadata, Mapping):
+        return feeds
+    for key in ("primary_provider", "provider", "fallback_provider", "promoted_provider"):
+        value = metadata.get(key)
+        if not value:
+            continue
+        label = canonical_provider(str(value))
+        if label and label not in feeds:
+            feeds.append(label)
+    if metadata.get("used_backup") and "yahoo" not in feeds:
+        feeds.append("yahoo")
+    return feeds
+
+
 def _detect_pytest_env() -> bool:
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
         return True
@@ -643,6 +659,9 @@ def _trigger_provider_safe_mode(
     metadata_payload: dict[str, Any] = {"provider": "alpaca", "reason": reason, "events": count}
     if metadata:
         metadata_payload.update({k: v for k, v in metadata.items() if k not in metadata_payload})
+    feeds_attempted = _extract_feed_attempts(metadata_payload)
+    if feeds_attempted:
+        metadata_payload["feeds_attempted"] = tuple(feeds_attempted)
 
     provider_key = canonical_provider(str(metadata_payload.get("provider", "alpaca")))
     degraded_only = False
@@ -654,6 +673,11 @@ def _trigger_provider_safe_mode(
             if isinstance(samples, deque):
                 gap_payload["samples"] = list(samples)
             metadata_payload.setdefault("gap_metrics", gap_payload)
+            metadata_payload["gap_events_total"] = gap_payload.get("events")
+            metadata_payload["gap_window"] = {
+                "start": gap_payload.get("last_window_start"),
+                "end": gap_payload.get("last_window_end"),
+            }
             logger.warning(
                 "PROVIDER_SAFE_MODE_DIAGNOSTICS",
                 extra={
@@ -685,6 +709,10 @@ def _trigger_provider_safe_mode(
         if used_backup and (fallback_contiguous or missing_after_zero):
             degraded_only = True
             metadata_payload["degraded_only"] = True
+            if fallback_contiguous:
+                metadata_payload["failsoft_reason"] = "fallback_contiguous"
+            elif missing_after_zero:
+                metadata_payload["failsoft_reason"] = "missing_after_zero"
             metadata_payload.setdefault("provider_disabled", False)
             logger.info(
                 "PROVIDER_SAFE_MODE_DEGRADED_ONLY",

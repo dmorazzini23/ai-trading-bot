@@ -91,6 +91,18 @@ class _NoFillStubClient(_AckStubClient):
         return SimpleNamespace(cash="10000", buying_power="10000")
 
 
+class _AcceptedNoPollClient(_AckStubClient):
+    def submit_order(self, *args, **kwargs):
+        self._polls = 0
+        return {"id": "order-1", "status": "accepted", "filled_qty": "0"}
+
+    def get_order_by_id(self, order_id: str):
+        raise ConnectionError("status endpoint unavailable")
+
+    def get_order_by_client_order_id(self, client_order_id: str):
+        raise ConnectionError("status endpoint unavailable")
+
+
 @pytest.fixture(autouse=True)
 def _fast_ack(monkeypatch):
     monkeypatch.setattr("ai_trading.execution.live_trading._ACK_TIMEOUT_SECONDS", 0.05)
@@ -230,3 +242,21 @@ def test_ack_timeout_does_not_block_followup_orders(monkeypatch, caplog):
 
     assert followup is not None
     assert "MSFT" in submissions
+
+
+def test_ack_timeout_logs_initial_status(monkeypatch, caplog):
+    engine = _build_engine(_AcceptedNoPollClient())
+    _prime_engine(engine, monkeypatch)
+    caplog.set_level(logging.WARNING)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert getattr(result, "reconciled", True) is False
+    pending = [record for record in caplog.records if record.msg == "ORDER_PENDING_NO_TERMINAL"]
+    timeout = [record for record in caplog.records if record.msg == "ORDER_ACK_TIMEOUT"]
+    assert pending
+    assert timeout
+    timeout_record = timeout[-1]
+    assert getattr(timeout_record, "initial_status", None) == "accepted"
+    assert getattr(timeout_record, "poll_attempts", None) == 0

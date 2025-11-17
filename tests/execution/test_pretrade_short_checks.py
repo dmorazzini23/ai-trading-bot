@@ -65,7 +65,7 @@ def test_shorting_disabled_logs_and_skips(monkeypatch, caplog) -> None:
     engine._cycle_account.update({"shorting_enabled": False, "margin_enabled": True})
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
 
-    caplog.set_level(logging.WARNING, logger="ai_trading.execution.live_trading")
+    caplog.set_level(logging.INFO, logger="ai_trading.execution.live_trading")
     result = engine.execute_order(
         "AAPL",
         "short",
@@ -75,12 +75,9 @@ def test_shorting_disabled_logs_and_skips(monkeypatch, caplog) -> None:
     )
 
     assert result is None
-    records = [rec for rec in caplog.records if rec.msg == "PRECHECK_SHORTABILITY_FAILED"]
-    assert records, "Expected PRECHECK_SHORTABILITY_FAILED log"
-    entry = records[-1]
-    assert entry.reason == "account_shorting_disabled"
-    assert entry.account_shorting_enabled is False
-    assert entry.account_margin_enabled is True
+    short_skip = [rec for rec in caplog.records if rec.msg == "SHORT_ORDER_SKIPPED_LONG_ONLY_MODE"]
+    assert short_skip, "Expected SHORT_ORDER_SKIPPED_LONG_ONLY_MODE log"
+    assert any(rec.msg == "ACCOUNT_SHORTING_DISABLED" for rec in caplog.records)
 
 
 def test_margin_disabled_logs_and_skips(monkeypatch, caplog) -> None:
@@ -89,7 +86,7 @@ def test_margin_disabled_logs_and_skips(monkeypatch, caplog) -> None:
     engine._cycle_account.update({"shorting_enabled": True, "margin_enabled": False})
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
 
-    caplog.set_level(logging.WARNING, logger="ai_trading.execution.live_trading")
+    caplog.set_level(logging.INFO, logger="ai_trading.execution.live_trading")
     result = engine.execute_order(
         "AAPL",
         "short",
@@ -99,11 +96,9 @@ def test_margin_disabled_logs_and_skips(monkeypatch, caplog) -> None:
     )
 
     assert result is None
-    records = [rec for rec in caplog.records if rec.msg == "PRECHECK_MARGIN_DISABLED"]
-    assert records, "Expected PRECHECK_MARGIN_DISABLED log"
-    entry = records[-1]
-    assert entry.reason == "account_margin_disabled"
-    assert entry.account_margin_enabled is False
+    short_skip = [rec for rec in caplog.records if rec.msg == "SHORT_ORDER_SKIPPED_LONG_ONLY_MODE"]
+    assert short_skip, "Expected SHORT_ORDER_SKIPPED_LONG_ONLY_MODE log"
+    assert any(rec.msg == "ACCOUNT_MARGIN_DISABLED" for rec in caplog.records)
 
 
 def test_shortability_failure_does_not_block_long_order(monkeypatch) -> None:
@@ -135,3 +130,23 @@ def test_shortability_failure_does_not_block_long_order(monkeypatch) -> None:
     assert long_result is not None
     assert engine.last_submitted is not None
     assert engine.last_submitted.get("symbol") == "MSFT"
+
+
+def test_config_disables_shorts(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("TRADING__ALLOW_SHORTS", "0")
+    engine = DummyLiveEngine()
+    engine.trading_client = SimpleNamespace(get_asset=lambda _symbol: _asset_payload())
+    engine._cycle_account.update({"shorting_enabled": True, "margin_enabled": True})
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    caplog.set_level(logging.INFO, logger="ai_trading.execution.live_trading")
+    result = engine.execute_order(
+        "AAPL",
+        "short",
+        5,
+        order_type="market",
+        quote=_quote_payload(),
+    )
+
+    assert result is None
+    assert any(rec.msg == "SHORT_ORDER_SKIPPED_LONG_ONLY_MODE" for rec in caplog.records)
