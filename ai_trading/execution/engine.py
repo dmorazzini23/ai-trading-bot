@@ -359,6 +359,7 @@ class ExecutionResult(str):
         "requested_quantity",
         "signal_weight",
         "reconciled",
+        "ack_timed_out",
     )
 
     def __new__(
@@ -377,6 +378,7 @@ class ExecutionResult(str):
         obj.requested_quantity = int(requested_quantity or 0)
         obj.signal_weight = signal_weight
         obj.reconciled = True
+        obj.ack_timed_out = False
         return obj
 
     @property

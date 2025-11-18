@@ -11525,6 +11525,26 @@ def get_minute_df(
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
                     _SKIPPED_SYMBOLS.discard(tf_key)
                     last_empty_error = None
+                    original_future_start = start_dt
+                    shrink_window = _dt.timedelta(hours=6)
+                    fallback_start_dt = max(start_dt, end_dt - shrink_window)
+                    try:
+                        session_start, _session_end = rth_session_utc(end_dt.date())
+                    except Exception:
+                        session_start = None
+                    if session_start is not None:
+                        fallback_start_dt = max(fallback_start_dt, session_start)
+                    if fallback_start_dt > original_future_start:
+                        logger.info(
+                            "ALPACA_EMPTY_BAR_WINDOW_SHRINK",
+                            extra={
+                                "symbol": symbol,
+                                "timeframe": "1Min",
+                                "previous_start": original_future_start.isoformat(),
+                                "new_start": fallback_start_dt.isoformat(),
+                            },
+                        )
+                        start_dt = fallback_start_dt
                     current_feed = str(feed_to_use or initial_feed or "").replace("alpaca_", "")
                     if (
                         current_feed == "iex"

@@ -18533,6 +18533,75 @@ def _failsoft_mode_active(provider_state: Mapping[str, Any] | None = None) -> bo
     return safe_mode_soft or backup_ready
 
 
+def _should_failsoft_allow_low_coverage(
+    *,
+    fallback_used: bool,
+    relax_ratio: float,
+    symbol: str,
+    coverage_threshold: int,
+    actual_bars: int,
+    fallback_feed: str | None,
+    fallback_provider: str | None,
+) -> bool:
+    """Return ``True`` when failsoft should allow low coverage scenarios."""
+
+    if not fallback_used:
+        return False
+    if not _safe_mode_failsoft_enabled():
+        return False
+    try:
+        safe_mode_active = bool(provider_monitor.is_safe_mode_active())
+    except Exception:
+        safe_mode_active = False
+    if not safe_mode_active:
+        return False
+    degraded_only = False
+    degraded_marker = getattr(provider_monitor, "safe_mode_degraded_only", None)
+    if callable(degraded_marker):
+        try:
+            degraded_only = bool(degraded_marker())
+        except Exception:
+            degraded_only = False
+    if not degraded_only:
+        return False
+    try:
+        expected = max(1, int(coverage_threshold))
+    except Exception:
+        expected = 1
+    try:
+        ratio = float(actual_bars) / float(expected)
+    except Exception:
+        ratio = 0.0
+    try:
+        coverage_threshold_int = int(coverage_threshold)
+    except Exception:
+        coverage_threshold_int = 0
+    try:
+        actual_bars_int = int(actual_bars)
+    except Exception:
+        actual_bars_int = 0
+    if isinstance(relax_ratio, (int, float)):
+        relax_value: float | None = float(relax_ratio)
+    else:
+        try:
+            relax_value = float(relax_ratio)
+        except (TypeError, ValueError):
+            relax_value = None
+    logger.warning(
+        "DEGRADED_COVERAGE_FAILSOFT_ALLOW",
+        extra={
+            "symbol": symbol,
+            "fallback_feed": fallback_feed or "",
+            "fallback_provider": fallback_provider or "",
+            "coverage_threshold": coverage_threshold_int,
+            "actual_bars": actual_bars_int,
+            "coverage_ratio": float(ratio),
+            "relax_ratio": relax_value,
+        },
+    )
+    return True
+
+
 def _safe_mode_blocks_trading() -> bool:
     """Return ``True`` when the current degraded policy requires blocking trades."""
 
