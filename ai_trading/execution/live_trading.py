@@ -5,6 +5,8 @@ This module provides production-ready order execution with proper error handling
 retry mechanisms, circuit breakers, and comprehensive monitoring.
 """
 
+from __future__ import annotations
+
 import inspect
 import math
 import os
@@ -4536,7 +4538,7 @@ class ExecutionEngine:
         if value in {"short", "sell_short", "exit"}:
             return "sell"
         if value in {"cover", "long"}:
-        return "buy"
+            return "buy"
 
     def _activate_long_only_mode(self, *, reason: str, context: Mapping[str, Any] | None = None) -> None:
         normalized_reason = str(reason or "long_only")

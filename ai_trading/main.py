@@ -371,19 +371,18 @@ def should_enforce_strict_import_preflight() -> bool:
 def _check_alpaca_sdk() -> None:
     """Ensure the Alpaca SDK is installed before continuing."""
 
-    under_test = any(
-        os.getenv(flag, "").strip().lower() in {"1", "true", "yes", "on"}
-        for flag in ("PYTEST_RUNNING", "TESTING")
-    )
-    if under_test:
-        if not ALPACA_AVAILABLE:
-            logger.warning("ALPACA_PY_SKIPPED_UNDER_TEST")
+    if ALPACA_AVAILABLE:
         return
-    if os.getenv("IMPORT_PREFLIGHT_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+
+    if not should_enforce_strict_import_preflight():
+        logger.warning(
+            "ALPACA_PY_SKIPPED_UNDER_TEST",
+            extra={"reason": "import_preflight_relaxed"},
+        )
         return
-    if not ALPACA_AVAILABLE:
-        logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py is required")
-        raise SystemExit(1)
+
+    logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py (alpaca-trade-api==3.2.0) is required")
+    raise SystemExit(1)
 
 
 def run_cycle() -> None:
@@ -472,9 +471,9 @@ def run_cycle() -> None:
     )
     from ai_trading.config.management import TradingConfig
     from ai_trading.config import get_settings
-from ai_trading.data import fetch as data_fetcher_module
-from ai_trading.data import provider_monitor
-from ai_trading.data.provider_monitor import safe_mode_reason
+    from ai_trading.data import fetch as data_fetcher_module
+    from ai_trading.data import provider_monitor
+    from ai_trading.data.provider_monitor import safe_mode_reason
 
     # Ensure trade log file exists before any trade-log reads occur. The
     # ``get_trade_logger`` helper lazily creates the log and writes the header on
