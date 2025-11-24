@@ -200,10 +200,11 @@ def test_ack_timeout_pending_no_cancel(monkeypatch, caplog):
 
     assert result is not None
     assert getattr(result, "reconciled", True) is False
-    assert result.status == "submitted"
+    assert result.status == "accepted"
+    assert getattr(result, "ack_timed_out", True) is False
     assert cancel_calls == []
     msgs = {record.message for record in caplog.records}
-    assert "ORDER_PENDING_NO_TERMINAL" in msgs
+    assert "ORDER_PENDING_NO_TERMINAL" not in msgs
     assert "ORDER_PENDING_CANCELLED" not in msgs
     assert "ORDER_ACK_TIMEOUT" not in msgs
 
@@ -253,10 +254,8 @@ def test_ack_timeout_logs_initial_status(monkeypatch, caplog):
 
     assert result is not None
     assert getattr(result, "reconciled", True) is False
+    assert getattr(result, "ack_timed_out", True) is False
     pending = [record for record in caplog.records if record.msg == "ORDER_PENDING_NO_TERMINAL"]
     timeout = [record for record in caplog.records if record.msg == "ORDER_ACK_TIMEOUT"]
-    assert pending
-    assert timeout
-    timeout_record = timeout[-1]
-    assert getattr(timeout_record, "initial_status", None) == "accepted"
-    assert getattr(timeout_record, "poll_attempts", None) == 0
+    assert not pending
+    assert not timeout

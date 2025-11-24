@@ -901,6 +901,12 @@ def test_enter_long_price_gate_gap_ratio(monkeypatch, caplog):
         == "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=AAPL reason=gap_ratio>limit"
         for record in caplog.records
     )
+    skip_record = next(
+        record for record in caplog.records if record.message.startswith("ORDER_SKIPPED_UNRELIABLE_PRICE")
+    )
+    assert skip_record.reason == "gap_ratio>limit"
+    expected_limit = float(getattr(bot_engine.get_trading_config(), "gap_ratio_limit", 0.0) or 0.0)
+    assert skip_record.gap_limit == pytest.approx(expected_limit)
     assert not any("SIGNAL_BUY" in record.message for record in caplog.records)
 
     monkeypatch.delenv("EXECUTION_ALLOW_FALLBACK_PRICE", raising=False)

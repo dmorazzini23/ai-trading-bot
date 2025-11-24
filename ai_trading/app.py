@@ -562,6 +562,8 @@ def create_app():
                 "degraded" if provider_state.get("using_backup") else "healthy"
             )
             provider_status_normalized = str(provider_status or "").strip().lower()
+            data_status = provider_state.get("data_status")
+            data_status_normalized = str(data_status or "").strip().lower()
             gap_ratio_recent = provider_state.get("gap_ratio_recent")
             gap_ratio_pct = None
             if gap_ratio_recent is not None:
@@ -584,6 +586,7 @@ def create_app():
                 "gap_ratio_pct": gap_ratio_pct,
                 "quote_fresh_ms": provider_state.get("quote_fresh_ms"),
                 "safe_mode": bool(provider_state.get("safe_mode")),
+                "data_status": data_status,
             }
 
             broker_connected_raw = broker_state.get("connected")
@@ -611,13 +614,16 @@ def create_app():
 
             provider_disabled = provider_status_normalized in {"down", "disabled"}
             broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
+            data_degraded = data_status_normalized in {"empty", "degraded"}
             degraded = provider_disabled or provider_payload.get("using_backup") or (
                 provider_status_normalized not in {"", "healthy", "ready"}
             )
             if broker_down:
                 degraded = True
+            if data_degraded:
+                degraded = True
 
-            provider_healthy = provider_status_normalized in {"", "healthy", "ready"}
+            provider_healthy = provider_status_normalized in {"", "healthy", "ready"} and not data_degraded
             broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
             overall_ok = provider_healthy and broker_healthy
             if _pytest_active():
@@ -640,6 +646,7 @@ def create_app():
                 "safe_mode": provider_payload.get("safe_mode"),
                 "provider_state": provider_state,
                 "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
+                "data_status": data_status,
             }
 
             if service_reason:
@@ -649,6 +656,8 @@ def create_app():
                 payload.setdefault("reason", degrade_reason)
             if degraded and provider_payload.get("http_code") is not None:
                 payload.setdefault("http_code", provider_payload.get("http_code"))
+            if data_degraded and not payload.get("reason"):
+                payload["reason"] = "data_unavailable"
             if broker_down and not payload.get("reason"):
                 payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
 

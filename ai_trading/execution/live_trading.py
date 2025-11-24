@@ -342,7 +342,7 @@ def _resolve_ack_timeout_seconds() -> float:
         timeout = float(configured)
     except (TypeError, ValueError):
         return default_timeout
-    return max(1.0, timeout)
+    return max(5.0, timeout)
 
 
 _ACK_TIMEOUT_SECONDS = _resolve_ack_timeout_seconds()
@@ -754,17 +754,19 @@ def _short_sale_precheck(
         margin_disabled_flag = _bool_from_record(account_snapshot, "margin_disabled", "no_margin")
         if margin_disabled_flag is not None:
             account_margin_enabled = not margin_disabled_flag
+    if account_margin_enabled is None and account_shorting is True:
+        account_margin_enabled = True
 
     extras = {
         "symbol": symbol,
         "side": str(side).lower(),
-        "asset_shortable": bool(shortable),
-        "easy_to_borrow": bool(easy_to_borrow),
-        "marginable": bool(marginable),
-        "account_shorting_enabled": bool(account_shorting),
-        "account_margin_enabled": bool(account_margin_enabled),
+        "asset_shortable": shortable,
+        "easy_to_borrow": easy_to_borrow,
+        "marginable": marginable,
+        "account_shorting_enabled": account_shorting,
+        "account_margin_enabled": account_margin_enabled,
         "short_sale_restriction": None,
-        "locate_required": bool(locate_required) if locate_required is not None else False,
+        "locate_required": locate_required,
         "allow_shorts_config": _allow_shorts_configured(),
         "long_only_source": None,
     }
@@ -819,27 +821,16 @@ def _short_sale_precheck(
             extras["reason"] = "short_sale_restriction_active"
             return False, extras, "shortability"
 
-    if shortable is not True or easy_to_borrow is not True:
-        extras["reason"] = (
-            "asset_not_shortable" if shortable is not True else "not_easy_to_borrow"
-        )
+    if shortable is False:
+        extras["reason"] = "asset_not_shortable"
+        return False, extras, "shortability"
+    if easy_to_borrow is False and locate_required is not False:
+        extras["reason"] = "not_easy_to_borrow"
         return False, extras, "shortability"
 
-    if marginable is not True:
+    if marginable is False:
         extras["reason"] = "asset_margin_disabled"
         return False, extras, "margin"
-
-    if account_margin_enabled is not True:
-        extras["reason"] = "account_margin_disabled"
-        return False, extras, "margin"
-
-    if account_snapshot is None:
-        extras["reason"] = "account_snapshot_missing"
-        return False, extras, "shortability"
-
-    if account_shorting is not True:
-        extras["reason"] = "account_shorting_disabled"
-        return False, extras, "shortability"
 
     return True, extras, None
 
@@ -4109,13 +4100,16 @@ class ExecutionEngine:
                 logger.info("ORDER_SUBMITTED", extra=dict(payload))
                 order_submitted_logged = True
 
-            if decided_status in _ACK_TRIGGER_STATUSES and not ack_logged:
+            ack_candidate = decided_status in _ACK_TRIGGER_STATUSES
+            ack_id_present = bool(order_id or client_order_id)
+            if ack_candidate and ack_id_present:
                 if source == "initial":
                     initial_ack_status = decided_status
-                else:
+                if not ack_logged:
                     ack_logged = True
                     ack_payload = dict(payload)
                     ack_payload["latency_ms"] = elapsed_ms
+                    ack_payload["ack_source"] = source
                     logger.info("ORDER_ACK_RECEIVED", extra=ack_payload)
                     runtime_state.update_broker_status(
                         connected=True,
@@ -4188,8 +4182,10 @@ class ExecutionEngine:
                 time.sleep(poll_interval)
                 poll_interval = min(poll_interval * 1.5, 2.0)
             status_lower = str(status or "").lower()
-            if not ack_timed_out and status_lower not in terminal_statuses:
+            ack_observed = bool(initial_ack_status or ack_logged)
+            if status_lower not in terminal_statuses and not ack_observed:
                 # Do not auto-cancel on missing ack; leave order pending and rely on broker sync.
+                ack_timed_out = True
                 pending_payload = _status_payload()
                 pending_payload["status"] = status_lower or "pending"
                 pending_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
@@ -4197,24 +4193,21 @@ class ExecutionEngine:
                 pending_payload["last_status"] = last_polled_status or status_lower or initial_status_token
                 pending_payload["initial_status"] = initial_status_token
                 pending_payload["status_detail"] = str(last_status_raw) if last_status_raw is not None else None
-                pending_payload["ack_observed"] = bool(initial_ack_status)
+                pending_payload["ack_observed"] = False
                 pending_payload["ack_logged"] = bool(ack_logged)
                 logger.warning("ORDER_PENDING_NO_TERMINAL", extra=pending_payload)
-                ack_timed_out = True
                 runtime_state.update_broker_status(
                     connected=True,
                     last_error="order_pending_no_terminal",
                     status="degraded",
                 )
-            if not ack_logged:
-                ack_timed_out = True
                 timeout_payload = _status_payload()
                 timeout_payload["timeout_seconds"] = _ACK_TIMEOUT_SECONDS
                 timeout_payload["poll_attempts"] = poll_attempts
                 timeout_payload["last_status"] = last_polled_status or status_lower or initial_status_token
                 timeout_payload["initial_status"] = initial_status_token
                 timeout_payload["initial_ack_status"] = initial_ack_status
-                timeout_payload["ack_observed"] = bool(initial_ack_status)
+                timeout_payload["ack_observed"] = False
                 timeout_payload["status_detail"] = str(last_status_raw) if last_status_raw is not None else None
                 timeout_payload["ack_logged"] = bool(ack_logged)
                 logger.error("ORDER_ACK_TIMEOUT", extra=timeout_payload)
@@ -4440,6 +4433,8 @@ class ExecutionEngine:
             elif ack_timed_out:
                 # Treat as submitted but not yet reconciled; downstream can track open orders via broker sync
                 execution_result.status = "submitted"
+            elif not execution_result.status:
+                execution_result.status = order_status_lower or "submitted"
 
         logger.info(
             "EXEC_ENGINE_EXECUTE_ORDER",

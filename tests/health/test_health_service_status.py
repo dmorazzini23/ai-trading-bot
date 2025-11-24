@@ -44,3 +44,22 @@ def test_healthz_degraded_provider(monkeypatch):
     assert data["data_provider"]["http_code"] == 429
     assert data.get("http_code") == 429
     assert data.get("reason") == "quota_exhausted"
+
+
+def test_healthz_data_status_empty_marks_degraded(monkeypatch):
+    app = _build_app(monkeypatch)
+    runtime_state.update_service_status(status="ready")
+    runtime_state.update_data_provider_state(
+        status="healthy",
+        primary="alpaca",
+        active="alpaca",
+        data_status="empty",
+        reason="data_source_empty",
+    )
+    runtime_state.update_broker_status(status="reachable", connected=True)
+    client = app.test_client()
+    resp = client.get("/healthz")
+    data = resp.get_json()
+    assert data["status"] == "degraded"
+    assert data["data_status"] == "empty"
+    assert data.get("reason") in {"data_source_empty", "data_unavailable"}

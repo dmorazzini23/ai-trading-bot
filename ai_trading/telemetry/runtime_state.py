@@ -29,6 +29,7 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "backup": None,
     "using_backup": False,
     "reason": None,
+    "data_status": None,
     "updated": None,
     "status": "unknown",
     "consecutive_failures": 0,
@@ -90,6 +91,7 @@ def update_data_provider_state(
     gap_ratio_recent: float | None = None,
     quote_fresh_ms: float | None = None,
     safe_mode: bool | None = None,
+    data_status: str | None = None,
 ) -> None:
     """Record current data provider routing."""
 
@@ -135,6 +137,11 @@ def update_data_provider_state(
             pass
     if safe_mode is not None:
         updates["safe_mode"] = bool(safe_mode)
+    if data_status is not None:
+        try:
+            updates["data_status"] = str(data_status)
+        except Exception:
+            updates["data_status"] = data_status
     timeframe_key: str | None = None
     if timeframe is not None:
         try:

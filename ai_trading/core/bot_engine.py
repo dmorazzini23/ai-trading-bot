@@ -1733,6 +1733,47 @@ def _log_skipped_unreliable_price(
         logger.warning("ORDER_SKIPPED_UNRELIABLE_PRICE", extra={"symbol": symbol})
 
 
+def _log_order_unreliable_price(
+    symbol: str,
+    reason_label: str,
+    *,
+    price_source: str | None,
+    prefer_backup: bool,
+    reasons: Sequence[str] | None = None,
+    gap_ratio: float | None = None,
+    gap_limit: float | None = None,
+    gap_limit_primary: float | None = None,
+    fallback_gap_limit: float | None = None,
+    extra: Mapping[str, Any] | None = None,
+    level: int = logging.INFO,
+) -> None:
+    payload: dict[str, Any] = {
+        "symbol": symbol,
+        "price_source": price_source,
+        "prefer_backup": bool(prefer_backup),
+        "reason": reason_label,
+    }
+    if reasons:
+        payload["reasons"] = tuple(reasons)
+    if gap_ratio is not None:
+        payload["gap_ratio"] = gap_ratio
+    if gap_limit is not None:
+        payload["gap_limit"] = gap_limit
+    if gap_limit_primary is not None:
+        payload["gap_limit_primary"] = gap_limit_primary
+    if fallback_gap_limit is not None:
+        payload["fallback_gap_limit"] = fallback_gap_limit
+    if extra:
+        payload.update({k: v for k, v in extra.items() if v is not None})
+    logger.log(
+        level,
+        "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+        symbol,
+        reason_label,
+        extra=payload,
+    )
+
+
 def _extract_trade_price(payload: Any, symbol: str) -> float | None:
     """Extract trade price from Alpaca trade payload variants."""
 
@@ -18872,6 +18913,31 @@ def _enter_long(
     annotations = dict(gate.annotations) if gate.annotations else {}
     gap_ratio = annotations.get("gap_ratio")
     gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
+    gap_value: float | None = None
+    if isinstance(gap_ratio, (int, float, np.floating)):
+        gap_value = float(gap_ratio)
+
+    def _log_unreliable(
+        reason_label: str,
+        *,
+        reasons: Sequence[str] | None = None,
+        extra: Mapping[str, Any] | None = None,
+        level: int = logging.INFO,
+    ) -> None:
+        _log_order_unreliable_price(
+            symbol,
+            reason_label,
+            price_source=price_source,
+            prefer_backup=prefer_backup_quote,
+            reasons=reasons,
+            gap_ratio=gap_value,
+            gap_limit=gap_limit,
+            gap_limit_primary=annotations.get("gap_limit_primary"),
+            fallback_gap_limit=annotations.get("gap_limit_relaxed"),
+            extra=extra,
+            level=level,
+        )
+
     fallback_ok = annotations.get("fallback_quote_ok")
     fallback_age = annotations.get("fallback_quote_age")
     fallback_error = annotations.get("fallback_quote_error")
@@ -18934,37 +19000,21 @@ def _enter_long(
                     "price_source": price_source,
                     "fallback_age": fallback_age,
                 },
-            )
+        )
         if "quote_source_unavailable" in reasons_tuple:
             logger.warning(
                 "FALLBACK_QUOTE_UNAVAILABLE",
                 extra={"symbol": symbol, "price_source": price_source},
             )
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
-            reason_label,
-            extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-            },
-        )
+        _log_unreliable(reason_label, reasons=gate.reasons)
         guard_mark_symbol_stale()
         return True
     nbbo_available = _is_primary_price_source(price_source)
-    gap_exceeds = False
-    gap_value: float | None = None
-    if isinstance(gap_ratio, (int, float, np.floating)):
-        gap_value = float(gap_ratio)
-        gap_exceeds = gap_value > gap_limit
+    gap_exceeds = bool(gap_value is not None and gap_limit is not None and gap_value > gap_limit)
     skip_reasons: list[str] = []
-    if gap_exceeds and gap_value is not None:
-        skip_reasons.append(
-            f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
-        )
+    if gap_exceeds:
+        skip_reasons.append("gap_ratio>limit")
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
@@ -18979,16 +19029,11 @@ def _enter_long(
                 "fallback_checked": fallback_checked,
             },
         )
-        reason_label = ";".join(dict.fromkeys(skip_reasons)) or skip_reason
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
+        reason_label = skip_reasons[0] if skip_reasons else skip_reason
+        _log_unreliable(
             reason_label,
+            reasons=skip_reasons or gate.reasons,
             extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
                 "skip_reason": skip_reason,
             },
         )
@@ -19020,7 +19065,7 @@ def _enter_long(
         skip_reasons = [
             reason
             for reason in skip_reasons
-            if not (isinstance(reason, str) and reason.startswith("gap_ratio="))
+            if not (isinstance(reason, str) and reason.startswith("gap_ratio"))
         ]
         gap_exceeds = False
     elif (
@@ -19041,7 +19086,7 @@ def _enter_long(
         skip_reasons = [
             reason
             for reason in skip_reasons
-            if not (isinstance(reason, str) and reason.startswith("gap_ratio="))
+            if not (isinstance(reason, str) and reason.startswith("gap_ratio"))
         ]
         gap_exceeds = False
     if fallback_stale_session:
@@ -19059,18 +19104,8 @@ def _enter_long(
         else:
             skip_reasons.append("fallback_quote_before_last_close")
     if not nbbo_available and (gap_exceeds or fallback_stale_session):
-        reason_label = ";".join(dict.fromkeys(skip_reasons)) or "unreliable_price"
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
-            reason_label,
-            extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-            },
-        )
+        reason_label = "gap_ratio>limit" if gap_exceeds else (skip_reasons[0] if skip_reasons else "unreliable_price")
+        _log_unreliable(reason_label, reasons=skip_reasons or gate.reasons)
         guard_mark_symbol_stale()
         return True
 
@@ -19078,7 +19113,7 @@ def _enter_long(
     if not nbbo_available and normalized_source in _TERMINAL_FALLBACK_PRICE_SOURCES:
         skip_reason = "nbbo_missing_fallback_price"
         skip_reasons.append(skip_reason)
-        reason_label = ";".join(dict.fromkeys(skip_reasons)) or skip_reason
+        reason_label = skip_reasons[0] if skip_reasons else skip_reason
         logger.warning(
             "FALLBACK_QUOTE_UNAVAILABLE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -19087,17 +19122,10 @@ def _enter_long(
             "FALLBACK_QUOTE_LAST_CLOSE_ONLY",
             extra={"symbol": symbol, "price_source": price_source},
         )
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
+        _log_unreliable(
             reason_label,
-            extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-                "skip_reason": skip_reason,
-            },
+            reasons=skip_reasons or gate.reasons,
+            extra={"skip_reason": skip_reason},
         )
         guard_mark_symbol_stale()
         return True
@@ -19108,22 +19136,25 @@ def _enter_long(
         if filtered:
             reasons_to_log = tuple(filtered)
     if gap_exceeds and fallback_quote_usable:
-        reason = f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+        reason = "gap_ratio>limit"
         if reasons_to_log is None:
             reasons_to_log = (reason,)
         elif reason not in reasons_to_log:
             reasons_to_log = tuple(list(reasons_to_log) + [reason])
 
     if reasons_to_log:
-        logger.info(
-            "DATA_GATING_PASS_THROUGH",
-            extra={
-                "symbol": symbol,
-                "reasons": reasons_to_log,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-            },
-        )
+        payload = {
+            "symbol": symbol,
+            "reasons": reasons_to_log,
+            "price_source": price_source,
+            "prefer_backup": prefer_backup_quote,
+            "gap_ratio": gap_value,
+            "gap_limit": gap_limit,
+        }
+        gap_limit_primary = annotations.get("gap_limit_primary")
+        if gap_limit_primary is not None:
+            payload["gap_limit_primary"] = gap_limit_primary
+        logger.info("DATA_GATING_PASS_THROUGH", extra=payload)
 
     fallback_used = False
     if (fallback_active or fallback_quote_usable) and quote_price is not None:
@@ -19654,6 +19685,31 @@ def _enter_short(
     fallback_age = annotations.get("fallback_quote_age")
     gap_ratio = annotations.get("gap_ratio")
     gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
+    gap_value: float | None = None
+    if isinstance(gap_ratio, (int, float, np.floating)):
+        gap_value = float(gap_ratio)
+
+    def _log_unreliable(
+        reason_label: str,
+        *,
+        reasons: Sequence[str] | None = None,
+        extra: Mapping[str, Any] | None = None,
+        level: int = logging.INFO,
+    ) -> None:
+        _log_order_unreliable_price(
+            symbol,
+            reason_label,
+            price_source=price_source,
+            prefer_backup=prefer_backup_quote,
+            reasons=reasons,
+            gap_ratio=gap_value,
+            gap_limit=gap_limit,
+            gap_limit_primary=annotations.get("gap_limit_primary"),
+            fallback_gap_limit=annotations.get("gap_limit_relaxed"),
+            extra=extra,
+            level=level,
+        )
+
     fallback_ok = annotations.get("fallback_quote_ok")
     try:
         fallback_env_raw = get_env("AI_TRADING_EXEC_ALLOW_FALLBACK_PRICE", None)
@@ -19699,9 +19755,7 @@ def _enter_short(
     if fallback_checked and annotations.get("fallback_quote_error") in _TRANSIENT_FALLBACK_REASONS:
         fallback_stale_session = False
         fallback_quote_usable = True
-    gap_exceeds = False
-    if isinstance(gap_ratio, (int, float, np.floating)):
-        gap_exceeds = float(gap_ratio) > gap_limit
+    gap_exceeds = bool(gap_value is not None and gap_limit is not None and gap_value > gap_limit)
     using_fallback_candidate = (
         not nbbo_available and (fallback_quote_usable or fallback_active)
     )
@@ -19715,15 +19769,10 @@ def _enter_short(
                 "fallback_checked": fallback_checked,
             },
         )
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
+        _log_unreliable(
             skip_reason,
+            reasons=gate.reasons,
             extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
                 "skip_reason": skip_reason,
             },
         )
@@ -19794,17 +19843,7 @@ def _enter_short(
                 extra={"symbol": symbol, "price_source": price_source},
             )
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
-            reason_label,
-            extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-            },
-        )
+        _log_unreliable(reason_label, reasons=gate.reasons)
         guard_mark_symbol_stale()
         return True
     if (
@@ -19812,15 +19851,18 @@ def _enter_short(
         and (not gate.block or gate_block_override)
         and any(reason != "liquidity_fallback" for reason in gate.reasons)
     ):
-        logger.info(
-            "DATA_GATING_PASS_THROUGH",
-            extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-            },
-        )
+        payload = {
+            "symbol": symbol,
+            "reasons": gate.reasons,
+            "price_source": price_source,
+            "prefer_backup": prefer_backup_quote,
+            "gap_ratio": gap_value,
+            "gap_limit": gap_limit,
+        }
+        gap_limit_primary = annotations.get("gap_limit_primary")
+        if gap_limit_primary is not None:
+            payload["gap_limit_primary"] = gap_limit_primary
+        logger.info("DATA_GATING_PASS_THROUGH", extra=payload)
     normalized_source = str(price_source or "").strip().lower()
     if not nbbo_available and normalized_source in _TERMINAL_FALLBACK_PRICE_SOURCES:
         skip_reason = "nbbo_missing_fallback_price"
@@ -19832,17 +19874,10 @@ def _enter_short(
             "FALLBACK_QUOTE_LAST_CLOSE_ONLY",
             extra={"symbol": symbol, "price_source": price_source},
         )
-        logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-            symbol,
+        _log_unreliable(
             skip_reason,
-            extra={
-                "symbol": symbol,
-                "reasons": gate.reasons,
-                "price_source": price_source,
-                "prefer_backup": prefer_backup_quote,
-                "skip_reason": skip_reason,
-            },
+            reasons=gate.reasons,
+            extra={"skip_reason": skip_reason},
         )
         guard_mark_symbol_stale()
         return True
@@ -24138,9 +24173,13 @@ def _ensure_executable_quote(
                         status="synthetic",
                     )
                     return decision
-                logger.info(
-                    "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio>limit",
+                _log_order_unreliable_price(
                     symbol,
+                    "gap_ratio>limit",
+                    price_source=None,
+                    prefer_backup=quote_is_fallback,
+                    gap_ratio=gap_ratio,
+                    gap_limit=gap_limit,
                 )
                 gap_details = {
                     "reference_price": reference_price,
@@ -27114,6 +27153,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     "DATA_SOURCE_RETRY_FAILED",
                     extra={"attempts": attempts_used or attempts_limit, "symbols": symbols},
                 )
+                state.skipped_cycles += 1
+                runtime_state.update_data_provider_state(
+                    status="degraded",
+                    reason="data_source_empty",
+                    data_status="empty",
+                    safe_mode=is_safe_mode_active(),
+                )
                 # AI-AGENT-REF: exit immediately on repeated data failure
                 return
             zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
@@ -27126,6 +27172,12 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     "DATA_SOURCE_RETRY_FINAL",
                     extra={"success": success, "attempts": attempts_used},
                 )
+
+            runtime_state.update_data_provider_state(
+                data_status="ready",
+                reason="data_available",
+                safe_mode=is_safe_mode_active(),
+            )
 
             if skipped:
                 logger.info(
