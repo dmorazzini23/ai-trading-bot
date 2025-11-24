@@ -572,6 +572,7 @@ _ACK_TRIGGER_STATUSES = frozenset(
     {
         "new",
         "pending_new",
+        "submitted",
         "accepted",
         "acknowledged",
         "pending_replace",
@@ -756,19 +757,22 @@ def _short_sale_precheck(
             account_margin_enabled = not margin_disabled_flag
     if account_margin_enabled is None and account_shorting is True:
         account_margin_enabled = True
+    if account_shorting is None:
+        account_shorting = True
 
     extras = {
         "symbol": symbol,
         "side": str(side).lower(),
-        "asset_shortable": shortable,
-        "easy_to_borrow": easy_to_borrow,
-        "marginable": marginable,
-        "account_shorting_enabled": account_shorting,
-        "account_margin_enabled": account_margin_enabled,
+        "asset_shortable": True if shortable is True else False if shortable is False else None,
+        "easy_to_borrow": True if easy_to_borrow is True else False if easy_to_borrow is False else None,
+        "marginable": True if marginable is True else False if marginable is False else None,
+        "account_shorting_enabled": True if account_shorting is True else False if account_shorting is False else None,
+        "account_margin_enabled": True if account_margin_enabled is True else False if account_margin_enabled is False else None,
         "short_sale_restriction": None,
         "locate_required": locate_required,
         "allow_shorts_config": _allow_shorts_configured(),
         "long_only_source": None,
+        "asset_lookup_failed": False,
     }
 
     config_disallows = not extras["allow_shorts_config"]
@@ -810,10 +814,11 @@ def _short_sale_precheck(
             extras["short_sale_restriction"] = ssr_state
 
     if asset is None:
-        extras["reason"] = "asset_lookup_failed"
+        extras["asset_lookup_failed"] = True
         if asset_detail:
             extras["detail"] = asset_detail
-        return False, extras, "shortability"
+        # Allow order to proceed when asset lookup is missing; broker will enforce true restrictions.
+        return True, extras, None
 
     if extras.get("short_sale_restriction"):
         ssr_text = str(extras["short_sale_restriction"]).strip().lower()
@@ -831,6 +836,9 @@ def _short_sale_precheck(
     if marginable is False:
         extras["reason"] = "asset_margin_disabled"
         return False, extras, "margin"
+
+    if account_snapshot is None and extras.get("asset_lookup_failed"):
+        extras["reason"] = "asset_lookup_failed"
 
     return True, extras, None
 

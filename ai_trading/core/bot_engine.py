@@ -1733,6 +1733,21 @@ def _log_skipped_unreliable_price(
         logger.warning("ORDER_SKIPPED_UNRELIABLE_PRICE", extra={"symbol": symbol})
 
 
+def _normalize_unreliable_reason(reason_label: str | None) -> str:
+    if reason_label is None:
+        return "unreliable_price"
+    try:
+        text = str(reason_label)
+    except Exception:
+        return "unreliable_price"
+    if ";" in text:
+        text = text.split(";", 1)[0]
+    normalized = text.strip().lower()
+    if normalized.startswith("gap_ratio"):
+        return "gap_ratio>limit"
+    return normalized or "unreliable_price"
+
+
 def _log_order_unreliable_price(
     symbol: str,
     reason_label: str,
@@ -1747,11 +1762,12 @@ def _log_order_unreliable_price(
     extra: Mapping[str, Any] | None = None,
     level: int = logging.INFO,
 ) -> None:
+    normalized_reason = _normalize_unreliable_reason(reason_label)
     payload: dict[str, Any] = {
         "symbol": symbol,
         "price_source": price_source,
         "prefer_backup": bool(prefer_backup),
-        "reason": reason_label,
+        "reason": normalized_reason,
     }
     if reasons:
         payload["reasons"] = tuple(reasons)
@@ -1769,7 +1785,7 @@ def _log_order_unreliable_price(
         level,
         "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
         symbol,
-        reason_label,
+        normalized_reason,
         extra=payload,
     )
 

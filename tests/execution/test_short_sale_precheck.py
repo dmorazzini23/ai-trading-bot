@@ -80,6 +80,25 @@ def test_short_precheck_blocks_non_shortable_asset():
     assert extras["reason"] == "asset_not_shortable"
 
 
+def test_short_precheck_allows_when_account_snapshot_missing():
+    client = _client_for(_shortable_asset())
+
+    ok, extras, reason = live_trading._short_sale_precheck(
+        None,
+        client,
+        symbol="NVDA",
+        side="sell",
+        closing_position=False,
+        account_snapshot=None,
+    )
+
+    assert ok is True
+    assert reason is None
+    assert extras is not None
+    assert extras["asset_lookup_failed"] is False
+    assert extras["account_shorting_enabled"] in {True, None}
+
+
 def test_short_precheck_sets_long_only_for_cash_account(caplog):
     caplog.set_level(logging.WARNING)
     client = _client_for(_shortable_asset())

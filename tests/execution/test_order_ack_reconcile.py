@@ -259,3 +259,29 @@ def test_ack_timeout_logs_initial_status(monkeypatch, caplog):
     timeout = [record for record in caplog.records if record.msg == "ORDER_ACK_TIMEOUT"]
     assert not pending
     assert not timeout
+
+
+def test_submitted_status_counts_as_ack(monkeypatch, caplog):
+    class _SubmittedClient(_AckStubClient):
+        def submit_order(self, *args, **kwargs):
+            self._polls = 0
+            return {"id": "order-xyz", "status": "submitted", "filled_qty": "0"}
+
+        def get_order_by_id(self, order_id: str):
+            raise ConnectionError("polling disabled")
+
+        def get_order_by_client_order_id(self, client_order_id: str):
+            raise ConnectionError("polling disabled")
+
+    engine = _build_engine(_SubmittedClient())
+    _prime_engine(engine, monkeypatch)
+    caplog.set_level(logging.INFO)
+
+    result = engine.execute_order("AAPL", "buy", qty=2, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert getattr(result, "ack_timed_out", True) is False
+    msgs = {record.msg for record in caplog.records}
+    assert "ORDER_ACK_TIMEOUT" not in msgs
+    assert "ORDER_PENDING_NO_TERMINAL" not in msgs
+    assert "ORDER_ACK_RECEIVED" in msgs
