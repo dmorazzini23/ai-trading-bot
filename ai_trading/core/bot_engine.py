@@ -27099,6 +27099,24 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 time.sleep(1.0)
                 return
 
+            try:
+                provider_state = runtime_state.observe_data_provider_state()
+            except Exception:
+                provider_state = {}
+            data_status = None
+            try:
+                data_status = str(provider_state.get("data_status") or "").strip().lower()
+            except Exception:
+                data_status = None
+            if data_status in {"empty", "degraded"} and is_safe_mode_active():
+                logger.warning(
+                    "DATA_STATUS_EMPTY_SHORT_CIRCUIT",
+                    extra={"data_status": data_status or "unknown"},
+                )
+                runtime_state.update_service_status(status="degraded", reason=data_status or "data_empty")
+                time.sleep(1.0)
+                return
+
             base_attempts, base_delay = _resolve_data_retry_settings()
             attempts_limit = max(1, base_attempts)
             retry_delay = base_delay
@@ -27110,6 +27128,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     primary_disabled = not bool(primary_provider_fn())
                 except Exception:
                     primary_disabled = False
+            if primary_disabled:
+                runtime_state.update_data_provider_state(
+                    status="degraded",
+                    reason="primary_provider_disabled",
+                    data_status="degraded",
+                    safe_mode=is_safe_mode_active(),
+                )
             attempts_limit, retry_delay, short_circuit_reason = _short_circuit_retry_budget(
                 prefer_backup=prefer_backup_quotes,
                 primary_disabled=primary_disabled,
