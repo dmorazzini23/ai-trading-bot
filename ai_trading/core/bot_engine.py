@@ -27135,6 +27135,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     data_status="degraded",
                     safe_mode=is_safe_mode_active(),
                 )
+            if primary_disabled and is_safe_mode_active():
+                logger.warning(
+                    "SAFE_MODE_DATA_SKIP",
+                    extra={"reason": safe_mode_reason() or "provider_disabled"},
+                )
+                runtime_state.update_service_status(status="degraded", reason="data_empty")
+                time.sleep(1.0)
+                return
             attempts_limit, retry_delay, short_circuit_reason = _short_circuit_retry_budget(
                 prefer_backup=prefer_backup_quotes,
                 primary_disabled=primary_disabled,
@@ -27201,6 +27209,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     data_status="empty",
                     safe_mode=is_safe_mode_active(),
                 )
+                runtime_state.update_service_status(status="degraded", reason="data_source_empty")
                 # AI-AGENT-REF: exit immediately on repeated data failure
                 return
             zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
