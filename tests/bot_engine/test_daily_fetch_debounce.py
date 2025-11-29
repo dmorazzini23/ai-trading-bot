@@ -496,6 +496,69 @@ def test_daily_fetch_memo_mapping_get_raises(monkeypatch):
     assert stored[1] is memo_payload
 
 
+@pytest.mark.parametrize(
+    "memo_entry_factory",
+    [
+        lambda payload: (payload, 150.0),
+        lambda payload: {"payload": payload, "memo_ts": 150.0},
+    ],
+)
+def test_daily_fetch_fresh_memo_skips_cache_and_provider(
+    monkeypatch, memo_entry_factory
+):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "QQQ"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+
+    def _fail_provider(*_args, **_kwargs):  # pragma: no cover - ensure memo short circuit
+        raise AssertionError("provider fetch should not be called when memo is fresh")
+
+    monkeypatch.setattr(be.DataFetcher, "_get_stock_bars", _fail_provider)
+
+    monotonic_values = iter([200.0, 201.0, 202.0, 203.0])
+    monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
+    canonical_key = (symbol, "1Day", start_ts.isoformat(), end_ts.isoformat())
+    legacy_key = (symbol, fetch_date.isoformat())
+    memo_payload = {"memo": True}
+    memo_store = {canonical_key: memo_entry_factory(memo_payload)}
+
+    class StrictCache(dict):
+        def get(self, *_args, **_kwargs):  # pragma: no cover - validate memo path
+            raise AssertionError("daily cache should not be consulted when memo is fresh")
+
+    fetcher._daily_cache = StrictCache({symbol: (fetch_date, {"cache": True})})
+
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 100.0, raising=False)
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+
+    assert result is memo_payload
+    for key in (canonical_key, legacy_key):
+        assert key in memo_store
+        stored = memo_store[key]
+        assert isinstance(stored, tuple)
+        assert len(stored) == 2
+        assert stored[1] is memo_payload
+        assert isinstance(stored[0], (int, float))
+
+
 def test_daily_fetch_memo_handles_generator_factory():
     from ai_trading.data import fetch as fetch_module
 
