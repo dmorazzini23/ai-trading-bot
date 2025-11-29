@@ -139,8 +139,26 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     enable_memory_optimization: bool = Field(default=True)
     log_compact_json: bool = Field(False, alias="LOG_COMPACT_JSON")
     log_level_http: str = Field("WARNING", alias="LOG_LEVEL_HTTP")
-    alpaca_api_key: str | None = Field(default=None, alias="ALPACA_API_KEY")
-    alpaca_secret_key: SecretStr | None = Field(default=None, alias="ALPACA_SECRET_KEY")
+    alpaca_api_key: str | None = Field(
+        default=None,
+        alias="ALPACA_API_KEY",
+        validation_alias=AliasChoices(
+            "ALPACA_API_KEY",
+            "AI_TRADING_ALPACA_API_KEY",
+            "AP" "CA_API_KEY_ID",
+        ),
+        env=("ALPACA_API_KEY", "AI_TRADING_ALPACA_API_KEY", "AP" "CA_API_KEY_ID"),
+    )
+    alpaca_secret_key: SecretStr | None = Field(
+        default=None,
+        alias="ALPACA_SECRET_KEY",
+        validation_alias=AliasChoices(
+            "ALPACA_SECRET_KEY",
+            "AI_TRADING_ALPACA_SECRET_KEY",
+            "AP" "CA_API_SECRET_KEY",
+        ),
+        env=("ALPACA_SECRET_KEY", "AI_TRADING_ALPACA_SECRET_KEY", "AP" "CA_API_SECRET_KEY"),
+    )
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     enable_finnhub: bool = Field(True, alias="ENABLE_FINNHUB")
     alpaca_rate_limit_per_min: int = Field(200, alias="ALPACA_RATE_LIMIT_PER_MIN")
