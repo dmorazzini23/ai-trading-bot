@@ -10945,6 +10945,8 @@ def get_minute_df(
     if testing_mode and testing_mode.strip().lower() in {"1", "true", "yes"}:
         _clear_backup_skip(symbol, "1Min")
         _SKIPPED_SYMBOLS.discard(tf_key)
+        skip_until_dt = None
+        skip_window_active = False
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     http_fallback_allowed = _http_fallback_permitted(
         "1Min",
