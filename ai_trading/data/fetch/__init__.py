@@ -10894,11 +10894,26 @@ def get_minute_df(
             forced_provider_label = forced_provider
     if forced_feed:
         feed = forced_feed
+    tf_key = (symbol, "1Min")
+    skip_until_raw = _BACKUP_SKIP_UNTIL.get(tf_key)
+    skip_until_dt: datetime | None = None
+    if isinstance(skip_until_raw, datetime):
+        skip_until_dt = skip_until_raw
+    elif skip_until_raw is not None:
+        try:
+            skip_until_dt = datetime.fromtimestamp(float(skip_until_raw), tz=UTC)
+        except Exception:
+            skip_until_dt = None
+    try:
+        skip_window_active = bool(skip_until_dt and datetime.now(tz=UTC) < skip_until_dt)
+    except Exception:
+        skip_window_active = False
+
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
     fallback_window_used = _used_fallback(symbol, "1Min", start_dt, end_dt)
-    if pytest_active and fallback_window_used:
+    if pytest_active and fallback_window_used and not skip_window_active:
         _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
         fallback_window_used = False
     fallback_metadata: dict[str, str] | None = None
@@ -10926,11 +10941,12 @@ def get_minute_df(
     }
     _GLOBAL_RETRY_LIMIT_LOGGED = False
     _clear_gap_ratio_state()
-    tf_key = (symbol, "1Min")
     testing_mode = os.getenv("TESTING")
     if testing_mode and testing_mode.strip().lower() in {"1", "true", "yes"}:
         _clear_backup_skip(symbol, "1Min")
         _SKIPPED_SYMBOLS.discard(tf_key)
+        skip_until_dt = None
+        skip_window_active = False
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     http_fallback_allowed = _http_fallback_permitted(
         "1Min",
@@ -11038,29 +11054,24 @@ def get_minute_df(
     forced_skip_engaged = False
     if safe_mode_forced_skip:
         forced_skip_engaged = True
-    forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
+    forced_skip_until = skip_until_dt if skip_until_dt is not None else _BACKUP_SKIP_UNTIL.get(tf_key)
     if forced_skip_until is not None and tf_key not in _SKIPPED_SYMBOLS:
-        _clear_backup_skip(symbol, "1Min")
-        forced_skip_until = None
+        _SKIPPED_SYMBOLS.add(tf_key)
     if forced_skip_until is not None:
-        if pytest_active and not fallback_allowed_flag:
-            _clear_backup_skip(symbol, "1Min")
-            skip_primary_due_to_fallback = False
-        else:
-            if not isinstance(forced_skip_until, datetime):
-                try:
-                    forced_skip_until = datetime.fromtimestamp(float(forced_skip_until), tz=UTC)
-                except Exception:
-                    _clear_backup_skip(symbol, "1Min")
-                    forced_skip_until = None
-            if isinstance(forced_skip_until, datetime):
-                now_dt = datetime.now(tz=UTC)
-                if now_dt < forced_skip_until:
-                    skip_primary_due_to_fallback = True
-                    if fallback_allowed_flag:
-                        forced_skip_engaged = True
-                elif not (pytest_active and fallback_allowed_flag):
-                    _clear_backup_skip(symbol, "1Min")
+        if not isinstance(forced_skip_until, datetime):
+            try:
+                forced_skip_until = datetime.fromtimestamp(float(forced_skip_until), tz=UTC)
+            except Exception:
+                _clear_backup_skip(symbol, "1Min")
+                forced_skip_until = None
+        if isinstance(forced_skip_until, datetime):
+            now_dt = datetime.now(tz=UTC)
+            if now_dt < forced_skip_until:
+                skip_primary_due_to_fallback = True
+                forced_skip_engaged = True
+                _SKIPPED_SYMBOLS.add(tf_key)
+            elif not (pytest_active and fallback_allowed_flag):
+                _clear_backup_skip(symbol, "1Min")
 
     disabled_until_map = getattr(provider_monitor, "disabled_until", {})
     if not isinstance(disabled_until_map, Mapping):
@@ -11263,33 +11274,23 @@ def get_minute_df(
                 normalized_feed = str(cached_cycle_feed).strip().lower()
     finnhub_key_present = bool(os.getenv("FINNHUB_API_KEY")) and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     if tf_key in _SKIPPED_SYMBOLS:
-        skip_window_until = _BACKUP_SKIP_UNTIL.get(tf_key)
-        skip_window_active = False
-        if isinstance(skip_window_until, datetime):
-            try:
-                now_dt = datetime.now(tz=UTC)
-            except Exception:
-                now_dt = None
-            if now_dt is not None and skip_window_until > now_dt:
-                skip_window_active = True
-        elif skip_window_until is not None:
-            try:
-                until_float = float(skip_window_until)
-            except Exception:
-                until_float = None
-            if until_float is not None:
+        skip_window_until = skip_until_dt
+        skip_window_active_local = skip_window_active
+        if skip_window_until is None:
+            skip_window_until = _BACKUP_SKIP_UNTIL.get(tf_key)
+            if skip_window_until is not None and not isinstance(skip_window_until, datetime):
                 try:
-                    converted_until = datetime.fromtimestamp(until_float, tz=UTC)
+                    skip_window_until = datetime.fromtimestamp(float(skip_window_until), tz=UTC)
                 except Exception:
-                    converted_until = None
-                if converted_until is not None:
-                    try:
-                        now_dt = datetime.now(tz=UTC)
-                    except Exception:
-                        now_dt = None
-                    if now_dt is not None and converted_until > now_dt:
-                        skip_window_active = True
-        if skip_window_active:
+                    skip_window_until = None
+            try:
+                skip_window_active_local = bool(
+                    skip_window_until and datetime.now(tz=UTC) < skip_window_until
+                )
+            except Exception:
+                skip_window_active_local = False
+        if skip_window_active_local:
+            skip_window_active = True
             skip_primary_due_to_fallback = True
             forced_skip_engaged = True
         elif skip_primary_due_to_fallback:
@@ -11387,6 +11388,9 @@ def get_minute_df(
     if forced_provider_label:
         skip_primary_due_to_fallback = True
     force_primary_fetch = not skip_primary_due_to_fallback
+    if forced_skip_engaged:
+        skip_primary_due_to_fallback = True
+        force_primary_fetch = False
     if pytest_active and not force_primary_fetch and not forced_provider_label:
         if not forced_skip_engaged:
             force_primary_fetch = True

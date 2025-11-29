@@ -64,3 +64,12 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
     assert not out2.empty
     assert yahoo_calls["n"] == 2
     assert calls["alpaca"] == first_calls
+
+    out3 = data_fetcher.get_minute_df("AAPL", start, end)
+    assert not out3.empty
+    assert yahoo_calls["n"] == 3
+    assert calls["alpaca"] == first_calls
+    refreshed_until = data_fetcher._BACKUP_SKIP_UNTIL.get(tf_key)
+    assert isinstance(refreshed_until, datetime)
+    assert refreshed_until > datetime.now(UTC)
+    assert tf_key in data_fetcher._SKIPPED_SYMBOLS
