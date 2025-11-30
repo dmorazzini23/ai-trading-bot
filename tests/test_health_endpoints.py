@@ -58,3 +58,39 @@ def test_standalone_health_server_handler():
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] in {"healthy", "degraded"}
+
+
+def test_pytest_override_keeps_ok_true(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": None,
+        "backup": "yahoo",
+        "using_backup": True,
+        "status": "down",
+        "consecutive_failures": 7,
+        "gap_ratio_recent": None,
+        "quote_fresh_ms": None,
+        "safe_mode": True,
+    }
+    broker_state = {
+        "status": "failed",
+        "connected": False,
+        "latency_ms": None,
+        "last_error": "connection refused",
+    }
+    service_state = {"status": "ready"}
+    quote_state = {"status": "stale"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    payload = response.get_json()
+
+    assert payload["ok"] is True
+    assert payload["data_provider"]["status"] == "down"
+    assert payload["broker"]["connected"] is False
