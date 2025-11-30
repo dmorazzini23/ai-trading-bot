@@ -10,6 +10,11 @@ from pathlib import Path
 import threading
 from ai_trading.http import pooling
 
+_DEFAULT_HOST_KEY = getattr(pooling, "_DEFAULT_HOST_KEY", "__default__")
+_FALLBACK_LOCK = threading.Lock()
+_FALLBACK_SYNC_LIMITERS: dict[str, threading.Semaphore] = {}
+_FALLBACK_ASYNC_LIMITERS: dict[str, asyncio.Semaphore] = {}
+
 _PEAK_PATH_ENV = "AI_TRADING_FALLBACK_PEAK_PATH"
 _DEFAULT_PEAK_PATH = "/tmp/ai_trading_fallback_peak.json"
 
@@ -81,6 +86,71 @@ def record_peak(value: int) -> None:
             pass
 
 
+def _normalize_host(host: str | None) -> str:
+    normalizer = getattr(pooling, "_normalize_host", None)
+    if callable(normalizer):
+        try:
+            return normalizer(host)
+        except Exception:
+            pass
+    normalized = (host or "").strip().lower()
+    return normalized or _DEFAULT_HOST_KEY
+
+
+def _resolve_fallback_limit() -> int:
+    for key in (
+        "AI_TRADING_HOST_LIMIT",
+        "AI_TRADING_HTTP_HOST_LIMIT",
+        "HTTP_MAX_WORKERS",
+        "HTTP_MAX_PER_HOST",
+    ):
+        raw = os.getenv(key)
+        if raw not in (None, ""):
+            try:
+                return max(1, int(raw))
+            except (TypeError, ValueError):
+                continue
+    return max(1, int(getattr(pooling, "_DEFAULT_LIMIT", 1)))
+
+
+def _get_sync_semaphore(host: str) -> threading.Semaphore:
+    getter = getattr(pooling, "get_host_limiter", None)
+    if callable(getter):
+        try:
+            semaphore = getter(host)
+        except Exception:
+            semaphore = None
+        else:
+            if semaphore is not None:
+                return semaphore
+
+    with _FALLBACK_LOCK:
+        semaphore = _FALLBACK_SYNC_LIMITERS.get(host)
+        if semaphore is None:
+            semaphore = threading.Semaphore(_resolve_fallback_limit())
+            _FALLBACK_SYNC_LIMITERS[host] = semaphore
+        return semaphore
+
+
+def _get_async_semaphore(host: str) -> asyncio.Semaphore:
+    getter = getattr(pooling, "get_host_semaphore", None)
+    if callable(getter):
+        try:
+            semaphore = getter(host)
+        except Exception:
+            semaphore = None
+        else:
+            if semaphore is not None:
+                return semaphore
+
+    with _FALLBACK_LOCK:
+        semaphore = _FALLBACK_ASYNC_LIMITERS.get(host)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(_resolve_fallback_limit())
+            _FALLBACK_ASYNC_LIMITERS[host] = semaphore
+        return semaphore
+
+
 def _register_acquire() -> None:
     global _IN_FLIGHT
     with _COUNTER_LOCK:
@@ -98,24 +168,64 @@ def _register_release() -> None:
 class _TrackedAsyncLimiter(AbstractAsyncContextManager["_TrackedAsyncLimiter"]):
     """Async context manager that tracks inflight permit usage."""
 
-    __slots__ = ("_inner", "_acquired")
+    __slots__ = ("_inner", "_acquired", "_tracks_inflight")
 
     def __init__(self, host: str | None) -> None:
-        self._inner = pooling.AsyncHostLimiter(host)
+        self._inner, self._tracks_inflight = _build_async_limiter(host)
         self._acquired = False
 
     async def __aenter__(self) -> "_TrackedAsyncLimiter":
         await self._inner.__aenter__()
+        if not self._tracks_inflight:
+            _register_acquire()
+        self._acquired = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool | None:
+        try:
+            if self._acquired and not self._tracks_inflight:
+                _register_release()
+        finally:
+            return await self._inner.__aexit__(exc_type, exc, tb)
+
+
+class _FallbackAsyncLimiter(AbstractAsyncContextManager["_FallbackAsyncLimiter"]):
+    __slots__ = ("_host", "_semaphore", "_acquired")
+
+    def __init__(self, host: str | None) -> None:
+        self._host = _normalize_host(host)
+        self._semaphore: asyncio.Semaphore | None = None
+        self._acquired = False
+
+    async def __aenter__(self) -> "_FallbackAsyncLimiter":
+        semaphore = _get_async_semaphore(self._host)
+        self._semaphore = semaphore
+        await semaphore.acquire()
         _register_acquire()
         self._acquired = True
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool | None:
         try:
-            if self._acquired:
+            if self._semaphore is not None and self._acquired:
+                try:
+                    self._semaphore.release()
+                except ValueError:
+                    pass
                 _register_release()
         finally:
-            return await self._inner.__aexit__(exc_type, exc, tb)
+            return None
+
+
+def _build_async_limiter(host: str | None) -> tuple[AbstractAsyncContextManager[object], bool]:
+    limiter_cls = getattr(pooling, "AsyncHostLimiter", None)
+    if callable(limiter_cls):
+        try:
+            limiter = limiter_cls(host)
+            return limiter, False  # type: ignore[return-value]
+        except Exception:
+            pass
+    return _FallbackAsyncLimiter(host), True
 
 
 def host_limiter_async(host: str | None = None) -> _TrackedAsyncLimiter:
@@ -128,8 +238,8 @@ def host_limiter_async(host: str | None = None) -> _TrackedAsyncLimiter:
 def host_limiter(host: str | None = None):
     """Synchronously limit host concurrency while tracking peaks."""
 
-    normalized = pooling._normalize_host(host)  # type: ignore[attr-defined]
-    semaphore = pooling.get_host_limiter(normalized)
+    normalized = _normalize_host(host)
+    semaphore = _get_sync_semaphore(normalized)
     semaphore.acquire()
     _register_acquire()
     try:
@@ -137,6 +247,8 @@ def host_limiter(host: str | None = None):
     finally:
         try:
             semaphore.release()
+        except ValueError:
+            pass
         finally:
             _register_release()
 
