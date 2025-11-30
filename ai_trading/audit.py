@@ -310,6 +310,7 @@ def log_trade(
                 try:
                     action()
                 except PermissionError as retry_exc:
+                    _repair_permissions()
                     logger.error(
                         "TRADE_LOG_PERMISSION_RETRY_FAILED",
                         extra={
