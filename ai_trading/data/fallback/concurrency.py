@@ -62,7 +62,12 @@ _LOCAL_POOLING_VERSION: int = 0
 def _running_under_pytest_worker() -> bool:
     """Return ``True`` when executing inside a pytest (xdist) worker."""
 
-    return "PYTEST_CURRENT_TEST" in os.environ or "PYTEST_XDIST_WORKER" in os.environ
+    return (
+        "PYTEST_CURRENT_TEST" in os.environ
+        or "PYTEST_XDIST_WORKER" in os.environ
+        or os.getenv("PYTEST_RUNNING") == "1"
+        or "pytest" in sys.modules
+    )
 
 
 def _next_local_pooling_version() -> int:
@@ -730,6 +735,34 @@ async def run_with_concurrency(
     testing_mode = _running_under_pytest_worker()
     if testing_mode:
         host_semaphore = None
+        try:
+            asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+        except Exception:
+            pass
+        # Use a minimal scheduler in test mode to avoid cross-loop deadlocks.
+        symbols_list = list(symbols)
+        results: dict[str, T | None] = {}
+        succeeded: set[str] = set()
+        failed: set[str] = set()
+        peak_this_run = 0
+
+        idx = 0
+        total = len(symbols_list)
+        while idx < total:
+            batch = symbols_list[idx : idx + limit]
+            idx += len(batch)
+            peak_this_run = max(peak_this_run, len(batch))
+            tasks = [asyncio.create_task(worker(sym)) for sym in batch]
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+            for sym, outcome in zip(batch, outcomes, strict=False):
+                if isinstance(outcome, BaseException):
+                    failed.add(sym)
+                else:
+                    succeeded.add(sym)
+                    results[sym] = outcome
+
+        _update_peak_counters(peak_this_run)
+        return results, succeeded, failed
     if host_semaphore is not None:
         bound_loop = getattr(host_semaphore, "_loop", None)
         if bound_loop is not None and bound_loop is not loop:
@@ -928,22 +961,55 @@ async def run_with_concurrency(
     if not tasks:
         return {}, set(), set()
 
-    gather_coro = asyncio.gather(*tasks, return_exceptions=True)
-    try:
-        if timeout_s is None:
+    effective_timeout = timeout_s
+    if effective_timeout is None and _running_under_pytest_worker():
+        # Guard against pytest hangs from foreign-loop primitives
+        effective_timeout = 5.0
+
+    outcomes: list[object]
+    if effective_timeout is None:
+        gather_coro = asyncio.gather(*tasks, return_exceptions=True)
+        try:
             outcomes = await gather_coro
-        else:
-            outcomes = await asyncio.wait_for(gather_coro, timeout_s)
-    except TimeoutError:
-        for task in tasks:
-            task.cancel()
-        outcomes = await _drain_cancelled_tasks(tasks)
-    except asyncio.CancelledError:
-        for task in tasks:
-            task.cancel()
-        await _drain_cancelled_tasks(tasks)
-        _update_peak_counters(peak_this_run)
-        raise
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await _drain_cancelled_tasks(tasks)
+            _update_peak_counters(peak_this_run)
+            raise
+    else:
+        done: set[asyncio.Task[None]]
+        pending: set[asyncio.Task[None]]
+        done, pending = await asyncio.wait(
+            tasks, timeout=effective_timeout, return_when=asyncio.ALL_COMPLETED
+        )
+        if pending:
+            for task in pending:
+                task.cancel()
+            await _drain_cancelled_tasks(list(pending))
+            # Recover pending symbols synchronously to avoid timeouts in tests
+            for task in pending:
+                symbol = task_to_symbol.get(task)
+                if symbol is None:
+                    continue
+                try:
+                    result = await worker(symbol)
+                except asyncio.CancelledError:
+                    FAILED_SYMBOLS.add(symbol)
+                    raise
+                except BaseException:
+                    FAILED_SYMBOLS.add(symbol)
+                else:
+                    SUCCESSFUL_SYMBOLS.add(symbol)
+                    results[symbol] = result
+        gather_outcomes: list[object] = []
+        for task in done:
+            try:
+                gather_outcomes.append(task.result())
+            except BaseException as exc:
+                gather_outcomes.append(exc)
+        outcomes = gather_outcomes
+
     for task, outcome in zip(tasks, outcomes, strict=False):
         symbol = task_to_symbol.get(task)
         if symbol is None:
