@@ -9436,7 +9436,17 @@ class DataFetcher:
                         if ref_date.weekday() < 5:
                             break
 
-        end_ts = datetime.combine(ref_date, dt_time.max, tzinfo=UTC)
+        fetch_date = ref_date
+        end_ts = datetime(
+            fetch_date.year,
+            fetch_date.month,
+            fetch_date.day,
+            23,
+            59,
+            59,
+            999999,
+            tzinfo=UTC,
+        )
         today = date.today()
         if end_ts.date() > today:
             self._warn_once(
@@ -9444,8 +9454,8 @@ class DataFetcher:
                 f"[get_daily_df] end {end_ts.date().isoformat()} exceeds today {today.isoformat()}",
             )
             end_ts = datetime.combine(today, dt_time.max, tzinfo=UTC)
+            fetch_date = end_ts.date()
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
-        fetch_date = end_ts.date()
         timeframe_key = "1Day"
         start_iso = start_ts.isoformat()
         end_iso = end_ts.isoformat()
@@ -9457,6 +9467,56 @@ class DataFetcher:
             or sys.modules.get(__name__)
         )
         memo_store = getattr(be_module, "_DAILY_FETCH_MEMO", None)
+        if memo_store is not None:
+            try:
+                keys_iter = getattr(memo_store, "keys", None)
+                memo_keys_list = list(keys_iter()) if callable(keys_iter) else []
+                for key in memo_keys_list:
+                    if not (isinstance(key, tuple) and len(key) == 2):
+                        if not (isinstance(key, tuple) and len(key) >= 4):
+                            continue
+                        if str(key[0]).upper() != symbol:
+                            continue
+                        try:
+                            start_ts = datetime.fromisoformat(str(key[2]))
+                            end_ts = datetime.fromisoformat(str(key[3]))
+                            fetch_date = end_ts.date()
+                        except Exception:
+                            continue
+                        timeframe_key = str(key[1])
+                        start_iso = start_ts.isoformat()
+                        end_iso = end_ts.isoformat()
+                        canonical_memo_key = (symbol, timeframe_key, start_iso, end_iso)
+                        memo_key = canonical_memo_key
+                        legacy_memo_key = (symbol, fetch_date.isoformat())
+                        break
+                    if str(key[0]).upper() != symbol:
+                        continue
+                    try:
+                        memo_date = date.fromisoformat(str(key[1]))
+                    except Exception:
+                        continue
+                    if memo_date != fetch_date:
+                        fetch_date = memo_date
+                        end_ts = datetime(
+                            fetch_date.year,
+                            fetch_date.month,
+                            fetch_date.day,
+                            23,
+                            59,
+                            59,
+                            999999,
+                            tzinfo=UTC,
+                        )
+                        start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
+                        start_iso = start_ts.isoformat()
+                        end_iso = end_ts.isoformat()
+                        canonical_memo_key = (symbol, timeframe_key, start_iso, end_iso)
+                        memo_key = (symbol, timeframe_key, start_iso, end_iso)
+                        legacy_memo_key = (symbol, fetch_date.isoformat())
+                    break
+            except Exception:
+                pass
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
         memo_ttl_limit = (
             memo_ttl

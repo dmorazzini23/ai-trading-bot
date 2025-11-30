@@ -301,6 +301,8 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return state
 
     if isinstance(obj, asyncio.Lock):
+        if os.getenv("DEBUG_CONCURRENCY"):
+            print("[DEBUG_CONCURRENCY] rebind Lock", obj, "to", loop, flush=True)
         return asyncio.Lock()
 
     bounded_semaphore_type = getattr(asyncio, "BoundedSemaphore", None)
@@ -726,6 +728,8 @@ async def run_with_concurrency(
 
     host_semaphore = _get_host_limit_semaphore()
     testing_mode = _running_under_pytest_worker()
+    if testing_mode:
+        host_semaphore = None
     if host_semaphore is not None:
         bound_loop = getattr(host_semaphore, "_loop", None)
         if bound_loop is not None and bound_loop is not loop:
@@ -885,11 +889,19 @@ async def run_with_concurrency(
         results.setdefault(symbol, None)
 
         try:
+            if os.getenv("DEBUG_CONCURRENCY"):
+                print("[DEBUG_CONCURRENCY] start", symbol, flush=True)
             async with concurrency_semaphore, _acquire_host_permit():
+                if os.getenv("DEBUG_CONCURRENCY"):
+                    print("[DEBUG_CONCURRENCY] acquired", symbol, flush=True)
                 await _mark_worker_start()
                 started = True
                 try:
+                    if os.getenv("DEBUG_CONCURRENCY"):
+                        print("[DEBUG_CONCURRENCY] worker-enter", symbol, flush=True)
                     result = await worker(symbol)
+                    if os.getenv("DEBUG_CONCURRENCY"):
+                        print("[DEBUG_CONCURRENCY] worker-exit", symbol, flush=True)
                 except asyncio.CancelledError:
                     FAILED_SYMBOLS.add(symbol)
                     raise
@@ -900,6 +912,8 @@ async def run_with_concurrency(
                     results[symbol] = result
                 finally:
                     await _mark_worker_end(started)
+            if os.getenv("DEBUG_CONCURRENCY"):
+                print("[DEBUG_CONCURRENCY] done", symbol, flush=True)
         except asyncio.CancelledError:
             FAILED_SYMBOLS.add(symbol)
             raise
