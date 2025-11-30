@@ -46,7 +46,7 @@ def safe_subprocess_run(
 
     timeout_param: float | None
     if timeout is None:
-        timeout_param = None
+        timeout_param = SUBPROCESS_TIMEOUT_DEFAULT
     else:
         try:
             normalized_timeout = float(timeout)

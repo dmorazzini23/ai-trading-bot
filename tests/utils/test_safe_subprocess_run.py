@@ -3,7 +3,11 @@ import sys
 
 import pytest
 
-from ai_trading.utils.safe_subprocess import SafeSubprocessResult, safe_subprocess_run
+from ai_trading.utils.safe_subprocess import (
+    SUBPROCESS_TIMEOUT_DEFAULT,
+    SafeSubprocessResult,
+    safe_subprocess_run,
+)
 
 
 def test_safe_subprocess_run_success():
@@ -24,7 +28,7 @@ def test_safe_subprocess_run_timeout(caplog):
     cmd = [sys.executable, "-c", script]
     with caplog.at_level("WARNING"):
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
-            safe_subprocess_run(cmd, timeout=0.3)
+            safe_subprocess_run(cmd, timeout=0.5)
 
     expected_result = SafeSubprocessResult("ready\n", "warn\n", 124, True)
     assert excinfo.value.cmd == cmd
@@ -32,7 +36,7 @@ def test_safe_subprocess_run_timeout(caplog):
     assert excinfo.value.result == expected_result
     assert excinfo.value.stdout == "ready\n"
     assert excinfo.value.stderr == "warn\n"
-    assert excinfo.value.timeout == pytest.approx(0.3)
+    assert excinfo.value.timeout == pytest.approx(0.5)
     assert excinfo.value.result.stdout == excinfo.value.stdout
     assert excinfo.value.result.stderr == excinfo.value.stderr
     assert excinfo.value.__cause__ is None
@@ -40,7 +44,25 @@ def test_safe_subprocess_run_timeout(caplog):
     record = caplog.records[0]
     assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
     assert record.cmd == cmd
-    assert record.timeout == pytest.approx(0.3)
+    assert record.timeout == pytest.approx(0.5)
+
+
+def test_safe_subprocess_run_default_timeout(caplog):
+    sleep_seconds = SUBPROCESS_TIMEOUT_DEFAULT * 3
+    cmd = [sys.executable, "-c", f"import time; time.sleep({sleep_seconds})"]
+    with caplog.at_level("WARNING"):
+        with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+            safe_subprocess_run(cmd)
+
+    assert excinfo.value.cmd == cmd
+    assert excinfo.value.timeout == pytest.approx(SUBPROCESS_TIMEOUT_DEFAULT)
+    assert excinfo.value.stdout == ""
+    assert excinfo.value.stderr == ""
+    assert caplog.records
+    record = caplog.records[0]
+    assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
+    assert record.cmd == cmd
+    assert record.timeout == pytest.approx(SUBPROCESS_TIMEOUT_DEFAULT)
 
 
 @pytest.mark.parametrize("timeout_value", [0, -0.5])
