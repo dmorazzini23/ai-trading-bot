@@ -16305,9 +16305,15 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
     explicitly ``True``.
     """
 
-    _ensure_alpaca_classes()
-
     pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
+    alpaca_classes_available = True
+    try:
+        _ensure_alpaca_classes()
+    except (*COMMON_EXC, AttributeError):
+        alpaca_classes_available = False
+        if not (getattr(CFG, "testing", False) or pytest_running):
+            raise
+
     skip_market_check = (
         getattr(CFG, "testing", False) or pytest_running or bypass_market_check
     )
@@ -16363,36 +16369,40 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 return value
 
     def _build_order_request_from_args(args: dict[str, Any]):
-        _ensure_alpaca_classes()
-        side = _coerce_enum(OrderSide, args.get("side"))
-        tif = _coerce_enum(TimeInForce, args.get("time_in_force"))
-        base_kwargs: dict[str, Any] = {
-            "symbol": args.get("symbol"),
-            "qty": args.get("qty"),
-            "side": side,
-            "time_in_force": tif,
-        }
-        client_order_id = args.get("client_order_id")
-        if client_order_id:
-            base_kwargs["client_order_id"] = client_order_id
-        limit_price = args.get("limit_price")
-        stop_price = args.get("stop_price")
-        order_type = str(args.get("type") or "market").lower()
-        if order_type == "limit" and limit_price is not None:
-            base_kwargs["limit_price"] = limit_price
-            return LimitOrderRequest(**base_kwargs)
-        if (
-            order_type == "stop_limit"
-            and limit_price is not None
-            and stop_price is not None
-        ):
-            base_kwargs["limit_price"] = limit_price
-            base_kwargs["stop_price"] = stop_price
-            return StopLimitOrderRequest(**base_kwargs)
-        if order_type == "stop" and stop_price is not None:
-            base_kwargs["stop_price"] = stop_price
-            return StopOrderRequest(**base_kwargs)
-        return MarketOrderRequest(**base_kwargs)
+        if alpaca_classes_available:
+            try:
+                side = _coerce_enum(OrderSide, args.get("side"))
+                tif = _coerce_enum(TimeInForce, args.get("time_in_force"))
+                base_kwargs: dict[str, Any] = {
+                    "symbol": args.get("symbol"),
+                    "qty": args.get("qty"),
+                    "side": side,
+                    "time_in_force": tif,
+                }
+                client_order_id = args.get("client_order_id")
+                if client_order_id:
+                    base_kwargs["client_order_id"] = client_order_id
+                limit_price = args.get("limit_price")
+                stop_price = args.get("stop_price")
+                order_type = str(args.get("type") or "market").lower()
+                if order_type == "limit" and limit_price is not None:
+                    base_kwargs["limit_price"] = limit_price
+                    return LimitOrderRequest(**base_kwargs)
+                if (
+                    order_type == "stop_limit"
+                    and limit_price is not None
+                    and stop_price is not None
+                ):
+                    base_kwargs["limit_price"] = limit_price
+                    base_kwargs["stop_price"] = stop_price
+                    return StopLimitOrderRequest(**base_kwargs)
+                if order_type == "stop" and stop_price is not None:
+                    base_kwargs["stop_price"] = stop_price
+                    return StopOrderRequest(**base_kwargs)
+                return MarketOrderRequest(**base_kwargs)
+            except (*COMMON_EXC, AttributeError):
+                pass
+        return types.SimpleNamespace(**args)
 
     def _submit_order_expects_request(submit_fn: Any) -> bool:
         if submit_fn is None:
@@ -16464,7 +16474,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             from ai_trading.core.order_ids import generate_client_order_id as _gen_id
 
             client_order_id = _gen_id(prefix)
-        except COMMON_EXC:
+        except (*COMMON_EXC, AttributeError):
             client_order_id = None
         if not client_order_id:
             client_order_id = _stable_client_order_id(prefix)

@@ -302,3 +302,55 @@ def test_safe_submit_order_generates_id(monkeypatch):
     assert generated, "ID generator was not called"
     assert api.client_order_ids == generated
     assert submitted["args"].get("client_order_id") == generated[0]
+
+
+def test_safe_submit_order_handles_stubbed_alpaca(monkeypatch):
+    """safe_submit_order should tolerate missing Alpaca classes under pytest."""
+
+    from ai_trading.core import bot_engine, order_ids
+
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda _api: True)
+
+    def _raise_attr(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AttributeError("stubbed")
+
+    monkeypatch.setattr(order_ids, "generate_client_order_id", _raise_attr)
+    monkeypatch.setattr(bot_engine, "_ensure_alpaca_classes", lambda: (_raise_attr()), raising=False)
+    monkeypatch.setattr(bot_engine, "MarketOrderRequest", None, raising=False)
+    monkeypatch.setattr(bot_engine, "LimitOrderRequest", None, raising=False)
+    monkeypatch.setattr(bot_engine, "StopOrderRequest", None, raising=False)
+    monkeypatch.setattr(bot_engine, "StopLimitOrderRequest", None, raising=False)
+
+    class OrderDataAPI:
+        def __init__(self):
+            self.client_order_ids: list[str | None] = []
+            self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
+            self.list_positions = lambda: []
+
+        def submit_order(self, *, order_data):  # type: ignore[no-untyped-def]
+            cid = getattr(order_data, "client_order_id", None)
+            self.client_order_ids.append(cid)
+            qty = getattr(order_data, "qty", 0)
+            return types.SimpleNamespace(
+                id=cid or "generated",
+                status="filled",
+                filled_qty=qty,
+                qty=qty,
+                client_order_id=cid,
+                symbol=getattr(order_data, "symbol", ""),
+            )
+
+        def get_order(self, order_id):  # type: ignore[no-untyped-def]
+            return types.SimpleNamespace(
+                id=order_id, status="filled", filled_qty=0, qty=0, symbol=""
+            )
+
+    api = OrderDataAPI()
+    req = types.SimpleNamespace(symbol="STUB", qty=1, side="buy", time_in_force="day")
+
+    order = bot_engine.safe_submit_order(api, req)
+
+    assert order.client_order_id
+    assert api.client_order_ids[-1] == order.client_order_id
