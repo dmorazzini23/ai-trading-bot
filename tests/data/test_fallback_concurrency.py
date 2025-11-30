@@ -456,6 +456,60 @@ def test_run_with_concurrency_host_limit_floors_to_one(module):
     assert module.PEAK_SIMULTANEOUS_WORKERS >= 1
 
 
+def test_run_with_concurrency_pytest_worker_bypasses_foreign_host_semaphore(monkeypatch):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+
+    foreign_loop = asyncio.new_event_loop()
+    try:
+        async def _make_semaphore() -> asyncio.Semaphore:
+            return asyncio.Semaphore(1)
+
+        foreign_semaphore = foreign_loop.run_until_complete(_make_semaphore())
+    finally:
+        foreign_loop.close()
+
+    monkeypatch.setattr(concurrency, "_get_effective_host_limit", lambda: 1)
+    monkeypatch.setattr(concurrency, "_pooling_get_host_semaphore", lambda: foreign_semaphore)
+    monkeypatch.setattr(
+        concurrency,
+        "_pooling_refresh_host_semaphore",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("should not refresh")),
+    )
+
+    concurrency.reset_tracking_state()
+    concurrency.reset_peak_simultaneous_workers()
+
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    symbols = ["XDIST1", "XDIST2", "XDIST3"]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=3)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen == 1
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
+
+
 def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
     class StrictSemaphore(asyncio.Semaphore):
         def __init__(self, value: int):

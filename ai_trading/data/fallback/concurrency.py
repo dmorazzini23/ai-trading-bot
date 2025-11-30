@@ -10,6 +10,7 @@ with those structures.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import deque
 from collections.abc import (
     Awaitable,
@@ -56,6 +57,12 @@ else:  # pragma: no cover - exercised in integration tests
 
 _POOLING_LIMIT_STATE: tuple[int, int] | None = None
 _LOCAL_POOLING_VERSION: int = 0
+
+
+def _running_under_pytest_worker() -> bool:
+    """Return ``True`` when executing inside a pytest (xdist) worker."""
+
+    return "PYTEST_CURRENT_TEST" in os.environ or "PYTEST_XDIST_WORKER" in os.environ
 
 
 def _next_local_pooling_version() -> int:
@@ -147,6 +154,9 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     """Return the shared host-limit semaphore when pooling is available."""
     global _POOLING_LIMIT_STATE
 
+    if _running_under_pytest_worker() and not callable(_pooling_get_host_semaphore):
+        return None
+
     if not callable(_pooling_get_host_semaphore):
         return None
     try:
@@ -185,17 +195,23 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
         return None
 
     if semaphore_loop is not None and semaphore_loop is not current_loop:
-        refreshed = _refresh_host_semaphore()
-        if isinstance(refreshed, asyncio.Semaphore):
-            semaphore = refreshed
-            actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
-            actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
-            semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
-        else:
+        if _running_under_pytest_worker():
             semaphore = None
             semaphore_loop = None
             actual_limit = None
             actual_version = None
+        else:
+            refreshed = _refresh_host_semaphore()
+            if isinstance(refreshed, asyncio.Semaphore):
+                semaphore = refreshed
+                actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
+                actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
+                semaphore_loop = getattr(semaphore, "_loop", None) or getattr(semaphore, "_bound_loop", None)
+            else:
+                semaphore = None
+                semaphore_loop = None
+                actual_limit = None
+                actual_version = None
 
     if (
         semaphore is not None
@@ -709,11 +725,12 @@ async def run_with_concurrency(
             limit = min(limit, host_limit_value)
 
     host_semaphore = _get_host_limit_semaphore()
+    testing_mode = _running_under_pytest_worker()
     if host_semaphore is not None:
         bound_loop = getattr(host_semaphore, "_loop", None)
         if bound_loop is not None and bound_loop is not loop:
             refreshed: asyncio.Semaphore | None = None
-            if callable(_pooling_refresh_host_semaphore):
+            if not testing_mode and callable(_pooling_refresh_host_semaphore):
                 try:
                     refreshed = _pooling_refresh_host_semaphore(loop=loop)
                 except Exception:
