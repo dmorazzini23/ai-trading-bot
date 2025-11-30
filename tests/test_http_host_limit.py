@@ -346,6 +346,48 @@ def test_switching_between_env_keys_refreshes_semaphore(monkeypatch):
     _reload_pooling(pooling)
 
 
+def test_reload_host_limit_handles_invalid_env(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "bad-value")
+    pooling = _reload_pooling()
+
+    loop = asyncio.new_event_loop()
+    try:
+        snapshot = pooling.reload_host_limit_if_env_changed()
+        assert snapshot.limit == pooling._DEFAULT_LIMIT
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=5)) == pooling._DEFAULT_LIMIT
+    finally:
+        loop.close()
+
+    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+    _reload_pooling(pooling)
+
+
+def test_http_host_limit_survives_partial_pooling_stub(monkeypatch):
+    http_host_limit = reload_module("ai_trading.net.http_host_limit")
+    monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "2")
+
+    stub = types.SimpleNamespace()
+    monkeypatch.setattr(http_host_limit, "pooling", stub, raising=False)
+
+    loop = asyncio.new_event_loop()
+    try:
+        async def _exercise_async():
+            async with http_host_limit.host_limiter_async("Example.com"):
+                async with http_host_limit.host_limiter_async("Example.com"):
+                    assert http_host_limit.current_inflight() == 2
+
+        loop.run_until_complete(_exercise_async())
+    finally:
+        loop.close()
+
+    with http_host_limit.host_limiter("Example.com"):
+        assert http_host_limit.current_inflight() == 1
+
+    assert http_host_limit.current_inflight() == 0
+
+    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
+
+
 def test_config_changes_refresh_semaphore(monkeypatch):
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
     monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
