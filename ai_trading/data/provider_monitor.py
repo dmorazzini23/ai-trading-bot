@@ -286,12 +286,13 @@ def _resolve_gap_ratio_trigger() -> float:
         except (TypeError, ValueError):
             pass
     if not candidates:
-        resolved = 0.02
+        # Default stricter threshold for IEX-only deployments
+        resolved = 0.01
     else:
         try:
             resolved = max(max(candidates), 0.0)
         except Exception:
-            resolved = 0.02
+            resolved = 0.01
     _prime_gap_ratio_cache(resolved)
     return resolved
 
@@ -369,11 +370,11 @@ def _failsoft_gap_ratio_limit() -> float:
             except (TypeError, ValueError):
                 pass
     if not candidates:
-        return 0.20
+        return 0.08
     try:
         return max(max(candidates), 0.0)
     except Exception:
-        return 0.20
+        return 0.08
 
 
 def _normalize_gap_ratio_value(ratio: Any, ratio_pct: Any) -> float | None:

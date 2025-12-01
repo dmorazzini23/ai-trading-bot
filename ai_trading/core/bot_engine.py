@@ -25586,8 +25586,13 @@ def _prepare_run(
     try:
         cfg_obj = get_trading_config()
         skip_on_disabled = bool(getattr(cfg_obj, "skip_compute_when_provider_disabled", False))
+        degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
+        failsoft_enabled = bool(getattr(cfg_obj, "safe_mode_failsoft", True))
+        if not failsoft_enabled and degraded_mode != "block":
+            degraded_mode = "block"
     except Exception:
         skip_on_disabled = False
+        degraded_mode = "block"
     failsoft_cycle = _failsoft_mode_active()
     if degraded_cycle and skip_on_disabled and not failsoft_cycle and (
         _reason_implies_fatal(degrade_reason) or degrade_fatal

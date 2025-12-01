@@ -641,7 +641,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="alpaca_fallback_ttl_seconds",
         env=("ALPACA_FALLBACK_TTL_SECONDS",),
         cast="int",
-        default=300,
+        default=180,
         description="Cooldown window before retrying Alpaca as primary data feed after fallback.",
         min_value=0,
     ),
