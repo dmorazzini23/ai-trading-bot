@@ -344,6 +344,38 @@ def _quote_recovery_age_limit_ms() -> float:
         return 2000.0
 
 
+def _failsoft_gap_ratio_limit() -> float:
+    """Return the maximum gap ratio that is treated as fail-soft when backup data is present."""
+
+    candidates: list[float] = []
+    for key in (
+        "SAFE_MODE_FAILSOFT_GAP_RATIO",
+        "AI_TRADING_SAFE_MODE_FAILSOFT_GAP_RATIO",
+        "AI_TRADING_FAILSOFT_GAP_RATIO",
+    ):
+        try:
+            env_val = get_env(key, None, cast=float)
+        except Exception:
+            env_val = None
+        if env_val is not None:
+            try:
+                candidates.append(float(env_val))
+            except (TypeError, ValueError):
+                pass
+        raw_env = os.getenv(key, "").strip()
+        if raw_env:
+            try:
+                candidates.append(float(raw_env))
+            except (TypeError, ValueError):
+                pass
+    if not candidates:
+        return 0.35
+    try:
+        return max(max(candidates), 0.0)
+    except Exception:
+        return 0.35
+
+
 def _mark_cycle_safe_mode(reason: str) -> None:
     """Increment the safe-mode cycle marker so fetchers can react once per cycle."""
 
@@ -665,6 +697,7 @@ def _trigger_provider_safe_mode(
 
     provider_key = canonical_provider(str(metadata_payload.get("provider", "alpaca")))
     degraded_only = False
+    failsoft_gap_limit = _failsoft_gap_ratio_limit()
     if reason == "minute_gap":
         gap_diag = _gap_event_diagnostics.pop(provider_key, None)
         if gap_diag:
@@ -718,6 +751,30 @@ def _trigger_provider_safe_mode(
                 "PROVIDER_SAFE_MODE_DEGRADED_ONLY",
                 extra={"provider": provider_key, "reason": reason, "contiguous_fallback": fallback_contiguous},
             )
+        else:
+            try:
+                gap_ratio_val = float(metadata_payload.get("gap_ratio", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                gap_ratio_val = None
+            used_backup = used_backup or bool(metadata_payload.get("using_fallback_provider"))
+            if (
+                gap_ratio_val is not None
+                and used_backup
+                and gap_ratio_val <= failsoft_gap_limit
+            ):
+                degraded_only = True
+                metadata_payload["degraded_only"] = True
+                metadata_payload.setdefault("failsoft_reason", "backup_gap_within_failsoft")
+                metadata_payload["failsoft_gap_ratio_limit"] = failsoft_gap_limit
+                logger.info(
+                    "PROVIDER_SAFE_MODE_FAILSOFT_BACKUP",
+                    extra={
+                        "provider": provider_key,
+                        "reason": reason,
+                        "gap_ratio": gap_ratio_val,
+                        "failsoft_gap_ratio_limit": failsoft_gap_limit,
+                    },
+                )
     else:
         _gap_event_diagnostics.pop(provider_key, None)
 

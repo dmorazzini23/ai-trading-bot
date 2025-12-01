@@ -95,6 +95,57 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
     assert pm.is_safe_mode_active() is False
 
 
+def test_gap_safe_mode_uses_failsoft_when_backup_available(tmp_path, monkeypatch) -> None:
+    dummy_alerts = _DummyAlerts()
+    monitor = pm.ProviderMonitor(alert_manager=dummy_alerts, cooldown=1, threshold=3)
+    disable_calls: list[str] = []
+
+    monitor.register_disable_callback("alpaca", lambda duration: disable_calls.append("alpaca"))
+    monitor.register_disable_callback("alpaca_sip", lambda duration: disable_calls.append("alpaca_sip"))
+
+    monkeypatch.setattr(pm, "provider_monitor", monitor)
+    monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
+    monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
+    monkeypatch.setattr(pm, "_gap_trigger_cooldown_until", 0.0, raising=False)
+    monkeypatch.setattr(pm, "_SAFE_MODE_ACTIVE", False, raising=False)
+    monkeypatch.setattr(pm, "_SAFE_MODE_REASON", None, raising=False)
+    monkeypatch.setattr(pm, "_SAFE_MODE_HEALTHY_PASSES", 0, raising=False)
+    monkeypatch.setattr(pm, "_SAFE_MODE_DEGRADED_ONLY", False, raising=False)
+
+    halt_path = tmp_path / "halt.flag"
+    monkeypatch.setattr(
+        pm,
+        "get_settings",
+        lambda: SimpleNamespace(halt_flag_path=str(halt_path)),
+    )
+
+    payload = {
+        "symbol": "AAPL",
+        "provider": "alpaca_iex",
+        "provider_canonical": "alpaca_iex",
+        "primary_feed_gap": True,
+        "gap_ratio": 0.32,
+        "initial_gap_ratio": 0.32,
+        "missing_after": 32,
+        "initial_missing": 32,
+        "expected": 100,
+        "residual_gap": True,
+        "used_backup": True,
+        "using_fallback_provider": True,
+        "fallback_provider": "yahoo",
+    }
+    for _ in range(pm._GAP_EVENT_THRESHOLD):
+        pm.record_minute_gap_event(payload)
+
+    assert pm.is_safe_mode_active() is True
+    assert pm.safe_mode_reason() == "minute_gap"
+    assert pm.safe_mode_degraded_only() is True
+    assert halt_path.exists() is False
+    assert disable_calls == []
+    assert monitor.is_disabled("alpaca") is False
+    assert monitor.is_disabled("alpaca_sip") is False
+
+
 def test_minute_gap_events_ignore_fallback_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
     monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
