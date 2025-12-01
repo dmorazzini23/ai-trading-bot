@@ -20668,6 +20668,17 @@ def trade_logic(
         raw_df, feat_df, skip_flag = _fetch_feature_data(
             ctx, state, symbol, price_df=price_df
         )
+    if is_safe_mode_active() and _safe_mode_blocks_trading():
+        reason = safe_mode_reason() or "provider_safe_mode"
+        logger.warning(
+            "SAFE_MODE_BLOCK",
+            extra={
+                "symbol": symbol,
+                "reason": reason,
+                "block_reason": "provider_disabled_midcycle",
+            },
+        )
+        return False
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
@@ -25904,6 +25915,16 @@ def _process_symbols(
             return False
 
         try:
+            if provider_monitor.is_safe_mode_active() and _safe_mode_blocks_trading():
+                logger.warning(
+                    "SAFE_MODE_BLOCK",
+                    extra={
+                        "symbol": symbol,
+                        "reason": safe_mode_reason() or "provider_safe_mode",
+                        "block_reason": "provider_disabled_midcycle",
+                    },
+                )
+                return
             if _checkpoint("start"):
                 return
             if cycle_budget and cycle_budget.should_throttle():

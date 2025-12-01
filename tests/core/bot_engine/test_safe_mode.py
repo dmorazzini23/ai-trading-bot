@@ -57,6 +57,62 @@ def test_enter_long_blocks_when_safe_mode_active(monkeypatch):
     assert blocked is True
 
 
+def test_trade_logic_blocks_when_safe_mode_triggers_after_fetch(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    call_count = {"n": 0}
+
+    def _safe_mode_active_flip():
+        call_count["n"] += 1
+        return call_count["n"] >= 2
+
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", _safe_mode_active_flip)
+    monkeypatch.setattr(bot_engine, "_safe_mode_blocks_trading", lambda: True)
+    monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: "minute_gap")
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    fetch_called = {"count": 0}
+
+    def _fake_fetch(*_args, **_kwargs):
+        fetch_called["count"] += 1
+        df = pd.DataFrame({"close": [100.0]})
+        return df, df.copy(), False
+
+    monkeypatch.setattr(bot_engine, "_fetch_feature_data", _fake_fetch)
+
+    ctx = types.SimpleNamespace(
+        rebalance_buys=set(),
+        stop_targets={},
+        take_profit_targets={},
+    )
+    state = types.SimpleNamespace(
+        position_cache={},
+        trade_cooldowns={},
+        last_trade_direction={},
+        long_positions=set(),
+        short_positions=set(),
+        degraded_providers=set(),
+        signal_manager=types.SimpleNamespace(last_components=[]),
+    )
+
+    caplog.set_level(logging.WARNING)
+
+    result = bot_engine.trade_logic(ctx, state, "TEST", 1000.0, model=None, regime_ok=True)
+
+    assert result is False
+    assert fetch_called["count"] == 1
+    assert any(
+        rec.message == "SAFE_MODE_BLOCK" and getattr(rec, "block_reason", "") == "provider_disabled_midcycle"
+        for rec in caplog.records
+    )
+
+
 def test_should_skip_order_for_fallback_price(monkeypatch):
     state = types.SimpleNamespace(auth_skipped_symbols=set())
     assert bot_engine._should_skip_order_for_alpaca_unavailable(state, "AAPL", "yahoo")
