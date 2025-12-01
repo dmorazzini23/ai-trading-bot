@@ -376,6 +376,27 @@ def _failsoft_gap_ratio_limit() -> float:
         return 0.35
 
 
+def _normalize_gap_ratio_value(ratio: Any, ratio_pct: Any) -> float | None:
+    """Return gap ratio as a fraction regardless of whether percent or fraction was provided."""
+
+    def _coerce(value: Any) -> float | None:
+        try:
+            if value is None:
+                return None
+            raw = float(value)
+            if raw < 0:
+                return None
+            # Values > 1 are treated as percent and converted to fraction.
+            return raw / 100.0 if raw > 1 else raw
+        except (TypeError, ValueError):
+            return None
+
+    ratio_val = _coerce(ratio)
+    if ratio_val is not None:
+        return ratio_val
+    return _coerce(ratio_pct)
+
+
 def _mark_cycle_safe_mode(reason: str) -> None:
     """Increment the safe-mode cycle marker so fetchers can react once per cycle."""
 
@@ -698,6 +719,15 @@ def _trigger_provider_safe_mode(
     provider_key = canonical_provider(str(metadata_payload.get("provider", "alpaca")))
     degraded_only = False
     failsoft_gap_limit = _failsoft_gap_ratio_limit()
+    gap_ratio_val = _normalize_gap_ratio_value(
+        metadata_payload.get("gap_ratio"),
+        metadata_payload.get("gap_ratio_pct"),
+    )
+    gap_ratio_pct = metadata_payload.get("gap_ratio_pct")
+    try:
+        gap_ratio_pct = float(gap_ratio_pct)
+    except (TypeError, ValueError):
+        gap_ratio_pct = None
     if reason == "minute_gap":
         gap_diag = _gap_event_diagnostics.pop(provider_key, None)
         if gap_diag:
@@ -721,7 +751,10 @@ def _trigger_provider_safe_mode(
                     "samples": gap_payload.get("samples"),
                 },
             )
-        used_backup = bool(metadata_payload.get("used_backup"))
+        used_backup = bool(
+            metadata_payload.get("used_backup")
+            or metadata_payload.get("using_fallback_provider")
+        )
         fallback_contiguous_flag = metadata_payload.get("fallback_contiguous")
         if isinstance(fallback_contiguous_flag, str):
             fallback_contiguous = fallback_contiguous_flag.strip().lower() in {
@@ -752,26 +785,25 @@ def _trigger_provider_safe_mode(
                 extra={"provider": provider_key, "reason": reason, "contiguous_fallback": fallback_contiguous},
             )
         else:
-            try:
-                gap_ratio_val = float(metadata_payload.get("gap_ratio", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                gap_ratio_val = None
-            used_backup = used_backup or bool(metadata_payload.get("using_fallback_provider"))
+            backup_gap_ratio = gap_ratio_val
+            if backup_gap_ratio is None and gap_ratio_pct is not None:
+                backup_gap_ratio = _normalize_gap_ratio_value(None, gap_ratio_pct)
             if (
-                gap_ratio_val is not None
+                backup_gap_ratio is not None
                 and used_backup
-                and gap_ratio_val <= failsoft_gap_limit
+                and backup_gap_ratio <= failsoft_gap_limit
             ):
                 degraded_only = True
                 metadata_payload["degraded_only"] = True
                 metadata_payload.setdefault("failsoft_reason", "backup_gap_within_failsoft")
                 metadata_payload["failsoft_gap_ratio_limit"] = failsoft_gap_limit
+                metadata_payload["gap_ratio"] = backup_gap_ratio
                 logger.info(
                     "PROVIDER_SAFE_MODE_FAILSOFT_BACKUP",
                     extra={
                         "provider": provider_key,
                         "reason": reason,
-                        "gap_ratio": gap_ratio_val,
+                        "gap_ratio": backup_gap_ratio,
                         "failsoft_gap_ratio_limit": failsoft_gap_limit,
                     },
                 )
@@ -929,19 +961,21 @@ def _safe_iso(value: Any) -> str | None:
 
 
 def _gap_event_is_severe(metadata: Mapping[str, Any]) -> bool:
-    try:
-        ratio_val = float(metadata.get("gap_ratio", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        ratio_val = 0.0
+    ratio_val = _normalize_gap_ratio_value(
+        metadata.get("gap_ratio"),
+        metadata.get("gap_ratio_pct"),
+    ) or 0.0
     try:
         missing_val = int(metadata.get("missing_after", 0) or 0)
     except (TypeError, ValueError):
         missing_val = 0
     residual = bool(metadata.get("residual_gap"))
     used_backup = bool(metadata.get("used_backup"))
-    try:
-        initial_ratio = float(metadata.get("initial_gap_ratio", ratio_val) or 0.0)
-    except (TypeError, ValueError):
+    initial_ratio = _normalize_gap_ratio_value(
+        metadata.get("initial_gap_ratio"),
+        metadata.get("initial_gap_ratio_pct"),
+    )
+    if initial_ratio is None:
         initial_ratio = ratio_val
     try:
         initial_missing = int(metadata.get("initial_missing", missing_val) or 0)

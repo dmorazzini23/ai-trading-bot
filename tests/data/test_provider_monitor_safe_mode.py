@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from collections import deque
 from types import SimpleNamespace
 from typing import Any, Dict, Mapping
@@ -107,6 +108,7 @@ def test_gap_safe_mode_uses_failsoft_when_backup_available(tmp_path, monkeypatch
     monkeypatch.setattr(pm, "_gap_events", deque(), raising=False)
     monkeypatch.setattr(pm, "_gap_event_diagnostics", {}, raising=False)
     monkeypatch.setattr(pm, "_gap_trigger_cooldown_until", 0.0, raising=False)
+    monkeypatch.setattr(pm, "_GAP_EVENT_THRESHOLD", 1, raising=False)
     monkeypatch.setattr(pm, "_SAFE_MODE_ACTIVE", False, raising=False)
     monkeypatch.setattr(pm, "_SAFE_MODE_REASON", None, raising=False)
     monkeypatch.setattr(pm, "_SAFE_MODE_HEALTHY_PASSES", 0, raising=False)
@@ -144,6 +146,53 @@ def test_gap_safe_mode_uses_failsoft_when_backup_available(tmp_path, monkeypatch
     assert disable_calls == []
     assert monitor.is_disabled("alpaca") is False
     assert monitor.is_disabled("alpaca_sip") is False
+
+
+def test_gap_failsoft_handles_percent_ratio(tmp_path, monkeypatch) -> None:
+    pm_local = importlib.reload(pm)
+    dummy_alerts = _DummyAlerts()
+    monitor = pm_local.ProviderMonitor(alert_manager=dummy_alerts, cooldown=1, threshold=3)
+
+    monkeypatch.setattr(pm_local, "provider_monitor", monitor)
+    monkeypatch.setattr(pm_local, "_gap_events", deque(), raising=False)
+    monkeypatch.setattr(pm_local, "_gap_event_diagnostics", {}, raising=False)
+    monkeypatch.setattr(pm_local, "_gap_trigger_cooldown_until", 0.0, raising=False)
+    monkeypatch.setattr(pm_local, "_GAP_EVENT_THRESHOLD", 1, raising=False)
+    monkeypatch.setattr(pm_local, "_SAFE_MODE_ACTIVE", False, raising=False)
+    monkeypatch.setattr(pm_local, "_SAFE_MODE_REASON", None, raising=False)
+    monkeypatch.setattr(pm_local, "_SAFE_MODE_HEALTHY_PASSES", 0, raising=False)
+    monkeypatch.setattr(pm_local, "_SAFE_MODE_DEGRADED_ONLY", False, raising=False)
+    times = iter([0.0, 1.0, 2.0, 3.0])
+    monkeypatch.setattr(pm_local, "monotonic_time", lambda: next(times), raising=False)
+
+    halt_path = tmp_path / "halt.flag"
+    monkeypatch.setattr(
+        pm_local,
+        "get_settings",
+        lambda: SimpleNamespace(halt_flag_path=str(halt_path)),
+    )
+
+    payload = {
+        "symbol": "AAPL",
+        "provider": "alpaca_iex",
+        "provider_canonical": "alpaca_iex",
+        "primary_feed_gap": True,
+        "gap_ratio": None,
+        "gap_ratio_pct": 30.32,  # percent representation
+        "initial_gap_ratio": 30.32,
+        "missing_after": 30,
+        "initial_missing": 30,
+        "expected": 99,
+        "residual_gap": True,
+        "used_backup": True,
+        "using_fallback_provider": True,
+        "fallback_provider": "yahoo",
+    }
+    pm_local._trigger_provider_safe_mode("minute_gap", count=3, metadata=payload)
+
+    assert pm_local.is_safe_mode_active() is True
+    assert pm_local.safe_mode_degraded_only() is True
+    assert halt_path.exists() is False
 
 
 def test_minute_gap_events_ignore_fallback_provider(monkeypatch: pytest.MonkeyPatch) -> None:
