@@ -369,11 +369,11 @@ def _failsoft_gap_ratio_limit() -> float:
             except (TypeError, ValueError):
                 pass
     if not candidates:
-        return 0.35
+        return 0.20
     try:
         return max(max(candidates), 0.0)
     except Exception:
-        return 0.35
+        return 0.20
 
 
 def _normalize_gap_ratio_value(ratio: Any, ratio_pct: Any) -> float | None:

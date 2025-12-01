@@ -123,13 +123,13 @@ def test_gap_safe_mode_uses_failsoft_when_backup_available(tmp_path, monkeypatch
 
     payload = {
         "symbol": "AAPL",
-        "provider": "alpaca_iex",
-        "provider_canonical": "alpaca_iex",
+        "provider": "alpaca",
+        "provider_canonical": "alpaca",
         "primary_feed_gap": True,
-        "gap_ratio": 0.32,
-        "initial_gap_ratio": 0.32,
-        "missing_after": 32,
-        "initial_missing": 32,
+        "gap_ratio": 0.12,
+        "initial_gap_ratio": 0.12,
+        "missing_after": 12,
+        "initial_missing": 12,
         "expected": 100,
         "residual_gap": True,
         "used_backup": True,
@@ -174,14 +174,14 @@ def test_gap_failsoft_handles_percent_ratio(tmp_path, monkeypatch) -> None:
 
     payload = {
         "symbol": "AAPL",
-        "provider": "alpaca_iex",
-        "provider_canonical": "alpaca_iex",
+        "provider": "alpaca",
+        "provider_canonical": "alpaca",
         "primary_feed_gap": True,
         "gap_ratio": None,
-        "gap_ratio_pct": 30.32,  # percent representation
-        "initial_gap_ratio": 30.32,
-        "missing_after": 30,
-        "initial_missing": 30,
+        "gap_ratio_pct": 12.5,  # percent representation
+        "initial_gap_ratio": 12.5,
+        "missing_after": 12,
+        "initial_missing": 12,
         "expected": 99,
         "residual_gap": True,
         "used_backup": True,

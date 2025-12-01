@@ -26892,6 +26892,37 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             logging.warning("ALPACA_CLIENT_MISSING")
             _log_loop_heartbeat(loop_id, loop_start)
             return
+        try:
+            safe_mode_live = provider_monitor.is_safe_mode_active()
+        except Exception:
+            safe_mode_live = False
+        if safe_mode_live and _safe_mode_blocks_trading():
+            try:
+                version, reason = provider_monitor.safe_mode_cycle_marker()
+            except Exception:
+                version, reason = (None, safe_mode_reason() if callable(safe_mode_reason) else None)
+            last_cleared = getattr(state, "_safe_mode_cancel_version", None)
+            if version is None or version != last_cleared:
+                try:
+                    cancel_all_open_orders(runtime)
+                except COMMON_EXC as exc:  # pragma: no cover - defensive cancel
+                    logger.warning(
+                        "SAFE_MODE_CANCEL_OPEN_ORDERS_FAILED",
+                        extra={
+                            "reason": reason or safe_mode_reason() or "provider_safe_mode",
+                            "cause": exc.__class__.__name__,
+                            "detail": str(exc),
+                        },
+                    )
+                else:
+                    logger.warning(
+                        "SAFE_MODE_CANCEL_OPEN_ORDERS",
+                        extra={
+                            "reason": reason or safe_mode_reason() or "provider_safe_mode",
+                            "version": version,
+                        },
+                    )
+                setattr(state, "_safe_mode_cancel_version", version)
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked is True:
             pdt_context = getattr(runtime, "_pdt_last_context", {}) or {}
