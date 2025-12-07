@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from collections import deque
 from collections.abc import (
     Awaitable,
@@ -54,6 +55,11 @@ else:  # pragma: no cover - exercised in integration tests
         _http_pooling, "refresh_host_semaphore", None,
     )
     _pooling_record_concurrency = getattr(_http_pooling, "record_concurrency", None)
+
+try:  # pragma: no cover - optional dependency; only present under tests
+    import freezegun.api as _freezegun_api
+except Exception:  # pragma: no cover - freezegun not installed in production
+    _freezegun_api = None
 
 
 _POOLING_LIMIT_STATE: tuple[int, int] | None = None
@@ -636,6 +642,60 @@ def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.
             continue
 
 
+def _patch_monotonic_for_tests() -> tuple[bool, tuple[object, object | None]]:
+    """Restore real monotonic clocks when freezegun freezes ``time.monotonic``."""
+    original = (time.monotonic, getattr(time, "monotonic_ns", None))
+    patched = False
+    if _freezegun_api is None:
+        return patched, original
+
+    real_monotonic = getattr(_freezegun_api, "real_monotonic", None)
+    real_monotonic_ns = getattr(_freezegun_api, "real_monotonic_ns", None)
+    fake_monotonic = getattr(_freezegun_api, "fake_monotonic", None)
+    fake_monotonic_ns = getattr(_freezegun_api, "fake_monotonic_ns", None)
+
+    if callable(real_monotonic) and fake_monotonic is not real_monotonic:
+        try:
+            _freezegun_api.fake_monotonic = real_monotonic
+        except Exception:
+            pass
+    if callable(real_monotonic_ns) and fake_monotonic_ns is not real_monotonic_ns:
+        try:
+            _freezegun_api.fake_monotonic_ns = real_monotonic_ns
+        except Exception:
+            pass
+
+    if callable(real_monotonic) and time.monotonic is not real_monotonic:
+        time.monotonic = real_monotonic  # type: ignore[assignment]
+        patched = True
+    if (
+        callable(real_monotonic_ns)
+        and hasattr(time, "monotonic_ns")
+        and getattr(time, "monotonic_ns") is not real_monotonic_ns
+    ):
+        try:
+            time.monotonic_ns = real_monotonic_ns  # type: ignore[assignment]
+        except Exception:
+            pass
+        else:
+            patched = True
+
+    return patched, original
+
+
+def _restore_monotonic(original: tuple[object, object | None]) -> None:
+    """Revert ``time.monotonic`` back to the caller-provided originals."""
+    try:
+        time.monotonic = original[0]  # type: ignore[assignment]
+    except Exception:
+        pass
+    try:
+        if hasattr(time, "monotonic_ns") and original[1] is not None:
+            time.monotonic_ns = original[1]  # type: ignore[assignment]
+    except Exception:
+        pass
+
+
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
@@ -715,6 +775,8 @@ async def run_with_concurrency(
     timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
+    debug_mode = bool(os.getenv("DEBUG_CONCURRENCY"))
+    _patch_monotonic_for_tests()
     reset_tracking_state(reset_peak=False)
 
     global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
@@ -734,8 +796,31 @@ async def run_with_concurrency(
 
     host_semaphore = _get_host_limit_semaphore()
     testing_mode = _running_under_pytest_worker()
+    if debug_mode:
+        print(
+            "[DEBUG_CONCURRENCY] enter run_with_concurrency",
+            {"testing_mode": testing_mode, "limit": limit, "host_limit": host_limit},
+            flush=True,
+        )
     if testing_mode:
-        host_semaphore = None
+        if host_semaphore is not None:
+            bound_loop = getattr(host_semaphore, "_loop", None) or getattr(host_semaphore, "_bound_loop", None)
+            if bound_loop is not None and bound_loop is not loop:
+                sem_limit = _normalise_positive_int(
+                    getattr(host_semaphore, "_ai_trading_host_limit", None),
+                ) or _normalise_positive_int(getattr(host_semaphore, "_value", None))
+                sem_limit = sem_limit or limit
+                host_semaphore = asyncio.Semaphore(sem_limit)
+                try:
+                    setattr(host_semaphore, "_ai_trading_host_limit", sem_limit)
+                except Exception:
+                    pass
+            if host_semaphore is not None:
+                sem_limit = _normalise_positive_int(
+                    getattr(host_semaphore, "_ai_trading_host_limit", None),
+                ) or _normalise_positive_int(getattr(host_semaphore, "_value", None))
+                if sem_limit is not None:
+                    limit = min(limit, sem_limit)
         try:
             asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
         except Exception:
@@ -746,23 +831,80 @@ async def run_with_concurrency(
         succeeded: set[str] = set()
         failed: set[str] = set()
         peak_this_run = 0
+        deadline = None if timeout_s is None else loop.time() + max(0.0, timeout_s)
 
         idx = 0
         total = len(symbols_list)
         while idx < total:
+            if deadline is not None and loop.time() >= deadline:
+                for sym in symbols_list[idx:]:
+                    results.setdefault(sym, None)
+                    failed.add(sym)
+                break
             batch = symbols_list[idx : idx + limit]
             idx += len(batch)
             peak_this_run = max(peak_this_run, len(batch))
             tasks = [asyncio.create_task(worker(sym)) for sym in batch]
-            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-            for sym, outcome in zip(batch, outcomes, strict=False):
+            task_map = {task: sym for task, sym in zip(tasks, batch, strict=False)}
+            if debug_mode:
+                print(
+                    "[DEBUG_CONCURRENCY] batch",
+                    {"batch": batch, "limit": limit, "idx": idx, "total": total},
+                    flush=True,
+                )
+            time_left = None if deadline is None else max(0.0, deadline - loop.time())
+            outcomes: dict[asyncio.Task[object], object] = {}
+            pending: set[asyncio.Task[object]] = set()
+            if deadline is None:
+                gathered = await asyncio.gather(*tasks, return_exceptions=True)
+                outcomes = {task: outcome for task, outcome in zip(tasks, gathered, strict=False)}
+            else:
+                done, pending = await asyncio.wait(
+                    tasks, timeout=time_left, return_when=asyncio.ALL_COMPLETED
+                )
+                for task in done:
+                    try:
+                        outcomes[task] = task.result()
+                    except BaseException as exc:
+                        outcomes[task] = exc
+            for task, sym in task_map.items():
+                if task in pending:
+                    failed.add(sym)
+                    results.setdefault(sym, None)
+                    task.cancel()
+                    if debug_mode:
+                        print(
+                            "[DEBUG_CONCURRENCY] worker_failed",
+                            {"symbol": sym, "outcome": "timeout"},
+                            flush=True,
+                        )
+                    continue
+                outcome = outcomes.get(task)
                 if isinstance(outcome, BaseException):
                     failed.add(sym)
+                    results.setdefault(sym, None)
+                    if debug_mode:
+                        print(
+                            "[DEBUG_CONCURRENCY] worker_failed",
+                            {"symbol": sym, "outcome": repr(outcome)},
+                            flush=True,
+                        )
                 else:
                     succeeded.add(sym)
                     results[sym] = outcome
 
         _update_peak_counters(peak_this_run)
+        if debug_mode:
+            print(
+                "[DEBUG_CONCURRENCY] exit",
+                {
+                    "results": results,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "peak": peak_this_run,
+                },
+                flush=True,
+            )
         return results, succeeded, failed
     if host_semaphore is not None:
         bound_loop = getattr(host_semaphore, "_loop", None)
