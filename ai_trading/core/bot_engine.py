@@ -25550,7 +25550,14 @@ def _prepare_run(
     """Prepare trading run by syncing positions and generating symbols."""
     try:
         ensure_data_fetcher(runtime)
-        cancel_all_open_orders(runtime)
+        cleanup_done = getattr(state, "_open_order_cleanup_done", False)
+        if not cleanup_done:
+            cancel_all_open_orders(runtime)
+            try:
+                setattr(state, "_open_order_cleanup_done", True)
+            except Exception:
+                # Best effort bookkeeping; do not block startup if state is immutable.
+                pass
         audit_positions(runtime)
     except APIError as e:
         logger.warning(
