@@ -5730,18 +5730,22 @@ class ExecutionEngine:
                         "response_class": resp_cls,
                     },
                 )
+                resp_preview = repr(resp)
+                if len(resp_preview) > 500:
+                    resp_preview = resp_preview[:500] + "...<truncated>"
                 logger.info(
-                    "ALPACA_ORDER_SUBMIT_RESPONSE status=%s resp_type=%s order_id=%s client_order_id=%s",
+                    "ALPACA_ORDER_SUBMIT_RESPONSE status=%s resp_type=%s order_id=%s client_order_id=%s resp=%s",
                     ack_status,
                     resp_cls,
                     ack_id,
                     ack_client_id or order_data.get("client_order_id"),
+                    resp_preview,
                     extra={
                         "alpaca_order_id": ack_id,
                         "client_order_id": ack_client_id or order_data.get("client_order_id"),
                         "status": ack_status,
                         "resp_type": resp_cls,
-                        "resp_repr": repr(resp),
+                        "resp_repr": resp_preview,
                     },
                 )
             return resp
