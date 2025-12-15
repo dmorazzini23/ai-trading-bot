@@ -5710,6 +5710,8 @@ class ExecutionEngine:
                     submitted_iso = str(submitted_ts)
                 else:
                     submitted_iso = None
+                ack_status = _extract_value(resp, "status")
+                resp_cls = resp.__class__.__name__ if resp is not None else None
                 logger.info(
                     "ALPACA_ORDER_SUBMITTED",
                     extra={
@@ -5722,10 +5724,34 @@ class ExecutionEngine:
                         "alpaca_order_id": ack_id,
                         "client_order_id": ack_client_id or order_data.get("client_order_id"),
                         "submitted_at": submitted_iso,
+                        "status": ack_status,
+                        "response_class": resp_cls,
+                    },
+                )
+                logger.info(
+                    "ALPACA_ORDER_SUBMIT_RESPONSE",
+                    extra={
+                        "alpaca_order_id": ack_id,
+                        "client_order_id": ack_client_id or order_data.get("client_order_id"),
+                        "status": ack_status,
+                        "resp_type": resp_cls,
                     },
                 )
             return resp
         except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ALPACA_ORDER_SUBMIT_ERROR",
+                extra={
+                    "symbol": order_data.get("symbol"),
+                    "side": order_data.get("side"),
+                    "qty": order_data.get("quantity") or order_data.get("qty"),
+                    "order_type": order_type,
+                    "status_code": getattr(e, "status_code", None),
+                    "code": getattr(e, "code", None),
+                    "message": getattr(e, "message", str(e)),
+                    "closing_position": closing_position,
+                },
+            )
             if isinstance(e, APIError) and self._is_opposite_conflict_error(e):
                 symbol = str(order_data.get("symbol") or "")
                 desired_side = str(order_data.get("side") or "")
