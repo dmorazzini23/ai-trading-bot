@@ -5713,7 +5713,9 @@ class ExecutionEngine:
                 ack_status = _extract_value(resp, "status")
                 resp_cls = resp.__class__.__name__ if resp is not None else None
                 logger.info(
-                    "ALPACA_ORDER_SUBMITTED",
+                    "ALPACA_ORDER_SUBMITTED status=%s resp_type=%s",
+                    ack_status,
+                    resp_cls,
                     extra={
                         "symbol": order_data.get("symbol"),
                         "side": order_data.get("side"),
@@ -5729,7 +5731,11 @@ class ExecutionEngine:
                     },
                 )
                 logger.info(
-                    "ALPACA_ORDER_SUBMIT_RESPONSE",
+                    "ALPACA_ORDER_SUBMIT_RESPONSE status=%s resp_type=%s order_id=%s client_order_id=%s",
+                    ack_status,
+                    resp_cls,
+                    ack_id,
+                    ack_client_id or order_data.get("client_order_id"),
                     extra={
                         "alpaca_order_id": ack_id,
                         "client_order_id": ack_client_id or order_data.get("client_order_id"),
@@ -5740,7 +5746,10 @@ class ExecutionEngine:
             return resp
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
-                "ALPACA_ORDER_SUBMIT_ERROR",
+                "ALPACA_ORDER_SUBMIT_ERROR status_code=%s code=%s message=%s",
+                getattr(e, "status_code", None),
+                getattr(e, "code", None),
+                getattr(e, "message", str(e)),
                 extra={
                     "symbol": order_data.get("symbol"),
                     "side": order_data.get("side"),
