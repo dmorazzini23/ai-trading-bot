@@ -5741,6 +5741,7 @@ class ExecutionEngine:
                         "client_order_id": ack_client_id or order_data.get("client_order_id"),
                         "status": ack_status,
                         "resp_type": resp_cls,
+                        "resp_repr": repr(resp),
                     },
                 )
             return resp
