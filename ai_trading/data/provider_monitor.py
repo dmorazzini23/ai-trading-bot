@@ -91,20 +91,17 @@ def _extract_feed_attempts(metadata: Mapping[str, Any] | None) -> list[str]:
 
 
 def _detect_pytest_env() -> bool:
-    if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+    flag = os.getenv("PYTEST_RUNNING")
+    if flag and str(flag).strip().lower() not in {"0", "false", "no", "off"}:
+        return True
+    if os.getenv("PYTEST_CURRENT_TEST"):
         return True
     try:
         import sys as _sys
 
-        if "pytest" in _sys.modules:
-            return True
+        return "pytest" in _sys.modules
     except Exception:
         return False
-    try:
-        import pytest  # type: ignore  # noqa: F401
-    except Exception:
-        return False
-    return True
 
 
 def _pytest_relaxed_switchovers_enabled() -> bool:

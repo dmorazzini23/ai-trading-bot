@@ -179,6 +179,18 @@ def _validate_trading_api(api: Any) -> bool:
             # Non-fatal; caller may handle attribute absence
             pass
 
+    if not hasattr(api, "get_order"):
+        getter = getattr(api, "get_order_by_id", None) or getattr(api, "get_order_by_client_order_id", None)
+        if callable(getter):
+
+            def _get_order_wrapper(order_id: Any):
+                return getter(order_id)
+
+            if _try_setattr(api, "get_order", _get_order_wrapper):
+                log_once.info("API_GET_ORDER_MAPPED", key="alpaca_get_order_mapped")
+            else:  # pragma: no cover - defensive fallback
+                log_once.error("ALPACA_GET_ORDER_PATCH_FAILED", key="alpaca_get_order_patch_failed")
+
     if not hasattr(api, "cancel_order"):
         cancel_by_id = getattr(api, "cancel_order_by_id", None)
         cancel_orders = getattr(api, "cancel_orders", None)

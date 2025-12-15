@@ -265,7 +265,9 @@ def _pytest_mode_active() -> bool:
     env_token = os.getenv("PYTEST_RUNNING")
     if isinstance(env_token, str) and env_token.strip().lower() in {"1", "true", "yes", "on"}:
         return True
-    return "pytest" in sys.modules
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    return False
 
 
 def _log_quote_entry_block(symbol: str, gate: str, extra: Mapping[str, Any] | None = None) -> None:
@@ -1903,7 +1905,7 @@ class ExecutionEngine:
                 self.execution_mode = str(self._explicit_mode).lower()
             if self._explicit_shadow is not None:
                 self.shadow_mode = bool(self._explicit_shadow)
-            if os.environ.get("PYTEST_RUNNING"):
+            if _pytest_mode_active():
                 try:
                     from tests.support.mocks import MockTradingClient  # type: ignore
                 except (ModuleNotFoundError, ImportError, ValueError, TypeError):
@@ -1955,6 +1957,15 @@ class ExecutionEngine:
                 url_override=base_url,
             )
             config_paper = paper if self.config is None else bool(self.config.use_paper)
+            logger.info(
+                "ALPACA_TRADING_CLIENT_INIT",
+                extra={
+                    "client_type": raw_client.__class__.__name__,
+                    "client_module": raw_client.__class__.__module__,
+                    "base_url": base_url,
+                    "paper": config_paper,
+                },
+            )
             logger.info(
                 "Real Alpaca client initialized",
                 extra={
