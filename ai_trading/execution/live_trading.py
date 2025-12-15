@@ -1493,13 +1493,18 @@ def _safe_mode_guard(
 ) -> bool:
     allow_paper_bypass, execution_mode = _safe_mode_policy()
     # For paper mode, always allow safe-mode bypass unless explicitly halted.
-    env_mode = os.getenv("EXECUTION_MODE", execution_mode)
+    env_mode = os.getenv("EXECUTION_MODE", "").strip().lower()
     if env_mode:
-        execution_mode = str(env_mode).strip().lower()
+        execution_mode = env_mode
+    else:
+        execution_mode = execution_mode or "paper"
     env_flag = os.getenv("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "")
     env_paper_bypass = env_flag.strip().lower() not in {"0", "false", "no", "off"}
     if execution_mode == "paper":
+        # Hard bypass for paper to prevent provider safe-mode from blocking orders.
         allow_paper_bypass = env_paper_bypass or allow_paper_bypass
+        if allow_paper_bypass:
+            return False
     reason: str | None = None
     env_override = os.getenv("AI_TRADING_HALT", "").strip().lower()
     if env_override in {"1", "true", "yes"}:
