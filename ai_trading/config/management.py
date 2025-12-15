@@ -79,9 +79,14 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
 
     from ai_trading.utils.env import refresh_alpaca_credentials_cache
 
+    skip_dotenv = bool(os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"))
+
     if path is None:
-        candidate = Path.cwd() / ".env"
-        path = candidate if candidate.exists() else None
+        if skip_dotenv:
+            path = None
+        else:
+            candidate = Path.cwd() / ".env"
+            path = candidate if candidate.exists() else None
     if path is None:
         reload_trading_config()
         refresh_alpaca_credentials_cache()

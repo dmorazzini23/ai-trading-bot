@@ -72,6 +72,10 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
     global _ENV_LOADED
     if _ENV_LOADED:
         return
+    if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
+        _ENV_LOADED = True
+        refresh_alpaca_credentials_cache()
+        return
     os.environ.setdefault("MULTI_LOAD_TEST", "safe_value")
     path = dotenv_path or os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)), ".env")
     loaded = load_dotenv_if_present(path)

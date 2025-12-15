@@ -4587,7 +4587,11 @@ def _remember_fallback_for_cycle(cycle_id: str, symbol: str, timeframe: str, fee
 def _reset_provider_auth_state_for_tests() -> None:
     global _ALLOW_SIP, _FORCE_SIP_REQUEST, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE, _state
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
+    preserve_unauth = bool(globals().get("_SIP_UNAUTHORIZED", False))
     _clear_sip_lockout_for_tests()
+    if preserve_unauth:
+        _SIP_UNAUTHORIZED = True
+        os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
     _SIP_UNAVAILABLE_LOGGED.clear()
     _CYCLE_FALLBACK_FEED.clear()
     _ALLOW_SIP = None
@@ -5793,6 +5797,15 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 interval,
                 reason_label,
                 extra=usage_extra,
+            )
+            log_backup_provider_used(
+                provider_str,
+                symbol=symbol,
+                timeframe=str(interval),
+                start=start_dt,
+                end=end_dt,
+                extra=usage_extra,
+                logger=logger,
             )
             bucket.add(key)
         if frames:
@@ -7173,7 +7186,21 @@ def _fetch_bars(
     pytest_active = _detect_pytest_env()
     global _NO_SESSION_ALPACA_OVERRIDE, _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
     if pytest_active:
+        _alpaca_disabled_until = None
+        _ALPACA_DISABLED_ALERTED = False
+        _alpaca_disable_count = 0
+        _alpaca_empty_streak = 0
+        try:
+            provider_monitor.reset()
+        except Exception:
+            pass
         os.environ.setdefault("PYTEST_RUNNING", "1")
+        _FALLBACK_WINDOWS.clear()
+        _FALLBACK_SUPPRESS_UNTIL.clear()
+        _BACKUP_SKIP_UNTIL.clear()
+        _ALPACA_CONSECUTIVE_FAILURES.clear()
+        _ALPACA_FAILURE_EVENTS.clear()
+        _IEX_EMPTY_COUNTS.clear()
     if pd is None:
         raise RuntimeError("pandas not available")
     if start is None:
@@ -7200,6 +7227,7 @@ def _fetch_bars(
     tf_key = (symbol, tf_norm)
     if pytest_active:
         _ALPACA_DISABLED_ALERTED = False
+        _alpaca_disabled_until = None
         _alpaca_disable_count = 0
         _alpaca_empty_streak = 0
         backup_allowed = True
