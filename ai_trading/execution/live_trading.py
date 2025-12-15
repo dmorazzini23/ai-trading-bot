@@ -3370,6 +3370,32 @@ class ExecutionEngine:
         if basis_label is None:
             basis_label = "unknown"
 
+        # Use a midpoint-anchored limit to reduce slippage when we have a live book and
+        # the caller did not force a specific limit/stop.
+        if (
+            order_type_normalized == "limit"
+            and not manual_limit_requested
+            and bid_val is not None
+            and ask_val is not None
+            and bid_val > 0
+            and ask_val > 0
+            and ask_val > bid_val
+        ):
+            mid = (bid_val + ask_val) / 2.0
+            spread = ask_val - bid_val
+            direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
+            # Cap the aggressiveness to avoid overpaying in wide markets.
+            max_offset_bps = 12.0
+            offset_abs = min(spread * 0.25, mid * max_offset_bps / 10000.0)
+            target_price = max(mid + direction * offset_abs, 0.01)
+            resolved_limit_price = target_price
+            price_for_limit = target_price
+            kwargs["price"] = target_price
+            if price_hint is None:
+                price_hint = target_price
+            if isinstance(annotations, dict):
+                annotations["limit_basis"] = "midpoint"
+
         provider_for_log = "alpaca"
         if (
             synthetic_quote
