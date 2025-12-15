@@ -4503,12 +4503,7 @@ def _detect_pytest_env() -> bool:
         return True
     if os.getenv("PYTEST_CURRENT_TEST"):
         return True
-    try:
-        import sys as _sys
-
-        return "pytest" in _sys.modules
-    except Exception:
-        return False
+    return False
 
 
 def _pytest_active() -> bool:
