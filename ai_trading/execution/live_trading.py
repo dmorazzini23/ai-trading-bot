@@ -592,6 +592,13 @@ def _normalize_status(value: Any) -> str | None:
         return None
     try:
         text = str(value).strip().lower()
+        # Normalize Alpaca SDK enums like "OrderStatus.PENDING_NEW" to "pending_new"
+        for prefix in ("orderstatus.", "order_status.", "status.", "alpaca.", "alpaca_order_status."):
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+                break
+        if "." in text:
+            text = text.split(".")[-1]
     except Exception:
         return None
     return text or None
