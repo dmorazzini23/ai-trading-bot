@@ -16765,10 +16765,33 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     break
                 time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
                 try:
-                    next_order = api.get_order(last_order.id)
+                    get_order = (
+                        getattr(api, "get_order", None)
+                        or getattr(api, "get_order_by_id", None)
+                        or getattr(api, "get_order_by_client_order_id", None)
+                    )
+                    if callable(get_order):
+                        next_order = get_order(last_order.id)
+                    else:
+                        # Fallback: fetch orders list and locate by id/client_order_id
+                        next_order = None
+                        try:
+                            orders_iter = getattr(api, "list_orders", None) or getattr(api, "get_orders", None)
+                            if callable(orders_iter):
+                                orders = orders_iter()
+                                for candidate in orders or []:
+                                    cand_id = getattr(candidate, "id", None)
+                                    cand_client_id = getattr(candidate, "client_order_id", None)
+                                    if cand_id == getattr(last_order, "id", None) or cand_client_id == getattr(
+                                        last_order, "client_order_id", None
+                                    ):
+                                        next_order = candidate
+                                        break
+                        except COMMON_EXC:
+                            next_order = None
+                    if next_order is None:
+                        break
                 except COMMON_EXC:
-                    break
-                if next_order is None:
                     break
                 if getattr(next_order, "symbol", None) in (None, "") and getattr(last_order, "symbol", None):
                     try:
