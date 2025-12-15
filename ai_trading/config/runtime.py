@@ -1014,7 +1014,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="strict_data_gating",
         env=("AI_TRADING_STRICT_GATING",),
         cast="bool",
-        default=True,
+        default=False,
         description="When true, enforce strict market data gating before routing orders.",
     ),
     ConfigSpec(

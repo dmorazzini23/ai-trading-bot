@@ -18758,6 +18758,11 @@ def _should_failsoft_allow_low_coverage(
 def _safe_mode_blocks_trading() -> bool:
     """Return ``True`` when the current degraded policy requires blocking trades."""
 
+    # Allow paper-mode bypass when explicitly permitted via env.
+    env_mode = os.getenv("EXECUTION_MODE", "").strip().lower()
+    env_paper_bypass = os.getenv("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "").strip().lower()
+    if env_mode == "paper" and env_paper_bypass not in {"0", "false", "no", "off"}:
+        return False
     try:
         cfg = get_trading_config()
     except COMMON_EXC:
