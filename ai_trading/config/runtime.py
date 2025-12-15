@@ -856,7 +856,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="safe_mode_allow_paper",
         env=("AI_TRADING_SAFE_MODE_ALLOW_PAPER",),
         cast="bool",
-        default=False,
+        default=True,
         description="Allow paper execution to bypass provider safe-mode blocks.",
     ),
     ConfigSpec(
