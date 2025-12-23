@@ -6368,9 +6368,11 @@ def _repair_rth_minute_gaps(
     missing_after = int(missing_index.size)
     gap_ratio = (missing_after / expected_count) if expected_count else 0.0
 
+    gap_limit_ratio = _resolve_gap_ratio_limit()
+    severe_gap_threshold = max(0.05, gap_limit_ratio)
     severe_primary_gap = (
         missing_after > 0
-        and gap_ratio > 0.05
+        and gap_ratio > severe_gap_threshold
         and not skip_backup_fill
         and (provider_attr or "alpaca").startswith("alpaca")
     )
