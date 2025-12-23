@@ -38,7 +38,7 @@ def test_repair_rth_gap_uses_backup(monkeypatch: pytest.MonkeyPatch) -> None:
     start_local = datetime(2024, 1, 2, 9, 30, tzinfo=tz)
     end_local = datetime(2024, 1, 2, 16, 0, tzinfo=tz)
     expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
-    missing = {expected_local[5].tz_convert("UTC"), expected_local[25].tz_convert("UTC")}
+    missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
     base_df = _build_base_frame(start_local, end_local, missing)
 
     captured: dict[str, pd.Timestamp] = {}
@@ -61,6 +61,7 @@ def test_repair_rth_gap_uses_backup(monkeypatch: pytest.MonkeyPatch) -> None:
         return pd.DataFrame(rows)
 
     monkeypatch.setattr(fetch_module, "_backup_get_bars", fake_backup)
+    monkeypatch.setenv("AI_TRADING_GAP_RATIO_LIMIT", "0.05")
     repaired, meta, used_backup = fetch_module._repair_rth_minute_gaps(  # type: ignore[attr-defined]
         base_df,
         symbol="AAPL",
@@ -73,6 +74,40 @@ def test_repair_rth_gap_uses_backup(monkeypatch: pytest.MonkeyPatch) -> None:
     assert meta["missing_after"] == 0
     assert captured["start"] == min(missing)
     assert captured["end"] == max(missing) + timedelta(minutes=1)
+    repaired_index = pd.to_datetime(repaired["timestamp"], utc=True)
+    for ts in missing:
+        assert ts in set(repaired_index)
+
+def test_repair_rth_gap_local_backfill_under_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    tz = ZoneInfo("America/New_York")
+    start_local = datetime(2024, 1, 2, 9, 30, tzinfo=tz)
+    end_local = datetime(2024, 1, 2, 10, 30, tzinfo=tz)
+    expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
+    missing = {expected_local[i].tz_convert("UTC") for i in (5, 25)}
+    base_df = _build_base_frame(start_local, end_local, missing)
+
+    backup_calls = {"count": 0}
+
+    def fake_backup(symbol: str, start: datetime, end: datetime, interval: str) -> pd.DataFrame:
+        backup_calls["count"] += 1
+        return pd.DataFrame()
+
+    monkeypatch.setattr(fetch_module, "_backup_get_bars", fake_backup)
+    monkeypatch.setenv("AI_TRADING_GAP_RATIO_LIMIT", "0.05")
+
+    repaired, meta, used_backup = fetch_module._repair_rth_minute_gaps(  # type: ignore[attr-defined]
+        base_df,
+        symbol="AAPL",
+        start=start_local.astimezone(UTC),
+        end=end_local.astimezone(UTC),
+        tz=tz,
+    )
+
+    assert used_backup is False
+    assert backup_calls["count"] == 0
+    assert meta["local_backfill"] is True
+    assert meta["backup_fill_suppressed"] is True
+    assert meta["missing_after"] == 0
     repaired_index = pd.to_datetime(repaired["timestamp"], utc=True)
     for ts in missing:
         assert ts in set(repaired_index)

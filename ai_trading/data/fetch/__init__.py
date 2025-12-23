@@ -2592,6 +2592,8 @@ def _mark_fallback(
                 target_key = str(provider_for_register)
         if from_key == "alpaca_iex" and not sip_allowed and target_key == "alpaca_sip":
             skip_switchover = True
+        if from_key and target_key == "yahoo" and from_key.startswith("alpaca") and not sip_allowed:
+            skip_switchover = True
 
     if should_emit:
         cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
@@ -6201,7 +6203,7 @@ def _repair_rth_minute_gaps(
     end: _dt.datetime,
     tz: ZoneInfo,
 ) -> tuple[pd.DataFrame | None, dict[str, object], bool]:
-    """Attempt to fill missing RTH minutes using the configured backup provider."""
+    """Attempt to fill missing RTH minutes using backup or local interpolation."""
     pd_local = _ensure_pandas()
     if pd_local is None or df is None or getattr(df, "empty", True):
         return df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False
@@ -6296,9 +6298,17 @@ def _repair_rth_minute_gaps(
     primary_provider_canonical = canonical_provider(
         provider_attr if provider_attr else ("yahoo" if skip_backup_fill else "alpaca"),
     )
+    gap_limit_ratio = _resolve_gap_ratio_limit()
+    allow_backup_fill = (
+        len(missing) > 0
+        and not skip_backup_fill
+        and initial_gap_ratio >= gap_limit_ratio
+    )
+    backup_suppressed = len(missing) > 0 and not skip_backup_fill and not allow_backup_fill
     used_backup = False
     yahoo_repaired = False
-    if len(missing) > 0 and not skip_backup_fill:
+    local_backfill = False
+    if len(missing) > 0 and allow_backup_fill:
         try:
             missing_start = missing.min()
             missing_end = missing.max() + _dt.timedelta(minutes=1)
@@ -6361,14 +6371,35 @@ def _repair_rth_minute_gaps(
             existing_index=current_raw_index,
         )
         if yahoo_repaired:
+            local_backfill = True
             work_df = repaired_df
             mutated = True
             current_raw_index, combined_index = _extract_minute_indexes(work_df)
+    elif len(missing) > 0 and backup_suppressed:
+        repaired_df, local_repaired = _repair_yahoo_minute_contiguity(
+            work_df if mutated else df,
+            expected_index=expected_utc,
+            existing_index=current_raw_index,
+        )
+        if local_repaired:
+            local_backfill = True
+            work_df = repaired_df
+            mutated = True
+            current_raw_index, combined_index = _extract_minute_indexes(work_df)
+            logger.info(
+                "MINUTE_GAPS_LOCAL_BACKFILL",
+                extra={
+                    "symbol": symbol,
+                    "window_start": start.isoformat(),
+                    "window_end": end.isoformat(),
+                    "gap_ratio": initial_gap_ratio,
+                    "gap_ratio_limit": gap_limit_ratio,
+                },
+            )
     missing_index = expected_utc.difference(combined_index)
     missing_after = int(missing_index.size)
     gap_ratio = (missing_after / expected_count) if expected_count else 0.0
 
-    gap_limit_ratio = _resolve_gap_ratio_limit()
     severe_gap_threshold = max(0.05, gap_limit_ratio)
     severe_primary_gap = (
         missing_after > 0
@@ -6435,7 +6466,6 @@ def _repair_rth_minute_gaps(
         gap_ratio_pct = max(float(gap_ratio or 0.0) * 100.0, 0.0)
     except (TypeError, ValueError):
         gap_ratio_pct = None
-    gap_limit_ratio = _resolve_gap_ratio_limit()
     gap_limit_pct = max(gap_limit_ratio * 100.0, 0.0)
     gap_over_limit = False
     if gap_ratio_pct is not None:
@@ -6473,6 +6503,8 @@ def _repair_rth_minute_gaps(
         "window_start": start_utc,
         "window_end": end_utc,
         "used_backup": used_backup,
+        "backup_fill_suppressed": backup_suppressed,
+        "local_backfill": local_backfill,
         "provider": provider_name,
         "residual_gap": missing_after > 0,
         "initial_missing": initial_missing_count,
@@ -6482,8 +6514,8 @@ def _repair_rth_minute_gaps(
         "primary_provider": primary_provider_canonical,
         "primary_feed_gap": primary_feed_gap,
         "using_fallback_provider": using_fallback_provider,
-        "fallback_repaired": yahoo_repaired,
-        "fallback_contiguous": using_fallback_provider and missing_after == 0,
+        "fallback_repaired": local_backfill,
+        "fallback_contiguous": (using_fallback_provider or local_backfill) and missing_after == 0,
         "coverage_last_timestamp": last_timestamp_dt,
     }
     if fallback_provider_hint:
@@ -6497,6 +6529,8 @@ def _repair_rth_minute_gaps(
             or used_backup
         )
     )
+    if local_backfill and not metadata["residual_gap"]:
+        emit_gap_event = False
 
     if gap_over_limit:
         gap_extra = {
