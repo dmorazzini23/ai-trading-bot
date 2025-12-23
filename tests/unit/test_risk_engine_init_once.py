@@ -83,7 +83,7 @@ def test_risk_engine_init_logged_once(monkeypatch, caplog):
 
     monkeypatch.setattr(eng, "run_lock", DummyLock())
     monkeypatch.setattr(eng, "_prepare_run", lambda *_a, **_k: (0.0, True, []))
-    monkeypatch.setattr(eng, "_process_symbols", lambda *_a, **_k: ([], {}))
+    monkeypatch.setattr(eng, "_process_symbols", lambda *_a, **_k: ([], {}, 0))
     monkeypatch.setattr(eng, "_send_heartbeat", lambda: None)
     monkeypatch.setattr(eng.time, "sleep", lambda *_a, **_k: None)
 
@@ -94,4 +94,3 @@ def test_risk_engine_init_logged_once(monkeypatch, caplog):
 
     init_logs = [r for r in caplog.records if "Risk engine initialized" in r.message]
     assert len(init_logs) == 1
-

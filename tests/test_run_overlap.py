@@ -27,7 +27,7 @@ def test_run_all_trades_overlap(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
     monkeypatch.setattr(bot_engine, "check_pdt_rule", lambda ctx: False)
     monkeypatch.setattr(bot_engine, "_prepare_run", lambda ctx, st: (0.0, True, []))
-    monkeypatch.setattr(bot_engine, "_process_symbols", lambda *a, **k: ([], {}))
+    monkeypatch.setattr(bot_engine, "_process_symbols", lambda *a, **k: ([], {}, 0))
     monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: None)
 
     api_obj = runtime.api

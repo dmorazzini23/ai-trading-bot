@@ -20,5 +20,5 @@ def test_symbol_processing_budget(monkeypatch):
     )
     monkeypatch.setattr(bot_engine, "get_ctx", lambda: object())
 
-    processed, _ = bot_engine._process_symbols(["AAPL", "MSFT"], 100.0, None, True)
+    processed, _, _ = bot_engine._process_symbols(["AAPL", "MSFT"], 100.0, None, True)
     assert processed == []

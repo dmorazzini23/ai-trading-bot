@@ -30,7 +30,7 @@ def test_skip_logic(monkeypatch, caplog):
         raising=False,
     )
 
-    processed, _ = bot_engine._process_symbols(
+    processed, _, _ = bot_engine._process_symbols(
         ["MSFT", "TSLA"], 1000.0, None, True, True
     )
     assert processed == []
@@ -72,7 +72,7 @@ def test_skip_duplicates(monkeypatch):
         raising=False,
     )
 
-    processed, _ = bot_engine._process_symbols(
+    processed, _, _ = bot_engine._process_symbols(
         ["AAPL"], 1000.0, None, True, False, True
     )
     assert processed == []

@@ -25732,9 +25732,11 @@ def _process_symbols(
     regime_ok: bool,
     close_shorts: bool = False,
     skip_duplicates: bool = False,
-) -> tuple[list[str], dict[str, int]]:
+) -> tuple[list[str], dict[str, int], int]:
     processed: list[str] = []
     row_counts: dict[str, int] = {}
+    fetch_attempts = 0
+    fetch_attempts_lock = Lock()
 
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
@@ -25927,7 +25929,7 @@ def _process_symbols(
                     "reason": cycle_budget.cause or "guard",
                 },
             )
-            return [], {s: 0 for s in symbols}
+            return [], {s: 0 for s in symbols}, fetch_attempts
 
     executors._ensure_executors()  # AI-AGENT-REF: lazy executor creation
 
@@ -25956,6 +25958,7 @@ def _process_symbols(
     def process_symbol(symbol: str) -> None:
         completed_stages: list[str] = []
         local_success = False
+        nonlocal fetch_attempts
 
         def _checkpoint(pending: str) -> bool:
             if should_stop():
@@ -26011,6 +26014,8 @@ def _process_symbols(
             try:
                 if _checkpoint("fetch"):
                     return
+                with fetch_attempts_lock:
+                    fetch_attempts += 1
                 price_df = fetch_minute_df_safe(symbol)
                 completed_stages.append("fetch")
             except EmptyBarsError as exc:
@@ -26114,9 +26119,9 @@ def _process_symbols(
     if should_stop():
         for fut in futures:
             cancel = getattr(fut, "cancel", None)
-            if callable(cancel):
-                cancel()
-        return processed, row_counts
+        if callable(cancel):
+            cancel()
+        return processed, row_counts, fetch_attempts
     for f in futures:
         if should_stop():
             cancel = getattr(f, "cancel", None)
@@ -26169,7 +26174,7 @@ def _process_symbols(
             "skipped": broker_skipped,
         },
     )
-    return processed, row_counts
+    return processed, row_counts, fetch_attempts
 
 
 def _log_loop_heartbeat(loop_id: str, start: float) -> None:
@@ -27347,13 +27352,15 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
             processed, row_counts = [], {}
             attempts_used = 0
+            fetch_attempts_total = 0
             for attempt in range(attempts_limit):
                 attempts_used = attempt + 1
                 try:
                     with StageTimer(logger, "CYCLE_DATA_MS", symbols=len(symbols)):
-                        processed, row_counts = _process_symbols(
+                        processed, row_counts, fetch_attempts = _process_symbols(
                             symbols, current_cash, alpha_model, regime_ok
                         )
+                        fetch_attempts_total += fetch_attempts
                 except CycleAbortSafeMode as exc:
                     logger.warning(
                         "CYCLE_EARLY_EXIT_SAFE_MODE",
@@ -27369,6 +27376,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     break
                 if attempt < attempts_limit - 1 and retry_delay > 0.0:
                     time.sleep(retry_delay)
+
+            if fetch_attempts_total == 0:
+                logger.info(
+                    "CYCLE_DATA_SKIP_NO_FETCH",
+                    extra={"symbols": symbols, "attempts": attempts_used or attempts_limit},
+                )
+                return
 
             # AI-AGENT-REF: abort only if all symbols returned zero rows
             if sum(row_counts.values()) == 0:

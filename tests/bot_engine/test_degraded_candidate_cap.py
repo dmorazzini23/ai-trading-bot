@@ -143,7 +143,7 @@ def test_process_symbols_skips_when_degraded(symbol_processing_env, caplog):
     runtime._data_degraded_fatal = True
     caplog.set_level(logging.WARNING, logger=bot_engine.logger.name)
 
-    processed, row_counts = bot_engine._process_symbols(
+    processed, row_counts, _ = bot_engine._process_symbols(
         ["AAPL", "MSFT"],
         current_cash=100000.0,
         model=None,
@@ -192,7 +192,7 @@ def test_process_symbols_detects_degrade_mid_cycle(symbol_processing_env, monkey
 
     caplog.set_level(logging.WARNING, logger=bot_engine.logger.name)
 
-    processed, row_counts = bot_engine._process_symbols(
+    processed, row_counts, _ = bot_engine._process_symbols(
         ["AAPL", "MSFT"],
         current_cash=100000.0,
         model=None,
@@ -235,7 +235,7 @@ def test_process_symbols_processes_when_backup_active(symbol_processing_env, mon
 
     caplog.set_level(logging.INFO, logger=bot_engine.logger.name)
 
-    processed, row_counts = bot_engine._process_symbols(
+    processed, row_counts, _ = bot_engine._process_symbols(
         ["AAPL"],
         current_cash=50000.0,
         model=None,

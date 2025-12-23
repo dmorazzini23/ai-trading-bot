@@ -2066,7 +2066,7 @@ def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
     monkeypatch.setattr(bot_engine, "prediction_executor", prediction_executor, raising=False)
     monkeypatch.setattr(bot_engine.executors, "_ensure_executors", lambda: None)
 
-    processed, _ = bot_engine._process_symbols(["AAPL"], 1000.0, None, True)
+    processed, _, _ = bot_engine._process_symbols(["AAPL"], 1000.0, None, True)
 
     assert processed == ["AAPL"]
     assert fetch_calls == ["AAPL"]

@@ -106,7 +106,7 @@ class TestProcessSymbol:
 
         monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", _raise_nan)
 
-        processed, row_counts = bot_engine._process_symbols(["AAPL"], 1000.0, None, True)
+        processed, row_counts, _ = bot_engine._process_symbols(["AAPL"], 1000.0, None, True)
 
         assert processed == []
         assert row_counts == {}
@@ -153,7 +153,7 @@ class TestProcessSymbol:
 
         caplog.set_level("INFO")
 
-        processed, row_counts = bot_engine._process_symbols(
+        processed, row_counts, _ = bot_engine._process_symbols(
             ["AAPL", "MSFT"], 1000.0, None, True
         )
 

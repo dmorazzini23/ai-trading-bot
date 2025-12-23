@@ -108,7 +108,7 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
 
     monkeypatch.setattr(eng, "run_lock", DummyLock())
 
-    monkeypatch.setattr(eng, "_process_symbols", lambda ctx, symbols, cash: None)
+    monkeypatch.setattr(eng, "_process_symbols", lambda *_a, **_k: ([], {}, 0))
     monkeypatch.setattr(eng, "_prepare_run", lambda *_a, **_k: (0.0, True, []))
 
     called = {"flag": False}

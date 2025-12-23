@@ -67,6 +67,7 @@ def test_retry_final_skipped_on_single_success(monkeypatch, caplog):
         lambda symbols, current_cash, alpha_model, regime_ok: (
             list(symbols),
             {symbol: 5 for symbol in symbols},
+            len(list(symbols)),
         ),
     )
 
