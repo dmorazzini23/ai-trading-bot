@@ -160,6 +160,7 @@ def test_process_symbols_detects_degrade_mid_cycle(symbol_processing_env, monkey
     runtime._data_degraded = False
     runtime._data_degraded_reason = None
     runtime._data_degraded_fatal = False
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "widen")
 
     detections = iter(
         [
@@ -205,11 +206,44 @@ def test_process_symbols_detects_degrade_mid_cycle(symbol_processing_env, monkey
     assert not any(record.msg == "DEGRADED_FEED_SKIP_SYMBOL" for record in caplog.records)
 
 
+def test_process_symbols_blocks_when_degraded_mode_block(symbol_processing_env, monkeypatch, caplog):
+    runtime, _state = symbol_processing_env
+    runtime._data_degraded = False
+    runtime._data_degraded_reason = None
+    runtime._data_degraded_fatal = False
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "block")
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_data_provider_degraded",
+        lambda: (True, "using_backup_provider", False),
+    )
+
+    def _fail_fetch(_symbol: str):  # pragma: no cover - should not be called
+        raise AssertionError("fetch_minute_df_safe should not be called when blocking")
+
+    monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", _fail_fetch)
+
+    caplog.set_level(logging.WARNING, logger=bot_engine.logger.name)
+
+    processed, row_counts, _ = bot_engine._process_symbols(
+        ["AAPL"],
+        current_cash=50000.0,
+        model=None,
+        regime_ok=True,
+    )
+
+    assert processed == []
+    assert row_counts == {}
+    assert any(record.msg == "DEGRADED_FEED_SKIP_SYMBOL" for record in caplog.records)
+
+
 def test_process_symbols_processes_when_backup_active(symbol_processing_env, monkeypatch, caplog):
     runtime, _state = symbol_processing_env
     runtime._data_degraded = False
     runtime._data_degraded_reason = None
     runtime._data_degraded_fatal = False
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "widen")
 
     monkeypatch.setattr(
         bot_engine,

@@ -25752,6 +25752,15 @@ def _process_symbols(
     degrade_reason = getattr(ctx, "_data_degraded_reason", None) or "provider_degraded"
     degrade_fatal = bool(getattr(ctx, "_data_degraded_fatal", False))
     degrade_announce_logged = False
+    degraded_mode = "block"
+    try:
+        cfg_obj = get_trading_config()
+    except COMMON_EXC:
+        cfg_obj = None
+    if cfg_obj is not None:
+        degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
+        if degraded_mode not in {"block", "widen"}:
+            degraded_mode = "block"
 
     cycle_budget = get_cycle_budget_context()
 
@@ -25822,6 +25831,7 @@ def _process_symbols(
                 except (AttributeError, Exception):
                     # Context objects used in tests may be bare objects without attribute support.
                     pass
+        pos = state.position_cache.get(symbol, 0)
         if data_degraded:
             if not degrade_announce_logged or detected:
                 logger.warning(
@@ -25833,6 +25843,12 @@ def _process_symbols(
                 logger.warning(
                     "DEGRADED_FEED_SKIP_SYMBOL",
                     extra={"symbol": symbol, "reason": degrade_reason},
+                )
+                continue
+            if degraded_mode == "block" and pos >= 0:
+                logger.warning(
+                    "DEGRADED_FEED_SKIP_SYMBOL",
+                    extra={"symbol": symbol, "reason": degrade_reason, "mode": degraded_mode},
                 )
                 continue
         now = datetime.now(UTC)
@@ -25867,8 +25883,6 @@ def _process_symbols(
             break
 
         processed_symbols += 1
-
-        pos = state.position_cache.get(symbol, 0)
         if pos < 0 and close_shorts:
             logger.info(
                 "SKIP_SHORT_CLOSE_QUEUED | symbol=%s qty=%s",
