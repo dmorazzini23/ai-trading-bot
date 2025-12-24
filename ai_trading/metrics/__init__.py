@@ -2,6 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+
+class _FallbackRegistry:
+    """Minimal registry used when the provided registry cannot be mutated."""
+
+    def __init__(self) -> None:
+        self._names_to_collectors: dict[str, object] = {}
+
+    def register(self, *_, **__) -> None:
+        pass
+
+    def unregister(self, *_, **__) -> None:
+        pass
+
 PROMETHEUS_AVAILABLE = False
 REGISTRY = None
 CollectorRegistry = None
@@ -73,9 +86,12 @@ def _ensure_names_map(registry):
     """Ensure ``registry`` exposes a ``_names_to_collectors`` mapping."""
 
     if registry is None:
-        return None
+        return _FallbackRegistry()
     if not hasattr(registry, "_names_to_collectors"):
-        setattr(registry, "_names_to_collectors", {})
+        try:
+            setattr(registry, "_names_to_collectors", {})
+        except (AttributeError, TypeError):
+            return _FallbackRegistry()
     return registry
 
 

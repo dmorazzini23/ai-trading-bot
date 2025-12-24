@@ -7,9 +7,9 @@ from typing import Optional, Union
 
 from .sleep import _real_sleep, sleep
 
-# Prefer AI_HTTP_TIMEOUT when present (tests set this); fallback to HTTP_TIMEOUT env
+# Prefer HTTP_TIMEOUT when present; fallback to AI_HTTP_TIMEOUT env
 HTTP_TIMEOUT: Union[int, float] = float(
-    os.getenv("AI_HTTP_TIMEOUT", os.getenv("HTTP_TIMEOUT", "10"))
+    os.getenv("HTTP_TIMEOUT") or os.getenv("AI_HTTP_TIMEOUT") or "10"
 )  # AI-AGENT-REF: canonical timeout across runtime
 
 

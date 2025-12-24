@@ -94,6 +94,10 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
     """Ensure no duplicate handler types and attach default if none exist."""
 
     handlers = getattr(log, "handlers", [])
+    try:
+        from ai_trading.logging_filters import SecretFilter
+    except Exception:  # pragma: no cover - optional dependency guard
+        SecretFilter = None  # type: ignore[assignment]
 
     try:
         unique: list[logging.Handler] = list(handlers)
@@ -116,6 +120,8 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
         if h_type in seen_types:
             continue
         seen_types.add(h_type)
+        if SecretFilter is not None and not any(isinstance(f, SecretFilter) for f in h.filters):
+            h.addFilter(SecretFilter())
         if not any(isinstance(f, ExtraSanitizerFilter) for f in h.filters):
             h.addFilter(ExtraSanitizerFilter())
         if _THROTTLE_FILTER not in h.filters:
@@ -126,6 +132,8 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
         h = logging.StreamHandler()
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
         h.setFormatter(fmt)
+        if SecretFilter is not None:
+            h.addFilter(SecretFilter())
         h.addFilter(ExtraSanitizerFilter())
         h.addFilter(_THROTTLE_FILTER)
         filtered.append(h)
@@ -717,10 +725,11 @@ def flush_log_throttle_summaries(logger: logging.Logger | logging.LoggerAdapter 
 
     pytest_running = _truthy_flag(os.getenv("PYTEST_RUNNING"))
     namespace = _logger_namespace(logger)
-    if pytest_running and namespace is None:
+    if pytest_running and namespace is None and logger is not None:
         namespace = _infer_logger_namespace_from_stack()
 
     _THROTTLE_FILTER.flush_cycle(namespace=namespace if pytest_running else None)
+    _flush_provider_log_summaries()
 
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
@@ -1370,9 +1379,9 @@ def log_backup_provider_used(
         active_logger = get_logger(__name__)
 
     try:
-        from ai_trading.data.metrics import backup_provider_used as _backup_counter
+        from ai_trading.data.fetch.metrics import inc_backup_provider_used
 
-        _backup_counter.labels(provider=provider, symbol=symbol).inc()
+        inc_backup_provider_used(provider, symbol, increment=True)
     except COMMON_EXC:
         active_logger.debug(
             "METRIC_BACKUP_PROVIDER_FAILED",

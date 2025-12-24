@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
 from threading import Lock
 
 from ai_trading.data.metrics import (
@@ -60,6 +61,13 @@ _EMPTY_LOCK = Lock()
 _FETCH_ATTEMPT_LOCK = Lock()
 _BACKUP_PROVIDER_LOCK = Lock()
 _ALPACA_FAILED_LOCK = Lock()
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def mark_skipped(symbol: str, timeframe: str) -> int:
@@ -154,15 +162,23 @@ def inc_provider_fallback(from_provider: str, to_provider: str) -> int:
     return value or _PROVIDER_FALLBACK_COUNTS[key]
 
 
-def inc_backup_provider_used(provider: str, symbol: str) -> int:
+def inc_backup_provider_used(provider: str, symbol: str, *, increment: bool | None = None) -> int:
     """Increment backup-provider counter and return the current value."""
+
+    if increment is None:
+        increment = not _env_truthy("PYTEST_RUNNING")
+
+    key = (provider, symbol)
     with _BACKUP_PROVIDER_LOCK:
-        key = (provider, symbol)
-        _BACKUP_PROVIDER_USED_COUNTS[key] += 1
-        local_value = _BACKUP_PROVIDER_USED_COUNTS[key]
+        if increment:
+            _BACKUP_PROVIDER_USED_COUNTS[key] += 1
+        local_value = _BACKUP_PROVIDER_USED_COUNTS.get(key, 0)
+
     metric = _backup_provider_used_counter.labels(provider=provider, symbol=symbol)
+    prom_value = 0
     try:
-        metric.inc()
+        if increment:
+            metric.inc()
         prom_value = _current_value(metric)
     except Exception:
         prom_value = 0

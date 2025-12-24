@@ -58,6 +58,8 @@ class SecretFilter(logging.Filter):
                     record.__dict__[k] = _ENV_MASK
             # Sanitize positional/keyword args only; avoid mutating format strings
             candidates = self._candidate_values()
+            if candidates and isinstance(record.msg, str):
+                record.msg = self._mask_in_text(record.msg, candidates)
             if record.args and candidates:
                 try:
                     if isinstance(record.args, tuple):

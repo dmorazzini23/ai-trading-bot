@@ -70,7 +70,7 @@ def _default_test_settings() -> SimpleNamespace:
         enable_memory_optimization=False,
         env="test" if os.getenv("PYTEST_RUNNING") else "dev",
         api_port=9001,
-        alpaca_data_feed=os.getenv("ALPACA_DATA_FEED", "sip"),
+        alpaca_data_feed=os.getenv("ALPACA_DATA_FEED", "iex"),
         alpaca_adjustment=os.getenv("ALPACA_ADJUSTMENT", "raw"),
     )
 

@@ -4135,6 +4135,7 @@ class ExecutionEngine:
                 "order_id": str(order_id) if order_id is not None else None,
                 "client_order_id": str(client_order_id) if client_order_id is not None else None,
                 "quantity": qty,
+                "qty": qty,
             }
 
         def _handle_status_transition(status_value: Any, *, source: str) -> None:

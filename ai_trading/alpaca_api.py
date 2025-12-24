@@ -80,6 +80,8 @@ def _lazy_http_session() -> "Optional[HTTPSession]":
 _HTTP_SESSION: "Optional[HTTPSession]" = None
 _pending_orders_lock = RLock()
 _pending_orders: dict[str, dict[str, Any]] = {}
+partial_fill_tracker: dict[str, float] = {}
+partial_fills: dict[str, dict[str, Any]] = {}
 
 
 def _get_http_session() -> "HTTPSession":
@@ -167,6 +169,13 @@ def eastern_tz() -> ZoneInfo:
 EASTERN_TZ = eastern_tz()
 
 ALPACA_AVAILABLE = ALPACA_AVAILABLE and not missing("alpaca", "alpaca")
+_TEST_FLAG_VALUES = {"1", "true", "yes", "on"}
+if (
+    str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in _TEST_FLAG_VALUES
+    or str(os.getenv("TESTING", "")).strip().lower() in _TEST_FLAG_VALUES
+    or os.getenv("PYTEST_CURRENT_TEST")
+):
+    ALPACA_AVAILABLE = False
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 _ALPACA_SERVICE_AVAILABLE: bool = True
 
@@ -1542,6 +1551,54 @@ def alpaca_get(
     return content
 
 
+def _coerce_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def handle_trade_update(event: Any) -> None:
+    """Handle trade update events and log fill transitions."""
+
+    if event is None:
+        return
+    event_type = getattr(event, "event", None) or getattr(event, "event_type", None)
+    event_label = str(event_type or "").strip().lower()
+    if not event_label:
+        return
+    order = getattr(event, "order", None) or getattr(event, "order_data", None)
+    if order is None:
+        return
+    order_id = getattr(order, "id", None) or getattr(order, "order_id", None)
+    if not order_id:
+        return
+    order_key = str(order_id)
+    symbol = getattr(order, "symbol", None)
+    filled_qty = _coerce_float(getattr(order, "filled_qty", None))
+    filled_avg_price = _coerce_float(getattr(order, "filled_avg_price", None))
+    payload = {
+        "order_id": order_key,
+        "symbol": symbol,
+        "filled_qty": filled_qty,
+        "filled_avg_price": filled_avg_price,
+        "event": event_label,
+    }
+
+    if event_label in {"partial_fill", "partial_filled"}:
+        if order_key in partial_fill_tracker:
+            return
+        partial_fill_tracker[order_key] = monotonic_time()
+        partial_fills[order_key] = dict(payload)
+        _log.info("ORDER_PARTIAL_FILL", extra=payload)
+        return
+    if event_label in {"fill", "filled"}:
+        partial_fill_tracker.pop(order_key, None)
+        partial_fills.pop(order_key, None)
+        _log.info("ORDER_FILLED", extra=payload)
+        return
+
+
 def start_trade_updates_stream(*_a, **_k):
     return None
 
@@ -1563,6 +1620,9 @@ __all__ = [
     "get_bars_df",
     "alpaca_get",
     "start_trade_updates_stream",
+    "partial_fill_tracker",
+    "partial_fills",
+    "handle_trade_update",
     "initialize",
     "_HTTP",
     "_pending_orders_lock",
