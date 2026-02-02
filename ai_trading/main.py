@@ -1373,7 +1373,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
     try:
         from ai_trading.health import HealthCheck
-        health_port = int(getattr(settings, "healthcheck_port", 9101) or 9101)
+        health_port = int(getattr(settings, "healthcheck_port", 8081) or 8081)
         if int(port) != int(health_port):
             ctx = SimpleNamespace(host="0.0.0.0", port=health_port, service="ai-trading")
             hc = HealthCheck(ctx=ctx)

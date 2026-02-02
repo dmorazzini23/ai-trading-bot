@@ -5,13 +5,11 @@ from __future__ import annotations
 import os
 import sys
 from typing import Dict
-
-from ai_trading.config.management import get_env
+from ai_trading.utils.env import resolve_alpaca_feed
 
 _VALID_FEEDS = {"iex", "sip"}
 _FEED_CACHE: Dict[str, str] = {}
 _TRUTHY = {"1", "true", "yes", "on"}
-_FALSY = {"0", "false", "no", "off"}
 
 
 def _normalize_feed(value: str | None) -> str | None:
@@ -38,31 +36,15 @@ def _pytest_mode() -> bool:
     return "pytest" in sys.modules or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in _TRUTHY
 
 
-def _env_false(key: str) -> bool:
-    try:
-        value = get_env(key, None)
-    except Exception:
-        value = None
-    if value is None:
-        value = os.getenv(key)
-    if value is None:
-        return False
-    try:
-        lowered = str(value).strip().lower()
-    except Exception:  # pragma: no cover - defensive
-        return False
-    return lowered in _FALSY
-
-
 def _sip_disabled_env(py_mode: bool) -> bool:
-    """Return ``True`` when environment flags explicitly disable SIP access."""
+    """Return ``True`` when environment flags disallow SIP access."""
 
-    allow_disabled = _env_false("ALPACA_ALLOW_SIP")
-    if py_mode:
-        return allow_disabled
-    if allow_disabled:
+    _ = py_mode
+    try:
+        resolved = resolve_alpaca_feed("sip")
+    except Exception:
         return True
-    return _env_false("ALPACA_SIP_ENTITLED")
+    return str(resolved).strip().lower() != "sip"
 
 
 def ensure_entitled_feed(requested: str | None, cached: str | None) -> str | None:

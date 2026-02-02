@@ -17,8 +17,8 @@ export ENABLE_FINNHUB=1
 ## Alpaca Feed
 
 - `ALPACA_DATA_FEED`: choose `iex` (default) or `sip`. The `sip` option requires a SIP-enabled Alpaca account.
-- `ALPACA_ALLOW_SIP`, `ALPACA_HAS_SIP`, `ALPACA_SIP_ENTITLED`: all must resolve truthy for SIP requests to be issued. Setting
-  `ALPACA_SIP_UNAUTHORIZED=1` forces the client back to IEX even when the other flags are present. `DATA_FEED_INTRADAY` and
+- `ALPACA_ALLOW_SIP` plus at least one of `ALPACA_HAS_SIP` or `ALPACA_SIP_ENTITLED` must resolve truthy for SIP requests to be issued.
+  Setting `ALPACA_SIP_UNAUTHORIZED=1` forces the client back to IEX even when the other flags are present. `DATA_FEED_INTRADAY` and
   `ALPACA_DATA_FEED` honour these flags automatically—when SIP is not fully authorised the runtime silently downgrades to IEX.
 - `ALPACA_FEED_FAILOVER`: comma-separated Alpaca feeds to try when a 200 OK response is empty. Example: `sip,iex` tells the bot to
   retry SIP first, then fall back to IEX if SIP is also empty or unavailable. Feeds that are not permitted by entitlement are
@@ -45,7 +45,8 @@ once. Future requests for the same pair use the working feed immediately, elimin
 
 ## Provider Priority and Fallbacks
 
-- `DATA_PROVIDER_PRIORITY`: comma-separated order of providers to try. Default is `alpaca_iex,alpaca_sip,yahoo`.
+- `DATA_PROVIDER_PRIORITY`: comma-separated order of providers to try. Default is `alpaca_iex,yahoo` unless SIP is entitled, in
+  which case `alpaca_sip` is inserted after `alpaca_iex`.
 - `MAX_DATA_FALLBACKS`: maximum number of fallbacks allowed before giving up. Default is `2` (tries both Alpaca feeds before Yahoo).
 
 Configure these variables in your deployment environment to control provider availability and failover behavior.

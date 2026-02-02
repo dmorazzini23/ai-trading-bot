@@ -1436,7 +1436,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="healthcheck_port",
         env=("HEALTHCHECK_PORT", "AI_TRADING_HEALTHCHECK_PORT"),
         cast="int",
-        default=9101,
+        default=8081,
         description="TCP port used by the auxiliary health/metrics server.",
         min_value=1,
         max_value=65535,
@@ -1960,18 +1960,20 @@ class TradingConfig:
             values["data_provider_priority"] = tuple(priority)
             values["data_provider"] = provider_override
 
-        if (
-            values.get("data_feed_intraday") == "sip"
-            and not values.get("alpaca_allow_sip")
-            and not values.get("alpaca_has_sip")
-        ):
-            raise ValueError(
-                (
-                    "DATA_FEED_INTRADAY=sip requires SIP entitlements. Set ALPACA_ALLOW_SIP=1 or "
-                    "ALPACA_HAS_SIP=1. Ensure ALPACA_API_KEY, ALPACA_SECRET_KEY, and DATA_FEED_INTRADAY are "
-                    "configured. See docs/DEPLOYING.md#alpaca-feed-selection for setup guidance."
+        if values.get("data_feed_intraday") == "sip":
+            allow_sip = bool(values.get("alpaca_allow_sip"))
+            has_sip = bool(values.get("alpaca_has_sip"))
+            sip_entitled_env = _to_bool(env_map.get("ALPACA_SIP_ENTITLED"), False)
+            sip_entitled = allow_sip and (has_sip or sip_entitled_env)
+            if not sip_entitled:
+                raise ValueError(
+                    (
+                        "DATA_FEED_INTRADAY=sip requires SIP entitlements. Set ALPACA_ALLOW_SIP=1 and either "
+                        "ALPACA_HAS_SIP=1 or ALPACA_SIP_ENTITLED=1. Ensure ALPACA_API_KEY, ALPACA_SECRET_KEY, "
+                        "and DATA_FEED_INTRADAY are configured. See docs/DEPLOYING.md#alpaca-feed-selection for "
+                        "setup guidance."
+                    )
                 )
-            )
         provider_normalized = str(values.get("data_provider") or "").strip().lower()
         feed_value = str(values.get("alpaca_data_feed") or "").strip().lower()
         feed_ignored = False

@@ -235,7 +235,9 @@ def test_sip_allowed_helper_refreshes_on_env_toggle(monkeypatch):
     assert data_fetch._sip_allowed() is False
 
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     assert data_fetch._sip_allowed() is True
 
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "0")
     assert data_fetch._sip_allowed() is False

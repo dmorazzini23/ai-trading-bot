@@ -823,6 +823,6 @@ if __name__ == "__main__":
 
         app = create_app()
         s = get_settings()
-        port = int(s.healthcheck_port or 9101)
+        port = int(s.healthcheck_port or 8081)
         app.logger.info("Starting Flask", extra={"port": port})
         app.run(host="0.0.0.0", port=port)

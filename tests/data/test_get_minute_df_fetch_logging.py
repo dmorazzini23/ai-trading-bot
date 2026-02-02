@@ -83,6 +83,7 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
     monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")

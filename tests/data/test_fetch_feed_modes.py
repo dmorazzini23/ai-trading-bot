@@ -14,6 +14,7 @@ def test_iex_ignores_sip_unauthorized(monkeypatch) -> None:
 
     monkeypatch.setenv("DATA_FEED_INTRADAY", "iex")
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
     monkeypatch.setattr(data_fetcher, "_ALLOW_SIP", True, raising=False)
     monkeypatch.setattr(data_fetcher, "_SIP_PRECHECK_DONE", False, raising=False)

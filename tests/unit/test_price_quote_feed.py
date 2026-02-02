@@ -139,6 +139,7 @@ def test_get_latest_price_http_error_falls_back(monkeypatch):
 def test_get_current_price_uses_configured_feed(monkeypatch):
     symbol = "TSLA"
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
     monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
@@ -334,6 +335,7 @@ def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
     caplog.set_level("WARNING")
     monkeypatch.setattr(bot_engine, "_INTRADAY_FEED_CACHE", None, raising=False)
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setattr(
@@ -589,4 +591,3 @@ def test_submit_limit_order_quantizes_price(monkeypatch):
     submitted_price = captured["order_data"]["limit_price"]
     assert submitted_price == pytest.approx(935.88)
     assert captured["execute_order_data"]["limit_price"] == submitted_price
-

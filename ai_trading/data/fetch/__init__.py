@@ -840,44 +840,11 @@ def _sip_allowed() -> bool:
         return True
     if override is not None:
         return bool(override)
-    env_choice: bool | None = None
-    for key in ("ALPACA_ALLOW_SIP", "ALPACA_HAS_SIP"):
-        try:
-            explicit = get_env(key, None, cast=bool)
-        except Exception:
-            explicit = None
-        raw_value = os.getenv(key)
-        if explicit is not None:
-            if raw_value is None and not explicit and _pytest_active():
-                explicit = None
-            else:
-                env_choice = bool(explicit)
-                break
-        if raw_value is not None:
-            normalized = raw_value.strip().lower()
-            if normalized:
-                env_choice = normalized in {"1", "true", "yes", "on"}
-            else:
-                env_choice = False
-            break
-    if env_choice is not None:
-        return env_choice
-    if _pytest_active():
-        if override is False:
-            return False
-        return True
     try:
-        priority = provider_priority()
+        resolved = resolve_alpaca_feed("sip")
     except Exception:
-        priority = ()
-    for entry in priority or ():
-        try:
-            provider_name = str(entry).strip().lower()
-        except Exception:
-            continue
-        if provider_name in {"alpaca_sip", "sip"}:
-            return True
-    return False
+        resolved = "iex"
+    return str(resolved).strip().lower() == "sip"
 
 
 def _ordered_fallbacks(primary_feed: str) -> list[str]:
@@ -6298,7 +6265,19 @@ def _repair_rth_minute_gaps(
     primary_provider_canonical = canonical_provider(
         provider_attr if provider_attr else ("yahoo" if skip_backup_fill else "alpaca"),
     )
-    gap_limit_ratio = _resolve_gap_ratio_limit()
+    feed_hint: str | None = None
+    try:
+        attrs = getattr(df, "attrs", None)
+    except Exception:
+        attrs = None
+    if isinstance(attrs, dict):
+        feed_hint = attrs.get("data_feed") or attrs.get("fallback_feed")
+    if not feed_hint:
+        try:
+            feed_hint = _current_intraday_feed()
+        except Exception:
+            feed_hint = None
+    gap_limit_ratio = _resolve_gap_ratio_limit(feed=feed_hint)
     allow_backup_fill = (
         len(missing) > 0
         and not skip_backup_fill
@@ -6612,7 +6591,7 @@ def _read_env_float(key: str) -> float | None:
     return None
 
 
-def _resolve_gap_ratio_limit(*, default_ratio: float = 0.05) -> float:
+def _resolve_gap_ratio_limit(*, default_ratio: float = 0.05, feed: str | None = None) -> float:
     pct_limit = _read_env_float("GAP_RATIO_MAX_PCT")
     if pct_limit is not None:
         try:
@@ -6634,9 +6613,17 @@ def _resolve_gap_ratio_limit(*, default_ratio: float = 0.05) -> float:
         except (TypeError, ValueError):
             continue
     try:
-        return max(float(default_ratio), 0.0)
+        resolved = max(float(default_ratio), 0.0)
     except (TypeError, ValueError):
-        return 0.0
+        resolved = 0.0
+    if feed:
+        try:
+            normalized = str(feed).strip().lower()
+        except Exception:
+            normalized = ""
+        if "iex" in normalized:
+            resolved = max(resolved, 0.30)
+    return resolved
 
 
 def _format_gap_ratio_reason(ratio: float, limit: float) -> str:
@@ -11276,7 +11263,8 @@ def get_minute_df(
             if isinstance(gap_over_limit_meta, bool):
                 exceeded_limit = gap_over_limit_meta
             elif ratio_float is not None:
-                exceeded_limit = ratio_float >= _resolve_gap_ratio_limit()
+                feed_hint = feed_tag or source_feed
+                exceeded_limit = ratio_float >= _resolve_gap_ratio_limit(feed=feed_hint)
             if exceeded_limit and not _state.get("fallback_reason"):
                 _state["fallback_reason"] = "gap_ratio_exceeded"
 
@@ -12337,11 +12325,23 @@ def get_minute_df(
 
     _apply_last_complete_meta(df)
 
-    max_gap_ratio = _resolve_gap_ratio_limit()
+    feed_hint: str | None = None
+    try:
+        attrs = getattr(df, "attrs", None)
+    except Exception:
+        attrs = None
+    if isinstance(attrs, dict):
+        feed_hint = attrs.get("data_feed") or attrs.get("fallback_feed")
+    if not feed_hint:
+        try:
+            feed_hint = _current_intraday_feed()
+        except Exception:
+            feed_hint = None
+    max_gap_ratio = _resolve_gap_ratio_limit(feed=feed_hint)
     gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
     try:
         coverage_meta["gap_ratio_pct"] = gap_ratio * 100.0
-        coverage_meta["gap_ratio_limit_pct"] = _resolve_gap_ratio_limit() * 100.0
+        coverage_meta["gap_ratio_limit_pct"] = _resolve_gap_ratio_limit(feed=feed_hint) * 100.0
     except Exception:
         pass
     healthy_gap = gap_ratio <= max_gap_ratio

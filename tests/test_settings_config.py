@@ -71,6 +71,7 @@ def test_cfg_data_feed_updates_default_feed(monkeypatch):
     """Mutating ``CFG.data_feed`` propagates to module-level fallbacks."""
 
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     pytest.importorskip("numpy")
     import ai_trading.config as config_pkg
     from ai_trading.config import settings as config_settings

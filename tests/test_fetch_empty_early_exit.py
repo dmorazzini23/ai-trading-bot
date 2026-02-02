@@ -38,6 +38,12 @@ def _dt_range():
 
 def test_persistent_empty_aborts_early(monkeypatch, caplog):
     start, end = _dt_range()
+    monkeypatch.setenv("ALPACA_API_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+    monkeypatch.delenv("MINUTE_SOURCE", raising=False)
+    monkeypatch.delenv("DAILY_SOURCE", raising=False)
+    fetch.refresh_alpaca_credentials_cache()
+    monkeypatch.setattr(fetch, "resolve_alpaca_feed", lambda _requested=None: "iex")
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     payloads = [{"bars": []}, {"bars": []}, {"bars": []}]
     corr_ids = ["id1", "id2", "id3"]

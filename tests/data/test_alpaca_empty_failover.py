@@ -58,6 +58,7 @@ def test_mark_fallback_records_switchover_when_sip_available(monkeypatch):
     data_fetch._FALLBACK_WINDOWS.clear()
     monkeypatch.setattr(data_fetch, "_sip_configured", lambda: True, raising=False)
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setattr(data_fetch, "log_backup_provider_used", lambda *a, **k: {})
     monkeypatch.setattr(data_fetch, "fallback_order", types.SimpleNamespace(register_fallback=lambda *a, **k: None))
     recorded: list[tuple] = []

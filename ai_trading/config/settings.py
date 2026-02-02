@@ -41,9 +41,17 @@ def broker_keys(s: Settings | None=None) -> dict[str, str]:
 def provider_priority(s: Settings | None = None) -> tuple[str, ...]:
     """Return configured data provider priority order."""
     s = s or get_settings()
-    return tuple(getattr(s, 'data_provider_priority', ())) or (
-        'alpaca_iex', 'alpaca_sip', 'yahoo'
-    )
+    priority = tuple(getattr(s, 'data_provider_priority', ())) or ()
+    if priority:
+        return priority
+    try:
+        from ai_trading.utils.env import resolve_alpaca_feed
+        sip_allowed = str(resolve_alpaca_feed("sip")).strip().lower() == "sip"
+    except Exception:
+        sip_allowed = False
+    if sip_allowed:
+        return ('alpaca_iex', 'alpaca_sip', 'yahoo')
+    return ('alpaca_iex', 'yahoo')
 
 def max_data_fallbacks(s: Settings | None = None) -> int:
     """Return maximum allowed provider fallbacks."""

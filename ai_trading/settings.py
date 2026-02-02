@@ -188,7 +188,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     disable_daily_retrain: bool = Field(False, alias="DISABLE_DAILY_RETRAIN")
     log_market_fetch: bool = Field(True, alias="LOG_MARKET_FETCH")
     healthcheck_port: int = Field(
-        9101,
+        8081,
         validation_alias=AliasChoices("HEALTHCHECK_PORT", "AI_TRADING_HEALTHCHECK_PORT"),
     )
     min_health_rows: int = Field(120, alias="MIN_HEALTH_ROWS")
@@ -414,12 +414,17 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     @classmethod
     def _enforce_allowed_feed(cls, v: str) -> str:
         """Force IEX feed unless SIP explicitly allowed."""
-        allow_sip = str(os.getenv("ALPACA_ALLOW_SIP", "0")).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
-        if v == "sip" and not allow_sip:
+        try:
+            from ai_trading.utils.env import resolve_alpaca_feed
+        except Exception:
+            resolve_alpaca_feed = None  # type: ignore[assignment]
+        sip_allowed = False
+        if callable(resolve_alpaca_feed):
+            try:
+                sip_allowed = str(resolve_alpaca_feed("sip")).strip().lower() == "sip"
+            except Exception:
+                sip_allowed = False
+        if v == "sip" and not sip_allowed:
             logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
             return "iex"
         return v
