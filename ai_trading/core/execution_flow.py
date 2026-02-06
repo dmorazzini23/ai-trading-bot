@@ -18,18 +18,41 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 
-def poll_order_fill_status(ctx: Any, order_id: str, timeout: int = 120) -> None:
+def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) -> None:
     """Poll broker for order fill status until it is no longer open.
 
     Honors the provided ``timeout`` by sleeping in short intervals instead of
     a fixed interval so tests can set small timeouts without hanging.
     """
-    start = pytime.time()
-    interval = 0.2 if timeout <= 1 else min(1.0, max(0.2, timeout / 10))
+    try:
+        timeout_s = max(float(timeout), 0.0)
+    except (TypeError, ValueError):
+        timeout_s = 0.0
+    start_wall = pytime.time()
+    try:
+        start_monotonic = pytime.monotonic()
+    except Exception:
+        start_monotonic = None
+    synthetic_elapsed = 0.0
+    interval = 0.2 if timeout_s <= 1 else min(1.0, max(0.2, timeout_s / 10))
     open_statuses = {"new", "accepted", "partially_filled", "pending_new"}
     last_status = ""
     last_filled: float | None = None
     last_qty: float | None = None
+
+    def _elapsed_seconds() -> float:
+        elapsed = synthetic_elapsed
+        if start_monotonic is not None:
+            try:
+                monotonic_elapsed = max(0.0, float(pytime.monotonic() - start_monotonic))
+            except Exception:
+                monotonic_elapsed = 0.0
+            elapsed = max(elapsed, monotonic_elapsed)
+        try:
+            wall_elapsed = max(0.0, float(pytime.time() - start_wall))
+        except Exception:
+            wall_elapsed = 0.0
+        return max(elapsed, wall_elapsed)
 
     def _coerce_numeric_attr(obj: Any, primary: str, aliases: tuple[str, ...] = ()) -> float | None:
         names = (primary,) + aliases
@@ -90,10 +113,12 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int = 120) -> None:
         ) as e:
             logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
-        remaining = timeout - (pytime.time() - start)
+        remaining = timeout_s - _elapsed_seconds()
         if remaining <= 0:
             break
-        pytime.sleep(min(interval, remaining))
+        sleep_for = min(interval, remaining)
+        pytime.sleep(sleep_for)
+        synthetic_elapsed += sleep_for
 
     if last_status:
         logger.warning(
@@ -101,7 +126,7 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int = 120) -> None:
             extra={
                 "order_id": order_id,
                 "status": last_status,
-                "timeout_s": timeout,
+                "timeout_s": timeout_s,
                 "filled_qty": last_filled,
                 "qty": last_qty,
             },

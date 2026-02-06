@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -69,10 +70,20 @@ def safe_subprocess_run(
         if run_kwargs.get("timeout") != timeout_param:  # defensive: ensure override sticks
             run_kwargs["timeout"] = timeout_param
 
+    timeout_event: threading.Event | None = None
+    watchdog: threading.Timer | None = None
+    if timeout_param is not None:
+        timeout_event = threading.Event()
+        watchdog = threading.Timer(timeout_param, timeout_event.set)
+        watchdog.daemon = True
+        watchdog.start()
+
     start_time = time.monotonic()
     try:
         completed = subprocess.run(cmd, **run_kwargs)
     except subprocess.TimeoutExpired as exc:
+        if watchdog is not None:
+            watchdog.cancel()
         stdout_text = _normalize_stream(getattr(exc, "output", None))
         stderr_text = _normalize_stream(getattr(exc, "stderr", None))
         result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
@@ -95,17 +106,23 @@ def safe_subprocess_run(
         )
         raise
     except (OSError, subprocess.SubprocessError) as exc:
+        if watchdog is not None:
+            watchdog.cancel()
         result = _coerce_exception_result(exc, cmd)
         log.warning(
             "SAFE_SUBPROCESS_ERROR",
             extra={"cmd": cmd, "returncode": result.returncode, "error": str(exc), "exc_type": type(exc).__name__},
         )
         return result
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
     elapsed = time.monotonic() - start_time
     stdout_text = _normalize_stream(completed.stdout)
     stderr_text = _normalize_stream(completed.stderr)
+    watchdog_fired = bool(timeout_event is not None and timeout_event.is_set())
     overshot_timeout = (
-        timeout_param is not None and (elapsed - timeout_param) > 0.001
+        timeout_param is not None and ((elapsed - timeout_param) > 0.001 or watchdog_fired)
     )
     if overshot_timeout and timeout_param is not None:
         synthetic_timeout = subprocess.TimeoutExpired(

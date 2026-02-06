@@ -17,7 +17,12 @@ from .base import BaseStrategy, StrategySignal
 if TYPE_CHECKING:  # pragma: no cover
     import pandas as pd
 
-pd: Any | None = None
+try:  # Keep module-level handle available for tests that monkeypatch ``pd.isna``.
+    import pandas as _pd_runtime
+except ImportError:  # pragma: no cover - optional dependency in minimal envs
+    _pd_runtime = None
+
+pd: Any | None = _pd_runtime
 
 class MomentumStrategy(BaseStrategy):
     """Momentum-based trading strategy."""

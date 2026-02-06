@@ -13,6 +13,12 @@ _TIMING_LEVEL_CACHE: tuple[str | None, str | None, int | None] | None = None
 def _monotonic_ns() -> int:
     """Return a monotonic clock reading in nanoseconds."""
 
+    perf_counter_ns = getattr(time, "perf_counter_ns", None)
+    if callable(perf_counter_ns):
+        try:
+            return perf_counter_ns()
+        except (OSError, ValueError):
+            pass
     monotonic = getattr(time, "monotonic", None)
     if callable(monotonic):
         try:
@@ -25,7 +31,7 @@ def _monotonic_ns() -> int:
             return monotonic_ns()
         except (OSError, ValueError):
             pass
-    return time.perf_counter_ns()
+    return int(time.perf_counter() * 1_000_000_000)
 
 
 def _resolve_timing_level() -> int | None:
@@ -103,38 +109,50 @@ class SoftBudget:
 
     def __init__(self, millis: int | float):
         self.ms = max(0.0, float(millis))
-        self.start_ns = _monotonic_ns()
-        self.start = self.start_ns / 1_000_000_000  # legacy attribute
+        self.start_ns = 0
+        self.start = 0.0  # legacy attribute
+        self.reset()
 
     def __enter__(self) -> "SoftBudget":
-        self.start_ns = _monotonic_ns()
-        self.start = self.start_ns / 1_000_000_000
+        self.reset()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
+    def reset(self) -> None:
+        """Reset the budget start time."""
+
+        self.start_ns = _monotonic_ns()
+        self.start = self.start_ns / 1_000_000_000
+
+    def _elapsed_ns(self) -> int:
+        elapsed_ns = _monotonic_ns() - self.start_ns
+        if elapsed_ns < 0:
+            return 0
+        return int(elapsed_ns)
+
     def elapsed_ms(self) -> float:
         """Return elapsed milliseconds since the most recent reset."""
 
-        elapsed_ns = _monotonic_ns() - self.start_ns
-        if elapsed_ns < 0:
-            elapsed_ns = 0
+        elapsed_ns = self._elapsed_ns()
         whole_ms = elapsed_ns // 1_000_000
         if elapsed_ns > 0 and whole_ms == 0:
             return 1.0
         return float(whole_ms)
 
     def remaining(self) -> float:
-        """Return milliseconds remaining before the budget is exceeded."""
+        """Return seconds remaining before the budget is exceeded."""
 
         remaining_ms = self.ms - self.elapsed_ms()
-        return remaining_ms if remaining_ms > 0.0 else 0.0
+        if remaining_ms <= 0.0:
+            return 0.0
+        return remaining_ms / 1000.0
 
     def over_budget(self) -> bool:
         """Return True if the elapsed time has exceeded the budget."""
 
-        return self.remaining() <= 0.0
+        return self._elapsed_ns() >= int(self.ms * 1_000_000)
 
     def over(self) -> bool:
         """Backward compatibility alias for :meth:`over_budget`."""

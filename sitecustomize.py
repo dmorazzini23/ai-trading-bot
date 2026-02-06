@@ -69,3 +69,19 @@ def _ensure_import_machinery(modules: dict[str, types.ModuleType]) -> None:
                 importlib.import_module(name)
             except Exception:  # pragma: no cover - best effort
                 continue
+
+
+try:  # pragma: no cover - optional dependency
+    import freezegun
+except Exception:
+    freezegun = None  # type: ignore[assignment]
+else:
+    _orig_freeze_time = freezegun.freeze_time
+
+    def _freeze_time_with_real_asyncio(*args, **kwargs):
+        kwargs.setdefault("real_asyncio", True)
+        return _orig_freeze_time(*args, **kwargs)
+
+    freezegun.freeze_time = _freeze_time_with_real_asyncio  # type: ignore[assignment]
+    if hasattr(freezegun, "api") and hasattr(freezegun.api, "freeze_time"):
+        freezegun.api.freeze_time = _freeze_time_with_real_asyncio  # type: ignore[attr-defined]

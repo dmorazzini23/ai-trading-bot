@@ -170,7 +170,7 @@ class AdaptiveRiskController:
             cluster_labels = fcluster(linkage_matrix, num_clusters, criterion='maxclust')
             cluster_assignments = {}
             for i, symbol in enumerate(correlation_matrix.index):
-                cluster_assignments[symbol] = cluster_labels[i] - 1
+                cluster_assignments[symbol] = int(cluster_labels[i]) - 1
             self._correlation_matrix = correlation_matrix
             self._cluster_assignments = cluster_assignments
             self.logger.info(f'Created {num_clusters} correlation clusters for {num_symbols} symbols')

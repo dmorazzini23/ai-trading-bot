@@ -15,6 +15,7 @@ import os
 import pickle
 import re
 import time
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -229,7 +230,7 @@ class ModelRegistry:
         registered_at: datetime,
     ) -> str:
         timestamp = registered_at.strftime("%Y%m%d%H%M%S")
-        entropy = format(time.time_ns() & 0xFFFFF, "05x")
+        entropy = uuid.uuid4().hex[:8]
         return "-".join(
             (
                 self._slug(strategy),
@@ -325,14 +326,17 @@ class ModelRegistry:
         registered_at = datetime.now(UTC)
         dataset_fp = str(dataset_fingerprint) if dataset_fingerprint is not None else None
 
-        while True:
+        for _attempt in range(64):
             model_id = self._generate_model_id(strategy, model_type, model_hash, registered_at)
             model_dir = self.models_dir / model_id
             try:
                 model_dir.mkdir(parents=True, exist_ok=False)
             except FileExistsError:
                 continue
-            break
+            else:
+                break
+        else:
+            raise RuntimeError("Failed to allocate unique model registry directory")
         artifact_path = model_dir / self._ARTIFACT_FILENAME
         artifact_path.write_bytes(payload)
 
@@ -342,12 +346,19 @@ class ModelRegistry:
         }
         tags_list = self._normalise_tags(tags)
         governance = {"status": "registered"}
+        try:
+            next_seq = max(int(entry.get("registered_seq", 0) or 0) for entry in self.model_index.values()) + 1
+        except ValueError:
+            next_seq = 1
+        except (TypeError, AttributeError):
+            next_seq = len(self.model_index) + 1
 
         index_entry = {
             "model_id": model_id,
             "strategy": strategy,
             "model_type": model_type,
             "registered_at": registered_at.isoformat(),
+            "registered_seq": int(next_seq),
             "path": str(model_dir),
             "artifact_path": str(artifact_path),
             "active": bool(activate),
@@ -381,7 +392,10 @@ class ModelRegistry:
             return None
         latest_id, _ = max(
             candidates,
-            key=lambda item: item[1].get("registered_at", ""),
+            key=lambda item: (
+                item[1].get("registered_at", ""),
+                int(item[1].get("registered_seq", 0) or 0),
+            ),
         )
         return latest_id
 

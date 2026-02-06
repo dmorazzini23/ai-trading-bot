@@ -441,10 +441,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     if force_refresh:
         _CACHE.value = None
         _CACHE.ts = None
-        _CACHE.equity = None
         _CACHE.equity_error = None
-        _CACHE.last_equity = None
-        _CACHE.last_equity_ts = None
         _CACHE.capital_cap = None
     cached_cap = _CACHE.capital_cap
     cap_matches = cached_cap is not None and isclose(cached_cap, cap, rel_tol=1e-9, abs_tol=1e-9)

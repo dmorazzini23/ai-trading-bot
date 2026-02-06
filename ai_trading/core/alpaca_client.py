@@ -34,6 +34,15 @@ ALPACA_AVAILABLE = getattr(_alpaca_api, "ALPACA_AVAILABLE", False)
 _shared_logger_once: Any | None = None
 
 
+def _get_active_alpaca_api_module() -> ModuleType:
+    """Return the currently active alpaca_api module object."""
+
+    module = sys.modules.get("ai_trading.alpaca_api")
+    if isinstance(module, ModuleType):
+        return module
+    return _alpaca_api
+
+
 def _get_bot_engine_module() -> ModuleType:
     """Return the active bot_engine module, honouring monkeypatched stubs."""
 
@@ -63,6 +72,15 @@ def _get_bot_logger_once() -> Any:
 
     _shared_logger_once = shared
     return shared
+
+
+def _resolve_trading_client_adapter_cls() -> type:
+    """Resolve TradingClientAdapter from the active alpaca_api module."""
+
+    adapter_cls = getattr(_get_active_alpaca_api_module(), "TradingClientAdapter", None)
+    if isinstance(adapter_cls, type):
+        return adapter_cls
+    return TradingClientAdapter
 
 
 def _validate_trading_api(api: Any) -> bool:
@@ -376,7 +394,11 @@ def _initialize_alpaca_clients() -> bool:
 
     if getattr(be, "trading_client", None) is not None:
         return True
-    if not _alpaca_api.ALPACA_AVAILABLE:
+    alpaca_available = bool(
+        getattr(_get_active_alpaca_api_module(), "ALPACA_AVAILABLE", False)
+        or ALPACA_AVAILABLE
+    )
+    if not alpaca_available:
         be.trading_client = None
         be.data_client = None
         return False
@@ -447,11 +469,12 @@ def _initialize_alpaca_clients() -> bool:
                 paper="paper" in str(base_url).lower(),
                 url_override=base_url,
             )
+            adapter_cls = _resolve_trading_client_adapter_cls()
             trading_client_obj: Any
-            if isinstance(raw_trading_client, TradingClientAdapter):
+            if isinstance(raw_trading_client, adapter_cls):
                 trading_client_obj = raw_trading_client
             else:
-                trading_client_obj = TradingClientAdapter(raw_trading_client)
+                trading_client_obj = adapter_cls(raw_trading_client)
             be.trading_client = trading_client_obj
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:

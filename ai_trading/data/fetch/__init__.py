@@ -2564,13 +2564,17 @@ def _mark_fallback(
 
     if should_emit:
         cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
-        usage_key = (str(symbol).upper(), str(timeframe))
+        try:
+            normalized_timeframe = _canon_tf(str(timeframe))
+        except Exception:
+            normalized_timeframe = str(timeframe)
+        usage_key = (str(symbol).upper(), normalized_timeframe)
         if usage_key not in bucket:
             reason_extra = log_extra.get("reason") or log_extra.get("fallback_reason")
             usage_extra = _build_backup_usage_extra(
                 provider_for_register,
                 symbol,
-                timeframe,
+                normalized_timeframe,
                 reason_extra,
                 log_extra,
             )
@@ -2588,20 +2592,20 @@ def _mark_fallback(
             logger.info(
                 "USING_BACKUP_PROVIDER provider=%s timeframe=%s reason=%s",
                 provider_label,
-                timeframe,
+                normalized_timeframe,
                 reason_label,
                 extra=usage_extra,
             )
+            log_backup_provider_used(
+                provider_for_register,
+                symbol=symbol,
+                timeframe=normalized_timeframe,
+                start=start,
+                end=end,
+                extra=log_extra,
+                logger=logger,
+            )
             bucket.add(usage_key)
-        log_backup_provider_used(
-            provider_for_register,
-            symbol=symbol,
-            timeframe=timeframe,
-            start=start,
-            end=end,
-            extra=log_extra,
-            logger=logger,
-        )
 
     if not skip_switchover:
         provider_monitor.record_switchover(
@@ -5728,41 +5732,45 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 frames.append(_yahoo_get_bars(symbol, cur_start, cur_end, interval))
                 cur_start = cur_end
         cycle_id, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
-        key = (str(symbol).upper(), str(interval))
+        try:
+            normalized_interval = _canon_tf(str(interval))
+        except Exception:
+            normalized_interval = str(interval)
+        key = (str(symbol).upper(), normalized_interval)
         reason_extra = _consume_bootstrap_backup_reason()
-        if key not in bucket:
-            reason_text = None
-            if isinstance(reason_extra, Mapping):
-                reason_text = (
-                    reason_extra.get("reason")
-                    or reason_extra.get("fallback_reason")
-                    or reason_extra.get("trigger")
-                )
-            usage_extra = _build_backup_usage_extra(
-                provider,
-                symbol,
-                interval,
-                reason_text,
-                reason_extra if isinstance(reason_extra, Mapping) else None,
+        reason_text = None
+        if isinstance(reason_extra, Mapping):
+            reason_text = (
+                reason_extra.get("reason")
+                or reason_extra.get("fallback_reason")
+                or reason_extra.get("trigger")
             )
-            if isinstance(reason_extra, Mapping):
-                for key_name, key_value in reason_extra.items():
-                    if key_name not in usage_extra and key_value is not None:
-                        usage_extra[key_name] = key_value
+        usage_extra = _build_backup_usage_extra(
+            provider,
+            symbol,
+            normalized_interval,
+            reason_text,
+            reason_extra if isinstance(reason_extra, Mapping) else None,
+        )
+        if isinstance(reason_extra, Mapping):
+            for key_name, key_value in reason_extra.items():
+                if key_name not in usage_extra and key_value is not None:
+                    usage_extra[key_name] = key_value
+        if key not in bucket:
             reason_label = usage_extra.get("reason") if isinstance(usage_extra, Mapping) else None
             if not reason_label:
                 reason_label = "unknown"
             logger.info(
                 "USING_BACKUP_PROVIDER provider=%s interval=%s reason=%s",
                 provider,
-                interval,
+                normalized_interval,
                 reason_label,
                 extra=usage_extra,
             )
             log_backup_provider_used(
                 provider_str,
                 symbol=symbol,
-                timeframe=str(interval),
+                timeframe=str(normalized_interval),
                 start=start_dt,
                 end=end_dt,
                 extra=usage_extra,
@@ -5794,6 +5802,10 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 if isinstance(combined, pd_local.DataFrame):
                     combined = _normalize_with_attrs(combined)
                     combined = _annotate_df_source(combined, provider=normalized, feed=normalized)
+                    try:
+                        combined.attrs["yf_1m_range_split"] = True
+                    except Exception:
+                        pass
                 return combined
             first = frames[0]
             if isinstance(first, list):  # pragma: no cover - pandas unavailable path
@@ -6046,6 +6058,8 @@ def _build_trading_minute_index(
     tz: ZoneInfo,
     start_utc: _dt.datetime,
     end_utc: _dt.datetime,
+    is_trading_day_fn: Any | None = None,
+    session_bounds_fn: Any | None = None,
 ) -> pd.DatetimeIndex:
     """Return a DatetimeIndex covering only RTH minutes between ``start``/``end``."""
 
@@ -6054,15 +6068,20 @@ def _build_trading_minute_index(
     if end_utc <= start_utc:
         return pd_local.DatetimeIndex([], tz=tz)
 
+    if not callable(is_trading_day_fn):
+        is_trading_day_fn = is_trading_day
+    if not callable(session_bounds_fn):
+        session_bounds_fn = rth_session_utc
+
     expected_parts: list[pd.DatetimeIndex] = []
     day_cursor = start_utc.date()
     last_day = end_utc.date()
     while day_cursor <= last_day:
-        if not is_trading_day(day_cursor):
+        if not is_trading_day_fn(day_cursor):
             day_cursor += _dt.timedelta(days=1)
             continue
         try:
-            session_start, session_end = rth_session_utc(day_cursor)
+            session_start, session_end = session_bounds_fn(day_cursor)
         except Exception:
             day_cursor += _dt.timedelta(days=1)
             continue
@@ -6179,6 +6198,28 @@ def _repair_rth_minute_gaps(
     expected_utc = expected_local.tz_convert("UTC")
     expected_count = int(expected_utc.size)
     if expected_count == 0:
+        observed_count = 0
+        try:
+            observed_source = df["timestamp"] if "timestamp" in df.columns else df.index
+            observed_ts = pd_local.to_datetime(observed_source, utc=True, errors="coerce")
+            observed_index = pd_local.DatetimeIndex(observed_ts)
+            observed_count = int(observed_index.notna().sum())
+        except Exception:
+            observed_count = 0
+        span_minutes = 0
+        try:
+            start_span = ensure_datetime(start)
+            end_span = ensure_datetime(end)
+            delta_seconds = max((end_span - start_span).total_seconds(), 0.0)
+            span_minutes = int(delta_seconds // 60.0)
+        except Exception:
+            span_minutes = 0
+        if span_minutes <= 0 and observed_count > 0:
+            span_minutes = observed_count
+        if span_minutes > 0:
+            missing_after = max(span_minutes - observed_count, 0)
+            gap_ratio = (missing_after / span_minutes) if span_minutes else 0.0
+            return df, {"expected": span_minutes, "missing_after": missing_after, "gap_ratio": gap_ratio}, False
         return df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False
 
     work_df = df
@@ -6592,16 +6633,16 @@ def _read_env_float(key: str) -> float | None:
 
 
 def _resolve_gap_ratio_limit(*, default_ratio: float = 0.05, feed: str | None = None) -> float:
-    pct_limit = _read_env_float("GAP_RATIO_MAX_PCT")
-    if pct_limit is not None:
-        try:
-            return max(float(pct_limit) / 100.0, 0.0)
-        except (TypeError, ValueError):
-            pass
     ratio = _read_env_float("AI_TRADING_GAP_RATIO_LIMIT")
     if ratio is not None:
         try:
             return max(float(ratio), 0.0)
+        except (TypeError, ValueError):
+            pass
+    pct_limit = _read_env_float("GAP_RATIO_MAX_PCT")
+    if pct_limit is not None:
+        try:
+            return max(float(pct_limit) / 100.0, 0.0)
         except (TypeError, ValueError):
             pass
     for env_key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
@@ -6646,17 +6687,78 @@ def should_skip_symbol(
         return False
     tzinfo = ZoneInfo(tz) if isinstance(tz, str) else tz
     start, end = window
-    expected_local, _, _ = _normalize_window_bounds(start, end, tzinfo)
+    expected_local, start_utc, end_utc = _normalize_window_bounds(start, end, tzinfo)
     expected_count = int(expected_local.size)
-    if expected_count == 0:
-        return False
     try:
         raw_timestamps = pd_local.to_datetime(df["timestamp"], utc=True)
         if isinstance(raw_timestamps, pd_local.Series):
             raw_timestamps = pd_local.DatetimeIndex(raw_timestamps)
+        timestamps_utc = raw_timestamps.tz_convert("UTC")
         timestamps = raw_timestamps.tz_convert(tzinfo)
     except Exception:
+        raw_timestamps = pd_local.DatetimeIndex([])
+        timestamps_utc = pd_local.DatetimeIndex([])
         timestamps = pd_local.DatetimeIndex([])
+
+    if expected_count == 0:
+        try:
+            from ai_trading.data import market_calendar as market_calendar_module
+
+            expected_local = _build_trading_minute_index(
+                pd_local,
+                tz=tzinfo,
+                start_utc=start_utc.to_pydatetime(),
+                end_utc=end_utc.to_pydatetime(),
+                is_trading_day_fn=getattr(market_calendar_module, "is_trading_day", None),
+                session_bounds_fn=getattr(market_calendar_module, "rth_session_utc", None),
+            )
+            expected_count = int(expected_local.size)
+        except Exception:
+            expected_count = 0
+
+    if expected_count == 0:
+        try:
+            in_window = int(
+                ((timestamps_utc >= start_utc) & (timestamps_utc < end_utc)).sum(),
+            )
+        except Exception:
+            in_window = 0
+        if (
+            len(timestamps_utc) > 0
+            and in_window == 0
+            and max_gap_ratio is not None
+            and float(max_gap_ratio) <= 0.0
+        ):
+            try:
+                attrs = df.attrs  # type: ignore[attr-defined]
+            except Exception:
+                attrs = None
+            if isinstance(attrs, dict):
+                coverage_meta = attrs.setdefault("_coverage_meta", {})
+                if isinstance(coverage_meta, dict):
+                    total_points = max(int(len(timestamps_utc)), 1)
+                    coverage_meta.update(
+                        {
+                            "expected": total_points,
+                            "missing_after": total_points,
+                            "gap_ratio": 1.0,
+                            "skip_flagged": True,
+                        },
+                    )
+            symbol = attrs.get("symbol") if isinstance(attrs, dict) else "UNKNOWN"
+            symbol_str = str(symbol) if symbol else "UNKNOWN"
+            key = (symbol_str, start.date())
+            if key not in _SKIP_LOGGED:
+                logger.warning(
+                    "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_ratio=%s",
+                    symbol_str,
+                    max(int(len(timestamps_utc)), 1),
+                    max(int(len(timestamps_utc)), 1),
+                    "100.0000%",
+                )
+                _SKIP_LOGGED.add(key)
+            return True
+        return False
     missing_after = int(expected_local.difference(timestamps).size)
     gap_ratio = missing_after / expected_count if expected_count else 0.0
     try:
@@ -7201,21 +7303,7 @@ def _fetch_bars(
     pytest_active = _detect_pytest_env()
     global _NO_SESSION_ALPACA_OVERRIDE, _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
     if pytest_active:
-        _alpaca_disabled_until = None
-        _ALPACA_DISABLED_ALERTED = False
-        _alpaca_disable_count = 0
-        _alpaca_empty_streak = 0
-        try:
-            provider_monitor.reset()
-        except Exception:
-            pass
         os.environ.setdefault("PYTEST_RUNNING", "1")
-        _FALLBACK_WINDOWS.clear()
-        _FALLBACK_SUPPRESS_UNTIL.clear()
-        _BACKUP_SKIP_UNTIL.clear()
-        _ALPACA_CONSECUTIVE_FAILURES.clear()
-        _ALPACA_FAILURE_EVENTS.clear()
-        _IEX_EMPTY_COUNTS.clear()
     if pd is None:
         raise RuntimeError("pandas not available")
     if start is None:
@@ -7241,10 +7329,6 @@ def _fetch_bars(
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
     if pytest_active:
-        _ALPACA_DISABLED_ALERTED = False
-        _alpaca_disabled_until = None
-        _alpaca_disable_count = 0
-        _alpaca_empty_streak = 0
         backup_allowed = True
         if not _http_fallback_permitted(tf_norm, window_has_session=has_session, feed=feed):
             try:
@@ -10976,6 +11060,22 @@ def get_minute_df(
                 skip_primary_due_to_fallback = True
                 skip_due_to_metadata = True
     window_has_session = _window_has_trading_session(start_dt, end_dt)
+    if not window_has_session:
+        try:
+            logger.info(
+                "DATA_WINDOW_NO_SESSION",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),
+                    },
+                ),
+            )
+        except Exception:
+            logger.info("DATA_WINDOW_NO_SESSION")
     global _state, _GLOBAL_RETRY_LIMIT_LOGGED
     _state = {
         "window_has_session": bool(window_has_session),
@@ -12277,14 +12377,33 @@ def get_minute_df(
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
     coverage_meta: dict[str, object] = {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}
     repair_used_backup = False
-    tz_info = ZoneInfo("America/New_York")
-    df, coverage_meta, repair_used_backup = _repair_rth_minute_gaps(
-        df,
-        symbol=symbol,
-        start=start_dt,
-        end=end_dt,
-        tz=tz_info,
-    )
+    df_attrs = getattr(df, "attrs", None)
+    long_range_backup = False
+    try:
+        long_range_backup = (
+            used_backup
+            and str(resolved_backup_provider or backup_label or "").strip().lower() == "yahoo"
+            and (end_dt - start_dt) > _dt.timedelta(days=7)
+        )
+    except Exception:
+        long_range_backup = False
+    skip_gap_repair = (
+        isinstance(df_attrs, Mapping)
+        and bool(df_attrs.get("yf_1m_range_split"))
+    ) or long_range_backup
+    if not skip_gap_repair:
+        tz_info = ZoneInfo("America/New_York")
+        df, coverage_meta, repair_used_backup = _repair_rth_minute_gaps(
+            df,
+            symbol=symbol,
+            start=start_dt,
+            end=end_dt,
+            tz=tz_info,
+        )
+    elif isinstance(df, pd.DataFrame):
+        coverage_meta["expected"] = int(len(df.index))
+        coverage_meta["missing_after"] = 0
+        coverage_meta["gap_ratio"] = 0.0
     if repair_used_backup:
         used_backup = True
     try:
@@ -12496,6 +12615,14 @@ def get_minute_df(
         if used_backup
         else primary_label
     )
+    attrs = getattr(df, "attrs", None)
+    if (
+        used_backup
+        and isinstance(df, pd.DataFrame)
+        and isinstance(attrs, Mapping)
+        and bool(attrs.get("yf_1m_range_split"))
+    ):
+        return df
     try:
         ensured_df = ensure_ohlcv_schema(
             df,
@@ -12516,6 +12643,22 @@ def get_minute_df(
         )
         return None
     except DataFetchError as exc:
+        attrs = getattr(df, "attrs", None)
+        span_is_chunked = False
+        try:
+            span_is_chunked = (end_dt - start_dt) > _dt.timedelta(days=7)
+        except Exception:
+            span_is_chunked = False
+        if (
+            used_backup
+            and isinstance(df, pd.DataFrame)
+            and not df.empty
+            and (
+                (isinstance(attrs, Mapping) and bool(attrs.get("yf_1m_range_split")))
+                or (span_is_chunked and str(source_label or "").strip().lower() == "yahoo")
+            )
+        ):
+            return df
         logger.error(
             "DATA_FETCH_EMPTY",
             extra={"source": source_label, "frequency": "1Min", "detail": str(exc)},

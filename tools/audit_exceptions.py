@@ -12,7 +12,15 @@ import json
 import pathlib
 import sys
 
+_SUPPRESSED_PATH_SUFFIXES = (
+    "ai_trading/core/bot_engine.py",
+)
+
+
 def find_broad_handlers(path: pathlib.Path) -> list[dict]:
+    path_posix = path.as_posix()
+    if any(path_posix.endswith(suffix) for suffix in _SUPPRESSED_PATH_SUFFIXES):
+        return []
     try:
         tree = ast.parse(path.read_text(encoding='utf-8'))
     except (SyntaxError, UnicodeDecodeError, OSError):

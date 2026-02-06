@@ -119,12 +119,16 @@ def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame
             df['cci'] = ta.cci(df['high'], df['low'], df['close'], length=20).astype(float)
     except (ValueError, TypeError) as e:
         logger.exception('CCI calculation failed: %s', e)
-    try:
-        mfi_vals = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=MFI_PERIOD).astype(float)
-        df['mfi_14'] = mfi_vals
-        df.dropna(subset=['mfi_14'], inplace=True)
-    except (ValueError, TypeError) as e:
-        logger.exception('MFI calculation failed: %s', e)
+    if hasattr(ta, 'mfi'):
+        try:
+            mfi_vals = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=MFI_PERIOD).astype(float)
+            df['mfi_14'] = mfi_vals
+            df.dropna(subset=['mfi_14'], inplace=True)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.exception('MFI calculation failed: %s', e)
+            df['mfi_14'] = np.nan
+    else:
+        logger.warning('MFI indicator unavailable in pandas_ta; skipping')
         df['mfi_14'] = np.nan
     df['tema'] = np.nan
     if hasattr(ta, 'tema'):

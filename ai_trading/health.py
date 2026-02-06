@@ -79,7 +79,13 @@ class HealthCheck:
 
         def _emit_response(body: dict, status: int = 200):
             response = jsonify(body)
-            if response is None:
+            if response is None or isinstance(response, Mapping):
+                return body if status == 200 else (body, status)
+            if not (
+                callable(getattr(response, "get_data", None))
+                or callable(getattr(response, "get_json", None))
+                or hasattr(response, "status_code")
+            ):
                 return body if status == 200 else (body, status)
             try:
                 response.status_code = status

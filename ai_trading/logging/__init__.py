@@ -110,6 +110,10 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
     # Preserve pytest's LogCaptureHandler instances to keep ``caplog`` functional
     for existing in unique:
         if existing.__class__.__name__ == "LogCaptureHandler":
+            if SecretFilter is not None and not any(isinstance(f, SecretFilter) for f in existing.filters):
+                existing.addFilter(SecretFilter())
+            if not any(isinstance(f, ExtraSanitizerFilter) for f in existing.filters):
+                existing.addFilter(ExtraSanitizerFilter())
             filtered.append(existing)
             seen_types.add(type(existing))
 
@@ -694,15 +698,18 @@ def _logger_namespace(obj: Any) -> str | None:
 
 def _infer_logger_namespace_from_stack() -> str | None:
     frame = inspect.currentframe()
+    if frame is not None:
+        frame = frame.f_back
     try:
         while frame is not None:
             for candidate in ("logger", "log", "LOGGER"):
                 namespace = _logger_namespace(frame.f_locals.get(candidate))
                 if namespace:
                     return namespace
-                namespace = _logger_namespace(frame.f_globals.get(candidate))
-                if namespace:
-                    return namespace
+                if frame.f_globals.get("__name__") != __name__:
+                    namespace = _logger_namespace(frame.f_globals.get(candidate))
+                    if namespace:
+                        return namespace
             frame = frame.f_back
     finally:
         del frame
@@ -725,7 +732,7 @@ def flush_log_throttle_summaries(logger: logging.Logger | logging.LoggerAdapter 
 
     pytest_running = _truthy_flag(os.getenv("PYTEST_RUNNING"))
     namespace = _logger_namespace(logger)
-    if pytest_running and namespace is None and logger is not None:
+    if pytest_running and namespace is None:
         namespace = _infer_logger_namespace_from_stack()
 
     _THROTTLE_FILTER.flush_cycle(namespace=namespace if pytest_running else None)

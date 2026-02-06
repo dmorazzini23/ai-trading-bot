@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import sys
 from typing import Callable, Any
 
 from ai_trading.utils.lazy_imports import load_pandas
@@ -12,6 +13,29 @@ pd = load_pandas()
 logger = get_logger(__name__)
 
 _RETRY_COUNTS: dict[tuple[str, str], int] = {}
+
+
+def _is_empty_bars_error(exc: BaseException) -> bool:
+    """Return True when ``exc`` is an EmptyBarsError across module reloads."""
+
+    candidates: list[type[BaseException]] = []
+    if isinstance(EmptyBarsError, type):
+        candidates.append(EmptyBarsError)
+    fetch_mod = sys.modules.get("ai_trading.data.fetch")
+    if fetch_mod is not None:
+        fresh_cls = getattr(fetch_mod, "EmptyBarsError", None)
+        if isinstance(fresh_cls, type):
+            candidates.append(fresh_cls)
+    for candidate in candidates:
+        try:
+            if isinstance(exc, candidate):
+                return True
+        except Exception:
+            continue
+    try:
+        return exc.__class__.__name__ == "EmptyBarsError"
+    except Exception:
+        return False
 
 
 def _empty_df() -> Any:
@@ -54,7 +78,9 @@ def fetch_with_retries(
     while True:
         try:
             data = fetch_fn()
-        except EmptyBarsError as exc:
+        except Exception as exc:
+            if not _is_empty_bars_error(exc):
+                raise
             attempts += 1
             _RETRY_COUNTS[key] = attempts
             if attempts >= 1:

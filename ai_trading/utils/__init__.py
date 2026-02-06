@@ -20,7 +20,6 @@ _BASE_EXPORTS = {
     "get_latest_close",
     "get_pid_on_port",
     "health_check",
-    "health_rows_passed",
     "is_market_open",
     "market_open_between",
     "log_warning",

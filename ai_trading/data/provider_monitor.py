@@ -37,7 +37,10 @@ from ai_trading.data.metrics import (
     provider_disable_duration_seconds,
     provider_failure_duration_seconds,
 )
-from ai_trading.telemetry.runtime_state import update_data_provider_state
+from ai_trading.telemetry.runtime_state import (
+    reset_data_provider_state,
+    update_data_provider_state,
+)
 from ai_trading.utils.time import monotonic_time
 
 
@@ -214,13 +217,29 @@ def _resolve_safe_mode_recovery_passes() -> int:
 
     candidate: int | None = None
     try:
-        candidate = get_env("HEALTH_RECOVERY_PASSES", None, cast=int)
+        resolved = get_env("HEALTH_RECOVERY_PASSES", None, cast=int)
     except Exception:
-        candidate = None
+        resolved = None
+    if resolved is not None:
+        candidate = resolved
     try:
-        candidate = get_env("AI_TRADING_SAFE_MODE_HEALTH_PASSES", None, cast=int)
+        resolved = get_env("AI_TRADING_SAFE_MODE_HEALTH_PASSES", None, cast=int)
     except Exception:
-        candidate = None
+        resolved = None
+    if resolved is not None:
+        candidate = resolved
+    raw = os.getenv("HEALTH_RECOVERY_PASSES", "").strip()
+    if raw:
+        try:
+            candidate = int(raw)
+        except Exception:
+            pass
+    raw = os.getenv("AI_TRADING_SAFE_MODE_HEALTH_PASSES", "").strip()
+    if raw:
+        try:
+            candidate = int(raw)
+        except Exception:
+            pass
     if candidate is None:
         candidate = _resolve_health_passes_required()
     try:
@@ -882,7 +901,7 @@ def _maybe_clear_safe_mode(
         _SAFE_MODE_HEALTHY_PASSES = 0
         return
     age_limit_ms = _quote_recovery_age_limit_ms()
-    if quote_age_ms is None or quote_age_ms > age_limit_ms:
+    if quote_age_ms is not None and quote_age_ms > age_limit_ms:
         _SAFE_MODE_HEALTHY_PASSES = 0
         return
     if gap_ratio is not None:
@@ -1568,6 +1587,10 @@ class ProviderMonitor:
         _SAFE_MODE_REASON = None
         _SAFE_MODE_RECOVERY_TARGET = _resolve_safe_mode_recovery_passes()
         _SAFE_MODE_DEGRADED_ONLY = False
+        try:
+            reset_data_provider_state()
+        except Exception:
+            pass
 
     def _refresh_runtime_limits(self) -> None:
         """Refresh cached cooldown and quiet window values from configuration."""

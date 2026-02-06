@@ -574,7 +574,6 @@ _ACK_TRIGGER_STATUSES = frozenset(
     {
         "new",
         "pending_new",
-        "submitted",
         "accepted",
         "acknowledged",
         "pending_replace",
@@ -2227,8 +2226,27 @@ class ExecutionEngine:
         if not short_ok:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
+            payload = short_extra or {"symbol": symbol, "side": side_lower}
+            skip_reason = None
+            if isinstance(short_extra, Mapping):
+                reason_candidate = short_extra.get("reason")
+                if reason_candidate is not None:
+                    skip_reason = str(reason_candidate)
+            if not skip_reason:
+                skip_reason = short_reason or "short_precheck_failed"
+            if (
+                short_reason in {"long_only", "margin", "shortability"}
+                or ("shortable" in skip_reason)
+                or ("short" in skip_reason and "disabled" in skip_reason)
+            ):
+                skip_reason = "shorting_disabled"
+            if (
+                short_reason in {"long_only", "margin", "shortability"}
+                or ("shortable" in skip_reason)
+                or ("short" in skip_reason and "disabled" in skip_reason)
+            ):
+                skip_reason = "shorting_disabled"
             if short_reason == "long_only":
-                payload = short_extra or {"symbol": symbol, "side": side_lower}
                 logger.info("SHORT_ORDER_SKIPPED_LONG_ONLY_MODE", extra=payload)
             else:
                 log_name = (
@@ -2238,6 +2256,26 @@ class ExecutionEngine:
                     logger.warning(log_name, extra=short_extra)
                 else:
                     logger.warning(log_name)
+            if isinstance(short_extra, Mapping) and short_extra.get("account_margin_enabled") is False:
+                logger.warning("ACCOUNT_MARGIN_DISABLED", extra=payload)
+            skipped_payload = {
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "order_type": "market",
+                "reason": skip_reason,
+            }
+            logger.warning("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_payload)
+            detail_payload = dict(skipped_payload)
+            detail_payload["detail"] = skip_reason
+            detail_payload["context"] = payload
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                skip_reason,
+                payload,
+                extra=detail_payload,
+            )
             return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
@@ -2344,6 +2382,24 @@ class ExecutionEngine:
                     },
                 )
                 return None
+
+        capacity = _call_preflight_capacity(
+            symbol,
+            side_lower,
+            None,
+            quantity,
+            trading_client,
+            account_snapshot,
+        )
+        if not capacity.can_submit:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            return None
+        if capacity.suggested_qty != quantity:
+            quantity = capacity.suggested_qty
+            order_data["quantity"] = quantity
 
         if guard_shadow_active() and not closing_position:
             logger.info(
@@ -2733,8 +2789,15 @@ class ExecutionEngine:
         if not short_ok:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
+            payload = short_extra or {"symbol": symbol, "side": side_lower}
+            skip_reason = None
+            if isinstance(short_extra, Mapping):
+                reason_candidate = short_extra.get("reason")
+                if reason_candidate is not None:
+                    skip_reason = str(reason_candidate)
+            if not skip_reason:
+                skip_reason = short_reason or "short_precheck_failed"
             if short_reason == "long_only":
-                payload = short_extra or {"symbol": symbol, "side": side_lower}
                 logger.info("SHORT_ORDER_SKIPPED_LONG_ONLY_MODE", extra=payload)
             else:
                 log_name = (
@@ -2744,6 +2807,27 @@ class ExecutionEngine:
                     logger.warning(log_name, extra=short_extra)
                 else:
                     logger.warning(log_name)
+            if isinstance(short_extra, Mapping) and short_extra.get("account_margin_enabled") is False:
+                logger.warning("ACCOUNT_MARGIN_DISABLED", extra=payload)
+            skipped_payload = {
+                "symbol": symbol,
+                "side": side_lower,
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "order_type": "limit",
+                "limit_price": None if limit_price is None else float(limit_price),
+                "reason": skip_reason,
+            }
+            logger.warning("ORDER_SKIPPED_NONRETRYABLE", extra=skipped_payload)
+            detail_payload = dict(skipped_payload)
+            detail_payload["detail"] = skip_reason
+            detail_payload["context"] = payload
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                skip_reason,
+                payload,
+                extra=detail_payload,
+            )
             return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
@@ -2874,6 +2958,24 @@ class ExecutionEngine:
                     },
                 )
                 return None
+
+        capacity = _call_preflight_capacity(
+            symbol,
+            side_lower,
+            None,
+            quantity,
+            trading_client,
+            account_snapshot,
+        )
+        if not capacity.can_submit:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            return None
+        if capacity.suggested_qty != quantity:
+            quantity = capacity.suggested_qty
+            order_data["quantity"] = quantity
 
         quote_payload: Mapping[str, Any] | None = None
         fallback_age: float | int | None = None
@@ -3268,10 +3370,6 @@ class ExecutionEngine:
                 market_on_degraded = bool(getattr(cfg, "execution_market_on_degraded", False))
             except Exception:
                 market_on_degraded = False
-        if pytest_mode:
-            require_nbbo = False
-            require_realtime_nbbo = False
-            require_quotes = False
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
@@ -3330,7 +3428,9 @@ class ExecutionEngine:
             or annotations.get("fallback_source")
         )
         try:
-            provider_source_str = str(provider_source).strip().lower()
+            provider_source_str = (
+                str(provider_source).strip().lower() if provider_source is not None else ""
+            )
         except Exception:
             provider_source_str = ""
 
@@ -3435,13 +3535,6 @@ class ExecutionEngine:
             except Exception:
                 market_on_degraded = False
 
-        if pytest_mode:
-            degraded_mode = "widen"
-            degraded_widen_bps = 0
-            require_realtime_nbbo = False
-            require_nbbo = False
-            require_quotes = False
-
         degrade_due_age = quote_age_ms is not None and quote_age_ms > float(min_quote_fresh_ms)
         try:
             degrade_due_monitor = bool(
@@ -3514,6 +3607,21 @@ class ExecutionEngine:
                     "last_price": last_value,
                 },
             )
+            try:
+                logger.warning(
+                    "ORDER_SKIPPED_PRICE_GATED",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "provider": provider_for_log,
+                        "age_ms": age_ms_int,
+                        "mode": degraded_mode,
+                        "degraded": bool(degrade_active),
+                        "reason": "primary_quote_required",
+                    },
+                )
+            except Exception:
+                pass
             return None
         slippage_basis: str | None = None
         if isinstance(annotations, Mapping):
@@ -4122,11 +4230,21 @@ class ExecutionEngine:
         ack_logged = False
         ack_timed_out = False
         current_status: str | None = None
+        last_prev_status: str | None = None
+        last_new_status: str | None = None
         event_sequence = 0
         order_submitted_logged = False
         final_cancel_reason: str | None = None
         initial_status_token = _normalize_status(status)
         initial_ack_status: str | None = None
+        initial_status_explicit = False
+        try:
+            if isinstance(final_order, Mapping):
+                initial_status_explicit = final_order.get("status") not in (None, "")
+            else:
+                initial_status_explicit = getattr(final_order, "status", None) not in (None, "")
+        except Exception:
+            initial_status_explicit = False
 
         def _status_payload() -> dict[str, Any]:
             return {
@@ -4139,7 +4257,8 @@ class ExecutionEngine:
             }
 
         def _handle_status_transition(status_value: Any, *, source: str) -> None:
-            nonlocal ack_logged, current_status, event_sequence, order_submitted_logged, final_status, initial_ack_status
+            nonlocal ack_logged, current_status, last_prev_status, last_new_status
+            nonlocal event_sequence, order_submitted_logged, final_status, initial_ack_status
             decided_status, advanced = apply_order_status(current_status, status_value)
             if decided_status is None:
                 return
@@ -4153,6 +4272,8 @@ class ExecutionEngine:
             payload["source"] = source
             payload["prev_status"] = prev_status
             payload["new_status"] = decided_status
+            last_prev_status = prev_status
+            last_new_status = decided_status
             elapsed_ms = int(max(0.0, (time.monotonic() - submit_started_at) * 1000.0))
             event_sequence += 1
             payload["event_seq"] = event_sequence
@@ -4167,6 +4288,13 @@ class ExecutionEngine:
                 order_submitted_logged = True
 
             ack_candidate = decided_status in _ACK_TRIGGER_STATUSES
+            if (
+                not ack_candidate
+                and decided_status == "submitted"
+                and source == "initial"
+                and initial_status_explicit
+            ):
+                ack_candidate = True
             ack_id_present = bool(order_id or client_order_id)
             if ack_candidate and ack_id_present:
                 if source == "initial":
@@ -4360,6 +4488,12 @@ class ExecutionEngine:
             "quantity": requested_qty,
             "filled_qty": float(filled_qty or 0),
         }
+        if event_sequence > 0:
+            final_payload["event_seq"] = event_sequence
+        if last_prev_status is not None:
+            final_payload["prev_status"] = last_prev_status
+        if last_new_status is not None:
+            final_payload["new_status"] = last_new_status
         if order_status_lower == "filled":
             logger.info("ORDER_FILLED", extra=final_payload)
         elif order_status_lower in {"canceled", "cancelled", "expired", "done_for_day"}:

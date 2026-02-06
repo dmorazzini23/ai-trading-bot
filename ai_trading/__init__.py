@@ -199,5 +199,10 @@ def __getattr__(name: str):  # pragma: no cover - thin lazy loader
     mod_name, _, attr = target.partition(':')
     mod = _import_module(mod_name)
     obj = getattr(mod, attr) if attr else mod
+    if name == "predict" and not attr:
+        try:
+            sys.modules.setdefault("predict", obj)
+        except Exception:
+            pass
     globals()[name] = obj
     return obj

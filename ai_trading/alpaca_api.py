@@ -776,11 +776,25 @@ def get_bars_df(
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
-    symbol = _canon_symbol(symbol)
-    APIError = get_api_error_cls()
-    StockBarsRequest = get_stock_bars_request_cls()
+    module_obj = sys.modules.get("ai_trading.alpaca_api")
+    module_ns = module_obj.__dict__ if module_obj is not None else globals()
 
-    _pd = _require_pandas("get_bars_df")
+    def _module_callable(name: str, fallback: Any) -> Any:
+        candidate = module_ns.get(name) if isinstance(module_ns, dict) else None
+        return candidate if callable(candidate) else fallback
+
+    canon_symbol = _module_callable("_canon_symbol", _canon_symbol)
+    symbol = canon_symbol(symbol)
+    api_error_factory = _module_callable("get_api_error_cls", get_api_error_cls)
+    APIError = api_error_factory()
+    request_cls_factory = _module_callable(
+        "get_stock_bars_request_cls",
+        get_stock_bars_request_cls,
+    )
+    StockBarsRequest = request_cls_factory()
+
+    require_pandas = _module_callable("_require_pandas", _require_pandas)
+    _pd = require_pandas("get_bars_df")
     rest_factories: list[Any] = []
     seen_factories: set[int] = set()
 
@@ -793,7 +807,6 @@ def get_bars_df(
         seen_factories.add(ident)
         rest_factories.append(candidate)
 
-    module_obj = sys.modules.get("ai_trading.alpaca_api")
     if module_obj is not None:
         _add_factory(getattr(module_obj, "_get_rest", None))
     _add_factory(globals().get("_get_rest"))
@@ -828,7 +841,11 @@ def get_bars_df(
     feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
     adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
     tf_raw = timeframe
-    tf_norm, tf_obj = _normalize_timeframe_for_tradeapi(tf_raw)
+    normalize_timeframe = _module_callable(
+        "_normalize_timeframe_for_tradeapi",
+        _normalize_timeframe_for_tradeapi,
+    )
+    tf_norm, tf_obj = normalize_timeframe(tf_raw)
     if end is not None:
         from ai_trading.utils.datetime import ensure_datetime
 
@@ -845,8 +862,17 @@ def get_bars_df(
         except (ValueError, TypeError):
             pass
     if start is None or end is None:
-        start, end = _bars_time_window(tf_obj)
-    req_start, req_end, start_s, end_s = _format_start_end_for_tradeapi(tf_norm, start, end)
+        bars_time_window = _module_callable("_bars_time_window", _bars_time_window)
+        start, end = bars_time_window(tf_obj)
+    format_start_end = _module_callable(
+        "_format_start_end_for_tradeapi",
+        _format_start_end_for_tradeapi,
+    )
+    req_start, req_end, start_s, end_s = format_start_end(tf_norm, start, end)
+    calls_total = module_ns.get("_alpaca_calls_total", _alpaca_calls_total)
+    call_latency = module_ns.get("_alpaca_call_latency", _alpaca_call_latency)
+    errors_total = module_ns.get("_alpaca_errors_total", _alpaca_errors_total)
+    time_mod = module_ns.get("time", time)
     try:
         req = StockBarsRequest(
             symbol_or_symbols=[symbol],
@@ -900,7 +926,7 @@ def get_bars_df(
                         },
                     )
                     try:
-                        time.sleep(delay)
+                        time_mod.sleep(delay)
                     except Exception:
                         pass
                     continue
@@ -921,7 +947,7 @@ def get_bars_df(
                         },
                     )
                     try:
-                        time.sleep(delay)
+                        time_mod.sleep(delay)
                     except Exception:
                         pass
                     continue
@@ -932,12 +958,12 @@ def get_bars_df(
                 raise
             finally:
                 try:
-                    _alpaca_calls_total.inc()
-                    _alpaca_call_latency.observe(
+                    calls_total.inc()
+                    call_latency.observe(
                         max(0.0, monotonic_time() - _start_t)
                     )
                     if error is not None:
-                        _alpaca_errors_total.inc()
+                        errors_total.inc()
                 except Exception:
                     pass
         else:

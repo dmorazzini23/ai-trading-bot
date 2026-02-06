@@ -33,6 +33,7 @@ from .management import (
     SEED,
     MAX_EMPTY_RETRIES,
 )
+from . import management as management
 from .settings import (
     Settings,
     get_settings as _settings_get_settings,

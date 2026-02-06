@@ -15,6 +15,9 @@ The functions here are intentionally lightweight so that they can be imported in
 isolation for unit tests without pulling in the entire ``fetch`` module.
 """
 
+import importlib
+import sys
+import types
 from datetime import datetime
 from typing import Any
 
@@ -40,6 +43,33 @@ from . import (
 
 pd = load_pandas()
 logger = get_logger(__name__)
+
+
+def _resolve_fetch_callable(name: str, fallback: Any) -> Any:
+    """Return the latest callable from ``ai_trading.data.fetch`` when available."""
+
+    try:
+        fetch_mod = sys.modules.get("ai_trading.data.fetch")
+        if not isinstance(fetch_mod, types.ModuleType):
+            fetch_mod = importlib.import_module("ai_trading.data.fetch")
+        candidate = getattr(fetch_mod, name, None)
+        if callable(candidate):
+            return candidate
+    except Exception:
+        pass
+    return fallback
+
+
+def _resolve_fetch_value(name: str, fallback: Any) -> Any:
+    """Return the latest value from ``ai_trading.data.fetch`` when available."""
+
+    try:
+        fetch_mod = sys.modules.get("ai_trading.data.fetch")
+        if not isinstance(fetch_mod, types.ModuleType):
+            fetch_mod = importlib.import_module("ai_trading.data.fetch")
+        return getattr(fetch_mod, name, fallback)
+    except Exception:
+        return fallback
 
 
 def _to_df(payload: dict[str, Any]):
@@ -80,13 +110,36 @@ def fetch_bars(
     session = session or _HTTP_SESSION
     tf = str(timeframe)
     key = (symbol, tf)
+    consecutive_failure_count = _resolve_fetch_callable(
+        "_consecutive_failure_count",
+        _consecutive_failure_count,
+    )
+    record_failure_event = _resolve_fetch_callable(
+        "_record_alpaca_failure_event",
+        _record_alpaca_failure_event,
+    )
+    clear_failure_events = _resolve_fetch_callable(
+        "_clear_alpaca_failure_events",
+        _clear_alpaca_failure_events,
+    )
+    try:
+        required_failures = max(
+            int(
+                _resolve_fetch_value(
+                    "_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD",
+                    _ALPACA_CONSECUTIVE_FAILURE_THRESHOLD,
+                )
+            ),
+            1,
+        )
+    except Exception:
+        required_failures = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
 
     # If previous attempts yielded an empty IEX response we skip straight to SIP
     # (when allowed).
     feed = "iex"
     if _IEX_EMPTY_COUNTS.get(key, 0) >= _IEX_EMPTY_THRESHOLD and _ALLOW_SIP and not _SIP_UNAUTHORIZED:
-        consecutive = _consecutive_failure_count(symbol, tf)
-        required = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
+        consecutive = consecutive_failure_count(symbol, tf)
         logger.info(
             "DATA_SOURCE_FALLBACK_ATTEMPT",
             extra={"symbol": symbol, "timeframe": tf, "from": "iex", "to": "sip", "attempts": 0},
@@ -101,7 +154,7 @@ def fetch_bars(
                 "fallback": "sip",
                 "reason": "iex_empty_threshold",
                 "consecutive_failures": consecutive,
-                "required_failures": required,
+                "required_failures": required_failures,
             },
         )
         feed = "sip"
@@ -128,7 +181,7 @@ def fetch_bars(
             if feed == "iex":
                 _IEX_EMPTY_COUNTS.pop(key, None)
                 demote_provider(symbol, provider="finnhub")
-            _clear_alpaca_failure_events(symbol, timeframe=tf)
+            clear_failure_events(symbol, timeframe=tf)
             return _to_df(payload)
 
         # Empty response handling
@@ -137,7 +190,7 @@ def fetch_bars(
             _IEX_EMPTY_COUNTS[key] = _IEX_EMPTY_COUNTS.get(key, 0) + 1
             inc_empty_payload(symbol, tf)
             mark_skipped(symbol, tf)
-            _record_alpaca_failure_event(symbol, timeframe=tf)
+            record_failure_event(symbol, timeframe=tf)
             if _ALLOW_SIP and not _SIP_UNAUTHORIZED:
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
@@ -166,7 +219,7 @@ def fetch_bars(
                 continue
             if _SIP_UNAUTHORIZED:
                 inc_unauthorized_sip("alpaca")
-            _record_alpaca_failure_event(symbol, timeframe=tf)
+            record_failure_event(symbol, timeframe=tf)
             return _to_df({})
 
         # If we get here the SIP request was also empty
@@ -174,7 +227,7 @@ def fetch_bars(
             "IEX_EMPTY_SIP_EMPTY",
             extra={"symbol": symbol, "timeframe": tf, "attempts": attempts + 1},
         )
-        _record_alpaca_failure_event(symbol, timeframe=tf)
+        record_failure_event(symbol, timeframe=tf)
         return _to_df({})
 
 

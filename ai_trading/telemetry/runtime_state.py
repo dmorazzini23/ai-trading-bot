@@ -9,12 +9,17 @@ from typing import Any
 __all__ = [
     "update_data_provider_state",
     "observe_data_provider_state",
+    "reset_data_provider_state",
     "update_quote_status",
     "observe_quote_status",
+    "reset_quote_status",
     "update_broker_status",
     "observe_broker_status",
+    "reset_broker_status",
     "update_service_status",
     "observe_service_status",
+    "reset_service_status",
+    "reset_all_states",
 ]
 
 
@@ -167,6 +172,14 @@ def observe_data_provider_state() -> dict[str, Any]:
         return dict(_provider_state)
 
 
+def reset_data_provider_state() -> None:
+    """Reset provider telemetry to defaults."""
+
+    with _LOCK:
+        global _provider_state
+        _provider_state = dict(_DEFAULT_PROVIDER_STATE)
+
+
 def update_service_status(*, status: str, reason: str | None = None) -> None:
     updates: dict[str, Any] = {"status": str(status or "unknown")}
     if reason is not None:
@@ -179,6 +192,14 @@ def update_service_status(*, status: str, reason: str | None = None) -> None:
 def observe_service_status() -> dict[str, Any]:
     with _LOCK:
         return dict(_service_status)
+
+
+def reset_service_status() -> None:
+    """Reset service telemetry to defaults."""
+
+    with _LOCK:
+        global _service_status
+        _service_status = {"status": "unknown", "updated": _now_iso()}
 
 
 def update_quote_status(
@@ -233,6 +254,14 @@ def observe_quote_status() -> dict[str, Any]:
         return dict(_quote_status)
 
 
+def reset_quote_status() -> None:
+    """Reset quote telemetry to defaults."""
+
+    with _LOCK:
+        global _quote_status
+        _quote_status = dict(_DEFAULT_QUOTE_STATE)
+
+
 def update_broker_status(
     *,
     connected: bool | None = None,
@@ -268,3 +297,22 @@ def update_broker_status(
 def observe_broker_status() -> dict[str, Any]:
     with _LOCK:
         return dict(_broker_status)
+
+
+def reset_broker_status() -> None:
+    """Reset broker telemetry to defaults."""
+
+    with _LOCK:
+        global _broker_status
+        _broker_status = dict(_DEFAULT_BROKER_STATE)
+
+
+def reset_all_states() -> None:
+    """Reset all runtime telemetry snapshots."""
+
+    with _LOCK:
+        global _provider_state, _quote_status, _broker_status, _service_status
+        _provider_state = dict(_DEFAULT_PROVIDER_STATE)
+        _quote_status = dict(_DEFAULT_QUOTE_STATE)
+        _broker_status = dict(_DEFAULT_BROKER_STATE)
+        _service_status = {"status": "unknown", "updated": _now_iso()}

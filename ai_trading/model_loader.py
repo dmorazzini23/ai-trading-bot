@@ -199,7 +199,8 @@ def load_model(symbol: str) -> object:
         or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
         or str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
     )
-    if test_mode:
+    allow_placeholder = "PLACEHOLDER" in str(symbol).upper()
+    if test_mode and allow_placeholder:
         from ai_trading.simple_models import get_model
 
         model = get_model()

@@ -292,7 +292,6 @@ def create_app():
             try:
                 response = func(dict(sanitized_payload))
             except Exception as exc:  # pragma: no cover - defensive fallback
-                _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
                 serialization_failed = True
                 fallback_used = True
                 reason_candidates = [str(exc).strip(), exc.__class__.__name__]
@@ -426,6 +425,15 @@ def create_app():
                 response = response_factory(payload)
             except Exception:
                 response = None
+            if response is not None:
+                if isinstance(response, Mapping):
+                    response = None
+                elif not (
+                    callable(getattr(response, "get_data", None))
+                    or callable(getattr(response, "get_json", None))
+                    or hasattr(response, "status_code")
+                ):
+                    response = None
             if response is not None:
                 try:
                     response.status_code = status
@@ -616,25 +624,19 @@ def create_app():
             provider_disabled = provider_status_normalized in {"down", "disabled"}
             broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
             data_degraded = data_status_normalized in {"empty", "degraded"}
-            if pytest_mode:
-                degraded = False
-            else:
-                degraded = provider_disabled or provider_payload.get("using_backup") or (
-                    provider_status_normalized not in {"", "healthy", "ready"}
-                )
-                if broker_down:
-                    degraded = True
-                if data_degraded:
-                    degraded = True
+            degraded = provider_disabled or provider_payload.get("using_backup") or (
+                provider_status_normalized not in {"", "healthy", "ready"}
+            )
+            if broker_down:
+                degraded = True
+            if data_degraded:
+                degraded = True
 
+            provider_healthy = provider_status_normalized in {"", "healthy", "ready"} and not data_degraded
+            broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
+            overall_ok = provider_healthy and broker_healthy
             if pytest_mode:
-                provider_healthy = True
-                broker_healthy = True
                 overall_ok = True
-            else:
-                provider_healthy = provider_status_normalized in {"", "healthy", "ready"} and not data_degraded
-                broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
-                overall_ok = provider_healthy and broker_healthy
 
             timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             payload = {

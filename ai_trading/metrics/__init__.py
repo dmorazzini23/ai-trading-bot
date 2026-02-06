@@ -54,8 +54,10 @@ except (ImportError, KeyError, ValueError, TypeError):
 
     class _NoopMetric:
 
-        def __init__(self, *_, **__):
-            pass
+        def __init__(self, *args, **kwargs):
+            name = args[0] if args else kwargs.get("name")
+            self._name = str(name) if name is not None else None
+            self.name = self._name
 
         def labels(self, *_, **__):
             return self

@@ -139,6 +139,18 @@ def retry(
     """
 
     attempts = max(0, int(retries))
+    if stop is not None and callable(stop):
+        # Support lightweight fallback stop predicates (e.g. stop_after_attempt)
+        # when Tenacity is unavailable.
+        for probe_attempt in range(1, 1001):
+            try:
+                if bool(stop(probe_attempt)):  # type: ignore[misc]
+                    attempts = probe_attempt
+                    break
+            except TypeError:
+                break
+            except Exception:
+                break
     base = max(0.0, float(delay))
     factor = max(0.0, float(backoff))
     mode_lc = str(mode or "exponential").lower()
