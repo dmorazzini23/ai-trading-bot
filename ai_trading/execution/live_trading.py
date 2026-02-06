@@ -4371,11 +4371,11 @@ class ExecutionEngine:
                 if normalized_polled_status:
                     last_polled_status = normalized_polled_status
                 _handle_status_transition(final_status, source="poll")
-                if str(final_status).lower() in terminal_statuses:
+                if (normalized_polled_status or str(final_status or "").strip().lower()) in terminal_statuses:
                     break
                 time.sleep(poll_interval)
                 poll_interval = min(poll_interval * 1.5, 2.0)
-            status_lower = str(status or "").lower()
+            status_lower = _normalize_status(status) or str(status or "").strip().lower()
             ack_observed = bool(initial_ack_status or ack_logged)
             if status_lower not in terminal_statuses and not ack_observed:
                 # Do not auto-cancel on missing ack; leave order pending and rely on broker sync.
@@ -4469,7 +4469,7 @@ class ExecutionEngine:
             return None
 
         order_id_display = order_id or client_order_id
-        order_status_lower = str(status).lower() if status is not None else None
+        order_status_lower = _normalize_status(status) if status is not None else None
         rejection_detail = _extract_value(
             final_order,
             "reject_reason",
@@ -5922,9 +5922,41 @@ class ExecutionEngine:
                         "response_class": resp_cls,
                     },
                 )
-                resp_preview = repr(resp)
-                if len(resp_preview) > 500:
-                    resp_preview = resp_preview[:500] + "...<truncated>"
+                response_summary: dict[str, Any] = {}
+                for field in (
+                    "id",
+                    "client_order_id",
+                    "status",
+                    "symbol",
+                    "side",
+                    "qty",
+                    "filled_qty",
+                    "filled_avg_price",
+                    "type",
+                    "order_type",
+                    "time_in_force",
+                    "limit_price",
+                    "stop_price",
+                    "submitted_at",
+                    "created_at",
+                    "updated_at",
+                    "filled_at",
+                ):
+                    value = _extract_value(resp, field)
+                    if value in (None, ""):
+                        continue
+                    if isinstance(value, datetime):
+                        value = value.astimezone(UTC).isoformat()
+                    elif not isinstance(value, (str, int, float, bool)):
+                        value = str(value)
+                    if isinstance(value, str) and len(value) > 120:
+                        value = value[:120] + "...<truncated>"
+                    response_summary[field] = value
+                if not response_summary:
+                    response_summary = {"response_class": resp_cls}
+                resp_preview = " ".join(f"{k}={v}" for k, v in response_summary.items())
+                if len(resp_preview) > 360:
+                    resp_preview = resp_preview[:360] + "...<truncated>"
                 logger.info(
                     "ALPACA_ORDER_SUBMIT_RESPONSE status=%s resp_type=%s order_id=%s client_order_id=%s resp=%s",
                     ack_status,
@@ -5937,7 +5969,7 @@ class ExecutionEngine:
                         "client_order_id": ack_client_id or order_data.get("client_order_id"),
                         "status": ack_status,
                         "resp_type": resp_cls,
-                        "resp_repr": resp_preview,
+                        "resp_summary": response_summary,
                     },
                 )
             return resp

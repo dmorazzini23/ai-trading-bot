@@ -105,3 +105,62 @@ def test_week_normalized(mock_rest_cls):
     assert isinstance(req.start, dt.datetime)
     assert isinstance(req.end, dt.datetime)
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
+
+
+def test_timeframe_coerced_to_request_runtime_class(monkeypatch):
+    import ai_trading.alpaca_api as api
+
+    class _ExpectedUnit:
+        Minute = type("Minute", (), {"name": "Minute"})()
+        Day = type("Day", (), {"name": "Day"})()
+
+    class _ExpectedTimeFrame:
+        def __init__(self, amount=1, unit=_ExpectedUnit.Day):
+            self.amount = amount
+            self.unit = unit
+
+    _ExpectedTimeFrame.Minute = _ExpectedTimeFrame(1, _ExpectedUnit.Minute)
+    _ExpectedTimeFrame.Day = _ExpectedTimeFrame(1, _ExpectedUnit.Day)
+
+    class _StrictRequest:
+        def __init__(self, **kwargs):
+            timeframe = kwargs.get("timeframe")
+            if not isinstance(timeframe, _ExpectedTimeFrame):
+                raise TypeError("timeframe_type_mismatch")
+            self.__dict__.update(kwargs)
+
+    captured: dict[str, object] = {}
+
+    class _Rest:
+        def get_stock_bars(self, req):
+            captured["request"] = req
+            return _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
+
+    monkeypatch.setattr(api, "_get_rest", lambda bars=True: _Rest())
+    monkeypatch.setattr(api, "get_stock_bars_request_cls", lambda: _StrictRequest)
+    monkeypatch.setattr(
+        api,
+        "_data_classes",
+        lambda: (_StrictRequest, _ExpectedTimeFrame, _ExpectedUnit),
+    )
+
+    foreign_tf = types.SimpleNamespace(
+        amount=5,
+        unit=types.SimpleNamespace(name="Minute"),
+    )
+    monkeypatch.setattr(
+        api,
+        "_normalize_timeframe_for_tradeapi",
+        lambda _tf: ("5Minute", foreign_tf),
+    )
+
+    start = dt.datetime(2025, 8, 19, 15, 0, tzinfo=dt.UTC)
+    end = dt.datetime(2025, 8, 19, 16, 0, tzinfo=dt.UTC)
+    df = api.get_bars_df("SPY", "5Min", start=start, end=end, feed="iex", adjustment="all")
+    assert_df_like(df)
+
+    request = captured.get("request")
+    assert request is not None
+    assert isinstance(request.timeframe, _ExpectedTimeFrame)
+    assert request.timeframe.amount == 5
+    assert request.timeframe.unit is _ExpectedUnit.Minute

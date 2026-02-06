@@ -604,6 +604,149 @@ def _normalize_timeframe_for_tradeapi(tf_raw):
     return f"{tf_obj.amount}{unit}", tf_obj
 
 
+def _coerce_timeframe_for_request(
+    tf_obj: Any,
+    tf_norm: str,
+    *,
+    timeframe_cls: Any | None,
+    timeframe_unit_cls: Any | None,
+) -> Any:
+    """Coerce ``tf_obj`` to the exact SDK timeframe class expected by requests.
+
+    Alpaca request models can validate with strict ``isinstance`` checks. When
+    multiple timeframe classes exist (same shape, different identity), request
+    construction can fail and trigger backup-provider fallbacks.
+    """
+
+    if timeframe_cls is None:
+        return tf_obj
+
+    try:
+        if isinstance(tf_obj, timeframe_cls):
+            return tf_obj
+    except Exception:
+        pass
+
+    amount = 1
+    unit_token: str | None = None
+    try:
+        amount = int(getattr(tf_obj, "amount", 1) or 1)
+    except Exception:
+        amount = 1
+
+    unit_obj = getattr(tf_obj, "unit", None)
+    if unit_obj is not None:
+        unit_token = getattr(unit_obj, "name", None) or getattr(unit_obj, "value", None)
+        if unit_token is None:
+            try:
+                unit_token = str(unit_obj)
+            except Exception:
+                unit_token = None
+
+    if not unit_token:
+        try:
+            from ai_trading.timeframe import canonicalize_timeframe
+
+            fallback_tf = canonicalize_timeframe(tf_norm)
+            amount = int(getattr(fallback_tf, "amount", amount) or amount)
+            fallback_unit = getattr(fallback_tf, "unit", None)
+            unit_token = (
+                getattr(fallback_unit, "name", None)
+                or getattr(fallback_unit, "value", None)
+                or (str(fallback_unit) if fallback_unit is not None else None)
+            )
+        except Exception:
+            unit_token = unit_token or "Day"
+
+    if amount < 1:
+        amount = 1
+    unit_token = str(unit_token or "Day")
+    normalized_unit = unit_token.strip().lower().replace("_", "")
+    unit_alias = {
+        "m": "Minute",
+        "min": "Minute",
+        "minute": "Minute",
+        "h": "Hour",
+        "hr": "Hour",
+        "hour": "Hour",
+        "d": "Day",
+        "day": "Day",
+        "w": "Week",
+        "wk": "Week",
+        "week": "Week",
+        "mo": "Month",
+        "mon": "Month",
+        "month": "Month",
+    }.get(normalized_unit, unit_token.title())
+
+    resolved_unit = None
+    if timeframe_unit_cls is not None:
+        for candidate in (
+            unit_alias,
+            unit_alias.upper(),
+            unit_alias.lower(),
+            unit_alias.capitalize(),
+            unit_alias.title(),
+        ):
+            resolved_unit = getattr(timeframe_unit_cls, candidate, None)
+            if resolved_unit is not None:
+                break
+        if resolved_unit is None:
+            members = getattr(timeframe_unit_cls, "__members__", None)
+            if isinstance(members, dict):
+                for key, member in members.items():
+                    key_norm = str(key).strip().lower()
+                    member_name = str(getattr(member, "name", "")).strip().lower()
+                    member_value = str(getattr(member, "value", "")).strip().lower()
+                    if key_norm in {normalized_unit, unit_alias.lower()}:
+                        resolved_unit = member
+                        break
+                    if member_name in {normalized_unit, unit_alias.lower()}:
+                        resolved_unit = member
+                        break
+                    if member_value in {normalized_unit, unit_alias.lower()}:
+                        resolved_unit = member
+                        break
+        if resolved_unit is None:
+            resolved_unit = getattr(timeframe_unit_cls, "Day", None)
+
+    # Prefer SDK-provided singleton timeframe tokens when available.
+    if amount == 1:
+        for candidate in (
+            unit_alias,
+            unit_alias.upper(),
+            unit_alias.lower(),
+            unit_alias.capitalize(),
+            unit_alias.title(),
+        ):
+            prebuilt = getattr(timeframe_cls, candidate, None)
+            try:
+                if prebuilt is not None and isinstance(prebuilt, timeframe_cls):
+                    return prebuilt
+            except Exception:
+                continue
+
+    constructors = [
+        lambda: timeframe_cls(amount, resolved_unit),
+        lambda: timeframe_cls(amount=amount, unit=resolved_unit),
+        lambda: timeframe_cls(amount, unit_alias),
+        lambda: timeframe_cls(amount=amount, unit=unit_alias),
+        lambda: timeframe_cls(tf_norm),
+    ]
+    for builder in constructors:
+        try:
+            candidate = builder()
+        except Exception:
+            continue
+        try:
+            if isinstance(candidate, timeframe_cls):
+                return candidate
+        except Exception:
+            return candidate
+
+    return tf_obj
+
+
 def _to_utc(dtobj: dt.datetime) -> dt.datetime:
     """Ensure a ``datetime`` is timezone-aware and in UTC."""
     if dtobj.tzinfo is None:
@@ -792,6 +935,15 @@ def get_bars_df(
         get_stock_bars_request_cls,
     )
     StockBarsRequest = request_cls_factory()
+    data_classes_factory = _module_callable("_data_classes", _data_classes)
+    request_timeframe_cls: Any | None = None
+    request_timeframe_unit_cls: Any | None = None
+    if callable(data_classes_factory):
+        try:
+            _req_cls, request_timeframe_cls, request_timeframe_unit_cls = data_classes_factory()
+        except Exception:
+            request_timeframe_cls = None
+            request_timeframe_unit_cls = None
 
     require_pandas = _module_callable("_require_pandas", _require_pandas)
     _pd = require_pandas("get_bars_df")
@@ -846,6 +998,12 @@ def get_bars_df(
         _normalize_timeframe_for_tradeapi,
     )
     tf_norm, tf_obj = normalize_timeframe(tf_raw)
+    tf_obj = _coerce_timeframe_for_request(
+        tf_obj,
+        tf_norm,
+        timeframe_cls=request_timeframe_cls,
+        timeframe_unit_cls=request_timeframe_unit_cls,
+    )
     if end is not None:
         from ai_trading.utils.datetime import ensure_datetime
 

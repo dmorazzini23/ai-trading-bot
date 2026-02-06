@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import ai_trading.app as app_module
 from ai_trading.app import create_app
 from ai_trading.health import HealthCheck
 from ai_trading.telemetry import runtime_state
@@ -94,3 +95,13 @@ def test_pytest_override_keeps_ok_true(monkeypatch):
     assert payload["ok"] is True
     assert payload["data_provider"]["status"] == "down"
     assert payload["broker"]["connected"] is False
+
+
+def test_pytest_detection_silent_without_hints(monkeypatch, caplog):
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(app_module, "sys", SimpleNamespace(modules={}))
+
+    caplog.set_level("DEBUG")
+    assert app_module._pytest_active() is False
+    assert not [record for record in caplog.records if record.message == "PYTEST_DETECT_FALSE"]

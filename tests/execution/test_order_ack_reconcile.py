@@ -103,6 +103,21 @@ class _AcceptedNoPollClient(_AckStubClient):
         raise ConnectionError("status endpoint unavailable")
 
 
+class _EnumStatusClient(_AckStubClient):
+    def submit_order(self, *args, **kwargs):
+        self._polls = 0
+        return {"id": "order-1", "status": "OrderStatus.PENDING_NEW", "filled_qty": "0"}
+
+    def get_order_by_id(self, order_id: str):
+        self._polls += 1
+        if self._polls >= 2:
+            return {"id": order_id, "status": "OrderStatus.FILLED", "filled_qty": "5"}
+        return {"id": order_id, "status": "OrderStatus.PENDING_NEW", "filled_qty": "0"}
+
+    def get_order_by_client_order_id(self, client_order_id: str):
+        return self.get_order_by_id(client_order_id)
+
+
 @pytest.fixture(autouse=True)
 def _fast_ack(monkeypatch):
     monkeypatch.setattr("ai_trading.execution.live_trading._ACK_TIMEOUT_SECONDS", 0.05)
@@ -285,3 +300,18 @@ def test_submitted_status_counts_as_ack(monkeypatch, caplog):
     assert "ORDER_ACK_TIMEOUT" not in msgs
     assert "ORDER_PENDING_NO_TERMINAL" not in msgs
     assert "ORDER_ACK_RECEIVED" in msgs
+
+
+def test_order_status_enum_tokens_normalized(monkeypatch, caplog):
+    engine = _build_engine(_EnumStatusClient())
+    _prime_engine(engine, monkeypatch)
+    caplog.set_level(logging.INFO)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert getattr(result, "reconciled", False)
+    msgs = {record.msg for record in caplog.records}
+    assert "ORDER_SUBMITTED" in msgs
+    assert "ORDER_FILL_CONFIRMED" in msgs
+    assert "ORDER_PENDING_NO_TERMINAL" not in msgs

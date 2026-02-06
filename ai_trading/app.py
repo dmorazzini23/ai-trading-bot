@@ -71,8 +71,8 @@ def _pytest_active() -> bool:
     if current:
         return True
     active = "pytest" in sys.modules
-    if not active:
-        _log.warning(
+    if not active and (flag is not None or current):
+        _log.debug(
             "PYTEST_DETECT_FALSE",
             extra={
                 "has_pytest_module": "pytest" in sys.modules,
