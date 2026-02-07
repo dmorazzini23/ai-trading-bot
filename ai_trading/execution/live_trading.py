@@ -265,8 +265,6 @@ def _pytest_mode_active() -> bool:
     env_token = os.getenv("PYTEST_RUNNING")
     if isinstance(env_token, str) and env_token.strip().lower() in {"1", "true", "yes", "on"}:
         return True
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        return True
     return False
 
 
@@ -2905,16 +2903,24 @@ class ExecutionEngine:
                 "pattern_day_trades",
                 "pattern_day_trades_count",
             )
-            if not pdt_guard(
-                _safe_bool(pattern_attr),
-                _safe_int(limit_attr, 0),
-                _safe_int(count_attr, 0),
+            pattern_flag = _safe_bool(pattern_attr)
+            daytrade_limit = _safe_int(limit_attr, 0)
+            daytrade_count = _safe_int(count_attr, 0)
+            lockout_active = (
+                pattern_flag
+                and daytrade_limit > 0
+                and daytrade_count >= daytrade_limit
+            )
+            if lockout_active and not pdt_guard(
+                pattern_flag,
+                daytrade_limit,
+                daytrade_count,
             ):
                 info = pdt_lockout_info()
                 detail_context = {
-                    "pattern_day_trader": _safe_bool(pattern_attr),
-                    "daytrade_limit": _safe_int(limit_attr, 0),
-                    "daytrade_count": _safe_int(count_attr, 0),
+                    "pattern_day_trader": pattern_flag,
+                    "daytrade_limit": daytrade_limit,
+                    "daytrade_count": daytrade_count,
                     "active": _safe_bool(_extract_value(account_snapshot, "active")),
                     "limit": info.get("limit"),
                     "count": info.get("count"),
@@ -4332,6 +4338,12 @@ class ExecutionEngine:
             client_order_id_hint = _extract_value(final_order, "client_order_id")
             poll_deadline = submit_started_at + _ACK_TIMEOUT_SECONDS
             poll_interval = 0.5
+            # Guard against frozen monotonic clocks in tests: ensure polling
+            # eventually exits even if wall-clock progress is unavailable.
+            max_poll_attempts = max(
+                4,
+                int(max(_ACK_TIMEOUT_SECONDS, 0.1) / max(poll_interval, 0.05)) * 8,
+            )
             terminal_statuses = {
                 "filled",
                 "partially_filled",
@@ -4341,7 +4353,7 @@ class ExecutionEngine:
                 "expired",
                 "done_for_day",
             }
-            while time.monotonic() < poll_deadline:
+            while poll_attempts < max_poll_attempts and time.monotonic() < poll_deadline:
                 refreshed = None
                 try:
                     get_by_id = getattr(client, "get_order_by_id", None)

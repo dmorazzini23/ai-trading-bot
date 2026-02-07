@@ -271,8 +271,12 @@ class ModelRegistry:
                 "repr": repr(model),
                 "name": getattr(model, "_mock_name", None),
             }
-            payload = pickle.dumps(mock_payload, protocol=pickle.HIGHEST_PROTOCOL)
-            return payload, "mock"
+            try:
+                payload = pickle.dumps(mock_payload, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception as exc:  # noqa: BLE001 - normalized below
+                errors.append(f"mock: {exc}")
+            else:
+                return payload, "mock"
         message = "; ".join(errors) or "unknown"
         raise RuntimeError(f"Model not picklable ({message})")
 

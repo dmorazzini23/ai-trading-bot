@@ -423,7 +423,19 @@ def pov_submit(
     import random
 
     import os as _os
-    pytest_running = _bot_engine._truthy_env(_os.getenv("PYTEST_RUNNING"))
+    import sys as _sys
+
+    env_token = _os.getenv("PYTEST_RUNNING")
+    if isinstance(env_token, str):
+        normalized = env_token.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            pytest_running = True
+        elif normalized in {"0", "false", "no", "off"}:
+            pytest_running = False
+        else:
+            pytest_running = "pytest" in _sys.modules
+    else:
+        pytest_running = "pytest" in _sys.modules
 
     def _sleep(seconds: float) -> None:
         if pytest_running or seconds <= 0:

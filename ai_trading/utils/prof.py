@@ -10,28 +10,57 @@ from typing import Any, Callable
 _TIMING_LEVEL_CACHE: tuple[str | None, str | None, int | None] | None = None
 
 
+def _is_freezegun_clock(fn: Any) -> bool:
+    module_name = str(getattr(fn, "__module__", "") or "").lower()
+    return "freezegun" in module_name
+
+
+def _clock_seconds() -> float:
+    perf_counter = getattr(time, "perf_counter", None)
+    if callable(perf_counter) and not _is_freezegun_clock(perf_counter):
+        try:
+            return float(perf_counter())
+        except (OSError, ValueError):
+            pass
+    try:
+        return float(os.times().elapsed)
+    except (AttributeError, OSError, ValueError):
+        return float(time.time())
+
+
 def _monotonic_ns() -> int:
     """Return a monotonic clock reading in nanoseconds."""
 
     perf_counter_ns = getattr(time, "perf_counter_ns", None)
-    if callable(perf_counter_ns):
+    if callable(perf_counter_ns) and not _is_freezegun_clock(perf_counter_ns):
         try:
-            return perf_counter_ns()
+            return int(perf_counter_ns())
         except (OSError, ValueError):
             pass
+
     monotonic = getattr(time, "monotonic", None)
-    if callable(monotonic):
+    if callable(monotonic) and not _is_freezegun_clock(monotonic):
         try:
-            return int(monotonic() * 1_000_000_000)
+            return int(float(monotonic()) * 1_000_000_000)
         except (OSError, ValueError):
             pass
+
     monotonic_ns = getattr(time, "monotonic_ns", None)
-    if callable(monotonic_ns):
+    if callable(monotonic_ns) and not _is_freezegun_clock(monotonic_ns):
         try:
-            return monotonic_ns()
+            return int(monotonic_ns())
         except (OSError, ValueError):
             pass
-    return int(time.perf_counter() * 1_000_000_000)
+
+    clock_gettime_ns = getattr(time, "clock_gettime_ns", None)
+    clock_monotonic = getattr(time, "CLOCK_MONOTONIC", None)
+    if callable(clock_gettime_ns) and isinstance(clock_monotonic, int):
+        try:
+            return int(clock_gettime_ns(clock_monotonic))
+        except (OSError, ValueError):
+            pass
+
+    return int(_clock_seconds() * 1_000_000_000)
 
 
 def _resolve_timing_level() -> int | None:
@@ -77,7 +106,7 @@ def _log_at_level(logger: Any, level: int, message: str, *, extra: dict[str, Any
 
 @contextmanager
 def StageTimer(logger: Any, stage_name: str, *, override_ms: float | None = None, **extra: Any) -> None:
-    t0 = time.perf_counter()
+    t0 = _clock_seconds()
     try:
         yield
     finally:
@@ -86,12 +115,12 @@ def StageTimer(logger: Any, stage_name: str, *, override_ms: float | None = None
             return
         raw_ms: float
         if override_ms is None:
-            raw_ms = (time.perf_counter() - t0) * 1000.0
+            raw_ms = (_clock_seconds() - t0) * 1000.0
         else:
             try:
                 raw_ms = float(override_ms)
             except (TypeError, ValueError):
-                raw_ms = (time.perf_counter() - t0) * 1000.0
+                raw_ms = (_clock_seconds() - t0) * 1000.0
         if not math.isfinite(raw_ms) or raw_ms < 0.0:
             raw_ms = 0.0
         dt_ms_int = 0

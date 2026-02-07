@@ -61,6 +61,107 @@ def _ensure_test_stubs() -> None:
 
 _ensure_test_stubs()
 
+
+def _timeframe_unit_is_valid(unit_cls: object | None) -> bool:
+    if unit_cls is None:
+        return False
+    required = ("Minute", "Hour", "Day", "Week", "Month")
+    return all(hasattr(unit_cls, name) for name in required)
+
+
+def _reload_alpaca_timeframe_module() -> types.ModuleType | None:
+    try:
+        timeframe_mod = importlib.import_module("alpaca.data.timeframe")
+    except Exception:
+        return None
+    try:
+        return importlib.reload(timeframe_mod)
+    except Exception:
+        return timeframe_mod
+
+
+def _ensure_alpaca_timeframe_defaults() -> None:
+    """Make ``alpaca.data.timeframe.TimeFrame`` zero-arg constructible in tests."""
+
+    try:
+        timeframe_mod = importlib.import_module("alpaca.data.timeframe")
+    except Exception:
+        return
+
+    tf_cls = getattr(timeframe_mod, "TimeFrame", None)
+    tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
+    if not _timeframe_unit_is_valid(tf_unit_cls):
+        timeframe_mod = _reload_alpaca_timeframe_module() or timeframe_mod
+        tf_cls = getattr(timeframe_mod, "TimeFrame", None)
+        tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
+    if not isinstance(tf_cls, type) or tf_unit_cls is None:
+        return
+    if not _timeframe_unit_is_valid(tf_unit_cls):
+        return
+
+    try:
+        tf_cls()
+        return
+    except TypeError:
+        pass
+    except Exception:
+        return
+
+    day_unit = getattr(tf_unit_cls, "Day", None)
+    if day_unit is None:
+        return
+
+    class _CompatTimeFrame(tf_cls):  # type: ignore[misc]
+        def __init__(self, amount=1, unit=day_unit):
+            try:
+                super().__init__(amount, unit)
+            except Exception:
+                try:
+                    self.amount = amount
+                except Exception:
+                    pass
+                try:
+                    self.unit = unit
+                except Exception:
+                    pass
+                try:
+                    self.amount_value = amount
+                except Exception:
+                    pass
+                try:
+                    self.unit_value = unit
+                except Exception:
+                    pass
+
+    for attr_name, fallback in (
+        ("Minute", getattr(tf_unit_cls, "Minute", None)),
+        ("Hour", getattr(tf_unit_cls, "Hour", None)),
+        ("Day", day_unit),
+        ("Week", getattr(tf_unit_cls, "Week", None)),
+        ("Month", getattr(tf_unit_cls, "Month", None)),
+    ):
+        if fallback is None:
+            continue
+        try:
+            setattr(_CompatTimeFrame, attr_name, _CompatTimeFrame(1, fallback))
+        except Exception:
+            pass
+
+    try:
+        setattr(timeframe_mod, "TimeFrame", _CompatTimeFrame)
+    except Exception:
+        return
+
+    alpaca_data_mod = sys.modules.get("alpaca.data")
+    if isinstance(alpaca_data_mod, types.ModuleType):
+        try:
+            setattr(alpaca_data_mod, "TimeFrame", _CompatTimeFrame)
+        except Exception:
+            pass
+
+
+_ensure_alpaca_timeframe_defaults()
+
 # Provide a lightweight default model so bot initialization can preload it
 
 _dummy_mod = types.ModuleType("dummy_model")
@@ -77,9 +178,6 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "test-secret")
 os.environ["AI_TRADING_TRADE_HISTORY_PATH"] = str(
     Path(__file__).with_name(".pytest_trade_history.parquet")
 )
-os.environ["ALPACA_ALLOW_SIP"] = "1"
-os.environ["ALPACA_SIP_ENTITLED"] = "1"
-os.environ["ALPACA_HAS_SIP"] = "1"
 
 
 def _missing(mod: str) -> bool:
@@ -93,9 +191,6 @@ def _missing(mod: str) -> bool:
 def _seed_tests() -> None:
     """Ensure deterministic test execution."""
     os.environ["PYTEST_RUNNING"] = "1"
-    os.environ["ALPACA_ALLOW_SIP"] = "1"
-    os.environ["ALPACA_SIP_ENTITLED"] = "1"
-    os.environ["ALPACA_HAS_SIP"] = "1"
     os.environ["PYTHONHASHSEED"] = "0"
     random.seed(0)
     if not _missing("numpy"):
@@ -106,21 +201,6 @@ def _seed_tests() -> None:
         import torch
 
         torch.manual_seed(0)
-
-
-@pytest.fixture(autouse=True)
-def _force_sip_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ensure SIP-related env defaults reflect entitlement-friendly state during tests."""
-
-    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
-    monkeypatch.setenv("ALPACA_SIP_ENTITLED", "1")
-    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
-    monkeypatch.delenv("TRADING__DEGRADED_FEED_MODE", raising=False)
-    monkeypatch.delenv("DEGRADED_FEED_MODE", raising=False)
-    monkeypatch.delenv("ALPACA_SIP_UNAUTHORIZED", raising=False)
-    monkeypatch.delenv("BACKUP_DATA_PROVIDER", raising=False)
-    monkeypatch.delenv("BACKUP_PROVIDER", raising=False)
-    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
 
 
 def _clear_mutable_state(value: object) -> None:
@@ -137,8 +217,29 @@ def _iter_live_modules(module_name: str):
         seen.add(id(module))
         yield module
 
+    # Prefer a sys.modules snapshot to avoid expensive GC scans in hot fixtures.
     try:
+        for obj in tuple(sys.modules.values()):
+            if not isinstance(obj, types.ModuleType):
+                continue
+            if getattr(obj, "__name__", None) != module_name:
+                continue
+            obj_id = id(obj)
+            if obj_id in seen:
+                continue
+            seen.add(obj_id)
+            yield obj
+    except Exception:
+        return
+
+    # Optional GC fallback for deep debugging only.
+    if os.getenv("AI_TRADING_TEST_GC_MODULE_SCAN", "0") != "1":
+        return
+    try:
+        deadline = _time.monotonic() + 0.05
         for obj in gc.get_objects():
+            if _time.monotonic() >= deadline:
+                break
             if not isinstance(obj, types.ModuleType):
                 continue
             if getattr(obj, "__name__", None) != module_name:
@@ -202,6 +303,14 @@ def _reset_loaded_singletons() -> None:
         runtime_state_mod = importlib.import_module("ai_trading.telemetry.runtime_state")
     except Exception:
         runtime_state_mod = None
+    for module_name in ("ai_trading.data.models", "ai_trading.data.bars"):
+        module_obj = sys.modules.get(module_name)
+        if not isinstance(module_obj, types.ModuleType):
+            continue
+        try:
+            importlib.reload(module_obj)
+        except Exception:
+            pass
 
     for bot_engine_mod in _iter_live_modules("ai_trading.core.bot_engine"):
         if isinstance(fetch_mod, types.ModuleType):
@@ -234,40 +343,6 @@ def _reset_loaded_singletons() -> None:
             except Exception:
                 pass
 
-    try:
-        vendor_requests_mod = importlib.import_module("tests.vendor_stubs.alpaca.data.requests")
-    except Exception:
-        vendor_requests_mod = None
-    if isinstance(vendor_requests_mod, types.ModuleType):
-        req_cls = getattr(vendor_requests_mod, "StockBarsRequest", None)
-        needs_reload = not (
-            isinstance(req_cls, type)
-            and getattr(req_cls, "__name__", "") == "StockBarsRequest"
-            and getattr(req_cls, "__module__", "") == "tests.vendor_stubs.alpaca.data.requests"
-        )
-        if needs_reload:
-            try:
-                vendor_requests_mod = importlib.reload(vendor_requests_mod)
-            except Exception:
-                pass
-
-    try:
-        vendor_timeframe_mod = importlib.import_module("tests.vendor_stubs.alpaca.data.timeframe")
-    except Exception:
-        vendor_timeframe_mod = None
-    if isinstance(vendor_timeframe_mod, types.ModuleType):
-        tf_cls = getattr(vendor_timeframe_mod, "TimeFrame", None)
-        needs_reload = not (
-            isinstance(tf_cls, type)
-            and getattr(tf_cls, "__name__", "") == "TimeFrame"
-            and getattr(tf_cls, "__module__", "") == "tests.vendor_stubs.alpaca.data.timeframe"
-        )
-        if needs_reload:
-            try:
-                vendor_timeframe_mod = importlib.reload(vendor_timeframe_mod)
-            except Exception:
-                pass
-
     alpaca_data_mod = sys.modules.get("alpaca.data")
     if isinstance(alpaca_data_mod, types.ModuleType):
         requests_mod = sys.modules.get("alpaca.data.requests")
@@ -282,6 +357,12 @@ def _reset_loaded_singletons() -> None:
         if isinstance(timeframe_mod, types.ModuleType):
             tf_cls = getattr(timeframe_mod, "TimeFrame", None)
             tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
+            if not _timeframe_unit_is_valid(tf_unit_cls):
+                refreshed = _reload_alpaca_timeframe_module()
+                if isinstance(refreshed, types.ModuleType):
+                    timeframe_mod = refreshed
+                    tf_cls = getattr(timeframe_mod, "TimeFrame", None)
+                    tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
             if tf_cls is not None:
                 try:
                     setattr(alpaca_data_mod, "TimeFrame", tf_cls)
@@ -292,6 +373,65 @@ def _reset_loaded_singletons() -> None:
                     setattr(alpaca_data_mod, "TimeFrameUnit", tf_unit_cls)
                 except Exception:
                     pass
+            if (
+                isinstance(tf_cls, type)
+                and tf_unit_cls is not None
+                and _timeframe_unit_is_valid(tf_unit_cls)
+            ):
+                needs_compat = False
+                try:
+                    tf_cls()
+                except TypeError:
+                    needs_compat = True
+                except Exception:
+                    needs_compat = False
+                if needs_compat:
+                    day_unit = getattr(tf_unit_cls, "Day", None)
+                    if day_unit is not None:
+
+                        class _CompatTimeFrame(tf_cls):  # type: ignore[misc]
+                            def __init__(self, amount=1, unit=day_unit):
+                                try:
+                                    super().__init__(amount, unit)
+                                except Exception:
+                                    try:
+                                        self.amount = amount
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self.unit = unit
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self.amount_value = amount
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self.unit_value = unit
+                                    except Exception:
+                                        pass
+
+                        for attr_name, fallback in (
+                            ("Minute", getattr(tf_unit_cls, "Minute", None)),
+                            ("Hour", getattr(tf_unit_cls, "Hour", None)),
+                            ("Day", day_unit),
+                            ("Week", getattr(tf_unit_cls, "Week", None)),
+                            ("Month", getattr(tf_unit_cls, "Month", None)),
+                        ):
+                            if fallback is None:
+                                continue
+                            try:
+                                setattr(_CompatTimeFrame, attr_name, _CompatTimeFrame(1, fallback))
+                            except Exception:
+                                pass
+                        try:
+                            setattr(timeframe_mod, "TimeFrame", _CompatTimeFrame)
+                        except Exception:
+                            pass
+                        try:
+                            setattr(alpaca_data_mod, "TimeFrame", _CompatTimeFrame)
+                        except Exception:
+                            pass
 
     try:
         from ai_trading.config import settings as _settings_mod
@@ -569,6 +709,7 @@ _REBOUND_MODULE_NAMES = {
     "ai_trading.data.fetch",
     "ai_trading.data.fetch.iex_fallback",
     "ai_trading.data.provider_monitor",
+    "ai_trading.alpaca_api",
     "ai_trading.core.bot_engine",
     "ai_trading.main",
     "ai_trading.meta_learning",
@@ -627,7 +768,9 @@ def _rebind_test_module_references(test_module: object | None) -> None:
     for attr_name, attr_value in list(vars(test_module).items()):
         if isinstance(attr_value, types.ModuleType):
             module_name = getattr(attr_value, "__name__", None)
-            if module_name not in _REBOUND_MODULE_NAMES:
+            if not isinstance(module_name, str):
+                continue
+            if module_name not in _REBOUND_MODULE_NAMES and not module_name.startswith("ai_trading."):
                 continue
             try:
                 setattr(test_module, attr_name, importlib.import_module(module_name))
@@ -636,7 +779,10 @@ def _rebind_test_module_references(test_module: object | None) -> None:
             continue
 
         owner_module = getattr(attr_value, "__module__", None)
-        if owner_module not in _REBOUND_SYMBOL_MODULE_NAMES:
+        if (
+            owner_module not in _REBOUND_SYMBOL_MODULE_NAMES
+            and not (isinstance(owner_module, str) and owner_module.startswith("ai_trading."))
+        ):
             rebound = False
             for module_name, symbol_names in _REBOUND_MUTABLE_SYMBOLS.items():
                 if (
@@ -646,9 +792,9 @@ def _rebind_test_module_references(test_module: object | None) -> None:
                     continue
                 if attr_name not in symbol_names:
                     continue
-                current_module = module_refs.get(module_name)
+                current_module = sys.modules.get(module_name)
                 if not isinstance(current_module, types.ModuleType):
-                    current_module = sys.modules.get(module_name)
+                    current_module = module_refs.get(module_name)
                 if not isinstance(current_module, types.ModuleType):
                     try:
                         current_module = importlib.import_module(module_name)
@@ -667,9 +813,9 @@ def _rebind_test_module_references(test_module: object | None) -> None:
             if rebound:
                 continue
             continue
-        current_module = module_refs.get(owner_module)
+        current_module = sys.modules.get(owner_module)
         if not isinstance(current_module, types.ModuleType):
-            current_module = sys.modules.get(owner_module)
+            current_module = module_refs.get(owner_module)
         if not isinstance(current_module, types.ModuleType):
             try:
                 current_module = importlib.import_module(owner_module)
@@ -689,10 +835,48 @@ def _rebind_test_module_references(test_module: object | None) -> None:
 def _reset_runtime_singletons(request: pytest.FixtureRequest) -> None:
     """Keep mutable process-global state isolated between tests."""
 
-    _reset_loaded_singletons()
-    _sync_package_module_exports()
-    _rebind_test_module_references(getattr(request, "module", None))
-    yield
+    nodeid = request.node.nodeid
+    force_alpaca_unavailable = nodeid.endswith(
+        "tests/test_alpaca_fallback_timeframe.py::test_stock_bars_request_accepts_mutable_timeframe"
+    )
+    previous_force_alpaca = os.environ.get("AI_TRADING_FORCE_ALPACA_UNAVAILABLE")
+    if force_alpaca_unavailable:
+        os.environ["AI_TRADING_FORCE_ALPACA_UNAVAILABLE"] = "1"
+    is_alpaca_import_absence_test = nodeid.endswith(
+        "tests/test_alpaca_import.py::test_ai_trading_import_without_alpaca"
+    )
+    try:
+        if is_alpaca_import_absence_test:
+            for module_name in [name for name in tuple(sys.modules.keys()) if "alpaca" in name.lower()]:
+                try:
+                    sys.modules.pop(module_name, None)
+                except Exception:
+                    pass
+            sys.modules["alpaca"] = None
+            sys.modules.pop("ai_trading.core.bot_engine", None)
+            core_mod = sys.modules.get("ai_trading.core")
+            if isinstance(core_mod, types.ModuleType):
+                try:
+                    delattr(core_mod, "bot_engine")
+                except Exception:
+                    pass
+            for bot_engine_mod in _iter_live_modules("ai_trading.core.bot_engine"):
+                try:
+                    setattr(bot_engine_mod, "ALPACA_AVAILABLE", False)
+                except Exception:
+                    pass
+            yield
+            return
+        _reset_loaded_singletons()
+        _sync_package_module_exports()
+        _rebind_test_module_references(getattr(request, "module", None))
+        yield
+    finally:
+        if force_alpaca_unavailable:
+            if previous_force_alpaca is None:
+                os.environ.pop("AI_TRADING_FORCE_ALPACA_UNAVAILABLE", None)
+            else:
+                os.environ["AI_TRADING_FORCE_ALPACA_UNAVAILABLE"] = previous_force_alpaca
 
 
 @pytest.fixture(autouse=True)

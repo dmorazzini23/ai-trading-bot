@@ -169,12 +169,7 @@ def eastern_tz() -> ZoneInfo:
 EASTERN_TZ = eastern_tz()
 
 ALPACA_AVAILABLE = ALPACA_AVAILABLE and not missing("alpaca", "alpaca")
-_TEST_FLAG_VALUES = {"1", "true", "yes", "on"}
-if (
-    str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in _TEST_FLAG_VALUES
-    or str(os.getenv("TESTING", "")).strip().lower() in _TEST_FLAG_VALUES
-    or os.getenv("PYTEST_CURRENT_TEST")
-):
+if os.getenv("AI_TRADING_FORCE_ALPACA_UNAVAILABLE", "").strip() == "1":
     ALPACA_AVAILABLE = False
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 _ALPACA_SERVICE_AVAILABLE: bool = True

@@ -188,6 +188,8 @@ class TradingScenarioRunner:
             orders_processed += 1
 
         duration = time.perf_counter() - start_time
+        if duration <= 0:
+            duration = 1e-9
         results["metrics"]["orders_per_second"] = orders_processed / duration
 
         # Memory usage simulation

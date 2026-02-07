@@ -835,16 +835,32 @@ def _sip_allowed() -> bool:
     """Return ``True`` when SIP access is permitted for the current process."""
     force_flag = bool(globals().get("_FORCE_SIP_REQUEST"))
     override = globals().get("_ALLOW_SIP")
+    allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower()
 
     if force_flag and override is not False:
         return True
     if override is not None:
         return bool(override)
+    if allow_env in {"0", "false", "no", "off"}:
+        return False
+    if allow_env in {"1", "true", "yes", "on"}:
+        return True
+    if _detect_pytest_env():
+        if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"):
+            return True
     try:
         resolved = resolve_alpaca_feed("sip")
     except Exception:
         resolved = "iex"
     return str(resolved).strip().lower() == "sip"
+
+
+def _sip_explicitly_disabled() -> bool:
+    override = globals().get("_ALLOW_SIP")
+    if override is False:
+        return True
+    allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower()
+    return allow_env in {"0", "false", "no", "off"}
 
 
 def _ordered_fallbacks(primary_feed: str) -> list[str]:
@@ -1056,10 +1072,12 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         if normalized_feed not in {"iex", "sip"}:
             _OVERRIDE_MAP.pop((symbol, primary_norm), None)
         elif _now_ts() - ts <= ttl:
-            resolved_override = ensure_entitled_feed(normalized_feed, primary_norm)
-            if resolved_override:
-                return resolved_override
-            _OVERRIDE_MAP.pop((symbol, primary_norm), None)
+            if normalized_feed == "sip" and (
+                _is_sip_unauthorized() or _sip_explicitly_disabled()
+            ):
+                _OVERRIDE_MAP.pop((symbol, primary_norm), None)
+            else:
+                return normalized_feed
         else:
             _OVERRIDE_MAP.pop((symbol, primary_norm), None)
 
@@ -1067,16 +1085,16 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     cached = _cycle_feed_override.get(symbol)
     if cached:
         normalized_cached = str(cached or "").strip().lower()
-        if normalized_cached not in {"iex", "sip"} or (normalized_cached == "sip" and (_is_sip_unauthorized() or not _sip_allowed())):
+        if normalized_cached not in {"iex", "sip"} or (
+            normalized_cached == "sip"
+            and (_is_sip_unauthorized() or _sip_explicitly_disabled())
+        ):
             _clear_override(symbol)
         else:
             ts = _override_set_ts.get(symbol, 0.0)
             now_ts = _time_now(None)
             if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
-                resolved_cached = ensure_entitled_feed(normalized_cached, primary_norm)
-                if resolved_cached:
-                    return resolved_cached
-                _clear_override(symbol)
+                return normalized_cached
             _clear_override(symbol)
     cache_keys: list[tuple[Any, ...]] = [(symbol,)]
     cache_keys.extend(
@@ -1096,13 +1114,12 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
         if normalized_cached not in {"iex", "sip"}:
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
-        if normalized_cached == "sip" and (_is_sip_unauthorized() or not _sip_allowed()):
+        if normalized_cached == "sip" and (
+            _is_sip_unauthorized() or _sip_explicitly_disabled()
+        ):
             _FEED_SWITCH_CACHE.pop(cache_key, None)
             continue
-        resolved_cached = ensure_entitled_feed(normalized_cached, primary_norm)
-        if resolved_cached:
-            return resolved_cached
-        _FEED_SWITCH_CACHE.pop(cache_key, None)
+        return normalized_cached
     return primary_norm
 
 

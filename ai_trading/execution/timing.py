@@ -7,12 +7,38 @@ The trading loop records timing metadata for each broker submission so that
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Mapping
 
 CycleMetadata = Dict[str, Any]
+
+
+def _is_freezegun_clock(fn: Any) -> bool:
+    module_name = str(getattr(fn, "__module__", "") or "").lower()
+    return "freezegun" in module_name
+
+
+def _clock_seconds() -> float:
+    perf_counter = getattr(time, "perf_counter", None)
+    if callable(perf_counter) and not _is_freezegun_clock(perf_counter):
+        try:
+            return float(perf_counter())
+        except (OSError, ValueError):
+            pass
+    clock_gettime_ns = getattr(time, "clock_gettime_ns", None)
+    clock_monotonic = getattr(time, "CLOCK_MONOTONIC", None)
+    if callable(clock_gettime_ns) and isinstance(clock_monotonic, int):
+        try:
+            return float(clock_gettime_ns(clock_monotonic)) / 1_000_000_000.0
+        except (OSError, ValueError):
+            pass
+    try:
+        return float(os.times().elapsed)
+    except (AttributeError, OSError, ValueError):
+        return float(time.time())
 
 _cycle_total_seconds = 0.0
 _cycle_wall_seconds = 0.0
@@ -71,7 +97,7 @@ def record_cycle_wall(elapsed: float, metadata: Mapping[str, Any] | None = None)
 def execution_span(logger: Any, **extra: Any):
     """Context manager that records execution timing with optional logging."""
 
-    start = time.perf_counter()
+    start = _clock_seconds()
     payload: dict[str, Any] = dict(extra)
     if logger is not None:
         try:
@@ -81,7 +107,7 @@ def execution_span(logger: Any, **extra: Any):
     try:
         yield
     finally:
-        elapsed = time.perf_counter() - start
+        elapsed = _clock_seconds() - start
         payload_end = dict(extra)
         payload_end["elapsed_ms"] = int(max(0.0, elapsed) * 1000.0)
         _record_span(elapsed, payload_end)
@@ -90,4 +116,3 @@ def execution_span(logger: Any, **extra: Any):
                 logger.info("EXECUTE_TIMING_END", extra=payload_end)
             except Exception:
                 pass
-

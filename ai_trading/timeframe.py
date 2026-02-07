@@ -30,11 +30,53 @@ def _safe_setattr(obj: object, name: str, value: object) -> None:
         return
 
 
+def _resolve_timeframe_unit_cls() -> Any:
+    """Return a unit enum/object exposing Minute/Hour/Day/Week/Month."""
+
+    unit_cls = TimeFrameUnit
+    if all(hasattr(unit_cls, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
+        return unit_cls
+    try:
+        from ai_trading.alpaca_api import TimeFrameUnit as _FallbackUnit  # type: ignore
+
+        if all(hasattr(_FallbackUnit, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
+            return _FallbackUnit
+    except Exception:
+        pass
+
+    class _UnitFallback:
+        Minute = "Minute"
+        Hour = "Hour"
+        Day = "Day"
+        Week = "Week"
+        Month = "Month"
+
+    return _UnitFallback
+
+
 class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
     """Timeframe with safe defaults and attribute accessors."""
 
     def __init__(self, amount: int = 1, unit=TimeFrameUnit.Day):  # type: ignore[assignment]
-        super().__init__(amount, unit)
+        unit_cls = _resolve_timeframe_unit_cls()
+        if unit is None:
+            unit = getattr(unit_cls, "Day", "Day")
+        try:
+            super().__init__(amount, unit)
+        except Exception:
+            # When third-party tests monkeypatch Alpaca's enum internals,
+            # base-class validation can crash. Keep a lightweight usable object.
+            try:
+                amount_value = int(amount)
+            except Exception:
+                amount_value = 1
+            if amount_value <= 0:
+                amount_value = 1
+            _safe_setattr(self, "amount_value", amount_value)
+            _safe_setattr(self, "unit_value", unit)
+            _safe_setattr(self, "amount", amount_value)
+            _safe_setattr(self, "unit", unit)
+            return
         # Guarantee ``amount`` and ``unit`` attributes for downstream code
         try:
             current_amount = getattr(self, "amount")
@@ -68,7 +110,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
     except Exception:
         pass
 
-    unit_cls = TimeFrameUnit
+    unit_cls = _resolve_timeframe_unit_cls()
 
     if isinstance(tf, (int, float)):
         return TimeFrame(int(tf) or 1, unit_cls.Day)
