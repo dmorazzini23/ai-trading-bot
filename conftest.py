@@ -343,6 +343,7 @@ def _reset_loaded_singletons() -> None:
         for attr_name in (
             "_state",
             "_BACKUP_SKIP_UNTIL",
+            "_BACKUP_PRIMARY_PROBE_AT",
             "_SKIPPED_SYMBOLS",
             "_FEED_FAILOVER_ATTEMPTS",
             "_FEED_OVERRIDE_BY_TF",

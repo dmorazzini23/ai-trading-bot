@@ -39,3 +39,7 @@ def test_classify_empty_bars_reason():
     reason, _ = data_fetcher._classify_fallback_reason(None, metadata)
     assert reason == "empty_bars"
 
+
+def test_classify_backup_cooldown_reason():
+    reason, _ = data_fetcher._classify_fallback_reason("backup_cooldown_active", {})
+    assert reason == "backup_cooldown_active"

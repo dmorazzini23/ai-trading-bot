@@ -1785,6 +1785,20 @@ def _classify_fallback_reason(
         return "bad_request", details
     if "gap_ratio" in combined_lower:
         return "gap_ratio_exceeded", details
+    if "safe_mode" in combined_lower:
+        return "provider_safe_mode", details
+    if (
+        "cooldown" in combined_lower
+        or "decision_window" in combined_lower
+        or "skip_window" in combined_lower
+    ):
+        return "backup_cooldown_active", details
+    if "forced_backup" in combined_lower or "forced backup" in combined_lower:
+        return "forced_backup_provider", details
+    if "fallback_ttl" in combined_lower:
+        return "fallback_ttl_active", details
+    if "probe_deferred" in combined_lower or "primary_probe" in combined_lower:
+        return "primary_probe_deferred", details
 
     error_obj = metadata.get("error") or metadata.get("exception")
     if isinstance(error_obj, TimeoutError):
@@ -1848,6 +1862,7 @@ _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
 _FALLBACK_SUPPRESS_UNTIL: dict[tuple[str, str], float] = {}
 _BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
+_BACKUP_PRIMARY_PROBE_AT: dict[tuple[str, str], datetime] = {}
 _BACKUP_SKIP_WINDOW = timedelta(minutes=10)
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
@@ -1863,6 +1878,56 @@ _YF_WARNING_MAX_CYCLES = 6
 
 _SAFE_MODE_CYCLE_STATE: dict[str, Any] = {"cycle_id": None, "reason": None, "version": 0}
 _SAFE_MODE_LOGGED: set[str] = set()
+
+
+def _backup_primary_probe_interval() -> timedelta:
+    """Return interval between forced primary probes during backup skip windows."""
+
+    raw = os.getenv("BACKUP_PRIMARY_PROBE_SECONDS", "90").strip()
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        seconds = 90
+    if seconds < 0:
+        seconds = 0
+    return timedelta(seconds=seconds)
+
+
+def _schedule_backup_primary_probe(key: tuple[str, str]) -> None:
+    """Schedule the next primary provider probe for ``key``."""
+
+    interval = _backup_primary_probe_interval()
+    if interval <= timedelta(0):
+        _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
+        return
+    try:
+        _BACKUP_PRIMARY_PROBE_AT[key] = datetime.now(tz=UTC) + interval
+    except Exception:
+        _BACKUP_PRIMARY_PROBE_AT[key] = datetime.now() + interval
+
+
+def _backup_primary_probe_due(symbol: str, timeframe: str) -> bool:
+    """Return ``True`` when a primary probe should run despite backup skip."""
+
+    key = (symbol, timeframe)
+    interval = _backup_primary_probe_interval()
+    if interval <= timedelta(0):
+        return False
+    try:
+        now_dt = datetime.now(tz=UTC)
+    except Exception:
+        now_dt = datetime.now()
+    due_at = _BACKUP_PRIMARY_PROBE_AT.get(key)
+    if isinstance(due_at, datetime):
+        try:
+            if due_at.tzinfo is None and now_dt.tzinfo is not None:
+                due_at = due_at.replace(tzinfo=now_dt.tzinfo)
+        except Exception:
+            pass
+        if now_dt < due_at:
+            return False
+    _BACKUP_PRIMARY_PROBE_AT[key] = now_dt + interval
+    return True
 
 
 def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tuple[str, set[tuple[str, str]]]:
@@ -2691,15 +2756,18 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 until_float = float(until)
             except Exception:
                 _BACKUP_SKIP_UNTIL.pop(key, None)
+                _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
                 _SKIPPED_SYMBOLS.add(key)
                 return
             try:
                 until_dt = datetime.fromtimestamp(until_float, tz=UTC)
             except Exception:
                 _BACKUP_SKIP_UNTIL.pop(key, None)
+                _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
                 _SKIPPED_SYMBOLS.add(key)
                 return
         _BACKUP_SKIP_UNTIL[key] = until_dt
+        _schedule_backup_primary_probe(key)
         _SKIPPED_SYMBOLS.add(key)
         return
     _SKIPPED_SYMBOLS.add(key)
@@ -2708,11 +2776,13 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
     except Exception:
         until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
+    _schedule_backup_primary_probe(key)
 
 
 def _clear_backup_skip(symbol: str, timeframe: str) -> None:
     key = (symbol, timeframe)
     _BACKUP_SKIP_UNTIL.pop(key, None)
+    _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
     _SKIPPED_SYMBOLS.discard(key)
 
 
@@ -2743,6 +2813,9 @@ def _clear_minute_fallback_state(
         cleared = True
     if tf_key in _BACKUP_SKIP_UNTIL:
         _clear_backup_skip(symbol, timeframe)
+        cleared = True
+    if tf_key in _BACKUP_PRIMARY_PROBE_AT:
+        _BACKUP_PRIMARY_PROBE_AT.pop(tf_key, None)
         cleared = True
     if cleared:
         if primary_label and backup_label:
@@ -11322,7 +11395,30 @@ def get_minute_df(
         window_end: _dt.datetime | None = None,
         from_feed: str | None = None,
     ) -> None:
-        _log_primary_failure("fallback_in_use")
+        if not primary_failure_logged:
+            if primary_fetch_attempted:
+                _log_primary_failure("fallback_in_use")
+            else:
+                skip_reason = "primary_probe_deferred"
+                if safe_mode_forced_skip:
+                    skip_reason = "provider_safe_mode"
+                elif forced_provider_label:
+                    skip_reason = "forced_backup_provider"
+                elif forced_skip_engaged or skip_window_active:
+                    skip_reason = "backup_cooldown_active"
+                elif fallback_ttl_active:
+                    skip_reason = "fallback_ttl_active"
+                if not _state.get("fallback_reason"):
+                    _state["fallback_reason"] = skip_reason
+                logger.info(
+                    "ALPACA_FETCH_SKIPPED",
+                    extra={
+                        "symbol": symbol,
+                        "reason": skip_reason,
+                        "feed": normalized_feed or _DEFAULT_FEED,
+                        "resolved_feed": resolved_backup_feed or normalized_feed or _DEFAULT_FEED,
+                    },
+                )
         start_window = window_start or start_dt
         end_window = window_end or end_dt
         source_feed = from_feed or normalized_feed or _DEFAULT_FEED
@@ -11497,6 +11593,7 @@ def get_minute_df(
     last_empty_error: EmptyBarsError | None = None
     provider_str, backup_normalized = _resolve_backup_provider()
     primary_failure_logged = False
+    primary_fetch_attempted = False
     allow_empty_override = False
     threshold_log_emitted = False
     last_empty_log_level: int | None = None
@@ -11538,6 +11635,24 @@ def get_minute_df(
     if pytest_active and not force_primary_fetch and not forced_provider_label:
         if not forced_skip_engaged:
             force_primary_fetch = True
+    if (
+        not force_primary_fetch
+        and skip_primary_due_to_fallback
+        and not forced_provider_label
+        and not safe_mode_forced_skip
+        and window_has_session
+        and fallback_allowed_flag
+        and not _disable_signal_active(primary_label)
+        and _backup_primary_probe_due(symbol, "1Min")
+    ):
+        skip_primary_due_to_fallback = False
+        force_primary_fetch = True
+        _state["backup_probe_due"] = True
+        _state["fallback_reason"] = "primary_probe_recheck"
+        logger.info(
+            "ALPACA_PRIMARY_RECOVERY_PROBE",
+            extra={"symbol": symbol, "timeframe": "1Min"},
+        )
     if backup_label:
         prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
         if skip_primary_due_to_fallback:
@@ -11636,6 +11751,7 @@ def get_minute_df(
                 proactive_switch = True
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
+            primary_fetch_attempted = True
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
             fallback_http_provider = False
             if df is not None:

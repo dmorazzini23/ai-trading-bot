@@ -360,6 +360,7 @@ def _reset_fallback_cache():
             data_fetcher._CYCLE_FALLBACK_FEED.clear()
         cache_attrs = {
             "_BACKUP_SKIP_UNTIL",
+            "_BACKUP_PRIMARY_PROBE_AT",
             "_SKIPPED_SYMBOLS",
             "_FEED_FAILOVER_ATTEMPTS",
             "_FEED_OVERRIDE_BY_TF",

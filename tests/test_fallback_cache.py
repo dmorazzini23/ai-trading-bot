@@ -73,3 +73,47 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
     assert isinstance(refreshed_until, datetime)
     assert refreshed_until > datetime.now(UTC)
     assert tf_key in data_fetcher._SKIPPED_SYMBOLS
+
+
+def test_backup_skip_window_rechecks_primary_on_probe_due(monkeypatch):
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    tf_key = ("AAPL", "1Min")
+
+    monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "1")
+    monkeypatch.setenv("BACKUP_PRIMARY_PROBE_SECONDS", "60")
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(data_fetcher.provider_monitor, "active_provider", lambda primary, backup: primary)
+
+    calls = {"alpaca": 0, "yahoo": 0}
+    df_primary = pd.DataFrame(
+        {
+            "timestamp": [pd.Timestamp(start)],
+            "open": [2.0],
+            "high": [2.0],
+            "low": [2.0],
+            "close": [2.0],
+            "volume": [2],
+        }
+    )
+
+    def fake_fetch_bars(*_args, **_kwargs):
+        calls["alpaca"] += 1
+        return df_primary.copy()
+
+    def fake_yahoo(*_args, **_kwargs):
+        calls["yahoo"] += 1
+        return pd.DataFrame()
+
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", fake_fetch_bars)
+    monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", fake_yahoo)
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", fake_yahoo)
+
+    data_fetcher._set_backup_skip("AAPL", "1Min")
+    data_fetcher._BACKUP_PRIMARY_PROBE_AT[tf_key] = datetime.now(UTC) - timedelta(seconds=1)
+
+    out = data_fetcher.get_minute_df("AAPL", start, end)
+    assert not out.empty
+    assert calls["alpaca"] >= 1
+    assert calls["yahoo"] == 0
