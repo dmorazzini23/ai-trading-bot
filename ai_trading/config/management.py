@@ -159,7 +159,16 @@ def get_env(
             return default
         return _coerce(raw, cast)
 
-    env_keys = tuple(spec.env) + tuple(spec.deprecated_env.keys())
+    env_keys = tuple(
+        dict.fromkeys(
+            (
+                *tuple(spec.env),
+                *tuple(spec.deprecated_env.keys()),
+                "TRADING_MODE",
+                "AI_TRADING_TRADING_MODE",
+            )
+        )
+    )
     cfg = ensure_trading_config_current(env_keys)
     value = getattr(cfg, spec.field)
     if value in (None, ""):

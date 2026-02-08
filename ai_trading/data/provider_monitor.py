@@ -1797,6 +1797,10 @@ class ProviderMonitor:
                 "window_seconds": window_for_log,
             },
         )
+        logger.info(
+            "DATA_PROVIDER_SWITCHOVER_BLOCK_REASON | reason=repeated_switchovers",
+            extra={"from_provider": from_key, "to_provider": to_key},
+        )
         try:
             self.disable(from_key, duration=self.max_cooldown)
         except Exception:  # pragma: no cover - defensive disable

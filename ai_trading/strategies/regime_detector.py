@@ -5,6 +5,7 @@ This module identifies market regimes (trending, ranging, volatile, crisis) to
 dynamically adjust trading frequency and portfolio rebalancing thresholds.
 """
 import math
+import sys
 import statistics
 from dataclasses import dataclass
 from enum import Enum
@@ -14,6 +15,30 @@ from ai_trading.logging import logger
 from ai_trading.risk.adaptive_sizing import MarketRegime, VolatilityRegime
 NUMPY_AVAILABLE = True
 ENHANCED_REGIMES_AVAILABLE = True
+
+
+def _canonical_market_regime_type() -> type[Any]:
+    """Return the current MarketRegime enum class from canonical module state."""
+
+    adaptive_mod = sys.modules.get("ai_trading.risk.adaptive_sizing")
+    candidate = getattr(adaptive_mod, "MarketRegime", None) if adaptive_mod is not None else None
+    if isinstance(candidate, type):
+        return candidate
+    return MarketRegime
+
+
+def _coerce_market_regime(regime: Any) -> Any:
+    """Normalize regime enum instances across module reload boundaries."""
+
+    regime_type = _canonical_market_regime_type()
+    if isinstance(regime, regime_type):
+        return regime
+    raw_value = getattr(regime, "value", regime)
+    try:
+        return regime_type(raw_value)
+    except Exception:
+        return getattr(regime_type, "NORMAL", MarketRegime.NORMAL)
+
 
 class TrendDirection(Enum):
     """Trend direction classification."""
@@ -112,7 +137,7 @@ class RegimeDetector:
             vix_level = self._get_vix_level(market_data)
             regime_confidence = self._calculate_regime_confidence(returns, trend_strength, volatility_level)
             metrics = RegimeMetrics(trend_strength=trend_strength, trend_direction=trend_direction, volatility_level=volatility_level, volatility_regime=volatility_regime, momentum=momentum, correlation_environment=correlation_environment, vix_level=vix_level, regime_confidence=regime_confidence)
-            regime = self._classify_market_regime(metrics)
+            regime = _coerce_market_regime(self._classify_market_regime(metrics))
             self._update_regime_history(regime)
             logger.info(f'Market regime detected: {regime.value} (trend={trend_strength:.3f}, vol={volatility_level:.3f}, confidence={regime_confidence:.3f})')
             return (regime, metrics)
@@ -133,6 +158,7 @@ class RegimeDetector:
             Adjusted trading thresholds
         """
         try:
+            regime = _coerce_market_regime(regime)
             if base_thresholds is None:
                 base_thresholds = {'rebalance_drift_threshold': 0.05, 'trade_frequency_multiplier': 1.0, 'correlation_penalty_adjustment': 1.0, 'minimum_improvement_threshold': 0.02, 'safety_margin_multiplier': 2.0}
             adjustments = self._get_regime_adjustments(regime, metrics)
@@ -298,8 +324,10 @@ class RegimeDetector:
 
     def _get_regime_adjustments(self, regime: MarketRegime, metrics: RegimeMetrics) -> dict[str, float]:
         """Get threshold adjustment multipliers for each regime."""
-        regime_adjustments = {MarketRegime.BULL_TRENDING: {'drift_multiplier': 1.2, 'frequency_multiplier': 1.3, 'correlation_multiplier': 0.8, 'improvement_multiplier': 0.8, 'safety_multiplier': 1.0}, MarketRegime.BEAR_TRENDING: {'drift_multiplier': 1.1, 'frequency_multiplier': 1.1, 'correlation_multiplier': 0.9, 'improvement_multiplier': 1.0, 'safety_multiplier': 1.2}, MarketRegime.SIDEWAYS_RANGE: {'drift_multiplier': 0.8, 'frequency_multiplier': 0.7, 'correlation_multiplier': 1.2, 'improvement_multiplier': 1.2, 'safety_multiplier': 1.5}, MarketRegime.HIGH_VOLATILITY: {'drift_multiplier': 0.6, 'frequency_multiplier': 0.5, 'correlation_multiplier': 1.5, 'improvement_multiplier': 1.5, 'safety_multiplier': 2.0}, MarketRegime.LOW_VOLATILITY: {'drift_multiplier': 1.3, 'frequency_multiplier': 1.2, 'correlation_multiplier': 0.9, 'improvement_multiplier': 0.9, 'safety_multiplier': 0.8}, MarketRegime.CRISIS: {'drift_multiplier': 0.3, 'frequency_multiplier': 0.2, 'correlation_multiplier': 2.0, 'improvement_multiplier': 2.0, 'safety_multiplier': 3.0}, MarketRegime.NORMAL: {'drift_multiplier': 1.0, 'frequency_multiplier': 1.0, 'correlation_multiplier': 1.0, 'improvement_multiplier': 1.0, 'safety_multiplier': 1.0}}
-        return regime_adjustments.get(regime, regime_adjustments[MarketRegime.NORMAL])
+        normalized_regime = _coerce_market_regime(regime)
+        regime_key = str(getattr(normalized_regime, "value", "normal"))
+        regime_adjustments = {'bull_trending': {'drift_multiplier': 1.2, 'frequency_multiplier': 1.3, 'correlation_multiplier': 0.8, 'improvement_multiplier': 0.8, 'safety_multiplier': 1.0}, 'bear_trending': {'drift_multiplier': 1.1, 'frequency_multiplier': 1.1, 'correlation_multiplier': 0.9, 'improvement_multiplier': 1.0, 'safety_multiplier': 1.2}, 'sideways_range': {'drift_multiplier': 0.8, 'frequency_multiplier': 0.7, 'correlation_multiplier': 1.2, 'improvement_multiplier': 1.2, 'safety_multiplier': 1.5}, 'high_volatility': {'drift_multiplier': 0.6, 'frequency_multiplier': 0.5, 'correlation_multiplier': 1.5, 'improvement_multiplier': 1.5, 'safety_multiplier': 2.0}, 'low_volatility': {'drift_multiplier': 1.3, 'frequency_multiplier': 1.2, 'correlation_multiplier': 0.9, 'improvement_multiplier': 0.9, 'safety_multiplier': 0.8}, 'crisis': {'drift_multiplier': 0.3, 'frequency_multiplier': 0.2, 'correlation_multiplier': 2.0, 'improvement_multiplier': 2.0, 'safety_multiplier': 3.0}, 'normal': {'drift_multiplier': 1.0, 'frequency_multiplier': 1.0, 'correlation_multiplier': 1.0, 'improvement_multiplier': 1.0, 'safety_multiplier': 1.0}}
+        return regime_adjustments.get(regime_key, regime_adjustments['normal'])
 
     def _update_regime_history(self, regime: MarketRegime):
         """Update regime history for stability analysis."""
@@ -311,7 +339,7 @@ class RegimeDetector:
         """Fallback regime detection when data is insufficient."""
         logger.warning('Using fallback regime detection')
         metrics = RegimeMetrics(trend_strength=0.0, trend_direction=TrendDirection.SIDEWAYS, volatility_level=0.5, volatility_regime=VolatilityRegime.NORMAL, momentum=0.0, correlation_environment=0.3, vix_level=None, regime_confidence=0.3)
-        return (MarketRegime.NORMAL, metrics)
+        return (_coerce_market_regime(MarketRegime.NORMAL), metrics)
 
 def create_regime_detector(config: dict[str, Any] | None=None) -> RegimeDetector:
     """

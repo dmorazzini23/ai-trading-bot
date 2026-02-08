@@ -56,21 +56,19 @@ def _get_bot_logger_once() -> Any:
     """Return the shared logger_once exposed by bot_engine when available."""
 
     global _shared_logger_once
-    if _shared_logger_once is not None:
-        return _shared_logger_once
-
     try:
         bot_engine_module = _get_bot_engine_module()
     except COMMON_EXC:
-        return logger_once
+        return _shared_logger_once or logger_once
     except Exception:
-        return logger_once
+        return _shared_logger_once or logger_once
 
     shared = getattr(bot_engine_module, "logger_once", None)
     if shared is None:
-        return logger_once
+        return _shared_logger_once or logger_once
 
-    _shared_logger_once = shared
+    if _shared_logger_once is not shared:
+        _shared_logger_once = shared
     return shared
 
 

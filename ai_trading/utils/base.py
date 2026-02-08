@@ -6,6 +6,7 @@ import os
 import random
 import socket
 import subprocess
+import sys
 import threading
 import time
 import warnings
@@ -84,6 +85,24 @@ _LAST_MARKET_CLOSED_DATE: date | None = None
 _LAST_HEALTH_ROW_LOG = 0.0
 _LAST_HEALTH_ROWS_COUNT = -1
 _LAST_HEALTH_STATUS: bool | None = None
+
+
+def _alpaca_http_error_types() -> tuple[type[Exception], ...]:
+    """Return Alpaca HTTP exception types resilient to module reload churn."""
+
+    error_types: list[type[Exception]] = []
+    for candidate in (
+        AlpacaOrderHTTPError,
+        getattr(sys.modules.get("ai_trading.alpaca_api"), "AlpacaOrderHTTPError", None),
+    ):
+        if not isinstance(candidate, type):
+            continue
+        if not issubclass(candidate, Exception):
+            continue
+        if candidate in error_types:
+            continue
+        error_types.append(candidate)
+    return tuple(error_types)
 
 
 class PhaseLoggerAdapter(logging.LoggerAdapter):
@@ -263,6 +282,7 @@ def get_latest_close(df: DataFrame) -> float:
 def get_current_price(symbol: str) -> float:
     """Return latest quote price with fallbacks."""
     price = 0.0
+    http_error_types = _alpaca_http_error_types()
     try:
         feed = get_env("ALPACA_DATA_FEED", "iex")
         params = {"feed": feed} if feed else None
@@ -271,7 +291,7 @@ def get_current_price(symbol: str) -> float:
             params=params,
         )
         price = float(data.get("ap", 0) or 0)
-    except AlpacaOrderHTTPError as exc:
+    except http_error_types as exc:
         logger.warning(
             "get_current_price http error for %s: %s",
             symbol,

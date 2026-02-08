@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 import inspect
+import types
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
 from threading import RLock
@@ -82,6 +83,15 @@ _pending_orders_lock = RLock()
 _pending_orders: dict[str, dict[str, Any]] = {}
 partial_fill_tracker: dict[str, float] = {}
 partial_fills: dict[str, dict[str, Any]] = {}
+
+
+def _active_alpaca_api_namespace() -> dict[str, Any]:
+    """Return the canonical ``ai_trading.alpaca_api`` module namespace."""
+
+    module_obj = sys.modules.get("ai_trading.alpaca_api")
+    if isinstance(module_obj, types.ModuleType):
+        return module_obj.__dict__
+    return globals()
 
 
 def _get_http_session() -> "HTTPSession":
@@ -1302,25 +1312,34 @@ def _sdk_submit(
     request_obj: Any | None = None
     request_kwargs: dict[str, Any]
     if use_request_object:
+        request_ns: dict[str, Any] = globals()
+        canonical_mod = sys.modules.get("ai_trading.alpaca_api")
+        if isinstance(canonical_mod, types.ModuleType):
+            request_ns = canonical_mod.__dict__
+
+        market_order_request = request_ns.get("MarketOrderRequest", MarketOrderRequest)
+        limit_order_request = request_ns.get("LimitOrderRequest", LimitOrderRequest)
+        stop_order_request = request_ns.get("StopOrderRequest", StopOrderRequest)
+        stop_limit_order_request = request_ns.get("StopLimitOrderRequest", StopLimitOrderRequest)
         order_type = str(type or "market").lower()
         request_cls_map: dict[str, type] = {}
-        if MarketOrderRequest is not None:
-            request_cls_map["market"] = MarketOrderRequest
-        if LimitOrderRequest is not None:
-            request_cls_map["limit"] = LimitOrderRequest
-        if StopOrderRequest is not None:
-            request_cls_map["stop"] = StopOrderRequest
-        if StopLimitOrderRequest is not None:
-            request_cls_map["stop_limit"] = StopLimitOrderRequest
+        if market_order_request is not None:
+            request_cls_map["market"] = market_order_request
+        if limit_order_request is not None:
+            request_cls_map["limit"] = limit_order_request
+        if stop_order_request is not None:
+            request_cls_map["stop"] = stop_order_request
+        if stop_limit_order_request is not None:
+            request_cls_map["stop_limit"] = stop_limit_order_request
 
         req_cls = request_cls_map.get(order_type)
         if req_cls is None:
             # Fallback to any available request class (preferring market)
             for candidate in (
-                MarketOrderRequest,
-                LimitOrderRequest,
-                StopOrderRequest,
-                StopLimitOrderRequest,
+                market_order_request,
+                limit_order_request,
+                stop_order_request,
+                stop_limit_order_request,
             ):
                 if candidate is not None:
                     req_cls = candidate
@@ -1427,6 +1446,14 @@ def _http_submit(
     idempotency_key: str | None,
     timeout: float | int | None,
 ) -> dict[str, Any]:
+    ns = _active_alpaca_api_namespace()
+    get_session = ns.get("_get_http_session", _get_http_session)
+    retry_wrapper = ns.get("_with_retry", _with_retry)
+    calls_counter = ns.get("_alpaca_calls_total", _alpaca_calls_total)
+    errors_counter = ns.get("_alpaca_errors_total", _alpaca_errors_total)
+    latency_hist = ns.get("_alpaca_call_latency", _alpaca_call_latency)
+    timeout_clamper = ns.get("clamp_request_timeout", clamp_request_timeout)
+
     url = f"{cfg.base_url}/v2/orders"
     headers = {
         "APCA-API-KEY-ID": cfg.key_id or "",
@@ -1451,21 +1478,21 @@ def _http_submit(
     _start_t = monotonic_time()
     _err: Exception | None = None
     try:
-        timeout_v = clamp_request_timeout(timeout or 10)
-        session = _get_http_session()
+        timeout_v = timeout_clamper(timeout or 10)
+        session = get_session()
         call = session.post
         if retry is not None:
-            call = _with_retry(call)
+            call = retry_wrapper(call)
         resp = call(url, headers=headers, json=payload, timeout=timeout_v)
     except RequestException as e:  # pragma: no cover - network error path
         _err = e
         raise AlpacaOrderNetworkError(f"Network error calling {url}: {e}") from e
     finally:
         try:
-            _alpaca_calls_total.inc()
-            _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
+            calls_counter.inc()
+            latency_hist.observe(max(0.0, monotonic_time() - _start_t))
             if _err is not None or resp.status_code >= 400:  # type: ignore[name-defined]
-                _alpaca_errors_total.inc()
+                errors_counter.inc()
         except Exception:
             pass
 
@@ -1644,6 +1671,16 @@ def alpaca_get(
         match :func:`_http_submit`.
     """
 
+    ns = _active_alpaca_api_namespace()
+    get_session = ns.get("_get_http_session", _get_http_session)
+    retry_wrapper = ns.get("_with_retry", _with_retry)
+    calls_counter = ns.get("_alpaca_calls_total", _alpaca_calls_total)
+    errors_counter = ns.get("_alpaca_errors_total", _alpaca_errors_total)
+    latency_hist = ns.get("_alpaca_call_latency", _alpaca_call_latency)
+    timeout_clamper = ns.get("clamp_request_timeout", clamp_request_timeout)
+    set_service_available = ns.get("_set_alpaca_service_available", _set_alpaca_service_available)
+    logger_obj = ns.get("_log", _log)
+
     cfg = _AlpacaConfig.from_env()
     if path.startswith(("http://", "https://")):
         url = path
@@ -1660,22 +1697,22 @@ def alpaca_get(
     _err: Exception | None = None
     resp: Any | None = None
     try:
-        timeout_v = clamp_request_timeout(timeout or 10)
-        session = _get_http_session()
+        timeout_v = timeout_clamper(timeout or 10)
+        session = get_session()
         call = session.get
         if retry is not None:
-            call = _with_retry(call)
+            call = retry_wrapper(call)
         resp = call(url, headers=headers, params=params, timeout=timeout_v)
     except RequestException as exc:  # pragma: no cover - network error path
         _err = exc
         raise RequestException(f"Network error calling {url}: {exc}") from exc
     finally:
         try:
-            _alpaca_calls_total.inc()
-            _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
+            calls_counter.inc()
+            latency_hist.observe(max(0.0, monotonic_time() - _start_t))
             status = getattr(resp, "status_code", 0) if resp is not None else 0
             if _err is not None or status >= 400:
-                _alpaca_errors_total.inc()
+                errors_counter.inc()
         except Exception:
             pass
 
@@ -1688,7 +1725,7 @@ def alpaca_get(
     text = getattr(resp, "text", "") if resp is not None else ""
 
     if 200 <= status_code < 400:
-        _set_alpaca_service_available(True)
+        set_service_available(True)
 
     if status_code == 401:
         payload = content if isinstance(content, dict) else {}
@@ -1697,8 +1734,8 @@ def alpaca_get(
             message = str(payload.get("message") or text)
         else:
             message = text
-        _set_alpaca_service_available(False)
-        _log.critical(
+        set_service_available(False)
+        logger_obj.critical(
             "ALPACA_AUTH_FAILURE",
             extra={
                 "endpoint": url,

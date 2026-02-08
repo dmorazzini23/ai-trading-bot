@@ -7,6 +7,7 @@ import types
 import gc
 import time as _time
 from pathlib import Path
+from collections.abc import Generator, Iterator
 from typing import Any
 
 from tests.dummy_model_util import _DummyModel, _get_model
@@ -111,8 +112,8 @@ def _ensure_alpaca_timeframe_defaults() -> None:
     if day_unit is None:
         return
 
-    class _CompatTimeFrame(tf_cls):  # type: ignore[misc]
-        def __init__(self, amount=1, unit=day_unit):
+    class _CompatTimeFrame(tf_cls):  # type: ignore[valid-type,misc]
+        def __init__(self, amount: int = 1, unit: Any = day_unit) -> None:
             try:
                 super().__init__(amount, unit)
             except Exception:
@@ -208,7 +209,7 @@ def _clear_mutable_state(value: object) -> None:
         value.clear()
 
 
-def _iter_live_modules(module_name: str):
+def _iter_live_modules(module_name: str) -> Iterator[types.ModuleType]:
     """Yield all live module objects matching ``module_name``."""
 
     seen: set[int] = set()
@@ -389,8 +390,8 @@ def _reset_loaded_singletons() -> None:
                     day_unit = getattr(tf_unit_cls, "Day", None)
                     if day_unit is not None:
 
-                        class _CompatTimeFrame(tf_cls):  # type: ignore[misc]
-                            def __init__(self, amount=1, unit=day_unit):
+                        class _CompatTimeFrame(tf_cls):  # type: ignore[valid-type,misc]
+                            def __init__(self, amount: int = 1, unit: Any = day_unit) -> None:
                                 try:
                                     super().__init__(amount, unit)
                                 except Exception:
@@ -619,6 +620,29 @@ def _reset_loaded_singletons() -> None:
                 except Exception:
                     pass
 
+    for alpaca_api_mod in _iter_live_modules("ai_trading.alpaca_api"):
+        for attr_name, attr_value in (
+            ("_ALPACA_SERVICE_AVAILABLE", True),
+            ("_HTTP_SESSION", None),
+        ):
+            if not hasattr(alpaca_api_mod, attr_name):
+                continue
+            try:
+                setattr(alpaca_api_mod, attr_name, attr_value)
+            except Exception:
+                continue
+
+    # Some modules retain direct references to stale alpaca function objects
+    # whose globals are detached from canonical sys.modules state.
+    for bot_engine_mod in _iter_live_modules("ai_trading.core.bot_engine"):
+        service_fn = getattr(bot_engine_mod, "is_alpaca_service_available", None)
+        globals_ns = getattr(service_fn, "__globals__", None)
+        if isinstance(globals_ns, dict) and "_ALPACA_SERVICE_AVAILABLE" in globals_ns:
+            try:
+                globals_ns["_ALPACA_SERVICE_AVAILABLE"] = True
+            except Exception:
+                pass
+
     for runtime_state_mod in _iter_live_modules("ai_trading.telemetry.runtime_state"):
         reset_all = getattr(runtime_state_mod, "reset_all_states", None)
         if callable(reset_all):
@@ -626,6 +650,19 @@ def _reset_loaded_singletons() -> None:
                 reset_all()
             except Exception:
                 pass
+
+    try:
+        risk_engine_mod = importlib.import_module("ai_trading.risk.engine")
+    except Exception:
+        risk_engine_mod = None
+    if isinstance(risk_engine_mod, types.ModuleType):
+        risk_engine_cls = getattr(risk_engine_mod, "RiskEngine", None)
+        if risk_engine_cls is not None:
+            for risk_pkg_mod in _iter_live_modules("ai_trading.risk"):
+                try:
+                    setattr(risk_pkg_mod, "RiskEngine", risk_engine_cls)
+                except Exception:
+                    pass
 
     for shutdown_mod in _iter_live_modules("ai_trading.runtime.shutdown"):
         stop_event = getattr(shutdown_mod, "stop_event", None)
@@ -830,9 +867,50 @@ def _rebind_test_module_references(test_module: object | None) -> None:
         except Exception:
             continue
 
+    # Keep common paired alpaca handles in lockstep so monkeypatches target
+    # the same module object in order-dependent runs.
+    canonical_alpaca = sys.modules.get("ai_trading.alpaca_api")
+    if isinstance(canonical_alpaca, types.ModuleType):
+        if hasattr(test_module, "alpaca_api"):
+            try:
+                setattr(test_module, "alpaca_api", canonical_alpaca)
+            except Exception:
+                pass
+        if hasattr(test_module, "_REAL_ALPACA_API"):
+            try:
+                setattr(test_module, "_REAL_ALPACA_API", canonical_alpaca)
+            except Exception:
+                pass
+
+
+def _force_sync_alpaca_handles(test_module: object | None) -> None:
+    """Hard-sync common alpaca module handles after aggressive module churn."""
+
+    if not isinstance(test_module, types.ModuleType):
+        return
+    canonical_alpaca = sys.modules.get("ai_trading.alpaca_api")
+    if not isinstance(canonical_alpaca, types.ModuleType):
+        return
+    for attr_name in ("alpaca_api", "_REAL_ALPACA_API"):
+        if not hasattr(test_module, attr_name):
+            continue
+        try:
+            setattr(test_module, attr_name, canonical_alpaca)
+        except Exception:
+            continue
+
+    ai_trading_pkg = sys.modules.get("ai_trading")
+    if isinstance(ai_trading_pkg, types.ModuleType):
+        try:
+            setattr(ai_trading_pkg, "alpaca_api", canonical_alpaca)
+        except Exception:
+            pass
+
 
 @pytest.fixture(autouse=True)
-def _reset_runtime_singletons(request: pytest.FixtureRequest) -> None:
+def _reset_runtime_singletons(
+    request: pytest.FixtureRequest,
+) -> Generator[None, None, None]:
     """Keep mutable process-global state isolated between tests."""
 
     nodeid = request.node.nodeid
@@ -870,6 +948,7 @@ def _reset_runtime_singletons(request: pytest.FixtureRequest) -> None:
         _reset_loaded_singletons()
         _sync_package_module_exports()
         _rebind_test_module_references(getattr(request, "module", None))
+        _force_sync_alpaca_handles(getattr(request, "module", None))
         yield
     finally:
         if force_alpaca_unavailable:
@@ -882,7 +961,7 @@ def _reset_runtime_singletons(request: pytest.FixtureRequest) -> None:
 @pytest.fixture(autouse=True)
 def _restore_real_sleep_for_prof_budget(
     request: pytest.FixtureRequest,
-) -> None:
+) -> Generator[None, None, None]:
     """Keep real sleep semantics for precision budget timing tests."""
 
     try:

@@ -1719,6 +1719,7 @@ _LIVE_ENV_VALUES = {"live", "live_prod", "prod", "production"}
 
 _ENV_ALIAS_MAP: dict[str, str] = {
     "DATA_PROVIDER": "DATA_PROVIDER_PRIORITY",
+    "DATA_FEED": "ALPACA_DATA_FEED",
     "PAPER": "EXECUTION_MODE",
 }
 
@@ -2039,15 +2040,19 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
     snap: _EnvSnapshotDict = _EnvSnapshotDict(
         {k: v for k, v in os.environ.items() if isinstance(v, str)}
     )
+    override_keys: set[str] = set()
     if overrides:
         if isinstance(overrides, str):
             snap["TRADING_MODE"] = overrides
+            override_keys.add("TRADING_MODE")
         else:
             if getattr(overrides, "is_snapshot", False):
                 snap.update(overrides)
             else:
                 _validate_override_keys(overrides)
-                snap.update({k.upper(): str(v) for k, v in overrides.items()})
+                normalized = {k.upper(): str(v) for k, v in overrides.items()}
+                snap.update(normalized)
+                override_keys.update(normalized.keys())
     for alias_key, canonical_key in _ENV_ALIAS_MAP.items():
         raw_value = snap.get(alias_key)
         if raw_value in (None, ""):
@@ -2055,11 +2060,20 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
         if canonical_key == "EXECUTION_MODE":
             normalized = str(raw_value).strip().lower()
             if normalized in {"1", "true", "yes", "on", "paper"}:
-                snap.setdefault(canonical_key, "paper")
+                if alias_key in override_keys:
+                    snap[canonical_key] = "paper"
+                else:
+                    snap.setdefault(canonical_key, "paper")
             elif normalized in {"0", "false", "no", "off", "live"}:
-                snap.setdefault(canonical_key, snap.get(canonical_key, "sim"))
+                if alias_key in override_keys:
+                    snap[canonical_key] = snap.get(canonical_key, "sim")
+                else:
+                    snap.setdefault(canonical_key, snap.get(canonical_key, "sim"))
         else:
-            snap.setdefault(canonical_key, str(raw_value))
+            if alias_key in override_keys:
+                snap[canonical_key] = str(raw_value)
+            else:
+                snap.setdefault(canonical_key, str(raw_value))
     return snap
 
 

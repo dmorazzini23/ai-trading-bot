@@ -32,14 +32,23 @@ def _is_dir_writable(dir_path: Path) -> bool:
     return bool(mode & _stat.S_IWOTH)
 
 
+def _active_bot_engine_module():
+    """Return the canonical bot_engine module when test reloads replace imports."""
+
+    module = sys.modules.get("ai_trading.core.bot_engine")
+    return module if module is not None else bot_engine
+
+
 def ensure_trade_log_path() -> None:
     """Ensure the trade log file exists and is writable.
 
     Creates parent directories as needed and exits with status 1 if the path
     cannot be written.
     """
+    active_bot_engine = _active_bot_engine_module()
     path = Path(
-        getattr(bot_engine, "TRADE_LOG_FILE", None) or bot_engine.default_trade_log_path()
+        getattr(active_bot_engine, "TRADE_LOG_FILE", None)
+        or active_bot_engine.default_trade_log_path()
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
