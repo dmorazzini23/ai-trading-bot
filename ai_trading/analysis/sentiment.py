@@ -80,7 +80,7 @@ def _load_transformers(log=logger):
         model.to(_device)
         model.eval()
         _transformers_bundle = (torch, tokenizer, model)
-    except (ImportError, ValueError, TypeError):
+    except Exception:
         if "transformers" not in _SENT_DEPS_LOGGED:
             log.warning(
                 "SENTIMENT_OPTIONAL_DEP_MISSING", extra={"package": "transformers"}

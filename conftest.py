@@ -718,6 +718,8 @@ def _sync_package_module_exports() -> None:
         ("ai_trading.config", "management", "ai_trading.config.management"),
         ("ai_trading", "alpaca_api", "ai_trading.alpaca_api"),
         ("ai_trading", "predict", "ai_trading.predict"),
+        ("ai_trading.execution", "engine", "ai_trading.execution.engine"),
+        ("ai_trading.execution", "live_trading", "ai_trading.execution.live_trading"),
     )
 
     for package_name, attr_name, module_name in export_map:

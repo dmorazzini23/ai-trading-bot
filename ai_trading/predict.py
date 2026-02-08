@@ -1,6 +1,6 @@
 from __future__ import annotations
+import importlib
 from functools import lru_cache
-from ai_trading.features import prepare as feature_prepare
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
@@ -42,6 +42,7 @@ def predict(path: str):
     import pandas as pd
 
     df = pd.read_csv(path)
+    feature_prepare = importlib.import_module("ai_trading.features.prepare")
     features = feature_prepare.prepare_indicators(df)
     model = load_model('default')
     pred = model.predict(features)[0]

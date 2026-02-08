@@ -14676,6 +14676,19 @@ def check_pdt_rule(ctx) -> bool:
 
     explicit_account_provided = getattr(ctx, "account", None) is not None
     account = getattr(ctx, "account", None)
+    if account is None and getattr(ctx, "api", None) is None:
+        creds_available = False
+        try:
+            creds_available = bool(_has_alpaca_credentials())
+        except Exception:
+            creds_available = False
+        if not creds_available:
+            logger.info(
+                "PDT_CHECK_SKIPPED",
+                extra={"reason": "account_unavailable"},
+            )
+            _safe_probe_open_orders()
+            return False
     if account is None:
         try:
             ensure_alpaca_attached(ctx)
