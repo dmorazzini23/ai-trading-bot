@@ -821,6 +821,7 @@ from ai_trading.settings import (
     get_daily_loss_limit,
     get_disaster_dd_limit,
     get_dollar_risk_limit,
+    get_min_position_hold_seconds,
     get_max_portfolio_positions,
     get_max_trades_per_day,
     get_max_trades_per_hour,
@@ -7838,6 +7839,7 @@ class BotState:
 
     # Trade Management
     trade_cooldowns: dict[str, datetime] = field(default_factory=dict)
+    position_entry_times: dict[str, datetime] = field(default_factory=dict)
     last_trade_direction: dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
     auth_skipped_symbols: set[str] = field(default_factory=set)
@@ -8369,8 +8371,8 @@ atexit.register(cleanup_executors)
 # EVENT cooldown
 _LAST_EVENT_TS = {}
 EVENT_COOLDOWN = 15.0  # seconds
-# AI-AGENT-REF: hold time now configurable; default to 0 for pure signal holding
-REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
+# AI-AGENT-REF: minimum position hold window (seconds); 0 disables hold gating
+REBALANCE_HOLD_SECONDS = get_min_position_hold_seconds()
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
 TRADE_COOLDOWN_MIN = get_trade_cooldown_min()  # minutes
 TRADE_COOLDOWN = getattr(S, "trade_cooldown", timedelta(minutes=TRADE_COOLDOWN_MIN))  # AI-AGENT-REF: validated cooldown
@@ -17339,8 +17341,54 @@ def should_enter(
     return pre_trade_checks(ctx, state, symbol, balance, regime_ok)
 
 
+def _position_opened_at(state: BotState, symbol: str) -> datetime | None:
+    entry_times = getattr(state, "position_entry_times", None)
+    if isinstance(entry_times, dict):
+        opened_at = entry_times.get(symbol)
+        if isinstance(opened_at, datetime):
+            return opened_at
+    with trade_cooldowns_lock:
+        trade_cooldowns = getattr(state, "trade_cooldowns", {})
+        cooldown_at = trade_cooldowns.get(symbol) if isinstance(trade_cooldowns, dict) else None
+    if isinstance(cooldown_at, datetime):
+        return cooldown_at
+    return None
+
+
+def _position_min_hold_active(
+    state: BotState, symbol: str, *, now: datetime | None = None
+) -> tuple[bool, int, float]:
+    hold_seconds = get_min_position_hold_seconds()
+    if hold_seconds <= 0:
+        return False, hold_seconds, 0.0
+    opened_at = _position_opened_at(state, symbol)
+    if opened_at is None:
+        return False, hold_seconds, 0.0
+    now_utc = now or datetime.now(UTC)
+    age_seconds = max(0.0, (now_utc - opened_at).total_seconds())
+    if age_seconds >= hold_seconds:
+        return False, hold_seconds, age_seconds
+    return True, hold_seconds, age_seconds
+
+
+def _log_exit_deferred_min_hold(
+    *, symbol: str, reason: str, hold_seconds: int, age_seconds: float
+) -> None:
+    remaining_seconds = max(0, int(round(hold_seconds - age_seconds)))
+    logger.info(
+        "EXIT_DEFERRED_MIN_HOLD",
+        extra={
+            "symbol": symbol,
+            "reason": reason,
+            "hold_seconds": hold_seconds,
+            "position_age_seconds": round(age_seconds, 2),
+            "remaining_seconds": remaining_seconds,
+        },
+    )
+
+
 def should_exit(
-    ctx: BotContext, symbol: str, price: float, atr: float
+    ctx: BotContext, state: BotState, symbol: str, price: float, atr: float
 ) -> tuple[bool, int, str]:
     current_qty = _current_qty(ctx, symbol)  # AI-AGENT-REF: derive qty safely
 
@@ -17362,6 +17410,16 @@ def should_exit(
     if current_qty < 0 and tp and price <= tp:
         exit_qty = max(int(abs(current_qty) * SCALING_FACTOR), 1)
         return True, exit_qty, "take_profit"
+
+    min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
+    if min_hold_active:
+        _log_exit_deferred_min_hold(
+            symbol=symbol,
+            reason="trailing_stop",
+            hold_seconds=hold_seconds,
+            age_seconds=age_seconds,
+        )
+        return False, 0, ""
 
     action = update_trailing_stop(ctx, symbol, price, current_qty, atr)
     if (action == "exit_long" and current_qty > 0) or (
@@ -17885,6 +17943,15 @@ def _exit_positions_if_needed(
     current_qty: int,
 ) -> bool:
     if final_score < 0 and current_qty > 0 and abs(conf) >= get_conf_threshold():
+        min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
+        if min_hold_active:
+            _log_exit_deferred_min_hold(
+                symbol=symbol,
+                reason="signal_reversal",
+                hold_seconds=hold_seconds,
+                age_seconds=age_seconds,
+            )
+            return False
         if _should_hold_position(feat_df):
             logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
         else:
@@ -17900,6 +17967,15 @@ def _exit_positions_if_needed(
             return True
 
     if final_score > 0 and current_qty < 0 and abs(conf) >= get_conf_threshold():
+        min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
+        if min_hold_active:
+            _log_exit_deferred_min_hold(
+                symbol=symbol,
+                reason="signal_reversal",
+                hold_seconds=hold_seconds,
+                age_seconds=age_seconds,
+            )
+            return False
         price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -19764,12 +19840,16 @@ def _enter_long(
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
+        entry_ts = datetime.now(UTC)
         with trade_cooldowns_lock:
-            state.trade_cooldowns[symbol] = datetime.now(UTC)
+            state.trade_cooldowns[symbol] = entry_ts
+        entry_times = getattr(state, "position_entry_times", None)
+        if isinstance(entry_times, dict):
+            entry_times[symbol] = entry_ts
         state.last_trade_direction[symbol] = "buy"
 
         # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
-        _record_trade_in_frequency_tracker(state, symbol, datetime.now(UTC))
+        _record_trade_in_frequency_tracker(state, symbol, entry_ts)
     return True
 
 
@@ -20514,12 +20594,16 @@ def _enter_short(
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
+        entry_ts = datetime.now(UTC)
         with trade_cooldowns_lock:
-            state.trade_cooldowns[symbol] = datetime.now(UTC)
+            state.trade_cooldowns[symbol] = entry_ts
+        entry_times = getattr(state, "position_entry_times", None)
+        if isinstance(entry_times, dict):
+            entry_times[symbol] = entry_ts
         state.last_trade_direction[symbol] = "sell"
 
         # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
-        _record_trade_in_frequency_tracker(state, symbol, datetime.now(UTC))
+        _record_trade_in_frequency_tracker(state, symbol, entry_ts)
     return True
 
 
@@ -20540,7 +20624,7 @@ def _manage_existing_position(
         logger.critical(f"Invalid price computed for {symbol}: {price}")
         return False
     # AI-AGENT-REF: always rely on indicator-driven exits
-    should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
+    should_exit_flag, exit_qty, reason = should_exit(ctx, state, symbol, price, atr)
     if should_exit_flag and exit_qty > 0:
         logger.info(
             f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price:.4f}"
@@ -20561,6 +20645,9 @@ def _manage_existing_position(
                 with targets_lock:
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
+                entry_times = getattr(state, "position_entry_times", None)
+                if isinstance(entry_times, dict):
+                    entry_times.pop(symbol, None)
         except (
             FileNotFoundError,
             PermissionError,
@@ -20980,6 +21067,10 @@ def trade_logic(
         return True
 
     current_qty = _current_qty(ctx, symbol)
+    if current_qty == 0:
+        entry_times = getattr(state, "position_entry_times", None)
+        if isinstance(entry_times, dict):
+            entry_times.pop(symbol, None)
 
     from datetime import UTC, datetime
 

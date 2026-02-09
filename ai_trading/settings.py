@@ -209,6 +209,14 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     finnhub_rpm: int = Field(default=55, env="AI_TRADING_FINNHUB_RPM")
     max_trades_per_day: int = Field(default=200, env="AI_TRADING_MAX_TRADES_PER_DAY")
     max_trades_per_hour: int = Field(default=30, env="AI_TRADING_MAX_TRADES_PER_HOUR")
+    min_position_hold_seconds: int = Field(
+        default=0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_MIN_POSITION_HOLD_SECONDS",
+            "MIN_POSITION_HOLD_SECONDS",
+            "REBALANCE_HOLD_SECONDS",
+        ),
+    )
     conf_threshold: float = Field(default=0.75, env="AI_TRADING_CONF_THRESHOLD")
     score_confidence_min: float | None = Field(default=None, alias="SCORE_CONFIDENCE_MIN")
     score_size_max_boost: float = Field(
@@ -715,6 +723,10 @@ def get_conf_threshold() -> float:
 
 def get_trade_cooldown_min() -> int:
     return _to_int(getattr(get_settings(), "trade_cooldown_min", 15), 15)
+
+
+def get_min_position_hold_seconds() -> int:
+    return max(0, _to_int(getattr(get_settings(), "min_position_hold_seconds", 0), 0))
 
 
 def get_max_trades_per_hour() -> int:
