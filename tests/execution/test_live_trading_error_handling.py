@@ -88,6 +88,23 @@ def test_submit_limit_order_success_path(engine_factory):
     assert engine.stats["failed_orders"] == 0
 
 
+def test_submit_limit_order_capacity_precheck_runs_once(engine_factory, monkeypatch):
+    calls: list[tuple[Any, Any, Any, Any]] = []
+
+    def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
+        calls.append((symbol, side, price_hint, quantity))
+        return lt.CapacityCheck(True, int(quantity))
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
+    engine = engine_factory(lambda order_data: {"id": "ok", **order_data})
+
+    result = engine.submit_limit_order("AAPL", "buy", 10, 123.45)
+
+    assert result["id"] == "ok"
+    assert len(calls) == 1
+    assert calls[0][2] == pytest.approx(123.45)
+
+
 def test_submit_limit_order_returns_broker_payload(engine_factory, monkeypatch):
     submissions: list[dict[str, object]] = []
 

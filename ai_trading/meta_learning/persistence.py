@@ -33,6 +33,7 @@ _CANONICAL_PATH = Path(
 
 _PANDAS_MISSING_LOGGED = False
 _PATCHED_PARQUET = False
+_READ_FAILURE_LOGGED: set[tuple[str, str, str]] = set()
 
 
 def _pytest_active() -> bool:
@@ -132,15 +133,34 @@ def _read_parquet(path: Path) -> "pd.DataFrame" | None:
     try:
         return pd.read_parquet(path)
     except (OSError, ValueError, ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - corrupt file guard
-        if _pytest_active():
-            try:
-                return pd.read_pickle(path)
-            except Exception:
-                pass
-        logger.warning(
-            "TRADE_HISTORY_READ_FAILED",
-            extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},
+        try:
+            return pd.read_pickle(path)
+        except Exception:
+            pass
+        detail = str(exc)
+        detail_lower = detail.lower()
+        parquet_engine_missing = (
+            isinstance(exc, (ImportError, ModuleNotFoundError))
+            or "unable to find a usable engine" in detail_lower
+            or ("pyarrow" in detail_lower and "fastparquet" in detail_lower)
+            or "missing optional dependency" in detail_lower
         )
+        if parquet_engine_missing:
+            key = ("TRADE_HISTORY_PARQUET_ENGINE_MISSING", str(path), exc.__class__.__name__)
+            if key not in _READ_FAILURE_LOGGED:
+                _READ_FAILURE_LOGGED.add(key)
+                logger.info(
+                    "TRADE_HISTORY_PARQUET_ENGINE_MISSING",
+                    extra={"path": str(path), "cause": exc.__class__.__name__, "detail": detail},
+                )
+            return None
+        key = ("TRADE_HISTORY_READ_FAILED", str(path), exc.__class__.__name__)
+        if key not in _READ_FAILURE_LOGGED:
+            _READ_FAILURE_LOGGED.add(key)
+            logger.warning(
+                "TRADE_HISTORY_READ_FAILED",
+                extra={"path": str(path), "cause": exc.__class__.__name__, "detail": detail},
+            )
         return None
 
 

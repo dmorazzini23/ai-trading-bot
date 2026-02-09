@@ -60,3 +60,41 @@ def test_safe_get_stock_bars_handles_sentinel(monkeypatch):
     assert isinstance(frame, pd.DataFrame)
     assert frame.empty
 
+
+def test_safe_get_stock_bars_minute_path_uses_minute_fetch_without_error(monkeypatch, caplog):
+    class DummyClient:
+        pass
+
+    req = StockBarsRequest(
+        symbol_or_symbols="SPY",
+        timeframe=TimeFrame.Minute,
+        start=datetime(2024, 1, 2, tzinfo=UTC),
+        end=datetime(2024, 1, 2, 0, 2, tzinfo=UTC),
+        feed="iex",
+    )
+
+    timestamps = pd.date_range(start=req.start, periods=2, freq="1min", tz=UTC)
+    minute_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [1.0, 1.1],
+            "high": [1.1, 1.2],
+            "low": [0.9, 1.0],
+            "close": [1.05, 1.15],
+            "volume": [100, 110],
+        }
+    )
+
+    monkeypatch.setattr(
+        bars_mod,
+        "_client_fetch_stock_bars",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("client path should not run for 1Min")),
+    )
+    monkeypatch.setattr(bars_mod, "get_minute_df", lambda *_args, **_kwargs: minute_df.copy())
+
+    with caplog.at_level("ERROR", logger=bars_mod._log.name):
+        frame = bars_mod.safe_get_stock_bars(DummyClient(), req, symbol="SPY", context="TEST")
+
+    assert isinstance(frame, pd.DataFrame)
+    assert not frame.empty
+    assert not any(record.message == "ALPACA_BARS_FETCH_FAILED" for record in caplog.records)

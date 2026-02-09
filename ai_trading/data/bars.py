@@ -784,9 +784,26 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
         request.end = end_dt
     except (AttributeError, TypeError, ValueError):
         pass
+    tf_str = _canon_tf(getattr(request, 'timeframe', ''))
     feed_req = _canon_feed(getattr(request, 'feed', None))
     if feed_req:
         request.feed = _ensure_entitled_feed(client, feed_req)
+    if _is_minute_timeframe(tf_str):
+        minute_feed = _canon_feed(getattr(request, 'feed', None))
+        try:
+            minute_df = get_minute_df(symbol, iso_start, iso_end, feed=minute_feed)
+        except COMMON_EXC as exc:
+            _log.warning(
+                "ALPACA_MINUTE_BARS_FALLBACK_FAILED",
+                extra={
+                    "symbol": symbol,
+                    "context": context,
+                    "feed": minute_feed,
+                    "error": str(exc),
+                },
+            )
+            return _create_empty_bars_dataframe()
+        return _normalize_bars_frame(minute_df)
     try:
         try:
             response = _client_fetch_stock_bars(client, request)
@@ -905,12 +922,40 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
             _log.log(lvl, 'ALPACA_PARSE_EMPTY', extra={'symbol': symbol, 'context': context, 'feed': _canon_feed(getattr(request, 'feed', None)), 'timeframe': _canon_tf(getattr(request, 'timeframe', '')), 'occurrences': cnt})
         return empty_bars_dataframe()
     except COMMON_EXC as e:
-        _log.error('ALPACA_BARS_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
-        if _is_minute_timeframe(getattr(request, 'timeframe', '')):
-            return _normalize_bars_frame(
-                get_minute_df(symbol, iso_start, iso_end, feed=_canon_feed(getattr(request, 'feed', None)))
-            )
         tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+        feed_str = _canon_feed(getattr(request, 'feed', None))
+        if _is_minute_timeframe(tf_str):
+            try:
+                fallback_df = _normalize_bars_frame(
+                    get_minute_df(symbol, iso_start, iso_end, feed=feed_str)
+                )
+            except COMMON_EXC as fallback_exc:
+                _log.error(
+                    'ALPACA_BARS_FETCH_FAILED',
+                    extra={'symbol': symbol, 'context': context, 'error': str(e)},
+                )
+                _log.warning(
+                    'ALPACA_MINUTE_BARS_FALLBACK_FAILED',
+                    extra={
+                        'symbol': symbol,
+                        'context': context,
+                        'feed': feed_str,
+                        'error': str(fallback_exc),
+                    },
+                )
+                return _create_empty_bars_dataframe()
+            if not fallback_df.empty:
+                _log.warning(
+                    'ALPACA_BARS_FETCH_RECOVERED',
+                    extra={'symbol': symbol, 'context': context, 'feed': feed_str, 'error': str(e)},
+                )
+                return fallback_df
+            _log.error(
+                'ALPACA_BARS_FETCH_FAILED',
+                extra={'symbol': symbol, 'context': context, 'error': str(e)},
+            )
+            return fallback_df
+        _log.error('ALPACA_BARS_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
         feed_str = _canon_feed(getattr(request, 'feed', None))
         df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
         return _coerce_http_bars(df)

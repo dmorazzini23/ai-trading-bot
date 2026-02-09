@@ -2965,24 +2965,6 @@ class ExecutionEngine:
                 )
                 return None
 
-        capacity = _call_preflight_capacity(
-            symbol,
-            side_lower,
-            None,
-            quantity,
-            trading_client,
-            account_snapshot,
-        )
-        if not capacity.can_submit:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            return None
-        if capacity.suggested_qty != quantity:
-            quantity = capacity.suggested_qty
-            order_data["quantity"] = quantity
-
         quote_payload: Mapping[str, Any] | None = None
         fallback_age: float | int | None = None
         fallback_error: str | None = None
