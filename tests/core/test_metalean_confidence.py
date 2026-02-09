@@ -81,7 +81,7 @@ def test_signal_confidence_clamped_to_unit_interval(caplog):
     assert float(getattr(clamp_logs[-1], "confidence_before_clamp", 0.0)) > 1.0
 
 
-def test_signal_confidence_uses_mean_component_weight():
+def test_signal_confidence_uses_rms_component_weight():
     ctx = SimpleNamespace()
     ctx.signal_manager = DummyMeanConfidenceSignalManager()
     state = SimpleNamespace()
@@ -96,4 +96,4 @@ def test_signal_confidence_uses_mean_component_weight():
     )
 
     assert score == pytest.approx(1.0)
-    assert confidence == pytest.approx(0.6)
+    assert confidence == pytest.approx(0.6480740698)

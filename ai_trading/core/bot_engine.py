@@ -20689,7 +20689,10 @@ def _evaluate_trade_signal(
             continue
         component_weights.append(max(weight_value, 0.0))
     if component_weights:
-        confidence = sum(component_weights) / float(len(component_weights))
+        # Use RMS so high-quality component signals are not overly diluted
+        # by weaker contributors while keeping confidence in a stable range.
+        squared_sum = sum(weight_value * weight_value for weight_value in component_weights)
+        confidence = math.sqrt(squared_sum / float(len(component_weights)))
     else:
         confidence = 0.0
         try:
