@@ -217,6 +217,34 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "REBALANCE_HOLD_SECONDS",
         ),
     )
+    take_profit_exit_fraction: float = Field(
+        default=1.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_TAKE_PROFIT_EXIT_FRACTION",
+            "TAKE_PROFIT_EXIT_FRACTION",
+        ),
+    )
+    take_profit_min_hold_bypass_pct: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_TAKE_PROFIT_MIN_HOLD_BYPASS_PCT",
+            "TAKE_PROFIT_MIN_HOLD_BYPASS_PCT",
+        ),
+    )
+    min_hold_loser_cut_pct: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_MIN_HOLD_LOSER_CUT_PCT",
+            "MIN_HOLD_LOSER_CUT_PCT",
+        ),
+    )
+    fallback_entry_confidence_bonus: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_FALLBACK_ENTRY_CONFIDENCE_BONUS",
+            "FALLBACK_ENTRY_CONFIDENCE_BONUS",
+        ),
+    )
     conf_threshold: float = Field(default=0.75, env="AI_TRADING_CONF_THRESHOLD")
     score_confidence_min: float | None = Field(default=None, alias="SCORE_CONFIDENCE_MIN")
     score_size_max_boost: float = Field(
@@ -727,6 +755,23 @@ def get_trade_cooldown_min() -> int:
 
 def get_min_position_hold_seconds() -> int:
     return max(0, _to_int(getattr(get_settings(), "min_position_hold_seconds", 0), 0))
+
+
+def get_take_profit_exit_fraction() -> float:
+    value = _to_float(getattr(get_settings(), "take_profit_exit_fraction", 1.0), 1.0)
+    return max(0.05, min(1.0, value))
+
+
+def get_take_profit_min_hold_bypass_pct() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "take_profit_min_hold_bypass_pct", 0.0), 0.0))
+
+
+def get_min_hold_loser_cut_pct() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "min_hold_loser_cut_pct", 0.0), 0.0))
+
+
+def get_fallback_entry_confidence_bonus() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "fallback_entry_confidence_bonus", 0.0), 0.0))
 
 
 def get_max_trades_per_hour() -> int:

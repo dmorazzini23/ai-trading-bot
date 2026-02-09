@@ -821,12 +821,16 @@ from ai_trading.settings import (
     get_daily_loss_limit,
     get_disaster_dd_limit,
     get_dollar_risk_limit,
+    get_fallback_entry_confidence_bonus,
+    get_min_hold_loser_cut_pct,
     get_min_position_hold_seconds,
     get_max_portfolio_positions,
     get_max_trades_per_day,
     get_max_trades_per_hour,
     get_rebalance_interval_min,
     get_sector_exposure_cap,
+    get_take_profit_exit_fraction,
+    get_take_profit_min_hold_bypass_pct,
     get_trade_cooldown_min,
     get_verbose_logging,
     get_volume_threshold,
@@ -17387,6 +17391,60 @@ def _log_exit_deferred_min_hold(
     )
 
 
+def _position_entry_price(ctx: BotContext, symbol: str) -> float | None:
+    position_map = getattr(ctx, "position_map", None)
+    if not isinstance(position_map, MappingABC):
+        return None
+    pos = position_map.get(symbol)
+    if pos is None:
+        return None
+    raw_price = (
+        getattr(pos, "avg_entry_price", None)
+        or getattr(pos, "avg_price", None)
+        or getattr(pos, "entry_price", None)
+    )
+    if raw_price in (None, ""):
+        return None
+    try:
+        price = float(raw_price)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(price) or price <= 0:
+        return None
+    return price
+
+
+def _position_unrealized_pct(
+    ctx: BotContext, symbol: str, current_price: float, current_qty: int
+) -> float | None:
+    if current_qty == 0:
+        return None
+    if not math.isfinite(current_price) or current_price <= 0:
+        return None
+    entry_price = _position_entry_price(ctx, symbol)
+    if entry_price is None:
+        return None
+    if current_qty > 0:
+        return (current_price - entry_price) / entry_price
+    return (entry_price - current_price) / entry_price
+
+
+def _min_hold_loser_cut_triggered(
+    ctx: BotContext,
+    symbol: str,
+    current_price: float,
+    current_qty: int,
+    *,
+    loss_cut_pct: float,
+) -> tuple[bool, float | None]:
+    if loss_cut_pct <= 0:
+        return False, None
+    unrealized_pct = _position_unrealized_pct(ctx, symbol, current_price, current_qty)
+    if unrealized_pct is None:
+        return False, None
+    return unrealized_pct <= -loss_cut_pct, unrealized_pct
+
+
 def should_exit(
     ctx: BotContext, state: BotState, symbol: str, price: float, atr: float
 ) -> tuple[bool, int, str]:
@@ -17396,6 +17454,8 @@ def should_exit(
     if symbol in ctx.rebalance_buys:
         ctx.rebalance_buys.pop(symbol, None)
 
+    min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
+
     stop = ctx.stop_targets.get(symbol)
     if stop is not None:
         if current_qty > 0 and price <= stop:
@@ -17404,14 +17464,26 @@ def should_exit(
             return True, abs(current_qty), "stop_loss"
 
     tp = ctx.take_profit_targets.get(symbol)
-    if current_qty > 0 and tp and price >= tp:
-        exit_qty = max(int(abs(current_qty) * SCALING_FACTOR), 1)
-        return True, exit_qty, "take_profit"
-    if current_qty < 0 and tp and price <= tp:
-        exit_qty = max(int(abs(current_qty) * SCALING_FACTOR), 1)
+    tp_hit = bool(
+        (current_qty > 0 and tp and price >= tp)
+        or (current_qty < 0 and tp and price <= tp)
+    )
+    if tp_hit:
+        min_hold_bypass_pct = get_take_profit_min_hold_bypass_pct()
+        if min_hold_active and min_hold_bypass_pct > 0:
+            unrealized_pct = _position_unrealized_pct(ctx, symbol, price, current_qty)
+            if unrealized_pct is None or unrealized_pct < min_hold_bypass_pct:
+                _log_exit_deferred_min_hold(
+                    symbol=symbol,
+                    reason="take_profit",
+                    hold_seconds=hold_seconds,
+                    age_seconds=age_seconds,
+                )
+                return False, 0, ""
+        exit_fraction = get_take_profit_exit_fraction()
+        exit_qty = max(int(abs(current_qty) * exit_fraction), 1)
         return True, exit_qty, "take_profit"
 
-    min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
     if min_hold_active:
         _log_exit_deferred_min_hold(
             symbol=symbol,
@@ -17933,6 +18005,29 @@ def _should_hold_position(df: pd.DataFrame) -> bool:
         return False
 
 
+def _should_hold_short_position(df: pd.DataFrame) -> bool:
+    """Return True if trend indicators favor staying in a short trade."""
+    from ai_trading.indicators import rsi  # type: ignore
+
+    try:
+        close = df["close"].astype(float)
+        ema_fast = close.ewm(span=20, adjust=False).mean().iloc[-1]
+        ema_slow = close.ewm(span=50, adjust=False).mean().iloc[-1]
+        rsi_val = rsi(tuple(close), 14).iloc[-1]
+        return close.iloc[-1] < ema_fast < ema_slow and rsi_val <= 45
+    except (
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        JSONDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+    ):
+        return False
+
+
 def _exit_positions_if_needed(
     ctx: BotContext,
     state: BotState,
@@ -17943,19 +18038,38 @@ def _exit_positions_if_needed(
     current_qty: int,
 ) -> bool:
     if final_score < 0 and current_qty > 0 and abs(conf) >= get_conf_threshold():
+        price = get_latest_close(feat_df)
         min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
         if min_hold_active:
-            _log_exit_deferred_min_hold(
-                symbol=symbol,
-                reason="signal_reversal",
-                hold_seconds=hold_seconds,
-                age_seconds=age_seconds,
+            loss_cut_pct = get_min_hold_loser_cut_pct()
+            force_exit, unrealized_pct = _min_hold_loser_cut_triggered(
+                ctx,
+                symbol,
+                price,
+                current_qty,
+                loss_cut_pct=loss_cut_pct,
             )
-            return False
+            if not force_exit:
+                _log_exit_deferred_min_hold(
+                    symbol=symbol,
+                    reason="signal_reversal",
+                    hold_seconds=hold_seconds,
+                    age_seconds=age_seconds,
+                )
+                return False
+            logger.warning(
+                "MIN_HOLD_LOSER_CUT",
+                extra={
+                    "symbol": symbol,
+                    "unrealized_pct": unrealized_pct,
+                    "loss_cut_pct": loss_cut_pct,
+                    "hold_seconds": hold_seconds,
+                    "position_age_seconds": round(age_seconds, 2),
+                },
+            )
         if _should_hold_position(feat_df):
             logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
         else:
-            price = get_latest_close(feat_df)
             logger.info(
                 f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
             )
@@ -17967,25 +18081,47 @@ def _exit_positions_if_needed(
             return True
 
     if final_score > 0 and current_qty < 0 and abs(conf) >= get_conf_threshold():
+        price = get_latest_close(feat_df)
         min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
         if min_hold_active:
-            _log_exit_deferred_min_hold(
-                symbol=symbol,
-                reason="signal_reversal",
-                hold_seconds=hold_seconds,
-                age_seconds=age_seconds,
+            loss_cut_pct = get_min_hold_loser_cut_pct()
+            force_exit, unrealized_pct = _min_hold_loser_cut_triggered(
+                ctx,
+                symbol,
+                price,
+                current_qty,
+                loss_cut_pct=loss_cut_pct,
             )
-            return False
-        price = get_latest_close(feat_df)
-        logger.info(
-            f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
-        )
-        send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
-        ctx.trade_logger.log_exit(state, symbol, price)
-        with targets_lock:
-            ctx.stop_targets.pop(symbol, None)
-            ctx.take_profit_targets.pop(symbol, None)
-        return True
+            if not force_exit:
+                _log_exit_deferred_min_hold(
+                    symbol=symbol,
+                    reason="signal_reversal",
+                    hold_seconds=hold_seconds,
+                    age_seconds=age_seconds,
+                )
+                return False
+            logger.warning(
+                "MIN_HOLD_LOSER_CUT",
+                extra={
+                    "symbol": symbol,
+                    "unrealized_pct": unrealized_pct,
+                    "loss_cut_pct": loss_cut_pct,
+                    "hold_seconds": hold_seconds,
+                    "position_age_seconds": round(age_seconds, 2),
+                },
+            )
+        if _should_hold_short_position(feat_df):
+            logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
+        else:
+            logger.info(
+                f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+            )
+            send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
+            ctx.trade_logger.log_exit(state, symbol, price)
+            with targets_lock:
+                ctx.stop_targets.pop(symbol, None)
+                ctx.take_profit_targets.pop(symbol, None)
+            return True
     return False
 
 
@@ -21110,6 +21246,28 @@ def trade_logic(
             local_threshold = min(float(local_threshold), float(cap_limit))
         except Exception:
             local_threshold = min(local_threshold, cap_limit)
+    fallback_confidence_bonus = get_fallback_entry_confidence_bonus()
+    if fallback_confidence_bonus > 0:
+        quality = _ensure_data_quality_bucket(state).get(symbol, {})
+        if isinstance(quality, MappingABC):
+            using_fallback_provider = bool(quality.get("using_fallback_provider"))
+            stale_data = bool(quality.get("stale_data"))
+            missing_ohlcv = bool(quality.get("missing_ohlcv"))
+            if using_fallback_provider or stale_data or missing_ohlcv:
+                threshold_before = local_threshold
+                local_threshold = min(1.0, local_threshold + fallback_confidence_bonus)
+                logger.info(
+                    "ENTRY_THRESHOLD_RAISED_DEGRADED_DATA",
+                    extra={
+                        "symbol": symbol,
+                        "threshold_before": threshold_before,
+                        "threshold_after": local_threshold,
+                        "confidence_bonus": fallback_confidence_bonus,
+                        "using_fallback_provider": using_fallback_provider,
+                        "stale_data": stale_data,
+                        "missing_ohlcv": missing_ohlcv,
+                    },
+                )
 
     if final_score > 0 and conf >= local_threshold and current_qty == 0:
         blocked, degraded_extra = _entry_data_degraded(state, symbol)
