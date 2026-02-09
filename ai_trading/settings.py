@@ -252,6 +252,13 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "REVERSAL_EXIT_CONFIRM_SIGNALS",
         ),
     )
+    entry_flip_confirm_signals: int = Field(
+        default=1,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ENTRY_FLIP_CONFIRM_SIGNALS",
+            "ENTRY_FLIP_CONFIRM_SIGNALS",
+        ),
+    )
     min_expected_edge_bps: float = Field(
         default=6.0,
         validation_alias=AliasChoices(
@@ -264,6 +271,55 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         validation_alias=AliasChoices(
             "AI_TRADING_FALLBACK_EXPECTED_EDGE_PENALTY_BPS",
             "FALLBACK_EXPECTED_EDGE_PENALTY_BPS",
+        ),
+    )
+    entry_cost_buffer_bps: float = Field(
+        default=2.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ENTRY_COST_BUFFER_BPS",
+            "ENTRY_COST_BUFFER_BPS",
+        ),
+    )
+    entry_age_penalty_per_sec_bps: float = Field(
+        default=0.02,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ENTRY_AGE_PENALTY_PER_SEC_BPS",
+            "ENTRY_AGE_PENALTY_PER_SEC_BPS",
+        ),
+    )
+    entry_age_penalty_cap_bps: float = Field(
+        default=5.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ENTRY_AGE_PENALTY_CAP_BPS",
+            "ENTRY_AGE_PENALTY_CAP_BPS",
+        ),
+    )
+    expectancy_filter_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "AI_TRADING_EXPECTANCY_FILTER_ENABLED",
+            "EXPECTANCY_FILTER_ENABLED",
+        ),
+    )
+    expectancy_min_samples: int = Field(
+        default=8,
+        validation_alias=AliasChoices(
+            "AI_TRADING_EXPECTANCY_MIN_SAMPLES",
+            "EXPECTANCY_MIN_SAMPLES",
+        ),
+    )
+    expectancy_window_trades: int = Field(
+        default=30,
+        validation_alias=AliasChoices(
+            "AI_TRADING_EXPECTANCY_WINDOW_TRADES",
+            "EXPECTANCY_WINDOW_TRADES",
+        ),
+    )
+    expectancy_min_mean_pct: float = Field(
+        default=-0.001,
+        validation_alias=AliasChoices(
+            "AI_TRADING_EXPECTANCY_MIN_MEAN_PCT",
+            "EXPECTANCY_MIN_MEAN_PCT",
         ),
     )
     winner_break_even_r: float = Field(
@@ -869,6 +925,10 @@ def get_reversal_exit_confirm_signals() -> int:
     return max(1, _to_int(getattr(get_settings(), "reversal_exit_confirm_signals", 2), 2))
 
 
+def get_entry_flip_confirm_signals() -> int:
+    return max(1, _to_int(getattr(get_settings(), "entry_flip_confirm_signals", 1), 1))
+
+
 def get_min_expected_edge_bps() -> float:
     return max(0.0, _to_float(getattr(get_settings(), "min_expected_edge_bps", 6.0), 6.0))
 
@@ -881,6 +941,37 @@ def get_fallback_expected_edge_penalty_bps() -> float:
             8.0,
         ),
     )
+
+
+def get_entry_cost_buffer_bps() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "entry_cost_buffer_bps", 2.0), 2.0))
+
+
+def get_entry_age_penalty_per_sec_bps() -> float:
+    return max(
+        0.0,
+        _to_float(getattr(get_settings(), "entry_age_penalty_per_sec_bps", 0.02), 0.02),
+    )
+
+
+def get_entry_age_penalty_cap_bps() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "entry_age_penalty_cap_bps", 5.0), 5.0))
+
+
+def get_expectancy_filter_enabled() -> bool:
+    return _to_bool(getattr(get_settings(), "expectancy_filter_enabled", False), False)
+
+
+def get_expectancy_min_samples() -> int:
+    return max(1, _to_int(getattr(get_settings(), "expectancy_min_samples", 8), 8))
+
+
+def get_expectancy_window_trades() -> int:
+    return max(1, _to_int(getattr(get_settings(), "expectancy_window_trades", 30), 30))
+
+
+def get_expectancy_min_mean_pct() -> float:
+    return _to_float(getattr(get_settings(), "expectancy_min_mean_pct", -0.001), -0.001)
 
 
 def get_winner_break_even_r() -> float:

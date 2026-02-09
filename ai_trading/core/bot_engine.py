@@ -825,7 +825,15 @@ from ai_trading.settings import (
     get_conf_threshold,
     get_daily_loss_limit,
     get_disaster_dd_limit,
+    get_entry_age_penalty_cap_bps,
+    get_entry_age_penalty_per_sec_bps,
+    get_entry_cost_buffer_bps,
+    get_entry_flip_confirm_signals,
     get_dollar_risk_limit,
+    get_expectancy_filter_enabled,
+    get_expectancy_min_mean_pct,
+    get_expectancy_min_samples,
+    get_expectancy_window_trades,
     get_fallback_expected_edge_penalty_bps,
     get_fallback_entry_confidence_bonus,
     get_min_expected_edge_bps,
@@ -7858,7 +7866,11 @@ class BotState:
     trade_cooldowns: dict[str, datetime] = field(default_factory=dict)
     position_entry_times: dict[str, datetime] = field(default_factory=dict)
     reversal_signal_streak: dict[str, int] = field(default_factory=dict)
+    entry_flip_signal_streak: dict[str, int] = field(default_factory=dict)
     last_trade_direction: dict[str, str] = field(default_factory=dict)
+    last_entry_side: dict[str, str] = field(default_factory=dict)
+    entry_expectancy_context: dict[str, dict[str, Any]] = field(default_factory=dict)
+    expectancy_history: dict[str, list[float]] = field(default_factory=dict)
     skipped_cycles: int = 0
     auth_skipped_symbols: set[str] = field(default_factory=set)
     cycle_order_intents: dict[str, str] = field(default_factory=dict)
@@ -18230,6 +18242,249 @@ def _reversal_signal_streak_count(
     return abs(next_value)
 
 
+def _normalize_entry_side(raw_side: Any) -> str | None:
+    value = str(raw_side or "").strip().lower()
+    if value in {"buy", "long"}:
+        return "long"
+    if value in {"sell", "short", "sell_short"}:
+        return "short"
+    return None
+
+
+def _last_entry_side(state: BotState, symbol: str) -> str | None:
+    side_map = getattr(state, "last_entry_side", None)
+    if not isinstance(side_map, dict):
+        return None
+    return _normalize_entry_side(side_map.get(symbol))
+
+
+def _reset_entry_flip_signal_streak(state: BotState, symbol: str) -> None:
+    streaks = getattr(state, "entry_flip_signal_streak", None)
+    if isinstance(streaks, dict):
+        streaks.pop(symbol, None)
+
+
+def _entry_flip_signal_streak_count(
+    state: BotState,
+    symbol: str,
+    *,
+    direction: int,
+) -> int:
+    streaks = getattr(state, "entry_flip_signal_streak", None)
+    if not isinstance(streaks, dict):
+        streaks = {}
+        setattr(state, "entry_flip_signal_streak", streaks)
+
+    current_raw = streaks.get(symbol, 0)
+    try:
+        current = int(current_raw)
+    except (TypeError, ValueError):
+        current = 0
+
+    if direction == 0:
+        streaks.pop(symbol, None)
+        return 0
+
+    if current == 0 or (current > 0) != (direction > 0):
+        next_value = direction
+    else:
+        next_value = current + direction
+    streaks[symbol] = next_value
+    return abs(next_value)
+
+
+def _entry_flip_confirmation_ready(
+    state: BotState,
+    *,
+    symbol: str,
+    candidate_side: str,
+    final_score: float,
+    confidence: float,
+) -> bool:
+    required = get_entry_flip_confirm_signals()
+    if required <= 1:
+        _reset_entry_flip_signal_streak(state, symbol)
+        return True
+
+    previous_side = _last_entry_side(state, symbol)
+    if previous_side is None or previous_side == candidate_side:
+        _reset_entry_flip_signal_streak(state, symbol)
+        return True
+
+    direction = 1 if candidate_side == "long" else -1
+    seen = _entry_flip_signal_streak_count(state, symbol, direction=direction)
+    if seen >= required:
+        return True
+
+    logger.info(
+        "ENTRY_FLIP_CONFIRM_PENDING",
+        extra={
+            "symbol": symbol,
+            "from_side": previous_side,
+            "to_side": candidate_side,
+            "seen": seen,
+            "required": required,
+            "final_score": round(float(final_score), 4),
+            "confidence": round(float(confidence), 4),
+        },
+    )
+    return False
+
+
+def _expectancy_bucket_key(symbol: str, regime: str, side: str) -> str:
+    return f"{str(symbol).upper()}|{_normalize_regime_name(regime)}|{side}"
+
+
+def _ensure_expectancy_history(state: BotState) -> dict[str, list[float]]:
+    history = getattr(state, "expectancy_history", None)
+    if not isinstance(history, dict):
+        history = {}
+        setattr(state, "expectancy_history", history)
+    return history
+
+
+def _record_expectancy_outcome(
+    state: BotState,
+    *,
+    symbol: str,
+    regime: str,
+    side: str,
+    outcome_pct: float,
+) -> None:
+    if not math.isfinite(outcome_pct):
+        return
+    normalized_side = _normalize_entry_side(side)
+    if normalized_side is None:
+        return
+    history = _ensure_expectancy_history(state)
+    key = _expectancy_bucket_key(symbol, regime, normalized_side)
+    bucket_raw = history.get(key)
+    if not isinstance(bucket_raw, list):
+        bucket = []
+        history[key] = bucket
+    else:
+        bucket = bucket_raw
+    bucket.append(float(outcome_pct))
+    window = max(1, get_expectancy_window_trades())
+    if len(bucket) > window:
+        del bucket[:-window]
+
+
+def _entry_expectancy_allowed(
+    state: BotState,
+    *,
+    symbol: str,
+    regime: str,
+    side: str,
+) -> bool:
+    if not get_expectancy_filter_enabled():
+        return True
+
+    normalized_side = _normalize_entry_side(side)
+    if normalized_side is None:
+        return True
+
+    key = _expectancy_bucket_key(symbol, regime, normalized_side)
+    history = _ensure_expectancy_history(state)
+    bucket_raw = history.get(key, [])
+    if not isinstance(bucket_raw, list):
+        return True
+
+    bucket = [float(val) for val in bucket_raw if isinstance(val, (int, float, np.floating)) and math.isfinite(float(val))]
+    sample_count = len(bucket)
+    min_samples = max(1, get_expectancy_min_samples())
+    if sample_count < min_samples:
+        return True
+
+    mean_pct = float(sum(bucket) / sample_count)
+    min_mean_pct = float(get_expectancy_min_mean_pct())
+    if mean_pct + 1e-12 >= min_mean_pct:
+        return True
+
+    logger.info(
+        "ENTRY_BLOCKED_EXPECTANCY",
+        extra={
+            "symbol": symbol,
+            "regime": _normalize_regime_name(regime),
+            "side": normalized_side,
+            "sample_count": sample_count,
+            "mean_pct": round(mean_pct, 6),
+            "min_mean_pct": round(min_mean_pct, 6),
+        },
+    )
+    return False
+
+
+def _record_entry_expectancy_context(
+    state: BotState,
+    *,
+    symbol: str,
+    side: str,
+    regime: str,
+    entry_price: float,
+) -> None:
+    normalized_side = _normalize_entry_side(side)
+    if normalized_side is None:
+        return
+    context_map = getattr(state, "entry_expectancy_context", None)
+    if not isinstance(context_map, dict):
+        context_map = {}
+        setattr(state, "entry_expectancy_context", context_map)
+    context_map[symbol] = {
+        "side": normalized_side,
+        "regime": _normalize_regime_name(regime),
+        "entry_price": float(entry_price) if math.isfinite(entry_price) else None,
+        "opened_at": datetime.now(UTC),
+    }
+    last_entry_side = getattr(state, "last_entry_side", None)
+    if not isinstance(last_entry_side, dict):
+        last_entry_side = {}
+        setattr(state, "last_entry_side", last_entry_side)
+    last_entry_side[symbol] = normalized_side
+    _reset_entry_flip_signal_streak(state, symbol)
+
+
+def _record_exit_expectancy(
+    ctx: BotContext,
+    state: BotState,
+    *,
+    symbol: str,
+    current_qty: int,
+    exit_price: float,
+    full_exit: bool,
+) -> None:
+    if current_qty == 0:
+        return
+    outcome_pct = _position_unrealized_pct(ctx, symbol, exit_price, current_qty)
+    if outcome_pct is None or not math.isfinite(outcome_pct):
+        return
+
+    side = "long" if current_qty > 0 else "short"
+    regime = _normalize_regime_name(getattr(state, "current_regime", "sideways"))
+
+    context_map = getattr(state, "entry_expectancy_context", None)
+    context_value: Mapping[str, Any] | None = None
+    if isinstance(context_map, dict):
+        raw_context = context_map.get(symbol)
+        if isinstance(raw_context, MappingABC):
+            context_value = raw_context
+
+    if context_value is not None:
+        side = _normalize_entry_side(context_value.get("side")) or side
+        regime = _normalize_regime_name(context_value.get("regime"))
+
+    _record_expectancy_outcome(
+        state,
+        symbol=symbol,
+        regime=regime,
+        side=side,
+        outcome_pct=float(outcome_pct),
+    )
+
+    if full_exit and isinstance(context_map, dict):
+        context_map.pop(symbol, None)
+
+
 def _exit_positions_if_needed(
     ctx: BotContext,
     state: BotState,
@@ -18300,6 +18555,14 @@ def _exit_positions_if_needed(
             logger.info(
                 f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
             )
+            _record_exit_expectancy(
+                ctx,
+                state,
+                symbol=symbol,
+                current_qty=current_qty,
+                exit_price=price,
+                full_exit=True,
+            )
             send_exit_order(ctx, symbol, current_qty, price, "reversal")
             ctx.trade_logger.log_exit(state, symbol, price)
             with targets_lock:
@@ -18359,6 +18622,14 @@ def _exit_positions_if_needed(
         else:
             logger.info(
                 f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+            )
+            _record_exit_expectancy(
+                ctx,
+                state,
+                symbol=symbol,
+                current_qty=current_qty,
+                exit_price=price,
+                full_exit=True,
             )
             send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
             ctx.trade_logger.log_exit(state, symbol, price)
@@ -19472,6 +19743,53 @@ def _expected_edge_bps(
     return strength * (atr / price) * 10000.0
 
 
+def _estimate_entry_cost_components_bps(
+    quote_details: Mapping[str, Any] | None,
+) -> dict[str, float]:
+    if not isinstance(quote_details, Mapping):
+        return {
+            "spread_bps": 0.0,
+            "slippage_bps": 0.0,
+            "age_penalty_bps": 0.0,
+            "cost_buffer_bps": 0.0,
+            "total_cost_bps": 0.0,
+        }
+
+    spread_bps = 0.0
+    bid = _safe_float(quote_details.get("bid"))
+    ask = _safe_float(quote_details.get("ask"))
+    if (
+        bid is not None
+        and ask is not None
+        and math.isfinite(bid)
+        and math.isfinite(ask)
+        and bid > 0
+        and ask >= bid
+    ):
+        mid = (bid + ask) / 2.0
+        if mid > 0 and math.isfinite(mid):
+            spread_bps = max(0.0, ((ask - bid) / mid) * 10000.0)
+
+    slippage_bps = max(0.0, float(_slippage_setting_bps()))
+    age_penalty_bps = 0.0
+    age_seconds = _safe_float(quote_details.get("age_sec"))
+    if age_seconds is not None and math.isfinite(age_seconds) and age_seconds > 0:
+        age_penalty_bps = min(
+            max(0.0, float(age_seconds) * get_entry_age_penalty_per_sec_bps()),
+            get_entry_age_penalty_cap_bps(),
+        )
+
+    cost_buffer_bps = max(0.0, get_entry_cost_buffer_bps())
+    total_cost_bps = spread_bps + slippage_bps + age_penalty_bps + cost_buffer_bps
+    return {
+        "spread_bps": spread_bps,
+        "slippage_bps": slippage_bps,
+        "age_penalty_bps": age_penalty_bps,
+        "cost_buffer_bps": cost_buffer_bps,
+        "total_cost_bps": total_cost_bps,
+    }
+
+
 def _entry_expected_edge_gate(
     *,
     side: str,
@@ -19481,6 +19799,7 @@ def _entry_expected_edge_gate(
     atr: float,
     price: float,
     fallback_used: bool,
+    quote_details: Mapping[str, Any] | None = None,
 ) -> bool:
     expected_bps = _expected_edge_bps(
         final_score=final_score,
@@ -19488,7 +19807,8 @@ def _entry_expected_edge_gate(
         atr=atr,
         price=price,
     )
-    required_bps = get_min_expected_edge_bps()
+    cost_components = _estimate_entry_cost_components_bps(quote_details)
+    required_bps = get_min_expected_edge_bps() + cost_components["total_cost_bps"]
     if fallback_used:
         required_bps += get_fallback_expected_edge_penalty_bps()
     if expected_bps + 1e-9 >= required_bps:
@@ -19505,6 +19825,10 @@ def _entry_expected_edge_gate(
             "confidence": confidence,
             "final_score": final_score,
             "fallback_used": fallback_used,
+            "spread_bps": round(cost_components["spread_bps"], 4),
+            "slippage_bps": round(cost_components["slippage_bps"], 4),
+            "age_penalty_bps": round(cost_components["age_penalty_bps"], 4),
+            "cost_buffer_bps": round(cost_components["cost_buffer_bps"], 4),
         },
     )
     return False
@@ -20084,6 +20408,7 @@ def _enter_long(
         atr=atr_value,
         price=current_price,
         fallback_used=fallback_for_edge,
+        quote_details=getattr(quote_gate, "details", None),
     ):
         return True
 
@@ -20299,6 +20624,13 @@ def _enter_long(
         if isinstance(entry_times, dict):
             entry_times[symbol] = entry_ts
         state.last_trade_direction[symbol] = "buy"
+        _record_entry_expectancy_context(
+            state,
+            symbol=symbol,
+            side="long",
+            regime=getattr(state, "current_regime", "sideways"),
+            entry_price=current_price,
+        )
 
         # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
         _record_trade_in_frequency_tracker(state, symbol, entry_ts)
@@ -20831,6 +21163,7 @@ def _enter_short(
         atr=atr,
         price=current_price,
         fallback_used=fallback_for_edge,
+        quote_details=getattr(quote_gate, "details", None),
     ):
         return True
 
@@ -21067,6 +21400,13 @@ def _enter_short(
         if isinstance(entry_times, dict):
             entry_times[symbol] = entry_ts
         state.last_trade_direction[symbol] = "sell"
+        _record_entry_expectancy_context(
+            state,
+            symbol=symbol,
+            side="short",
+            regime=getattr(state, "current_regime", "sideways"),
+            entry_price=current_price,
+        )
 
         # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
         _record_trade_in_frequency_tracker(state, symbol, entry_ts)
@@ -21094,6 +21434,15 @@ def _manage_existing_position(
     if should_exit_flag and exit_qty > 0:
         logger.info(
             f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price:.4f}"
+        )
+        full_exit = exit_qty >= abs(current_qty)
+        _record_exit_expectancy(
+            ctx,
+            state,
+            symbol=symbol,
+            current_qty=current_qty,
+            exit_price=price,
+            full_exit=full_exit,
         )
         send_exit_order(ctx, symbol, exit_qty, price, reason)
         if reason == "stop_loss":
@@ -21635,7 +21984,27 @@ def trade_logic(
                 },
             )
 
-    if final_score > 0 and conf >= local_threshold and current_qty == 0:
+    long_entry_candidate = final_score > 0 and conf >= local_threshold and current_qty == 0
+    short_entry_candidate = final_score < 0 and conf >= local_threshold and current_qty == 0
+    if current_qty == 0 and not (long_entry_candidate or short_entry_candidate):
+        _reset_entry_flip_signal_streak(state, symbol)
+
+    if long_entry_candidate:
+        if not _entry_flip_confirmation_ready(
+            state,
+            symbol=symbol,
+            candidate_side="long",
+            final_score=float(final_score),
+            confidence=float(conf),
+        ):
+            return True
+        if not _entry_expectancy_allowed(
+            state,
+            symbol=symbol,
+            regime=getattr(state, "current_regime", "sideways"),
+            side="long",
+        ):
+            return True
         blocked, degraded_extra = _entry_data_degraded(state, symbol)
         if blocked:
             logger.warning(
@@ -21659,7 +22028,22 @@ def trade_logic(
             ctx, state, symbol, balance, feat_df, final_score, conf, strat
         )
 
-    if final_score < 0 and conf >= local_threshold and current_qty == 0:
+    if short_entry_candidate:
+        if not _entry_flip_confirmation_ready(
+            state,
+            symbol=symbol,
+            candidate_side="short",
+            final_score=float(final_score),
+            confidence=float(conf),
+        ):
+            return True
+        if not _entry_expectancy_allowed(
+            state,
+            symbol=symbol,
+            regime=getattr(state, "current_regime", "sideways"),
+            side="short",
+        ):
+            return True
         blocked, degraded_extra = _entry_data_degraded(state, symbol)
         if blocked:
             logger.warning(
@@ -26676,6 +27060,14 @@ def _process_symbols(
         state.trade_cooldowns = {}
     if not hasattr(state, "last_trade_direction"):
         state.last_trade_direction = {}
+    if not hasattr(state, "entry_flip_signal_streak"):
+        state.entry_flip_signal_streak = {}
+    if not hasattr(state, "last_entry_side"):
+        state.last_entry_side = {}
+    if not hasattr(state, "entry_expectancy_context"):
+        state.entry_expectancy_context = {}
+    if not hasattr(state, "expectancy_history"):
+        state.expectancy_history = {}
 
     now = datetime.now(UTC)
 
@@ -27937,6 +28329,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
             state.last_trade_direction = {}
+        if not hasattr(state, "entry_flip_signal_streak"):
+            state.entry_flip_signal_streak = {}
+        if not hasattr(state, "last_entry_side"):
+            state.last_entry_side = {}
+        if not hasattr(state, "entry_expectancy_context"):
+            state.entry_expectancy_context = {}
+        if not hasattr(state, "expectancy_history"):
+            state.expectancy_history = {}
         if state.running:
             logger.warning(
                 "RUN_ALL_TRADES_SKIPPED_OVERLAP",

@@ -248,6 +248,10 @@ def test_entry_expected_edge_gate_blocks_low_edge(monkeypatch):
         "get_fallback_expected_edge_penalty_bps",
         lambda: 10.0,
     )
+    monkeypatch.setattr(bot_engine, "_slippage_setting_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_cost_buffer_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_age_penalty_per_sec_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_age_penalty_cap_bps", lambda: 0.0)
 
     allowed = bot_engine._entry_expected_edge_gate(
         side="buy",
@@ -269,6 +273,10 @@ def test_entry_expected_edge_gate_allows_high_edge(monkeypatch):
         "get_fallback_expected_edge_penalty_bps",
         lambda: 5.0,
     )
+    monkeypatch.setattr(bot_engine, "_slippage_setting_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_cost_buffer_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_age_penalty_per_sec_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_age_penalty_cap_bps", lambda: 0.0)
 
     allowed = bot_engine._entry_expected_edge_gate(
         side="sell_short",
@@ -281,6 +289,145 @@ def test_entry_expected_edge_gate_allows_high_edge(monkeypatch):
     )
 
     assert allowed is True
+
+
+def test_entry_expected_edge_gate_includes_quote_cost_components(monkeypatch):
+    monkeypatch.setattr(bot_engine, "get_min_expected_edge_bps", lambda: 6.0)
+    monkeypatch.setattr(bot_engine, "get_fallback_expected_edge_penalty_bps", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "_slippage_setting_bps", lambda: 10.0)
+    monkeypatch.setattr(bot_engine, "get_entry_cost_buffer_bps", lambda: 2.0)
+    monkeypatch.setattr(bot_engine, "get_entry_age_penalty_per_sec_bps", lambda: 0.1)
+    monkeypatch.setattr(bot_engine, "get_entry_age_penalty_cap_bps", lambda: 5.0)
+
+    # Baseline expected edge ~= 15 bps; costs push required edge above baseline.
+    allowed = bot_engine._entry_expected_edge_gate(
+        side="sell_short",
+        symbol="TEST",
+        final_score=-1.0,
+        confidence=0.75,
+        atr=0.2,
+        price=100.0,
+        fallback_used=False,
+        quote_details={"bid": 99.0, "ask": 101.0, "age_sec": 20.0},
+    )
+
+    assert allowed is False
+
+
+def test_trade_logic_requires_flip_confirmation_before_entry(monkeypatch, caplog):
+    ctx = SimpleNamespace(
+        signal_manager=SimpleNamespace(meta_confidence_capped=False),
+        position_map={},
+        portfolio_weights={},
+        rebalance_buys={},
+    )
+    state = BotState()
+    state.last_entry_side["TEST"] = "short"
+    feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine, "_fetch_feature_data", lambda *a, **k: (feat_df, feat_df, None)
+    )
+    monkeypatch.setattr(bot_engine, "_model_feature_names", lambda *_a, **_k: [])
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(
+        bot_engine, "_check_trade_frequency_limits", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_fallback_entry_confidence_bonus", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_entry_flip_confirm_signals", lambda: 2)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_trade_signal",
+        lambda *_a, **_k: (1.0, 0.9, "flip_confirm"),
+    )
+    monkeypatch.setattr(bot_engine, "_entry_data_degraded", lambda *_a, **_k: (False, {}))
+
+    entered: dict[str, int] = {"calls": 0}
+
+    def _fake_enter_long(*_a, **_k):
+        entered["calls"] += 1
+        return True
+
+    monkeypatch.setattr(bot_engine, "_enter_long", _fake_enter_long)
+
+    caplog.set_level(logging.INFO)
+    result_first = bot_engine.trade_logic(
+        ctx, state, "TEST", balance=100000.0, model=None, regime_ok=True
+    )
+    result_second = bot_engine.trade_logic(
+        ctx, state, "TEST", balance=100000.0, model=None, regime_ok=True
+    )
+
+    assert result_first is True
+    assert result_second is True
+    assert entered["calls"] == 1
+    assert any(record.message == "ENTRY_FLIP_CONFIRM_PENDING" for record in caplog.records)
+
+
+def test_trade_logic_blocks_entry_when_expectancy_negative(monkeypatch, caplog):
+    ctx = SimpleNamespace(
+        signal_manager=SimpleNamespace(meta_confidence_capped=False),
+        position_map={},
+        portfolio_weights={},
+        rebalance_buys={},
+    )
+    state = BotState()
+    state.current_regime = "bull"
+    bucket_key = bot_engine._expectancy_bucket_key("TEST", "bull", "long")
+    state.expectancy_history[bucket_key] = [-0.03, -0.02, -0.01]
+    feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine, "_fetch_feature_data", lambda *a, **k: (feat_df, feat_df, None)
+    )
+    monkeypatch.setattr(bot_engine, "_model_feature_names", lambda *_a, **_k: [])
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(
+        bot_engine, "_check_trade_frequency_limits", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_fallback_entry_confidence_bonus", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_expectancy_filter_enabled", lambda: True)
+    monkeypatch.setattr(bot_engine, "get_expectancy_min_samples", lambda: 2)
+    monkeypatch.setattr(bot_engine, "get_expectancy_min_mean_pct", lambda: 0.0)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_trade_signal",
+        lambda *_a, **_k: (1.0, 0.9, "expectancy"),
+    )
+    monkeypatch.setattr(bot_engine, "_entry_data_degraded", lambda *_a, **_k: (False, {}))
+    monkeypatch.setattr(
+        bot_engine,
+        "_enter_long",
+        lambda *_a, **_k: pytest.fail("entry should be blocked by expectancy filter"),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = bot_engine.trade_logic(
+        ctx, state, "TEST", balance=100000.0, model=None, regime_ok=True
+    )
+
+    assert result is True
+    assert any(record.message == "ENTRY_BLOCKED_EXPECTANCY" for record in caplog.records)
 
 
 def test_trade_logic_raises_threshold_with_alpha_decay(monkeypatch, caplog):
