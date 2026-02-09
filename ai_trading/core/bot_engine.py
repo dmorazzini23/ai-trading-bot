@@ -815,6 +815,11 @@ _SENTIMENT_CALL_TIMES: deque[float] = deque()
 from enum import Enum
 
 from ai_trading.settings import (
+    get_alpha_decay_max_bump,
+    get_alpha_decay_max_trades_window,
+    get_alpha_decay_start_trades,
+    get_alpha_decay_threshold_step,
+    get_alpha_decay_window_minutes,
     get_buy_threshold,
     get_capital_cap,
     get_conf_threshold,
@@ -829,6 +834,8 @@ from ai_trading.settings import (
     get_max_portfolio_positions,
     get_max_trades_per_day,
     get_max_trades_per_hour,
+    get_regime_signal_profile,
+    get_regime_signal_routing_enabled,
     get_rebalance_interval_min,
     get_reversal_exit_confirm_signals,
     get_sector_exposure_cap,
@@ -12174,6 +12181,56 @@ def _metafallback_confidence_cap() -> float:
         return 0.35
 
 
+_ALL_SIGNAL_COMPONENTS: tuple[str, ...] = (
+    "momentum",
+    "mean_reversion",
+    "ml",
+    "sentiment",
+    "regime",
+    "stochrsi",
+    "obv",
+    "vsa",
+)
+
+_REGIME_SIGNAL_COMPONENTS: dict[str, dict[str, tuple[str, ...]]] = {
+    "balanced": {
+        "trending": ("momentum", "ml", "regime", "obv", "vsa", "sentiment"),
+        "sideways": ("mean_reversion", "stochrsi", "ml", "regime", "sentiment"),
+        "mean_reversion": ("mean_reversion", "stochrsi", "ml", "regime", "sentiment"),
+        "high_volatility": ("ml", "regime", "vsa", "sentiment"),
+    },
+    "conservative": {
+        "trending": ("momentum", "ml", "regime", "obv"),
+        "sideways": ("mean_reversion", "stochrsi", "ml", "regime"),
+        "mean_reversion": ("mean_reversion", "stochrsi", "ml", "regime"),
+        "high_volatility": ("ml", "regime"),
+    },
+}
+
+
+def _normalize_regime_name(raw_regime: Any) -> str:
+    value = str(raw_regime or "").strip().lower()
+    aliases = {
+        "bull": "trending",
+        "bear": "mean_reversion",
+        "volatile": "high_volatility",
+    }
+    normalized = aliases.get(value, value)
+    return normalized or "sideways"
+
+
+def _resolve_regime_signal_components(state: BotState) -> tuple[str, ...]:
+    if not get_regime_signal_routing_enabled():
+        return _ALL_SIGNAL_COMPONENTS
+
+    profile = get_regime_signal_profile()
+    profile_components = _REGIME_SIGNAL_COMPONENTS.get(
+        profile, _REGIME_SIGNAL_COMPONENTS["balanced"]
+    )
+    regime = _normalize_regime_name(getattr(state, "current_regime", "sideways"))
+    return profile_components.get(regime, _ALL_SIGNAL_COMPONENTS)
+
+
 class SignalManager:
     def __init__(self) -> None:
         self.momentum_lookback = 5
@@ -12650,15 +12707,21 @@ class SignalManager:
             self.last_components = []
             return 0.0, 0.0, "no_data"
 
+        signal_factories = {
+            "momentum": lambda: self.signal_momentum(df, model),
+            "mean_reversion": lambda: self.signal_mean_reversion(df, model),
+            "ml": lambda: self.signal_ml(df, model, ticker),
+            "sentiment": lambda: self.signal_sentiment(ctx, ticker, df, model),
+            "regime": lambda: self.signal_regime(ctx, state, df, model),
+            "stochrsi": lambda: self.signal_stochrsi(df, model),
+            "obv": lambda: self.signal_obv(df, model),
+            "vsa": lambda: self.signal_vsa(df, model),
+        }
+        component_order = _resolve_regime_signal_components(state)
         raw = [
-            self.signal_momentum(df, model),
-            self.signal_mean_reversion(df, model),
-            self.signal_ml(df, model, ticker),
-            self.signal_sentiment(ctx, ticker, df, model),
-            self.signal_regime(ctx, state, df, model),
-            self.signal_stochrsi(df, model),
-            self.signal_obv(df, model),
-            self.signal_vsa(df, model),
+            signal_factories[tag]()
+            for tag in component_order
+            if tag in signal_factories
         ]
         # drop skipped signals and those with NaN confidence
         for s in raw:
@@ -21507,6 +21570,21 @@ def trade_logic(
         logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
         return True
 
+    alpha_decay_guard: dict[str, Any] | None = None
+    if current_qty == 0:
+        alpha_decay_guard = _alpha_decay_entry_guard(state, symbol, now)
+        if alpha_decay_guard.get("blocked"):
+            logger.info(
+                "ENTRY_BLOCKED_ALPHA_DECAY",
+                extra={
+                    "symbol": symbol,
+                    "trades_in_window": alpha_decay_guard.get("trades_in_window", 0),
+                    "window_minutes": alpha_decay_guard.get("window_minutes", 0),
+                    "max_trades_window": alpha_decay_guard.get("max_trades_window", 0),
+                },
+            )
+            return True
+
     local_threshold = max(get_buy_threshold(), get_conf_threshold())
     meta_capped = bool(getattr(ctx.signal_manager, "meta_confidence_capped", False))
     if meta_capped:
@@ -21538,6 +21616,24 @@ def trade_logic(
                         "missing_ohlcv": missing_ohlcv,
                     },
                 )
+
+    if current_qty == 0 and alpha_decay_guard is not None:
+        threshold_bump = float(alpha_decay_guard.get("threshold_bump", 0.0) or 0.0)
+        if threshold_bump > 0:
+            threshold_before = local_threshold
+            local_threshold = min(1.0, local_threshold + threshold_bump)
+            logger.info(
+                "ENTRY_THRESHOLD_RAISED_ALPHA_DECAY",
+                extra={
+                    "symbol": symbol,
+                    "threshold_before": threshold_before,
+                    "threshold_after": local_threshold,
+                    "threshold_bump": threshold_bump,
+                    "trades_in_window": alpha_decay_guard.get("trades_in_window", 0),
+                    "window_minutes": alpha_decay_guard.get("window_minutes", 0),
+                    "start_trades": alpha_decay_guard.get("start_trades", 0),
+                },
+            )
 
     if final_score > 0 and conf >= local_threshold and current_qty == 0:
         blocked, degraded_extra = _entry_data_degraded(state, symbol)
@@ -29399,6 +29495,74 @@ def _trade_limit_reached(state: BotState, current_time: datetime) -> bool:
     hour_ago = current_time - timedelta(hours=TRADE_FREQUENCY_WINDOW_HOURS)
     total_trades_hour = sum(1 for _, ts in state.trade_history if ts > hour_ago)
     return total_trades_hour >= MAX_TRADES_PER_HOUR
+
+
+def _alpha_decay_entry_guard(
+    state: BotState, symbol: str, current_time: datetime
+) -> dict[str, Any]:
+    """Return entry-throttle directives derived from recent symbol trade density."""
+
+    window_minutes = get_alpha_decay_window_minutes()
+    step = get_alpha_decay_threshold_step()
+    max_trades_window = get_alpha_decay_max_trades_window()
+    start_trades = get_alpha_decay_start_trades()
+    max_bump = get_alpha_decay_max_bump()
+    if window_minutes <= 0 or (step <= 0 and max_trades_window <= 0):
+        return {
+            "enabled": False,
+            "window_minutes": window_minutes,
+            "start_trades": start_trades,
+            "trades_in_window": 0,
+            "threshold_bump": 0.0,
+            "max_trades_window": max_trades_window,
+            "blocked": False,
+        }
+
+    history = getattr(state, "trade_history", None)
+    if not isinstance(history, list):
+        return {
+            "enabled": False,
+            "window_minutes": window_minutes,
+            "start_trades": start_trades,
+            "trades_in_window": 0,
+            "threshold_bump": 0.0,
+            "max_trades_window": max_trades_window,
+            "blocked": False,
+        }
+
+    cutoff = current_time - timedelta(minutes=window_minutes)
+
+    def _is_recent(timestamp: datetime) -> bool:
+        try:
+            return timestamp > cutoff
+        except TypeError:
+            try:
+                return float(timestamp.timestamp()) > float(cutoff.timestamp())
+            except Exception:
+                return False
+
+    trades_in_window = sum(
+        1
+        for sym, ts in history
+        if sym == symbol and isinstance(ts, datetime) and _is_recent(ts)
+    )
+
+    blocked = max_trades_window > 0 and trades_in_window >= max_trades_window
+    threshold_bump = 0.0
+    if step > 0 and trades_in_window >= max(1, start_trades):
+        effective_cap = max_bump if max_bump > 0 else 1.0
+        bump_steps = trades_in_window - max(1, start_trades) + 1
+        threshold_bump = min(effective_cap, float(bump_steps) * step)
+
+    return {
+        "enabled": True,
+        "window_minutes": window_minutes,
+        "start_trades": start_trades,
+        "trades_in_window": trades_in_window,
+        "threshold_bump": threshold_bump,
+        "max_trades_window": max_trades_window,
+        "blocked": blocked,
+    }
 
 
 def _check_trade_frequency_limits(

@@ -287,6 +287,55 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "WINNER_TRAILING_ATR_FACTOR",
         ),
     )
+    regime_signal_routing_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "AI_TRADING_REGIME_SIGNAL_ROUTING_ENABLED",
+            "REGIME_SIGNAL_ROUTING_ENABLED",
+        ),
+    )
+    regime_signal_profile: str = Field(
+        default="balanced",
+        validation_alias=AliasChoices(
+            "AI_TRADING_REGIME_SIGNAL_PROFILE",
+            "REGIME_SIGNAL_PROFILE",
+        ),
+    )
+    alpha_decay_window_minutes: int = Field(
+        default=0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ALPHA_DECAY_WINDOW_MINUTES",
+            "ALPHA_DECAY_WINDOW_MINUTES",
+        ),
+    )
+    alpha_decay_start_trades: int = Field(
+        default=0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ALPHA_DECAY_START_TRADES",
+            "ALPHA_DECAY_START_TRADES",
+        ),
+    )
+    alpha_decay_threshold_step: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ALPHA_DECAY_THRESHOLD_STEP",
+            "ALPHA_DECAY_THRESHOLD_STEP",
+        ),
+    )
+    alpha_decay_max_bump: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ALPHA_DECAY_MAX_BUMP",
+            "ALPHA_DECAY_MAX_BUMP",
+        ),
+    )
+    alpha_decay_max_trades_window: int = Field(
+        default=0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_ALPHA_DECAY_MAX_TRADES_WINDOW",
+            "ALPHA_DECAY_MAX_TRADES_WINDOW",
+        ),
+    )
     conf_threshold: float = Field(default=0.75, env="AI_TRADING_CONF_THRESHOLD")
     score_confidence_min: float | None = Field(default=None, alias="SCORE_CONFIDENCE_MIN")
     score_size_max_boost: float = Field(
@@ -846,6 +895,40 @@ def get_winner_trailing_tighten_r() -> float:
 def get_winner_trailing_atr_factor() -> float:
     value = _to_float(getattr(get_settings(), "winner_trailing_atr_factor", 0.7), 0.7)
     return min(1.0, max(0.1, value))
+
+
+def get_regime_signal_routing_enabled() -> bool:
+    return _to_bool(getattr(get_settings(), "regime_signal_routing_enabled", False), False)
+
+
+def get_regime_signal_profile() -> str:
+    profile = str(getattr(get_settings(), "regime_signal_profile", "balanced") or "balanced")
+    normalized = profile.strip().lower()
+    if normalized in {"balanced", "conservative"}:
+        return normalized
+    return "balanced"
+
+
+def get_alpha_decay_window_minutes() -> int:
+    return max(0, _to_int(getattr(get_settings(), "alpha_decay_window_minutes", 0), 0))
+
+
+def get_alpha_decay_start_trades() -> int:
+    return max(0, _to_int(getattr(get_settings(), "alpha_decay_start_trades", 0), 0))
+
+
+def get_alpha_decay_threshold_step() -> float:
+    value = _to_float(getattr(get_settings(), "alpha_decay_threshold_step", 0.0), 0.0)
+    return min(1.0, max(0.0, value))
+
+
+def get_alpha_decay_max_bump() -> float:
+    value = _to_float(getattr(get_settings(), "alpha_decay_max_bump", 0.0), 0.0)
+    return min(1.0, max(0.0, value))
+
+
+def get_alpha_decay_max_trades_window() -> int:
+    return max(0, _to_int(getattr(get_settings(), "alpha_decay_max_trades_window", 0), 0))
 
 
 def get_max_trades_per_hour() -> int:

@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -280,3 +281,135 @@ def test_entry_expected_edge_gate_allows_high_edge(monkeypatch):
     )
 
     assert allowed is True
+
+
+def test_trade_logic_raises_threshold_with_alpha_decay(monkeypatch, caplog):
+    ctx = SimpleNamespace(
+        signal_manager=SimpleNamespace(meta_confidence_capped=False),
+        position_map={},
+        portfolio_weights={},
+        rebalance_buys={},
+    )
+    state = BotState()
+    feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
+    now = datetime(2026, 2, 9, tzinfo=UTC)
+    state.trade_history = [
+        ("TEST", now - timedelta(minutes=10)),
+        ("TEST", now - timedelta(minutes=5)),
+    ]
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine, "_fetch_feature_data", lambda *a, **k: (feat_df, feat_df, None)
+    )
+    monkeypatch.setattr(bot_engine, "_model_feature_names", lambda *_a, **_k: [])
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(
+        bot_engine, "_check_trade_frequency_limits", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_fallback_entry_confidence_bonus", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_window_minutes", lambda: 30)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_start_trades", lambda: 1)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_threshold_step", lambda: 0.1)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_max_bump", lambda: 0.2)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_max_trades_window", lambda: 0)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_trade_signal",
+        lambda *_a, **_k: (1.0, 0.55, "alpha_decay"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_enter_long",
+        lambda *_a, **_k: pytest.fail("entry should be skipped after alpha-decay threshold bump"),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = bot_engine.trade_logic(
+        ctx,
+        state,
+        "TEST",
+        balance=100000.0,
+        model=None,
+        regime_ok=True,
+        now_provider=lambda: now,
+    )
+
+    assert result is True
+    assert any(record.message == "ENTRY_THRESHOLD_RAISED_ALPHA_DECAY" for record in caplog.records)
+
+
+def test_trade_logic_blocks_entry_when_alpha_decay_window_saturated(monkeypatch, caplog):
+    ctx = SimpleNamespace(
+        signal_manager=SimpleNamespace(meta_confidence_capped=False),
+        position_map={},
+        portfolio_weights={},
+        rebalance_buys={},
+    )
+    state = BotState()
+    feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
+    now = datetime(2026, 2, 9, tzinfo=UTC)
+    state.trade_history = [
+        ("TEST", now - timedelta(minutes=10)),
+        ("TEST", now - timedelta(minutes=8)),
+        ("TEST", now - timedelta(minutes=3)),
+    ]
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine, "_fetch_feature_data", lambda *a, **k: (feat_df, feat_df, None)
+    )
+    monkeypatch.setattr(bot_engine, "_model_feature_names", lambda *_a, **_k: [])
+    monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: False)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(
+        bot_engine, "_check_trade_frequency_limits", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_fallback_entry_confidence_bonus", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_window_minutes", lambda: 30)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_start_trades", lambda: 1)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_threshold_step", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_max_bump", lambda: 0.0)
+    monkeypatch.setattr(bot_engine, "get_alpha_decay_max_trades_window", lambda: 3)
+    monkeypatch.setattr(
+        bot_engine,
+        "_evaluate_trade_signal",
+        lambda *_a, **_k: (1.0, 0.9, "alpha_decay"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_enter_long",
+        lambda *_a, **_k: pytest.fail("entry should be blocked by alpha-decay saturation"),
+    )
+
+    caplog.set_level(logging.INFO)
+    result = bot_engine.trade_logic(
+        ctx,
+        state,
+        "TEST",
+        balance=100000.0,
+        model=None,
+        regime_ok=True,
+        now_provider=lambda: now,
+    )
+
+    assert result is True
+    blocked = [record for record in caplog.records if record.message == "ENTRY_BLOCKED_ALPHA_DECAY"]
+    assert blocked
