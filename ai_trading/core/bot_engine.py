@@ -821,19 +821,25 @@ from ai_trading.settings import (
     get_daily_loss_limit,
     get_disaster_dd_limit,
     get_dollar_risk_limit,
+    get_fallback_expected_edge_penalty_bps,
     get_fallback_entry_confidence_bonus,
+    get_min_expected_edge_bps,
     get_min_hold_loser_cut_pct,
     get_min_position_hold_seconds,
     get_max_portfolio_positions,
     get_max_trades_per_day,
     get_max_trades_per_hour,
     get_rebalance_interval_min,
+    get_reversal_exit_confirm_signals,
     get_sector_exposure_cap,
     get_take_profit_exit_fraction,
     get_take_profit_min_hold_bypass_pct,
     get_trade_cooldown_min,
     get_verbose_logging,
     get_volume_threshold,
+    get_winner_break_even_r,
+    get_winner_trailing_atr_factor,
+    get_winner_trailing_tighten_r,
 )
 
 __all__ = [
@@ -7844,6 +7850,7 @@ class BotState:
     # Trade Management
     trade_cooldowns: dict[str, datetime] = field(default_factory=dict)
     position_entry_times: dict[str, datetime] = field(default_factory=dict)
+    reversal_signal_streak: dict[str, int] = field(default_factory=dict)
     last_trade_direction: dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
     auth_skipped_symbols: set[str] = field(default_factory=set)
@@ -17445,6 +17452,100 @@ def _min_hold_loser_cut_triggered(
     return unrealized_pct <= -loss_cut_pct, unrealized_pct
 
 
+def _position_risk_unit(
+    ctx: BotContext,
+    symbol: str,
+    current_qty: int,
+    entry_price: float,
+    atr: float,
+) -> float | None:
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        return None
+    stop = getattr(ctx, "stop_targets", {}).get(symbol)
+    stop_value = _safe_float(stop)
+    if stop_value is not None and math.isfinite(stop_value):
+        if current_qty > 0:
+            stop_distance = entry_price - stop_value
+        else:
+            stop_distance = stop_value - entry_price
+        if stop_distance > 0:
+            return float(stop_distance)
+    if math.isfinite(atr) and atr > 0:
+        return float(atr)
+    return max(entry_price * 0.005, 0.01)
+
+
+def _position_r_multiple(
+    ctx: BotContext,
+    symbol: str,
+    current_qty: int,
+    current_price: float,
+    atr: float,
+) -> float | None:
+    entry_price = _position_entry_price(ctx, symbol)
+    if entry_price is None:
+        return None
+    risk_unit = _position_risk_unit(ctx, symbol, current_qty, entry_price, atr)
+    if risk_unit is None or not math.isfinite(risk_unit) or risk_unit <= 0:
+        return None
+    if current_qty > 0:
+        pnl_per_share = current_price - entry_price
+    else:
+        pnl_per_share = entry_price - current_price
+    return pnl_per_share / risk_unit
+
+
+def _winner_protection_trailing_atr(
+    ctx: BotContext,
+    symbol: str,
+    current_qty: int,
+    price: float,
+    atr: float,
+) -> float:
+    adjusted_atr = atr
+    r_multiple = _position_r_multiple(ctx, symbol, current_qty, price, atr)
+    if r_multiple is None:
+        return adjusted_atr
+
+    entry_price = _position_entry_price(ctx, symbol)
+    if entry_price is None:
+        return adjusted_atr
+
+    break_even_r = get_winner_break_even_r()
+    if r_multiple >= break_even_r:
+        with targets_lock:
+            stop_targets = getattr(ctx, "stop_targets", {})
+            current_stop = _safe_float(stop_targets.get(symbol))
+            desired_stop = entry_price
+            should_update = False
+            if current_qty > 0:
+                should_update = current_stop is None or desired_stop > current_stop
+            else:
+                should_update = current_stop is None or desired_stop < current_stop
+            if should_update:
+                stop_targets[symbol] = desired_stop
+                logger.info(
+                    "WINNER_STOP_BREAKEVEN_SET",
+                    extra={
+                        "symbol": symbol,
+                        "side": "long" if current_qty > 0 else "short",
+                        "r_multiple": round(r_multiple, 3),
+                        "stop": round(desired_stop, 4),
+                    },
+                )
+
+    tighten_r = get_winner_trailing_tighten_r()
+    if (
+        r_multiple >= tighten_r
+        and math.isfinite(atr)
+        and atr > 0
+    ):
+        tightened = atr * get_winner_trailing_atr_factor()
+        if math.isfinite(tightened) and tightened > 0:
+            adjusted_atr = min(atr, max(tightened, atr * 0.1))
+    return adjusted_atr
+
+
 def should_exit(
     ctx: BotContext, state: BotState, symbol: str, price: float, atr: float
 ) -> tuple[bool, int, str]:
@@ -17493,7 +17594,10 @@ def should_exit(
         )
         return False, 0, ""
 
-    action = update_trailing_stop(ctx, symbol, price, current_qty, atr)
+    trailing_atr = _winner_protection_trailing_atr(
+        ctx, symbol, current_qty, price, atr
+    )
+    action = update_trailing_stop(ctx, symbol, price, current_qty, trailing_atr)
     if (action == "exit_long" and current_qty > 0) or (
         action == "exit_short" and current_qty < 0
     ):
@@ -18028,6 +18132,41 @@ def _should_hold_short_position(df: pd.DataFrame) -> bool:
         return False
 
 
+def _reset_reversal_signal_streak(state: BotState, symbol: str) -> None:
+    streaks = getattr(state, "reversal_signal_streak", None)
+    if isinstance(streaks, dict):
+        streaks.pop(symbol, None)
+
+
+def _reversal_signal_streak_count(
+    state: BotState,
+    symbol: str,
+    *,
+    direction: int,
+) -> int:
+    streaks = getattr(state, "reversal_signal_streak", None)
+    if not isinstance(streaks, dict):
+        streaks = {}
+        setattr(state, "reversal_signal_streak", streaks)
+
+    current_raw = streaks.get(symbol, 0)
+    try:
+        current = int(current_raw)
+    except (TypeError, ValueError):
+        current = 0
+
+    if direction == 0:
+        streaks.pop(symbol, None)
+        return 0
+
+    if current == 0 or (current > 0) != (direction > 0):
+        next_value = direction
+    else:
+        next_value = current + direction
+    streaks[symbol] = next_value
+    return abs(next_value)
+
+
 def _exit_positions_if_needed(
     ctx: BotContext,
     state: BotState,
@@ -18037,9 +18176,19 @@ def _exit_positions_if_needed(
     conf: float,
     current_qty: int,
 ) -> bool:
+    conf_ok = abs(conf) >= get_conf_threshold()
+    long_reversal = final_score < 0 and current_qty > 0 and conf_ok
+    short_reversal = final_score > 0 and current_qty < 0 and conf_ok
+    if not long_reversal and not short_reversal:
+        _reset_reversal_signal_streak(state, symbol)
+        return False
+
+    reversal_needed = get_reversal_exit_confirm_signals()
+
     if final_score < 0 and current_qty > 0 and abs(conf) >= get_conf_threshold():
         price = get_latest_close(feat_df)
         min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
+        force_exit = False
         if min_hold_active:
             loss_cut_pct = get_min_hold_loser_cut_pct()
             force_exit, unrealized_pct = _min_hold_loser_cut_triggered(
@@ -18067,8 +18216,23 @@ def _exit_positions_if_needed(
                     "position_age_seconds": round(age_seconds, 2),
                 },
             )
+        reversal_seen = _reversal_signal_streak_count(state, symbol, direction=-1)
+        if not force_exit and reversal_seen < reversal_needed:
+            logger.info(
+                "REVERSAL_CONFIRM_PENDING",
+                extra={
+                    "symbol": symbol,
+                    "side": "long",
+                    "seen": reversal_seen,
+                    "required": reversal_needed,
+                    "final_score": final_score,
+                    "confidence": conf,
+                },
+            )
+            return False
         if _should_hold_position(feat_df):
             logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
+            return False
         else:
             logger.info(
                 f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -18078,11 +18242,13 @@ def _exit_positions_if_needed(
             with targets_lock:
                 ctx.stop_targets.pop(symbol, None)
                 ctx.take_profit_targets.pop(symbol, None)
+            _reset_reversal_signal_streak(state, symbol)
             return True
 
     if final_score > 0 and current_qty < 0 and abs(conf) >= get_conf_threshold():
         price = get_latest_close(feat_df)
         min_hold_active, hold_seconds, age_seconds = _position_min_hold_active(state, symbol)
+        force_exit = False
         if min_hold_active:
             loss_cut_pct = get_min_hold_loser_cut_pct()
             force_exit, unrealized_pct = _min_hold_loser_cut_triggered(
@@ -18110,8 +18276,23 @@ def _exit_positions_if_needed(
                     "position_age_seconds": round(age_seconds, 2),
                 },
             )
+        reversal_seen = _reversal_signal_streak_count(state, symbol, direction=1)
+        if not force_exit and reversal_seen < reversal_needed:
+            logger.info(
+                "REVERSAL_CONFIRM_PENDING",
+                extra={
+                    "symbol": symbol,
+                    "side": "short",
+                    "seen": reversal_seen,
+                    "required": reversal_needed,
+                    "final_score": final_score,
+                    "confidence": conf,
+                },
+            )
+            return False
         if _should_hold_short_position(feat_df):
             logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
+            return False
         else:
             logger.info(
                 f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -18121,6 +18302,7 @@ def _exit_positions_if_needed(
             with targets_lock:
                 ctx.stop_targets.pop(symbol, None)
                 ctx.take_profit_targets.pop(symbol, None)
+            _reset_reversal_signal_streak(state, symbol)
             return True
     return False
 
@@ -19209,6 +19391,62 @@ def _log_safe_mode_continue(
     logger.warning("SAFE_MODE_DEGRADED_CONTINUE", extra=extra)
 
 
+def _expected_edge_bps(
+    *,
+    final_score: float,
+    confidence: float,
+    atr: float,
+    price: float,
+) -> float:
+    if not math.isfinite(price) or price <= 0:
+        return 0.0
+    if not math.isfinite(atr) or atr <= 0:
+        return 0.0
+    # Confidence is directional for short signals; edge quality should use magnitude.
+    strength = max(0.0, min(1.0, abs(float(final_score)))) * max(
+        0.0, min(1.0, abs(float(confidence)))
+    )
+    return strength * (atr / price) * 10000.0
+
+
+def _entry_expected_edge_gate(
+    *,
+    side: str,
+    symbol: str,
+    final_score: float,
+    confidence: float,
+    atr: float,
+    price: float,
+    fallback_used: bool,
+) -> bool:
+    expected_bps = _expected_edge_bps(
+        final_score=final_score,
+        confidence=confidence,
+        atr=atr,
+        price=price,
+    )
+    required_bps = get_min_expected_edge_bps()
+    if fallback_used:
+        required_bps += get_fallback_expected_edge_penalty_bps()
+    if expected_bps + 1e-9 >= required_bps:
+        return True
+    logger.info(
+        "ENTRY_EXPECTED_EDGE_BLOCKED",
+        extra={
+            "symbol": symbol,
+            "side": side,
+            "expected_edge_bps": round(expected_bps, 4),
+            "required_edge_bps": round(required_bps, 4),
+            "atr": round(float(atr), 6) if math.isfinite(atr) else atr,
+            "price": round(float(price), 6) if math.isfinite(price) else price,
+            "confidence": confidence,
+            "final_score": final_score,
+            "fallback_used": fallback_used,
+        },
+    )
+    return False
+
+
 def _enter_long(
     ctx: BotContext,
     state: BotState,
@@ -19771,6 +20009,21 @@ def _enter_long(
         )
         return True
 
+    atr_value = _safe_float(feat_df["atr"].iloc[-1])
+    if atr_value is None:
+        atr_value = 0.0
+    fallback_for_edge = fallback_active or not _is_primary_price_source(price_source)
+    if not _entry_expected_edge_gate(
+        side="buy",
+        symbol=symbol,
+        final_score=final_score,
+        confidence=conf,
+        atr=atr_value,
+        price=current_price,
+        fallback_used=fallback_for_edge,
+    ):
+        return True
+
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     if target_weight == 0.0:
@@ -19965,7 +20218,7 @@ def _enter_long(
         tp_factor = tp_base * 1.1 if is_high_vol_regime() else tp_base
         stop, take = scaled_atr_stop(
             entry_price=current_price,
-            atr=feat_df["atr"].iloc[-1],
+            atr=atr_value,
             now=now_pac,
             market_open=mo,
             market_close=mc,
@@ -20503,7 +20756,21 @@ def _enter_short(
         )
         return True
 
-    atr = feat_df["atr"].iloc[-1]
+    atr = _safe_float(feat_df["atr"].iloc[-1])
+    if atr is None:
+        atr = 0.0
+    fallback_for_edge = fallback_active or not _is_primary_price_source(price_source)
+    if not _entry_expected_edge_gate(
+        side="sell_short",
+        symbol=symbol,
+        final_score=final_score,
+        confidence=conf,
+        atr=atr,
+        price=current_price,
+        fallback_used=fallback_for_edge,
+    ):
+        return True
+
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
     if gate.size_cap is not None and gate.size_cap < 1.0 and qty > 0:
         capped_qty = int(math.floor(qty * gate.size_cap))
@@ -20784,6 +21051,7 @@ def _manage_existing_position(
                 entry_times = getattr(state, "position_entry_times", None)
                 if isinstance(entry_times, dict):
                     entry_times.pop(symbol, None)
+                _reset_reversal_signal_streak(state, symbol)
         except (
             FileNotFoundError,
             PermissionError,
@@ -21207,6 +21475,7 @@ def trade_logic(
         entry_times = getattr(state, "position_entry_times", None)
         if isinstance(entry_times, dict):
             entry_times.pop(symbol, None)
+        _reset_reversal_signal_streak(state, symbol)
 
     from datetime import UTC, datetime
 
@@ -21238,7 +21507,7 @@ def trade_logic(
         logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
         return True
 
-    local_threshold = get_buy_threshold()
+    local_threshold = max(get_buy_threshold(), get_conf_threshold())
     meta_capped = bool(getattr(ctx.signal_manager, "meta_confidence_capped", False))
     if meta_capped:
         cap_limit = _metafallback_confidence_cap()
@@ -21246,6 +21515,7 @@ def trade_logic(
             local_threshold = min(float(local_threshold), float(cap_limit))
         except Exception:
             local_threshold = min(local_threshold, cap_limit)
+        local_threshold = max(local_threshold, get_conf_threshold())
     fallback_confidence_bonus = get_fallback_entry_confidence_bonus()
     if fallback_confidence_bonus > 0:
         quality = _ensure_data_quality_bucket(state).get(symbol, {})

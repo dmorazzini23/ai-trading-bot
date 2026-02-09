@@ -245,6 +245,48 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "FALLBACK_ENTRY_CONFIDENCE_BONUS",
         ),
     )
+    reversal_exit_confirm_signals: int = Field(
+        default=2,
+        validation_alias=AliasChoices(
+            "AI_TRADING_REVERSAL_EXIT_CONFIRM_SIGNALS",
+            "REVERSAL_EXIT_CONFIRM_SIGNALS",
+        ),
+    )
+    min_expected_edge_bps: float = Field(
+        default=6.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_MIN_EXPECTED_EDGE_BPS",
+            "MIN_EXPECTED_EDGE_BPS",
+        ),
+    )
+    fallback_expected_edge_penalty_bps: float = Field(
+        default=8.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_FALLBACK_EXPECTED_EDGE_PENALTY_BPS",
+            "FALLBACK_EXPECTED_EDGE_PENALTY_BPS",
+        ),
+    )
+    winner_break_even_r: float = Field(
+        default=1.0,
+        validation_alias=AliasChoices(
+            "AI_TRADING_WINNER_BREAK_EVEN_R",
+            "WINNER_BREAK_EVEN_R",
+        ),
+    )
+    winner_trailing_tighten_r: float = Field(
+        default=1.75,
+        validation_alias=AliasChoices(
+            "AI_TRADING_WINNER_TRAILING_TIGHTEN_R",
+            "WINNER_TRAILING_TIGHTEN_R",
+        ),
+    )
+    winner_trailing_atr_factor: float = Field(
+        default=0.7,
+        validation_alias=AliasChoices(
+            "AI_TRADING_WINNER_TRAILING_ATR_FACTOR",
+            "WINNER_TRAILING_ATR_FACTOR",
+        ),
+    )
     conf_threshold: float = Field(default=0.75, env="AI_TRADING_CONF_THRESHOLD")
     score_confidence_min: float | None = Field(default=None, alias="SCORE_CONFIDENCE_MIN")
     score_size_max_boost: float = Field(
@@ -772,6 +814,38 @@ def get_min_hold_loser_cut_pct() -> float:
 
 def get_fallback_entry_confidence_bonus() -> float:
     return max(0.0, _to_float(getattr(get_settings(), "fallback_entry_confidence_bonus", 0.0), 0.0))
+
+
+def get_reversal_exit_confirm_signals() -> int:
+    return max(1, _to_int(getattr(get_settings(), "reversal_exit_confirm_signals", 2), 2))
+
+
+def get_min_expected_edge_bps() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "min_expected_edge_bps", 6.0), 6.0))
+
+
+def get_fallback_expected_edge_penalty_bps() -> float:
+    return max(
+        0.0,
+        _to_float(
+            getattr(get_settings(), "fallback_expected_edge_penalty_bps", 8.0),
+            8.0,
+        ),
+    )
+
+
+def get_winner_break_even_r() -> float:
+    return max(0.0, _to_float(getattr(get_settings(), "winner_break_even_r", 1.0), 1.0))
+
+
+def get_winner_trailing_tighten_r() -> float:
+    value = max(0.0, _to_float(getattr(get_settings(), "winner_trailing_tighten_r", 1.75), 1.75))
+    return max(get_winner_break_even_r(), value)
+
+
+def get_winner_trailing_atr_factor() -> float:
+    value = _to_float(getattr(get_settings(), "winner_trailing_atr_factor", 0.7), 0.7)
+    return min(1.0, max(0.1, value))
 
 
 def get_max_trades_per_hour() -> int:

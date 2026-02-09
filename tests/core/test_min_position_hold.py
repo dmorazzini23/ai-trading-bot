@@ -20,6 +20,7 @@ def test_reversal_exit_blocked_during_min_hold(monkeypatch):
 
     monkeypatch.setattr(bot_engine, "get_min_position_hold_seconds", lambda: 300)
     monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_reversal_exit_confirm_signals", lambda: 1)
     monkeypatch.setattr(bot_engine, "_should_hold_position", lambda *_a, **_k: False)
     monkeypatch.setattr(bot_engine, "get_latest_close", lambda *_a, **_k: 100.0)
     monkeypatch.setattr(
@@ -55,6 +56,7 @@ def test_reversal_exit_allowed_after_min_hold(monkeypatch):
 
     monkeypatch.setattr(bot_engine, "get_min_position_hold_seconds", lambda: 300)
     monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_reversal_exit_confirm_signals", lambda: 1)
     monkeypatch.setattr(bot_engine, "_should_hold_position", lambda *_a, **_k: False)
     monkeypatch.setattr(bot_engine, "get_latest_close", lambda *_a, **_k: 100.0)
     monkeypatch.setattr(
@@ -254,3 +256,122 @@ def test_short_reversal_holds_when_short_trend_still_valid(monkeypatch):
 
     assert exited is False
     assert exit_calls["count"] == 0
+
+
+def test_reversal_exit_requires_signal_confirmation(monkeypatch):
+    state = BotState()
+    state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
+    ctx = SimpleNamespace(
+        trade_logger=SimpleNamespace(log_exit=lambda *_a, **_k: None),
+        stop_targets={},
+        take_profit_targets={},
+        rebalance_buys={},
+    )
+    exit_calls = {"count": 0}
+
+    monkeypatch.setattr(bot_engine, "get_min_position_hold_seconds", lambda: 300)
+    monkeypatch.setattr(bot_engine, "get_conf_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "get_reversal_exit_confirm_signals", lambda: 2)
+    monkeypatch.setattr(bot_engine, "_should_hold_position", lambda *_a, **_k: False)
+    monkeypatch.setattr(bot_engine, "get_latest_close", lambda *_a, **_k: 100.0)
+    monkeypatch.setattr(
+        bot_engine,
+        "send_exit_order",
+        lambda *_a, **_k: exit_calls.__setitem__("count", exit_calls["count"] + 1),
+    )
+
+    first = bot_engine._exit_positions_if_needed(
+        ctx=ctx,
+        state=state,
+        symbol="AAPL",
+        feat_df=pd.DataFrame({"close": [100.0]}),
+        final_score=-1.0,
+        conf=0.9,
+        current_qty=10,
+    )
+    second = bot_engine._exit_positions_if_needed(
+        ctx=ctx,
+        state=state,
+        symbol="AAPL",
+        feat_df=pd.DataFrame({"close": [100.0]}),
+        final_score=-1.0,
+        conf=0.9,
+        current_qty=10,
+    )
+
+    assert first is False
+    assert second is True
+    assert exit_calls["count"] == 1
+
+
+def test_should_exit_sets_break_even_stop_for_winner(monkeypatch):
+    state = BotState()
+    state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
+    ctx = SimpleNamespace(
+        rebalance_buys={},
+        stop_targets={"AAPL": 95.0},
+        take_profit_targets={},
+        position_map={"AAPL": SimpleNamespace(avg_entry_price=100.0, qty=5)},
+    )
+    seen: dict[str, float] = {}
+
+    monkeypatch.setattr(bot_engine, "get_min_position_hold_seconds", lambda: 0)
+    monkeypatch.setattr(bot_engine, "_current_qty", lambda *_a, **_k: 5)
+    monkeypatch.setattr(bot_engine, "get_winner_break_even_r", lambda: 1.0)
+    monkeypatch.setattr(bot_engine, "get_winner_trailing_tighten_r", lambda: 2.0)
+    monkeypatch.setattr(bot_engine, "get_winner_trailing_atr_factor", lambda: 0.5)
+    monkeypatch.setattr(
+        bot_engine,
+        "update_trailing_stop",
+        lambda *_a, **_k: seen.__setitem__("atr", float(_a[4])) or "hold",
+    )
+
+    should_exit, exit_qty, reason = bot_engine.should_exit(
+        ctx=ctx,
+        state=state,
+        symbol="AAPL",
+        price=106.0,
+        atr=2.0,
+    )
+
+    assert should_exit is False
+    assert exit_qty == 0
+    assert reason == ""
+    assert ctx.stop_targets["AAPL"] == 100.0
+    assert seen["atr"] == 2.0
+
+
+def test_should_exit_tightens_trailing_atr_for_winner(monkeypatch):
+    state = BotState()
+    state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
+    ctx = SimpleNamespace(
+        rebalance_buys={},
+        stop_targets={"AAPL": 95.0},
+        take_profit_targets={},
+        position_map={"AAPL": SimpleNamespace(avg_entry_price=100.0, qty=5)},
+    )
+    seen: dict[str, float] = {}
+
+    monkeypatch.setattr(bot_engine, "get_min_position_hold_seconds", lambda: 0)
+    monkeypatch.setattr(bot_engine, "_current_qty", lambda *_a, **_k: 5)
+    monkeypatch.setattr(bot_engine, "get_winner_break_even_r", lambda: 1.0)
+    monkeypatch.setattr(bot_engine, "get_winner_trailing_tighten_r", lambda: 1.5)
+    monkeypatch.setattr(bot_engine, "get_winner_trailing_atr_factor", lambda: 0.5)
+    monkeypatch.setattr(
+        bot_engine,
+        "update_trailing_stop",
+        lambda *_a, **_k: seen.__setitem__("atr", float(_a[4])) or "hold",
+    )
+
+    should_exit, exit_qty, reason = bot_engine.should_exit(
+        ctx=ctx,
+        state=state,
+        symbol="AAPL",
+        price=108.0,
+        atr=2.0,
+    )
+
+    assert should_exit is False
+    assert exit_qty == 0
+    assert reason == ""
+    assert seen["atr"] == 1.0
