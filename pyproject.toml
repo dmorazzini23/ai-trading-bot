@@ -71,6 +71,7 @@ test = ["pytest>=7.4", "pytest-cov>=4.1"]
 
 [project.scripts]
 validate-env = "ai_trading.tools.env_validate:main"
+ai-offline-replay = "ai_trading.tools.offline_replay:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
