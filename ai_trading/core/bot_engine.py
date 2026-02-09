@@ -26938,6 +26938,26 @@ def _pending_order_force_cleanup_seconds() -> float:
     return max(5.0, min(value, 3600.0))
 
 
+def _pending_order_broker_age_seconds(order: Any, now_dt: datetime) -> float | None:
+    """Return broker-reported order age in seconds when timestamps are available."""
+
+    for attr in ("created_at", "submitted_at", "updated_at"):
+        raw_value = getattr(order, attr, None)
+        if raw_value in (None, ""):
+            continue
+        try:
+            ts_value = _ensure_utc_dt(raw_value)
+        except COMMON_EXC:
+            continue
+        if ts_value.tzinfo is None:
+            ts_value = ts_value.replace(tzinfo=UTC)
+        else:
+            ts_value = ts_value.astimezone(UTC)
+        age_s = (now_dt - ts_value).total_seconds()
+        return max(age_s, 0.0)
+    return None
+
+
 def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     """Handle pending orders and decide whether to skip the current cycle.
 
@@ -26965,13 +26985,26 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     if not confirmed_pending and open_list:
         confirmed_pending = open_list
 
+    now = time.time()
+    now_dt = datetime.fromtimestamp(now, tz=UTC)
+
     pending_ids: list[str] = []
     pending_statuses: set[str] = set()
+    oldest_pending_age_s: float | None = None
+    oldest_stuck_age_s: float | None = None
     for order in confirmed_pending:
         status = _normalize_broker_order_status(getattr(order, "status", None))
         pending_ids.append(str(getattr(order, "id", "?")))
         if status:
             pending_statuses.add(status)
+        broker_age_s = _pending_order_broker_age_seconds(order, now_dt)
+        if broker_age_s is not None:
+            if oldest_pending_age_s is None or broker_age_s > oldest_pending_age_s:
+                oldest_pending_age_s = broker_age_s
+            if status in _PENDING_ORDER_STUCK_STATUSES and (
+                oldest_stuck_age_s is None or broker_age_s > oldest_stuck_age_s
+            ):
+                oldest_stuck_age_s = broker_age_s
 
     tracker = _get_pending_tracker(runtime)
     first_seen = tracker.get(_PENDING_ORDER_FIRST_SEEN_KEY)
@@ -27004,14 +27037,20 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     force_cleanup_after = _pending_order_force_cleanup_seconds()
     if pending_statuses and pending_statuses.issubset(_PENDING_ORDER_STUCK_STATUSES):
         cleanup_after = min(cleanup_after, force_cleanup_after)
-
-    now = time.time()
+    stale_stuck_detected = (
+        oldest_stuck_age_s is not None and oldest_stuck_age_s >= force_cleanup_after
+    )
+    if stale_stuck_detected:
+        cleanup_after = min(cleanup_after, force_cleanup_after)
 
     sample_ids = pending_ids[:_PENDING_ORDER_SAMPLE_LIMIT]
     statuses = sorted(pending_statuses)
 
     if first_seen is None:
-        tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = now
+        first_seen_ts = now
+        if stale_stuck_detected:
+            first_seen_ts = now - cleanup_after
+        tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = first_seen_ts
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
         logger.warning(
             "PENDING_ORDERS_DETECTED",
@@ -27022,9 +27061,22 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 "pending_statuses": statuses,
                 "age_s": 0,
                 "cleanup_after_s": int(cleanup_after),
+                "oldest_pending_age_s": (
+                    int(max(oldest_pending_age_s, 0))
+                    if oldest_pending_age_s is not None
+                    else None
+                ),
+                "oldest_stuck_age_s": (
+                    int(max(oldest_stuck_age_s, 0))
+                    if oldest_stuck_age_s is not None
+                    else None
+                ),
+                "stale_stuck_detected": stale_stuck_detected,
             },
         )
-        return True
+        if not stale_stuck_detected:
+            return True
+        first_seen = first_seen_ts
 
     age = now - float(first_seen)
 
@@ -27041,11 +27093,21 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 "pending_statuses": statuses,
                 "age_s": int(max(age, 0)),
                 "cleanup_after_s": int(cleanup_after),
+                "oldest_pending_age_s": (
+                    int(max(oldest_pending_age_s, 0))
+                    if oldest_pending_age_s is not None
+                    else None
+                ),
+                "oldest_stuck_age_s": (
+                    int(max(oldest_stuck_age_s, 0))
+                    if oldest_stuck_age_s is not None
+                    else None
+                ),
             },
         )
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
-    if age < cleanup_after:
+    if age < cleanup_after and not stale_stuck_detected:
         return True
 
     try:
@@ -27061,6 +27123,16 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 "pending_statuses": statuses,
                 "age_s": int(max(age, 0)),
                 "detail": str(exc),
+                "oldest_pending_age_s": (
+                    int(max(oldest_pending_age_s, 0))
+                    if oldest_pending_age_s is not None
+                    else None
+                ),
+                "oldest_stuck_age_s": (
+                    int(max(oldest_stuck_age_s, 0))
+                    if oldest_stuck_age_s is not None
+                    else None
+                ),
             },
             exc_info=True,
         )
@@ -27072,6 +27144,16 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             "canceled_ids": sample_ids,
             "pending_count": len(pending_ids),
             "age_s": int(max(age, 0)),
+            "oldest_pending_age_s": (
+                int(max(oldest_pending_age_s, 0))
+                if oldest_pending_age_s is not None
+                else None
+            ),
+            "oldest_stuck_age_s": (
+                int(max(oldest_stuck_age_s, 0))
+                if oldest_stuck_age_s is not None
+                else None
+            ),
         },
     )
     tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None

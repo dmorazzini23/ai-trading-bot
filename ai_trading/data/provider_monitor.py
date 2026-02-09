@@ -62,6 +62,7 @@ _CRITICAL_REASON_TOKENS = (
     "empty_bars",
     "empty_data",
     "timeout",
+    "upstream_unavailable",
 )
 
 

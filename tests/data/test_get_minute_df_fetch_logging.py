@@ -103,6 +103,61 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     assert any(record.message == "UNAUTHORIZED_SIP" for record in caplog.records)
 
 
+def test_backup_usage_marks_primary_unhealthy(monkeypatch):
+    start, end = _dt_range()
+    timestamps = pd.date_range(start=start, periods=5, freq="1min", tz=UTC)
+    fallback_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [1.0] * 5,
+            "high": [1.5] * 5,
+            "low": [0.5] * 5,
+            "close": [1.2] * 5,
+            "volume": [100] * 5,
+        }
+    )
+
+    class _Monitor(_DummyProviderMonitor):
+        def __init__(self):
+            self.health_updates = []
+
+        def update_data_health(self, primary, backup, *, healthy, reason, severity=None, **_kwargs):
+            self.health_updates.append((primary, backup, healthy, reason, severity))
+            return backup if not healthy else primary
+
+    monitor = _Monitor()
+
+    monkeypatch.setattr(data_fetcher, "provider_monitor", monitor)
+    monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", lambda *_a, **_k: fallback_df.copy())
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_INTRADAY", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "DATA_HTTP_FALLBACK_OUT_OF_SESSION", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_SIP_UNAUTHORIZED", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_sip_configured", lambda: True)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(
+        data_fetcher,
+        "get_settings",
+        lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
+    )
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
+    monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+    result = data_fetcher.get_minute_df("AAPL", start, end, feed="sip")
+
+    assert isinstance(result, pd.DataFrame)
+    assert monitor.health_updates
+    _, _, healthy, reason, severity = monitor.health_updates[-1]
+    assert healthy is False
+    assert severity == "hard_fail"
+    assert str(reason).strip() != ""
+
+
 def test_env_without_sip_does_not_schedule_sip(monkeypatch):
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
     monkeypatch.setenv("ALPACA_HAS_SIP", "0")

@@ -1,5 +1,6 @@
 """Tests for pending-order reconciliation logic in the bot engine."""
 
+from datetime import UTC, datetime, timedelta
 import logging
 import sys
 import types
@@ -73,8 +74,10 @@ if "bs4" not in sys.modules:
 from ai_trading.core import bot_engine as be
 
 
-def _order(status: str, oid: str = "order-1"):
-    return types.SimpleNamespace(id=oid, status=status)
+def _order(status: str, oid: str = "order-1", **extra):
+    payload = {"id": oid, "status": status}
+    payload.update(extra)
+    return types.SimpleNamespace(**payload)
 
 
 def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
@@ -170,4 +173,28 @@ def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
     assert be._handle_pending_orders(orders, runtime) is True
     clock.value = 131.0
     assert be._handle_pending_orders(orders, runtime) is False
+    cancel_mock.assert_called_once_with(runtime)
+
+
+def test_handle_pending_orders_stale_broker_age_triggers_immediate_cleanup(monkeypatch):
+    runtime = types.SimpleNamespace(state={})
+    cancel_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=300),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "30")
+
+    now_dt = datetime(2026, 2, 9, 18, 0, 0, tzinfo=UTC)
+    now_epoch = now_dt.timestamp()
+    monkeypatch.setattr(be.time, "time", lambda: now_epoch)
+    stale_order = _order(
+        "pending_new",
+        "o-stale",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+
+    assert be._handle_pending_orders([stale_order], runtime) is False
     cancel_mock.assert_called_once_with(runtime)

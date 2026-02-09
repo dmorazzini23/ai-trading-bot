@@ -12599,6 +12599,23 @@ def get_minute_df(
     healthy_gap = gap_ratio <= max_gap_ratio
     severity = "good" if healthy_gap else "degraded"
     gap_reason = f"gap_ratio={gap_ratio * 100:.2f}%"
+    monitor_healthy = healthy_gap
+    monitor_reason = gap_reason
+    monitor_severity = severity
+    if used_backup:
+        monitor_healthy = False
+        monitor_severity = "hard_fail"
+        fallback_reason = None
+        try:
+            fallback_reason = _state.get("fallback_reason")
+        except Exception:
+            fallback_reason = None
+        if fallback_reason is not None:
+            try:
+                fallback_reason = str(fallback_reason).strip()
+            except Exception:
+                fallback_reason = None
+        monitor_reason = fallback_reason or "upstream_unavailable"
     quote_ts_present = False
     quote_age_ms: float | None = None
     last_timestamp_dt = coverage_meta.get("coverage_last_timestamp") if isinstance(coverage_meta, Mapping) else None
@@ -12615,9 +12632,9 @@ def get_minute_df(
         provider_monitor.update_data_health(
             primary_label,
             backup_label,
-            healthy=healthy_gap,
-            reason=gap_reason,
-            severity=severity,
+            healthy=monitor_healthy,
+            reason=monitor_reason,
+            severity=monitor_severity,
             gap_ratio=gap_ratio,
             quote_timestamp_present=quote_ts_present,
             quote_age_ms=quote_age_ms,
