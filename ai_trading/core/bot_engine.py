@@ -18098,13 +18098,25 @@ def _entry_data_degraded(state: BotState, symbol: str) -> tuple[bool, dict[str, 
     extra: dict[str, Any] = {}
 
     using_fallback_provider = bool(quality.get("using_fallback_provider"))
+    price_reliable = bool(quality.get("price_reliable", True))
+    fallback_contiguous_raw = quality.get("fallback_contiguous")
+    fallback_contiguous: bool | None = None
+    if fallback_contiguous_raw is not None:
+        fallback_contiguous = bool(fallback_contiguous_raw)
+    fallback_repaired = bool(quality.get("fallback_repaired"))
     provider_label = str(
         quality.get("provider_canonical") or quality.get("fallback_provider") or ""
     ).strip()
     if using_fallback_provider:
-        reasons.append("fallback_provider_active")
         if provider_label:
             extra["fallback_provider"] = provider_label
+        extra["fallback_repaired"] = fallback_repaired
+        if fallback_contiguous is not None:
+            extra["fallback_contiguous"] = fallback_contiguous
+        if not price_reliable:
+            reasons.append("fallback_price_unreliable")
+        elif fallback_contiguous is False and not fallback_repaired:
+            reasons.append("fallback_not_contiguous")
 
     if bool(quality.get("stale_data")):
         reasons.append("stale_minute_data")
@@ -20667,7 +20679,23 @@ def _evaluate_trade_signal(
     ]
     logger.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
-    confidence = sum(w for _, w, _ in ctx.signal_manager.last_components)
+    component_weights: list[float] = []
+    for _, weight, _ in ctx.signal_manager.last_components:
+        try:
+            weight_value = float(weight)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(weight_value):
+            continue
+        component_weights.append(max(weight_value, 0.0))
+    if component_weights:
+        confidence = sum(component_weights) / float(len(component_weights))
+    else:
+        confidence = 0.0
+        try:
+            confidence = float(eval_confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
     confidence, capped_flag, confidence_before_cap = _apply_meta_cap(confidence)
     confidence, clamped_flag, confidence_before_clamp = _clamp_confidence(confidence)
     _log_confidence_clamp(confidence_before_clamp, confidence)

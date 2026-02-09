@@ -24,6 +24,17 @@ class DummyOutOfRangeSignalManager(bot_engine.SignalManager):
         return (1, 2.7, "composite")
 
 
+class DummyMeanConfidenceSignalManager(bot_engine.SignalManager):
+    def evaluate(self, ctx, state, df, ticker, model):  # noqa: D401
+        self.meta_confidence_capped = False
+        self.last_components = [
+            (1, 0.9, "momentum"),
+            (1, 0.3, "trend"),
+            (1, 0.6, "volume"),
+        ]
+        return (1, 1.8, "composite")
+
+
 def test_metalean_confidence_clamped(caplog):
     ctx = SimpleNamespace()
     ctx.signal_manager = DummySignalManager()
@@ -68,3 +79,21 @@ def test_signal_confidence_clamped_to_unit_interval(caplog):
     assert clamp_logs
     assert getattr(clamp_logs[-1], "symbol", "") == "AAPL"
     assert float(getattr(clamp_logs[-1], "confidence_before_clamp", 0.0)) > 1.0
+
+
+def test_signal_confidence_uses_mean_component_weight():
+    ctx = SimpleNamespace()
+    ctx.signal_manager = DummyMeanConfidenceSignalManager()
+    state = SimpleNamespace()
+    feat_df = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
+
+    score, confidence, _ = bot_engine._evaluate_trade_signal(
+        ctx,
+        state,
+        feat_df,
+        "AAPL",
+        model=None,
+    )
+
+    assert score == pytest.approx(1.0)
+    assert confidence == pytest.approx(0.6)
