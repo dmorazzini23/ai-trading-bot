@@ -150,3 +150,24 @@ def test_handle_pending_orders_creates_state(monkeypatch):
     assert isinstance(getattr(runtime, "state", None), dict)
     tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
     assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] == 10.0
+
+
+def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
+    runtime = types.SimpleNamespace(state={})
+    cancel_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=300),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "30")
+
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    orders = [_order("pending_new", "o-force")]
+
+    assert be._handle_pending_orders(orders, runtime) is True
+    clock.value = 131.0
+    assert be._handle_pending_orders(orders, runtime) is False
+    cancel_mock.assert_called_once_with(runtime)

@@ -237,6 +237,10 @@ from ai_trading.telemetry import runtime_state
 
 
 _PENDING_ORDER_STATUSES = frozenset({"new", "pending_new"})
+_PENDING_ORDER_STUCK_STATUSES = frozenset(
+    {"new", "pending_new", "accepted", "accepted_for_bidding"}
+)
+_PENDING_ORDER_FORCE_CLEANUP_SEC_DEFAULT = 45.0
 _PENDING_ORDER_SAMPLE_LIMIT = 20
 _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
 _PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
@@ -18065,6 +18069,65 @@ _strict_data_gating_enabled.cache_info = _strict_data_gating_enabled_cached.cach
 
 
 @functools.lru_cache(maxsize=8)
+def _block_entries_on_fallback_minute_data_cached(signature: tuple[str | None, ...]) -> bool:
+    raw = signature[0] if signature else None
+    return _parse_env_bool(raw, True)
+
+
+def _block_entries_on_fallback_minute_data() -> bool:
+    return _block_entries_on_fallback_minute_data_cached(
+        _env_signature("AI_TRADING_BLOCK_ENTRIES_ON_FALLBACK_MINUTE_DATA")
+    )
+
+
+_block_entries_on_fallback_minute_data.cache_clear = _block_entries_on_fallback_minute_data_cached.cache_clear  # type: ignore[attr-defined]
+_block_entries_on_fallback_minute_data.cache_info = _block_entries_on_fallback_minute_data_cached.cache_info  # type: ignore[attr-defined]
+
+
+def _entry_data_degraded(state: BotState, symbol: str) -> tuple[bool, dict[str, Any]]:
+    """Return entry-block decision for degraded minute data."""
+
+    if not _block_entries_on_fallback_minute_data():
+        return False, {}
+
+    quality = _ensure_data_quality_bucket(state).get(symbol, {})
+    if not isinstance(quality, MappingABC):
+        return False, {}
+
+    reasons: list[str] = []
+    extra: dict[str, Any] = {}
+
+    using_fallback_provider = bool(quality.get("using_fallback_provider"))
+    provider_label = str(
+        quality.get("provider_canonical") or quality.get("fallback_provider") or ""
+    ).strip()
+    if using_fallback_provider:
+        reasons.append("fallback_provider_active")
+        if provider_label:
+            extra["fallback_provider"] = provider_label
+
+    if bool(quality.get("stale_data")):
+        reasons.append("stale_minute_data")
+    if bool(quality.get("missing_ohlcv")):
+        reasons.append("missing_ohlcv")
+
+    gap_ratio_val = quality.get("gap_ratio")
+    if isinstance(gap_ratio_val, (int, float, np.floating)):
+        gap_ratio = float(gap_ratio_val)
+        gap_limit = _gap_ratio_gate_limit()
+        extra["gap_ratio"] = gap_ratio
+        extra["gap_limit"] = gap_limit
+        if gap_ratio > gap_limit:
+            reasons.append("gap_ratio_exceeds_limit")
+
+    if not reasons:
+        return False, {}
+
+    extra["reasons"] = tuple(dict.fromkeys(reasons))
+    return True, extra
+
+
+@functools.lru_cache(maxsize=8)
 def _gap_ratio_gate_limit_cached(signature: tuple[str | None, ...]) -> float:
     """Return the maximum tolerated gap ratio before rejecting fallback prices."""
 
@@ -20537,6 +20600,29 @@ def _evaluate_trade_signal(
             return cap_limit, True, value
         return value, False, None
 
+    def _clamp_confidence(value: float) -> tuple[float, bool, float | None]:
+        if not math.isfinite(value):
+            return 0.0, False, None
+        clamped = max(0.0, min(float(value), 1.0))
+        if clamped != value:
+            return clamped, True, value
+        return clamped, False, None
+
+    def _log_confidence_clamp(before_clamp: float | None, value: float) -> None:
+        if before_clamp is None:
+            return
+        log_throttled_event(
+            logger,
+            f"SIGNAL_CONFIDENCE_CLAMPED::{symbol}",
+            level=logging.WARNING,
+            message="SIGNAL_CONFIDENCE_CLAMPED",
+            extra={
+                "symbol": symbol,
+                "confidence_before_clamp": before_clamp,
+                "confidence": value,
+            },
+        )
+
     if not components:
         confidence = 0.0
         try:
@@ -20546,14 +20632,19 @@ def _evaluate_trade_signal(
         if not np.isfinite(confidence):
             confidence = 0.0
         confidence, capped_flag, confidence_before_cap = _apply_meta_cap(confidence)
+        confidence, clamped_flag, confidence_before_clamp = _clamp_confidence(confidence)
+        _log_confidence_clamp(confidence_before_clamp, confidence)
         extra_payload = {
             "symbol": symbol,
             "final_score": 0.0,
             "confidence": confidence,
             "confidence_capped_due_to_history": capped_flag,
+            "confidence_clamped_to_unit": clamped_flag,
         }
         if capped_flag and confidence_before_cap is not None:
             extra_payload["confidence_before_cap"] = confidence_before_cap
+        if clamped_flag and confidence_before_clamp is not None:
+            extra_payload["confidence_before_clamp"] = confidence_before_clamp
         logger.info(
             "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
             symbol,
@@ -20578,6 +20669,8 @@ def _evaluate_trade_signal(
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
     confidence = sum(w for _, w, _ in ctx.signal_manager.last_components)
     confidence, capped_flag, confidence_before_cap = _apply_meta_cap(confidence)
+    confidence, clamped_flag, confidence_before_clamp = _clamp_confidence(confidence)
+    _log_confidence_clamp(confidence_before_clamp, confidence)
     strat_components = [lab for _, _, lab in ctx.signal_manager.last_components]
     strat = "+".join(strat_components) if strat_components else "HOLD"
     if final_score is None or not np.isfinite(final_score):
@@ -20593,9 +20686,12 @@ def _evaluate_trade_signal(
             "final_score": final_score,
             "confidence": confidence,
             "confidence_capped_due_to_history": capped_flag,
+            "confidence_clamped_to_unit": clamped_flag,
         }
         if capped_flag and confidence_before_cap is not None:
             extra_payload["confidence_before_cap"] = confidence_before_cap
+        if clamped_flag and confidence_before_clamp is not None:
+            extra_payload["confidence_before_clamp"] = confidence_before_clamp
         logger.info(
             "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
             symbol,
@@ -20614,9 +20710,12 @@ def _evaluate_trade_signal(
         "final_score": final_score,
         "confidence": confidence,
         "confidence_capped_due_to_history": capped_flag,
+        "confidence_clamped_to_unit": clamped_flag,
     }
     if capped_flag and confidence_before_cap is not None:
         extra_payload["confidence_before_cap"] = confidence_before_cap
+    if clamped_flag and confidence_before_clamp is not None:
+        extra_payload["confidence_before_clamp"] = confidence_before_clamp
     logger.info(
         "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
         symbol,
@@ -20891,6 +20990,19 @@ def trade_logic(
             local_threshold = min(local_threshold, cap_limit)
 
     if final_score > 0 and conf >= local_threshold and current_qty == 0:
+        blocked, degraded_extra = _entry_data_degraded(state, symbol)
+        if blocked:
+            logger.warning(
+                "ENTRY_BLOCKED_DEGRADED_MINUTE_DATA",
+                extra={
+                    "symbol": symbol,
+                    "side": "buy",
+                    "final_score": final_score,
+                    "confidence": conf,
+                    **degraded_extra,
+                },
+            )
+            return True
         if symbol in state.long_positions:
             held = state.position_cache.get(symbol, 0)
             logger.info(
@@ -20902,6 +21014,19 @@ def trade_logic(
         )
 
     if final_score < 0 and conf >= local_threshold and current_qty == 0:
+        blocked, degraded_extra = _entry_data_degraded(state, symbol)
+        if blocked:
+            logger.warning(
+                "ENTRY_BLOCKED_DEGRADED_MINUTE_DATA",
+                extra={
+                    "symbol": symbol,
+                    "side": "sell",
+                    "final_score": final_score,
+                    "confidence": conf,
+                    **degraded_extra,
+                },
+            )
+            return True
         if symbol in state.short_positions:
             held = abs(state.position_cache.get(symbol, 0))
             logger.info(
@@ -26768,6 +26893,20 @@ def _log_market_closed(msg: str) -> None:
         _LAST_MARKET_CLOSED_LOG = now
 
 
+def _pending_order_force_cleanup_seconds() -> float:
+    try:
+        value = float(
+            get_env(
+                "AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC",
+                _PENDING_ORDER_FORCE_CLEANUP_SEC_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        value = _PENDING_ORDER_FORCE_CLEANUP_SEC_DEFAULT
+    return max(5.0, min(value, 3600.0))
+
+
 def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     """Handle pending orders and decide whether to skip the current cycle.
 
@@ -26830,7 +26969,10 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         cleanup_after = float(cfg_interval)
     except (TypeError, ValueError):  # pragma: no cover - defensive
         cleanup_after = 120.0
-    cleanup_after = max(10.0, min(cleanup_after, 3600.0))
+    cleanup_after = max(5.0, min(cleanup_after, 3600.0))
+    force_cleanup_after = _pending_order_force_cleanup_seconds()
+    if pending_statuses and pending_statuses.issubset(_PENDING_ORDER_STUCK_STATUSES):
+        cleanup_after = min(cleanup_after, force_cleanup_after)
 
     now = time.time()
 
