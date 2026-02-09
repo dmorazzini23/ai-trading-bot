@@ -163,6 +163,48 @@ class TestProcessSymbol:
             record.message == "TRADE_QUOTA_EXHAUSTED_SKIP" for record in caplog.records
         )
 
+    def test_process_symbols_respects_configured_trade_cooldown(self, monkeypatch):
+        state = bot_engine.BotState()
+        state.position_cache = {}
+        state.trade_cooldowns = {"AAPL": datetime.now(UTC) - timedelta(minutes=5)}
+        bot_engine.state = state
+
+        dummy_halt = DummyHaltManager()
+        dummy_ctx = DummyContext(dummy_halt)
+        skipped_symbols: list[list[str]] = []
+
+        monkeypatch.setattr(bot_engine, "get_ctx", lambda: dummy_ctx)
+        monkeypatch.setattr(bot_engine, "get_trade_cooldown_min", lambda: 15)
+        monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+        monkeypatch.setattr(bot_engine, "ensure_final_bar", lambda *_, **__: True)
+        monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda symbols, **_: skipped_symbols.append(list(symbols)))
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_duplicates",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_cooldown",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(bot_engine.executors, "_ensure_executors", lambda: None)
+        monkeypatch.setattr(bot_engine, "prediction_executor", DummyExecutor(), raising=False)
+        monkeypatch.setattr(bot_engine, "_safe_trade", lambda *_, **__: None)
+
+        def _fail_fetch(symbol: str):  # pragma: no cover - should not be called
+            raise AssertionError(f"fetch_minute_df_safe called for {symbol}")
+
+        monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", _fail_fetch)
+
+        processed, row_counts, _ = bot_engine._process_symbols(["AAPL"], 1000.0, None, True)
+
+        assert processed == []
+        assert row_counts == {}
+        assert skipped_symbols == [["AAPL"]]
+
 
 def test_get_trade_logger_uses_fallback_when_primary_unwritable(monkeypatch, tmp_path):
     primary_dir = tmp_path / "primary"

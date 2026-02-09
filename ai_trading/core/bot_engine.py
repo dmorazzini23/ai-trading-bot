@@ -26085,6 +26085,10 @@ def _process_symbols(
 
     quota_notice_logged = False
     quota_notice_lock = Lock()
+    try:
+        trade_cooldown_seconds = max(0.0, float(get_trade_cooldown_min()) * 60.0)
+    except (TypeError, ValueError):
+        trade_cooldown_seconds = 15.0 * 60.0
 
     def _log_trade_quota_once() -> None:
         nonlocal quota_notice_logged
@@ -26217,7 +26221,7 @@ def _process_symbols(
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
         with trade_cooldowns_lock:
             ts = state.trade_cooldowns.get(symbol)
-        if ts and (now - ts).total_seconds() < 60:
+        if ts and (now - ts).total_seconds() < trade_cooldown_seconds:
             cd_skipped.append(symbol)
             skipped_cooldown.inc()
             continue
