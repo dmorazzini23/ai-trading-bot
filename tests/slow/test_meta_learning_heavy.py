@@ -6,10 +6,6 @@ import pytest
 pd = pytest.importorskip("pandas")
 sklearn = pytest.importorskip("sklearn")
 import sklearn.linear_model
-from ai_trading.utils.device import TORCH_AVAILABLE
-if not TORCH_AVAILABLE:
-    pytest.skip("torch not installed", allow_module_level=True)
-import torch
 try:
     import pydantic_settings  # noqa: F401
     from ai_trading import meta_learning
@@ -69,6 +65,9 @@ def test_retrain_meta_training_fail(monkeypatch):
     class Bad:
         def fit(self, X, y, sample_weight=None):
             raise RuntimeError("boom")
+
+        def predict(self, X):  # pragma: no cover - interface completeness
+            return [0] * len(X)
 
     monkeypatch.setattr(sklearn.linear_model, "Ridge", lambda *a, **k: Bad())
     assert not meta_learning.retrain_meta_learner("trades.csv", "m.pkl", "hist.pkl", min_samples=1)

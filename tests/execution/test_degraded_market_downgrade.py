@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -12,25 +13,44 @@ from ai_trading.execution import live_trading
 from tests.execution.test_live_trading_degraded_feed import DummyLiveEngine
 
 
+def _resolve_live_trading_modules() -> list[object]:
+    """Return every live_trading module object referenced by this test path."""
+
+    modules: list[object] = [live_trading]
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        module_name = globals_ns.get("__name__")
+        if isinstance(module_name, str):
+            module_obj = sys.modules.get(module_name)
+            if module_obj is not None and module_obj not in modules:
+                modules.append(module_obj)
+    return modules
+
+
 @pytest.fixture(autouse=True)
 def _patch_execution_guards(monkeypatch) -> None:
     """Stabilize guard behaviour for deterministic assertions."""
 
-    monkeypatch.setattr(live_trading, "_safe_mode_guard", lambda *a, **k: False)
-    monkeypatch.setattr(live_trading, "_require_bid_ask_quotes", lambda: False)
-    monkeypatch.setattr(live_trading, "quote_fresh_enough", lambda *a, **k: True)
-    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
-    monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
-    monkeypatch.setattr(
-        live_trading,
-        "_call_preflight_capacity",
-        lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
-    )
-    monkeypatch.setattr(
-        live_trading.provider_monitor,
-        "is_disabled",
-        lambda *_a, **_k: True,
-    )
+    for live_mod in _resolve_live_trading_modules():
+        monkeypatch.setattr(live_mod, "_safe_mode_guard", lambda *a, **k: False, raising=False)
+        monkeypatch.setattr(live_mod, "_require_bid_ask_quotes", lambda: False, raising=False)
+        monkeypatch.setattr(live_mod, "quote_fresh_enough", lambda *a, **k: True, raising=False)
+        monkeypatch.setattr(live_mod, "guard_shadow_active", lambda: False, raising=False)
+        monkeypatch.setattr(live_mod, "is_safe_mode_active", lambda: False, raising=False)
+        monkeypatch.setattr(
+            live_mod,
+            "_call_preflight_capacity",
+            lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
+            raising=False,
+        )
+        provider_monitor = getattr(live_mod, "provider_monitor", None)
+        if provider_monitor is not None:
+            monkeypatch.setattr(
+                provider_monitor,
+                "is_disabled",
+                lambda *_a, **_k: True,
+                raising=False,
+            )
     from ai_trading.execution import guards
 
     guards.STATE.pdt = guards.PDTState()
@@ -60,7 +80,8 @@ def test_market_downgrade_when_realtime_nbbo_required(monkeypatch, caplog) -> No
         execution_market_on_degraded=True,
         nbbo_required_for_limit=False,
     )
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    for live_mod in _resolve_live_trading_modules():
+        monkeypatch.setattr(live_mod, "get_trading_config", lambda: config, raising=False)
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
 
     def _fake_submit_market(self, symbol, side, quantity, **kwargs):

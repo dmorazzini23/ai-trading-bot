@@ -6,6 +6,7 @@ import sys
 import types
 import gc
 import time as _time
+import unittest.mock as _umock
 from pathlib import Path
 from collections.abc import Generator, Iterator
 from typing import Any
@@ -68,6 +69,47 @@ def _timeframe_unit_is_valid(unit_cls: object | None) -> bool:
         return False
     required = ("Minute", "Hour", "Day", "Week", "Month")
     return all(hasattr(unit_cls, name) for name in required)
+
+
+def _extract_request_timeframe_cls(request_cls: object) -> type | None:
+    """Best-effort extraction of StockBarsRequest timeframe annotation class."""
+
+    try:
+        model_fields = getattr(request_cls, "model_fields", None)
+        if isinstance(model_fields, dict):
+            timeframe_field = model_fields.get("timeframe")
+            annotation = getattr(timeframe_field, "annotation", None)
+            if isinstance(annotation, type):
+                return annotation
+    except Exception:
+        return None
+    return None
+
+
+def _is_usable_stock_bars_request_cls(request_cls: object) -> bool:
+    """Return True when ``request_cls`` behaves like StockBarsRequest."""
+
+    if not isinstance(request_cls, type):
+        return False
+
+    timeframe_cls = _extract_request_timeframe_cls(request_cls)
+    timeframe_token: object = object()
+    if isinstance(timeframe_cls, type):
+        timeframe_token = getattr(timeframe_cls, "Day", None) or getattr(
+            timeframe_cls, "Minute", None
+        )
+        if timeframe_token is None:
+            try:
+                timeframe_token = timeframe_cls()
+            except Exception:
+                timeframe_token = object()
+
+    try:
+        request = request_cls(symbol_or_symbols="SPY", timeframe=timeframe_token)
+    except Exception:
+        return False
+
+    return hasattr(request, "timeframe") and hasattr(request, "symbol_or_symbols")
 
 
 def _reload_alpaca_timeframe_module() -> types.ModuleType | None:
@@ -153,12 +195,10 @@ def _ensure_alpaca_timeframe_defaults() -> None:
     except Exception:
         return
 
-    alpaca_data_mod = sys.modules.get("alpaca.data")
-    if isinstance(alpaca_data_mod, types.ModuleType):
-        try:
-            setattr(alpaca_data_mod, "TimeFrame", _CompatTimeFrame)
-        except Exception:
-            pass
+    # Keep alpaca.data.TimeFrame untouched. StockBarsRequest models bind their
+    # timeframe field at import time and can become strict about class identity.
+    # Overwriting alpaca.data.TimeFrame here can cause cross-test validation
+    # mismatches even when timeframe values are shape-compatible.
 
 
 _ensure_alpaca_timeframe_defaults()
@@ -207,6 +247,10 @@ def _seed_tests() -> None:
 def _clear_mutable_state(value: object) -> None:
     if isinstance(value, (dict, set, list)):
         value.clear()
+
+
+def _is_mock_like(value: object) -> bool:
+    return isinstance(value, _umock.Mock)
 
 
 def _iter_live_modules(module_name: str) -> Iterator[types.ModuleType]:
@@ -304,6 +348,69 @@ def _reset_loaded_singletons() -> None:
         runtime_state_mod = importlib.import_module("ai_trading.telemetry.runtime_state")
     except Exception:
         runtime_state_mod = None
+    try:
+        logging_mod_ref = importlib.import_module("ai_trading.logging")
+    except Exception:
+        logging_mod_ref = None
+    try:
+        aliases_mod = importlib.import_module("ai_trading.config.aliases")
+    except Exception:
+        aliases_mod = None
+    try:
+        retry_mode_mod = importlib.import_module("ai_trading.utils.retry_mode")
+    except Exception:
+        retry_mode_mod = None
+
+    # Some collection-time tests replace ``pybreaker.CircuitBreaker`` with a
+    # Mock at module import. Restore a deterministic no-op implementation so
+    # bot_engine decorators are always real callables between tests.
+    pybreaker_mod = sys.modules.get("pybreaker")
+    if _is_mock_like(pybreaker_mod):
+        pybreaker_mod = types.ModuleType("pybreaker")
+        sys.modules["pybreaker"] = pybreaker_mod
+    if isinstance(pybreaker_mod, types.ModuleType):
+        cb_cls = getattr(pybreaker_mod, "CircuitBreaker", None)
+        if _is_mock_like(cb_cls):
+            class _NoopCircuitBreaker:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def call(self, func):
+                    def _wrapped(*a, **kw):
+                        return func(*a, **kw)
+
+                    return _wrapped
+
+                def __call__(self, func):
+                    return self.call(func)
+
+            try:
+                setattr(pybreaker_mod, "CircuitBreaker", _NoopCircuitBreaker)
+            except Exception:
+                pass
+
+    try:
+        bot_engine_canonical = importlib.import_module("ai_trading.core.bot_engine")
+    except Exception:
+        bot_engine_canonical = None
+
+    if isinstance(retry_mode_mod, types.ModuleType):
+        tenacity_retry = getattr(retry_mode_mod, "_tenacity_retry", None)
+        retry_mode_fn = getattr(retry_mode_mod, "retry_mode", None)
+        if _is_mock_like(tenacity_retry) or _is_mock_like(retry_mode_fn):
+            try:
+                retry_mode_mod = importlib.reload(retry_mode_mod)
+            except Exception:
+                pass
+
+    if isinstance(bot_engine_canonical, types.ModuleType):
+        safe_get_account = getattr(bot_engine_canonical, "safe_alpaca_get_account", None)
+        ensure_attached = getattr(bot_engine_canonical, "ensure_alpaca_attached", None)
+        if _is_mock_like(safe_get_account) or _is_mock_like(ensure_attached):
+            try:
+                bot_engine_canonical = importlib.reload(bot_engine_canonical)
+            except Exception:
+                pass
     for module_name in ("ai_trading.data.models", "ai_trading.data.bars"):
         module_obj = sys.modules.get(module_name)
         if not isinstance(module_obj, types.ModuleType):
@@ -314,6 +421,23 @@ def _reset_loaded_singletons() -> None:
             pass
 
     for bot_engine_mod in _iter_live_modules("ai_trading.core.bot_engine"):
+        if isinstance(bot_engine_canonical, types.ModuleType):
+            for attr_name in (
+                "ensure_alpaca_attached",
+                "safe_alpaca_get_account",
+                "_initialize_alpaca_clients",
+                "_validate_trading_api",
+                "list_open_orders",
+            ):
+                canonical_attr = getattr(bot_engine_canonical, attr_name, None)
+                if canonical_attr is None:
+                    continue
+                if _is_mock_like(canonical_attr):
+                    continue
+                try:
+                    setattr(bot_engine_mod, attr_name, canonical_attr)
+                except Exception:
+                    pass
         if isinstance(fetch_mod, types.ModuleType):
             try:
                 setattr(bot_engine_mod, "data_fetcher_module", fetch_mod)
@@ -347,33 +471,80 @@ def _reset_loaded_singletons() -> None:
     alpaca_data_mod = sys.modules.get("alpaca.data")
     if isinstance(alpaca_data_mod, types.ModuleType):
         requests_mod = sys.modules.get("alpaca.data.requests")
+        request_cls = None
+        request_timeframe_cls: type | None = None
         if isinstance(requests_mod, types.ModuleType):
             request_cls = getattr(requests_mod, "StockBarsRequest", None)
+            if not _is_usable_stock_bars_request_cls(request_cls):
+                try:
+                    requests_mod = importlib.reload(requests_mod)
+                except Exception:
+                    pass
+                request_cls = getattr(requests_mod, "StockBarsRequest", None)
+            if not _is_usable_stock_bars_request_cls(request_cls):
+                try:
+                    from ai_trading.alpaca_api import StockBarsRequest as _FallbackStockBarsRequest
+
+                    request_cls = _FallbackStockBarsRequest
+                except Exception:
+                    request_cls = None
             if request_cls is not None:
+                try:
+                    setattr(requests_mod, "StockBarsRequest", request_cls)
+                except Exception:
+                    pass
                 try:
                     setattr(alpaca_data_mod, "StockBarsRequest", request_cls)
                 except Exception:
                     pass
+                request_timeframe_cls = _extract_request_timeframe_cls(request_cls)
+                if isinstance(request_timeframe_cls, type):
+                    try:
+                        setattr(alpaca_data_mod, "TimeFrame", request_timeframe_cls)
+                    except Exception:
+                        pass
         timeframe_mod = sys.modules.get("alpaca.data.timeframe")
         if isinstance(timeframe_mod, types.ModuleType):
             tf_cls = getattr(timeframe_mod, "TimeFrame", None)
             tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
+            tf_instance = None
+            if isinstance(tf_cls, type):
+                try:
+                    tf_instance = tf_cls()
+                except Exception:
+                    tf_instance = None
+
+            if (
+                isinstance(tf_cls, type)
+                and tf_instance is not None
+                and not hasattr(tf_instance, "amount")
+            ):
+                refreshed = _reload_alpaca_timeframe_module()
+                if isinstance(refreshed, types.ModuleType):
+                    timeframe_mod = refreshed
+                    tf_cls = getattr(timeframe_mod, "TimeFrame", None)
+                    tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
+
+            if (
+                isinstance(request_timeframe_cls, type)
+                and isinstance(tf_cls, type)
+                and tf_cls is not request_timeframe_cls
+                and not isinstance(getattr(tf_cls, "Day", None), request_timeframe_cls)
+            ):
+                # Keep alpaca.data aligned to the request model's timeframe class.
+                # This avoids request validation mismatches after tests inject
+                # ad-hoc TimeFrame stubs at module scope.
+                try:
+                    setattr(alpaca_data_mod, "TimeFrame", request_timeframe_cls)
+                except Exception:
+                    pass
+
             if not _timeframe_unit_is_valid(tf_unit_cls):
                 refreshed = _reload_alpaca_timeframe_module()
                 if isinstance(refreshed, types.ModuleType):
                     timeframe_mod = refreshed
                     tf_cls = getattr(timeframe_mod, "TimeFrame", None)
                     tf_unit_cls = getattr(timeframe_mod, "TimeFrameUnit", None)
-            if tf_cls is not None:
-                try:
-                    setattr(alpaca_data_mod, "TimeFrame", tf_cls)
-                except Exception:
-                    pass
-            if tf_unit_cls is not None:
-                try:
-                    setattr(alpaca_data_mod, "TimeFrameUnit", tf_unit_cls)
-                except Exception:
-                    pass
             if (
                 isinstance(tf_cls, type)
                 and tf_unit_cls is not None
@@ -429,10 +600,6 @@ def _reset_loaded_singletons() -> None:
                             setattr(timeframe_mod, "TimeFrame", _CompatTimeFrame)
                         except Exception:
                             pass
-                        try:
-                            setattr(alpaca_data_mod, "TimeFrame", _CompatTimeFrame)
-                        except Exception:
-                            pass
 
     try:
         from ai_trading.config import settings as _settings_mod
@@ -466,6 +633,13 @@ def _reset_loaded_singletons() -> None:
         _clear_mutable_state(emitted_keys)
 
     for fetch_mod in _iter_live_modules("ai_trading.data.fetch"):
+        if isinstance(provider_monitor_mod, types.ModuleType):
+            provider_monitor = getattr(provider_monitor_mod, "provider_monitor", None)
+            if provider_monitor is not None:
+                try:
+                    setattr(fetch_mod, "provider_monitor", provider_monitor)
+                except Exception:
+                    pass
         try:
             from ai_trading.data import market_calendar as _market_calendar_mod
         except Exception:
@@ -528,6 +702,8 @@ def _reset_loaded_singletons() -> None:
             ("_ALPACA_DISABLED_ALERTED", False),
             ("_alpaca_disable_count", 0),
             ("_ALPACA_KEYS_MISSING_LOGGED", False),
+            ("_SIP_UNAUTHORIZED_UNTIL", None),
+            ("_max_fallbacks_config", None),
         ):
             if hasattr(fetch_mod, attr_name):
                 try:
@@ -599,6 +775,13 @@ def _reset_loaded_singletons() -> None:
                 pass
 
     for live_trading_mod in _iter_live_modules("ai_trading.execution.live_trading"):
+        if isinstance(config_pkg, types.ModuleType):
+            get_cfg = getattr(config_pkg, "get_trading_config", None)
+            if callable(get_cfg) and not _is_mock_like(get_cfg):
+                try:
+                    setattr(live_trading_mod, "get_trading_config", get_cfg)
+                except Exception:
+                    pass
         if isinstance(provider_monitor_mod, types.ModuleType):
             for attr_name in ("provider_monitor", "is_safe_mode_active", "safe_mode_reason"):
                 if not hasattr(provider_monitor_mod, attr_name):
@@ -619,6 +802,20 @@ def _reset_loaded_singletons() -> None:
                     setattr(live_trading_mod, attr_name, attr_value)
                 except Exception:
                     pass
+
+    if isinstance(aliases_mod, types.ModuleType) and isinstance(logging_mod_ref, types.ModuleType):
+        logger_once_obj = getattr(logging_mod_ref, "logger_once", None)
+        if logger_once_obj is not None and not _is_mock_like(logger_once_obj):
+            try:
+                setattr(aliases_mod, "logger_once", logger_once_obj)
+            except Exception:
+                pass
+        resolve_fn = getattr(aliases_mod, "resolve_trading_mode", None)
+        if _is_mock_like(resolve_fn):
+            try:
+                aliases_mod = importlib.reload(aliases_mod)
+            except Exception:
+                pass
 
     for alpaca_api_mod in _iter_live_modules("ai_trading.alpaca_api"):
         for attr_name, attr_value in (

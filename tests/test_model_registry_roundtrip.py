@@ -1,5 +1,6 @@
 """Test model registry register → latest_for → load_model workflow."""
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 np = pytest.importorskip("numpy")
@@ -123,18 +124,19 @@ def test_model_registry_errors():
         result = registry.latest_for("nonexistent", "strategy")
         assert result is None
 
-        # Test non-picklable model when all picklers fail
-        def non_picklable(x):
-            return x  # lambda normally picklable via cloudpickle
-
-        _ = pytest.importorskip("cloudpickle")
-        dill_mod = pytest.importorskip("dill")
-
+        # Test non-picklable model when all configured picklers fail
         def fail(*_a, **_k):  # pragma: no cover - trivial
             raise Exception("fail")
 
+        failing_picklers = [
+            SimpleNamespace(name="primary", dumps=fail, loads=lambda data: data),
+            SimpleNamespace(name="fallback", dumps=fail, loads=lambda data: data),
+        ]
+
         with pytest.raises(RuntimeError, match="Model not picklable"):
-            with patch("pickle.dumps", side_effect=fail), patch(
-                "cloudpickle.dumps", side_effect=fail
-            ), patch.object(dill_mod, "dumps", side_effect=fail):
-                registry.register_model(non_picklable, "test", "lambda")
+            with patch.object(
+                ModelRegistry,
+                "_available_picklers",
+                return_value=failing_picklers,
+            ):
+                registry.register_model({"x": 1}, "test", "dict")

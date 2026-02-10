@@ -2,8 +2,10 @@
 Tests for model registry functionality.
 """
 import json
+import pickle
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -132,33 +134,47 @@ class TestModelRegistry:
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
 
-            mock_model = Mock()
-            _ = pytest.importorskip("cloudpickle")
-            dill_mod = pytest.importorskip("dill")
+            model = object()
 
             def fail(*_a, **_k):  # pragma: no cover - trivial
                 raise Exception("Cannot pickle this object")
 
+            failing_picklers = [
+                SimpleNamespace(name="primary", dumps=fail, loads=lambda data: data),
+                SimpleNamespace(name="fallback", dumps=fail, loads=lambda data: data),
+            ]
+
             with pytest.raises(RuntimeError, match="Model not picklable"):
-                with patch("pickle.dumps", side_effect=fail), patch(
-                    "cloudpickle.dumps", side_effect=fail
-                ), patch.object(dill_mod, "dumps", side_effect=fail):
+                with patch.object(
+                    ModelRegistry,
+                    "_available_picklers",
+                    return_value=failing_picklers,
+                ):
                     registry.register_model(
-                        model=mock_model,
+                        model=model,
                         strategy="test_strategy",
                         model_type="test_type",
                     )
 
     def test_pickle_fallback(self):
         """pickle failure should fall back to cloudpickle or dill."""
-        _ = pytest.importorskip("cloudpickle")
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
-            model = Mock()
+            model = {"a": 1}
 
-            with patch("pickle.dumps", side_effect=Exception("boom")):
+            picklers = [
+                SimpleNamespace(
+                    name="primary",
+                    dumps=lambda _obj: (_ for _ in ()).throw(Exception("boom")),
+                    loads=lambda data: data,
+                ),
+                SimpleNamespace(name="fallback", dumps=pickle.dumps, loads=pickle.loads),
+            ]
+
+            with patch.object(ModelRegistry, "_available_picklers", return_value=picklers):
                 model_id = registry.register_model(model, "s", "t")
             assert model_id in registry.model_index
+            assert registry.model_index[model_id]["pickler"] == "fallback"
 
     def test_metadata_class_path_conversion(self):
         """Metadata containing classes should be stored as dotted path."""

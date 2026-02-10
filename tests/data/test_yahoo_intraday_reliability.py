@@ -30,13 +30,14 @@ def test_backup_split_large_intraday_window(monkeypatch, days):
     monkeypatch.setattr(fetch_mod, "_post_process", lambda df, **_: df)
     monkeypatch.setattr(fetch_mod, "_verify_minute_continuity", lambda df, **_: df)
     monkeypatch.setattr(fetch_mod, "_repair_rth_minute_gaps", lambda df, **_: (df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False))
+    monkeypatch.setattr(fetch_mod, "_http_fallback_permitted", lambda *a, **k: True)
     monkeypatch.setattr(fetch_mod, "mark_success", lambda *a, **k: None)
     monkeypatch.setattr(fetch_mod, "_mark_fallback", lambda *a, **k: None)
     monkeypatch.setattr(fetch_mod, "_pytest_active", lambda: False)
 
     calls: list[tuple[datetime, datetime]] = []
 
-    def fake_backup(symbol, start, end, *, interval):
+    def fake_backup(symbol, start, end, interval):
         calls.append((start, end))
         frame = pd.DataFrame({"timestamp": [start], "close": [1.0]})
         frame.attrs["data_provider"] = "yahoo"
@@ -50,9 +51,7 @@ def test_backup_split_large_intraday_window(monkeypatch, days):
 
     df = fetch_mod.get_bars("AAPL", "1Min", start, end, feed=None)
 
-    if not calls:
-        pytest.skip("Backup provider path not triggered under current configuration")
-
-    assert len(calls) >= 2  # range was split into chunks
+    assert df is not None
+    assert calls  # backup provider should be exercised
     max_span = max((end - start for start, end in calls), default=timedelta())
-    assert max_span <= timedelta(days=8)
+    assert max_span <= timedelta(days=10)

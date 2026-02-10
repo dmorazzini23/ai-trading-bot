@@ -1,4 +1,5 @@
 import logging
+import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -7,23 +8,40 @@ from ai_trading.execution import live_trading
 from tests.execution.test_live_trading_degraded_feed import DummyLiveEngine
 
 
+def _resolve_live_trading_modules() -> list[object]:
+    modules: list[object] = [live_trading]
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        module_name = globals_ns.get("__name__")
+        if isinstance(module_name, str):
+            module_obj = sys.modules.get(module_name)
+            if module_obj is not None and module_obj not in modules:
+                modules.append(module_obj)
+    return modules
+
+
 @pytest.fixture(autouse=True)
 def _patch_quote_gate_guards(monkeypatch) -> None:
-    monkeypatch.setattr(live_trading, "_safe_mode_guard", lambda *a, **k: False)
-    monkeypatch.setattr(live_trading, "_require_bid_ask_quotes", lambda: False)
-    monkeypatch.setattr(live_trading, "quote_fresh_enough", lambda *a, **k: True)
-    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
-    monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
-    monkeypatch.setattr(
-        live_trading.provider_monitor,
-        "is_disabled",
-        lambda *_a, **_k: True,
-    )
-    monkeypatch.setattr(
-        live_trading,
-        "_call_preflight_capacity",
-        lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
-    )
+    for live_mod in _resolve_live_trading_modules():
+        monkeypatch.setattr(live_mod, "_safe_mode_guard", lambda *a, **k: False, raising=False)
+        monkeypatch.setattr(live_mod, "_require_bid_ask_quotes", lambda: False, raising=False)
+        monkeypatch.setattr(live_mod, "quote_fresh_enough", lambda *a, **k: True, raising=False)
+        monkeypatch.setattr(live_mod, "guard_shadow_active", lambda: False, raising=False)
+        monkeypatch.setattr(live_mod, "is_safe_mode_active", lambda: False, raising=False)
+        provider_monitor = getattr(live_mod, "provider_monitor", None)
+        if provider_monitor is not None:
+            monkeypatch.setattr(
+                provider_monitor,
+                "is_disabled",
+                lambda *_a, **_k: True,
+                raising=False,
+            )
+        monkeypatch.setattr(
+            live_mod,
+            "_call_preflight_capacity",
+            lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
+            raising=False,
+        )
 
 
 def _quote_payload() -> dict:
@@ -43,7 +61,8 @@ def test_entry_block_log_emitted_for_degraded_gate(monkeypatch, caplog) -> None:
         "degraded_feed_limit_widen_bps": 0,
         "execution_require_realtime_nbbo": False,
     })()
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    for live_mod in _resolve_live_trading_modules():
+        monkeypatch.setattr(live_mod, "get_trading_config", lambda: config, raising=False)
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
 
     caplog.set_level(logging.WARNING, logger="ai_trading.execution.live_trading")

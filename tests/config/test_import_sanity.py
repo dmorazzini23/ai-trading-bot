@@ -15,7 +15,6 @@ def _flag_enabled() -> bool:
     return os.getenv(FLAG) == "1"
 
 
-@pytest.mark.skipif(not _flag_enabled(), reason="import sanity guard disabled")
 def test_python_dotenv_is_resolved(_monkeypatch: pytest.MonkeyPatch) -> None:
     sys.modules.pop("dotenv", None)
     module = importlib.import_module("dotenv")

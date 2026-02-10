@@ -22,23 +22,40 @@ from ai_trading.meta_learning import (
     has_mixed_format,
 )
 
-def test_meta_learning_mixed_format():
+
+def _write_mixed_trade_log(path):
+    rows = [
+        "symbol,side,entry_price,signal_tags,exit_price,timestamp",
+        "2026-01-01T00:00:00+00:00,ORD123,AAPL,buy,10,100.00",
+    ]
+    for i in range(12):
+        entry = 100.0 + i
+        exit_p = entry + (1.0 if i % 2 == 0 else -0.5)
+        rows.append(
+            f"AAPL,buy,{entry:.2f},trend+volume,{exit_p:.2f},2026-01-01T00:{i:02d}:00+00:00"
+        )
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(rows) + "\n")
+
+
+def test_meta_learning_mixed_format(tmp_path):
     """Test that meta-learning can handle mixed audit/meta-learning log formats."""
 
-    # Test with the actual trades.csv file
-    quality_report = validate_trade_data_quality("trades.csv")
+    trade_log = tmp_path / "trades.csv"
+    _write_mixed_trade_log(trade_log)
+    quality_report = validate_trade_data_quality(str(trade_log))
 
     # Verify mixed format detection
     assert quality_report["file_exists"], "Trade log file should exist"
     assert quality_report["has_valid_format"], "Should have valid format"
-    assert has_mixed_format("trades.csv"), "Should detect mixed formats"
+    assert has_mixed_format(str(trade_log)), "Should detect mixed formats"
     assert quality_report["audit_format_rows"] > 0, "Should find audit format rows"
     assert quality_report["meta_format_rows"] > 0, "Should find meta-learning format rows"
     assert quality_report["valid_price_rows"] > 0, "Should find valid price rows"
     assert quality_report["data_quality_score"] > 0, "Should have positive data quality score"
 
     # Test that retrain_meta_learner works
-    result = retrain_meta_learner("trades.csv", min_samples=10)
+    result = retrain_meta_learner(str(trade_log), min_samples=10)
     assert result, "Meta-learning retraining should succeed"
 
 def test_position_size_reporting():
@@ -95,10 +112,10 @@ def test_latency_tracking():
         pass
 
 
-def test_comprehensive_fixes():
+def test_comprehensive_fixes(tmp_path):
     """Run comprehensive test of all performance fixes."""
 
-    test_meta_learning_mixed_format()
+    test_meta_learning_mixed_format(tmp_path)
 
     test_position_size_reporting()
 

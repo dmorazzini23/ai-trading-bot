@@ -187,6 +187,29 @@ except Exception:  # pragma: no cover - dependency missing
     from tests.vendor_stubs.alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     from tests.vendor_stubs.alpaca.data.timeframe import TimeFrame  # type: ignore  # noqa: F401
 
+_BASE_THIRD_PARTY_MODULES = {
+    name: sys.modules.get(name)
+    for name in (
+        "pandas",
+        "ai_trading.portfolio",
+        "ai_trading.portfolio.core",
+        "ai_trading.portfolio.optimizer",
+        "sklearn",
+        "sklearn.linear_model",
+        "sklearn.metrics",
+        "sklearn.pipeline",
+        "sklearn.preprocessing",
+        "alpaca",
+        "alpaca.trading",
+        "alpaca.trading.client",
+        "alpaca.data",
+        "alpaca.data.timeframe",
+        "alpaca.data.requests",
+        "alpaca.common",
+        "alpaca.common.exceptions",
+    )
+}
+
 try:
     from freezegun import freeze_time  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -226,6 +249,13 @@ def _env_defaults(monkeypatch):
 def _restore_third_party_modules():
     """Ensure third-party module stubs installed by tests do not leak globally."""
 
+    def _restore_from_baseline(module_name: str) -> None:
+        baseline = _BASE_THIRD_PARTY_MODULES.get(module_name)
+        if baseline is None:
+            sys.modules.pop(module_name, None)
+            return
+        sys.modules[module_name] = baseline
+
     yield
     restore_targets = (
         (
@@ -243,17 +273,33 @@ def _restore_third_party_modules():
             lambda m: getattr(m, "__file__", None) is not None,
             ("sklearn.linear_model", "sklearn.metrics", "sklearn.pipeline", "sklearn.preprocessing"),
         ),
+        (
+            "alpaca",
+            lambda m: getattr(m, "__path__", None) is not None,
+            (
+                "alpaca.trading",
+                "alpaca.trading.client",
+                "alpaca.data",
+                "alpaca.data.timeframe",
+                "alpaca.data.requests",
+                "alpaca.common",
+                "alpaca.common.exceptions",
+            ),
+        ),
     )
     for module_name, validator, extra_modules in restore_targets:
         module = sys.modules.get(module_name)
-        if module is not None and not validator(module):
-            sys.modules.pop(module_name, None)
+        # Always hard-restore alpaca modules because some tests mutate module
+        # attributes in-place (not only module objects). Validating only
+        # ``__path__`` misses those leaks and causes cross-test contamination.
+        if module_name == "alpaca":
+            needs_restore = True
+        else:
+            needs_restore = module is not None and not validator(module)
+        if needs_restore:
+            _restore_from_baseline(module_name)
             for extra in extra_modules:
-                sys.modules.pop(extra, None)
-            try:
-                importlib.import_module(module_name)
-            except ModuleNotFoundError:
-                continue
+                _restore_from_baseline(extra)
 
 
 @pytest.fixture(autouse=True)
@@ -407,6 +453,23 @@ def _reset_fallback_cache():
             data_fetcher._reset_provider_auth_state_for_tests()
         elif hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):
             data_fetcher._clear_sip_lockout_for_tests()
+        # Ensure no auth/disable lockout leaks between tests.
+        if hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):
+            data_fetcher._clear_sip_lockout_for_tests()
+        if hasattr(data_fetcher, "_alpaca_disabled_until"):
+            data_fetcher._alpaca_disabled_until = None
+        if hasattr(data_fetcher, "_ALPACA_DISABLED_ALERTED"):
+            data_fetcher._ALPACA_DISABLED_ALERTED = False
+        if hasattr(data_fetcher, "_alpaca_disable_count"):
+            data_fetcher._alpaca_disable_count = 0
+        if hasattr(data_fetcher, "_alpaca_empty_streak"):
+            data_fetcher._alpaca_empty_streak = 0
+        try:
+            from ai_trading.data.provider_monitor import provider_monitor
+
+            provider_monitor.reset()
+        except Exception:
+            pass
 
     _reset()
     try:
@@ -433,6 +496,8 @@ def _reset_bot_engine_state():
     """Clear mutable caches in core bot engine between tests."""
 
     import ai_trading.core.bot_engine as bot_engine  # local import to avoid circulars
+    import time as _time
+    from threading import Lock
 
     def _reset() -> None:
         bot_engine._GLOBAL_CYCLE_ID = None
@@ -447,6 +512,74 @@ def _reset_bot_engine_state():
         bot_engine._TRADE_LOGGER_SINGLETON = None
         bot_engine._TRADE_LOG_FALLBACK_PATH = None
         bot_engine.TRADE_LOG_FILE = bot_engine.default_trade_log_path()
+        if hasattr(bot_engine, "_RUNTIME_READY"):
+            bot_engine._RUNTIME_READY = False
+        if hasattr(bot_engine, "_HEALTH_CHECK_FAILURES"):
+            bot_engine._HEALTH_CHECK_FAILURES = 0
+        if hasattr(bot_engine, "trading_client"):
+            bot_engine.trading_client = None
+        if hasattr(bot_engine, "data_client"):
+            bot_engine.data_client = None
+        if hasattr(bot_engine, "stream"):
+            bot_engine.stream = None
+        if hasattr(bot_engine, "time") and hasattr(bot_engine.time, "sleep"):
+            bot_engine.time.sleep = _time.sleep
+        if hasattr(bot_engine, "_ctx"):
+            bot_engine._ctx = None
+        lazy_cls = getattr(bot_engine, "LazyBotContext", None)
+        if isinstance(lazy_cls, type):
+            fresh_ctx = lazy_cls()
+            if hasattr(bot_engine, "_global_ctx"):
+                bot_engine._global_ctx = fresh_ctx
+            if hasattr(bot_engine, "ctx"):
+                bot_engine.ctx = fresh_ctx
+        else:
+            if hasattr(bot_engine, "_global_ctx"):
+                bot_engine._global_ctx = None
+            if hasattr(bot_engine, "ctx"):
+                bot_engine.ctx = None
+        if hasattr(bot_engine, "_exec_engine"):
+            bot_engine._exec_engine = None
+        if hasattr(bot_engine, "run_lock"):
+            bot_engine.run_lock = Lock()
+
+    _reset()
+    try:
+        yield
+    finally:
+        _reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging_once_state():
+    """Reset once/throttle logging caches so caplog assertions are deterministic."""
+
+    import ai_trading.logging as logging_mod
+    from ai_trading.logging.emit_once import reset_emit_once_state
+
+    def _reset() -> None:
+        try:
+            logging_mod.logger_once._emitted_keys.clear()
+        except Exception:
+            pass
+        reset_emit_once_state()
+        throttle_filter = getattr(logging_mod, "_THROTTLE_FILTER", None)
+        if throttle_filter is not None:
+            lock = getattr(throttle_filter, "_lock", None)
+            state = getattr(throttle_filter, "_state", None)
+            if isinstance(state, dict):
+                try:
+                    if lock is not None:
+                        with lock:
+                            state.clear()
+                    else:
+                        state.clear()
+                except Exception:
+                    state.clear()
+        try:
+            logging_mod.reset_provider_log_dedupe()
+        except Exception:
+            pass
 
     _reset()
     try:

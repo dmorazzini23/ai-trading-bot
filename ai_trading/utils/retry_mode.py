@@ -1,18 +1,50 @@
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Callable
+from importlib import metadata
+import types
 from typing import TypeVar
 
 T = TypeVar("T")
 
+
+def _is_real_tenacity(mod: types.ModuleType) -> bool:
+    """Return True only when the imported module is the real PyPI package.
+
+    Some tests install lightweight stubs into ``sys.modules["tenacity"]`` to
+    keep optional imports working under minimal environments. Those stubs may
+    export a ``retry`` decorator that is a no-op, which breaks retry semantics.
+    """
+
+    try:
+        metadata.version("tenacity")
+    except metadata.PackageNotFoundError:
+        return False
+    except Exception:
+        return False
+
+    try:
+        path = inspect.getfile(mod)
+    except Exception:
+        return False
+
+    path_lc = path.lower()
+    return ("site-packages" in path_lc) or ("dist-packages" in path_lc) or ("/tmp" in path_lc)
+
+
 try:  # pragma: no cover - optional tenacity import
+    import tenacity as _tenacity_mod
+
     from tenacity import (
         retry as _tenacity_retry,
         stop_after_attempt as _stop_after_attempt,
         wait_fixed as _wait_fixed,
         retry_if_exception_type as _retry_if_exception_type,
     )
+    if not _is_real_tenacity(_tenacity_mod):
+        raise ImportError("tenacity stub detected")
     HAS_TENACITY = True
 except Exception:  # pragma: no cover - tenacity missing
     HAS_TENACITY = False
@@ -54,11 +86,15 @@ def retry_mode(
     base_delay = max(0.0, float(delay))
 
     if HAS_TENACITY:
+        # ``retry_error_cls=None`` can surface the last exception in some
+        # tenacity versions. Keep behavior stable by always returning fallback
+        # when retry budget is exhausted.
+        tenacity_attempts = max(1, attempts)
         dec = _tenacity_retry(
-            stop=_stop_after_attempt(attempts),
+            stop=_stop_after_attempt(tenacity_attempts),
             wait=_wait_fixed(base_delay),
             retry=_retry_if_exception_type(exceptions),
-            retry_error_cls=None,
+            reraise=False,
             retry_error_callback=lambda _state: fallback,
         )
 

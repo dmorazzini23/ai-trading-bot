@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import threading
 import time as _time
 from typing import Callable
 
@@ -25,6 +26,29 @@ try:  # pragma: no cover - optional dependency
     import freezegun.api as _freezegun_api  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     _freezegun_api = None  # type: ignore
+
+
+def _is_reliable_sleep(candidate: Callable | None) -> bool:
+    """Return True when *candidate* is a real blocking builtin sleep."""
+
+    if not callable(candidate):
+        return False
+    module_name = (getattr(candidate, "__module__", "") or "").lower()
+    return inspect.isbuiltin(candidate) and "freezegun" not in module_name
+
+
+def _event_wait_sleep(seconds: float) -> None:
+    """Sleep via threading wait to bypass monkeypatched ``time.sleep``."""
+
+    if seconds <= 0:
+        return
+    waiter = threading.Event()
+    deadline = _monotonic_now() + float(seconds)
+    while True:
+        remaining = deadline - _monotonic_now()
+        if remaining <= 0:
+            return
+        waiter.wait(remaining)
 
 
 def _freezegun_active(runtime_sleep: Callable | None = None) -> bool:
@@ -70,7 +94,7 @@ def _resolve_sleep():
     runtime_sleep = getattr(_time, "sleep", None)
     if callable(runtime_sleep):
         runtime_module = (getattr(runtime_sleep, "__module__", "") or "").lower()
-        runtime_is_builtin = inspect.isbuiltin(runtime_sleep)
+        runtime_is_builtin = _is_reliable_sleep(runtime_sleep)
         if _freezegun_active(runtime_sleep):
             if runtime_is_builtin and "freezegun" not in runtime_module:
                 if _os_level_sleep is None:
@@ -87,16 +111,18 @@ def _resolve_sleep():
             reload_sleep = getattr(reloaded_time, "sleep", None)
             if callable(reload_sleep):
                 reload_module = (getattr(reload_sleep, "__module__", "") or "").lower()
-                if inspect.isbuiltin(reload_sleep) and "freezegun" not in reload_module:
+                if _is_reliable_sleep(reload_sleep) and "freezegun" not in reload_module:
                     if _os_level_sleep is None:
                         _os_level_sleep = reload_sleep
                     return reload_sleep
         elif _os_level_sleep is None and runtime_is_builtin and "freezegun" not in runtime_module:
             _os_level_sleep = runtime_sleep
 
-    if _os_level_sleep is not None:
+    if _is_reliable_sleep(_os_level_sleep):
         return _os_level_sleep
-    return _real_sleep
+    if _is_reliable_sleep(_real_sleep):
+        return _real_sleep
+    return _event_wait_sleep
 
 
 def sleep(seconds: float | int) -> float:

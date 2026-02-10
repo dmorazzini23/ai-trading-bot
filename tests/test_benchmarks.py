@@ -41,13 +41,8 @@ for module in modules:
 
 @pytest.mark.parametrize("func", params)
 def test_benchmarks(request, func):
-    """Test function performance, with optional benchmark if pytest-benchmark is available."""
-    try:
-        # Try to use the benchmark fixture if available
-        benchmark = request.getfixturevalue('benchmark')
-        benchmark(func, df)
-    except LookupError:
-        # Fallback: just run the function to ensure it works
-        result = func(df)
-        # Basic verification that function completed without error
-        assert result is not None or result is None  # Allow any result including None
+    """Functional smoke for indicator/signal callability in frozen-time test runs."""
+    _ = request  # keep signature stable for existing callers/plugins
+    result = func(df)
+    # Some helpers are mutative/no-return by design; this guards only for crashes.
+    assert result is not None or result is None

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import logging
 import pytest
 
 pd = pytest.importorskip("pandas")
@@ -13,9 +14,10 @@ def force_coverage(mod):
 
 
 @pytest.mark.smoke
-@pytest.mark.xfail(reason="minimal data may produce no trades")
-def test_backtester_engine_basic(tmp_path, capsys):
+def test_backtester_engine_basic(tmp_path, caplog, monkeypatch):
     from ai_trading.strategies import backtester
+
+    monkeypatch.chdir(tmp_path)
 
     idx = pd.date_range("2024-01-01", periods=2, freq="D")
     df = pd.DataFrame(
@@ -33,20 +35,19 @@ def test_backtester_engine_basic(tmp_path, capsys):
     data_dir.mkdir()
     df.to_csv(data_dir / "AAPL.csv")
 
-    backtester.main([
-        "--symbols",
-        "AAPL",
-        "--data-dir",
-        str(data_dir),
-        "--start",
-        "2024-01-01",
-        "--end",
-        "2024-01-02",
-    ])
+    with caplog.at_level(logging.INFO, logger="ai_trading.strategies.backtester"):
+        backtester.main([
+            "--symbols",
+            "AAPL",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-01-02",
+        ])
 
-    out = capsys.readouterr().out
-    assert "Net PnL" in out
-
-
+    assert any("symbol  pnl" in rec.message for rec in caplog.records)
+    assert any("AAPL" in rec.message for rec in caplog.records)
 
     force_coverage(backtester)

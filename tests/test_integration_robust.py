@@ -1,3 +1,4 @@
+import importlib
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -7,9 +8,48 @@ from ai_trading.config import management as config
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("requests")
-from ai_trading.utils.device import TORCH_AVAILABLE
-if not TORCH_AVAILABLE:
-    pytest.skip("torch not installed", allow_module_level=True)
+
+_PATCHED_MODULES = {
+    "bs4",
+    "flask",
+    "schedule",
+    "portalocker",
+    "alpaca",
+    "alpaca.trading.client",
+    "alpaca.data",
+    "alpaca.data.timeframe",
+    "alpaca.data.requests",
+    "finnhub",
+    "sklearn.ensemble",
+    "sklearn.linear_model",
+    "sklearn.decomposition",
+    "pipeline",
+    "metrics_logger",
+    "prometheus_client",
+    "pybreaker",
+    "yfinance",
+    "ratelimit",
+    "ai_trading.capital_scaling",
+    "strategy_allocator",
+    "pandas_ta",
+    "pandas_market_calendars",
+}
+_ORIGINAL_MODULES = {name: sys.modules.get(name) for name in _PATCHED_MODULES}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_module_state_after_tests():
+    """Prevent integration stubs from affecting subsequent modules."""
+    yield
+    for name, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(name, None)
+            continue
+        sys.modules[name] = original
+        try:
+            importlib.reload(original)
+        except Exception:
+            pass
 
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:
@@ -405,5 +445,3 @@ def test_bot_main_signal_nan(monkeypatch):
 
         monkeypatch.setattr(bot, "main", lambda: None)
         bot.main()
-
-

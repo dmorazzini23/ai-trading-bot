@@ -3537,6 +3537,40 @@ class ExecutionEngine:
         nbbo_gate_required = require_nbbo and degrade_active and not closing_position
         price_gate_required = (require_quotes or nbbo_gate_required) and not closing_position
 
+        # In degraded mode, keep explicit block-mode semantics. When degraded
+        # execution is allowed and mode is non-blocking, align limit basis.
+        if (
+            degrade_active
+            and require_realtime_nbbo
+            and market_on_degraded
+            and not closing_position
+            and degraded_mode != "block"
+        ):
+            if order_type_normalized in {"limit", "stop_limit"} and basis_price is not None:
+                current_limit = _safe_float(resolved_limit_price)
+                if current_limit is None:
+                    current_limit = _safe_float(price_for_limit)
+                adjusted_limit = current_limit
+                if current_limit is None:
+                    adjusted_limit = basis_price
+                elif mapped_side in {"buy", "cover"}:
+                    adjusted_limit = max(current_limit, basis_price)
+                else:
+                    adjusted_limit = min(current_limit, basis_price)
+                if (
+                    adjusted_limit is not None
+                    and adjusted_limit > 0
+                    and (
+                        current_limit is None
+                        or not math.isclose(adjusted_limit, current_limit, rel_tol=0.0, abs_tol=1e-9)
+                    )
+                ):
+                    resolved_limit_price = adjusted_limit
+                    price_for_limit = adjusted_limit
+                    kwargs["price"] = adjusted_limit
+                    if price_hint is None:
+                        price_hint = adjusted_limit
+
         # Surface the resolved gating inputs to help diagnose degraded-feed behaviour
         gap_ratio_value: float | None = None
         if isinstance(annotations, Mapping):

@@ -854,13 +854,17 @@ def _mask_secret(value: str) -> str:
         return "***"
 
 
-logging.Formatter.converter = time.gmtime
+# NOTE: `logging.Formatter.converter` is looked up on instances, so if it is a
+# Python function stored on the class it becomes a bound method (self + args).
+# `freezegun` replaces `time.gmtime` with a Python function, so wrap it in
+# `staticmethod(...)` to keep the expected `converter(ts)` call signature.
+logging.Formatter.converter = staticmethod(time.gmtime)
 
 
 class UTCFormatter(logging.Formatter):
     """Formatter with UTC timestamps and structured phase tags."""
 
-    converter = time.gmtime
+    converter = staticmethod(time.gmtime)
 
 
 class CompactJsonFormatter(JSONFormatter):

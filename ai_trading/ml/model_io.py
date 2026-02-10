@@ -1,9 +1,9 @@
-"""Model persistence helpers using :mod:`dill` when available.
+"""Model persistence helpers using :mod:`dill`/``cloudpickle`` when available.
 
 The default :mod:`pickle` module cannot serialize lambda functions. To support
 models that may reference lambdas, this module attempts to use :mod:`dill`
-which extends pickle's capabilities. If :mod:`dill` is not installed the
-standard :mod:`pickle` module is used as a fallback.
+first, then ``cloudpickle``. If neither is installed the standard
+:mod:`pickle` module is used as a fallback.
 """
 
 from __future__ import annotations
@@ -15,10 +15,13 @@ from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
 
-try:  # pragma: no cover - import error path exercised in tests via importorskip
+try:  # pragma: no cover - import error path exercised in tests
     import dill as _pickle
 except Exception:  # pragma: no cover - fallback when dill missing
-    import pickle as _pickle  # type: ignore
+    try:
+        import cloudpickle as _pickle  # type: ignore
+    except Exception:
+        import pickle as _pickle  # type: ignore
 
 
 def save_model(model: Any, path: str | Path) -> Path:

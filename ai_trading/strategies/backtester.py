@@ -228,7 +228,11 @@ class BacktestEngine:
         duration_years = len(equity) / 252 if len(equity) else 0
         cagr = (equity['total_equity'].iloc[-1] / equity['total_equity'].iloc[0]) ** (1 / max(duration_years, 1e-09)) - 1
         drawdown = (equity['total_equity'] / equity['total_equity'].cummax() - 1).min()
-        turnover = trades['qty'].abs().mul(trades['price']).sum() / equity['total_equity'].iloc[0]
+        turnover = 0.0
+        if not trades.empty and {'qty', 'price'}.issubset(set(trades.columns)):
+            turnover = float(
+                trades['qty'].abs().mul(trades['price']).sum() / equity['total_equity'].iloc[0]
+            )
         calmar = cagr / abs(drawdown) if drawdown else float('inf')
         return {'net_pnl': net_pnl, 'cagr': cagr, 'max_drawdown': abs(drawdown), 'sharpe': sharpe, 'calmar': calmar, 'turnover': turnover}
 

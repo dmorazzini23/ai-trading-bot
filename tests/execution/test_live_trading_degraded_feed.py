@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from datetime import UTC, datetime
+import sys
 from types import SimpleNamespace
 
 import logging
@@ -9,6 +10,23 @@ import logging
 import pytest
 
 from ai_trading.execution import live_trading
+
+
+def _resolve_live_trading_modules() -> list[object]:
+    modules: list[object] = [live_trading]
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        module_name = globals_ns.get("__name__")
+        if isinstance(module_name, str):
+            module_obj = sys.modules.get(module_name)
+            if module_obj is not None and module_obj not in modules:
+                modules.append(module_obj)
+    return modules
+
+
+def _patch_config_getter(monkeypatch, config: object) -> None:
+    for live_mod in _resolve_live_trading_modules():
+        monkeypatch.setattr(live_mod, "get_trading_config", lambda: config, raising=False)
 
 
 class DummyLiveEngine(live_trading.LiveTradingExecutionEngine):
@@ -60,21 +78,27 @@ class DummyLiveEngine(live_trading.LiveTradingExecutionEngine):
 def patch_shared_guards(monkeypatch):
     """Stub shared guard helpers for predictable behaviour."""
 
-    monkeypatch.setattr(live_trading, "_safe_mode_guard", lambda *a, **k: False)
-    monkeypatch.setattr(live_trading, "_require_bid_ask_quotes", lambda: False)
-    monkeypatch.setattr(live_trading, "quote_fresh_enough", lambda *a, **k: True)
-    monkeypatch.setattr(live_trading, "guard_shadow_active", lambda: False)
-    monkeypatch.setattr(live_trading, "is_safe_mode_active", lambda: False)
-    monkeypatch.setattr(
-        live_trading, "_call_preflight_capacity",
-        lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
-    )
-    monkeypatch.setattr(
-        live_trading.provider_monitor,
-        "is_disabled",
-        lambda *_a, **_k: True,
-    )
-    monkeypatch.setattr(live_trading, "pdt_guard", lambda *a, **k: True)
+    for live_mod in _resolve_live_trading_modules():
+        monkeypatch.setattr(live_mod, "_safe_mode_guard", lambda *a, **k: False, raising=False)
+        monkeypatch.setattr(live_mod, "_require_bid_ask_quotes", lambda: False, raising=False)
+        monkeypatch.setattr(live_mod, "quote_fresh_enough", lambda *a, **k: True, raising=False)
+        monkeypatch.setattr(live_mod, "guard_shadow_active", lambda: False, raising=False)
+        monkeypatch.setattr(live_mod, "is_safe_mode_active", lambda: False, raising=False)
+        monkeypatch.setattr(
+            live_mod,
+            "_call_preflight_capacity",
+            lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
+            raising=False,
+        )
+        provider_monitor = getattr(live_mod, "provider_monitor", None)
+        if provider_monitor is not None:
+            monkeypatch.setattr(
+                provider_monitor,
+                "is_disabled",
+                lambda *_a, **_k: True,
+                raising=False,
+            )
+        monkeypatch.setattr(live_mod, "pdt_guard", lambda *a, **k: True, raising=False)
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 
@@ -97,7 +121,7 @@ def test_degraded_feed_logs_basis(monkeypatch, caplog) -> None:
         degraded_feed_limit_widen_bps=12,
         execution_require_realtime_nbbo=False,
     )
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    _patch_config_getter(monkeypatch, config)
 
     caplog.set_level(logging.INFO)
 
@@ -137,7 +161,7 @@ def test_degraded_feed_block_prevents_submission(monkeypatch, caplog) -> None:
         degraded_feed_limit_widen_bps=8,
         execution_require_realtime_nbbo=False,
     )
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    _patch_config_getter(monkeypatch, config)
 
     caplog.set_level(logging.INFO)
 
@@ -227,7 +251,7 @@ def test_realtime_nbbo_gate_skips_degraded_openings(monkeypatch, caplog) -> None
         execution_require_realtime_nbbo=True,
         execution_market_on_degraded=False,
     )
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    _patch_config_getter(monkeypatch, config)
 
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
@@ -266,7 +290,7 @@ def test_market_on_degraded_retains_limit(monkeypatch, caplog) -> None:
         execution_require_realtime_nbbo=False,
         execution_market_on_degraded=True,
     )
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    _patch_config_getter(monkeypatch, config)
 
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
@@ -306,7 +330,7 @@ def test_execute_order_logs_real_order_id(monkeypatch, caplog) -> None:
         execution_require_realtime_nbbo=False,
         execution_market_on_degraded=False,
     )
-    monkeypatch.setattr(live_trading, "get_trading_config", lambda: config)
+    _patch_config_getter(monkeypatch, config)
     monkeypatch.setattr(live_trading.provider_monitor, "is_disabled", lambda *_a, **_k: False)
 
     caplog.set_level(logging.INFO)

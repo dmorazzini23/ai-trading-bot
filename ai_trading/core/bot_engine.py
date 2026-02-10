@@ -8615,7 +8615,19 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
         )
         return None
 
-    if ctx.api is None:
+    api = getattr(ctx, "api", None)
+    if api is None:
+        # Keep context API in sync with the module singleton in case a stale
+        # helper path initialized the client without attaching the runtime.
+        fallback_api = globals().get("trading_client")
+        if fallback_api is not None:
+            try:
+                setattr(ctx, "api", fallback_api)
+            except COMMON_EXC:
+                pass
+            api = getattr(ctx, "api", None)
+
+    if api is None:
         # Log once per process to avoid per-cycle noise when creds are missing
         logger_once.error(
             "ctx.api is None - Alpaca trading client unavailable",
@@ -8623,7 +8635,7 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
         )  # AI-AGENT-REF: unify key to dedupe across call sites
         return None
     try:
-        return ctx.api.get_account()
+        return api.get_account()
     except (
         APIError,
         TimeoutError,

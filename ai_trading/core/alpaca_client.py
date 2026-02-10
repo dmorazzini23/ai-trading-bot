@@ -170,7 +170,16 @@ def _validate_trading_api(api: Any) -> bool:
                     key="alpaca_list_orders_patch_failed",
                 )
         else:
-            log_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
+            if is_shadow_mode() or os.getenv("PYTEST_RUNNING"):
+                log_once.warning(
+                    "ALPACA_LIST_ORDERS_MISSING",
+                    key="alpaca_list_orders_missing",
+                )
+            else:
+                log_once.error(
+                    "ALPACA_LIST_ORDERS_MISSING",
+                    key="alpaca_list_orders_missing",
+                )
             if not is_shadow_mode() and not os.getenv("PYTEST_RUNNING"):
                 raise RuntimeError("Alpaca client missing list_orders method")
             return False
@@ -335,10 +344,10 @@ def ensure_alpaca_attached(ctx) -> None:
         return
     if not _alpaca_api.ALPACA_AVAILABLE:
         try:
+            # Refresh TradingClient availability from the active module state.
+            # This supports test stubs that provide trading-only classes.
             get_trading_client_cls()
-        except RuntimeError:
-            return
-        if not _alpaca_api.ALPACA_AVAILABLE:
+        except COMMON_EXC:
             return
     if not _initialize_alpaca_clients():
         return
@@ -396,6 +405,16 @@ def _initialize_alpaca_clients() -> bool:
         getattr(_get_active_alpaca_api_module(), "ALPACA_AVAILABLE", False)
         or ALPACA_AVAILABLE
     )
+    if not alpaca_available:
+        try:
+            # Re-evaluate availability lazily so trading-only stubs can initialize.
+            get_trading_client_cls()
+        except COMMON_EXC:
+            pass
+        alpaca_available = bool(
+            getattr(_get_active_alpaca_api_module(), "ALPACA_AVAILABLE", False)
+            or ALPACA_AVAILABLE
+        )
     if not alpaca_available:
         be.trading_client = None
         be.data_client = None
@@ -476,8 +495,12 @@ def _initialize_alpaca_clients() -> bool:
             be.trading_client = trading_client_obj
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
-            logger.error("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})
-            log_once.error("ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed")
+            if is_shadow_mode() or os.getenv("PYTEST_RUNNING"):
+                logger.warning("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})
+                log_once.warning("ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed")
+            else:
+                logger.error("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})
+                log_once.error("ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed")
             be.trading_client = None
             be.data_client = None
             return False

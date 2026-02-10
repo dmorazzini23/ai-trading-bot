@@ -1,3 +1,4 @@
+import importlib
 import sys
 import types
 
@@ -5,9 +6,48 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("requests")
-from ai_trading.utils.device import TORCH_AVAILABLE
-if not TORCH_AVAILABLE:
-    pytest.skip("torch not installed", allow_module_level=True)
+
+_PATCHED_MODULES = {
+    "sklearn",
+    "pandas_ta",
+    "pandas_market_calendars",
+    "schedule",
+    "portalocker",
+    "alpaca",
+    "alpaca.trading",
+    "alpaca.trading.client",
+    "alpaca.data",
+    "alpaca.data.timeframe",
+    "alpaca.data.requests",
+    "sklearn.ensemble",
+    "sklearn.linear_model",
+    "sklearn.decomposition",
+    "pipeline",
+    "metrics_logger",
+    "prometheus_client",
+    "finnhub",
+    "pybreaker",
+    "ratelimit",
+    "yfinance",
+}
+_ORIGINAL_MODULES = {name: sys.modules.get(name) for name in _PATCHED_MODULES}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_module_state_after_tests():
+    """Prevent module stubs from leaking into other test modules."""
+    yield
+    for name, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(name, None)
+            continue
+        sys.modules[name] = original
+        try:
+            importlib.reload(original)
+        except Exception:
+            # Some third-party modules are not safely reloadable; keep original object.
+            pass
+
 # Minimal stubs so importing bot_engine succeeds without optional deps
 mods = [
     "sklearn",
@@ -28,8 +68,6 @@ mods = [
     "finnhub",
     "pybreaker",
     "ratelimit",
-    "ai_trading.execution",
-    "ai_trading.capital_scaling",
     # "strategy_allocator",  # AI-AGENT-REF: Don't mock this, it interferes with other tests
 ]
 for name in mods:
@@ -40,22 +78,6 @@ if "sklearn" in sys.modules:
     sys.modules["sklearn"].ensemble = sys.modules["sklearn.ensemble"]
     sys.modules["sklearn"].linear_model = sys.modules["sklearn.linear_model"]
     sys.modules["sklearn"].decomposition = sys.modules["sklearn.decomposition"]
-
-if "ai_trading.capital_scaling" in sys.modules:
-    class _CapScaler:
-        def __init__(self, *a, **k):
-            pass
-
-        def update(self, *a, **k):
-            pass
-
-        def __call__(self, size):
-            return size
-
-        def scale_position(self, size):
-            return size
-
-    sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))
 if "pandas_market_calendars" in sys.modules:

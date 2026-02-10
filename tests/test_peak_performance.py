@@ -4,13 +4,10 @@ Tests for peak performance hardening modules.
 """
 
 from datetime import UTC, datetime
+import sys
 
 import numpy as np
 import pytest
-try:
-    from ai_trading.training.train_ml import LIGHTGBM_AVAILABLE
-except Exception:  # pragma: no cover - optional dependency may be missing or broken
-    LIGHTGBM_AVAILABLE = False
 
 
 # Test idempotency
@@ -199,11 +196,14 @@ def test_adaptive_risk_controls():
         assert kelly_fractions[symbol] >= 0  # Kelly fractions should be non-negative
 
 
-def test_determinism():
+def test_determinism(monkeypatch):
     """Test deterministic training setup."""
     pd = pytest.importorskip("pandas")
-    if not LIGHTGBM_AVAILABLE:
-        pytest.skip("lightgbm not installed")
+    monkeypatch.setitem(
+        sys.modules,
+        "lightgbm",
+        type("_LGBMStub", (), {"reset_parameter": staticmethod(lambda *_a, **_k: None)})(),
+    )
     from ai_trading.utils.determinism import hash_data, set_random_seeds
 
     # Test seed setting

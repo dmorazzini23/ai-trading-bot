@@ -33,22 +33,22 @@ def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runne
     import tools.run_pytest as run_pytest
 
     cmd = [sys.executable, "-m", "pytest", "-q", "-W", "ignore"]
-    addopts = os.environ.get("PYTEST_ADDOPTS", "")
+    addopts = env.get("PYTEST_ADDOPTS", "")
     if (
-        os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
+        env.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
         and ("-p pytest_asyncio" not in addopts)
         and (iu.find_spec("pytest_asyncio") is not None)
     ):
         cmd += ["-p", "pytest_asyncio.plugin"]
     if (
-        os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
+        env.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
         and ("-p xdist.plugin" not in addopts)
         and (iu.find_spec("xdist") is not None)
-        and os.environ.get("NO_XDIST") != "1"
+        and env.get("NO_XDIST") != "1"
     ):
-        cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
+        cmd += ["-p", "xdist.plugin", "-n", env.get("PYTEST_XDIST_N", "auto")]
     if (
-        os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
+        env.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
         and iu.find_spec("pytest_timeout") is not None
     ):
         cmd += ["-p", "pytest_timeout"]
@@ -58,4 +58,3 @@ def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runne
     ]
     expected = run_pytest.echo_command(cmd)
     assert echo.strip() == expected
-

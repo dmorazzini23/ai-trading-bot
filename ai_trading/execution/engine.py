@@ -584,7 +584,12 @@ class OrderManager:
             self.active_orders[order.id] = order
             cache.mark_submitted(key, order.id)
             if not self._monitor_running:
-                self.start_monitoring()
+                # Avoid starting background monitor threads automatically during
+                # unit tests. Tests that need the thread can call
+                # ``start_monitoring()`` explicitly.
+                pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
+                if not pytest_running:
+                    self.start_monitoring()
             logger.info(f"Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}")
             if getattr(order, "expected_price", None) is not None:
                 logger.debug(

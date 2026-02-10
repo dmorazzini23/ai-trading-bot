@@ -84,9 +84,8 @@ def test_httpsession_uses_config_or_default(monkeypatch):
     assert captured["timeout"] == 8.0
 
 
-def test_request_function_errors_without_requests():
-    if http.REQUESTS_AVAILABLE:
-        pytest.skip("requires requests missing")
+def test_request_function_errors_without_requests(monkeypatch):
+    monkeypatch.setattr(http, "REQUESTS_AVAILABLE", False)
     with pytest.raises(RuntimeError):
         http.request("GET", "http://example.com")
 

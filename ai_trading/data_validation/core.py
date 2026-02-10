@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.validation.require_env import should_halt_trading
 
@@ -12,7 +13,9 @@ from ai_trading.validation.require_env import should_halt_trading
 pd = load_pandas()
 __all__ = [
     "check_data_freshness",
+    "get_staleness_threshold",
     "get_stale_symbols",
+    "is_market_hours",
     "validate_trading_data",
     "emergency_data_check",
     "is_valid_ohlcv",
@@ -23,6 +26,34 @@ __all__ = [
     "should_halt_trading",
 ]
 REQUIRED_PRICE_COLS = ('open', 'high', 'low', 'close', 'volume')
+_MARKET_TZ = ZoneInfo("America/New_York")
+
+
+def is_market_hours(ts: datetime | None=None) -> bool:
+    """Return ``True`` during regular US market hours (09:30-16:00 ET weekdays)."""
+    now = ts or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    eastern = now.astimezone(_MARKET_TZ)
+    if eastern.weekday() >= 5:
+        return False
+    open_ts = eastern.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_ts = eastern.replace(hour=16, minute=0, second=0, microsecond=0)
+    return bool(open_ts <= eastern <= close_ts)
+
+
+def get_staleness_threshold(symbol: str, ts: datetime | None=None) -> int:
+    """Return staleness threshold (minutes) based on market session context."""
+    _ = symbol  # kept for future symbol-specific thresholds
+    now = ts or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    eastern = now.astimezone(_MARKET_TZ)
+    if eastern.weekday() >= 5:
+        return 360
+    if is_market_hours(now):
+        return 15
+    return 120
 
 def is_valid_ohlcv(df: pd.DataFrame, min_rows: int=50) -> bool:
     """Return True if ``df`` has required OHLCV columns and rows."""
@@ -34,19 +65,40 @@ def is_valid_ohlcv(df: pd.DataFrame, min_rows: int=50) -> bool:
 
 def check_data_freshness(df: pd.DataFrame | None, symbol: str, *, max_staleness_minutes: int=15) -> dict[str, float | str | bool]:
     """Return freshness info for ``symbol`` handling empty/naive data."""
+    now = datetime.now(UTC)
+    market_open = is_market_hours(now)
+    threshold = int(max_staleness_minutes)
     if df is None or getattr(df, 'empty', True):
-        return {'symbol': symbol, 'is_fresh': False, 'minutes_stale': float('inf')}
+        return {
+            'symbol': symbol,
+            'is_fresh': False,
+            'minutes_stale': float('inf'),
+            'market_hours': market_open,
+            'staleness_threshold': threshold,
+        }
     try:
         last_ts = df.index[-1]
         if not isinstance(last_ts, datetime):
             last_ts = datetime.fromtimestamp(float(last_ts), tz=UTC)
         if last_ts.tzinfo is None:
             last_ts = last_ts.replace(tzinfo=UTC)
-        age = datetime.now(UTC) - last_ts.astimezone(UTC)
+        age = now - last_ts.astimezone(UTC)
         minutes = age.total_seconds() / 60.0
-        return {'symbol': symbol, 'is_fresh': minutes <= max_staleness_minutes, 'minutes_stale': minutes}
+        return {
+            'symbol': symbol,
+            'is_fresh': minutes <= threshold,
+            'minutes_stale': minutes,
+            'market_hours': market_open,
+            'staleness_threshold': threshold,
+        }
     except (ValueError, TypeError):
-        return {'symbol': symbol, 'is_fresh': False, 'minutes_stale': float('inf')}
+        return {
+            'symbol': symbol,
+            'is_fresh': False,
+            'minutes_stale': float('inf'),
+            'market_hours': market_open,
+            'staleness_threshold': threshold,
+        }
 
 def get_stale_symbols(data_map: Mapping[str, object] | None, *, max_staleness_minutes: int=15) -> list[str]:
     """Return symbols whose data is stale.

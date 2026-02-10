@@ -4,12 +4,6 @@ import time
 
 import pytest
 
-pytest.importorskip("gymnasium")
-pytest.importorskip("stable_baselines3")
-from ai_trading.utils.device import TORCH_AVAILABLE
-if not TORCH_AVAILABLE:
-    pytest.skip("torch not installed", allow_module_level=True)
-
 MODULES = [
     "ai_trading.rl_trading",
     "ai_trading.rl_trading.train",
