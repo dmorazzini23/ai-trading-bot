@@ -5,13 +5,27 @@ import pytest
 pd = pytest.importorskip("pandas")
 from ai_trading import indicators, signals
 
-df = pd.DataFrame({
-    'open': np.random.random(500_000) * 100,
-    'high': np.random.random(500_000) * 100,
-    'low': np.random.random(500_000) * 100,
-    'close': np.random.random(500_000) * 100,
-    'volume': np.random.randint(1000, 10000, size=500_000)
-})
+_BENCH_ROWS = 25_000
+
+
+@pytest.fixture(scope="module")
+def bench_df():
+    """Shared input frame for indicator/signal smoke tests.
+
+    Keep this modest to avoid xdist worker crashes from per-worker module import
+    allocations while still exercising vectorized paths.
+    """
+
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(
+        {
+            "open": rng.random(_BENCH_ROWS) * 100.0,
+            "high": rng.random(_BENCH_ROWS) * 100.0,
+            "low": rng.random(_BENCH_ROWS) * 100.0,
+            "close": rng.random(_BENCH_ROWS) * 100.0,
+            "volume": rng.integers(1000, 10_000, size=_BENCH_ROWS),
+        }
+    )
 
 modules = [signals, indicators]
 params = []
@@ -40,9 +54,9 @@ for module in modules:
         params.append(pytest.param(func, id=f"{module.__name__}.{name}"))
 
 @pytest.mark.parametrize("func", params)
-def test_benchmarks(request, func):
+def test_benchmarks(request, func, bench_df):
     """Functional smoke for indicator/signal callability in frozen-time test runs."""
     _ = request  # keep signature stable for existing callers/plugins
-    result = func(df)
+    result = func(bench_df)
     # Some helpers are mutative/no-return by design; this guards only for crashes.
     assert result is not None or result is None

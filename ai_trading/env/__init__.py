@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 import logging
 import os
+import sys
 
 from ai_trading.utils.env import refresh_alpaca_credentials_cache
 
@@ -72,7 +73,15 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
     global _ENV_LOADED
     if _ENV_LOADED:
         return
-    if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
+    # Never load `.env` during pytest collection/execution; tests must be
+    # hermetic and not depend on developer/production environment files.
+    if (
+        os.getenv("PYTEST_RUNNING")
+        or os.getenv("TESTING")
+        or os.getenv("PYTEST_CURRENT_TEST")
+        or os.getenv("PYTEST_XDIST_WORKER")
+        or "pytest" in sys.modules
+    ):
         _ENV_LOADED = True
         refresh_alpaca_credentials_cache()
         return

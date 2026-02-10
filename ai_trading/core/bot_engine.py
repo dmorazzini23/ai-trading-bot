@@ -2042,6 +2042,15 @@ def _attempt_alpaca_trade(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
             extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
         )
+        try:
+            from ai_trading.alpaca_api import _set_alpaca_service_available
+        except Exception:
+            _set_alpaca_service_available = None  # type: ignore[assignment]
+        if callable(_set_alpaca_service_available):
+            try:
+                _set_alpaca_service_available(False)
+            except Exception:
+                pass
         _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
         cache['alpaca_auth_failed'] = True
         cache['trade_source'] = 'alpaca_auth_failed'
@@ -2080,6 +2089,17 @@ def _attempt_alpaca_trade(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
             )
+            try:
+                from ai_trading.alpaca_api import _set_alpaca_service_available
+            except Exception:
+                _set_alpaca_service_available = None  # type: ignore[assignment]
+            if callable(_set_alpaca_service_available):
+                try:
+                    _set_alpaca_service_available(False)
+                except Exception:
+                    pass
+            _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
+            cache['alpaca_auth_failed'] = True
             cache['trade_source'] = 'alpaca_auth_failed'
             try:
                 runtime_state.update_data_provider_state(
@@ -2113,6 +2133,15 @@ def _attempt_alpaca_trade(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
             )
+            try:
+                from ai_trading.alpaca_api import _set_alpaca_service_available
+            except Exception:
+                _set_alpaca_service_available = None  # type: ignore[assignment]
+            if callable(_set_alpaca_service_available):
+                try:
+                    _set_alpaca_service_available(False)
+                except Exception:
+                    pass
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['trade_source'] = 'alpaca_auth_failed'
@@ -2160,6 +2189,15 @@ def _attempt_alpaca_quote(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
             )
+            try:
+                from ai_trading.alpaca_api import _set_alpaca_service_available
+            except Exception:
+                _set_alpaca_service_available = None  # type: ignore[assignment]
+            if callable(_set_alpaca_service_available):
+                try:
+                    _set_alpaca_service_available(False)
+                except Exception:
+                    pass
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['quote_source'] = 'alpaca_auth_failed'

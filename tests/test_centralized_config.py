@@ -25,6 +25,9 @@ class TestCentralizedConfig:
     def test_trading_config_initialization(self, monkeypatch):
         """Test that TradingConfig initializes correctly from environment."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        # Guard against developer shells exporting these knobs (e.g. sourced .env).
+        monkeypatch.delenv("CAPITAL_CAP", raising=False)
+        monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env()
 
         # Test default values are set
@@ -333,6 +336,8 @@ class TestCentralizedConfig:
     def test_conservative_mode_parameters(self, monkeypatch):
         """Test conservative mode specific values."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("CAPITAL_CAP", raising=False)
+        monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env("conservative")
 
         assert config.kelly_fraction == 0.25
@@ -346,6 +351,8 @@ class TestCentralizedConfig:
     def test_balanced_mode_parameters(self, monkeypatch):
         """Test balanced mode specific values."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("CAPITAL_CAP", raising=False)
+        monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env("balanced")
 
         assert config.kelly_fraction == 0.6
@@ -359,6 +366,8 @@ class TestCentralizedConfig:
     def test_aggressive_mode_parameters(self, monkeypatch):
         """Test aggressive mode specific values."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("CAPITAL_CAP", raising=False)
+        monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env("aggressive")
 
         assert config.kelly_fraction == 0.75

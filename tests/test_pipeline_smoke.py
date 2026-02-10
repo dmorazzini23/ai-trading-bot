@@ -17,6 +17,17 @@ def force_coverage(mod):
 
 @pytest.mark.smoke
 def test_pipeline_basic(monkeypatch):
+    # Ensure this test is hermetic even if earlier tests exercised sklearn
+    # import-failure paths that populate lazy-import caches.
+    sys.modules.pop("ai_trading.pipeline", None)
+    sys.modules.pop("ai_trading.pipeline.basic", None)
+    try:
+        from ai_trading.utils.lazy_imports import _load_sklearn_submodule
+    except Exception:  # pragma: no cover - defensive
+        _load_sklearn_submodule = None
+    if _load_sklearn_submodule is not None:
+        _load_sklearn_submodule.cache_clear()
+
     skl_base = types.ModuleType("sklearn.base")
     skl_base.BaseEstimator = type("BE", (), {})
     skl_base.TransformerMixin = type("TM", (), {})
