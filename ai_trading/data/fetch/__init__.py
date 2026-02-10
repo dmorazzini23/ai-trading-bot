@@ -6409,10 +6409,21 @@ def _repair_rth_minute_gaps(
         except Exception:
             feed_hint = None
     gap_limit_ratio = _resolve_gap_ratio_limit(feed=feed_hint)
+    # When the configured gap ratio limit is extremely strict (e.g. 0.5% in
+    # production defaults), even a handful of missing minutes can trigger an
+    # upstream backup fetch. For small gaps in otherwise dense windows, prefer
+    # local interpolation over mixing providers.
+    tiny_gap_local_fill = (
+        initial_missing_count > 0
+        and expected_count >= 30
+        and initial_missing_count <= 3
+        and initial_gap_ratio <= 0.05
+    )
     allow_backup_fill = (
         len(missing) > 0
         and not skip_backup_fill
         and initial_gap_ratio >= gap_limit_ratio
+        and not tiny_gap_local_fill
     )
     backup_suppressed = len(missing) > 0 and not skip_backup_fill and not allow_backup_fill
     used_backup = False
@@ -12603,8 +12614,6 @@ def get_minute_df(
     monitor_reason = gap_reason
     monitor_severity = severity
     if used_backup:
-        monitor_healthy = False
-        monitor_severity = "hard_fail"
         fallback_reason = None
         try:
             fallback_reason = _state.get("fallback_reason")
@@ -12615,7 +12624,38 @@ def get_minute_df(
                 fallback_reason = str(fallback_reason).strip()
             except Exception:
                 fallback_reason = None
-        monitor_reason = fallback_reason or "upstream_unavailable"
+        primary_feed_gap = False
+        residual_gap = False
+        initial_gap_ratio_meta: float | None = None
+        if isinstance(coverage_meta, Mapping):
+            try:
+                primary_feed_gap = bool(coverage_meta.get("primary_feed_gap"))
+            except Exception:
+                primary_feed_gap = False
+            try:
+                residual_gap = bool(coverage_meta.get("residual_gap"))
+            except Exception:
+                residual_gap = False
+            try:
+                raw_initial = coverage_meta.get("initial_gap_ratio")
+                if raw_initial is not None:
+                    initial_gap_ratio_meta = float(raw_initial)
+            except (TypeError, ValueError):
+                initial_gap_ratio_meta = None
+        severe_initial_gap = (
+            initial_gap_ratio_meta is not None and initial_gap_ratio_meta >= 0.10
+        )
+        # If we only needed the backup provider to patch gaps in the primary
+        # feed, avoid forcing a global provider switchover as long as the final
+        # frame is within tolerance.
+        if primary_feed_gap and healthy_gap and not residual_gap and not severe_initial_gap:
+            monitor_healthy = True
+            monitor_severity = "degraded"
+            monitor_reason = fallback_reason or "minute_gap_backfilled"
+        else:
+            monitor_healthy = False
+            monitor_severity = "hard_fail"
+            monitor_reason = fallback_reason or "upstream_unavailable"
     quote_ts_present = False
     quote_age_ms: float | None = None
     last_timestamp_dt = coverage_meta.get("coverage_last_timestamp") if isinstance(coverage_meta, Mapping) else None

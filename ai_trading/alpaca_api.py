@@ -802,10 +802,14 @@ def _get_rest(*, bars: bool = False) -> Any:
         :class:`TradingClient`.
     """
 
-    key = os.getenv("ALPACA_API_KEY")
-    secret = os.getenv("ALPACA_SECRET_KEY")
+    # Resolve credentials using the shared resolver (single source of truth).
+    from ai_trading.broker.alpaca_credentials import resolve_alpaca_credentials_with_base
+
+    creds = resolve_alpaca_credentials_with_base()
+    key = creds.api_key
+    secret = creds.secret_key
     oauth = os.getenv("ALPACA_OAUTH")
-    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    base_url = creds.base_url or "https://paper-api.alpaca.markets"
     if oauth and (key or secret):
         raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
 
@@ -815,6 +819,10 @@ def _get_rest(*, bars: bool = False) -> Any:
         if oauth:
             return StockHistoricalDataClient(
                 oauth_token=oauth,
+            )
+        if not key or not secret:
+            raise RuntimeError(
+                "Missing Alpaca credentials: set ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH"
             )
         return StockHistoricalDataClient(
             api_key=key,
@@ -829,6 +837,10 @@ def _get_rest(*, bars: bool = False) -> Any:
             oauth_token=oauth,
             paper=is_paper,
             url_override=base_url,
+        )
+    if not key or not secret:
+        raise RuntimeError(
+            "Missing Alpaca credentials: set ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH"
         )
     return TradingClient(
         api_key=key,
