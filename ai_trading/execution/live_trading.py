@@ -369,6 +369,22 @@ def _resolve_bool_env(name: str) -> bool | None:
         return None
 
 
+def _runtime_trading_config() -> Any | None:
+    """Resolve trading config via the canonical module binding."""
+    live_mod = sys.modules.get("ai_trading.execution.live_trading")
+    if live_mod is not None:
+        getter = getattr(live_mod, "get_trading_config", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                pass
+    try:
+        return get_trading_config()
+    except Exception:
+        return None
+
+
 def _allow_shorts_configured() -> bool:
     for key in ("TRADING__ALLOW_SHORTS", "AI_TRADING_ALLOW_SHORT"):
         flag = _resolve_bool_env(key)
@@ -2195,10 +2211,7 @@ class ExecutionEngine:
         require_quotes = _require_bid_ask_quotes()
         cfg: Any | None = None
         require_nbbo = False
-        try:
-            cfg = get_trading_config()
-        except Exception:
-            cfg = None
+        cfg = _runtime_trading_config()
         if cfg is not None:
             try:
                 require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
@@ -2757,10 +2770,7 @@ class ExecutionEngine:
         require_quotes = _require_bid_ask_quotes()
         cfg = None
         require_nbbo = False
-        try:
-            cfg = get_trading_config()
-        except Exception:
-            cfg = None
+        cfg = _runtime_trading_config()
         if cfg is not None:
             try:
                 require_nbbo = bool(getattr(cfg, "nbbo_required_for_limit", False))
@@ -3933,6 +3943,7 @@ class ExecutionEngine:
             quantity = capacity.suggested_qty
             order_data["quantity"] = quantity
 
+        qty = quantity
         logger.debug(
             "ORDER_PREFLIGHT_READY",
             extra={

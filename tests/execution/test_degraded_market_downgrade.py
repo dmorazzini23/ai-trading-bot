@@ -51,6 +51,18 @@ def _patch_execution_guards(monkeypatch) -> None:
                 lambda *_a, **_k: True,
                 raising=False,
             )
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        monkeypatch.setitem(globals_ns, "_safe_mode_guard", lambda *a, **k: False)
+        monkeypatch.setitem(globals_ns, "_require_bid_ask_quotes", lambda: False)
+        monkeypatch.setitem(globals_ns, "quote_fresh_enough", lambda *a, **k: True)
+        monkeypatch.setitem(globals_ns, "guard_shadow_active", lambda: False)
+        monkeypatch.setitem(globals_ns, "is_safe_mode_active", lambda: False)
+        monkeypatch.setitem(
+            globals_ns,
+            "_call_preflight_capacity",
+            lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
+        )
     from ai_trading.execution import guards
 
     guards.STATE.pdt = guards.PDTState()
@@ -82,6 +94,9 @@ def test_market_downgrade_when_realtime_nbbo_required(monkeypatch, caplog) -> No
     )
     for live_mod in _resolve_live_trading_modules():
         monkeypatch.setattr(live_mod, "get_trading_config", lambda: config, raising=False)
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        monkeypatch.setitem(globals_ns, "get_trading_config", lambda: config)
     monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
 
     def _fake_submit_market(self, symbol, side, quantity, **kwargs):

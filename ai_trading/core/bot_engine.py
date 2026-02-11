@@ -21711,12 +21711,55 @@ def _evaluate_trade_signal(
 
 
 def _current_qty(ctx, symbol: str) -> int:
-    pos = ctx.position_map.get(symbol) if hasattr(ctx, "position_map") else None  # AI-AGENT-REF: safe lookup
+    symbol_key = str(symbol).upper()
+    position_map = getattr(ctx, "position_map", None)
+    if not isinstance(position_map, MappingABC):
+        position_map = None
+
+    # Fallback to broker positions when the context has not cached a position map yet.
+    if position_map is None:
+        fresh_map: dict[str, Any] = {}
+        api_obj = getattr(ctx, "api", None)
+        list_positions = getattr(api_obj, "list_positions", None)
+        if callable(list_positions):
+            try:
+                broker_positions = list_positions()
+            except COMMON_EXC:
+                broker_positions = ()
+            for pos_entry in broker_positions or ():
+                raw_symbol = getattr(pos_entry, "symbol", None)
+                if raw_symbol in (None, "") and isinstance(pos_entry, MappingABC):
+                    raw_symbol = pos_entry.get("symbol")
+                if raw_symbol in (None, ""):
+                    continue
+                try:
+                    key = str(raw_symbol).strip().upper()
+                except Exception:
+                    continue
+                if key:
+                    fresh_map[key] = pos_entry
+        position_map = fresh_map
+        try:
+            setattr(ctx, "position_map", fresh_map)
+        except Exception:
+            pass
+
+    pos = None
+    if isinstance(position_map, MappingABC):
+        pos = position_map.get(symbol_key)
+        if pos is None:
+            pos = position_map.get(symbol)
     if pos is None:
         return 0
-    qty = getattr(pos, "qty", 0) or 0
+    qty = getattr(pos, "qty", None)
+    if qty in (None, "") and isinstance(pos, MappingABC):
+        qty = pos.get("qty")
+        if qty in (None, ""):
+            qty = pos.get("quantity")
+    if qty in (None, ""):
+        return 0
     try:
-        return int(qty)
+        return int(float(qty))
     except (TypeError, ValueError):
         return 0
 

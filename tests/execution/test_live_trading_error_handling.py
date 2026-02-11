@@ -105,6 +105,35 @@ def test_submit_limit_order_capacity_precheck_runs_once(engine_factory, monkeypa
     assert calls[0][2] == pytest.approx(123.45)
 
 
+def test_execute_order_uses_capacity_suggested_qty(engine_factory, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
+        return lt.CapacityCheck(True, 3)
+
+    def _submit_limit_stub(symbol, side, quantity, limit_price, **kwargs):
+        captured["quantity"] = quantity
+        captured["limit_price"] = limit_price
+        return {
+            "id": "ok",
+            "symbol": symbol,
+            "side": side,
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+        }
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
+    engine = engine_factory(lambda order_data: {"id": "ok", **order_data})
+    engine.submit_limit_order = _submit_limit_stub
+
+    result = engine.execute_order("AAPL", "buy", 10, order_type="limit", limit_price=123.45)
+
+    assert result is not None
+    assert captured["quantity"] == 3
+    assert result.requested_quantity == 3
+
+
 def test_submit_limit_order_returns_broker_payload(engine_factory, monkeypatch):
     submissions: list[dict[str, object]] = []
 

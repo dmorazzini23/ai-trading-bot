@@ -1,8 +1,14 @@
 import pytest
 from types import SimpleNamespace
 
-from ai_trading.execution.engine import ExecutionEngine, ExecutionResult, OrderManager
+from ai_trading.execution.engine import (
+    ExecutionEngine,
+    ExecutionResult,
+    Order,
+    OrderManager,
+)
 from ai_trading.core.enums import OrderSide
+from ai_trading.core.enums import OrderStatus
 from ai_trading.risk.engine import TradeSignal
 
 
@@ -79,3 +85,27 @@ def test_async_fill_triggers_risk_engine(monkeypatch):
     engine._handle_execution_event(order, "completed")
     assert len(risk.fills) == 2
     assert pytest.approx(sum(sig.weight for sig in risk.fills), rel=1e-6) == pytest.approx(0.5)
+
+
+def test_order_add_fill_tracks_partial_then_full():
+    order = Order("AAPL", OrderSide.BUY, 5)
+
+    order.add_fill(2, 101.0)
+    assert order.status == OrderStatus.PARTIALLY_FILLED
+    assert order.filled_quantity == 2
+
+    order.add_fill(3, 102.0)
+    assert order.status == OrderStatus.FILLED
+    assert order.filled_quantity == 5
+
+
+def test_simulate_market_execution_skips_canceled_unfilled_order():
+    engine = ExecutionEngine()
+    order = Order("AAPL", OrderSide.BUY, 5)
+    order.status = OrderStatus.CANCELED
+
+    filled_before = engine.execution_stats["filled_orders"]
+    engine._simulate_market_execution(order)
+
+    assert order.filled_quantity == 0
+    assert engine.execution_stats["filled_orders"] == filled_before

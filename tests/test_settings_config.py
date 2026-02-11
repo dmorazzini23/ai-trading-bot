@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from ai_trading.logging import logger
 from ai_trading.settings import Settings, get_position_size_min_usd, get_settings
 from pydantic import ValidationError
@@ -65,6 +66,28 @@ def test_current_qty_no_position():
         position_map = {}
 
     assert _current_qty(Ctx(), "XYZ") == 0
+
+
+def test_current_qty_falls_back_to_api_positions():
+    """Helper should query broker positions when position_map is absent."""
+    pytest.importorskip("numpy")
+    from ai_trading.core.bot_engine import _current_qty
+
+    calls = {"count": 0}
+
+    def _list_positions():
+        calls["count"] += 1
+        return [
+            SimpleNamespace(symbol="AAPL", qty="7"),
+            SimpleNamespace(symbol="MSFT", qty="-2"),
+        ]
+
+    ctx = SimpleNamespace(api=SimpleNamespace(list_positions=_list_positions))
+
+    assert _current_qty(ctx, "AAPL") == 7
+    assert _current_qty(ctx, "MSFT") == -2
+    assert _current_qty(ctx, "TSLA") == 0
+    assert calls["count"] == 1
 
 
 def test_cfg_data_feed_updates_default_feed(monkeypatch):

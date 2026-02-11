@@ -27,6 +27,9 @@ def _resolve_live_trading_modules() -> list[object]:
 def _patch_config_getter(monkeypatch, config: object) -> None:
     for live_mod in _resolve_live_trading_modules():
         monkeypatch.setattr(live_mod, "get_trading_config", lambda: config, raising=False)
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        monkeypatch.setitem(globals_ns, "get_trading_config", lambda: config)
 
 
 class DummyLiveEngine(live_trading.LiveTradingExecutionEngine):
@@ -99,6 +102,19 @@ def patch_shared_guards(monkeypatch):
                 raising=False,
             )
         monkeypatch.setattr(live_mod, "pdt_guard", lambda *a, **k: True, raising=False)
+    globals_ns = getattr(DummyLiveEngine.execute_order, "__globals__", None)
+    if isinstance(globals_ns, dict):
+        monkeypatch.setitem(globals_ns, "_safe_mode_guard", lambda *a, **k: False)
+        monkeypatch.setitem(globals_ns, "_require_bid_ask_quotes", lambda: False)
+        monkeypatch.setitem(globals_ns, "quote_fresh_enough", lambda *a, **k: True)
+        monkeypatch.setitem(globals_ns, "guard_shadow_active", lambda: False)
+        monkeypatch.setitem(globals_ns, "is_safe_mode_active", lambda: False)
+        monkeypatch.setitem(
+            globals_ns,
+            "_call_preflight_capacity",
+            lambda *a, **k: live_trading.CapacityCheck(True, int(a[3]), None),
+        )
+        monkeypatch.setitem(globals_ns, "pdt_guard", lambda *a, **k: True)
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
 
