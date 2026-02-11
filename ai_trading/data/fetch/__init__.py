@@ -6122,17 +6122,43 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
             needs_sort = True
     if needs_sort:
         df.sort_values("timestamp", inplace=True)
-    ts = pd_local.DatetimeIndex(df["timestamp"])
-    diffs = ts.to_series().diff().dt.total_seconds().iloc[1:]
-    missing = diffs[diffs > 60]
-    if missing.empty:
+    ts_series = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    ts_series = ts_series.dropna()
+    ts = pd_local.DatetimeIndex(ts_series)
+    if ts.empty:
+        return df
+    try:
+        start_utc = ensure_utc_datetime(ts.min())
+        end_utc = ensure_utc_datetime(ts.max())
+    except Exception:
+        return df
+    try:
+        end_utc = end_utc + _dt.timedelta(minutes=1)
+    except Exception:
+        pass
+    try:
+        expected_local = _build_trading_minute_index(
+            pd_local,
+            tz=ZoneInfo("America/New_York"),
+            start_utc=start_utc,
+            end_utc=end_utc,
+        )
+    except Exception:
+        expected_local = pd_local.DatetimeIndex([], tz="UTC")
+    if expected_local.empty:
+        return df
+    expected_utc = expected_local.tz_convert("UTC")
+    missing_index = expected_utc.difference(ts)
+    if missing_index.empty:
         return df
 
-    full_index = pd_local.date_range(ts.min(), ts.max(), freq="1min", tz=ts.tz)
-    gap_count = len(missing)
-    expected_minutes = len(full_index)
-    missing_minutes = max(expected_minutes - len(ts), 0)
+    expected_minutes = int(expected_utc.size)
+    missing_minutes = int(missing_index.size)
     gap_ratio = (missing_minutes / expected_minutes) if expected_minutes else 0.0
+    gap_count = 0
+    if missing_minutes:
+        diffs = missing_index.to_series().diff().dt.total_seconds().fillna(0)
+        gap_count = int((diffs > 60).sum()) + 1
     gap_log = {
         "symbol": symbol,
         "gap_count": gap_count,
@@ -6153,7 +6179,9 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
     if not backfill:
         return df
 
-    df = df.set_index("timestamp").reindex(full_index)
+    df = df.copy()
+    df["timestamp"] = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df = df.set_index("timestamp").reindex(expected_utc)
     df.index.name = "timestamp"
 
     if backfill == "ffill":

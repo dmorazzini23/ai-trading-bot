@@ -12,7 +12,7 @@ from ai_trading.guards import staleness
 from ai_trading.utils import base as base_utils
 
 def _make_gap_df():
-    ts = pd.date_range("2024-01-01 09:30", periods=3, freq="1min", tz="UTC")
+    ts = pd.date_range("2024-01-02 14:30", periods=3, freq="1min", tz="UTC")
     return pd.DataFrame(
         {
             "timestamp": [ts[0], ts[2]],
@@ -45,7 +45,7 @@ def test_backfill_ffill():
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("ignore")
         out = _verify_minute_continuity(df, "TEST", backfill="ffill")
-    ts = pd.date_range("2024-01-01 09:30", periods=3, freq="1min", tz="UTC")
+    ts = pd.date_range("2024-01-02 14:30", periods=3, freq="1min", tz="UTC")
     assert len(out) == 3
     mid = out.loc[out["timestamp"] == ts[1]].iloc[0]
     assert mid["close"] == df["close"].iloc[0]
@@ -56,7 +56,7 @@ def test_backfill_interpolate():
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("ignore")
         out = _verify_minute_continuity(df, "TEST", backfill="interpolate")
-    ts = pd.date_range("2024-01-01 09:30", periods=3, freq="1min", tz="UTC")
+    ts = pd.date_range("2024-01-02 14:30", periods=3, freq="1min", tz="UTC")
     mid = out.loc[out["timestamp"] == ts[1]].iloc[0]
     assert mid["close"] == pytest.approx((df["close"].iloc[0] + df["close"].iloc[1]) / 2)
 

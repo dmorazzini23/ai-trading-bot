@@ -980,7 +980,10 @@ def ensure_logging_configured(level: int | None = None) -> None:
     root = logging.getLogger()
     if _LOGGING_CONFIGURED or root.handlers:
         return
-    logging.basicConfig(level=level or logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    logging.basicConfig(
+        level=level or logging.INFO,
+        format="%(asctime)sZ %(levelname)s %(name)s - %(message)s",
+    )
     _LOGGING_CONFIGURED = True
 
 
@@ -1709,7 +1712,8 @@ def setup_enhanced_logging(
         root_logger.handlers.clear()
         console_handler = logging.StreamHandler(sys.stdout)
         console_formatter = UTCFormatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%SZ",
         )
         console_handler.setFormatter(console_formatter)
         from ai_trading.logging_filters import SecretFilter
@@ -1730,7 +1734,8 @@ def setup_enhanced_logging(
                     file_formatter = JSONFormatter()
                 else:
                     file_formatter = UTCFormatter(
-                        "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+                        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%SZ",
                     )
                 file_handler.setFormatter(file_formatter)
                 file_handler.addFilter(secret_filter)
@@ -1761,7 +1766,10 @@ def _setup_performance_logging():
         return
     try:
         perf_handler = RotatingFileHandler(perf_file, maxBytes=50 * 1024 * 1024, backupCount=3)
-        perf_formatter = UTCFormatter("%(asctime)s PERF %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        perf_formatter = UTCFormatter(
+            "%(asctime)s PERF %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%SZ",
+        )
         perf_handler.setFormatter(perf_formatter)
         from ai_trading.logging_filters import SecretFilter
 
