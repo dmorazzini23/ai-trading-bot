@@ -1140,6 +1140,16 @@ class CapacityCheck:
     reason: str | None = None
 
 
+@dataclass
+class _SignalMeta:
+    """Track signal context needed for post-fill exposure updates."""
+
+    signal: Any | None
+    requested_qty: int
+    signal_weight: float | None
+    reported_fill_qty: int = 0
+
+
 @lru_cache(maxsize=8)
 def _preflight_supports_account_kwarg(preflight_fn: Callable[..., Any]) -> bool:
     """Return True when the provided preflight callable supports an account kwarg."""
@@ -1664,6 +1674,7 @@ class ExecutionEngine:
         self._api_secret: str | None = None
         self._cred_error: Exception | None = None
         self._pending_orders: dict[str, dict[str, Any]] = {}
+        self._order_signal_meta: dict[str, _SignalMeta] = {}
         self._broker_locked_until: float = 0.0
         self._broker_lock_reason: str | None = None
         self._long_only_mode_reason: str | None = None
@@ -3276,7 +3287,7 @@ class ExecutionEngine:
 
         time_in_force_alias = kwargs.pop("tif", None)
         extended_hours = kwargs.get("extended_hours")
-        kwargs.pop("signal", None)
+        signal = kwargs.pop("signal", None)
         signal_weight = kwargs.pop("signal_weight", None)
         price_alias = kwargs.get("price")
         limit_price_kwarg = kwargs.pop("limit_price", None)
@@ -4515,6 +4526,35 @@ class ExecutionEngine:
             return None
 
         order_id_display = order_id or client_order_id
+        if order_id_display:
+            meta_weight = None
+            for candidate in (signal_weight, getattr(signal, "weight", None)):
+                if candidate is None:
+                    continue
+                try:
+                    weight = float(candidate)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(weight):
+                    meta_weight = weight
+                    break
+            if signal is not None or meta_weight is not None:
+                try:
+                    requested_qty_int = int(requested_qty) if requested_qty is not None else int(qty)
+                except (TypeError, ValueError):
+                    try:
+                        requested_qty_int = int(qty)
+                    except (TypeError, ValueError):
+                        requested_qty_int = 0
+                store = getattr(self, "_order_signal_meta", None)
+                if store is None:
+                    store = {}
+                store[str(order_id_display)] = _SignalMeta(signal, requested_qty_int, meta_weight)
+                self._order_signal_meta = store
+            else:
+                store = getattr(self, "_order_signal_meta", None)
+                if store is not None:
+                    store.pop(str(order_id_display), None)
         order_status_lower = _normalize_status(status) if status is not None else None
         rejection_detail = _extract_value(
             final_order,
@@ -4702,6 +4742,28 @@ class ExecutionEngine:
         """Execute an order using slicing-compatible signature."""
 
         return self.execute_order(*args, **kwargs)
+
+    def mark_fill_reported(self, order_id: str, quantity: int) -> None:
+        """Record quantity already forwarded to risk engine to avoid double-counting."""
+
+        store = getattr(self, "_order_signal_meta", None)
+        if store is None:
+            return
+        if order_id is None:
+            return
+        key = str(order_id)
+        meta = store.get(key)
+        if meta is None:
+            return
+        try:
+            qty = int(quantity)
+        except (TypeError, ValueError):
+            return
+        if qty < 0:
+            return
+        meta.reported_fill_qty = max(meta.reported_fill_qty, qty)
+        if meta.reported_fill_qty >= meta.requested_qty:
+            store.pop(key, None)
 
     def safe_submit_order(self, *args: Any, **kwargs: Any) -> str:
         """Submit an order and always return a string identifier."""
