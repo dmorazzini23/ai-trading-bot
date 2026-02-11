@@ -865,7 +865,7 @@ def _short_sale_precheck(
     return True, extras, None
 
 
-def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any, str, int, int, Any, Any]:
+def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any, str, float, int, Any, Any]:
     """Return normalized order metadata for logging and ExecutionResult."""
 
     if isinstance(order_payload, dict):
@@ -903,7 +903,9 @@ def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any
         ) or getattr(order_payload, "requested_quantity", None)
         order_obj = order_payload
 
-    filled_qty = _safe_int(filled_raw, 0)
+    filled_qty = _safe_float(filled_raw)
+    if filled_qty is None:
+        filled_qty = 0.0
     requested_qty = _safe_int(requested_raw, qty_fallback)
     return order_obj, str(status), filled_qty, requested_qty, order_id, client_order_id
 
@@ -6079,7 +6081,7 @@ class ExecutionEngine:
         client_order_id: Any | None,
         order_data_snapshot: Mapping[str, Any],
         limit_price: float | None,
-    ) -> tuple[Any, str, int, int, Any, Any] | None:
+    ) -> tuple[Any, str, float, int, Any, Any] | None:
         """Cancel an idle limit order and replace it with a marketable limit."""
 
         if limit_price is None:

@@ -53,3 +53,17 @@ def test_submit_limit_order_handles_timeout_without_unboundlocalerror(monkeypatc
     assert result is None
     assert any(record.message == "ORDER_SUBMIT_RETRIES_EXHAUSTED" for record in caplog.records)
 
+
+def test_normalize_order_payload_preserves_fractional_fill_qty():
+    payload = {"id": "order-1", "status": "partially_filled", "filled_qty": "0.6", "qty": "1"}
+
+    _, status, filled_qty, requested_qty, order_id, client_order_id = live_trading._normalize_order_payload(
+        payload,
+        qty_fallback=1,
+    )
+
+    assert status == "partially_filled"
+    assert filled_qty == pytest.approx(0.6)
+    assert requested_qty == 1
+    assert order_id == "order-1"
+    assert client_order_id is None
