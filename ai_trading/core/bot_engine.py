@@ -5384,6 +5384,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     )
     required_span = timedelta(minutes=longest_indicator_minutes)
 
+    indicator_backfill_applied = False
     if (end_dt - start_dt) < required_span:
         backfill_date = session_date
         attempts = 0
@@ -5400,6 +5401,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 break
             else:
                 start_dt = session_start
+                indicator_backfill_applied = True
             attempts += 1
 
     def _determine_fallback_feed(
@@ -5922,7 +5924,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
         return None
 
-    low_bar_threshold = max(60, intraday_lookback // 2)
+    # Use a dynamic floor for stale-recovery probes so early-session windows do
+    # not trigger aggressive cross-provider failover solely due to a low elapsed
+    # minute count after the open.
+    low_bar_expected = expected_bars
+    if market_open_now and session_start_dt is not None:
+        session_elapsed = _count_trading_minutes(session_start_dt, end_dt)
+        if session_elapsed > 0:
+            low_bar_expected = session_elapsed
+    low_bar_expected_floor = max(1, int(low_bar_expected * 0.5)) if low_bar_expected > 0 else 1
+    low_bar_threshold = max(1, min(max(1, intraday_lookback // 2), low_bar_expected_floor))
     if df is not None and low_bar_threshold > 0:
         try:
             current_len = int(len(df))
@@ -6245,9 +6256,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 end_dt - timedelta(minutes=intraday_lookback), start_dt
             )
 
-        if session_start_dt is not None:
-            if fallback_start_dt < session_start_dt:
-                fallback_start_dt = session_start_dt
+        if indicator_backfill_applied and session_start_dt is not None and start_dt < session_start_dt:
+            fallback_start_dt = start_dt
+            if coverage_warning_context is not None:
+                coverage_warning_context["fallback_start_adjusted"] = "indicator_history_window"
+        elif session_start_dt is not None and fallback_start_dt < session_start_dt:
+            fallback_start_dt = session_start_dt
 
         coverage_window_start = fallback_start_dt
         if coverage_warning_context is not None:
