@@ -24418,18 +24418,27 @@ def load_candidate_universe(runtime, tickers: list[str] | None = None) -> list[s
         If no tickers are available after loading.
     """  # AI-AGENT-REF: use packaged universe loader
     if tickers is not None:
+        # Preserve a canonical universe separate from cycle-scoped screened symbols.
+        tickers = [symbol for symbol in (str(raw).strip() for raw in tickers) if symbol]
         setattr(runtime, "tickers", tickers)
-    tickers = getattr(runtime, "tickers", None)
+        setattr(runtime, "universe_tickers", list(tickers))
+    else:
+        tickers = getattr(runtime, "universe_tickers", None)
+        if not tickers:
+            tickers = getattr(runtime, "tickers", None)
     if not tickers:
         tickers = load_tickers()
         setattr(runtime, "tickers", tickers)
+        setattr(runtime, "universe_tickers", list(tickers))
     if not tickers:
         raise RuntimeError("No tickers available")
+    if not getattr(runtime, "universe_tickers", None):
+        setattr(runtime, "universe_tickers", list(tickers))
     logger.debug(
         "CANDIDATE_UNIVERSE_LOADED",
         extra={"count": len(tickers)},
     )
-    return tickers
+    return list(tickers)
 
 
 def daily_summary() -> None:
@@ -27036,6 +27045,7 @@ def _prepare_run(
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_candidate_universe(runtime, tickers)
+    setattr(runtime, "universe_tickers", list(full_watchlist))
     degraded_snapshot = _resolve_data_provider_degraded()
     degraded_cycle, degrade_reason, degrade_fatal = _degrade_state(degraded_snapshot)
     try:
@@ -28644,7 +28654,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             for attempt in range(3):
                 try:
                     current_cash, regime_ok, symbols = _prepare_run(
-                        runtime, state, getattr(runtime, "tickers", None)
+                        runtime, state, getattr(runtime, "universe_tickers", None)
                     )
                     break
                 except DataFetchError as e:

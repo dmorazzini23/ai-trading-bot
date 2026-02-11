@@ -231,3 +231,27 @@ def test_load_candidate_universe_raises_when_csv_missing(
     with pytest.raises(RuntimeError):
         bot_engine.load_candidate_universe(runtime)
 
+
+def test_load_candidate_universe_prefers_canonical_runtime_universe(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Cached universe should not be replaced by cycle-scoped screened symbols."""
+
+    runtime = types.SimpleNamespace(
+        tickers=["AAPL", "ABBV", "ABT"],
+        universe_tickers=["AAPL", "MSFT", "GOOGL", "AMZN"],
+    )
+
+    called: list[bool] = []
+
+    def fake_load() -> list[str]:
+        called.append(True)
+        return ["SHOULD_NOT_BE_USED"]
+
+    monkeypatch.setattr(bot_engine, "load_tickers", fake_load)
+
+    symbols = bot_engine.load_candidate_universe(runtime)
+
+    assert symbols == ["AAPL", "MSFT", "GOOGL", "AMZN"]
+    assert runtime.universe_tickers == ["AAPL", "MSFT", "GOOGL", "AMZN"]
+    assert called == []
