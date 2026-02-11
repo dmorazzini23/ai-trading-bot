@@ -177,6 +177,30 @@ class OrderIdempotencyCache:
         with self._lock:
             self._cache[key.hash()] = {'order_id': order_id, 'submitted_at': datetime.now(UTC), 'key': key}
 
+    def check_and_mark_submitted(
+        self,
+        key: IdempotencyKey,
+        order_id: str,
+    ) -> tuple[bool, str | None]:
+        """
+        Atomically check duplicate status and mark a key as submitted.
+
+        Returns:
+            Tuple of (is_duplicate, existing_order_id)
+        """
+        with self._lock:
+            key_hash = key.hash()
+            existing = self._cache.get(key_hash)
+            if isinstance(existing, dict):
+                existing_order_id = existing.get("order_id")
+                return (True, str(existing_order_id) if existing_order_id is not None else None)
+            self._cache[key_hash] = {
+                "order_id": order_id,
+                "submitted_at": datetime.now(UTC),
+                "key": key,
+            }
+            return (False, None)
+
     def get_existing_order(self, key: IdempotencyKey) -> dict | None:
         """
         Get existing order info if this is a duplicate.
@@ -230,12 +254,15 @@ class OrderIdempotencyCache:
         with self._lock:
             return {'size': len(self._cache), 'max_size': self._cache.maxsize, 'ttl': self._cache.ttl}
 _global_cache: OrderIdempotencyCache | None = None
+_global_cache_lock = threading.Lock()
 
 def get_idempotency_cache() -> OrderIdempotencyCache:
     """Get or create global idempotency cache instance."""
     global _global_cache
     if _global_cache is None:
-        _global_cache = OrderIdempotencyCache()
+        with _global_cache_lock:
+            if _global_cache is None:
+                _global_cache = OrderIdempotencyCache()
     return _global_cache
 
 def is_duplicate_order(symbol: str, side: OrderSide | str, quantity: float, intent_timestamp: datetime | None=None) -> tuple[bool, str | None]:

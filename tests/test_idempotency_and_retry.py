@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import types
 from datetime import UTC, datetime
 
@@ -20,6 +21,53 @@ def test_order_idempotency_duplicate_prevented():
     # Duplicate should be rejected by idempotency cache
     assert resp2 is None
     assert getattr(o2, "status", None) is not None
+
+
+def test_idempotency_check_and_mark_is_atomic_across_threads():
+    from ai_trading.execution.idempotency import OrderIdempotencyCache
+
+    cache = OrderIdempotencyCache(ttl_seconds=60, max_size=100)
+    key = cache.generate_key("AAPL", "buy", 5)
+    barrier = threading.Barrier(2)
+    results: list[tuple[bool, str | None]] = []
+    errors: list[Exception] = []
+
+    def _worker(order_id: str) -> None:
+        try:
+            barrier.wait(timeout=2)
+            results.append(cache.check_and_mark_submitted(key, order_id))
+        except Exception as exc:  # pragma: no cover - defensive capture
+            errors.append(exc)
+
+    t1 = threading.Thread(target=_worker, args=("order-1",))
+    t2 = threading.Thread(target=_worker, args=("order-2",))
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert not errors
+    assert len(results) == 2
+    assert sum(1 for is_dup, _existing in results if is_dup) == 1
+    assert sum(1 for is_dup, _existing in results if not is_dup) == 1
+
+
+def test_order_manager_submit_order_uses_atomic_idempotency_check(monkeypatch):
+    from ai_trading.execution.engine import OrderManager, Order
+    from ai_trading.core.enums import OrderSide, OrderType
+
+    manager = OrderManager()
+    cache = manager._ensure_idempotency_cache()
+
+    def _fail_if_called(_key):
+        raise AssertionError("legacy non-atomic idempotency path should not be used")
+
+    monkeypatch.setattr(cache, "is_duplicate", _fail_if_called)
+
+    order = Order(symbol="AAPL", side=OrderSide.BUY, quantity=1, order_type=OrderType.MARKET)
+    response = manager.submit_order(order)
+
+    assert response is not None
 
 
 def test_http_submit_retries_once_then_succeeds(monkeypatch):
@@ -74,4 +122,3 @@ def test_http_submit_retries_once_then_succeeds(monkeypatch):
     )
     assert result["symbol"] == "MSFT"
     assert calls["n"] == 2, "should have retried once"
-

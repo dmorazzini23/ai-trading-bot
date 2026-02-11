@@ -573,16 +573,6 @@ class OrderManager:
                 return None
             cache = self._ensure_idempotency_cache()
             key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(UTC))
-            if cache.is_duplicate(key):
-                logger.warning(f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}")
-                order.status = OrderStatus.REJECTED
-                order.notes += " | Rejected: Duplicate order detected"
-                try:
-                    _orders_duplicate_total.inc()
-                    _orders_rejected_total.inc()
-                except Exception:
-                    pass
-                return None
             if len(self.active_orders) >= self.max_concurrent_orders:
                 logger.error(f"Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})")
                 order.status = OrderStatus.REJECTED
@@ -592,9 +582,27 @@ class OrderManager:
                 except Exception:
                     pass
                 return None
+            is_duplicate, existing_order_id = cache.check_and_mark_submitted(key, order.id)
+            if is_duplicate:
+                logger.warning(
+                    "ORDER_DUPLICATE_SKIPPED",
+                    extra={
+                        "symbol": order.symbol,
+                        "side": getattr(order.side, "value", order.side),
+                        "quantity": order.quantity,
+                        "existing_order_id": existing_order_id,
+                    },
+                )
+                order.status = OrderStatus.REJECTED
+                order.notes += " | Rejected: Duplicate order detected"
+                try:
+                    _orders_duplicate_total.inc()
+                    _orders_rejected_total.inc()
+                except Exception:
+                    pass
+                return None
             self.orders[order.id] = order
             self.active_orders[order.id] = order
-            cache.mark_submitted(key, order.id)
             if not self._monitor_running:
                 # Avoid starting background monitor threads automatically during
                 # unit tests. Tests that need the thread can call
