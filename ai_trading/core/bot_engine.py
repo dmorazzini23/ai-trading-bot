@@ -18217,7 +18217,8 @@ def _build_feature_frames(
             # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
             if feat_df.empty:
                 logger.warning("Parsed feature DataFrame is empty; falling back to raw data")
-                feat_df = raw_df.copy()
+                fallback_source = df if df is not None and not df.empty else raw_df
+                feat_df = fallback_source.copy() if fallback_source is not None else pd.DataFrame()
         except (ValueError, KeyError) as exc:
             logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
             return raw_df, None, True

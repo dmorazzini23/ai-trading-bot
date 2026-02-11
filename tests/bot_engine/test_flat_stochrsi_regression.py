@@ -132,3 +132,42 @@ def test_fetch_feature_data_constant_series(monkeypatch: pytest.MonkeyPatch) -> 
     assert required.issubset(feat_df.columns)
     assert not feat_df["stochrsi"].isna().all()
 
+
+def test_fetch_feature_data_empty_prepare_uses_enriched_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When prepare_indicators drops all rows, retain enriched indicator frame."""
+
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    df = _constant_minute_frame(80)
+
+    def _assign(frame: pd.DataFrame, **cols: float) -> pd.DataFrame:
+        out = frame.copy()
+        for name, value in cols.items():
+            out[name] = value
+        return out
+
+    monkeypatch.setattr(bot_engine, "compute_macd", lambda frame: _assign(frame, macd=0.2))
+    monkeypatch.setattr(bot_engine, "compute_atr", lambda frame: _assign(frame, atr=0.1))
+    monkeypatch.setattr(bot_engine, "compute_vwap", lambda frame: _assign(frame, vwap=125.0))
+    monkeypatch.setattr(
+        bot_engine,
+        "compute_sma",
+        lambda frame: _assign(frame, sma_50=125.0, sma_200=124.0),
+    )
+    monkeypatch.setattr(bot_engine, "compute_macds", lambda frame: _assign(frame, macds=0.3))
+    monkeypatch.setattr(bot_engine, "ensure_columns", lambda frame, cols, symbol: frame)
+    monkeypatch.setattr(bot_engine, "prepare_indicators", lambda frame: frame.iloc[0:0].copy())
+
+    ctx = SimpleNamespace(
+        halt_manager=None,
+        data_fetcher=SimpleNamespace(get_daily_df=lambda _ctx, _symbol: None),
+    )
+
+    raw_df, feat_df, skip = bot_engine._fetch_feature_data(ctx, object(), "FALLBACK", price_df=df)
+
+    assert raw_df is not None and not raw_df.empty
+    assert skip is None
+    assert feat_df is not None and not feat_df.empty
+    assert len(feat_df) == len(df)
+    assert {"macd", "atr", "vwap", "macds", "sma_50", "sma_200"}.issubset(feat_df.columns)
