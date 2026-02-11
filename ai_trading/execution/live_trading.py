@@ -865,7 +865,10 @@ def _short_sale_precheck(
     return True, extras, None
 
 
-def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any, str, float, int, Any, Any]:
+def _normalize_order_payload(
+    order_payload: Any,
+    qty_fallback: float,
+) -> tuple[Any, str, float, float, Any, Any]:
     """Return normalized order metadata for logging and ExecutionResult."""
 
     if isinstance(order_payload, dict):
@@ -906,7 +909,9 @@ def _normalize_order_payload(order_payload: Any, qty_fallback: int) -> tuple[Any
     filled_qty = _safe_float(filled_raw)
     if filled_qty is None:
         filled_qty = 0.0
-    requested_qty = _safe_int(requested_raw, qty_fallback)
+    requested_qty = _safe_float(requested_raw)
+    if requested_qty is None:
+        requested_qty = _safe_float(qty_fallback) or 0.0
     return order_obj, str(status), filled_qty, requested_qty, order_id, client_order_id
 
 
@@ -1616,7 +1621,7 @@ class ExecutionEngine:
 
         self.trading_client = None
         self._broker_sync: BrokerSyncResult | None = None
-        self._open_order_qty_index: dict[str, tuple[int, int]] = {}
+        self._open_order_qty_index: dict[str, tuple[float, float]] = {}
         self.config: AlpacaConfig | None = None
         self.settings = None
         self.execution_mode = str(requested_mode).lower()
@@ -6224,8 +6229,8 @@ class ExecutionEngine:
 
         open_orders_tuple = tuple(open_orders or ())
         positions_tuple = tuple(positions or ())
-        buy_index: dict[str, int] = {}
-        sell_index: dict[str, int] = {}
+        buy_index: dict[str, float] = {}
+        sell_index: dict[str, float] = {}
 
         def _normalize_symbol(value: Any) -> str | None:
             if value in (None, ""):
@@ -6249,7 +6254,7 @@ class ExecutionEngine:
                 return "sell"
             return None
 
-        def _extract_qty(value: Any) -> int:
+        def _extract_qty(value: Any) -> float:
             candidates: list[Any] = []
             if isinstance(value, Mapping):
                 candidates.extend(
@@ -6264,10 +6269,13 @@ class ExecutionEngine:
                 if candidate in (None, ""):
                     continue
                 try:
-                    return abs(int(float(candidate)))
+                    qty = float(candidate)
                 except (TypeError, ValueError):
                     continue
-            return 0
+                if not math.isfinite(qty):
+                    continue
+                return abs(qty)
+            return 0.0
 
         for order in open_orders_tuple:
             if isinstance(order, Mapping):
@@ -6286,9 +6294,9 @@ class ExecutionEngine:
             else:
                 sell_index[symbol] = sell_index.get(symbol, 0) + qty_val
 
-        qty_index: dict[str, tuple[int, int]] = {}
+        qty_index: dict[str, tuple[float, float]] = {}
         for sym in set(buy_index) | set(sell_index):
-            qty_index[sym] = (buy_index.get(sym, 0), sell_index.get(sym, 0))
+            qty_index[sym] = (buy_index.get(sym, 0.0), sell_index.get(sym, 0.0))
 
         snapshot = BrokerSyncResult(
             open_orders=open_orders_tuple,
@@ -6308,13 +6316,13 @@ class ExecutionEngine:
             self._broker_sync = BrokerSyncResult((), (), {}, {}, monotonic_time())
         return self._broker_sync
 
-    def open_order_totals(self, symbol: str) -> tuple[int, int]:
+    def open_order_totals(self, symbol: str) -> tuple[float, float]:
         """Return aggregate (buy_qty, sell_qty) for *symbol* from cached snapshot."""
 
         if not symbol:
-            return (0, 0)
+            return (0.0, 0.0)
         key = symbol.upper()
-        return self._open_order_qty_index.get(key, (0, 0))
+        return self._open_order_qty_index.get(key, (0.0, 0.0))
 
 
 class LiveTradingExecutionEngine(ExecutionEngine):

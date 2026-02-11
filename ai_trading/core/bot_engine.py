@@ -21790,8 +21790,8 @@ def _delta_quantity(
     order_side: str | None,
     target_qty: int,
     position_qty: int,
-    open_buy_qty: int,
-    open_sell_qty: int,
+    open_buy_qty: float,
+    open_sell_qty: float,
 ) -> int:
     """Return delta order quantity accounting for open orders."""
 

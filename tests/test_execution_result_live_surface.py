@@ -1,5 +1,7 @@
 """Tests for :class:`ai_trading.execution.engine.ExecutionResult`."""
 
+import pytest
+
 from ai_trading.execution.engine import ExecutionResult, Order
 from ai_trading.core.enums import OrderSide, OrderType
 
@@ -17,3 +19,12 @@ def test_execution_result_side_maps_short_variants_to_sell():
     result = ExecutionResult(order, "accepted", 0, 1, None)
 
     assert result.side == "sell"
+
+
+def test_execution_result_preserves_fractional_quantities():
+    order = Order(symbol="AAPL", side=OrderSide.BUY, quantity=1, order_type=OrderType.MARKET)
+    result = ExecutionResult(order, "partially_filled", 0.6, 0.8, None)
+
+    assert result.filled_quantity == 0.6
+    assert result.requested_quantity == 0.8
+    assert result.fill_ratio == pytest.approx(0.75)

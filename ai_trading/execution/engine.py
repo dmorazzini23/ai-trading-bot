@@ -43,8 +43,8 @@ class BrokerSyncResult:
 
     open_orders: tuple[Any, ...]
     positions: tuple[Any, ...]
-    open_buy_by_symbol: dict[str, int]
-    open_sell_by_symbol: dict[str, int]
+    open_buy_by_symbol: dict[str, float]
+    open_sell_by_symbol: dict[str, float]
     timestamp: float
 
 # Lightweight Prometheus counters (no-op if client unavailable)
@@ -366,20 +366,32 @@ class ExecutionResult(str):
         cls,
         order: Order | None,
         status: OrderStatus | str | None,
-        filled_quantity: int,
-        requested_quantity: int,
+        filled_quantity: float,
+        requested_quantity: float,
         signal_weight: float | None,
     ) -> "ExecutionResult":
         order_id = getattr(order, "id", "") or ""
         obj = str.__new__(cls, order_id)
         obj.order = order
         obj.status = cls._normalize_status(status)
-        obj.filled_quantity = int(filled_quantity or 0)
-        obj.requested_quantity = int(requested_quantity or 0)
+        obj.filled_quantity = cls._coerce_quantity(filled_quantity)
+        obj.requested_quantity = cls._coerce_quantity(requested_quantity)
         obj.signal_weight = signal_weight
         obj.reconciled = True
         obj.ack_timed_out = False
         return obj
+
+    @staticmethod
+    def _coerce_quantity(value: Any) -> float:
+        if value is None:
+            return 0.0
+        try:
+            qty = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(qty):
+            return 0.0
+        return qty
 
     @property
     def side(self) -> str | None:
@@ -828,7 +840,7 @@ class ExecutionEngine:
         }
         self._last_partial_fill_summary: dict[str, Any] | None = None
         self._broker_sync: BrokerSyncResult | None = None
-        self._open_order_qty_index: dict[str, tuple[int, int]] = {}
+        self._open_order_qty_index: dict[str, tuple[float, float]] = {}
         emit_once(logger, "EXECUTION_ENGINE_INIT", "info", "ExecutionEngine initialized")
         try:
             self.order_manager.add_execution_callback(self._handle_execution_event)
@@ -932,8 +944,8 @@ class ExecutionEngine:
 
         open_orders_tuple = tuple(open_orders or ())
         positions_tuple = tuple(positions or ())
-        buy_index: dict[str, int] = {}
-        sell_index: dict[str, int] = {}
+        buy_index: dict[str, float] = {}
+        sell_index: dict[str, float] = {}
 
         def _normalize_symbol(value: Any) -> str | None:
             if value in (None, ""):
@@ -959,7 +971,7 @@ class ExecutionEngine:
                 return "sell"
             return None
 
-        def _extract_qty(value: Any) -> int:
+        def _extract_qty(value: Any) -> float:
             candidates = []
             if isinstance(value, Mapping):
                 candidates.extend(
@@ -974,10 +986,13 @@ class ExecutionEngine:
                 if candidate in (None, ""):
                     continue
                 try:
-                    return abs(int(float(candidate)))
+                    qty = float(candidate)
                 except (TypeError, ValueError):
                     continue
-            return 0
+                if not math.isfinite(qty):
+                    continue
+                return abs(qty)
+            return 0.0
 
         for order in open_orders_tuple:
             if isinstance(order, Mapping):
@@ -996,9 +1011,9 @@ class ExecutionEngine:
             else:
                 sell_index[symbol] = sell_index.get(symbol, 0) + qty_val
 
-        qty_index: dict[str, tuple[int, int]] = {}
+        qty_index: dict[str, tuple[float, float]] = {}
         for sym in set(buy_index) | set(sell_index):
-            qty_index[sym] = (buy_index.get(sym, 0), sell_index.get(sym, 0))
+            qty_index[sym] = (buy_index.get(sym, 0.0), sell_index.get(sym, 0.0))
 
         snapshot = BrokerSyncResult(
             open_orders=open_orders_tuple,
@@ -1018,13 +1033,13 @@ class ExecutionEngine:
             self._broker_sync = BrokerSyncResult((), (), {}, {}, monotonic_time())
         return self._broker_sync
 
-    def open_order_totals(self, symbol: str) -> tuple[int, int]:
+    def open_order_totals(self, symbol: str) -> tuple[float, float]:
         """Return aggregate (buy_qty, sell_qty) for *symbol* from last sync."""
 
         if not symbol:
-            return (0, 0)
+            return (0.0, 0.0)
         key = symbol.upper()
-        return self._open_order_qty_index.get(key, (0, 0))
+        return self._open_order_qty_index.get(key, (0.0, 0.0))
 
     def _cancel_stale_order(self, order_id: str) -> bool:
         """Attempt to cancel a stale order via broker interface."""

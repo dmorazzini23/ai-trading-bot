@@ -11200,7 +11200,7 @@ def get_minute_df(
             )
         except Exception:
             logger.info("DATA_WINDOW_NO_SESSION")
-    global _state, _GLOBAL_RETRY_LIMIT_LOGGED
+    global _GLOBAL_RETRY_LIMIT_LOGGED
     _state = {
         "window_has_session": bool(window_has_session),
         "no_session_forced": bool(not window_has_session),

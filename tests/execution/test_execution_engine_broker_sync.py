@@ -26,6 +26,21 @@ def test_update_broker_snapshot_tracks_open_quantities() -> None:
     assert engine.synchronize_broker_state() is snapshot
 
 
+def test_update_broker_snapshot_preserves_fractional_quantities() -> None:
+    """Engine should retain fractional open-order quantities."""
+
+    engine = ExecutionEngine()
+    open_orders = [
+        {"symbol": "AAPL", "side": "buy", "qty": "0.6"},
+        SimpleNamespace(symbol="AAPL", side="sell", quantity="0.4"),
+    ]
+    snapshot = engine._update_broker_snapshot(open_orders, positions=[])
+
+    assert snapshot.open_buy_by_symbol["AAPL"] == 0.6
+    assert snapshot.open_sell_by_symbol["AAPL"] == 0.4
+    assert engine.open_order_totals("AAPL") == (0.6, 0.4)
+
+
 class _StubTradingClient:
     def get_orders(self, status: str = "open"):
         return [
@@ -48,3 +63,26 @@ def test_live_engine_fetches_broker_state() -> None:
     assert snapshot.open_orders
     assert snapshot.positions
     assert engine.open_order_totals("AMD") == (3, 1)
+
+
+def test_live_engine_preserves_fractional_open_order_quantities() -> None:
+    """Live engine broker sync should not truncate fractional quantities."""
+
+    class _FractionalStubTradingClient:
+        def get_orders(self, status: str = "open"):
+            return [
+                SimpleNamespace(symbol="AMD", side="buy", qty="0.6"),
+                SimpleNamespace(symbol="AMD", side="sell", qty="0.2"),
+            ]
+
+        def get_all_positions(self):
+            return [SimpleNamespace(symbol="AMD", qty=2)]
+
+    engine = LiveTradingExecutionEngine(ctx=None)
+    engine.trading_client = _FractionalStubTradingClient()
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot.open_buy_by_symbol["AMD"] == 0.6
+    assert snapshot.open_sell_by_symbol["AMD"] == 0.2
+    assert engine.open_order_totals("AMD") == (0.6, 0.2)
