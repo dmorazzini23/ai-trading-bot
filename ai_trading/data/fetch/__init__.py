@@ -12702,8 +12702,12 @@ def get_minute_df(
                     initial_gap_ratio_meta = float(raw_initial)
             except (TypeError, ValueError):
                 initial_gap_ratio_meta = None
+        # Treat initial gaps as "severe" only when they exceed the effective
+        # gap tolerance for the active feed; this avoids forcing a switchover
+        # when IEX gaps are moderate but the repaired frame is within limits.
+        severe_threshold = max(0.10, max_gap_ratio)
         severe_initial_gap = (
-            initial_gap_ratio_meta is not None and initial_gap_ratio_meta >= 0.10
+            initial_gap_ratio_meta is not None and initial_gap_ratio_meta >= severe_threshold
         )
         # If we only needed the backup provider to patch gaps in the primary
         # feed, avoid forcing a global provider switchover as long as the final
