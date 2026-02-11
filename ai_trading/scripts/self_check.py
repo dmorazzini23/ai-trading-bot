@@ -9,6 +9,7 @@ from ai_trading.alpaca_api import (
 )
 from ai_trading.data.models import StockBarsRequest, TimeFrame
 from ai_trading.config.management import get_env, validate_required_env
+from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.logging import logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -27,6 +28,7 @@ def _bars_time_window(timeframe: "TimeFrame") -> tuple[dt.datetime, dt.datetime]
 
 
 def main() -> None:
+    ensure_dotenv_loaded()
     feed = get_env("ALPACA_DATA_FEED", "iex")
     if feed.lower() == "sip" and not (
         get_env("ALPACA_ALLOW_SIP", "0", cast=bool)
@@ -39,7 +41,6 @@ def main() -> None:
     client = DataClient(
         api_key=get_env("ALPACA_API_KEY"),
         secret_key=get_env("ALPACA_SECRET_KEY"),
-        base_url=get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
     )
     try:
         req_day = StockBarsRequest(
