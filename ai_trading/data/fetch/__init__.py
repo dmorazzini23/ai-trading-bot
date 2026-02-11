@@ -93,6 +93,7 @@ APIError = get_api_error_cls()
 # to be used with no change in behavior.
 _state: dict[str, Any] = {}
 _STATE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar("fetch_state_context", default=None)
+_STATE_LOCAL = threading.local()
 _GLOBAL_RETRY_LIMIT_LOGGED = False
 
 
@@ -102,6 +103,9 @@ def _get_fetch_state() -> dict[str, Any]:
     context_state = _STATE_CONTEXT.get()
     if isinstance(context_state, dict):
         return context_state
+    local_state = getattr(_STATE_LOCAL, "state", None)
+    if isinstance(local_state, dict):
+        return local_state
     global_state = globals().get("_state")
     if isinstance(global_state, dict):
         return global_state
@@ -113,6 +117,7 @@ def _set_fetch_state(state: dict[str, Any] | None) -> None:
 
     normalized = state if isinstance(state, dict) else {}
     _STATE_CONTEXT.set(normalized)
+    _STATE_LOCAL.state = normalized
     globals()["_state"] = normalized
 
 # --- Boot-time primary provider override bookkeeping ----------------------
@@ -346,7 +351,10 @@ def _record_session_last_request(session_obj, method, url, params, headers):
             params=params_dict,
             headers=dict(headers or {}),
         )
-        calls = _state.setdefault("calls", {})
+        fetch_state = _get_fetch_state()
+        if not isinstance(fetch_state, dict):
+            return
+        calls = fetch_state.setdefault("calls", {})
         feed_value = params_dict.get("feed")
         if feed_value is not None:
             feeds = calls.setdefault("feeds", [])

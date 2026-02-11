@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import threading
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from ai_trading.data import fetch
 
@@ -98,3 +99,49 @@ def test_get_minute_df_uses_call_local_state(monkeypatch) -> None:
     assert not errors
     assert set(seen_local_state_ids) == {"fetch-thread-1", "fetch-thread-2"}
     assert len(set(seen_local_state_ids.values())) == 2
+
+
+def test_record_session_last_request_is_isolated_per_thread() -> None:
+    """Request bookkeeping should write into each thread-local fetch state."""
+
+    original_state = dict(getattr(fetch, "_state", {}) or {})
+    barrier = threading.Barrier(2)
+    results: dict[str, list[str]] = {}
+    errors: list[Exception] = []
+
+    def _worker(name: str, feed: str) -> None:
+        try:
+            local_state: dict[str, object] = {}
+            fetch._set_fetch_state(local_state)
+            barrier.wait(timeout=2)
+            fetch._record_session_last_request(
+                SimpleNamespace(),
+                "GET",
+                "https://example.com/v2/stocks/bars",
+                {"feed": feed},
+                {},
+            )
+            calls = local_state.get("calls") if isinstance(local_state, dict) else None
+            if isinstance(calls, dict):
+                feeds = calls.get("feeds")
+                if isinstance(feeds, list):
+                    results[name] = [str(value) for value in feeds]
+                else:
+                    results[name] = []
+            else:
+                results[name] = []
+        except Exception as exc:  # pragma: no cover - defensive thread capture
+            errors.append(exc)
+
+    t1 = threading.Thread(target=_worker, args=("one", "iex"))
+    t2 = threading.Thread(target=_worker, args=("two", "sip"))
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    fetch._set_fetch_state(original_state)
+
+    assert not errors
+    assert results["one"] == ["iex"]
+    assert results["two"] == ["sip"]
