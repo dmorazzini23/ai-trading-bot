@@ -9,6 +9,7 @@ np.random.seed(0)
 
 from ai_trading.signals import GaussianHMM, detect_market_regime_hmm, prepare_indicators
 import ai_trading.signals.indicators as ind
+import ai_trading.signals as signals_mod
 
 
 def test_hmm_regime_detection():
@@ -154,3 +155,28 @@ def test_composite_signal_confidence_dict_and_list():
     conf_list = [0.5, 0.25]
     assert ind.composite_signal_confidence(conf_dict) == pytest.approx(0.75)
     assert ind.composite_signal_confidence(conf_list) == pytest.approx(0.75)
+
+
+def test_calculate_macd_accepts_dataframe_with_close_column():
+    df = pd.DataFrame(
+        {
+            "open": np.linspace(100.0, 110.0, 80),
+            "high": np.linspace(101.0, 111.0, 80),
+            "low": np.linspace(99.0, 109.0, 80),
+            "close": np.linspace(100.5, 110.5, 80),
+            "volume": np.linspace(1_000.0, 2_000.0, 80),
+        }
+    )
+    out = signals_mod.calculate_macd(df)
+    assert out is not None
+    assert {"macd", "signal", "histogram"}.issubset(out.columns)
+
+
+def test_calculate_macd_rejects_multicolumn_input_without_close():
+    df = pd.DataFrame(
+        {
+            "open": np.linspace(100.0, 110.0, 80),
+            "price": np.linspace(100.0, 110.0, 80),
+        }
+    )
+    assert signals_mod.calculate_macd(df) is None

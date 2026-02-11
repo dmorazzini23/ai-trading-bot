@@ -7601,9 +7601,13 @@ def _fetch_intraday_bars_chunked(
             if missing:
                 max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
 
-                def _pull(sym: str):
+                def _pull(
+                    sym: str,
+                    _slice_start: datetime = s_dt,
+                    _slice_end: datetime = e_dt,
+                ):
                     try:
-                        return sym, get_minute_df(sym, s_dt, e_dt, feed=feed)
+                        return sym, get_minute_df(sym, _slice_start, _slice_end, feed=feed)
                     except (
                         FileNotFoundError,
                         PermissionError,
@@ -12151,9 +12155,10 @@ def audit_positions(ctx) -> None:
 
 
 def validate_open_orders(ctx: BotContext) -> None:
+    logger = get_logger(__name__)
     local = _parse_local_positions()
     if not local:
-        get_logger(__name__).debug(
+        logger.debug(
             "No local positions parsed; skipping open-order audit"
         )
         return
@@ -12169,7 +12174,6 @@ def validate_open_orders(ctx: BotContext) -> None:
         TypeError,
         OSError,
     ) as e:  # AI-AGENT-REF: narrow exception
-        logger = get_logger(__name__)
         logger.exception(
             "bot_engine: failed to fetch open orders from broker", exc_info=e
         )
@@ -12184,7 +12188,10 @@ def validate_open_orders(ctx: BotContext) -> None:
         if age > 5 and getattr(od, "status", "").lower() in {"new", "accepted"}:
             try:
                 ctx.api.cancel_order(od.id)
-                qty = int(getattr(od, "qty", 0))
+                try:
+                    qty = int(float(getattr(od, "qty", 0) or 0))
+                except (TypeError, ValueError):
+                    qty = 0
                 side = getattr(od, "side", "")
                 if qty > 0 and side in {"buy", "sell"}:
                     req = MarketOrderRequest(
@@ -15493,7 +15500,11 @@ def sector_exposure(ctx: BotContext) -> dict[str, float]:
     except TypeError:
         iter_positions = []
     for pos in iter_positions:
-        qty = abs(int(getattr(pos, "qty", 0)))
+        raw_qty = getattr(pos, "qty", getattr(pos, "quantity", 0))
+        try:
+            qty = abs(float(raw_qty))
+        except (TypeError, ValueError):
+            qty = 0.0
         price = float(
             getattr(pos, "current_price", 0) or getattr(pos, "avg_entry_price", 0) or 0
         )
@@ -17527,7 +17538,18 @@ def _position_entry_price(ctx: BotContext, symbol: str) -> float | None:
     position_map = getattr(ctx, "position_map", None)
     if not isinstance(position_map, MappingABC):
         return None
-    pos = position_map.get(symbol)
+    symbol_key = str(symbol).strip().upper()
+    pos = position_map.get(symbol_key)
+    if pos is None:
+        pos = position_map.get(symbol)
+    if pos is None:
+        for key, candidate in position_map.items():
+            try:
+                if str(key).strip().upper() == symbol_key:
+                    pos = candidate
+                    break
+            except Exception:
+                continue
     if pos is None:
         return None
     raw_price = (

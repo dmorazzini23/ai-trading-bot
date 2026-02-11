@@ -79,6 +79,21 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
 
     from ai_trading.utils.env import refresh_alpaca_credentials_cache
 
+    def _invalidate_settings_caches() -> None:
+        try:
+            get_settings.cache_clear()  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        try:
+            import ai_trading.config as config_pkg
+
+            reset_cached = getattr(config_pkg, "_reset_cached_settings", None)
+            if callable(reset_cached):
+                reset_cached()
+        except Exception:
+            # Best-effort cache invalidation; runtime config reload still proceeds.
+            pass
+
     skip_dotenv = bool(os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"))
 
     if path is None:
@@ -88,10 +103,12 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
             candidate = Path.cwd() / ".env"
             path = candidate if candidate.exists() else None
     if path is None:
+        _invalidate_settings_caches()
         reload_trading_config()
         refresh_alpaca_credentials_cache()
         return None
     _maybe_load_dotenv(path, override=override)
+    _invalidate_settings_caches()
     reload_trading_config()
     refresh_alpaca_credentials_cache()
     return os.fspath(path)

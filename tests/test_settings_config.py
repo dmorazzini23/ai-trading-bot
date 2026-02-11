@@ -90,6 +90,18 @@ def test_current_qty_falls_back_to_api_positions():
     assert calls["count"] == 1
 
 
+def test_position_entry_price_is_case_insensitive():
+    """Entry price lookup should tolerate symbol key casing differences."""
+    pytest.importorskip("numpy")
+    from ai_trading.core.bot_engine import _position_entry_price
+
+    ctx = SimpleNamespace(
+        position_map={"AAPL": SimpleNamespace(avg_entry_price="123.45")}
+    )
+
+    assert _position_entry_price(ctx, "aapl") == pytest.approx(123.45)
+
+
 def test_cfg_data_feed_updates_default_feed(monkeypatch):
     """Mutating ``CFG.data_feed`` propagates to module-level fallbacks."""
 

@@ -8,6 +8,7 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+import math
 from ai_trading.execution.costs import get_symbol_costs
 logger = get_logger(__name__)
 
@@ -73,6 +74,17 @@ class SmartOrderRouter:
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._symbol_params: dict[str, OrderParameters] = {}
         self._active_orders: dict[str, dict] = {}
+
+    @staticmethod
+    def _coerce_numeric(value: object, default: float) -> float:
+        """Return finite numeric values with defensive fallback."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if not math.isfinite(number):
+            return float(default)
+        return number
 
     def get_order_params(self, symbol: str) -> OrderParameters:
         """
@@ -221,9 +233,15 @@ class SmartOrderRouter:
             price_deviation = abs(current_mid - original_limit) / original_limit
             if price_deviation > 0.005:
                 return (True, f'Market moved significantly ({price_deviation:.2%})')
-        filled_qty = order_info.get('filled_quantity', 0)
-        total_qty = order_info.get('quantity', 1)
-        fill_ratio = filled_qty / total_qty
+        filled_qty = self._coerce_numeric(
+            order_info.get('filled_quantity', order_info.get('filled_qty', 0)),
+            0.0,
+        )
+        total_qty = self._coerce_numeric(
+            order_info.get('quantity', order_info.get('qty', 1)),
+            1.0,
+        )
+        fill_ratio = 0.0 if total_qty <= 0 else max(0.0, filled_qty / total_qty)
         if fill_ratio > 0 and fill_ratio < params.min_fill_ratio:
             if order_age > params.max_wait_seconds / 2:
                 return (True, f'Poor fill ratio ({fill_ratio:.1%}) after {order_age:.1f}s')

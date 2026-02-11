@@ -241,7 +241,13 @@ def _validate_macd_input(close_prices, min_len):
     np = _get_numpy()
     if np is None:
         return False
-    if close_prices.isna().any() or np.isinf(close_prices).any():
+    has_nan = bool(close_prices.isna().any())
+    try:
+        values = np.asarray(close_prices, dtype=float)
+    except (TypeError, ValueError):
+        return False
+    has_inf = bool(np.isinf(values).any())
+    if has_nan or has_inf:
         return False
     if len(close_prices) < min_len:
         logger.warning(
@@ -304,6 +310,15 @@ def calculate_macd(close_prices, fast_period: int = 12, slow_period: int = 26, s
         logger.warning("Pandas not available, cannot calculate MACD")
         return None
     try:
+        # Allow callers to pass a full OHLCV frame; MACD only uses close prices.
+        if hasattr(close_prices, "columns"):
+            columns = getattr(close_prices, "columns", [])
+            if "close" in columns:
+                close_prices = close_prices["close"]
+            elif len(columns) == 1:
+                close_prices = close_prices.iloc[:, 0]
+            else:
+                return None
         min_len = slow_period + signal_period
         if not _validate_macd_input(close_prices, min_len):
             return None

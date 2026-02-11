@@ -18,6 +18,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from threading import Lock, Semaphore
 from types import GeneratorType, SimpleNamespace
@@ -91,7 +92,28 @@ APIError = get_api_error_cls()
 # Python’s normal name resolution prefers the closer binding, so the outer `_state` continues
 # to be used with no change in behavior.
 _state: dict[str, Any] = {}
+_STATE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar("fetch_state_context", default=None)
 _GLOBAL_RETRY_LIMIT_LOGGED = False
+
+
+def _get_fetch_state() -> dict[str, Any]:
+    """Return per-execution fetch state with a module-level fallback."""
+
+    context_state = _STATE_CONTEXT.get()
+    if isinstance(context_state, dict):
+        return context_state
+    global_state = globals().get("_state")
+    if isinstance(global_state, dict):
+        return global_state
+    return {}
+
+
+def _set_fetch_state(state: dict[str, Any] | None) -> None:
+    """Bind fetch state for the current execution context and global fallback."""
+
+    normalized = state if isinstance(state, dict) else {}
+    _STATE_CONTEXT.set(normalized)
+    globals()["_state"] = normalized
 
 # --- Boot-time primary provider override bookkeeping ----------------------
 _BOOTSTRAP_PRIMARY_ONCE = True
@@ -1516,7 +1538,7 @@ class EmptyBarsError(DataFetchError, ValueError):
         except Exception:
             message_text = str(self)
         if isinstance(message_text, str) and "alpaca_empty" in message_text.lower():
-            fetch_state = globals().get("_state")
+            fetch_state = _get_fetch_state()
             symbol = None
             feed = None
             if isinstance(fetch_state, dict):
@@ -2124,7 +2146,7 @@ _NO_SESSION_ALPACA_OVERRIDE: str | None = None
 def _reset_state() -> None:
     """Test helper: clear transient module overrides."""
     globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-    globals().pop("_state", None)
+    _set_fetch_state({})
 
 
 def _preferred_feed_failover() -> tuple[str, ...]:
@@ -2549,7 +2571,8 @@ def _mark_fallback(
     log_extra["symbol"] = symbol
     log_extra["timeframe"] = timeframe
     log_extra.setdefault("interval", timeframe)
-    coverage_meta = _state.get("coverage_meta")
+    fetch_state = _get_fetch_state()
+    coverage_meta = fetch_state.get("coverage_meta")
     if isinstance(coverage_meta, Mapping):
         for key in ("gap_ratio", "gap_ratio_pct", "gap_ratio_limit_pct", "gap_over_limit"):
             value = coverage_meta.get(key)
@@ -2572,7 +2595,7 @@ def _mark_fallback(
     if feed_hint:
         metadata["fallback_feed"] = feed_hint
         log_extra["fallback_feed"] = feed_hint
-    last_attempt = _state.get("last_fetch_attempt")
+    last_attempt = fetch_state.get("last_fetch_attempt")
     if isinstance(last_attempt, Mapping):
         for key, value in last_attempt.items():
             log_extra.setdefault(key, value)
@@ -4197,7 +4220,7 @@ def _log_retry_limit_event(symbol: str | None = None, feed: str | None = None) -
         extra={"symbol": symbol, "feed": normalized_feed},
     )
     _log_with_capture(logging.WARNING, "ALPACA_FETCH_RETRY_LIMIT", extra={"symbol": symbol, "feed": normalized_feed})
-    fetch_state = globals().get("_state")
+    fetch_state = _get_fetch_state()
     if isinstance(fetch_state, dict):
         fetch_state["retry_limit_logged"] = True
     _GLOBAL_RETRY_LIMIT_LOGGED = True
@@ -4653,11 +4676,11 @@ def _reset_provider_auth_state_for_tests() -> None:
     _FORCE_SIP_REQUEST = False
     _SIP_DISALLOWED_WARNED = False
     _SIP_PRECHECK_DONE = False
-    current_state = globals().get("_state")
+    current_state = _get_fetch_state()
     if isinstance(current_state, dict):
         current_state.clear()
     else:
-        globals()["_state"] = {}
+        _set_fetch_state({})
     _alpaca_disabled_until = None
     _ALPACA_DISABLED_ALERTED = False
     _alpaca_disable_count = 0
@@ -5374,7 +5397,7 @@ def _flatten_and_normalize_ohlcv(
                 "columns": [str(col) for col in getattr(df, "columns", [])],
             }
             extra = {k: v for k, v in extra.items() if v is not None}
-            fetch_state = globals().get("_state")
+            fetch_state = _get_fetch_state()
             benign_close = False
             if isinstance(fetch_state, dict):
                 short_circuit_flag = bool(fetch_state.get("short_circuit_empty"))
@@ -6004,7 +6027,7 @@ def _post_process(
         return df
     if df is None or getattr(df, "empty", True):
         slots = _fallback_slots_remaining_local()
-        fetch_state = globals().get("_state")
+        fetch_state = _get_fetch_state()
         state_session: bool | None = None
         state_feed: str | None = None
         if isinstance(fetch_state, dict):
@@ -7425,7 +7448,7 @@ def _fetch_bars(
         raise ValueError("end must be a timezone-aware datetime")
     feed = feed if feed not in ("",) else None
     feed, adjustment = _validate_fetch_params(symbol, start_dt, end_dt, timeframe, feed, adjustment)
-    globals()["_state"] = {}
+    _set_fetch_state({})
     has_session = _window_has_trading_session(start_dt, end_dt)
     tf_norm = _canon_tf(timeframe)
     tf_key = (symbol, tf_norm)
@@ -7531,7 +7554,7 @@ def _fetch_bars(
         "symbol": symbol,
         "initial_feed": _feed,
     }
-    globals()["_state"] = _state
+    _set_fetch_state(_state)
     intraday_timeframe = _interval == "1Min"
     intraday_session_active = intraday_timeframe and _state.get("window_has_session", True)
     _state["intraday_session_active"] = intraday_session_active
@@ -11183,6 +11206,7 @@ def get_minute_df(
         "no_session_forced": bool(not window_has_session),
         "retry_limit_logged": False,
     }
+    _set_fetch_state(_state)
     _GLOBAL_RETRY_LIMIT_LOGGED = False
     _clear_gap_ratio_state()
     testing_mode = os.getenv("TESTING")
@@ -13551,7 +13575,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 **kwargs,
             )
         except EmptyBarsError:
-            state_obj = globals().get("_state")
+            state_obj = _get_fetch_state()
             state = state_obj if isinstance(state_obj, dict) else {}
             short_circuit = bool(state.get("short_circuit_empty"))
             fallbacks_off = not bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
@@ -13614,7 +13638,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             import pandas as _pd
 
             if isinstance(df, _pd.DataFrame) and df.empty:
-                state_obj = globals().get("_state")
+                state_obj = _get_fetch_state()
                 state = state_obj if isinstance(state_obj, dict) else {}
                 if not state and _pytest_active():
                     return (df, {}) if return_meta else df
@@ -13649,7 +13673,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             pass
 
         try:
-            short_circuit_local = bool(globals().get("_state", {}).get("short_circuit_empty"))
+            short_circuit_local = bool(_get_fetch_state().get("short_circuit_empty"))
             if df is None and short_circuit_local:
                 empty_frame = _empty_ohlcv_frame()
                 if empty_frame is not None:
@@ -13658,7 +13682,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             pass
 
         try:
-            state = globals().get("_state", {})
+            state = _get_fetch_state()
             meta = dict(state.get("meta", {}) or {})
             providers_list = list(state.get("providers", []) or [])
             if providers_list:
@@ -13672,7 +13696,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
 
         return df
 def _record_gap_ratio_state(ratio: float | None, *, metadata: Mapping[str, Any] | None = None) -> None:
-    state = globals().get("_state")
+    state = _get_fetch_state()
     if not isinstance(state, dict):
         return
     if ratio is None:
@@ -13690,7 +13714,7 @@ def _record_gap_ratio_state(ratio: float | None, *, metadata: Mapping[str, Any] 
 
 
 def _current_gap_ratio(default: float | None = None) -> float | None:
-    state = globals().get("_state")
+    state = _get_fetch_state()
     if not isinstance(state, dict):
         return default
     ratio = state.get("gap_ratio")
@@ -13707,7 +13731,7 @@ def _current_gap_ratio(default: float | None = None) -> float | None:
 
 
 def _clear_gap_ratio_state() -> None:
-    state = globals().get("_state")
+    state = _get_fetch_state()
     if isinstance(state, dict):
         state.pop("gap_ratio", None)
         state.pop("coverage_meta", None)

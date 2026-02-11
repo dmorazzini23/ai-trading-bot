@@ -630,6 +630,24 @@ def test_sector_exposure_handles_non_iterable_positions():
     assert sector_exposure(mock_ctx) == {}
 
 
+def test_sector_exposure_handles_fractional_string_qty():
+    """sector_exposure should parse fractional quantity strings without raising."""
+    from ai_trading.core.bot_engine import sector_exposure
+
+    mock_ctx = Mock()
+    mock_ctx.api = Mock()
+    mock_ctx.api.list_positions.return_value = [
+        Mock(symbol="AAPL", qty="0.5", current_price="200", avg_entry_price="190")
+    ]
+    mock_account = Mock()
+    mock_account.portfolio_value = 1000
+    mock_ctx.api.get_account.return_value = mock_account
+
+    exposure = sector_exposure(mock_ctx)
+    assert exposure
+    assert sum(exposure.values()) == pytest.approx(0.1)
+
+
 def test_data_integrity_validation():
     """Test comprehensive data integrity validation."""
     from ai_trading.data_validation import (

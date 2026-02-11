@@ -9,12 +9,29 @@ Reconciles local trading state with broker truth by:
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import math
 from typing import Any
 
 from ai_trading.core.interfaces import Order, OrderStatus, Position, OrderType
 from ai_trading.order.types import OrderSide
 from ai_trading.utils.time import safe_utcnow
 logger = get_logger(__name__)
+
+
+def _coerce_quantity(value: Any, default: int = 0) -> int:
+    """Parse broker/local quantity payloads defensively."""
+    if value in (None, ""):
+        return default
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(numeric):
+        return default
+    try:
+        return int(numeric)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 @dataclass
 class PositionDrift:
@@ -256,7 +273,7 @@ def reconcile_with_broker(
     try:
         positions = client.list_positions() or []
         for pos in positions:
-            qty = int(getattr(pos, "qty", getattr(pos, "quantity", 0)))
+            qty = _coerce_quantity(getattr(pos, "qty", getattr(pos, "quantity", 0)))
             broker_positions[pos.symbol] = Position(
                 symbol=pos.symbol,
                 quantity=qty,
@@ -276,8 +293,8 @@ def reconcile_with_broker(
             orders = []
         for ord_obj in orders:
             status = OrderStatus(getattr(ord_obj, "status"))
-            qty = int(getattr(ord_obj, "qty", getattr(ord_obj, "quantity", 0)))
-            filled_qty = int(
+            qty = _coerce_quantity(getattr(ord_obj, "qty", getattr(ord_obj, "quantity", 0)))
+            filled_qty = _coerce_quantity(
                 getattr(ord_obj, "filled_qty", getattr(ord_obj, "filled_quantity", 0))
             )
             broker_orders[ord_obj.id] = Order(
@@ -329,7 +346,8 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
     # Extract local state
     local_positions: dict[str, int] = {}
     for sym, pos in (getattr(ctx, "positions", {}) or {}).items():
-        qty = pos.quantity if isinstance(pos, Position) else int(pos)
+        raw_qty = pos.quantity if isinstance(pos, Position) else pos
+        qty = _coerce_quantity(raw_qty)
         local_positions[sym] = qty
 
     local_orders_list = list(getattr(ctx, "orders", []) or [])
@@ -340,7 +358,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
         try:
             broker_order = broker_client.get_order(order.id)
             broker_status = OrderStatus(getattr(broker_order, "status"))
-            filled_qty = int(
+            filled_qty = _coerce_quantity(
                 getattr(broker_order, "filled_qty", getattr(broker_order, "filled_quantity", order.filled_quantity))
             )
             if order.status != broker_status or order.filled_quantity != filled_qty:

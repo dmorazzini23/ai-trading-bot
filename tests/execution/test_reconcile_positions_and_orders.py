@@ -66,3 +66,42 @@ def test_reconciliation_updates_state():
     assert ctx.positions["AAPL"] == 10
     assert ctx.orders[0].status is OrderStatus.FILLED
 
+
+def test_reconcile_with_fractional_string_quantities():
+    """String decimal quantities from broker payloads should not crash reconciliation."""
+
+    broker = DummyBroker()
+    broker._order = SimpleNamespace(
+        id="1",
+        status="filled",
+        filled_qty="0.5",
+        symbol="AAPL",
+    )
+    broker.list_positions = lambda: [  # type: ignore[assignment]
+        SimpleNamespace(symbol="AAPL", qty="0.5", market_value=0, cost_basis=0, unrealized_pl=0),
+    ]
+
+    ctx = SimpleNamespace(
+        api=broker,
+        positions={"AAPL": "0.5"},
+        orders=[
+            Order(
+                id="1",
+                symbol="AAPL",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                status=OrderStatus.PENDING,
+                quantity=1,
+                filled_quantity=0,
+                price=None,
+                filled_price=None,
+                timestamp=datetime.now(UTC),
+            )
+        ],
+    )
+
+    result = reconcile_positions_and_orders(ctx)
+
+    assert isinstance(result, ReconciliationResult)
+    assert isinstance(ctx.positions, dict)
+    assert ctx.orders[0].status is OrderStatus.FILLED

@@ -28,7 +28,7 @@ from .management import (
     reload_env,
     is_shadow_mode,
     validate_required_env,
-    validate_alpaca_credentials,
+    validate_alpaca_credentials as _validate_alpaca_credentials_from_management,
     _resolve_alpaca_env,
     SEED,
     MAX_EMPTY_RETRIES,
@@ -61,6 +61,17 @@ logger = logging.getLogger(__name__)
 
 
 _CACHED_SETTINGS: object | None = None
+
+
+def _reset_cached_settings() -> None:
+    """Clear this module's cached settings reference."""
+
+    global _CACHED_SETTINGS
+    _CACHED_SETTINGS = None
+    try:
+        _settings_get_settings.cache_clear()  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
 
 
 def _default_test_settings() -> SimpleNamespace:
@@ -345,18 +356,7 @@ def get_max_drawdown_threshold() -> float:
 
 
 def validate_alpaca_credentials() -> None:
-    missing = [
-        name
-        for name, value in {
-            "ALPACA_API_KEY": ALPACA_API_KEY,
-            "ALPACA_SECRET_KEY": ALPACA_SECRET_KEY,
-            "ALPACA_API_URL": ALPACA_BASE_URL,
-        }.items()
-        if value in (None, "")
-    ]
-    if missing:
-        raise RuntimeError(f"Missing required Alpaca credentials: {', '.join(missing)}")
-    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL"))
+    _validate_alpaca_credentials_from_management()
 
 
 def log_config(mask_fields: Sequence[str] | None = None) -> None:
