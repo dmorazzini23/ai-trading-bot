@@ -241,10 +241,12 @@ def begin_cycle(universe_size: int, degraded: bool) -> None:
 
     STATE.universe_size = int(universe_size or 0)
     STATE.stale_symbols = 0
+    # Shadow cycles are only forced by explicit guards (e.g., PDT lockout).
+    # Degraded data should not implicitly enable shadow mode.
     if STATE.shadow_cycle_forced:
         STATE.shadow_cycle = True
     else:
-        STATE.shadow_cycle = bool(degraded)
+        STATE.shadow_cycle = False
 
 
 def mark_symbol_stale() -> None:
@@ -256,12 +258,10 @@ def mark_symbol_stale() -> None:
 def end_cycle(stale_threshold_ratio: float = 0.30) -> None:
     """Finalize cycle bookkeeping and promote shadow mode if required."""
 
-    if STATE.universe_size > 0:
-        ratio = STATE.stale_symbols / float(STATE.universe_size)
-        trigger_shadow = ratio >= stale_threshold_ratio
-        STATE.shadow_cycle_forced = trigger_shadow
-        if trigger_shadow:
-            STATE.shadow_cycle = True
+    # Shadow cycles are not promoted based on stale ratios; only explicit
+    # guards (e.g., PDT lockout) should enforce shadow mode.
+    if STATE.shadow_cycle_forced:
+        STATE.shadow_cycle = True
 
 
 def shadow_active() -> bool:

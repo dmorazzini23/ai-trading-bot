@@ -17,10 +17,10 @@ def test_shadow_cycle_persists_after_stale_ratio_trip() -> None:
     for _ in range(4):
         guards.mark_symbol_stale()
     guards.end_cycle(stale_threshold_ratio=0.30)
-    assert guards.shadow_active()
+    assert not guards.shadow_active()
 
     guards.begin_cycle(universe_size=8, degraded=False)
-    assert guards.shadow_active()
+    assert not guards.shadow_active()
 
     guards.end_cycle(stale_threshold_ratio=0.50)
     guards.begin_cycle(universe_size=5, degraded=False)
@@ -30,7 +30,7 @@ def test_shadow_cycle_persists_after_stale_ratio_trip() -> None:
 def test_shadow_cycle_respects_degraded_flag() -> None:
     _reset_state()
     guards.begin_cycle(universe_size=12, degraded=True)
-    assert guards.shadow_active()
+    assert not guards.shadow_active()
 
     guards.end_cycle(stale_threshold_ratio=0.30)
     guards.begin_cycle(universe_size=12, degraded=False)
