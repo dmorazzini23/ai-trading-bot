@@ -256,7 +256,8 @@ class SignalAggregator:
     def _apply_turnover_penalty(self, signal: StrategySignal, timestamp: datetime | None=None) -> StrategySignal:
         """Apply turnover penalty to reduce excessive trading."""
         try:
-            signal_id = f'{signal.symbol}_{signal.side.value}'
+            side_value = getattr(signal.side, "value", signal.side)
+            signal_id = f'{signal.symbol}_{side_value}'
             recent_signals = [entry for entry in self.ensemble_history[-10:] if entry.get('signal_id') == signal_id]
             if len(recent_signals) > 3:
                 penalty_factor = 1.0 - self.turnover_penalty * (len(recent_signals) - 3)
@@ -334,7 +335,18 @@ class SignalAggregator:
         try:
             if not output_signal or not timestamp:
                 return
-            entry = {'timestamp': timestamp, 'input_signals': len(input_signals), 'output_signal': {'symbol': output_signal.symbol, 'strength': output_signal.strength, 'confidence': output_signal.confidence, 'side': output_signal.side.value}, 'signal_id': f'{output_signal.symbol}_{output_signal.side.value}'}
+            side_value = getattr(output_signal.side, "value", output_signal.side)
+            entry = {
+                'timestamp': timestamp,
+                'input_signals': len(input_signals),
+                'output_signal': {
+                    'symbol': output_signal.symbol,
+                    'strength': output_signal.strength,
+                    'confidence': output_signal.confidence,
+                    'side': side_value,
+                },
+                'signal_id': f'{output_signal.symbol}_{side_value}',
+            }
             self.ensemble_history.append(entry)
             if len(self.ensemble_history) > 1000:
                 self.ensemble_history = self.ensemble_history[-500:]

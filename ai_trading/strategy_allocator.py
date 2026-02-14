@@ -296,6 +296,7 @@ class StrategyAllocator:
                 # Normalize side to canonical strings and accept common aliases
                 side_value = getattr(s, "side", "")
                 side_is_enum = isinstance(side_value, OrderSide)
+                side_is_enum = bool(getattr(s, "_side_is_enum", side_is_enum))
                 if side_is_enum:
                     s.side = "buy" if side_value is OrderSide.BUY else "sell"
                 else:

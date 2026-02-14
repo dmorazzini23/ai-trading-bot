@@ -110,7 +110,30 @@ class MovingAverageCrossoverStrategy:
         action = self._latest_cross(short, long)
         signals: list[StrategySignal] = []
         if action:
-            signals.append(StrategySignal(symbol=sym, side=action))
+            try:
+                last_short = float(short.iloc[-1])
+                last_long = float(long.iloc[-1])
+                denom = max(abs(last_long), 1e-6)
+                strength = min(abs(last_short - last_long) / denom, 1.0)
+            except (TypeError, ValueError):
+                strength = 0.5
+            confidence = min(1.0, 0.5 + strength * 0.5)
+            bar_ts = None
+            try:
+                bar_ts = df.index[-1]
+            except (AttributeError, IndexError, TypeError):
+                bar_ts = None
+            metadata = {"bar_ts": bar_ts.isoformat() if hasattr(bar_ts, "isoformat") else bar_ts}
+            signals.append(
+                StrategySignal(
+                    symbol=sym,
+                    side=action,
+                    strength=strength,
+                    confidence=confidence,
+                    timeframe="1Day",
+                    metadata=metadata,
+                )
+            )
         now = monotonic_time()
         if self._guard_last_summary == 0.0:
             self._guard_last_summary = now

@@ -93,7 +93,7 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
 class _StartupConfig(BaseModel):
     """Minimal runtime configuration validated at startup."""
 
-    timeframe: Literal["1Min", "1Day"]
+    timeframe: Literal["1Min", "5Min", "15Min", "1Hour", "1Day"]
     data_feed: Literal["iex", "sip"]
 
     @field_validator("timeframe", mode="before")
@@ -102,6 +102,12 @@ class _StartupConfig(BaseModel):
         s = str(v).strip().lower()
         if s in {"1min", "1m", "minute", "1 minute"}:
             return "1Min"
+        if s in {"5min", "5m", "5 minute", "5 minutes"}:
+            return "5Min"
+        if s in {"15min", "15m", "15 minute", "15 minutes"}:
+            return "15Min"
+        if s in {"1hour", "1h", "hour", "1 hour", "60min", "60 minute", "60 minutes"}:
+            return "1Hour"
         if s in {"1day", "1d", "day", "1 day"}:
             return "1Day"
         raise ValueError(f"Unsupported timeframe: {v}")

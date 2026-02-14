@@ -26,10 +26,12 @@ from functools import cached_property, lru_cache
 
 from json import JSONDecodeError
 # Safe 'requests' import with stub + RequestException binding
+_REQUESTS_STUB = False
 try:  # pragma: no cover
     import requests  # type: ignore
     RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
+    _REQUESTS_STUB = True
     class RequestException(Exception):
         pass
 
@@ -44,11 +46,13 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
     requests = _RequestsStub()  # type: ignore
 
 # Reusable HTTP session
+_HTTP_SESSION_STUB = False
 try:  # pragma: no cover
     from ai_trading.net.http import HTTPSession, get_http_session
 
     _HTTP_SESSION: HTTPSession = get_http_session()
 except (ImportError, AttributeError, RuntimeError):  # pragma: no cover - fallback when requests missing
+    _HTTP_SESSION_STUB = True
     class _HTTPStub:
         def get(self, *a, **k):  # type: ignore[no-untyped-def]
             raise RequestException("HTTPSession unavailable")
@@ -7930,6 +7934,13 @@ class BotState:
     skipped_cycles: int = 0
     auth_skipped_symbols: set[str] = field(default_factory=set)
     cycle_order_intents: dict[str, str] = field(default_factory=dict)
+    last_eval_bar_ts: dict[tuple[str, str], datetime] = field(default_factory=dict)
+    last_order_bar_ts: dict[str, datetime] = field(default_factory=dict)
+    last_order_client_id: dict[str, str] = field(default_factory=dict)
+    turnover_dollars: dict[tuple[date, str, str], float] = field(default_factory=dict)
+    stop_lock: dict[str, dict[str, Any]] = field(default_factory=dict)
+    recon_halt: bool = False
+    last_recon_ts: datetime | None = None
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -16464,8 +16475,21 @@ def submit_order(
     if exec_kwargs.get("price_hint") is None and price is not None:
         exec_kwargs["price_hint"] = price
 
-    if not market_is_open():
-        logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
+    cfg = _resolve_trading_config(ctx)
+    kill_switch, kill_reason = _kill_switch_active(cfg)
+    if kill_switch:
+        logger.warning(
+            "KILL_SWITCH_BLOCK",
+            extra={"symbol": symbol, "reason": kill_reason or "kill_switch"},
+        )
+        return None
+    rth_only = bool(getattr(cfg, "rth_only", True))
+    allow_extended = bool(getattr(cfg, "allow_extended", False))
+    if (rth_only or not allow_extended) and not market_is_open():
+        logger.warning(
+            "MARKET_CLOSED_ORDER_SKIP",
+            extra={"symbol": symbol, "reason": "MARKET_CLOSED_BLOCK"},
+        )
         return None
 
     # AI-AGENT-REF: Add validation for execution engine initialization
@@ -16826,9 +16850,20 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             except COMMON_EXC:
                 pass
 
-    if not skip_market_check and not (pytest_running or market_is_open()):
+    cfg = get_trading_config()
+    kill_switch, kill_reason = _kill_switch_active(cfg)
+    if kill_switch:
         logger.warning(
-            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": order_args.get("symbol", "")}
+            "KILL_SWITCH_BLOCK",
+            extra={"symbol": order_args.get("symbol", ""), "reason": kill_reason or "kill_switch"},
+        )
+        return _dummy_order("kill_switch")
+
+    rth_only = bool(getattr(cfg, "rth_only", True))
+    allow_extended = bool(getattr(cfg, "allow_extended", False))
+    if not skip_market_check and (rth_only or not allow_extended) and not (pytest_running or market_is_open()):
+        logger.warning(
+            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": order_args.get("symbol", ""), "reason": "MARKET_CLOSED_BLOCK"}
         )
         client_order_id = order_args.get("client_order_id") or "market_closed"
         qty_val = order_args.get("qty", 0)
@@ -28312,6 +28347,497 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     return False
 
 
+def _resolve_trading_config(runtime) -> TradingConfig:
+    cfg = getattr(runtime, "cfg", None)
+    if cfg is None or not isinstance(cfg, TradingConfig):
+        cfg = get_trading_config()
+    return cfg
+
+
+def _netting_pipeline_enabled(runtime) -> bool:
+    cfg = getattr(runtime, "cfg", None)
+    try:
+        pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
+    except Exception:
+        pytest_running = False
+    if cfg is None and pytest_running:
+        return False
+    cfg = _resolve_trading_config(runtime)
+    return bool(getattr(cfg, "netting_enabled", False))
+
+
+def _enforce_dependency_preflight(runtime) -> None:
+    cfg = _resolve_trading_config(runtime)
+    testing_flag = bool(getattr(cfg, "testing", False))
+    try:
+        testing_flag = testing_flag or bool(get_env("AI_TRADING_TESTING", "0", cast=bool))
+    except Exception:
+        testing_flag = testing_flag or False
+    if testing_flag:
+        return
+    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+    if execution_mode not in {"paper", "live"}:
+        return
+    if _REQUESTS_STUB:
+        raise RuntimeError("requests is required for paper/live trading")
+    if _HTTP_SESSION_STUB:
+        raise RuntimeError("HTTP session unavailable for paper/live trading")
+
+
+def _kill_switch_active(cfg: TradingConfig) -> tuple[bool, str | None]:
+    flag = bool(getattr(cfg, "kill_switch", False))
+    if flag:
+        return True, "env"
+    path = getattr(cfg, "kill_switch_path", None)
+    if path:
+        try:
+            if Path(path).exists():
+                return True, "file"
+        except Exception:
+            return True, "file_error"
+    return False, None
+
+
+def _freshness_seconds_for_timeframe(timeframe: str) -> int:
+    mapping = {
+        "1Min": 120,
+        "5Min": 600,
+        "15Min": 1800,
+        "1Hour": 7200,
+        "1Day": 86400,
+    }
+    return int(mapping.get(timeframe, 900))
+
+
+def _score_from_bars(df) -> tuple[float, float]:
+    try:
+        if df is None or df.empty or len(df) < 2:
+            return 0.0, 0.0
+        close = df["close"]
+        last = float(close.iloc[-1])
+        prev = float(close.iloc[-2])
+        if prev <= 0:
+            return 0.0, 0.0
+        ret = (last / prev) - 1.0
+        score = max(-1.0, min(1.0, ret * 100.0))
+        confidence = min(1.0, abs(score))
+        return score, confidence
+    except Exception:
+        return 0.0, 0.0
+
+
+def _write_decision_record(record: Any, path: str | None) -> None:
+    try:
+        payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
+    except Exception:
+        payload = {"record": repr(record)}
+    logger.info("DECISION_RECORD", extra={"decision": payload})
+    if not path:
+        return
+    try:
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, sort_keys=True))
+            fh.write("\n")
+    except Exception as exc:
+        logger.warning("DECISION_RECORD_WRITE_FAILED", extra={"error": str(exc)})
+
+
+def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now: datetime) -> bool:
+    if not bool(getattr(cfg, "recon_enabled", False)):
+        return True
+    interval = int(getattr(cfg, "recon_interval_seconds", 300))
+    last_ts = getattr(state, "last_recon_ts", None)
+    if last_ts and (now - last_ts).total_seconds() < interval:
+        return not bool(getattr(state, "recon_halt", False))
+    try:
+        from ai_trading.oms.reconcile import fetch_broker_positions, reconcile
+
+        internal_positions = state.position_cache or compute_current_positions(runtime)
+        broker_positions = fetch_broker_positions(getattr(runtime, "api", None))
+        result = reconcile(internal_positions, broker_positions, tolerance_shares=0.0)
+        state.last_recon_ts = now
+        if not result.ok:
+            state.recon_halt = True
+            logger.error(
+                "RECON_MISMATCH_HALT",
+                extra={"mismatches": result.mismatches, "summary": result.summary},
+            )
+            return False
+        state.recon_halt = False
+        return True
+    except Exception as exc:
+        logger.warning("RECONCILIATION_FAILED", extra={"error": str(exc)})
+        state.last_recon_ts = now
+        return not bool(getattr(state, "recon_halt", False))
+
+
+def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float) -> None:
+    from ai_trading.analytics.attribution import compute_attribution_metrics
+    from ai_trading.core.data_contract import normalize_bars, validate_bars
+    from ai_trading.core.horizons import build_sleeve_configs
+    from ai_trading.core.netting import (
+        DecisionRecord,
+        NettedTarget,
+        SleeveProposal,
+        apply_global_caps,
+        apply_turnover_gate,
+        compute_sleeve_proposal,
+        net_targets_for_symbol,
+    )
+    from ai_trading.data.fetch import get_bars_batch
+    from ai_trading.oms.ledger import LedgerEntry, OrderLedger, deterministic_client_order_id
+
+    cfg = _resolve_trading_config(runtime)
+    now = datetime.now(UTC)
+    rth_only = bool(getattr(cfg, "rth_only", True))
+    if rth_only and not market_is_open(now):
+        _run_reconciliation_if_due(state, runtime, cfg, now)
+        record = DecisionRecord(
+            symbol="ALL",
+            bar_ts=now,
+            sleeves=[],
+            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
+            gates=["MARKET_CLOSED_BLOCK", "IDLE_MARKET_CLOSED"],
+        )
+        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        return
+
+    if not _run_reconciliation_if_due(state, runtime, cfg, now):
+        record = DecisionRecord(
+            symbol="ALL",
+            bar_ts=now,
+            sleeves=[],
+            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
+            gates=["RECON_MISMATCH_HALT"],
+        )
+        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        return
+
+    kill_switch, kill_reason = _kill_switch_active(cfg)
+    sleeves = [s for s in build_sleeve_configs(cfg) if s.enabled]
+    if not sleeves:
+        logger.warning("HORIZONS_EMPTY")
+        return
+
+    symbols = list(getattr(runtime, "tickers", []) or [])
+    if not symbols:
+        symbols = list(getattr(runtime, "universe_tickers", []) or [])
+    if not symbols:
+        logger.warning("NETTING_NO_SYMBOLS")
+        return
+
+    ensure_data_fetcher(runtime)
+    positions = compute_current_positions(runtime)
+    proposals_by_symbol: dict[str, list[SleeveProposal]] = {sym: [] for sym in symbols}
+    latest_bar_ts: dict[str, datetime] = {}
+    latest_price: dict[str, float] = {}
+    skip_reasons: dict[str, list[str]] = {sym: [] for sym in symbols}
+
+    for sleeve in sleeves:
+        end = now
+        start = end - timedelta(seconds=_freshness_seconds_for_timeframe(sleeve.timeframe) * 50)
+        bars_map = get_bars_batch(symbols, sleeve.timeframe, start, end)
+        for symbol, df in bars_map.items():
+            df = normalize_bars(df, sleeve.timeframe, tz=UTC, rth_only=rth_only)
+            if bool(getattr(cfg, "data_contract_enabled", True)):
+                result = validate_bars(df, sleeve.timeframe, _freshness_seconds_for_timeframe(sleeve.timeframe), rth_only=rth_only)
+                if not result.ok:
+                    proposals_by_symbol[symbol].append(
+                        SleeveProposal(
+                            symbol=symbol,
+                            sleeve=sleeve.name,
+                            bar_ts=now,
+                            target_dollars=0.0,
+                            expected_edge_bps=0.0,
+                            expected_cost_bps=0.0,
+                            score=0.0,
+                            confidence=0.0,
+                            blocked=True,
+                            reason_code="BAD_DATA_CONTRACT",
+                            debug={"reason": result.reason, "detail": result.detail},
+                        )
+                    )
+                    skip_reasons[symbol].append("BAD_DATA_CONTRACT")
+                    continue
+            if df is None or df.empty:
+                skip_reasons[symbol].append("BAD_DATA_CONTRACT")
+                continue
+            try:
+                bar_ts = df.index[-1]
+                if bar_ts.tzinfo is None:
+                    bar_ts = bar_ts.replace(tzinfo=UTC)
+            except Exception:
+                skip_reasons[symbol].append("BAD_DATA_CONTRACT")
+                continue
+            last_key = (sleeve.name, symbol)
+            if state.last_eval_bar_ts.get(last_key) == bar_ts:
+                skip_reasons[symbol].append("NO_NEW_BAR")
+                continue
+            state.last_eval_bar_ts[last_key] = bar_ts
+            score, confidence = _score_from_bars(df)
+            try:
+                price = float(df["close"].iloc[-1])
+            except Exception:
+                price = 0.0
+            spread = None
+            vol = None
+            try:
+                high = float(df["high"].iloc[-1])
+                low = float(df["low"].iloc[-1])
+                if high > 0 and low >= 0:
+                    spread = max(0.0, high - low)
+                if price > 0:
+                    vol = max(0.0, (high - low) / price)
+            except Exception:
+                spread = None
+            proposal = compute_sleeve_proposal(
+                sleeve,
+                symbol,
+                bar_ts,
+                score,
+                confidence,
+                positions.get(symbol, 0.0),
+                price,
+                spread,
+                vol,
+                volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
+            )
+            turnover_key = (now.date(), sleeve.name, symbol)
+            existing_turnover = state.turnover_dollars.get(turnover_key, 0.0)
+            projected_turnover = existing_turnover + abs(proposal.target_dollars - (positions.get(symbol, 0.0) * price))
+            if apply_turnover_gate(projected_turnover, sleeve.turnover_cap_dollars):
+                proposal.blocked = True
+                proposal.reason_code = "TURNOVER_CAP"
+                proposal.target_dollars = positions.get(symbol, 0.0) * price
+                skip_reasons[symbol].append("TURNOVER_CAP")
+            proposals_by_symbol[symbol].append(proposal)
+            latest_bar_ts[symbol] = bar_ts
+            if price > 0:
+                latest_price[symbol] = price
+
+    targets: dict[str, NettedTarget] = {}
+    for symbol, proposals in proposals_by_symbol.items():
+        if not proposals:
+            continue
+        bar_ts = latest_bar_ts.get(symbol, now)
+        targets[symbol] = net_targets_for_symbol(
+            symbol,
+            bar_ts,
+            proposals,
+            float(getattr(cfg, "disagree_ratio_threshold", 0.35)),
+        )
+
+    apply_global_caps(
+        targets,
+        float(getattr(cfg, "global_max_symbol_dollars", 0.0)),
+        float(getattr(cfg, "global_max_gross_dollars", 0.0)),
+        float(getattr(cfg, "global_max_net_dollars", 0.0)),
+    )
+
+    ledger: OrderLedger | None = None
+    if bool(getattr(cfg, "ledger_enabled", False)):
+        ledger = getattr(state, "_oms_ledger", None)
+        if ledger is None:
+            ledger = OrderLedger(
+                str(getattr(cfg, "ledger_path", "runtime/oms_ledger.jsonl")),
+                float(getattr(cfg, "ledger_lookback_hours", 24.0)),
+            )
+            setattr(state, "_oms_ledger", ledger)
+
+    decision_path = getattr(cfg, "decision_log_path", None)
+    for symbol, net_target in targets.items():
+        price = latest_price.get(symbol, 0.0)
+        current_shares = int(positions.get(symbol, 0) or 0)
+        if price <= 0:
+            net_target.reasons.append("BAD_DATA_CONTRACT")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=skip_reasons.get(symbol, []),
+            )
+            _write_decision_record(record, decision_path)
+            continue
+        net_target.target_shares = int(round(net_target.target_dollars / price))
+        delta_shares = net_target.target_shares - current_shares
+        gates: list[str] = []
+        gates.extend(skip_reasons.get(symbol, []))
+        gates.extend(net_target.reasons)
+        for proposal in net_target.proposals:
+            if proposal.reason_code:
+                gates.append(proposal.reason_code)
+
+        lock = state.stop_lock.get(symbol)
+        if lock:
+            lock_ts = lock.get("bar_ts")
+            lock_dir = str(lock.get("direction", "")).lower()
+            net_score = sum(p.score for p in net_target.proposals)
+            net_conf = max((p.confidence for p in net_target.proposals), default=0.0)
+            reentry_threshold = max((s.reentry_threshold for s in sleeves), default=0.6)
+            if lock_ts and isinstance(lock_ts, datetime) and net_target.bar_ts <= lock_ts:
+                net_target.target_dollars = 0.0
+                net_target.target_shares = 0
+                delta_shares = -current_shares
+                gates.append("STOP_LOCK")
+            else:
+                if abs(net_score) < reentry_threshold or net_conf < reentry_threshold:
+                    net_target.target_dollars = 0.0
+                    net_target.target_shares = 0
+                    delta_shares = -current_shares
+                    gates.append("STOP_LOCK")
+                else:
+                    if lock_dir:
+                        state.stop_lock.pop(symbol, None)
+
+        if delta_shares == 0:
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
+        if kill_switch:
+            gates.append("KILL_SWITCH_BLOCK")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
+        if state.last_order_bar_ts.get(symbol) == net_target.bar_ts:
+            gates.append("BAR_DEDUP")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
+        min_qty = int(getattr(cfg, "execution_min_qty", 1))
+        min_notional = float(getattr(cfg, "execution_min_notional", 1.0))
+        if abs(delta_shares) < min_qty or abs(delta_shares) * price < min_notional:
+            gates.append("RISK_CAP_SYMBOL")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
+        side = "buy" if delta_shares > 0 else "sell"
+        client_order_id = deterministic_client_order_id(
+            salt=str(getattr(cfg, "seed", "seed")),
+            symbol=symbol,
+            bar_ts=net_target.bar_ts.isoformat(),
+            side=side,
+            qty=abs(delta_shares),
+            limit_price=price,
+        )
+        if ledger is not None and ledger.seen_client_order_id(client_order_id):
+            gates.append("BAR_DEDUP")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
+        order = submit_order(
+            runtime,
+            symbol,
+            abs(delta_shares),
+            side,
+            price=price,
+            client_order_id=client_order_id,
+        )
+        if order is None:
+            gates.append("MARKET_CLOSED_BLOCK")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+        order_status = getattr(order, "status", None) if order is not None else None
+        if ledger is not None:
+            ledger.record(
+                LedgerEntry(
+                    client_order_id=client_order_id,
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts.isoformat(),
+                    qty=float(abs(delta_shares)),
+                    side=side,
+                    limit_price=price,
+                    ts=now.isoformat(),
+                    broker_order_id=getattr(order, "id", None) if order is not None else None,
+                    status=str(order_status) if order_status is not None else None,
+                )
+            )
+        state.last_order_bar_ts[symbol] = net_target.bar_ts
+        state.last_order_client_id[symbol] = client_order_id
+
+        total_target = sum(abs(p.target_dollars) for p in net_target.proposals)
+        if total_target > 0:
+            trade_notional = abs(delta_shares) * price
+            for proposal in net_target.proposals:
+                ratio = abs(proposal.target_dollars) / total_target
+                turnover_key = (now.date(), proposal.sleeve, symbol)
+                state.turnover_dollars[turnover_key] = state.turnover_dollars.get(turnover_key, 0.0) + trade_notional * ratio
+
+        metrics = {}
+        try:
+            fill_price = getattr(order, "filled_avg_price", None)
+            metrics = compute_attribution_metrics(
+                arrival_price=price,
+                fill_price=float(fill_price) if fill_price else None,
+                side=side,
+                bid=None,
+                ask=None,
+            )
+        except Exception:
+            metrics = {}
+        gates.append("OK_TRADE")
+        record = DecisionRecord(
+            symbol=symbol,
+            bar_ts=net_target.bar_ts,
+            sleeves=net_target.proposals,
+            net_target=net_target,
+            gates=gates,
+            order={
+                "client_order_id": client_order_id,
+                "side": side,
+                "qty": abs(delta_shares),
+                "price": price,
+                "status": str(order_status) if order_status is not None else None,
+            },
+            metrics=metrics,
+        )
+        _write_decision_record(record, decision_path)
+
+
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
 def run_all_trades_worker(state: BotState, runtime) -> None:
     """
@@ -28465,6 +28991,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
         _ensure_execution_engine(runtime)
+        _enforce_dependency_preflight(runtime)
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
@@ -28497,7 +29024,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         ):
             logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
             return
-        if not is_market_open():
+        cfg_for_market = _resolve_trading_config(runtime)
+        rth_only = bool(getattr(cfg_for_market, "rth_only", True))
+        allow_extended = bool(getattr(cfg_for_market, "allow_extended", False))
+        if (rth_only or not allow_extended) and not is_market_open():
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
             return  # skip work when market closed
         loop_start = monotonic_time()
@@ -28626,6 +29156,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     )
                     open_orders = []
             if _handle_pending_orders(open_orders, runtime):
+                return
+            if _netting_pipeline_enabled(runtime):
+                _run_netting_cycle(state, runtime, loop_id, loop_start)
                 return
             if get_verbose_logging():
                 logger.info(

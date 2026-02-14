@@ -214,10 +214,10 @@ class BacktestEngine:
             spread_cost_bps = half_spread * 10000
             slippage_cost_bps = slippage_amount * 10000
             total_cost_bps = total_commission / turnover * 10000 if turnover > 0 else 0
-            return {'symbol': signal.symbol, 'side': signal.side.value, 'signal_price': signal_price, 'execution_price': execution_price, 'quantity_requested': position_size, 'quantity_filled': actual_quantity, 'fill_ratio': actual_quantity / position_size if position_size > 0 else 0, 'gross_pnl': gross_pnl, 'net_pnl': net_pnl, 'commission_bps': commission_bps_cost, 'commission_flat': commission_flat_cost, 'total_commission': total_commission, 'half_spread': half_spread, 'spread_cost_bps': spread_cost_bps, 'slippage_amount': slippage_amount, 'slippage_cost_bps': slippage_cost_bps, 'total_cost_bps': total_cost_bps, 'turnover': turnover, 'signal_strength': signal.strength, 'timestamp': execution_timestamp.isoformat() if execution_timestamp else datetime.now(UTC).isoformat(), 'latency_ms': self.latency_ms}
+            return {'symbol': signal.symbol, 'side': signal.side, 'signal_price': signal_price, 'execution_price': execution_price, 'quantity_requested': position_size, 'quantity_filled': actual_quantity, 'fill_ratio': actual_quantity / position_size if position_size > 0 else 0, 'gross_pnl': gross_pnl, 'net_pnl': net_pnl, 'commission_bps': commission_bps_cost, 'commission_flat': commission_flat_cost, 'total_commission': total_commission, 'half_spread': half_spread, 'spread_cost_bps': spread_cost_bps, 'slippage_amount': slippage_amount, 'slippage_cost_bps': slippage_cost_bps, 'total_cost_bps': total_cost_bps, 'turnover': turnover, 'signal_strength': signal.strength, 'timestamp': execution_timestamp.isoformat() if execution_timestamp else datetime.now(UTC).isoformat(), 'latency_ms': self.latency_ms}
         except (ValueError, TypeError) as e:
             logger.error(f'Error simulating trade: {e}')
-            return {'symbol': signal.symbol, 'side': signal.side.value, 'net_pnl': 0, 'gross_pnl': 0, 'error': str(e), 'quantity_filled': 0, 'fill_ratio': 0.0, 'total_cost_bps': 0.0}
+            return {'symbol': signal.symbol, 'side': signal.side, 'net_pnl': 0, 'gross_pnl': 0, 'error': str(e), 'quantity_filled': 0, 'fill_ratio': 0.0, 'total_cost_bps': 0.0}
 
     def _calculate_max_drawdown(self, portfolio_values: list[float]) -> float:
         """Calculate maximum drawdown."""

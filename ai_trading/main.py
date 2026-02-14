@@ -426,8 +426,16 @@ def run_cycle() -> None:
             )
             return
 
+    try:
+        cfg = get_trading_config()
+        rth_only = bool(getattr(cfg, "rth_only", True))
+        allow_extended = bool(getattr(cfg, "allow_extended", False))
+    except Exception:
+        rth_only = True
+        allow_extended = False
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
-    if not allow_after_hours:
+    allow_extended = allow_extended or allow_after_hours
+    if (rth_only or not allow_extended):
         try:
             if not _is_market_open_base():
                 logger.info("MARKET_CLOSED_SKIP_CYCLE")

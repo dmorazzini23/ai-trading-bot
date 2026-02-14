@@ -134,13 +134,43 @@ class RLAgent:
                 signals: list[StrategySignal] = []
                 for sym, act in zip(symbols, actions, strict=False):
                     side = {0: "hold", 1: "buy", 2: "sell"}.get(int(act), "hold")
+                    bar_ts = None
+                    try:
+                        if isinstance(state, dict):
+                            bar_ts = state.get("bar_ts")
+                        elif hasattr(state, "bar_ts"):
+                            bar_ts = getattr(state, "bar_ts")
+                    except (TypeError, AttributeError):
+                        bar_ts = None
                     signals.append(
-                        StrategySignal(symbol=sym, side=side, confidence=1.0, strategy="rl")
+                        StrategySignal(
+                            symbol=sym,
+                            side=side,
+                            strength=1.0,
+                            confidence=1.0,
+                            strategy="rl",
+                            metadata={"bar_ts": bar_ts},
+                        )
                     )
                 return signals
             action, _ = self.model.predict(state, deterministic=True)
             side = {0: "hold", 1: "buy", 2: "sell"}.get(int(action), "hold")
-            return StrategySignal(symbol="RL", side=side, confidence=1.0, strategy="rl")
+            bar_ts = None
+            try:
+                if isinstance(state, dict):
+                    bar_ts = state.get("bar_ts")
+                elif hasattr(state, "bar_ts"):
+                    bar_ts = getattr(state, "bar_ts")
+            except (TypeError, AttributeError):
+                bar_ts = None
+            return StrategySignal(
+                symbol="RL",
+                side=side,
+                strength=1.0,
+                confidence=1.0,
+                strategy="rl",
+                metadata={"bar_ts": bar_ts},
+            )
         except (KeyError, ValueError, TypeError) as exc:
             logger.error("RL prediction failed: %s", exc)
             return None

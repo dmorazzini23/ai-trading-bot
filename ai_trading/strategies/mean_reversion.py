@@ -69,10 +69,35 @@ class MeanReversionStrategy:
             return []
         px = float(df['close'].iloc[-1])
         z = (px - mean) / std
+        bar_ts = None
+        try:
+            bar_ts = df.index[-1]
+        except (AttributeError, IndexError, TypeError):
+            bar_ts = None
+        metadata = {"bar_ts": bar_ts.isoformat() if hasattr(bar_ts, "isoformat") else bar_ts}
+        confidence = min(1.0, 0.5 + min(abs(z) / max(z_entry, 1e-6), 1.0) * 0.5)
         if z <= -z_entry:
-            return [StrategySignal(symbol=sym, side='buy', strength=abs(z))]
+            return [
+                StrategySignal(
+                    symbol=sym,
+                    side="buy",
+                    strength=abs(z),
+                    confidence=confidence,
+                    timeframe="1Day",
+                    metadata=metadata,
+                )
+            ]
         if z >= z_entry:
-            return [StrategySignal(symbol=sym, side='sell', strength=abs(z))]
+            return [
+                StrategySignal(
+                    symbol=sym,
+                    side="sell",
+                    strength=abs(z),
+                    confidence=confidence,
+                    timeframe="1Day",
+                    metadata=metadata,
+                )
+            ]
         now = monotonic_time()
         if self._guard_last_summary == 0.0:
             self._guard_last_summary = now

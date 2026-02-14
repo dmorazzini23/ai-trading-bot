@@ -20,8 +20,23 @@ The timer schedules the bot to start at market open and the service exits automa
 If the bot is started manually outside regular hours, it waits until the next
 NYSE session before trading, and run cycles invoked while the market is closed
 exit immediately without fetching data or computing indicators. Set
-`ALLOW_AFTER_HOURS=1` to disable these guards when running tests or after-hours
-experiments.
+`ALLOW_AFTER_HOURS=1` or `ALLOW_EXTENDED=1` to disable these guards when running
+tests or after-hours experiments. `RTH_ONLY=1` enforces regular trading hours at
+both the scheduler and OMS boundary.
+
+### Institutional controls
+
+1. **Kill switch**: set `AI_TRADING_KILL_SWITCH=1` or create the file at
+   `AI_TRADING_KILL_SWITCH_PATH` (default `runtime/kill_switch`) to block all
+   new orders while still allowing reconciliation and health checks.
+2. **Reconciliation gate**: enabled by default with `AI_TRADING_RECON_ENABLED=1`
+   and runs on startup, at market open, and every
+   `AI_TRADING_RECON_INTERVAL_SECONDS`. Mismatches halt new orders with
+   `RECON_MISMATCH_HALT`.
+3. **Decision records & OMS ledger**: per-bar decision records are written to
+   `AI_TRADING_DECISION_LOG_PATH` and deterministic OMS ledger entries are
+   appended to `AI_TRADING_LEDGER_PATH` to prevent duplicate order submissions
+   across restarts.
 
 Check logs and health:
 

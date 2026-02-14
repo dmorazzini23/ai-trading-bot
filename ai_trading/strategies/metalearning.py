@@ -21,7 +21,7 @@ from ai_trading.utils.lazy_imports import (
     load_sklearn_preprocessing,
 )
 from ai_trading.data.fetch import get_minute_df
-from ..core.enums import OrderSide, RiskLevel
+from ..core.enums import RiskLevel
 from .base import BaseStrategy, StrategySignal
 try:
     ML_AVAILABLE = bool(find_spec("sklearn"))
@@ -121,8 +121,26 @@ class MetaLearning(BaseStrategy):
             for symbol in self.symbols:
                 signal_dict = self.execute_strategy(symbol)
                 if signal_dict and signal_dict.get('signal') != 'hold':
-                    side = OrderSide.BUY if signal_dict['signal'] == 'buy' else OrderSide.SELL
-                    signal = StrategySignal(symbol=symbol, side=side, strength=signal_dict.get('strength', 0.5), confidence=signal_dict.get('confidence', 0.5), strategy_id=self.strategy_id, price_target=signal_dict.get('price_target'), stop_loss=signal_dict.get('stop_loss'), signal_type='ml_prediction', metadata={'reasoning': signal_dict.get('reasoning', ''), 'prediction_horizon': self.parameters['prediction_horizon'], 'model_accuracy': self.prediction_accuracy})
+                    side = signal_dict.get('signal', 'hold')
+                    bar_ts = signal_dict.get('bar_ts') if isinstance(signal_dict, dict) else None
+                    metadata = {
+                        'reasoning': signal_dict.get('reasoning', ''),
+                        'prediction_horizon': self.parameters['prediction_horizon'],
+                        'model_accuracy': self.prediction_accuracy,
+                        'bar_ts': bar_ts.isoformat() if hasattr(bar_ts, "isoformat") else bar_ts,
+                    }
+                    signal = StrategySignal(
+                        symbol=symbol,
+                        side=side,
+                        strength=signal_dict.get('strength', 0.5),
+                        confidence=signal_dict.get('confidence', 0.5),
+                        strategy_id=self.strategy_id,
+                        price_target=signal_dict.get('price_target'),
+                        stop_loss=signal_dict.get('stop_loss'),
+                        signal_type='ml_prediction',
+                        timeframe="1Min",
+                        metadata=metadata,
+                    )
                     if self.validate_signal(signal):
                         signals.append(signal)
                         self.signals_generated += 1

@@ -10,7 +10,8 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from typing import Any
 from ai_trading.logging import logger, logger_once
-from ..core.enums import OrderSide, RiskLevel
+from ..core.enums import RiskLevel
+from ..order.types import OrderSide
 
 class StrategySignal:
     """
@@ -20,25 +21,38 @@ class StrategySignal:
     and metadata for institutional decision making.
     """
 
-    def __init__(self, symbol: str, side: OrderSide, strength: float=1.0, confidence: float=1.0, **kwargs):
+    def __init__(
+        self,
+        symbol: str,
+        side: str | OrderSide | None,
+        strength: float | None = None,
+        confidence: float | None = None,
+        **kwargs,
+    ):
         """Initialize trading signal.
 
         Parameters
         ----------
         symbol : str
             Asset ticker symbol.
-        side : OrderSide
-            Direction of the trade (``OrderSide.BUY`` or ``OrderSide.SELL``).
+        side : str | OrderSide
+            Direction of the trade (``buy`` or ``sell``). ``hold`` is permitted
+            for neutral signals.
         strength : float, optional
-            Raw signal strength in the ``[0, 1]`` range. Defaults to ``1.0``.
+            Raw signal strength in the ``[0, 1]`` range.
         confidence : float, optional
-            Confidence weight in the ``[0, 1]`` range. Defaults to ``1.0``.
+            Confidence weight in the ``[0, 1]`` range.
         """
         self.id = str(uuid.uuid4())
         self.symbol = symbol
-        self.side = side
-        self.strength = max(0.0, min(1.0, strength))
-        self.confidence = max(0.0, min(1.0, confidence))
+        self._side_is_enum = isinstance(side, OrderSide)
+        self.side = self._normalize_side(side)
+        self._strength_provided = strength is not None
+        self._confidence_provided = confidence is not None
+        strength_val = 0.0 if strength is None else float(strength)
+        confidence_val = 0.0 if confidence is None else float(confidence)
+        self.strength = max(0.0, min(1.0, strength_val))
+        self.confidence = max(0.0, min(1.0, confidence_val))
         self.timestamp = datetime.now(UTC)
         self.strategy_id = kwargs.get('strategy_id')
         self.timeframe = kwargs.get('timeframe', '1d')
@@ -49,24 +63,57 @@ class StrategySignal:
         self.signal_type = kwargs.get('signal_type', 'momentum')
         self.metadata = kwargs.get('metadata', {})
 
+    @staticmethod
+    def _normalize_side(side: str | OrderSide | None) -> str:
+        if isinstance(side, OrderSide):
+            side = side.value
+        value = str(side or "").strip().lower()
+        if value in {"buy", "long", "entry"}:
+            return "buy"
+        if value in {"sell", "short", "exit"}:
+            return "sell"
+        if value in {"hold", "neutral", "none", "flat", ""}:
+            return "hold"
+        logger.warning("SIGNAL_SIDE_INVALID", extra={"side": value})
+        return "hold"
+
+    @property
+    def has_explicit_strength(self) -> bool:
+        """Return True when strength was explicitly provided."""
+        return bool(self._strength_provided)
+
+    @property
+    def has_explicit_confidence(self) -> bool:
+        """Return True when confidence was explicitly provided."""
+        return bool(self._confidence_provided)
+
     @property
     def weighted_strength(self) -> float:
         """Calculate confidence-weighted signal strength."""
         return self.strength * self.confidence
 
     @property
+    def score(self) -> float:
+        """Return signed strength based on side."""
+        if self.side == "buy":
+            return self.strength
+        if self.side == "sell":
+            return -self.strength
+        return 0.0
+
+    @property
     def is_buy(self) -> bool:
         """Check if signal is a buy signal."""
-        return self.side == OrderSide.BUY
+        return self.side == "buy"
 
     @property
     def is_sell(self) -> bool:
         """Check if signal is a sell signal."""
-        return self.side == OrderSide.SELL
+        return self.side == "sell"
 
     def to_dict(self) -> dict:
         """Convert signal to dictionary representation."""
-        return {'id': self.id, 'symbol': self.symbol, 'side': self.side.value, 'strength': self.strength, 'confidence': self.confidence, 'weighted_strength': self.weighted_strength, 'timestamp': self.timestamp.isoformat(), 'strategy_id': self.strategy_id, 'timeframe': self.timeframe, 'price_target': self.price_target, 'stop_loss': self.stop_loss, 'expected_return': self.expected_return, 'risk_score': self.risk_score, 'signal_type': self.signal_type, 'metadata': self.metadata}
+        return {'id': self.id, 'symbol': self.symbol, 'side': self.side, 'strength': self.strength, 'confidence': self.confidence, 'weighted_strength': self.weighted_strength, 'score': self.score, 'timestamp': self.timestamp.isoformat(), 'strategy_id': self.strategy_id, 'timeframe': self.timeframe, 'price_target': self.price_target, 'stop_loss': self.stop_loss, 'expected_return': self.expected_return, 'risk_score': self.risk_score, 'signal_type': self.signal_type, 'metadata': self.metadata}
 
 
 # Backwards-compatible alias used by tests.
@@ -114,9 +161,9 @@ class BaseStrategy(ABC):
     def generate_signal(
         self,
         symbol: str,
-        side: OrderSide = OrderSide.BUY,
-        strength: float = 0.0,
-        confidence: float = 0.0,
+        side: str | OrderSide = "buy",
+        strength: float | None = None,
+        confidence: float | None = None,
         **kwargs: Any,
     ) -> StrategySignal:
         """Generate a placeholder single trading signal.
@@ -129,11 +176,11 @@ class BaseStrategy(ABC):
         symbol:
             Asset ticker symbol.
         side:
-            Trade direction, defaults to ``OrderSide.BUY``.
+            Trade direction, defaults to ``buy``.
         strength:
-            Raw signal strength in ``[0, 1]``; defaults to ``0.0``.
+            Raw signal strength in ``[0, 1]``.
         confidence:
-            Confidence weight in ``[0, 1]``; defaults to ``0.0``.
+            Confidence weight in ``[0, 1]``.
         **kwargs:
             Additional metadata forwarded to :class:`StrategySignal`.
 
@@ -201,6 +248,9 @@ class BaseStrategy(ABC):
             True if signal is valid
         """
         try:
+            if not getattr(signal, "has_explicit_strength", False) or not getattr(signal, "has_explicit_confidence", False):
+                logger.warning("SIGNAL_MISSING_STRENGTH_CONFIDENCE", extra={"symbol": getattr(signal, "symbol", None)})
+                return False
             if not signal.symbol or signal.strength <= 0:
                 return False
             if signal.risk_score > 0.8:

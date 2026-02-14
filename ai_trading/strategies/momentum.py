@@ -10,7 +10,6 @@ import numpy as np
 from ai_trading.logging import logger
 from ai_trading.utils.time import monotonic_time
 from ..core.enums import RiskLevel
-from ..core.interfaces import OrderSide
 from ai_trading.config.profiles import load_strategy_profile, lookup_overrides
 from .base import BaseStrategy, StrategySignal
 
@@ -93,7 +92,26 @@ class MomentumStrategy(BaseStrategy):
                 continue
             if mom > threshold:
                 strength = float(min(max(mom, 0.0), 1.0))
-                signals.append(StrategySignal(symbol=symbol, side=OrderSide.BUY, strength=strength, confidence=float(min(1.0, 0.5 + strength)), metadata={'lookback': lookback, 'momentum': float(mom)}))
+                bar_ts = None
+                try:
+                    bar_ts = prices.index[-1]
+                except (AttributeError, IndexError, TypeError):
+                    bar_ts = None
+                metadata = {
+                    "lookback": lookback,
+                    "momentum": float(mom),
+                    "bar_ts": bar_ts.isoformat() if hasattr(bar_ts, "isoformat") else bar_ts,
+                }
+                signals.append(
+                    StrategySignal(
+                        symbol=symbol,
+                        side="buy",
+                        strength=strength,
+                        confidence=float(min(1.0, 0.5 + strength)),
+                        timeframe="1Day",
+                        metadata=metadata,
+                    )
+                )
         # Periodic summary (once per ~60s)
         now = monotonic_time()
         if self._guard_last_summary == 0.0:
