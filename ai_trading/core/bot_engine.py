@@ -125,6 +125,22 @@ from ai_trading.alpaca_api import (
 from ai_trading.utils.pickle_safe import safe_pickle_load
 from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.core.enums import OrderSide as CoreOrderSide
+from ai_trading.core.dependency_breakers import DependencyBreakers
+from ai_trading.core.errors import ErrorAction, ErrorCategory, ErrorInfo, classify_exception
+from ai_trading.core.retry import retry_idempotent
+from ai_trading.core.runtime_contract import (
+    is_testing_mode as is_runtime_contract_testing_mode,
+    require_dependency,
+    require_no_stubs,
+)
+from ai_trading.oms.cancel_all import cancel_all_open_orders as cancel_all_open_orders_oms
+from ai_trading.oms.pretrade import (
+    OrderIntent as PretradeOrderIntent,
+    SlidingWindowRateLimiter,
+    validate_pretrade,
+)
+from ai_trading.monitoring.alerts import evaluate_runtime_alert_thresholds
+from ai_trading.runtime.run_manifest import write_run_manifest
 
 
 class CycleAbortSafeMode(RuntimeError):
@@ -7941,6 +7957,14 @@ class BotState:
     stop_lock: dict[str, dict[str, Any]] = field(default_factory=dict)
     recon_halt: bool = False
     last_recon_ts: datetime | None = None
+    halt_trading: bool = False
+    halt_reason: str | None = None
+    dependency_breakers: DependencyBreakers | None = None
+    pretrade_rate_limiter: SlidingWindowRateLimiter | None = None
+    run_manifest_written: bool = False
+    session_close_cleanup_date: date | None = None
+    startup_cleanup_done: bool = False
+    canary_mode_logged: bool = False
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -12293,6 +12317,19 @@ _REGIME_SIGNAL_COMPONENTS: dict[str, dict[str, tuple[str, ...]]] = {
         "mean_reversion": ("mean_reversion", "stochrsi", "ml", "regime", "sentiment"),
         "high_volatility": ("ml", "regime", "vsa", "sentiment"),
     },
+    "aggressive": {
+        "trending": ("momentum", "ml", "regime", "obv", "vsa", "sentiment"),
+        "sideways": ("mean_reversion", "stochrsi", "ml", "regime", "sentiment", "obv"),
+        "mean_reversion": (
+            "mean_reversion",
+            "stochrsi",
+            "ml",
+            "regime",
+            "sentiment",
+            "vsa",
+        ),
+        "high_volatility": ("momentum", "ml", "regime", "vsa", "sentiment"),
+    },
     "conservative": {
         "trending": ("momentum", "ml", "regime", "obv"),
         "sideways": ("mean_reversion", "stochrsi", "ml", "regime"),
@@ -12318,9 +12355,12 @@ def _resolve_regime_signal_components(state: BotState) -> tuple[str, ...]:
         return _ALL_SIGNAL_COMPONENTS
 
     profile = get_regime_signal_profile()
-    profile_components = _REGIME_SIGNAL_COMPONENTS.get(
-        profile, _REGIME_SIGNAL_COMPONENTS["balanced"]
-    )
+    if profile not in _REGIME_SIGNAL_COMPONENTS:
+        logger.warning(
+            "UNKNOWN_REGIME_PROFILE_FALLBACK",
+            extra={"profile": profile, "fallback": "balanced"},
+        )
+    profile_components = _REGIME_SIGNAL_COMPONENTS.get(profile, _REGIME_SIGNAL_COMPONENTS["balanced"])
     regime = _normalize_regime_name(getattr(state, "current_regime", "sideways"))
     return profile_components.get(regime, _ALL_SIGNAL_COMPONENTS)
 
@@ -28038,6 +28078,13 @@ def _ensure_execution_engine(runtime) -> None:
             logger.warning(
                 "Execution engine initialization failed: %s", e
             )
+            strict_runtime = status.mode in {"paper", "live"} and not (
+                _is_testing_env() or is_runtime_contract_testing_mode()
+            )
+            if strict_runtime:
+                raise RuntimeError(
+                    "Execution engine initialization failed in paper/live mode; startup aborted."
+                ) from e
             delegate_cls = None if getattr(_ExecutionEngine, "_IS_STUB", False) else _ExecutionEngine
             _attach_stub_engine(e, delegate_cls)
             if recovered_stub:
@@ -28373,15 +28420,111 @@ def _enforce_dependency_preflight(runtime) -> None:
         testing_flag = testing_flag or bool(get_env("AI_TRADING_TESTING", "0", cast=bool))
     except Exception:
         testing_flag = testing_flag or False
+    testing_flag = testing_flag or is_runtime_contract_testing_mode() or _is_testing_env()
     if testing_flag:
         return
     execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
     if execution_mode not in {"paper", "live"}:
         return
-    if _REQUESTS_STUB:
-        raise RuntimeError("requests is required for paper/live trading")
-    if _HTTP_SESSION_STUB:
-        raise RuntimeError("HTTP session unavailable for paper/live trading")
+    require_dependency(
+        not _REQUESTS_STUB,
+        "requests is required for paper/live trading",
+        execution_mode=execution_mode,
+    )
+    require_dependency(
+        not _HTTP_SESSION_STUB,
+        "HTTP session unavailable for paper/live trading",
+        execution_mode=execution_mode,
+    )
+    exec_engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
+    require_dependency(
+        exec_engine is not None,
+        "Execution engine is required for paper/live trading",
+        execution_mode=execution_mode,
+    )
+    require_no_stubs(
+        {
+            "runtime": runtime,
+            "_REQUESTS_STUB": _REQUESTS_STUB,
+            "_HTTP_SESSION_STUB": _HTTP_SESSION_STUB,
+            "_HTTP_SESSION": _HTTP_SESSION,
+            "execution_engine": exec_engine,
+        },
+        execution_mode=execution_mode,
+    )
+
+
+def _dependency_breakers(state: BotState) -> DependencyBreakers:
+    breakers = getattr(state, "dependency_breakers", None)
+    if isinstance(breakers, DependencyBreakers):
+        return breakers
+    breakers = DependencyBreakers()
+    state.dependency_breakers = breakers
+    return breakers
+
+
+def _pretrade_rate_limiter(state: BotState) -> SlidingWindowRateLimiter:
+    limiter = getattr(state, "pretrade_rate_limiter", None)
+    if isinstance(limiter, SlidingWindowRateLimiter):
+        return limiter
+    limiter = SlidingWindowRateLimiter(
+        global_orders_per_min=int(get_env("AI_TRADING_ORDERS_PER_MIN_GLOBAL", 60, cast=int)),
+        per_symbol_orders_per_min=int(get_env("AI_TRADING_ORDERS_PER_MIN_SYMBOL", 6, cast=int)),
+        cancels_per_min=int(get_env("AI_TRADING_CANCELS_PER_MIN", 60, cast=int)),
+        cancel_loop_max_without_fill=int(
+            get_env("AI_TRADING_CANCEL_LOOP_MAX_WITHOUT_FILL", 5, cast=int)
+        ),
+        cancel_loop_block_bars=int(get_env("AI_TRADING_CANCEL_LOOP_BLOCK_BARS", 3, cast=int)),
+    )
+    state.pretrade_rate_limiter = limiter
+    return limiter
+
+
+def _handle_error(
+    error_info: ErrorInfo,
+    *,
+    state: BotState,
+    ctx: Any,
+    symbol: str | None = None,
+    sleeve: str | None = None,
+) -> None:
+    details = dict(error_info.details)
+    if symbol:
+        details.setdefault("symbol", symbol)
+    if sleeve:
+        details.setdefault("sleeve", sleeve)
+    details.setdefault("dependency", error_info.dependency)
+    details.setdefault("reason_code", error_info.reason_code)
+
+    if error_info.action is ErrorAction.SKIP_SYMBOL:
+        logger.warning("ERROR_SKIP_SYMBOL", extra=details)
+        return
+
+    if error_info.action is ErrorAction.DISABLE_PROVIDER:
+        state.degraded_providers.add(error_info.dependency)
+        logger.error("ERROR_DISABLE_PROVIDER", extra=details)
+        evaluate_runtime_alert_thresholds(
+            breaker_open=error_info.dependency,
+            state=state,
+        )
+        return
+
+    if error_info.action is ErrorAction.HALT_TRADING:
+        state.halt_trading = True
+        state.halt_reason = error_info.reason_code
+        logger.error("ALERT_HALT_TRADING", extra=details)
+        evaluate_runtime_alert_thresholds(
+            halt_reason=error_info.reason_code,
+            state=state,
+        )
+        if error_info.category in {
+            ErrorCategory.INVARIANT_VIOLATION,
+            ErrorCategory.PROGRAMMING_ERROR,
+        }:
+            logger.error("ALERT_INVARIANT_OR_PROGRAMMING_HALT", extra=details)
+        return
+
+    logger.error("ERROR_ACTION_UNHANDLED", extra=details)
 
 
 def _kill_switch_active(cfg: TradingConfig) -> tuple[bool, str | None]:
@@ -28451,26 +28594,71 @@ def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now
     last_ts = getattr(state, "last_recon_ts", None)
     if last_ts and (now - last_ts).total_seconds() < interval:
         return not bool(getattr(state, "recon_halt", False))
+    breakers = _dependency_breakers(state)
+    if not breakers.allow("broker_positions"):
+        state.recon_halt = True
+        state.halt_reason = breakers.open_reason("broker_positions")
+        state.last_recon_ts = now
+        return False
+
     try:
         from ai_trading.oms.reconcile import fetch_broker_positions, reconcile
 
-        internal_positions = state.position_cache or compute_current_positions(runtime)
-        broker_positions = fetch_broker_positions(getattr(runtime, "api", None))
+        if state.position_cache:
+            internal_positions = dict(state.position_cache)
+        else:
+            internal_positions = retry_idempotent(
+                lambda: compute_current_positions(runtime),
+                dep="broker_positions",
+                breakers=breakers,
+                classify_exception=classify_exception,
+                max_attempts=3,
+                max_total_seconds=5.0,
+                base_delay=0.2,
+                jitter=0.1,
+                context={"scope": "reconcile"},
+            )
+
+        broker_positions = retry_idempotent(
+            lambda: fetch_broker_positions(getattr(runtime, "api", None)),
+            dep="broker_positions",
+            breakers=breakers,
+            classify_exception=classify_exception,
+            max_attempts=3,
+            max_total_seconds=5.0,
+            base_delay=0.2,
+            jitter=0.1,
+            context={"scope": "reconcile"},
+        )
         result = reconcile(internal_positions, broker_positions, tolerance_shares=0.0)
         state.last_recon_ts = now
         if not result.ok:
             state.recon_halt = True
+            state.halt_reason = "RECON_MISMATCH_HALT"
             logger.error(
                 "RECON_MISMATCH_HALT",
                 extra={"mismatches": result.mismatches, "summary": result.summary},
             )
+            if bool(get_env("AI_TRADING_CANCEL_ALL_ON_RECON_MISMATCH", "0", cast=bool)):
+                result_cancel = cancel_all_open_orders_oms(runtime)
+                logger.warning(
+                    "CANCEL_ALL_TRIGGERED",
+                    extra={
+                        "reason_code": "RECON_MISMATCH_HALT",
+                        "cancelled": result_cancel.cancelled,
+                        "failed": result_cancel.failed,
+                    },
+                )
             return False
+        breakers.record_success("broker_positions")
         state.recon_halt = False
         return True
     except Exception as exc:
-        logger.warning("RECONCILIATION_FAILED", extra={"error": str(exc)})
+        error_info = classify_exception(exc, dependency="broker_positions")
+        breakers.record_failure("broker_positions", error_info)
+        _handle_error(error_info, state=state, ctx=runtime)
         state.last_recon_ts = now
-        return not bool(getattr(state, "recon_halt", False))
+        return False
 
 
 def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float) -> None:
@@ -28491,9 +28679,53 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     cfg = _resolve_trading_config(runtime)
     now = datetime.now(UTC)
+    breakers = _dependency_breakers(state)
+    for dep in ("broker_submit", "broker_positions", "broker_open_orders", "data_primary"):
+        if not breakers.allow(dep):
+            reason = breakers.open_reason(dep) or f"CIRCUIT_OPEN_{dep}"
+            state.halt_trading = True
+            state.halt_reason = reason
+            record = DecisionRecord(
+                symbol="ALL",
+                bar_ts=now,
+                sleeves=[],
+                net_target=NettedTarget(
+                    symbol="ALL",
+                    bar_ts=now,
+                    target_dollars=0.0,
+                    target_shares=0.0,
+                ),
+                gates=[reason],
+            )
+            _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+            return
+    if state.halt_trading:
+        reason = state.halt_reason or "HALT_TRADING"
+        record = DecisionRecord(
+            symbol="ALL",
+            bar_ts=now,
+            sleeves=[],
+            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
+            gates=[reason],
+        )
+        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        return
+
     rth_only = bool(getattr(cfg, "rth_only", True))
     if rth_only and not market_is_open(now):
         _run_reconciliation_if_due(state, runtime, cfg, now)
+        if bool(get_env("AI_TRADING_CANCEL_DAY_ORDERS_ON_CLOSE", "0", cast=bool)):
+            cleanup_date = getattr(state, "session_close_cleanup_date", None)
+            if cleanup_date != now.date():
+                result = cancel_all_open_orders_oms(runtime)
+                state.session_close_cleanup_date = now.date()
+                logger.warning(
+                    "SESSION_CLOSE_CLEANUP",
+                    extra={
+                        "cancelled": result.cancelled,
+                        "failed": result.failed,
+                    },
+                )
         record = DecisionRecord(
             symbol="ALL",
             bar_ts=now,
@@ -28510,12 +28742,27 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             bar_ts=now,
             sleeves=[],
             net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
-            gates=["RECON_MISMATCH_HALT"],
+            gates=[state.halt_reason or "RECON_MISMATCH_HALT"],
         )
         _write_decision_record(record, getattr(cfg, "decision_log_path", None))
         return
 
     kill_switch, kill_reason = _kill_switch_active(cfg)
+    if kill_switch and bool(get_env("AI_TRADING_CANCEL_ALL_ON_KILL", "0", cast=bool)):
+        fired_ts = getattr(state, "_cancel_all_kill_fired_at", None)
+        if not isinstance(fired_ts, datetime) or (now - fired_ts).total_seconds() >= 60.0:
+            result = cancel_all_open_orders_oms(runtime)
+            setattr(state, "_cancel_all_kill_fired_at", now)
+            logger.warning(
+                "CANCEL_ALL_TRIGGERED",
+                extra={
+                    "reason_code": "CANCEL_ALL_TRIGGERED",
+                    "kill_reason": kill_reason or "kill_switch",
+                    "cancelled": result.cancelled,
+                    "failed": result.failed,
+                },
+            )
+
     sleeves = [s for s in build_sleeve_configs(cfg) if s.enabled]
     if not sleeves:
         logger.warning("HORIZONS_EMPTY")
@@ -28527,9 +28774,51 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     if not symbols:
         logger.warning("NETTING_NO_SYMBOLS")
         return
+    canary_raw = str(get_env("AI_TRADING_CANARY_SYMBOLS", "") or "").strip()
+    if canary_raw:
+        canary_symbols = {
+            token.strip().upper()
+            for token in canary_raw.split(",")
+            if token and token.strip()
+        }
+        symbols = [symbol for symbol in symbols if str(symbol).upper() in canary_symbols]
+        if not state.canary_mode_logged:
+            logger.warning(
+                "CANARY_MODE_ACTIVE",
+                extra={"symbols": sorted(canary_symbols)},
+            )
+            state.canary_mode_logged = True
+        if not symbols:
+            logger.warning("CANARY_MODE_EMPTY_UNIVERSE")
+            return
 
     ensure_data_fetcher(runtime)
-    positions = compute_current_positions(runtime)
+    try:
+        positions = retry_idempotent(
+            lambda: compute_current_positions(runtime),
+            dep="broker_positions",
+            breakers=breakers,
+            classify_exception=classify_exception,
+            max_attempts=3,
+            max_total_seconds=5.0,
+            base_delay=0.2,
+            jitter=0.1,
+            context={"scope": "netting"},
+        )
+    except Exception as exc:
+        error_info = classify_exception(exc, dependency="broker_positions")
+        breakers.record_failure("broker_positions", error_info)
+        _handle_error(error_info, state=state, ctx=runtime)
+        record = DecisionRecord(
+            symbol="ALL",
+            bar_ts=now,
+            sleeves=[],
+            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
+            gates=[error_info.reason_code],
+        )
+        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        return
+
     proposals_by_symbol: dict[str, list[SleeveProposal]] = {sym: [] for sym in symbols}
     latest_bar_ts: dict[str, datetime] = {}
     latest_price: dict[str, float] = {}
@@ -28538,7 +28827,38 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     for sleeve in sleeves:
         end = now
         start = end - timedelta(seconds=_freshness_seconds_for_timeframe(sleeve.timeframe) * 50)
-        bars_map = get_bars_batch(symbols, sleeve.timeframe, start, end)
+        try:
+            bars_map = retry_idempotent(
+                lambda: get_bars_batch(symbols, sleeve.timeframe, start, end),
+                dep="data_primary",
+                breakers=breakers,
+                classify_exception=classify_exception,
+                max_attempts=3,
+                max_total_seconds=5.0,
+                base_delay=0.2,
+                jitter=0.1,
+                context={"sleeve": sleeve.name},
+            )
+        except Exception as exc:
+            error_info = classify_exception(exc, dependency="data_primary", sleeve=sleeve.name)
+            breakers.record_failure("data_primary", error_info)
+            _handle_error(error_info, state=state, ctx=runtime, sleeve=sleeve.name)
+            if error_info.action is ErrorAction.HALT_TRADING:
+                record = DecisionRecord(
+                    symbol="ALL",
+                    bar_ts=now,
+                    sleeves=[],
+                    net_target=NettedTarget(
+                        symbol="ALL",
+                        bar_ts=now,
+                        target_dollars=0.0,
+                        target_shares=0.0,
+                    ),
+                    gates=[error_info.reason_code],
+                )
+                _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+                return
+            continue
         for symbol, df in bars_map.items():
             df = normalize_bars(df, sleeve.timeframe, tz=UTC, rth_only=rth_only)
             if bool(getattr(cfg, "data_contract_enabled", True)):
@@ -28645,9 +28965,21 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(getattr(cfg, "ledger_lookback_hours", 24.0)),
             )
             setattr(state, "_oms_ledger", ledger)
+    rate_limiter = _pretrade_rate_limiter(state)
 
     decision_path = getattr(cfg, "decision_log_path", None)
     for symbol, net_target in targets.items():
+        if state.halt_trading:
+            reason = state.halt_reason or "HALT_TRADING"
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=[reason],
+            )
+            _write_decision_record(record, decision_path)
+            continue
         price = latest_price.get(symbol, 0.0)
         current_shares = int(positions.get(symbol, 0) or 0)
         if price <= 0:
@@ -28750,6 +29082,19 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             qty=abs(delta_shares),
             limit_price=price,
         )
+        if not breakers.allow("broker_submit"):
+            reason = breakers.open_reason("broker_submit") or "CIRCUIT_OPEN_broker_submit"
+            gates.append(reason)
+            state.halt_reason = reason
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
         if ledger is not None and ledger.seen_client_order_id(client_order_id):
             gates.append("BAR_DEDUP")
             record = DecisionRecord(
@@ -28762,14 +29107,74 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
 
-        order = submit_order(
-            runtime,
-            symbol,
-            abs(delta_shares),
-            side,
-            price=price,
+        intent = PretradeOrderIntent(
+            symbol=symbol,
+            side=side,
+            qty=abs(delta_shares),
+            notional=abs(delta_shares) * price,
+            limit_price=price,
+            bar_ts=net_target.bar_ts,
             client_order_id=client_order_id,
+            last_price=price,
+            mid=price,
+            spread=None,
         )
+        allowed, pretrade_reason, pretrade_details = validate_pretrade(
+            intent,
+            cfg=cfg,
+            ledger=ledger,
+            rate_limiter=rate_limiter,
+        )
+        if not allowed:
+            gates.append(pretrade_reason)
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                metrics={"pretrade": pretrade_details},
+            )
+            _write_decision_record(record, decision_path)
+            continue
+
+        try:
+            order = submit_order(
+                runtime,
+                symbol,
+                abs(delta_shares),
+                side,
+                price=price,
+                client_order_id=client_order_id,
+            )
+            breakers.record_success("broker_submit")
+        except Exception as exc:
+            error_info = classify_exception(exc, dependency="broker_submit", symbol=symbol)
+            breakers.record_failure("broker_submit", error_info)
+            _handle_error(error_info, state=state, ctx=runtime, symbol=symbol)
+            submit_open_reason = breakers.open_reason("broker_submit")
+            if submit_open_reason and bool(
+                get_env("AI_TRADING_CANCEL_ALL_ON_SUBMIT_BREAKER", "0", cast=bool)
+            ):
+                cancel_result = cancel_all_open_orders_oms(runtime)
+                logger.warning(
+                    "CANCEL_ALL_TRIGGERED",
+                    extra={
+                        "reason_code": submit_open_reason,
+                        "cancelled": cancel_result.cancelled,
+                        "failed": cancel_result.failed,
+                    },
+                )
+            gates.append(error_info.reason_code)
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+            )
+            _write_decision_record(record, decision_path)
+            continue
         if order is None:
             gates.append("MARKET_CLOSED_BLOCK")
             record = DecisionRecord(
@@ -28992,6 +29397,17 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             )
         _ensure_execution_engine(runtime)
         _enforce_dependency_preflight(runtime)
+        cfg_runtime = _resolve_trading_config(runtime)
+        if not state.run_manifest_written:
+            try:
+                write_run_manifest(
+                    cfg_runtime,
+                    runtime_contract={"stubs_enabled": False},
+                )
+            except Exception as exc:
+                logger.warning("RUN_MANIFEST_WRITE_FAILED", extra={"error": str(exc)})
+            else:
+                state.run_manifest_written = True
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
@@ -29024,7 +29440,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         ):
             logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
             return
-        cfg_for_market = _resolve_trading_config(runtime)
+        cfg_for_market = cfg_runtime
         rth_only = bool(getattr(cfg_for_market, "rth_only", True))
         allow_extended = bool(getattr(cfg_for_market, "allow_extended", False))
         if (rth_only or not allow_extended) and not is_market_open():
@@ -29062,6 +29478,19 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             logging.warning("ALPACA_CLIENT_MISSING")
             _log_loop_heartbeat(loop_id, loop_start)
             return
+        if (
+            not state.startup_cleanup_done
+            and bool(get_env("AI_TRADING_STARTUP_CANCEL_UNEXPECTED_ORDERS", "0", cast=bool))
+        ):
+            startup_result = cancel_all_open_orders_oms(runtime)
+            state.startup_cleanup_done = True
+            logger.warning(
+                "STARTUP_CLEANUP",
+                extra={
+                    "cancelled": startup_result.cancelled,
+                    "failed": startup_result.failed,
+                },
+            )
         try:
             safe_mode_live = provider_monitor.is_safe_mode_active()
         except Exception:
@@ -29154,6 +29583,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         "api.list_orders failed during order check",
                         extra={"cause": e.__class__.__name__, "detail": str(e)},
                     )
+                    breaker_info = classify_exception(e, dependency="broker_open_orders")
+                    breakers = _dependency_breakers(state)
+                    breakers.record_failure("broker_open_orders", breaker_info)
+                    _handle_error(breaker_info, state=state, ctx=runtime)
                     open_orders = []
             if _handle_pending_orders(open_orders, runtime):
                 return

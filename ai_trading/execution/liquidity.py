@@ -43,7 +43,7 @@ class LiquidityAnalyzer:
         """Initialize liquidity analyzer."""
         self.liquidity_thresholds = {'very_low': 100000, 'low': 500000, 'normal': 2000000, 'high': 10000000, 'very_high': 50000000}
         self.volume_lookback_days = 20
-        self.participation_thresholds = {'conservative': 0.05, 'moderate': 0.1, 'aggressive': 0.2}
+        self.participation_thresholds = {'conservative': 0.05, 'balanced': 0.1, 'aggressive': 0.2}
         self.liquidity_history = {}
         logger.info('LiquidityAnalyzer initialized')
 

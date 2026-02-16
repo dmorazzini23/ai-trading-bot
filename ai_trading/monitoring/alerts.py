@@ -292,3 +292,83 @@ class RiskAlertEngine:
             self.last_alert_times[alert_key] = current_time
         except (ValueError, TypeError) as e:
             logger.error(f'Error creating risk alert: {e}')
+
+
+def emit_runtime_alert(
+    event: str,
+    *,
+    severity: str = "warning",
+    details: dict | None = None,
+    state: object | None = None,
+    halt_reason: str | None = None,
+) -> None:
+    """Emit a structured ALERT_* runtime event and optionally set halt reason."""
+
+    payload = dict(details or {})
+    payload.setdefault("severity", severity)
+    level = severity.strip().lower()
+    if level in {"critical", "error"}:
+        logger.error(event, extra=payload)
+    elif level == "info":
+        logger.info(event, extra=payload)
+    else:
+        logger.warning(event, extra=payload)
+
+    if state is not None and halt_reason:
+        try:
+            setattr(state, "halt_reason", halt_reason)
+        except (AttributeError, TypeError):
+            pass
+
+
+def evaluate_runtime_alert_thresholds(
+    *,
+    breaker_open: str | None = None,
+    repeated_rejects: int = 0,
+    reject_threshold: int = 3,
+    data_stale_seconds: float | None = None,
+    data_stale_threshold: float = 120.0,
+    recon_mismatch: bool = False,
+    halt_reason: str | None = None,
+    state: object | None = None,
+) -> None:
+    """Evaluate thin threshold rules for runtime alerting."""
+
+    if breaker_open:
+        emit_runtime_alert(
+            "ALERT_BREAKER_OPEN",
+            severity="critical",
+            details={"dependency": breaker_open},
+            state=state,
+            halt_reason=f"CIRCUIT_OPEN_{breaker_open}",
+        )
+    if repeated_rejects >= max(1, int(reject_threshold)):
+        emit_runtime_alert(
+            "ALERT_REPEATED_REJECTS",
+            severity="warning",
+            details={"count": repeated_rejects, "threshold": reject_threshold},
+            state=state,
+        )
+    if data_stale_seconds is not None and data_stale_seconds > float(data_stale_threshold):
+        emit_runtime_alert(
+            "ALERT_DATA_STALE",
+            severity="warning",
+            details={"stale_seconds": data_stale_seconds, "threshold": data_stale_threshold},
+            state=state,
+        )
+    if recon_mismatch:
+        emit_runtime_alert(
+            "ALERT_RECON_MISMATCH",
+            severity="critical",
+            details={"recon_mismatch": True},
+            state=state,
+            halt_reason="RECON_MISMATCH_HALT",
+        )
+    if halt_reason:
+        emit_runtime_alert(
+            "ALERT_HALT_REASON",
+            severity="critical",
+            details={"halt_reason": halt_reason},
+            state=state,
+            halt_reason=halt_reason,
+        )

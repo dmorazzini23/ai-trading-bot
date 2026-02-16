@@ -1,0 +1,1 @@
+{"account_id": "dummy", "enabled_feature_flags": [], "git_commit_hash": "fe755f2f1cc96c1ba52cdd3ebdaa9c1e62990f42", "mode": "sim", "resolved_config_hash": "fb88c5d854d1e5a52b9af2f284277acc51c6652d92166eaee2051d10fa9e4241", "runtime_contract": {"stubs_enabled": false}, "timestamp": "2026-02-16T20:41:42.482760+00:00"}

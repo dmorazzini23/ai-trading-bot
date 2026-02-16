@@ -2199,21 +2199,23 @@ def _normalize_base_url(value: Any) -> str:
 
 
 def _infer_paper_mode(values: Mapping[str, Any]) -> bool:
-    base_url = _normalize_base_url(values.get("alpaca_base_url")).lower()
     execution_mode = _normalize_env_label(values.get("execution_mode"))
-    trading_mode_env = _normalize_env_label(
-        os.getenv("TRADING_MODE") or os.getenv("AI_TRADING_TRADING_MODE")
-    )
-    app_env = _normalize_env_label(values.get("app_env"), default="test")
+    if execution_mode:
+        if execution_mode in _LIVE_ENV_VALUES:
+            return False
+        if execution_mode == "paper":
+            return True
+        if execution_mode == "disabled":
+            return True
 
-    if execution_mode in _LIVE_ENV_VALUES:
-        return False
-    if trading_mode_env in _LIVE_ENV_VALUES:
-        return False
+    app_env = _normalize_env_label(values.get("app_env"), default="test")
     if app_env in _LIVE_ENV_VALUES:
         return False
+
+    base_url = _normalize_base_url(values.get("alpaca_base_url")).lower()
     if "paper" in base_url:
         return True
+
     return app_env not in _LIVE_ENV_VALUES
 
 
