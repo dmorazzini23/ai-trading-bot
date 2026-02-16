@@ -61,6 +61,8 @@ class DecisionRecord:
     order: dict[str, Any] | None = None
     fills: list[dict[str, Any]] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
+    config_snapshot: dict[str, Any] = field(default_factory=dict)
+    tca: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         sleeves = [asdict(s) for s in self.sleeves]
@@ -80,6 +82,8 @@ class DecisionRecord:
             "order": self.order,
             "fills": list(self.fills),
             "metrics": dict(self.metrics),
+            "config_snapshot": dict(self.config_snapshot),
+            "tca": dict(self.tca) if isinstance(self.tca, dict) else self.tca,
         }
 
 

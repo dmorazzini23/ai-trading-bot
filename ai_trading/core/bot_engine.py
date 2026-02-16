@@ -139,7 +139,25 @@ from ai_trading.oms.pretrade import (
     SlidingWindowRateLimiter,
     validate_pretrade,
 )
+from ai_trading.oms.orders import validate_order_type_support
+from ai_trading.analytics.post_trade_learning import load_learning_overrides
+from ai_trading.analytics.execution_report import write_daily_execution_report
+from ai_trading.analytics.tca import (
+    ExecutionBenchmark,
+    FillSummary,
+    build_tca_record,
+    write_tca_record,
+)
+from ai_trading.portfolio.allocation import load_allocation_state
 from ai_trading.monitoring.alerts import evaluate_runtime_alert_thresholds
+from ai_trading.risk.liquidity_regime import (
+    LiquidityFeatures,
+    LiquidityRegime,
+    classify_liquidity_regime,
+    enforce_participation_cap,
+)
+from ai_trading.risk.portfolio_limits import apply_portfolio_limits
+from ai_trading.runtime.quarantine import load_quarantine_state, save_quarantine_state
 from ai_trading.runtime.run_manifest import write_run_manifest
 
 
@@ -7965,6 +7983,7 @@ class BotState:
     session_close_cleanup_date: date | None = None
     startup_cleanup_done: bool = False
     canary_mode_logged: bool = False
+    last_execution_report_date: date | None = None
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -28587,6 +28606,114 @@ def _write_decision_record(record: Any, path: str | None) -> None:
         logger.warning("DECISION_RECORD_WRITE_FAILED", extra={"error": str(exc)})
 
 
+def _allocation_base_weights() -> dict[str, float]:
+    day = float(get_env("AI_TRADING_ALLOC_DAY_BASE_WEIGHT", 0.40, cast=float))
+    swing = float(get_env("AI_TRADING_ALLOC_SWING_BASE_WEIGHT", 0.35, cast=float))
+    longshort = float(get_env("AI_TRADING_ALLOC_LONGSHORT_BASE_WEIGHT", 0.25, cast=float))
+    raw = {
+        "day": max(0.0, day),
+        "swing": max(0.0, swing),
+        "longshort": max(0.0, longshort),
+    }
+    total = sum(raw.values()) or 1.0
+    return {key: value / total for key, value in raw.items()}
+
+
+def _allocation_weights_for_sleeves(cfg: TradingConfig, sleeves: Sequence[Any]) -> dict[str, float]:
+    if not bool(get_env("AI_TRADING_ALLOCATION_ENABLED", "0", cast=bool)):
+        return {str(sleeve.name): 1.0 for sleeve in sleeves}
+    path = str(
+        get_env(
+            "AI_TRADING_ALLOCATION_OUTPUT_PATH",
+            "runtime/allocation_state.json",
+        )
+    )
+    persisted = load_allocation_state(path)
+    base = _allocation_base_weights()
+    weights: dict[str, float] = {}
+    for sleeve in sleeves:
+        name = str(getattr(sleeve, "name", "")).strip()
+        if not name:
+            continue
+        weights[name] = float(persisted.get(name, base.get(name, 1.0)))
+    total = sum(abs(value) for value in weights.values()) or 1.0
+    return {key: value / total for key, value in weights.items()}
+
+
+def _load_learned_overrides(cfg: TradingConfig) -> dict[str, Any]:
+    if not bool(get_env("AI_TRADING_LEARNING_APPLY_OVERRIDES", "0", cast=bool)):
+        return {}
+    path = str(get_env("AI_TRADING_LEARNING_OUTPUT_PATH", "runtime/learned_overrides.json"))
+    max_age_days = int(get_env("AI_TRADING_LEARNING_MAX_OVERRIDE_AGE_DAYS", 30, cast=int))
+    return load_learning_overrides(path, max_age_days=max_age_days)
+
+
+def _load_quarantine_manager(state: BotState) -> Any:
+    manager = getattr(state, "_quarantine_manager", None)
+    if manager is not None:
+        return manager
+    path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
+    manager = load_quarantine_state(path)
+    setattr(state, "_quarantine_manager", manager)
+    return manager
+
+
+def _persist_quarantine_manager(state: BotState) -> None:
+    manager = getattr(state, "_quarantine_manager", None)
+    if manager is None:
+        return
+    path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
+    save_quarantine_state(path, manager)
+
+
+def _liquidity_features(spread: float | None, vol: float | None, volume: float | None, price: float) -> LiquidityFeatures:
+    spread_bps = 0.0
+    if spread is not None and price > 0:
+        spread_bps = max(0.0, float(spread) / float(price) * 10_000.0)
+    volatility_proxy = float(vol) if vol is not None else 0.0
+    rolling_volume = float(volume) if volume is not None else 0.0
+    return LiquidityFeatures(
+        rolling_volume=rolling_volume,
+        spread_bps=spread_bps,
+        volatility_proxy=volatility_proxy,
+    )
+
+
+def _decision_record_config_snapshot(
+    *,
+    cfg: TradingConfig,
+    state: BotState,
+    allocation_weights: Mapping[str, float],
+    learned_overrides: Mapping[str, Any],
+    liquidity_regime: str | None = None,
+) -> dict[str, Any]:
+    profile = get_regime_signal_profile()
+    regime_components = _REGIME_SIGNAL_COMPONENTS.get(profile, _REGIME_SIGNAL_COMPONENTS["balanced"])
+    snapshot = {
+        "trading_mode": str(getattr(cfg, "trading_mode", TRADING_MODE)),
+        "execution_mode": str(getattr(cfg, "execution_mode", "sim")),
+        "regime_signal_profile": profile,
+        "regime_signal_components": regime_components,
+        "global_caps": {
+            "GLOBAL_MAX_SYMBOL_DOLLARS": float(getattr(cfg, "global_max_symbol_dollars", 0.0)),
+            "GLOBAL_MAX_GROSS_DOLLARS": float(getattr(cfg, "global_max_gross_dollars", 0.0)),
+            "GLOBAL_MAX_NET_DOLLARS": float(getattr(cfg, "global_max_net_dollars", 0.0)),
+        },
+        "portfolio_risk": {
+            "target_annual_vol": float(get_env("AI_TRADING_TARGET_ANNUAL_VOL", 0.18, cast=float)),
+            "corr_threshold": float(get_env("AI_TRADING_CORR_THRESHOLD", 0.80, cast=float)),
+            "corr_group_gross_cap": float(
+                get_env("AI_TRADING_CORR_GROUP_GROSS_CAP", 0.35, cast=float)
+            ),
+        },
+        "allocation_weights": dict(allocation_weights),
+        "learned_overrides": dict(learned_overrides),
+        "halt_reason": state.halt_reason,
+        "liquidity_regime": liquidity_regime,
+    }
+    return snapshot
+
+
 def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now: datetime) -> bool:
     if not bool(getattr(cfg, "recon_enabled", False)):
         return True
@@ -28669,6 +28796,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         DecisionRecord,
         NettedTarget,
         SleeveProposal,
+        apply_cost_gate,
         apply_global_caps,
         apply_turnover_gate,
         compute_sleeve_proposal,
@@ -28679,12 +28807,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     cfg = _resolve_trading_config(runtime)
     now = datetime.now(UTC)
+    decision_path = getattr(cfg, "decision_log_path", None)
+    allocation_weights: dict[str, float] = {}
+    learned_overrides: dict[str, Any] = {}
+    quarantine_enabled = bool(get_env("AI_TRADING_QUARANTINE_ENABLED", "0", cast=bool))
+    quarantine_manager = _load_quarantine_manager(state) if quarantine_enabled else None
     breakers = _dependency_breakers(state)
     for dep in ("broker_submit", "broker_positions", "broker_open_orders", "data_primary"):
         if not breakers.allow(dep):
             reason = breakers.open_reason(dep) or f"CIRCUIT_OPEN_{dep}"
             state.halt_trading = True
             state.halt_reason = reason
+            base_snapshot = _decision_record_config_snapshot(
+                cfg=cfg,
+                state=state,
+                allocation_weights=allocation_weights,
+                learned_overrides=learned_overrides,
+            )
             record = DecisionRecord(
                 symbol="ALL",
                 bar_ts=now,
@@ -28696,19 +28835,27 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     target_shares=0.0,
                 ),
                 gates=[reason],
+                config_snapshot=base_snapshot,
             )
-            _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+            _write_decision_record(record, decision_path)
             return
     if state.halt_trading:
         reason = state.halt_reason or "HALT_TRADING"
+        base_snapshot = _decision_record_config_snapshot(
+            cfg=cfg,
+            state=state,
+            allocation_weights=allocation_weights,
+            learned_overrides=learned_overrides,
+        )
         record = DecisionRecord(
             symbol="ALL",
             bar_ts=now,
             sleeves=[],
             net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=[reason],
+            config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        _write_decision_record(record, decision_path)
         return
 
     rth_only = bool(getattr(cfg, "rth_only", True))
@@ -28726,25 +28873,63 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "failed": result.failed,
                     },
                 )
+        if bool(get_env("AI_TRADING_EXECUTION_REPORT_ENABLED", "0", cast=bool)):
+            report_date = getattr(state, "last_execution_report_date", None)
+            if report_date != now.date():
+                try:
+                    write_daily_execution_report(
+                        tca_path=str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")),
+                        output_dir=str(
+                            get_env(
+                                "AI_TRADING_EXECUTION_REPORT_DIR",
+                                "runtime/execution_reports",
+                            )
+                        ),
+                        formats=tuple(
+                            part.strip()
+                            for part in str(
+                                get_env("AI_TRADING_EXECUTION_REPORT_FORMATS", "json,csv")
+                            ).split(",")
+                            if part.strip()
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning("EXECUTION_REPORT_FAILED", extra={"error": str(exc)})
+                else:
+                    state.last_execution_report_date = now.date()
+        base_snapshot = _decision_record_config_snapshot(
+            cfg=cfg,
+            state=state,
+            allocation_weights=allocation_weights,
+            learned_overrides=learned_overrides,
+        )
         record = DecisionRecord(
             symbol="ALL",
             bar_ts=now,
             sleeves=[],
             net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=["MARKET_CLOSED_BLOCK", "IDLE_MARKET_CLOSED"],
+            config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        _write_decision_record(record, decision_path)
         return
 
     if not _run_reconciliation_if_due(state, runtime, cfg, now):
+        base_snapshot = _decision_record_config_snapshot(
+            cfg=cfg,
+            state=state,
+            allocation_weights=allocation_weights,
+            learned_overrides=learned_overrides,
+        )
         record = DecisionRecord(
             symbol="ALL",
             bar_ts=now,
             sleeves=[],
             net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=[state.halt_reason or "RECON_MISMATCH_HALT"],
+            config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        _write_decision_record(record, decision_path)
         return
 
     kill_switch, kill_reason = _kill_switch_active(cfg)
@@ -28767,6 +28952,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     if not sleeves:
         logger.warning("HORIZONS_EMPTY")
         return
+    sleeve_configs_map = {str(s.name): s for s in sleeves}
+    allocation_weights = _allocation_weights_for_sleeves(cfg, sleeves)
+    learned_overrides = _load_learned_overrides(cfg)
 
     symbols = list(getattr(runtime, "tickers", []) or [])
     if not symbols:
@@ -28809,19 +28997,28 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         error_info = classify_exception(exc, dependency="broker_positions")
         breakers.record_failure("broker_positions", error_info)
         _handle_error(error_info, state=state, ctx=runtime)
+        base_snapshot = _decision_record_config_snapshot(
+            cfg=cfg,
+            state=state,
+            allocation_weights=allocation_weights,
+            learned_overrides=learned_overrides,
+        )
         record = DecisionRecord(
             symbol="ALL",
             bar_ts=now,
             sleeves=[],
             net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
             gates=[error_info.reason_code],
+            config_snapshot=base_snapshot,
         )
-        _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+        _write_decision_record(record, decision_path)
         return
 
     proposals_by_symbol: dict[str, list[SleeveProposal]] = {sym: [] for sym in symbols}
     latest_bar_ts: dict[str, datetime] = {}
     latest_price: dict[str, float] = {}
+    latest_liquidity: dict[str, LiquidityFeatures] = {}
+    symbol_returns: dict[str, list[float]] = {}
     skip_reasons: dict[str, list[str]] = {sym: [] for sym in symbols}
 
     for sleeve in sleeves:
@@ -28844,6 +29041,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             breakers.record_failure("data_primary", error_info)
             _handle_error(error_info, state=state, ctx=runtime, sleeve=sleeve.name)
             if error_info.action is ErrorAction.HALT_TRADING:
+                base_snapshot = _decision_record_config_snapshot(
+                    cfg=cfg,
+                    state=state,
+                    allocation_weights=allocation_weights,
+                    learned_overrides=learned_overrides,
+                )
                 record = DecisionRecord(
                     symbol="ALL",
                     bar_ts=now,
@@ -28855,8 +29058,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         target_shares=0.0,
                     ),
                     gates=[error_info.reason_code],
+                    config_snapshot=base_snapshot,
                 )
-                _write_decision_record(record, getattr(cfg, "decision_log_path", None))
+                _write_decision_record(record, decision_path)
                 return
             continue
         for symbol, df in bars_map.items():
@@ -28924,6 +29128,52 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 vol,
                 volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
             )
+            volume_last = float(df["volume"].iloc[-1]) if "volume" in df.columns else None
+            latest_liquidity[symbol] = _liquidity_features(spread, vol, volume_last, price)
+
+            close_returns: list[float] = []
+            try:
+                close_values = [float(v) for v in df["close"].tail(20).tolist()]
+                for idx in range(1, len(close_values)):
+                    prev = close_values[idx - 1]
+                    cur = close_values[idx]
+                    if prev > 0:
+                        close_returns.append((cur / prev) - 1.0)
+            except Exception:
+                close_returns = []
+            if close_returns:
+                symbol_returns[symbol] = close_returns
+
+            weight = float(allocation_weights.get(sleeve.name, 1.0))
+            proposal.target_dollars *= weight
+            proposal.debug["allocation_weight"] = weight
+
+            symbol_cost_buffers = learned_overrides.get("per_symbol_cost_buffer_bps", {})
+            extra_cost_bps = float(symbol_cost_buffers.get(symbol, 0.0)) if isinstance(symbol_cost_buffers, dict) else 0.0
+            if extra_cost_bps > 0:
+                proposal.expected_cost_bps += extra_cost_bps
+                proposal.debug["learned_cost_buffer_bps"] = extra_cost_bps
+                if apply_cost_gate(proposal.expected_edge_bps, proposal.expected_cost_bps, sleeve.cost_k):
+                    proposal.blocked = True
+                    proposal.reason_code = "COST_GATE"
+                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+
+            if quarantine_enabled and quarantine_manager is not None:
+                q_sleeve, reason_sleeve = quarantine_manager.is_quarantined(
+                    sleeve=sleeve.name,
+                    now=bar_ts,
+                )
+                q_symbol, reason_symbol = quarantine_manager.is_quarantined(
+                    symbol=symbol,
+                    now=bar_ts,
+                )
+                if q_sleeve or q_symbol:
+                    reason = reason_symbol or reason_sleeve or "SLEEVE_QUARANTINED"
+                    proposal.blocked = True
+                    proposal.reason_code = reason
+                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+                    skip_reasons[symbol].append(reason)
+
             turnover_key = (now.date(), sleeve.name, symbol)
             existing_turnover = state.turnover_dollars.get(turnover_key, 0.0)
             projected_turnover = existing_turnover + abs(proposal.target_dollars - (positions.get(symbol, 0.0) * price))
@@ -28955,6 +29205,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         float(getattr(cfg, "global_max_gross_dollars", 0.0)),
         float(getattr(cfg, "global_max_net_dollars", 0.0)),
     )
+    if bool(get_env("AI_TRADING_PORTFOLIO_LIMITS_ENABLED", "0", cast=bool)):
+        limits = apply_portfolio_limits(
+            targets={symbol: target.target_dollars for symbol, target in targets.items()},
+            symbol_returns=symbol_returns,
+            target_annual_vol=float(get_env("AI_TRADING_TARGET_ANNUAL_VOL", 0.18, cast=float)),
+            vol_min_scale=float(get_env("AI_TRADING_VOL_MIN_SCALE", 0.25, cast=float)),
+            vol_max_scale=float(get_env("AI_TRADING_VOL_MAX_SCALE", 1.25, cast=float)),
+            max_symbol_weight=float(get_env("AI_TRADING_MAX_SYMBOL_WEIGHT", 0.12, cast=float)),
+            corr_threshold=float(get_env("AI_TRADING_CORR_THRESHOLD", 0.80, cast=float)),
+            corr_group_gross_cap=float(get_env("AI_TRADING_CORR_GROUP_GROSS_CAP", 0.35, cast=float)),
+        )
+        for symbol, dollars in limits.scaled_targets.items():
+            if symbol in targets:
+                targets[symbol].target_dollars = dollars
+                for reason in limits.reasons:
+                    if reason not in targets[symbol].reasons:
+                        targets[symbol].reasons.append(reason)
 
     ledger: OrderLedger | None = None
     if bool(getattr(cfg, "ledger_enabled", False)):
@@ -28967,8 +29234,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             setattr(state, "_oms_ledger", ledger)
     rate_limiter = _pretrade_rate_limiter(state)
 
-    decision_path = getattr(cfg, "decision_log_path", None)
     for symbol, net_target in targets.items():
+        liq_features = latest_liquidity.get(
+            symbol,
+            LiquidityFeatures(rolling_volume=0.0, spread_bps=0.0, volatility_proxy=0.0),
+        )
+        liq_regime = classify_liquidity_regime(
+            liq_features,
+            thin_spread_bps=float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float)),
+            thin_vol_mult=float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float)),
+        )
+        symbol_snapshot = _decision_record_config_snapshot(
+            cfg=cfg,
+            state=state,
+            allocation_weights=allocation_weights,
+            learned_overrides=learned_overrides,
+            liquidity_regime=liq_regime.value,
+        )
         if state.halt_trading:
             reason = state.halt_reason or "HALT_TRADING"
             record = DecisionRecord(
@@ -28977,6 +29259,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=[reason],
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -28990,6 +29273,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=skip_reasons.get(symbol, []),
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29001,6 +29285,27 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         for proposal in net_target.proposals:
             if proposal.reason_code:
                 gates.append(proposal.reason_code)
+        symbol_snapshot["sleeve_configs"] = {
+            proposal.sleeve: {
+                "thresholds": {
+                    "entry": float(getattr(sleeve_configs_map.get(proposal.sleeve), "entry_threshold", 0.0)),
+                    "exit": float(getattr(sleeve_configs_map.get(proposal.sleeve), "exit_threshold", 0.0)),
+                    "flip": float(getattr(sleeve_configs_map.get(proposal.sleeve), "flip_threshold", 0.0)),
+                    "reentry": float(getattr(sleeve_configs_map.get(proposal.sleeve), "reentry_threshold", 0.0)),
+                },
+                "deadband_dollars": float(
+                    getattr(sleeve_configs_map.get(proposal.sleeve), "deadband_dollars", 0.0)
+                ),
+                "cost_k": float(getattr(sleeve_configs_map.get(proposal.sleeve), "cost_k", 0.0)),
+                "edge_scale_bps": float(
+                    getattr(sleeve_configs_map.get(proposal.sleeve), "edge_scale_bps", 0.0)
+                ),
+                "turnover_cap_dollars": float(
+                    getattr(sleeve_configs_map.get(proposal.sleeve), "turnover_cap_dollars", 0.0)
+                ),
+            }
+            for proposal in net_target.proposals
+        }
 
         lock = state.stop_lock.get(symbol)
         if lock:
@@ -29031,6 +29336,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29043,6 +29349,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29055,9 +29362,42 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
+
+        if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", "1", cast=bool)):
+            allowed_participation, adjusted_qty, liq_reason = enforce_participation_cap(
+                order_qty=float(delta_shares),
+                rolling_volume=liq_features.rolling_volume,
+                max_participation_pct=float(
+                    get_env("AI_TRADING_MAX_PARTICIPATION_PCT", 0.015, cast=float)
+                ),
+                mode=str(get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")),
+                scale_min=float(get_env("AI_TRADING_PARTICIPATION_SCALE_MIN", 0.25, cast=float)),
+            )
+            if not allowed_participation:
+                gates.append(liq_reason or "LIQ_PARTICIPATION_BLOCK")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
+            adjusted_qty_int = int(round(adjusted_qty))
+            if adjusted_qty_int != delta_shares:
+                delta_shares = adjusted_qty_int
+                net_target.target_shares = current_shares + delta_shares
+                net_target.target_dollars = net_target.target_shares * price
+                if liq_reason:
+                    gates.append(liq_reason)
+            if liq_regime is LiquidityRegime.THIN and "LIQ_REGIME_THIN_SCALE" not in gates:
+                gates.append("LIQ_REGIME_THIN_SCALE")
 
         min_qty = int(getattr(cfg, "execution_min_qty", 1))
         min_notional = float(getattr(cfg, "execution_min_notional", 1.0))
@@ -29069,6 +29409,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29092,6 +29433,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29103,6 +29445,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29134,6 +29477,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 net_target=net_target,
                 gates=gates,
                 metrics={"pretrade": pretrade_details},
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29152,6 +29496,36 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             error_info = classify_exception(exc, dependency="broker_submit", symbol=symbol)
             breakers.record_failure("broker_submit", error_info)
             _handle_error(error_info, state=state, ctx=runtime, symbol=symbol)
+            if quarantine_enabled and quarantine_manager is not None:
+                reject_counts = getattr(state, "_quarantine_reject_counts", None)
+                if not isinstance(reject_counts, dict):
+                    reject_counts = {}
+                    setattr(state, "_quarantine_reject_counts", reject_counts)
+                if error_info.category is ErrorCategory.ORDER_REJECTED:
+                    reject_counts[symbol] = int(reject_counts.get(symbol, 0)) + 1
+                    reject_trigger = float(
+                        get_env("AI_TRADING_QUARANTINE_REJECT_RATE_TRIGGER", 0.15, cast=float)
+                    )
+                    min_trades = int(get_env("AI_TRADING_QUARANTINE_MIN_TRADES", 12, cast=int))
+                    reject_threshold = max(1, int(round(reject_trigger * min_trades)))
+                    if reject_counts[symbol] >= reject_threshold:
+                        quarantine_manager.quarantine_symbol(
+                            symbol=symbol,
+                            duration=timedelta(
+                                days=float(
+                                    get_env(
+                                        "AI_TRADING_QUARANTINE_DURATION_DAYS_LONGSHORT",
+                                        2.0,
+                                        cast=float,
+                                    )
+                                )
+                            ),
+                            trigger_reason="SLEEVE_QUARANTINED",
+                            metrics_snapshot={
+                                "reject_count": reject_counts[symbol],
+                                "threshold": reject_threshold,
+                            },
+                        )
             submit_open_reason = breakers.open_reason("broker_submit")
             if submit_open_reason and bool(
                 get_env("AI_TRADING_CANCEL_ALL_ON_SUBMIT_BREAKER", "0", cast=bool)
@@ -29172,6 +29546,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29183,6 +29558,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 sleeves=net_target.proposals,
                 net_target=net_target,
                 gates=gates,
+                config_snapshot=symbol_snapshot,
             )
             _write_decision_record(record, decision_path)
             continue
@@ -29213,6 +29589,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 state.turnover_dollars[turnover_key] = state.turnover_dollars.get(turnover_key, 0.0) + trade_notional * ratio
 
         metrics = {}
+        tca_record: dict[str, Any] | None = None
         try:
             fill_price = getattr(order, "filled_avg_price", None)
             metrics = compute_attribution_metrics(
@@ -29224,6 +29601,51 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
         except Exception:
             metrics = {}
+            fill_price = None
+        if bool(get_env("AI_TRADING_TCA_ENABLED", "0", cast=bool)):
+            fill_vwap = float(fill_price) if fill_price else float(price)
+            benchmark = ExecutionBenchmark(
+                arrival_price=float(price),
+                mid_at_arrival=float(price),
+                bid_at_arrival=None,
+                ask_at_arrival=None,
+                bar_close_price=float(price),
+                decision_ts=net_target.bar_ts,
+                submit_ts=now,
+                first_fill_ts=now,
+            )
+            fill_summary = FillSummary(
+                fill_vwap=fill_vwap,
+                total_qty=float(abs(delta_shares)),
+                fees=0.0,
+                status=str(order_status) if order_status is not None else "submitted",
+                partial_fill=str(order_status).lower() == "partially_filled",
+            )
+            tca_record = build_tca_record(
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=side,
+                benchmark=benchmark,
+                fill=fill_summary,
+                sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
+                regime_profile=get_regime_signal_profile(),
+                provider="alpaca",
+                order_type="limit",
+                quote_proxy=True,
+            )
+            metrics["tca"] = {
+                "is_bps": tca_record.get("is_bps"),
+                "spread_paid_bps": tca_record.get("spread_paid_bps"),
+                "fill_latency_ms": tca_record.get("fill_latency_ms"),
+            }
+            if bool(get_env("AI_TRADING_TCA_UPDATE_ON_FILL", "1", cast=bool)):
+                try:
+                    tca_path = str(
+                        get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
+                    )
+                    write_tca_record(tca_path, tca_record)
+                except Exception as exc:
+                    logger.warning("TCA_WRITE_FAILED", extra={"error": str(exc)})
         gates.append("OK_TRADE")
         record = DecisionRecord(
             symbol=symbol,
@@ -29239,8 +29661,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "status": str(order_status) if order_status is not None else None,
             },
             metrics=metrics,
+            config_snapshot=symbol_snapshot,
+            tca=tca_record,
         )
         _write_decision_record(record, decision_path)
+    if quarantine_enabled:
+        _persist_quarantine_manager(state)
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
@@ -29398,6 +29824,20 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         _ensure_execution_engine(runtime)
         _enforce_dependency_preflight(runtime)
         cfg_runtime = _resolve_trading_config(runtime)
+        if bool(get_env("AI_TRADING_ORDER_TYPES_ENABLED", "0", cast=bool)):
+            capabilities = getattr(runtime, "broker_order_type_capabilities", None)
+            if isinstance(capabilities, Mapping):
+                validate_order_type_support(
+                    configured_entry_type=str(
+                        get_env("AI_TRADING_DEFAULT_ENTRY_ORDER_TYPE", "limit")
+                    ).strip().lower(),
+                    configured_exit_type=str(
+                        get_env("AI_TRADING_DEFAULT_EXIT_ORDER_TYPE", "stop_limit")
+                    ).strip().lower(),
+                    allow_bracket=bool(get_env("AI_TRADING_ALLOW_BRACKET_ORDERS", "0", cast=bool)),
+                    allow_oco_oto=bool(get_env("AI_TRADING_ALLOW_OCO_OTO", "0", cast=bool)),
+                    capabilities=capabilities,
+                )
         if not state.run_manifest_written:
             try:
                 write_run_manifest(
