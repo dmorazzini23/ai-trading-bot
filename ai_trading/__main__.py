@@ -121,6 +121,63 @@ class _StartupConfig(BaseModel):
         raise ValueError(f"Unsupported data_feed: {v}")
 
 
+_ENV_ALIAS_PAIRS: tuple[tuple[str, str, Callable[[str], object]], ...] = (
+    ("MAX_ORDER_DOLLARS", "AI_TRADING_MAX_ORDER_DOLLARS", int),
+    ("MAX_ORDER_SHARES", "AI_TRADING_MAX_ORDER_SHARES", int),
+    ("PRICE_COLLAR_PCT", "AI_TRADING_PRICE_COLLAR_PCT", float),
+    ("MAX_ORDERS_PER_MINUTE_GLOBAL", "AI_TRADING_ORDERS_PER_MIN_GLOBAL", int),
+    ("MAX_ORDERS_PER_MINUTE_PER_SYMBOL", "AI_TRADING_ORDERS_PER_MIN_SYMBOL", int),
+    ("MAX_CANCELS_PER_MINUTE_GLOBAL", "AI_TRADING_CANCELS_PER_MIN", int),
+)
+
+
+def _coerce_alias_value(raw: str | None, caster: Callable[[str], object]) -> object | None:
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    try:
+        return caster(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _validate_env_alias_consistency() -> None:
+    import os
+
+    mismatches: list[dict[str, str]] = []
+    for canonical_key, alias_key, caster in _ENV_ALIAS_PAIRS:
+        canonical_value = _coerce_alias_value(os.getenv(canonical_key), caster)
+        alias_value = _coerce_alias_value(os.getenv(alias_key), caster)
+        if canonical_value is None or alias_value is None:
+            continue
+        if canonical_value == alias_value:
+            continue
+        mismatches.append(
+            {
+                "canonical": canonical_key,
+                "canonical_value": str(canonical_value),
+                "alias": alias_key,
+                "alias_value": str(alias_value),
+            }
+        )
+
+    if mismatches:
+        logger.error("CONFIG_ALIAS_MISMATCH", extra={"mismatches": mismatches})
+        joined = "; ".join(
+            (
+                f"{item['canonical']}={item['canonical_value']}"
+                f" conflicts with {item['alias']}={item['alias_value']}"
+            )
+            for item in mismatches
+        )
+        raise SystemExit(
+            "Invalid configuration: conflicting duplicated env keys detected. "
+            f"{joined}"
+        )
+
+
 try:
     _StartupConfig.model_rebuild()
 except Exception:  # pragma: no cover - defensive
@@ -151,6 +208,7 @@ def _validate_startup_config() -> _StartupConfig:
 
     timeframe_env = os.getenv("TIMEFRAME")
     try:
+        _validate_env_alias_consistency()
         if feed_env is not None:
             feed_value = feed_env
         else:

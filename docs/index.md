@@ -45,6 +45,13 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+## Institutional Operations
+
+- [Institutional 30/60/90 Roadmap](institutional_roadmap_30_60_90.md)
+- [Institutional Acceptance Matrix](acceptance_matrix.md)
+- [SLO Alerts](slo_alerts.md)
+- [Degraded Data Playbook](degraded_data_playbook.md)
+
 
 ## Systemd Service
 

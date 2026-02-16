@@ -9,7 +9,7 @@ SKIP_INSTALL ?= 0
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
 
-.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy lint tests-self lint-core
+.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy lint tests-self lint-core institutional-gates secret-scan
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
@@ -65,6 +65,10 @@ audit-exceptions:
 	@echo "== audit broad exceptions =="
 	@$(PYTHON) tools/audit_exceptions.py --paths ai_trading > artifacts/audit-exceptions.json
 
+secret-scan:
+	@echo "== secret exposure guard =="
+	@$(PYTHON) tools/check_no_live_secrets.py
+
 legacy-scan:
 	@echo "== legacy import scan =="
 	@ci/scripts/forbid_alpaca_trade_api.sh
@@ -90,3 +94,6 @@ test-all-heavy:
 lint:
 	@command -v ruff >/dev/null 2>&1 && ruff check . || \
 	  echo "ruff not installed; skipping lint"
+
+institutional-gates:
+	@bash ci/scripts/institutional_gates.sh

@@ -37,6 +37,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+      - name: Secret exposure guard
+        run: make secret-scan
+      - name: Institutional gates (static bundle)
+        run: INSTITUTIONAL_SKIP_PYTEST=1 make institutional-gates
       - name: Compile
         run: python -m compileall . -q
       - name: Lint + Format + Types

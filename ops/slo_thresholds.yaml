@@ -1,0 +1,56 @@
+version: 1
+service: ai-trading-bot
+environment_defaults:
+  execution_mode: paper
+  canary_required_for_resume: true
+slo:
+  data_freshness:
+    window: 5m
+    max_stale_symbols: 0
+    severity: critical
+  breaker_open_critical_dep:
+    window: 5m
+    max_open_events: 0
+    dependencies:
+      - broker_submit
+      - broker_positions
+      - broker_open_orders
+      - data_primary
+    severity: critical
+  order_reject_rate:
+    window: 15m
+    max_fraction: 0.05
+    min_samples: 20
+    severity: warning
+  recon_mismatch:
+    window: 15m
+    max_events: 0
+    severity: critical
+  tca_implementation_shortfall:
+    window: 1d
+    p95_max_bps: 25
+    min_samples: 20
+    severity: warning
+  replay_determinism:
+    window: per_release
+    must_match_hash: true
+    severity: critical
+  leakage_guard_failures:
+    window: per_release
+    max_events: 0
+    severity: critical
+alerts:
+  notify:
+    - oncall
+    - engineering_manager
+  page_on:
+    - data_freshness
+    - breaker_open_critical_dep
+    - recon_mismatch
+    - leakage_guard_failures
+rollback_policy:
+  auto_rollback_on:
+    - breaker_open_critical_dep
+    - recon_mismatch
+    - leakage_guard_failures
+  manual_approval_required_for_resume: true
