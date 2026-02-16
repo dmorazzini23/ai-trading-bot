@@ -159,6 +159,7 @@ from ai_trading.risk.liquidity_regime import (
 from ai_trading.risk.portfolio_limits import apply_portfolio_limits
 from ai_trading.runtime.quarantine import load_quarantine_state, save_quarantine_state
 from ai_trading.runtime.run_manifest import write_run_manifest
+from ai_trading.models.artifacts import verify_artifact
 
 
 class CycleAbortSafeMode(RuntimeError):
@@ -3315,17 +3316,67 @@ class _ModelPlaceholder:
 _MODEL_CACHE: Any | None = None
 
 
+def _runtime_execution_mode() -> str:
+    try:
+        raw = get_env("EXECUTION_MODE", "sim")
+    except COMMON_EXC:
+        raw = os.getenv("EXECUTION_MODE", "sim")
+    return str(raw or "sim").strip().lower() or "sim"
+
+
+def _auto_train_allowed(execution_mode: str, *, allow_paper_train: bool) -> bool:
+    return execution_mode == "paper" and bool(allow_paper_train)
+
+
+def _enforce_model_artifact_verification(model_path: str) -> None:
+    verify_enabled = bool(get_env("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1", cast=bool))
+    if not verify_enabled:
+        return
+    configured_manifest = str(get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or "").strip()
+    manifest_path = configured_manifest or f"{model_path}.manifest.json"
+    ok, reason = verify_artifact(model_path=model_path, manifest_path=manifest_path)
+    if ok:
+        return
+
+    execution_mode = _runtime_execution_mode()
+    details = {
+        "model_path": model_path,
+        "manifest_path": manifest_path,
+        "reason_code": reason,
+        "execution_mode": execution_mode,
+    }
+    if execution_mode == "live" and not (_is_testing_env() or is_runtime_contract_testing_mode()):
+        logger.error("MODEL_VERIFICATION_FAILED", extra=details)
+        raise RuntimeError(f"MODEL_VERIFICATION_FAILED: {reason}")
+    logger.warning("MODEL_VERIFICATION_SKIPPED", extra=details)
+
+
 def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
     """Load ML model from path or module; create placeholder if missing."""  # AI-AGENT-REF: strict model loader
     global _MODEL_CACHE
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
 
-    path = os.getenv("AI_TRADING_MODEL_PATH")
-    modname = os.getenv("AI_TRADING_MODEL_MODULE")
+    path = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
+    modname = str(get_env("AI_TRADING_MODEL_MODULE", "") or "").strip()
 
     if path:
+        execution_mode = _runtime_execution_mode()
+        strict_live = execution_mode == "live" and not (
+            _is_testing_env() or is_runtime_contract_testing_mode()
+        )
         if not os.path.isfile(path):
+            if strict_live:
+                logger.error(
+                    "MODEL_VERIFICATION_FAILED",
+                    extra={
+                        "model_path": path,
+                        "manifest_path": str(get_env("AI_TRADING_MODEL_MANIFEST_PATH", "") or ""),
+                        "reason_code": "MODEL_FILE_MISSING",
+                        "execution_mode": execution_mode,
+                    },
+                )
+                raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_FILE_MISSING")
             try:
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
                 joblib.dump({"placeholder": True}, path)
@@ -3340,6 +3391,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                 raise RuntimeError(
                     f"AI_TRADING_MODEL_PATH '{path}' could not be created"
                 ) from e
+        _enforce_model_artifact_verification(path)
         mdl = joblib.load(path)
         try:
             digest = _sha256_file(path)
@@ -24828,6 +24880,13 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     )
     marker = RETRAIN_MARKER_FILE
 
+    execution_mode = _runtime_execution_mode()
+    allow_paper_train = bool(get_env("AI_TRADING_ALLOW_PAPER_TRAIN", "0", cast=bool))
+    auto_train_allowed = _auto_train_allowed(
+        execution_mode,
+        allow_paper_train=allow_paper_train,
+    )
+
     need_to_retrain = True
     if CFG.disable_daily_retrain:
         logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
@@ -24838,12 +24897,38 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         if last_date == today_str:
             need_to_retrain = False
 
-    if not MODEL_PATH or not os.path.exists(MODEL_PATH):
+    model_missing = not MODEL_PATH or not os.path.exists(MODEL_PATH)
+    if model_missing:
         logger.warning(
             "MODEL_PATH missing; forcing initial retrain.",
             extra={"path": MODEL_PATH or ""},
         )
-        need_to_retrain = True  # AI-AGENT-REF: guard for missing model path
+        if execution_mode == "live":
+            logger.error(
+                "MODEL_VERIFICATION_FAILED",
+                extra={
+                    "reason_code": "MODEL_FILE_MISSING",
+                    "execution_mode": execution_mode,
+                    "model_path": MODEL_PATH or "",
+                },
+            )
+            raise RuntimeError("MODEL_VERIFICATION_FAILED: MODEL_FILE_MISSING")
+        if auto_train_allowed:
+            need_to_retrain = True  # AI-AGENT-REF: guard for missing model path
+        else:
+            raise RuntimeError(
+                "Auto-train blocked: set EXECUTION_MODE=paper and AI_TRADING_ALLOW_PAPER_TRAIN=1"
+            )
+
+    if need_to_retrain and not auto_train_allowed:
+        logger.info(
+            "AUTO_TRAIN_BLOCKED",
+            extra={
+                "execution_mode": execution_mode,
+                "allow_paper_train": allow_paper_train,
+            },
+        )
+        need_to_retrain = False
 
     if need_to_retrain:
         if not callable(globals().get("retrain_meta_learner")):
@@ -28471,6 +28556,44 @@ def _enforce_dependency_preflight(runtime) -> None:
         },
         execution_mode=execution_mode,
     )
+    _enforce_order_type_failfast(runtime, cfg=cfg, execution_mode=execution_mode)
+
+
+def _enforce_order_type_failfast(
+    runtime: Any,
+    *,
+    cfg: Any | None = None,
+    execution_mode: str | None = None,
+) -> None:
+    if not bool(get_env("AI_TRADING_ORDER_TYPES_ENABLED", "0", cast=bool)):
+        return
+    if not bool(get_env("AI_TRADING_ORDER_TYPE_FAILFAST_ON_UNSUPPORTED", "1", cast=bool)):
+        return
+
+    runtime_cfg = cfg if cfg is not None else _resolve_trading_config(runtime)
+    mode = str(execution_mode or getattr(runtime_cfg, "execution_mode", "sim") or "sim").strip().lower()
+    if mode not in {"paper", "live"}:
+        return
+    if bool(getattr(runtime_cfg, "testing", False)) or _is_testing_env() or is_runtime_contract_testing_mode():
+        return
+
+    capabilities = getattr(runtime, "broker_order_type_capabilities", None)
+    if not isinstance(capabilities, Mapping):
+        raise RuntimeError("ORDER_TYPE_CAPABILITIES_MISSING")
+    try:
+        validate_order_type_support(
+            configured_entry_type=str(
+                get_env("AI_TRADING_DEFAULT_ENTRY_ORDER_TYPE", "limit")
+            ).strip().lower(),
+            configured_exit_type=str(
+                get_env("AI_TRADING_DEFAULT_EXIT_ORDER_TYPE", "stop_limit")
+            ).strip().lower(),
+            allow_bracket=bool(get_env("AI_TRADING_ALLOW_BRACKET_ORDERS", "0", cast=bool)),
+            allow_oco_oto=bool(get_env("AI_TRADING_ALLOW_OCO_OTO", "0", cast=bool)),
+            capabilities=capabilities,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"ORDER_TYPE_UNSUPPORTED: {exc}") from exc
 
 
 def _dependency_breakers(state: BotState) -> DependencyBreakers:
@@ -28685,6 +28808,7 @@ def _decision_record_config_snapshot(
     state: BotState,
     allocation_weights: Mapping[str, float],
     learned_overrides: Mapping[str, Any],
+    sleeve_configs: Mapping[str, Any] | None = None,
     liquidity_regime: str | None = None,
 ) -> dict[str, Any]:
     profile = get_regime_signal_profile()
@@ -28710,6 +28834,15 @@ def _decision_record_config_snapshot(
         "learned_overrides": dict(learned_overrides),
         "halt_reason": state.halt_reason,
         "liquidity_regime": liquidity_regime,
+        "liquidity_participation": {
+            "enabled": bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", "0", cast=bool)),
+            "max_participation_pct": float(
+                get_env("AI_TRADING_MAX_PARTICIPATION_PCT", 0.015, cast=float)
+            ),
+            "block_mode": str(get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")),
+            "scale_min": float(get_env("AI_TRADING_PARTICIPATION_SCALE_MIN", 0.25, cast=float)),
+        },
+        "sleeve_configs": dict(sleeve_configs or {}),
     }
     return snapshot
 
@@ -28810,6 +28943,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     decision_path = getattr(cfg, "decision_log_path", None)
     allocation_weights: dict[str, float] = {}
     learned_overrides: dict[str, Any] = {}
+    sleeve_snapshot: dict[str, Any] = {}
     quarantine_enabled = bool(get_env("AI_TRADING_QUARANTINE_ENABLED", "0", cast=bool))
     quarantine_manager = _load_quarantine_manager(state) if quarantine_enabled else None
     breakers = _dependency_breakers(state)
@@ -28823,6 +28957,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 state=state,
                 allocation_weights=allocation_weights,
                 learned_overrides=learned_overrides,
+                sleeve_configs=sleeve_snapshot,
             )
             record = DecisionRecord(
                 symbol="ALL",
@@ -28846,6 +28981,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             state=state,
             allocation_weights=allocation_weights,
             learned_overrides=learned_overrides,
+            sleeve_configs=sleeve_snapshot,
         )
         record = DecisionRecord(
             symbol="ALL",
@@ -28902,6 +29038,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             state=state,
             allocation_weights=allocation_weights,
             learned_overrides=learned_overrides,
+            sleeve_configs=sleeve_snapshot,
         )
         record = DecisionRecord(
             symbol="ALL",
@@ -28920,6 +29057,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             state=state,
             allocation_weights=allocation_weights,
             learned_overrides=learned_overrides,
+            sleeve_configs=sleeve_snapshot,
         )
         record = DecisionRecord(
             symbol="ALL",
@@ -28953,6 +29091,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         logger.warning("HORIZONS_EMPTY")
         return
     sleeve_configs_map = {str(s.name): s for s in sleeves}
+    sleeve_snapshot = {
+        str(name): {
+            "timeframe": str(getattr(sleeve_cfg, "timeframe", "")),
+            "entry_threshold": float(getattr(sleeve_cfg, "entry_threshold", 0.0)),
+            "exit_threshold": float(getattr(sleeve_cfg, "exit_threshold", 0.0)),
+            "flip_threshold": float(getattr(sleeve_cfg, "flip_threshold", 0.0)),
+            "reentry_threshold": float(getattr(sleeve_cfg, "reentry_threshold", 0.0)),
+            "deadband_dollars": float(getattr(sleeve_cfg, "deadband_dollars", 0.0)),
+            "deadband_shares": float(getattr(sleeve_cfg, "deadband_shares", 0.0)),
+            "cost_k": float(getattr(sleeve_cfg, "cost_k", 0.0)),
+            "edge_scale_bps": float(getattr(sleeve_cfg, "edge_scale_bps", 0.0)),
+            "turnover_cap_dollars": float(getattr(sleeve_cfg, "turnover_cap_dollars", 0.0)),
+            "max_symbol_dollars": float(getattr(sleeve_cfg, "max_symbol_dollars", 0.0)),
+            "max_gross_dollars": float(getattr(sleeve_cfg, "max_gross_dollars", 0.0)),
+        }
+        for name, sleeve_cfg in sleeve_configs_map.items()
+    }
     allocation_weights = _allocation_weights_for_sleeves(cfg, sleeves)
     learned_overrides = _load_learned_overrides(cfg)
 
@@ -29002,6 +29157,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             state=state,
             allocation_weights=allocation_weights,
             learned_overrides=learned_overrides,
+            sleeve_configs=sleeve_snapshot,
         )
         record = DecisionRecord(
             symbol="ALL",
@@ -29046,6 +29202,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     state=state,
                     allocation_weights=allocation_weights,
                     learned_overrides=learned_overrides,
+                    sleeve_configs=sleeve_snapshot,
                 )
                 record = DecisionRecord(
                     symbol="ALL",
@@ -29249,6 +29406,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             state=state,
             allocation_weights=allocation_weights,
             learned_overrides=learned_overrides,
+            sleeve_configs=sleeve_snapshot,
             liquidity_regime=liq_regime.value,
         )
         if state.halt_trading:
@@ -29824,20 +29982,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         _ensure_execution_engine(runtime)
         _enforce_dependency_preflight(runtime)
         cfg_runtime = _resolve_trading_config(runtime)
-        if bool(get_env("AI_TRADING_ORDER_TYPES_ENABLED", "0", cast=bool)):
-            capabilities = getattr(runtime, "broker_order_type_capabilities", None)
-            if isinstance(capabilities, Mapping):
-                validate_order_type_support(
-                    configured_entry_type=str(
-                        get_env("AI_TRADING_DEFAULT_ENTRY_ORDER_TYPE", "limit")
-                    ).strip().lower(),
-                    configured_exit_type=str(
-                        get_env("AI_TRADING_DEFAULT_EXIT_ORDER_TYPE", "stop_limit")
-                    ).strip().lower(),
-                    allow_bracket=bool(get_env("AI_TRADING_ALLOW_BRACKET_ORDERS", "0", cast=bool)),
-                    allow_oco_oto=bool(get_env("AI_TRADING_ALLOW_OCO_OTO", "0", cast=bool)),
-                    capabilities=capabilities,
-                )
         if not state.run_manifest_written:
             try:
                 write_run_manifest(

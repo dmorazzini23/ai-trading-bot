@@ -35,10 +35,11 @@ class FillSummary:
 
 def implementation_shortfall_bps(
     side: str,
-    arrival_price: float,
-    fill_vwap: float,
+    arrival_price: float | None = None,
+    fill_vwap: float | None = None,
     fees: float = 0.0,
     qty: float = 0.0,
+    decision_price: float | None = None,
 ) -> float:
     """Return implementation shortfall in bps using signed direction.
 
@@ -46,7 +47,12 @@ def implementation_shortfall_bps(
     IS_bps = sign * (fill_price - decision_price) / decision_price * 10_000
     """
 
-    base = float(arrival_price)
+    reference = decision_price if decision_price is not None else arrival_price
+    if reference is None:
+        raise ValueError("decision_price is required")
+    base = float(reference)
+    if fill_vwap is None:
+        raise ValueError("fill_vwap is required")
     fill = float(fill_vwap)
     if base <= 0:
         return 0.0
@@ -131,6 +137,11 @@ def build_tca_record(
         "regime_profile": regime_profile,
         "provider": provider,
         "order_type": order_type,
+        "decision_price": arrival,
+        "submit_price_reference": (
+            float(benchmark.mid_at_arrival) if benchmark.mid_at_arrival is not None else arrival
+        ),
+        "fill_price": fill_vwap,
         "arrival_price": arrival,
         "fill_vwap": fill_vwap,
         "qty": float(fill.total_qty),
