@@ -128,7 +128,7 @@ def _cfg_value(
     cfg: Any,
     *,
     field: str,
-    env_key: str,
+    env_keys: tuple[str, ...],
     default: Any,
     cast: type[float] | type[int],
 ) -> float | int:
@@ -138,7 +138,12 @@ def _cfg_value(
             return cast(raw)
         except (TypeError, ValueError):
             pass
-    return cast(get_env(env_key, default, cast=cast))
+    for env_key in env_keys:
+        raw_env = get_env(env_key, None)
+        if raw_env is None:
+            continue
+        return cast(get_env(env_key, default, cast=cast))
+    return cast(default)
 
 
 def _ledger_fingerprints(ledger: Any) -> set[tuple[str, str, int, str]]:
@@ -165,7 +170,7 @@ def validate_pretrade(
         _cfg_value(
             cfg,
             field="max_order_dollars",
-            env_key="AI_TRADING_MAX_ORDER_DOLLARS",
+            env_keys=("MAX_ORDER_DOLLARS", "AI_TRADING_MAX_ORDER_DOLLARS"),
             default=0.0,
             cast=float,
         )
@@ -174,7 +179,7 @@ def validate_pretrade(
         _cfg_value(
             cfg,
             field="max_order_shares",
-            env_key="AI_TRADING_MAX_ORDER_SHARES",
+            env_keys=("MAX_ORDER_SHARES", "AI_TRADING_MAX_ORDER_SHARES"),
             default=0,
             cast=int,
         )
@@ -183,7 +188,7 @@ def validate_pretrade(
         _cfg_value(
             cfg,
             field="price_collar_pct",
-            env_key="AI_TRADING_PRICE_COLLAR_PCT",
+            env_keys=("PRICE_COLLAR_PCT", "AI_TRADING_PRICE_COLLAR_PCT"),
             default=0.03,
             cast=float,
         )

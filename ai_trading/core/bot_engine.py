@@ -28577,8 +28577,8 @@ def _enforce_order_type_failfast(
     if bool(getattr(runtime_cfg, "testing", False)) or _is_testing_env() or is_runtime_contract_testing_mode():
         return
 
-    capabilities = getattr(runtime, "broker_order_type_capabilities", None)
-    if not isinstance(capabilities, Mapping):
+    capabilities = _resolve_order_type_capabilities(runtime)
+    if capabilities is None:
         raise RuntimeError("ORDER_TYPE_CAPABILITIES_MISSING")
     try:
         validate_order_type_support(
@@ -28596,6 +28596,88 @@ def _enforce_order_type_failfast(
         raise RuntimeError(f"ORDER_TYPE_UNSUPPORTED: {exc}") from exc
 
 
+def _resolve_order_type_capabilities(runtime: Any) -> Mapping[str, bool] | None:
+    raw_caps = getattr(runtime, "broker_order_type_capabilities", None)
+    if isinstance(raw_caps, Mapping):
+        return {str(key).strip().lower(): bool(value) for key, value in raw_caps.items()}
+
+    exec_engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
+    for attr in ("broker_order_type_capabilities", "order_type_capabilities"):
+        candidate = getattr(exec_engine, attr, None)
+        if isinstance(candidate, Mapping):
+            normalized = {
+                str(key).strip().lower(): bool(value) for key, value in candidate.items()
+            }
+            setattr(runtime, "broker_order_type_capabilities", normalized)
+            return normalized
+
+    env_caps: dict[str, bool] = {}
+    env_defined = False
+    env_map = {
+        "limit": "AI_TRADING_BROKER_SUPPORTS_LIMIT",
+        "market": "AI_TRADING_BROKER_SUPPORTS_MARKET",
+        "stop": "AI_TRADING_BROKER_SUPPORTS_STOP",
+        "stop_limit": "AI_TRADING_BROKER_SUPPORTS_STOP_LIMIT",
+        "trailing_stop": "AI_TRADING_BROKER_SUPPORTS_TRAILING_STOP",
+        "bracket": "AI_TRADING_BROKER_SUPPORTS_BRACKET",
+        "oco": "AI_TRADING_BROKER_SUPPORTS_OCO",
+        "oto": "AI_TRADING_BROKER_SUPPORTS_OTO",
+    }
+    for capability, env_key in env_map.items():
+        raw_value = get_env(env_key, None)
+        if raw_value is None:
+            continue
+        env_defined = True
+        env_caps[capability] = bool(get_env(env_key, "0", cast=bool))
+    if env_defined:
+        setattr(runtime, "broker_order_type_capabilities", env_caps)
+        logger.info("ORDER_TYPE_CAPABILITIES_CONFIGURED", extra={"capabilities": env_caps})
+        return env_caps
+
+    engine_module = ""
+    if exec_engine is not None:
+        engine_module = str(getattr(exec_engine.__class__, "__module__", "") or "")
+    if engine_module.startswith("ai_trading.execution.live_trading"):
+        inferred_caps = {
+            "limit": True,
+            "market": True,
+            "stop": True,
+            "stop_limit": True,
+            "trailing_stop": True,
+            "bracket": False,
+            "oco": False,
+            "oto": False,
+        }
+        setattr(runtime, "broker_order_type_capabilities", inferred_caps)
+        logger.warning(
+            "ORDER_TYPE_CAPABILITIES_INFERRED",
+            extra={
+                "engine_module": engine_module,
+                "capabilities": inferred_caps,
+                "note": "Set AI_TRADING_BROKER_SUPPORTS_* for explicit capability config.",
+            },
+        )
+        return inferred_caps
+
+    return None
+
+
+def _get_pretrade_limit_env(
+    primary_key: str,
+    *,
+    fallback_key: str | None = None,
+    default: int,
+) -> int:
+    raw_primary = get_env(primary_key, None)
+    if raw_primary is not None:
+        return int(get_env(primary_key, default, cast=int))
+    if fallback_key is not None:
+        raw_fallback = get_env(fallback_key, None)
+        if raw_fallback is not None:
+            return int(get_env(fallback_key, default, cast=int))
+    return int(default)
+
+
 def _dependency_breakers(state: BotState) -> DependencyBreakers:
     breakers = getattr(state, "dependency_breakers", None)
     if isinstance(breakers, DependencyBreakers):
@@ -28610,9 +28692,21 @@ def _pretrade_rate_limiter(state: BotState) -> SlidingWindowRateLimiter:
     if isinstance(limiter, SlidingWindowRateLimiter):
         return limiter
     limiter = SlidingWindowRateLimiter(
-        global_orders_per_min=int(get_env("AI_TRADING_ORDERS_PER_MIN_GLOBAL", 60, cast=int)),
-        per_symbol_orders_per_min=int(get_env("AI_TRADING_ORDERS_PER_MIN_SYMBOL", 6, cast=int)),
-        cancels_per_min=int(get_env("AI_TRADING_CANCELS_PER_MIN", 60, cast=int)),
+        global_orders_per_min=_get_pretrade_limit_env(
+            "MAX_ORDERS_PER_MINUTE_GLOBAL",
+            fallback_key="AI_TRADING_ORDERS_PER_MIN_GLOBAL",
+            default=60,
+        ),
+        per_symbol_orders_per_min=_get_pretrade_limit_env(
+            "MAX_ORDERS_PER_MINUTE_PER_SYMBOL",
+            fallback_key="AI_TRADING_ORDERS_PER_MIN_SYMBOL",
+            default=6,
+        ),
+        cancels_per_min=_get_pretrade_limit_env(
+            "MAX_CANCELS_PER_MINUTE_GLOBAL",
+            fallback_key="AI_TRADING_CANCELS_PER_MIN",
+            default=60,
+        ),
         cancel_loop_max_without_fill=int(
             get_env("AI_TRADING_CANCEL_LOOP_MAX_WITHOUT_FILL", 5, cast=int)
         ),
