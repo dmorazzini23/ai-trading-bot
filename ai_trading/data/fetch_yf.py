@@ -20,6 +20,9 @@ except Exception:  # pragma: no cover - optional dependency missing
 
 from ai_trading.config.management import get_env
 from ai_trading.data.normalize import ensure_ohlcv
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -102,6 +105,7 @@ def normalize_yf_interval(interval: str | None) -> str | None:
     try:
         lowered = str(interval).strip().lower()
     except Exception:
+        logger.debug("YF_INTERVAL_NORMALIZE_FAILED", extra={"interval": interval}, exc_info=True)
         return None
     if not lowered:
         return None
@@ -116,6 +120,7 @@ def _cache_read_or_none(key: str) -> Optional[pd.DataFrame]:
     try:
         return pd.read_parquet(path)
     except Exception:
+        logger.debug("YF_CACHE_READ_FAILED", extra={"path": str(path)}, exc_info=True)
         return None
 
 
@@ -124,7 +129,7 @@ def _cache_write(key: str, df: pd.DataFrame) -> None:
     try:
         df.to_parquet(path)
     except Exception:
-        pass
+        logger.debug("YF_CACHE_WRITE_FAILED", extra={"path": str(path)}, exc_info=True)
 
 
 def fetch_yf_batched(

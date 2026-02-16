@@ -78,6 +78,11 @@ def _http_profile_logging_enabled() -> bool:
     try:
         return bool(int(value))
     except Exception:
+        logger.debug(
+            "HTTP_PROFILE_LOG_ENABLED_PARSE_FALLBACK",
+            extra={"raw_value": value},
+            exc_info=True,
+        )
         return bool(value)
 
 # Detect Alpaca SDK availability without importing heavy modules
@@ -151,6 +156,7 @@ def _config_snapshot(cfg: Any) -> dict[str, Any]:
     try:
         return copy.deepcopy(cfg.to_dict())
     except Exception:  # pragma: no cover - defensive fallback
+        logger.debug("CONFIG_SNAPSHOT_DEEPCOPY_FAILED", exc_info=True)
         return {"__repr__": repr(cfg)}
 
 
@@ -178,7 +184,7 @@ def _resolve_cached_context(
             try:
                 runtime.cfg = cfg
             except Exception:  # pragma: no cover - runtime without cfg attribute
-                pass
+                logger.debug("RUNTIME_CFG_ASSIGN_FAILED_REBUILD", exc_info=True)
             _STATE_CACHE = state
             _RUNTIME_CACHE = runtime
             _RUNTIME_CFG_SNAPSHOT = snapshot
@@ -189,7 +195,7 @@ def _resolve_cached_context(
             try:
                 runtime.cfg = cfg
             except Exception:  # pragma: no cover - runtime without cfg attribute
-                pass
+                logger.debug("RUNTIME_CFG_ASSIGN_FAILED_REUSE", exc_info=True)
             reused = True
 
     return state, runtime, reused
@@ -206,6 +212,7 @@ def _reset_warmup_cooldown_timestamp() -> None:
             if hasattr(state, "last_run_at"):
                 setattr(state, "last_run_at", None)
         except Exception:
+            logger.debug("WARMUP_COOLDOWN_RESET_FAILED", exc_info=True)
             return
 
 
@@ -218,6 +225,7 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
     try:
         trading_cfg = get_trading_config()
     except Exception:
+        logger.debug("TRADING_CONFIG_LOG_SNAPSHOT_UNAVAILABLE", exc_info=True)
         trading_cfg = None
     if trading_cfg is not None:
         provider_candidate = getattr(trading_cfg, "data_provider", None)
@@ -553,7 +561,7 @@ def run_cycle() -> None:
             try:
                 logged_cycles.add(str(cycle_getter()))
             except Exception:  # pragma: no cover - best effort dedupe
-                pass
+                logger.debug("SAFE_MODE_LOG_DEDUPE_UPDATE_FAILED", exc_info=True)
         _interruptible_sleep(5.0)
         return
 
@@ -568,7 +576,7 @@ def run_cycle() -> None:
             },
         )
     except Exception:
-        pass
+        logger.debug("EXEC_CONFIG_RESOLVED_LOG_FAILED", exc_info=True)
 
     # Carry through a pre-resolved max position size if available on Settings.
     S = get_settings()
@@ -580,7 +588,7 @@ def run_cycle() -> None:
             try:
                 setattr(cfg, "max_position_size", float(mps))
             except Exception:  # pragma: no cover - defensive
-                pass
+                logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
 
     state, runtime, _ = _resolve_cached_context(cfg, BotState, build_runtime)
 
@@ -593,7 +601,7 @@ def run_cycle() -> None:
         try:
             runtime.state = {}
         except Exception:
-            pass
+            logger.debug("RUNTIME_STATE_DICT_INIT_FAILED", exc_info=True)
 
     global _STARTUP_PENDING_RECONCILED
     if not _STARTUP_PENDING_RECONCILED:
@@ -720,6 +728,7 @@ def get_memory_optimizer():
     try:
         from ai_trading.utils import memory_optimizer
     except Exception:
+        logger.debug("MEMORY_OPTIMIZER_IMPORT_FAILED", exc_info=True)
         return _NULL_MEMORY_OPTIMIZER
 
     return memory_optimizer
@@ -1017,7 +1026,7 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                 try:
                     object.__setattr__(obj, "equity", resolved_eq)
                 except Exception:  # pragma: no cover - defensive
-                    pass
+                    logger.debug("ACCOUNT_EQUITY_ASSIGN_FAILED", exc_info=True)
     else:
         logger.warning(
             "ACCOUNT_EQUITY_MISSING",
@@ -1030,7 +1039,7 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                 try:
                     object.__setattr__(obj, "equity", None)
                 except Exception:  # pragma: no cover - defensive
-                    pass
+                    logger.debug("ACCOUNT_EQUITY_CLEAR_FAILED", exc_info=True)
     try:
         force = (_CACHE.value is None) or (eq != prev_eq)
         # Use full Settings for equity/credentials; mode is read from Settings
@@ -1286,7 +1295,7 @@ def run_flask_app(
         try:
             application.config = {"broker_snapshot_fn": _broker_snapshot}
         except Exception:
-            pass
+            logger.debug("APP_CONFIG_ASSIGN_FALLBACK_FAILED", exc_info=True)
     debug = run_kwargs.pop("debug", False)
 
     def _port_available(candidate: int) -> bool:
@@ -1358,6 +1367,7 @@ def _probe_local_api_health(port: int) -> bool:
         import http.client as _http
         import json as _json
     except Exception:  # pragma: no cover - stdlib import failures are unexpected
+        logger.debug("LOCAL_API_HEALTH_PROBE_IMPORT_FAILED", exc_info=True)
         return False
 
     conn = None
@@ -1368,18 +1378,20 @@ def _probe_local_api_health(port: int) -> bool:
         resp = conn.getresponse()
         payload = resp.read()  # must consume response before closing
     except Exception:
+        logger.debug("LOCAL_API_HEALTH_PROBE_REQUEST_FAILED", extra={"port": port}, exc_info=True)
         return False
     finally:
         try:
             conn.close()
         except Exception:
-            pass
+            logger.debug("LOCAL_API_PROBE_CONN_CLOSE_FAILED", exc_info=True)
 
     if resp is None or resp.status != 200:
         return False
     try:
         data = _json.loads(payload.decode("utf-8"))
     except Exception:
+        logger.debug("LOCAL_API_HEALTH_PROBE_DECODE_FAILED", extra={"port": port}, exc_info=True)
         return False
     return bool(data) and data.get("service") == "ai-trading"
 
@@ -1529,7 +1541,7 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
         try:
             setattr(api_error, "exception", exc)
         except Exception:
-            pass
+            logger.debug("API_ERROR_EXCEPTION_ATTR_SET_FAILED", exc_info=True)
         api_error.set()
 
 
@@ -1567,7 +1579,7 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
                     _bof = float(_os.getenv(f"HTTP_BACKOFF_{key}", "0.2"))
                     mount_host_retry_profile(session, host, total_retries=_retries, backoff_factor=_bof, pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)))
             except Exception:
-                pass
+                logger.debug("HTTP_HOST_RETRY_PROFILE_INIT_FAILED", exc_info=True)
             set_global_session(session)
             logger.info(
                 "REQUESTS_POOL_STATS",
@@ -1712,16 +1724,16 @@ def main(argv: list[str] | None = None) -> None:
                     try:
                         object.__setattr__(S, "capital_cap", _cap_val)
                     except Exception:
-                        pass
+                        logger.debug("SETTINGS_CAPITAL_CAP_ASSIGN_FAILED", exc_info=True)
                 try:
                     setattr(config, "capital_cap", _cap_val)
                 except Exception:
                     try:
                         object.__setattr__(config, "capital_cap", _cap_val)
                     except Exception:
-                        pass
+                        logger.debug("CONFIG_CAPITAL_CAP_ASSIGN_FAILED", exc_info=True)
             except Exception:
-                pass
+                logger.debug("CAPITAL_CAP_ENV_PARSE_FAILED", extra={"raw_value": _cap_env}, exc_info=True)
     if config is None:
         logger.critical(
             "SETTINGS_UNAVAILABLE",  # AI-AGENT-REF: clearer startup failure
@@ -1890,7 +1902,7 @@ def main(argv: list[str] | None = None) -> None:
                                 os.environ["AI_TRADING_EXEC_WORKERS"] = _ewc
                                 os.environ["AI_TRADING_PRED_WORKERS"] = _ewc
                         except Exception:
-                            pass
+                            logger.debug("EXEC_WORKERS_CLOSED_HINT_SET_FAILED", exc_info=True)
                         session = build_retrying_session(
                             pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
                             total_retries=1,
@@ -1904,7 +1916,7 @@ def main(argv: list[str] | None = None) -> None:
                             if host:
                                 mount_host_retry_profile(session, host, total_retries=1, backoff_factor=0.1, pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
                         except Exception:
-                            pass
+                            logger.debug("HTTP_PROFILE_CLOSED_HOST_MOUNT_FAILED", exc_info=True)
                         set_global_session(session)
                         if _http_profile_logging_enabled():
                             logger.info(
@@ -1926,7 +1938,7 @@ def main(argv: list[str] | None = None) -> None:
                                 os.environ.pop("AI_TRADING_EXEC_WORKERS", None)
                                 os.environ.pop("AI_TRADING_PRED_WORKERS", None)
                         except Exception:
-                            pass
+                            logger.debug("EXEC_WORKERS_CLOSED_HINT_CLEAR_FAILED", exc_info=True)
                         session = build_retrying_session(
                             pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
                             total_retries=int(getattr(S, "http_total_retries", 3)),
@@ -1942,7 +1954,7 @@ def main(argv: list[str] | None = None) -> None:
                                 _bof = float(os.getenv(host.replace('.', '_').join(["HTTP_BACKOFF_", ""])) or getattr(S, "http_backoff_factor", 0.3))
                                 mount_host_retry_profile(session, host, total_retries=int(_retries), backoff_factor=float(_bof), pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
                         except Exception:
-                            pass
+                            logger.debug("HTTP_PROFILE_OPEN_HOST_MOUNT_FAILED", exc_info=True)
                         set_global_session(session)
                         if _http_profile_logging_enabled():
                             logger.info(
@@ -1956,7 +1968,7 @@ def main(argv: list[str] | None = None) -> None:
                             )
                     _http_closed_profile = closed
                 except Exception:
-                    pass
+                    logger.debug("HTTP_PROFILE_SWITCH_FAILED", exc_info=True)
             raw_fraction = get_env(
                 "CYCLE_COMPUTE_BUDGET",
                 get_env("CYCLE_BUDGET_FRACTION", 0.9),
@@ -1989,13 +2001,13 @@ def main(argv: list[str] | None = None) -> None:
                     try:
                         _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, monotonic_time() - _t0))  # type: ignore[call-arg]
                     except Exception:
-                        pass
+                        logger.debug("CYCLE_STAGE_METRIC_OBSERVE_FETCH_FAILED", exc_info=True)
                     if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
                         try:
                             _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
                         except Exception:
-                            pass
+                            logger.debug("CYCLE_BUDGET_COUNTER_INC_FETCH_FAILED", exc_info=True)
                     _t1 = monotonic_time()
                     if budget is not None:
                         set_cycle_budget_context(
@@ -2013,13 +2025,13 @@ def main(argv: list[str] | None = None) -> None:
                     try:
                         _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, monotonic_time() - _t1))  # type: ignore[call-arg]
                     except Exception:
-                        pass
+                        logger.debug("CYCLE_STAGE_METRIC_OBSERVE_COMPUTE_FAILED", exc_info=True)
                     if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
                         try:
                             _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
                         except Exception:
-                            pass
+                            logger.debug("CYCLE_BUDGET_COUNTER_INC_COMPUTE_FAILED", exc_info=True)
                     execute_seconds = execution_timing.cycle_seconds()
                     with StageTimer(
                         logger,
@@ -2030,13 +2042,13 @@ def main(argv: list[str] | None = None) -> None:
                     try:
                         _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, execute_seconds))  # type: ignore[call-arg]
                     except Exception:
-                        pass
+                        logger.debug("CYCLE_STAGE_METRIC_OBSERVE_EXECUTE_FAILED", exc_info=True)
                     if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
                         try:
                             _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
                         except Exception:
-                            pass
+                            logger.debug("CYCLE_BUDGET_COUNTER_INC_EXECUTE_FAILED", exc_info=True)
                     if budget is not None:
                         try:
                             elapsed_ms = int(max(0.0, budget.elapsed_ms()))

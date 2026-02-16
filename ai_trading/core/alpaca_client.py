@@ -61,6 +61,7 @@ def _get_bot_logger_once() -> Any:
     except COMMON_EXC:
         return _shared_logger_once or logger_once
     except Exception:
+        logger.debug("BOT_ENGINE_MODULE_LOOKUP_FAILED", exc_info=True)
         return _shared_logger_once or logger_once
 
     shared = getattr(bot_engine_module, "logger_once", None)
@@ -138,7 +139,7 @@ def _validate_trading_api(api: Any) -> bool:
                     if enum_cls is not None:
                         enum_val = getattr(enum_cls, str(status).upper(), status)
                 except Exception:
-                    pass
+                    logger.debug("LIST_ORDERS_STATUS_ENUM_MAP_FAILED", exc_info=True)
 
                 # Prefer building a filter object when available to be compatible
                 # with newer alpaca-py signatures and tests that assert this path.
@@ -202,7 +203,7 @@ def _validate_trading_api(api: Any) -> bool:
                 )
         except Exception:
             # Non-fatal; caller may handle attribute absence
-            pass
+            logger.debug("LIST_POSITIONS_PATCH_FAILED", exc_info=True)
 
     if not hasattr(api, "get_order"):
         getter = getattr(api, "get_order_by_id", None) or getattr(api, "get_order_by_client_order_id", None)
@@ -447,7 +448,7 @@ def _initialize_alpaca_clients() -> bool:
                     from ai_trading.config.management import reload_env
                     reload_env(override=False)
                 except Exception:
-                    pass
+                    logger.debug("RELOAD_ENV_AFTER_RESOLUTION_FAILURE_FAILED", exc_info=True)
                 continue
             log_once.error("ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed")
             be.trading_client = None

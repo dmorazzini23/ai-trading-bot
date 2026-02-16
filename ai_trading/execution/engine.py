@@ -204,6 +204,7 @@ def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
     try:
         return OrderSide(str(side).lower())
     except Exception:
+        logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
         return None
 
 
@@ -421,6 +422,7 @@ class ExecutionResult(str):
         try:
             normalized = str(candidate).strip().lower()
         except Exception:  # pragma: no cover - defensive
+            logger.debug("ORDER_EVENT_SIDE_NORMALIZE_FAILED", exc_info=True)
             return None
         if not normalized:
             return None
@@ -445,6 +447,7 @@ class ExecutionResult(str):
         try:
             text = str(sym).strip()
         except Exception:  # pragma: no cover - defensive
+            logger.debug("ORDER_EVENT_SYMBOL_NORMALIZE_FAILED", exc_info=True)
             return None
         return text or None
 
@@ -457,6 +460,7 @@ class ExecutionResult(str):
         try:
             return OrderStatus(str(status))
         except Exception:
+            logger.debug("ORDER_STATUS_NORMALIZE_FAILED", extra={"status": status}, exc_info=True)
             return None
 
     @property
@@ -984,6 +988,7 @@ class ExecutionEngine:
             try:
                 text = str(value).strip()
             except Exception:  # pragma: no cover - defensive
+                self.logger.debug("BROKER_SNAPSHOT_SYMBOL_NORMALIZE_FAILED", exc_info=True)
                 return None
             if not text:
                 return None
@@ -995,6 +1000,7 @@ class ExecutionEngine:
             try:
                 text = str(value).strip().lower()
             except Exception:  # pragma: no cover - defensive
+                self.logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
             if text in {"buy", "long", "cover"}:
                 return "buy"
@@ -1848,6 +1854,11 @@ class ExecutionEngine:
             else:
                 fill_signal = signal.__class__(**{**getattr(signal, "__dict__", {}), "weight": weight_delta})
         except Exception:
+            self.logger.debug(
+                "RISK_FILL_SIGNAL_CLONE_FAILED",
+                extra={"symbol": getattr(signal, "symbol", None)},
+                exc_info=True,
+            )
             return False
         risk_engine.register_fill(fill_signal)
         return True
@@ -1887,6 +1898,7 @@ class ExecutionEngine:
                 except (TypeError, ValueError):
                     return None
         except Exception:
+            self.logger.debug("EXPECTED_PRICE_GUESS_FAILED", extra={"symbol": symbol}, exc_info=True)
             return None
         return None
 

@@ -66,7 +66,7 @@ def _build_fetcher() -> Any:
         globals()["FinnhubAPIException"] = _FHExc  # type: ignore[assignment]
     except Exception:
         # Keep the local placeholder if import fails
-        pass
+        logger.debug("FINNHUB_EXCEPTION_CLASS_IMPORT_FAILED", exc_info=True)
 
     api_key = config.get_env("FINNHUB_API_KEY")
     if not api_key:
@@ -115,6 +115,7 @@ def _build_fetcher() -> Any:
                     raise e
             except Exception:
                 # Any finnhub client/network error results in empty DataFrame
+                logger.debug("FINNHUB_STOCK_CANDLE_FALLBACK_FAILED", extra={"symbol": symbol}, exc_info=True)
                 return pd.DataFrame()
 
             # Expected shape: { s: 'ok'|'no_data', t: [...], o: [...], h: [...], l: [...], c: [...], v: [...] }
@@ -136,6 +137,7 @@ def _build_fetcher() -> Any:
                 df = df.dropna(subset=["timestamp"]).reset_index(drop=True)
                 return df
             except Exception:
+                logger.debug("FINNHUB_CANDLE_DF_BUILD_FAILED", extra={"symbol": symbol}, exc_info=True)
                 return pd.DataFrame()
 
     return FinnhubFetcher(finnhub.Client(api_key))

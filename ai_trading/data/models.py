@@ -14,9 +14,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ai_trading.logging import get_logger
 from ai_trading.timeframe import canonicalize_timeframe
 
 from ._alpaca_guard import should_import_alpaca_sdk
+
+logger = get_logger(__name__)
 
 _USE_ALPACA_REQUESTS = should_import_alpaca_sdk()
 
@@ -35,6 +38,7 @@ if _USE_ALPACA_REQUESTS:
     try:
         unit_cls = get_timeframe_unit_cls()
     except Exception:  # pragma: no cover - unit class optional
+        logger.debug("TIMEFRAME_UNIT_CLASS_LOAD_FAILED", exc_info=True)
         unit_cls = None
     _BaseStockBarsRequest = get_stock_bars_request_cls()
 else:
@@ -103,7 +107,7 @@ if _USE_ALPACA_REQUESTS and unit_cls is not None:  # pragma: no cover - attribut
         if not hasattr(TimeFrame, "Month"):
             setattr(TimeFrame, "Month", TimeFrame(1, getattr(unit_cls, "Month", "Month")))  # type: ignore[arg-type]
     except Exception:
-        pass
+        logger.debug("TIMEFRAME_ALIAS_ATTACH_FAILED", exc_info=True)
 
 
 def _coerce_timeframe(tf: Any) -> Any:
@@ -117,7 +121,7 @@ def _coerce_timeframe(tf: Any) -> Any:
         if isinstance(coerced, TimeFrame):
             return coerced
     except Exception:
-        pass
+        logger.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
 
     amount = getattr(coerced, "amount", None)
     unit = getattr(coerced, "unit", None)
@@ -136,6 +140,7 @@ def _coerce_timeframe(tf: Any) -> Any:
     try:
         return TimeFrame(amount_val, unit if unit is not None else getattr(unit_cls, "Day", unit))
     except Exception:
+        logger.debug("TIMEFRAME_CONSTRUCTION_FAILED", exc_info=True)
         return TimeFrame()  # type: ignore[call-arg]
 
 
@@ -167,7 +172,7 @@ try:  # pragma: no cover - pydantic optional during some tests
                             _coerce_timeframe(getattr(data, "timeframe")),
                         )
                     except Exception:
-                        pass
+                        logger.debug("STOCK_BARS_REQUEST_TIMEFRAME_SET_FAILED", exc_info=True)
                 return data
 
         StockBarsRequest.model_rebuild()  # ensure validator is applied

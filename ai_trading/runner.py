@@ -9,6 +9,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from ai_trading.core import bot_engine
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def start(api: Any | None = None):
@@ -26,7 +29,7 @@ def start(api: Any | None = None):
         try:
             ctx._ensure_initialized()  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover - defensive
-            pass
+            logger.debug("RUNNER_CONTEXT_INIT_FAILED", exc_info=True)
     try:
         inner_ctx = object.__getattribute__(ctx, "_context")
     except AttributeError:
@@ -41,7 +44,7 @@ def start(api: Any | None = None):
             try:
                 object.__setattr__(ctx, "_fallback_context", inner)
             except Exception:  # pragma: no cover - defensive
-                pass
+                logger.debug("RUNNER_FALLBACK_CONTEXT_SET_FAILED", exc_info=True)
     else:
         inner = inner_ctx
 
@@ -82,7 +85,7 @@ def start(api: Any | None = None):
             try:
                 object.__setattr__(ctx, "api", final_api)
             except Exception:
-                pass
+                logger.debug("RUNNER_FINAL_API_ATTACH_FAILED", exc_info=True)
     return inner
 
 

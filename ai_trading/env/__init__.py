@@ -14,6 +14,7 @@ def _ensure_dotenv_module() -> tuple[object | None, bool]:
     try:  # pragma: no cover - import resolution validated by tests
         module = importlib.import_module("dotenv")
     except Exception:  # pragma: no cover - fallback path when python-dotenv missing
+        logging.getLogger(__name__).debug("DOTENV_IMPORT_FAILED", exc_info=True)
         return None, False
 
     if not hasattr(module, "dotenv_values"):
@@ -44,6 +45,11 @@ def load_dotenv_if_present(dotenv_path: str = ".env") -> bool:
     try:
         _dotenv.load_dotenv(dotenv_path=dotenv_path, override=True)  # type: ignore[union-attr]
     except Exception:  # pragma: no cover - defensive logging is handled upstream
+        logging.getLogger(__name__).debug(
+            "DOTENV_LOAD_FAILED",
+            extra={"dotenv_path": dotenv_path},
+            exc_info=True,
+        )
         return False
     return True
 
@@ -64,6 +70,7 @@ def _log_env_loaded(source: str) -> None:
                 extra={"key": f"env_loaded:{source}", "dotenv_path": source},
             )
     except Exception:  # pragma: no cover - keep env init resilient
+        logging.getLogger(__name__).debug("ENV_LOADED_LOG_EMIT_FAILED", exc_info=True)
         return
 
 
@@ -99,7 +106,7 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
         try:
             refresh_alpaca_credentials_cache()
         except Exception:  # pragma: no cover - keep env init resilient
-            pass
+            logging.getLogger(__name__).debug("ALPACA_CREDENTIAL_CACHE_REFRESH_FAILED", exc_info=True)
 
 
 __all__ = ["ensure_dotenv_loaded", "load_dotenv_if_present", "PYTHON_DOTENV_RESOLVED"]

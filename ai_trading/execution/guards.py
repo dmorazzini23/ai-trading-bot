@@ -62,6 +62,7 @@ def _coerce_timestamp(value: Any) -> _dt.datetime | None:
         try:
             return _dt.datetime.fromtimestamp(float(value), tz=_dt.timezone.utc)
         except Exception:
+            logger.debug("TIMESTAMP_FROM_EPOCH_FAILED", extra={"value": value}, exc_info=True)
             return None
     if isinstance(value, _dt.datetime):
         if value.tzinfo is None:
@@ -69,6 +70,7 @@ def _coerce_timestamp(value: Any) -> _dt.datetime | None:
         try:
             return value.astimezone(_dt.timezone.utc)
         except Exception:
+            logger.debug("TIMESTAMP_TZ_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
             return None
     return None
 
@@ -88,6 +90,7 @@ def _is_stale(quote: dict[str, Any], now: _dt.datetime, max_age_sec: int) -> Tup
     try:
         age = (now - dt_val).total_seconds()
     except Exception:
+        logger.debug("QUOTE_STALENESS_AGE_COMPUTE_FAILED", exc_info=True)
         return True, "quote_timestamp_missing"
     if age > float(max_age_sec):
         return True, "stale_quote"
@@ -98,6 +101,7 @@ def _require_bid_ask() -> bool:
     try:
         cfg = get_trading_config()
     except Exception:
+        logger.debug("REQUIRE_BID_ASK_CONFIG_UNAVAILABLE", exc_info=True)
         return True
     return bool(getattr(cfg, "execution_require_bid_ask", True))
 
@@ -106,11 +110,13 @@ def _max_age_seconds() -> int:
     try:
         cfg = get_trading_config()
     except Exception:
+        logger.debug("MAX_AGE_SECONDS_CONFIG_UNAVAILABLE", exc_info=True)
         return 60
     value = getattr(cfg, "execution_max_staleness_sec", 60)
     try:
         return int(value)
     except Exception:
+        logger.debug("MAX_AGE_SECONDS_PARSE_FAILED", extra={"value": value}, exc_info=True)
         return 60
 
 

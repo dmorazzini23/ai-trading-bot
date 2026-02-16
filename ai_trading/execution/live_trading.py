@@ -68,7 +68,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
                 parsed_message = payload.get("message", parsed_message)
                 parsed_code = payload.get("code", parsed_code)
             except Exception:
-                pass
+                logger.debug("API_ERROR_JSON_PARSE_FAILED", exc_info=True)
             self._code = parsed_code
             self._message = parsed_message
             derived_status = status_code
@@ -76,7 +76,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
                 try:
                     derived_status = getattr(getattr(http_error, "response", None), "status_code", derived_status)
                 except Exception:
-                    pass
+                    logger.debug("API_ERROR_STATUS_DERIVE_FAILED", exc_info=True)
             self._status_code = derived_status
 
         @property
@@ -359,6 +359,7 @@ def _resolve_bool_env(name: str) -> bool | None:
             try:
                 return bool(value)
             except Exception:
+                logger.debug("BOOL_ENV_CAST_FAILED", extra={"name": name, "value": value}, exc_info=True)
                 return None
     raw = os.getenv(name)
     if not raw:
@@ -366,6 +367,7 @@ def _resolve_bool_env(name: str) -> bool | None:
     try:
         return _safe_bool(raw)
     except Exception:
+        logger.debug("BOOL_ENV_PARSE_FAILED", extra={"name": name, "raw": raw}, exc_info=True)
         return None
 
 
@@ -382,6 +384,7 @@ def _runtime_trading_config() -> Any | None:
     try:
         return get_trading_config()
     except Exception:
+        logger.debug("RUNTIME_CONFIG_DIRECT_GET_FAILED", exc_info=True)
         return None
 
 
@@ -449,6 +452,7 @@ def _require_bid_ask_quotes() -> bool:
     try:
         cfg = get_trading_config()
     except Exception:
+        logger.debug("REQUIRE_BID_ASK_CONFIG_UNAVAILABLE", exc_info=True)
         return True
     return bool(getattr(cfg, "execution_require_bid_ask", True))
 
@@ -459,6 +463,7 @@ def _max_quote_staleness_seconds() -> int:
     try:
         cfg = get_trading_config()
     except Exception:
+        logger.debug("MAX_QUOTE_STALENESS_CONFIG_UNAVAILABLE", exc_info=True)
         return 60
     raw_value = getattr(cfg, "execution_max_staleness_sec", 60)
     try:
@@ -473,6 +478,7 @@ def _quote_gate_max_age_ms() -> float:
     try:
         cfg = get_trading_config()
     except Exception:
+        logger.debug("QUOTE_GATE_MAX_AGE_CONFIG_UNAVAILABLE", exc_info=True)
         return 2000.0
     raw_value = getattr(cfg, "quote_max_age_ms", 2000)
     try:
@@ -613,6 +619,7 @@ def _normalize_status(value: Any) -> str | None:
         if "." in text:
             text = text.split(".")[-1]
     except Exception:
+        logger.debug("ORDER_STATUS_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
         return None
     return text or None
 
@@ -706,6 +713,7 @@ def _bool_from_record(record: Any, *names: str) -> bool | None:
     try:
         return _safe_bool(value)
     except Exception:
+        logger.debug("BOOL_FROM_RECORD_PARSE_FAILED", extra={"value": value}, exc_info=True)
         return None
 
 
@@ -930,6 +938,7 @@ def _extract_error_detail(err: BaseException | None) -> str | None:
             if parts:
                 return " ".join(parts)
     except Exception:
+        logger.debug("ERROR_DETAIL_EXTRACTION_FAILED", exc_info=True)
         return None
     return None
 
@@ -945,6 +954,7 @@ def _extract_error_code(err: BaseException | None) -> str | int | None:
             if isinstance(value, (str, int)):
                 return value
     except Exception:
+        logger.debug("ERROR_CODE_EXTRACTION_FAILED", exc_info=True)
         return None
     return None
 
@@ -1106,6 +1116,7 @@ def _config_decimal(name: str, default: Decimal) -> Decimal:
     try:
         return _safe_decimal(raw)
     except Exception:
+        logger.debug("CONFIG_DECIMAL_PARSE_FAILED", extra={"name": name, "raw": raw}, exc_info=True)
         return default
 
 
@@ -1853,6 +1864,7 @@ class ExecutionEngine:
                 0,
             )
         except Exception:
+            logger.debug("PDT_LIMIT_CHECK_FAILED", exc_info=True)
             return False
         if limit_val <= 0:
             return False
@@ -4835,6 +4847,7 @@ class ExecutionEngine:
         try:
             value = str(side).strip().lower()
         except Exception:
+            logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
             return None
         if value in {"buy", "sell"}:
             return value
@@ -4872,6 +4885,7 @@ class ExecutionEngine:
         try:
             cfg = get_trading_config()
         except Exception:
+            logger.debug("ORDER_FLIP_MODE_CONFIG_UNAVAILABLE", exc_info=True)
             return "cancel_then_submit"
         policy = getattr(cfg, "order_flip_mode", "cancel_then_submit")
         if policy not in {"cancel_then_submit", "cover_then_long", "skip"}:
@@ -4974,6 +4988,11 @@ class ExecutionEngine:
                             position_obj = pos
                             break
                 except Exception:
+                    logger.debug(
+                        "POSITION_LIST_SCAN_FAILED",
+                        extra={"symbol": symbol},
+                        exc_info=True,
+                    )
                     position_obj = None
         if position_obj is None:
             return 0
@@ -4981,6 +5000,7 @@ class ExecutionEngine:
         try:
             qty_decimal = _safe_decimal(qty_raw)
         except Exception:
+            logger.debug("POSITION_QTY_PARSE_FAILED", extra={"symbol": symbol, "qty_raw": qty_raw}, exc_info=True)
             return 0
         try:
             side_val = _extract_value(position_obj, "side")
@@ -5323,6 +5343,7 @@ class ExecutionEngine:
             try:
                 text = str(value).strip().lower()
             except Exception:
+                logger.debug("TIME_IN_FORCE_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
                 return None
             if not text:
                 return None
@@ -6304,6 +6325,7 @@ class ExecutionEngine:
             try:
                 text = str(value).strip()
             except Exception:  # pragma: no cover - defensive
+                logger.debug("BROKER_SNAPSHOT_SYMBOL_NORMALIZE_FAILED", exc_info=True)
                 return None
             return text.upper() or None
 
@@ -6313,6 +6335,7 @@ class ExecutionEngine:
             try:
                 token = str(value).strip().lower()
             except Exception:  # pragma: no cover - defensive
+                logger.debug("BROKER_SNAPSHOT_SIDE_NORMALIZE_FAILED", exc_info=True)
                 return None
             if token in {"buy", "long", "cover"}:
                 return "buy"
@@ -6470,7 +6493,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
             try:
                 mgr.recalc_all()
             except Exception:  # pragma: no cover - defensive best effort
-                pass
+                logger.debug("TRAILING_STOP_RECALC_FAILED", exc_info=True)
 
 
 # Export the live-capable engine under the canonical name used by the selector

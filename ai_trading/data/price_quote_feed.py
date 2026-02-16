@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 import sys
 from typing import Dict
+
+from ai_trading.logging import get_logger
 from ai_trading.utils.env import resolve_alpaca_feed
 
 _VALID_FEEDS = {"iex", "sip"}
 _FEED_CACHE: Dict[str, str] = {}
 _TRUTHY = {"1", "true", "yes", "on"}
+logger = get_logger(__name__)
 
 
 def _normalize_feed(value: str | None) -> str | None:
@@ -20,6 +23,7 @@ def _normalize_feed(value: str | None) -> str | None:
     try:
         lowered = str(value).strip().lower()
     except Exception:  # pragma: no cover - defensive
+        logger.debug("FEED_VALUE_NORMALIZE_FAILED", extra={"value": value}, exc_info=True)
         return None
     if not lowered:
         return None
@@ -43,6 +47,7 @@ def _sip_disabled_env(py_mode: bool) -> bool:
     try:
         resolved = resolve_alpaca_feed("sip")
     except Exception:
+        logger.debug("SIP_DISABLED_ENV_RESOLVE_FAILED", exc_info=True)
         return True
     return str(resolved).strip().lower() != "sip"
 
@@ -118,6 +123,7 @@ def _sip_unauthorized() -> bool:
     try:
         from ai_trading.data import fetch as data_fetcher  # local import to avoid cycles
     except Exception:
+        logger.debug("SIP_UNAUTHORIZED_FETCH_IMPORT_FAILED", exc_info=True)
         return False
 
     state = getattr(data_fetcher, "_state", {})

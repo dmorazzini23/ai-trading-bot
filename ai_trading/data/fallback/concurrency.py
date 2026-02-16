@@ -28,6 +28,10 @@ from dataclasses import fields, is_dataclass, replace
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import TypeVar
 
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:  # pragma: no cover - optional during stubbed tests
     from ai_trading.net import http_host_limit as _http_host_limit
 except Exception:  # pragma: no cover - fallback when module unavailable
@@ -136,12 +140,14 @@ def _get_effective_host_limit() -> int | None:
         try:
             snapshot = _normalise_pooling_state(_pooling_reload_host_limit())
         except Exception:
+            logger.debug("POOLING_LIMIT_RELOAD_FAILED", exc_info=True)
             snapshot = None
 
     if snapshot is None and callable(_pooling_get_limit_snapshot):
         try:
             snapshot = _normalise_pooling_state(_pooling_get_limit_snapshot())
         except Exception:
+            logger.debug("POOLING_LIMIT_SNAPSHOT_FETCH_FAILED", exc_info=True)
             snapshot = None
 
     if snapshot is not None:
@@ -154,6 +160,7 @@ def _get_effective_host_limit() -> int | None:
     try:
         limit = int(_pooling_host_limit())
     except Exception:
+        logger.debug("POOLING_HOST_LIMIT_RESOLVE_FAILED", exc_info=True)
         return None
 
     limit = max(1, limit)
@@ -174,6 +181,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     try:
         semaphore = _pooling_get_host_semaphore()
     except Exception:
+        logger.debug("POOLING_HOST_SEMAPHORE_FETCH_FAILED", exc_info=True)
         return None
     if not isinstance(semaphore, asyncio.Semaphore):
         return None
@@ -198,6 +206,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
         except TypeError:
             refreshed = _pooling_refresh_host_semaphore()
         except Exception:
+            logger.debug("POOLING_HOST_SEMAPHORE_REFRESH_FAILED", exc_info=True)
             return None
         if isinstance(refreshed, asyncio.Semaphore):
             bound_loop = getattr(refreshed, "_loop", None) or getattr(refreshed, "_bound_loop", None)
@@ -382,6 +391,11 @@ def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
         try:
             object.__setattr__(target, name, value)
         except Exception:
+            logger.debug(
+                "DATACLASS_ATTR_ASSIGN_FAILED",
+                extra={"target_type": type(target).__name__, "name": name},
+                exc_info=True,
+            )
             return False
         return True
 
@@ -407,6 +421,7 @@ def _recreate_dataclass_if_needed(
         try:
             return replace(obj, **mutated_fields)
         except Exception:
+            logger.debug("DATACLASS_REPLACE_FAILED_FALLBACK_ASSIGN", exc_info=True)
             for name, value in mutated_fields.items():
                 _assign_dataclass_attr(obj, name, value)
             return obj
@@ -422,6 +437,7 @@ def _recreate_dataclass_if_needed(
     try:
         return replace(obj, **mutated_fields)
     except Exception:
+        logger.debug("DATACLASS_REPLACE_FAILED_FINAL", exc_info=True)
         return obj
 
 
@@ -458,6 +474,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         try:
             return type(obj)(updates)
         except Exception:
+            logger.debug("MAPPING_REBUILD_FAILED", exc_info=True)
             return dict(updates)
 
     if isinstance(obj, deque):
@@ -506,6 +523,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
             try:
                 return type(obj)(new_items)
             except Exception:
+                logger.debug("FROZENSET_REBUILD_FAILED", exc_info=True)
                 return frozenset(new_items)
 
         # Tuple (and tuple-like) containers should preserve their concrete type
@@ -576,7 +594,11 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
                     try:
                         setattr(obj, name, new_value)
                     except Exception:
-                        pass
+                        logger.debug(
+                            "SLOT_ATTR_REBIND_FAILED",
+                            extra={"target_type": type(obj).__name__, "name": name},
+                            exc_info=True,
+                        )
         return obj
 
     module_name = getattr(obj.__class__, "__module__", "")
@@ -589,7 +611,11 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
                 try:
                     setattr(obj, name, new_value)
                 except Exception:
-                    pass
+                    logger.debug(
+                        "OBJECT_ATTR_REBIND_FAILED",
+                        extra={"target_type": type(obj).__name__, "name": name},
+                        exc_info=True,
+                    )
         return obj
 
     return obj
@@ -658,12 +684,12 @@ def _patch_monotonic_for_tests() -> tuple[bool, tuple[object, object | None]]:
         try:
             _freezegun_api.fake_monotonic = real_monotonic
         except Exception:
-            pass
+            logger.debug("FREEZEGUN_MONOTONIC_RESTORE_FAILED", exc_info=True)
     if callable(real_monotonic_ns) and fake_monotonic_ns is not real_monotonic_ns:
         try:
             _freezegun_api.fake_monotonic_ns = real_monotonic_ns
         except Exception:
-            pass
+            logger.debug("FREEZEGUN_MONOTONIC_NS_RESTORE_FAILED", exc_info=True)
 
     if callable(real_monotonic) and time.monotonic is not real_monotonic:
         time.monotonic = real_monotonic  # type: ignore[assignment]
@@ -676,7 +702,7 @@ def _patch_monotonic_for_tests() -> tuple[bool, tuple[object, object | None]]:
         try:
             time.monotonic_ns = real_monotonic_ns  # type: ignore[assignment]
         except Exception:
-            pass
+            logger.debug("TIME_MONOTONIC_NS_PATCH_FAILED", exc_info=True)
         else:
             patched = True
 
@@ -688,12 +714,12 @@ def _restore_monotonic(original: tuple[object, object | None]) -> None:
     try:
         time.monotonic = original[0]  # type: ignore[assignment]
     except Exception:
-        pass
+        logger.debug("TIME_MONOTONIC_RESTORE_FAILED", exc_info=True)
     try:
         if hasattr(time, "monotonic_ns") and original[1] is not None:
             time.monotonic_ns = original[1]  # type: ignore[assignment]
     except Exception:
-        pass
+        logger.debug("TIME_MONOTONIC_NS_RESTORE_FAILED", exc_info=True)
 
 
 SUCCESSFUL_SYMBOLS: set[str] = set()
@@ -721,12 +747,12 @@ def _update_peak_counters(peak_this_run: int) -> None:
             try:
                 _http_host_limit.record_peak(PEAK_SIMULTANEOUS_WORKERS)
             except Exception:
-                pass
+                logger.debug("HOST_LIMIT_PEAK_RECORD_FAILED", exc_info=True)
         if callable(_pooling_record_concurrency):
             try:
                 _pooling_record_concurrency(int(PEAK_SIMULTANEOUS_WORKERS))
             except Exception:
-                pass
+                logger.debug("POOLING_CONCURRENCY_RECORD_FAILED", exc_info=True)
 
 
 def _increment_host_permits() -> None:
@@ -814,7 +840,7 @@ async def run_with_concurrency(
                 try:
                     setattr(host_semaphore, "_ai_trading_host_limit", sem_limit)
                 except Exception:
-                    pass
+                    logger.debug("HOST_SEMAPHORE_LIMIT_ATTR_SET_FAILED", exc_info=True)
             if host_semaphore is not None:
                 sem_limit = _normalise_positive_int(
                     getattr(host_semaphore, "_ai_trading_host_limit", None),
@@ -824,7 +850,7 @@ async def run_with_concurrency(
         try:
             asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
         except Exception:
-            pass
+            logger.debug("EVENT_LOOP_POLICY_RESET_FAILED", exc_info=True)
         # Use a minimal scheduler in test mode to avoid cross-loop deadlocks.
         symbols_list = list(symbols)
         results: dict[str, T | None] = {}
@@ -956,6 +982,7 @@ async def run_with_concurrency(
                     raise
                 except BaseException:
                     # If host semaphore acquisition fails, proceed without holding a permit.
+                    logger.debug("HOST_SEMAPHORE_ACQUIRE_FAILED", exc_info=True)
                     return
                 self._acquired = True
                 _increment_host_permits()
@@ -1034,6 +1061,7 @@ async def run_with_concurrency(
                     try:
                         task.exception()
                     except BaseException:
+                        logger.debug("TASK_EXCEPTION_DRAIN_FAILED", exc_info=True)
                         return
 
                 task.add_done_callback(_drain)

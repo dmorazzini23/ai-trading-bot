@@ -64,6 +64,7 @@ def _get_numpy():
 
         return np
     except Exception:  # ImportError or others
+        logger.debug("NUMPY_IMPORT_FAILED", exc_info=True)
         return None
 
 
@@ -72,6 +73,7 @@ def _get_pandas():
         if pd is None or not hasattr(pd, "DataFrame"):
             return None
     except Exception:
+        logger.debug("PANDAS_HANDLE_CHECK_FAILED", exc_info=True)
         return None
     return pd
 
@@ -82,6 +84,7 @@ def _get_pandas_ta():
 
         return ta
     except Exception:
+        logger.debug("PANDAS_TA_IMPORT_FAILED", exc_info=True)
         return None
 
 
@@ -91,6 +94,7 @@ def _get_gaussian_hmm():
 
         return GaussianHMM
     except Exception:
+        logger.debug("GAUSSIAN_HMM_IMPORT_FAILED", exc_info=True)
         return None
 
 

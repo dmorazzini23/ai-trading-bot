@@ -12,6 +12,10 @@ from typing import Final, NamedTuple
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
+
 _previous_host_semaphores = globals().get("_HOST_SEMAPHORES")
 if isinstance(_previous_host_semaphores, WeakKeyDictionary):
     _previous_host_semaphores.clear()
@@ -19,7 +23,7 @@ elif hasattr(_previous_host_semaphores, "clear"):
     try:
         _previous_host_semaphores.clear()  # type: ignore[call-arg]  # pragma: no cover - defensive guard for exotic reload state
     except Exception:  # pragma: no cover - defensive guard for exotic reload state
-        pass
+        logger.debug("HOST_SEMAPHORE_CLEAR_FAILED", exc_info=True)
 
 if "_LIMIT_CACHE" in globals():
     globals()["_LIMIT_CACHE"] = None
@@ -98,6 +102,7 @@ def _load_fallback_concurrency_module() -> ModuleType | None:
     try:
         return importlib.import_module("ai_trading.data.fallback.concurrency")
     except Exception:
+        logger.debug("FALLBACK_CONCURRENCY_IMPORT_FAILED", exc_info=True)
         return None
 
 
@@ -112,12 +117,12 @@ def _invalidate_fallback_pooling_state() -> None:
         try:
             invalidator()
         except Exception:
-            pass
+            logger.debug("FALLBACK_POOLING_INVALIDATE_FAILED", exc_info=True)
         return
     try:
         module._POOLING_LIMIT_STATE = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        logger.debug("FALLBACK_POOLING_STATE_RESET_FAILED", exc_info=True)
 
 
 def _normalise_pooling_state(state: object | None) -> tuple[int, int] | None:
@@ -156,17 +161,18 @@ def _set_pooling_limit_state(limit: int, version: int) -> None:
             recorder(limit, version)
             return
         except Exception:
-            pass
+            logger.debug("FALLBACK_POOLING_RECORD_FAILED", exc_info=True)
     try:
         module._POOLING_LIMIT_STATE = (max(1, int(limit)), int(version))  # type: ignore[attr-defined]
     except Exception:
+        logger.debug("FALLBACK_POOLING_STATE_SET_FAILED", exc_info=True)
         return
     local_version = getattr(module, "_LOCAL_POOLING_VERSION", None)
     if isinstance(local_version, int) and version > local_version:
         try:
             module._LOCAL_POOLING_VERSION = version  # type: ignore[attr-defined]
         except Exception:
-            pass
+            logger.debug("FALLBACK_POOLING_LOCAL_VERSION_SET_FAILED", exc_info=True)
 
 
 def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapshot:
@@ -242,7 +248,7 @@ def _annotate_semaphore_metadata(
         setattr(semaphore, "_ai_trading_host_limit", limit)
         setattr(semaphore, "_ai_trading_host_limit_version", version)
     except Exception:  # pragma: no cover - attribute assignment failure should not break runtime
-        pass
+        logger.debug("SEMAPHORE_METADATA_ANNOTATE_FAILED", exc_info=True)
 
 
 def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
@@ -343,7 +349,7 @@ def _compute_limit(raw: str | None = None) -> int:
         try:
             return max(1, int(raw))
         except (TypeError, ValueError):
-            pass
+            logger.debug("HOST_LIMIT_ENV_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
     try:
         limit = int(
             config.get_env(
@@ -354,6 +360,7 @@ def _compute_limit(raw: str | None = None) -> int:
         )
         return max(1, limit)
     except Exception:
+        logger.debug("HOST_LIMIT_CONFIG_FALLBACK_FAILED", exc_info=True)
         return _DEFAULT_LIMIT
 
 
@@ -786,7 +793,7 @@ def get_host_limiter(host: str):
             try:
                 setattr(limiter, "_ai_trading_host_limit", limit_value)
             except Exception:
-                pass
+                logger.debug("THREADING_LIMITER_METADATA_SET_FAILED", exc_info=True)
             _HOST_LIMITERS[key] = limiter
         return limiter
 

@@ -76,7 +76,11 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) 
                         setattr(obj, target, value)
                     except Exception:
                         # Ignore read-only attributes from broker SDKs
-                        pass
+                        logger.debug(
+                            "ORDER_ATTR_NORMALIZE_SET_FAILED",
+                            extra={"attr": target},
+                            exc_info=True,
+                        )
             break
         return value
 
@@ -271,12 +275,12 @@ def vwap_pegged_submit(
                         try:
                             slippage_total.inc(abs(slip))  # type: ignore[union-attr]
                         except Exception:
-                            pass
+                            logger.debug("VWAP_SLIPPAGE_TOTAL_METRIC_INC_FAILED", exc_info=True)
                     if slippage_count:
                         try:
                             slippage_count.inc()  # type: ignore[union-attr]
                         except Exception:
-                            pass
+                            logger.debug("VWAP_SLIPPAGE_COUNT_METRIC_INC_FAILED", exc_info=True)
                     _slippage_log.append((symbol, vwap_price, fill_price, datetime.now(UTC)))
                     with slippage_lock:  # type: ignore[arg-type]
                         try:
@@ -285,7 +289,7 @@ def vwap_pegged_submit(
                                     [utc_now_iso(), symbol, vwap_price, fill_price, slip]
                                 )
                         except Exception:
-                            pass
+                            logger.debug("VWAP_SLIPPAGE_LOG_APPEND_FAILED", exc_info=True)
                 break
             except APIError as e:
                 logger.warning(f"[VWAP] APIError attempt {attempt + 1} for {symbol}: {e}")
@@ -716,7 +720,7 @@ def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
     try:
         ctx.trade_logger.log_exit(state, symbol, exit_price)
     except Exception:
-        pass
+        logger.debug("TRADE_LOG_EXIT_RECORD_FAILED", extra={"symbol": symbol}, exc_info=True)
     with targets_lock:
         ctx.take_profit_targets.pop(symbol, None)
         ctx.stop_targets.pop(symbol, None)

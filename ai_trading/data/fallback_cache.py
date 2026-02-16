@@ -10,6 +10,10 @@ utility helpers that attempt to decode such responses consistently.
 from typing import Any
 import json
 
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def resp_json(resp: Any) -> Any:
     """Return JSON from a response-like object.
@@ -25,7 +29,7 @@ def resp_json(resp: Any) -> Any:
         if hasattr(resp, "json"):
             return resp.json()
     except Exception:
-        pass
+        logger.debug("RESPONSE_JSON_METHOD_FAILED", exc_info=True)
 
     raw: Any = None
 
@@ -60,6 +64,7 @@ def resp_json(resp: Any) -> Any:
         elif not isinstance(raw, str):
             raw = str(raw)
     except Exception:
+        logger.debug("RESPONSE_JSON_COERCE_TO_STRING_FAILED", exc_info=True)
         return {}
 
     raw = raw.strip()
@@ -69,6 +74,7 @@ def resp_json(resp: Any) -> Any:
     try:
         return json.loads(raw)
     except Exception:
+        logger.debug("RESPONSE_JSON_PARSE_FAILED", exc_info=True)
         return {}
 
 

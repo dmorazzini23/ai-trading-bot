@@ -12,6 +12,9 @@ from ai_trading.data.metrics import (
     provider_disabled as _provider_disabled_gauge,
     provider_fallback as _provider_fallback_counter,
 )
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
 
 _PROVIDER_DISABLE_TOTALS: dict[str, int] = {}
 
@@ -142,6 +145,7 @@ def _current_value(metric: object) -> int:
     try:
         return int(value.get())
     except Exception:  # pragma: no cover - defensive
+        logger.debug("METRIC_CURRENT_VALUE_READ_FAILED", exc_info=True)
         return 0
 
 
@@ -194,7 +198,7 @@ def inc_provider_disable_total(provider: str) -> int:
         metric = _provider_disable_total_counter.labels(provider=provider)
         metric.inc()
     except Exception:
-        pass
+        logger.debug("PROVIDER_DISABLE_TOTAL_METRIC_INC_FAILED", extra={"provider": provider}, exc_info=True)
     return total
 
 
@@ -212,6 +216,7 @@ def provider_disabled(provider: str) -> int:
                 return 1
             return 0
         except Exception:  # pragma: no cover - defensive fallback
+            logger.debug("PROVIDER_DISABLED_FALLBACK_LOOKUP_FAILED", extra={"provider": provider}, exc_info=True)
             return 0
     return value
 

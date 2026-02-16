@@ -5,6 +5,10 @@ import os
 from dataclasses import dataclass
 from typing import cast
 
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     import requests
 except Exception:  # pragma: no cover - fallback when requests missing
@@ -28,6 +32,7 @@ def ensure_urllib3_disable_warnings() -> None:
     try:
         urllib3 = importlib.import_module("urllib3")
     except Exception:  # pragma: no cover - urllib3 not installed
+        logger.debug("URLLIB3_IMPORT_FAILED", exc_info=True)
         return
 
     globals()["urllib3"] = urllib3
@@ -41,6 +46,7 @@ def ensure_urllib3_disable_warnings() -> None:
         try:
             setattr(urllib3, "disable_warnings", _noop_disable_warnings)
         except Exception:  # pragma: no cover - attribute assignment failed
+            logger.debug("URLLIB3_DISABLE_WARNINGS_ATTR_SET_FAILED", exc_info=True)
             return
         disable_warnings = getattr(urllib3, "disable_warnings", None)
         if not callable(disable_warnings):  # pragma: no cover - custom module rejected shim
@@ -56,7 +62,7 @@ def ensure_urllib3_disable_warnings() -> None:
     try:
         disable_warnings(warning_category)
     except Exception:  # pragma: no cover - downstream failure should not break imports
-        pass
+        logger.debug("URLLIB3_DISABLE_WARNINGS_CALL_FAILED", exc_info=True)
 
 
 ensure_urllib3_disable_warnings()
@@ -99,6 +105,7 @@ class TimeoutSession(_SessionBase):
             try:
                 patched_requests_get = getattr(requests_get, "__module__", "") != "requests.api"
             except Exception:
+                logger.debug("REQUESTS_GET_MODULE_INSPECT_FAILED", exc_info=True)
                 patched_requests_get = True
         if testing_flag or pytest_flag or patched_requests_get:
             if "timeout" not in kwargs or kwargs["timeout"] is None:
@@ -341,12 +348,12 @@ def reload_host_limit_if_env_changed(
     try:
         from ai_trading.http import pooling as _pooling
     except Exception:  # pragma: no cover - pooling optional during stubbed tests
-        pass
+        logger.debug("POOLING_MODULE_IMPORT_FAILED", exc_info=True)
     else:
         try:
             _pooling.reload_host_limit_if_env_changed()
         except Exception:
-            pass
+            logger.debug("POOLING_LIMIT_RELOAD_FAILED", exc_info=True)
     return _HOST_LIMIT_CONTROLLER.reload_if_changed(target)
 
 

@@ -36,7 +36,7 @@ def _resolve_log_path() -> str:
             # Provide a conventional default when config exists but lacks the attribute
             return os.path.join("data", DEFAULT_LOG_FILE)
     except Exception:
-        pass
+        logger.debug("AUDIT_LOG_PATH_CONFIG_LOOKUP_FAILED", exc_info=True)
     return DEFAULT_LOG_FILE
 
 
@@ -57,7 +57,7 @@ def fix_file_permissions(path: str | os.PathLike, _header: list[str] | None = No
             _pm.fix_file_permissions(path)  # type: ignore[arg-type]
             return True
     except Exception:
-        pass
+        logger.debug("PROCESS_MANAGER_PERMISSION_FIX_FAILED", exc_info=True)
     try:
         from ai_trading.utils import process_manager as _pm2  # type: ignore
 
@@ -65,7 +65,7 @@ def fix_file_permissions(path: str | os.PathLike, _header: list[str] | None = No
             _pm2.fix_file_permissions(path)  # type: ignore[arg-type]
             return True
     except Exception:
-        pass
+        logger.debug("UTILS_PROCESS_MANAGER_PERMISSION_FIX_FAILED", exc_info=True)
     return False
 
 
@@ -124,6 +124,7 @@ def _find_pytest_tmpdir() -> Path | None:
             except Exception:
                 continue
     except Exception:
+        logger.debug("PYTEST_TMPDIR_STACK_SCAN_FAILED", exc_info=True)
         return None
     # Fallback: Derive from PYTEST_CURRENT_TEST by scanning /tmp
     try:
@@ -148,7 +149,7 @@ def _find_pytest_tmpdir() -> Path | None:
                 candidates.sort()
                 return candidates[-1][1]
     except Exception:
-        pass
+        logger.debug("PYTEST_TMPDIR_FALLBACK_SCAN_FAILED", exc_info=True)
     return None
 
 

@@ -244,13 +244,13 @@ def _resolve_safe_mode_recovery_passes() -> int:
         try:
             candidate = int(raw)
         except Exception:
-            pass
+            logger.debug("HEALTH_RECOVERY_PASSES_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
     raw = os.getenv("AI_TRADING_SAFE_MODE_HEALTH_PASSES", "").strip()
     if raw:
         try:
             candidate = int(raw)
         except Exception:
-            pass
+            logger.debug("SAFE_MODE_HEALTH_PASSES_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
     if candidate is None:
         candidate = _resolve_health_passes_required()
     try:
@@ -1547,7 +1547,7 @@ class ProviderMonitor:
                     },
                 )
             except Exception:
-                pass
+                logger.debug("PROVIDER_MONITOR_CONFIG_LOG_FAILED", exc_info=True)
         self._last_switchover_provider: str | None = None
         self._last_switchover_ts: float = 0.0
         self._last_switchover_passes: int = 0
@@ -1618,7 +1618,7 @@ class ProviderMonitor:
         try:
             reset_data_provider_state()
         except Exception:
-            pass
+            logger.debug("DATA_PROVIDER_STATE_RESET_FAILED", exc_info=True)
 
     def _refresh_runtime_limits(self) -> None:
         """Refresh cached cooldown and quiet window values from configuration."""
@@ -1763,7 +1763,7 @@ class ProviderMonitor:
                 try:
                     provider_disabled.labels(provider=key).set(0)
                 except Exception:  # pragma: no cover - defensive
-                    pass
+                    logger.debug("PROVIDER_DISABLED_METRIC_RESET_FAILED", extra={"provider": key}, exc_info=True)
         if not self.consecutive_switches_by_provider:
             self.consecutive_switches = 0
         self.disabled_until.pop(provider, None)
@@ -1771,7 +1771,7 @@ class ProviderMonitor:
         try:
             provider_disabled.labels(provider=provider).set(0)
         except Exception:  # pragma: no cover - defensive
-            pass
+            logger.debug("PROVIDER_DISABLED_METRIC_CLEAR_FAILED", extra={"provider": provider}, exc_info=True)
         if provider.startswith("alpaca"):
             global _SAFE_MODE_ACTIVE, _SAFE_MODE_REASON, _SAFE_MODE_DEGRADED_ONLY
             _SAFE_MODE_ACTIVE = False
@@ -2112,7 +2112,7 @@ class ProviderMonitor:
 
             register_provider_disable(provider)
         except Exception:  # pragma: no cover - defensive
-            pass
+            logger.debug("REGISTER_PROVIDER_DISABLE_FAILED", extra={"provider": provider}, exc_info=True)
         provider_disabled.labels(provider=provider).set(1)
         logger.warning(
             "DATA_PROVIDER_DISABLED",

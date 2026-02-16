@@ -13,7 +13,10 @@ import time
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Mapping
 
+from ai_trading.logging import get_logger
+
 CycleMetadata = Dict[str, Any]
+module_logger = get_logger(__name__)
 
 
 def _is_freezegun_clock(fn: Any) -> bool:
@@ -67,7 +70,7 @@ def _record_span(elapsed: float, meta: CycleMetadata) -> None:
             callback(clamped, meta)
         except Exception:
             # Individual callbacks should never break execution timing.
-            pass
+            module_logger.debug("EXECUTION_TIMING_CALLBACK_FAILED", exc_info=True)
 
 
 def cycle_seconds() -> float:
@@ -90,7 +93,7 @@ def record_cycle_wall(elapsed: float, metadata: Mapping[str, Any] | None = None)
         try:
             callback(clamped, dict(metadata))
         except Exception:
-            pass
+            module_logger.debug("EXECUTION_TIMING_WALL_CALLBACK_FAILED", exc_info=True)
 
 
 @contextmanager
@@ -103,7 +106,7 @@ def execution_span(logger: Any, **extra: Any):
         try:
             logger.info("EXECUTE_TIMING_START", extra=payload)
         except Exception:
-            pass
+            module_logger.debug("EXECUTE_TIMING_START_LOG_FAILED", exc_info=True)
     try:
         yield
     finally:
@@ -115,4 +118,4 @@ def execution_span(logger: Any, **extra: Any):
             try:
                 logger.info("EXECUTE_TIMING_END", extra=payload_end)
             except Exception:
-                pass
+                module_logger.debug("EXECUTE_TIMING_END_LOG_FAILED", exc_info=True)

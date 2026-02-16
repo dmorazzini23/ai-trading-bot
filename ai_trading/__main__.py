@@ -181,7 +181,7 @@ def _validate_env_alias_consistency() -> None:
 try:
     _StartupConfig.model_rebuild()
 except Exception:  # pragma: no cover - defensive
-    pass
+    logger.debug("STARTUP_CONFIG_MODEL_REBUILD_FAILED", exc_info=True)
 
 
 def _validate_startup_config() -> _StartupConfig:
@@ -422,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.interval is not None:
                 mapped_argv.extend(["--interval", str(args.interval)])
         except Exception:
-            pass
+            logger.debug("CLI_INTERVAL_ARG_MAPPING_FAILED", exc_info=True)
         if getattr(args, "once", False):
             mapped_argv.extend(["--iterations", "1"])
 
@@ -491,4 +491,4 @@ if __name__ == "__main__":
             if _os2.getenv("PYTEST_RUNNING") == "1":
                 _sys.modules.pop(__name__, None)
         except Exception:
-            pass
+            logger.debug("PYTEST_MAIN_MODULE_CLEANUP_FAILED", exc_info=True)

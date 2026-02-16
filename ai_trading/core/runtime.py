@@ -120,7 +120,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
         try:
             object.__setattr__(cfg, "capital_cap", params["CAPITAL_CAP"])
         except Exception:
-            pass
+            logger.debug("CAPITAL_CAP_DEFAULT_ASSIGN_FAILED", exc_info=True)
 
     # Ensure equity is populated so downstream sizing uses a cached value.
     eq = getattr(cfg, "equity", None)
@@ -133,7 +133,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             try:
                 setattr(cfg, "equity", eq)
             except Exception:  # pragma: no cover - defensive
-                pass
+                logger.debug("EQUITY_ASSIGN_FAILED", exc_info=True)
 
     mode = str(getattr(cfg, "max_position_mode", "STATIC")).upper()
     raw_cfg_value = getattr(cfg, "max_position_size", object())
@@ -199,7 +199,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             try:
                 setattr(cfg, "max_position_size", float(resolved))
             except Exception:
-                pass
+                logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
     if resolved <= 0:
         raise ValueError("MAX_POSITION_SIZE must be positive")
     params["MAX_POSITION_SIZE"] = float(resolved)
@@ -211,7 +211,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
         if getattr(be, "MAX_POSITION_SIZE", None) != float(resolved):
             be.MAX_POSITION_SIZE = float(resolved)
     except Exception:
-        pass
+        logger.debug("BOT_ENGINE_MAX_POSITION_SIZE_SYNC_FAILED", exc_info=True)
     if sizing_meta.get("source") == "fallback":
         logger.warning("POSITION_SIZING_FALLBACK", extra={**sizing_meta, "resolved": resolved})
     else:

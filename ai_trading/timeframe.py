@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_trading.logging import get_logger
 from ai_trading.alpaca_api import ALPACA_AVAILABLE
+
+logger = get_logger(__name__)
 
 if ALPACA_AVAILABLE:  # pragma: no cover - depends on alpaca-py
     from alpaca.data.timeframe import TimeFrame as _BaseTimeFrame, TimeFrameUnit  # type: ignore
@@ -42,7 +45,7 @@ def _resolve_timeframe_unit_cls() -> Any:
         if all(hasattr(_FallbackUnit, name) for name in ("Minute", "Hour", "Day", "Week", "Month")):
             return _FallbackUnit
     except Exception:
-        pass
+        logger.debug("FALLBACK_TIMEFRAME_UNIT_IMPORT_FAILED", exc_info=True)
 
     class _UnitFallback:
         Minute = "Minute"
@@ -64,6 +67,11 @@ class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
         try:
             super().__init__(amount, unit)
         except Exception:
+            logger.debug(
+                "TIMEFRAME_BASE_INIT_FAILED",
+                extra={"amount": amount, "unit": unit},
+                exc_info=True,
+            )
             # When third-party tests monkeypatch Alpaca's enum internals,
             # base-class validation can crash. Keep a lightweight usable object.
             try:
@@ -108,7 +116,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
         if isinstance(tf, TimeFrame) and tf.__class__ is TimeFrame:
             return tf
     except Exception:
-        pass
+        logger.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
 
     unit_cls = _resolve_timeframe_unit_cls()
 
@@ -124,7 +132,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
                 unit = getattr(unit_cls, name, unit_cls.Day)
             return TimeFrame(int(amount), unit)
         except Exception:
-            pass
+            logger.debug("TIMEFRAME_ATTR_COERCE_FAILED", exc_info=True)
 
     try:
         s = str(tf).strip()
@@ -152,7 +160,7 @@ def canonicalize_timeframe(tf: Any) -> TimeFrame:
                 unit = getattr(unit_cls, unit_name, unit_cls.Day)
                 return TimeFrame(amt, unit)
     except Exception:
-        pass
+        logger.debug("TIMEFRAME_STRING_PARSE_FAILED", extra={"value": tf}, exc_info=True)
 
     return TimeFrame()
 

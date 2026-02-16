@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def load_trading_calendars():
     """Return :mod:`exchange_calendars` if available, else ``None``."""
@@ -20,6 +24,7 @@ def load_trading_calendars():
     try:  # pragma: no cover - optional dependency
         import exchange_calendars as ec  # type: ignore
     except Exception:  # library missing or incompatible
+        logger.debug("EXCHANGE_CALENDARS_IMPORT_FAILED", exc_info=True)
         return None
     return ec
 
@@ -30,6 +35,7 @@ def load_pandas_market_calendars():
     try:  # pragma: no cover - optional dependency
         import pandas_market_calendars as pmc  # type: ignore
     except Exception:
+        logger.debug("PANDAS_MARKET_CALENDARS_IMPORT_FAILED", exc_info=True)
         return None
     return pmc
 
@@ -43,6 +49,7 @@ if _tc is not None:  # pragma: no branch - small init
         # Preload sessions so holiday and early-close data is available without I/O.
         _CAL.sessions_in_range("2024-01-01", "2025-12-31")
     except Exception:  # pragma: no cover - fall back to stubs
+        logger.debug("EXCHANGE_CALENDAR_INIT_FAILED", exc_info=True)
         _CAL = None
 
 
@@ -117,7 +124,7 @@ def is_trading_day(d: date) -> bool:
         try:
             return bool(_CAL.is_session(d))
         except Exception:  # pragma: no cover - defensive
-            pass
+            logger.debug("CALENDAR_IS_SESSION_FAILED", extra={"date": d.isoformat()}, exc_info=True)
     if d in _HOLIDAYS:
         return False
     if d in _FALLBACK_SESSIONS:
@@ -143,7 +150,7 @@ def session_info(d: date) -> Session:
                 early = close_et.hour < 16
             return Session(open_et.astimezone(UTC), close_et.astimezone(UTC), early)
         except Exception:  # pragma: no cover - fall back
-            pass
+            logger.debug("CALENDAR_SESSION_INFO_FAILED", extra={"date": d.isoformat()}, exc_info=True)
     if d in _FALLBACK_SESSIONS:
         return _FALLBACK_SESSIONS[d]
     return _session_from_et(d, 16, 0)
@@ -185,7 +192,7 @@ def previous_trading_session(d: date) -> date:
                 return prev.date()
             return prev
         except Exception:  # pragma: no cover - fall back
-            pass
+            logger.debug("CALENDAR_PREVIOUS_SESSION_FAILED", extra={"date": d.isoformat()}, exc_info=True)
 
     dd = d - timedelta(days=1)
     while not is_trading_day(dd):
@@ -210,4 +217,3 @@ __all__ = [
     "load_trading_calendars",
     "get_rth_session",
 ]
-

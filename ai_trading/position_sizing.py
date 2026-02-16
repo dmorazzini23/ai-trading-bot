@@ -197,6 +197,7 @@ def _reset_log_throttle(message: str) -> None:
     try:
         from ai_trading.logging import _THROTTLE_FILTER
     except Exception:  # pragma: no cover - defensive import
+        _log.debug("LOG_THROTTLE_FILTER_IMPORT_FAILED", exc_info=True)
         return
     state = getattr(_THROTTLE_FILTER, "_state", None)
     lock = getattr(_THROTTLE_FILTER, "_lock", None)
@@ -415,7 +416,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                             try:
                                 object.__setattr__(obj, "equity", eq)
                             except Exception:  # pragma: no cover - defensive
-                                pass
+                                _log.debug("AUTO_SIZING_EQUITY_ASSIGN_FAILED", exc_info=True)
                 else:
                     eq = None
             cur, source = _resolve_max_position_size(
@@ -498,7 +499,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                         extra={"reason": reason, "capital_cap": cap},
                     )
                 except Exception:  # pragma: no cover - defensive
-                    pass
+                    _log.debug("AUTO_SIZING_ABORT_LOG_EMIT_FAILED", exc_info=True)
             try:
                 import logging as _logging
 
@@ -537,7 +538,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                                 if throttle is not None:
                                     handler.addFilter(throttle)
             except Exception:  # pragma: no cover - defensive
-                pass
+                _log.debug("AUTO_SIZING_ABORT_HANDLER_RESTORE_FAILED", exc_info=True)
             raise RuntimeError(f"AUTO sizing aborted: {reason}")
         _log.info(
             "AUTO_SIZING_REUSED_EQUITY",

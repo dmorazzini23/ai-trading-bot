@@ -75,6 +75,7 @@ def _lazy_http_session() -> "Optional[HTTPSession]":
 
         return get_http_session()
     except Exception:
+        _log.debug("HTTP_SESSION_LAZY_IMPORT_FAILED", exc_info=True)
         return None
 
 
@@ -400,7 +401,7 @@ class TradingClientAdapter:
                 if enum_cls is not None:
                     enum_val = getattr(enum_cls, str(status).upper(), status)
             except Exception:
-                pass
+                _log.debug("ORDER_STATUS_ENUM_MAP_FAILED", exc_info=True)
 
             if accepts_filter:
                 try:
@@ -548,7 +549,7 @@ def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
             enum_val = getattr(enum_cls, str(status).upper(), status)
             filt = req_cls(statuses=[enum_val])
         except Exception:
-            pass
+            _log.debug("ORDER_FILTER_BUILD_FAILED", exc_info=True)
         else:
             return api.get_orders(*args, filter=filt, **kwargs)
 
@@ -560,7 +561,7 @@ def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
             if enum_cls is not None:
                 enum_val = getattr(enum_cls, str(status).upper(), status)
         except Exception:
-            pass
+            _log.debug("ORDER_STATUS_ENUM_FALLBACK_FAILED", exc_info=True)
         kwargs["status"] = enum_val
     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
@@ -572,6 +573,7 @@ def _data_classes():
 
         return _StockBarsRequest, _TimeFrame, _TimeFrameUnit
     except Exception:
+        _log.debug("ALPACA_DATA_CLASSES_IMPORT_FAILED", exc_info=True)
         return StockBarsRequest, TimeFrame, TimeFrameUnit
 
 
@@ -630,7 +632,7 @@ def _coerce_timeframe_for_request(
         if isinstance(tf_obj, timeframe_cls):
             return tf_obj
     except Exception:
-        pass
+        _log.debug("TIMEFRAME_INSTANCE_CHECK_FAILED", exc_info=True)
 
     amount = 1
     unit_token: str | None = None
@@ -747,6 +749,7 @@ def _coerce_timeframe_for_request(
             if isinstance(candidate, timeframe_cls):
                 return candidate
         except Exception:
+            _log.debug("TIMEFRAME_CANDIDATE_INSTANCE_CHECK_FAILED", exc_info=True)
             return candidate
 
     return tf_obj
@@ -1103,7 +1106,7 @@ def get_bars_df(
                     try:
                         time_mod.sleep(delay)
                     except Exception:
-                        pass
+                        _log.debug("RATE_LIMIT_BACKOFF_SLEEP_FAILED", exc_info=True)
                     continue
                 raise
             except RequestException as req_exc:
@@ -1124,7 +1127,7 @@ def get_bars_df(
                     try:
                         time_mod.sleep(delay)
                     except Exception:
-                        pass
+                        _log.debug("NETWORK_RETRY_BACKOFF_SLEEP_FAILED", exc_info=True)
                     continue
                 raise
             except Exception as exc:
@@ -1140,7 +1143,7 @@ def get_bars_df(
                     if error is not None:
                         errors_total.inc()
                 except Exception:
-                    pass
+                    _log.debug("ALPACA_FETCH_METRICS_RECORD_FAILED", exc_info=True)
         else:
             if last_error is not None:
                 raise last_error
@@ -1404,7 +1407,7 @@ def _sdk_submit(
         if os.getenv("PYTEST_RUNNING"):
             disable_retry = True
     except Exception:
-        pass
+        _log.debug("PYTEST_MODE_DETECT_FAILED", exc_info=True)
     selected_retry = None if disable_retry else retry
     call = submit if selected_retry is None else _with_retry(submit)
     _start_t = monotonic_time()
@@ -1424,7 +1427,7 @@ def _sdk_submit(
             if _err is not None:
                 _alpaca_errors_total.inc()
         except Exception:
-            pass
+            _log.debug("ALPACA_SUBMIT_METRICS_RECORD_FAILED", exc_info=True)
     if hasattr(order, "_raw"):
         data = dict(order._raw)  # type: ignore[attr-defined]
     elif hasattr(order, "__dict__"):
@@ -1506,7 +1509,7 @@ def _http_submit(
             if _err is not None or resp.status_code >= 400:  # type: ignore[name-defined]
                 errors_counter.inc()
         except Exception:
-            pass
+            _log.debug("ALPACA_HTTP_POST_METRICS_RECORD_FAILED", exc_info=True)
 
     try:
         content: dict[str, Any] | None = resp.json()
@@ -1559,7 +1562,7 @@ def submit_order(
 
             reload_trading_config()
         except Exception:
-            pass
+            _log.debug("TRADING_CONFIG_RELOAD_FOR_PYTEST_FAILED", exc_info=True)
 
     cfg = _AlpacaConfig.from_env()
     explicit_shadow = shadow if shadow is not None else None
@@ -1726,7 +1729,7 @@ def alpaca_get(
             if _err is not None or status >= 400:
                 errors_counter.inc()
         except Exception:
-            pass
+            _log.debug("ALPACA_GET_METRICS_RECORD_FAILED", exc_info=True)
 
     try:
         content = resp.json() if resp is not None else None

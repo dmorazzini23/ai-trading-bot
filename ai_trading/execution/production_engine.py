@@ -53,7 +53,7 @@ class ProductionExecutionCoordinator:
                 with open(sl_path, 'w', newline='') as f:
                     csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
         except Exception:
-            pass
+            logger.debug("PRODUCTION_SLIPPAGE_LOG_INIT_FAILED", exc_info=True)
         logger.info(f'ProductionExecutionCoordinator initialized with equity=${account_equity:,.2f}')
 
     async def submit_order_request(self, order_request: OrderRequest) -> ExecutionResult:
@@ -109,7 +109,7 @@ class ProductionExecutionCoordinator:
                 try:
                     md['max_participation_rate'] = max(0.0, min(1.0, float(part_cap)))
                 except Exception:
-                    pass
+                    logger.debug("MAX_PARTICIPATION_RATE_PARSE_FAILED", exc_info=True)
             # Prefer limit orders when not urgent and a price/target is available
             urgency = md.get('urgency_level')
             price_hint = price if price is not None else md.get('target_price')
@@ -344,7 +344,7 @@ class ProductionExecutionCoordinator:
                             },
                         )
                 except Exception:
-                    pass
+                    logger.debug("SLIPPAGE_LOG_RECORD_FAILED", exc_info=True)
             else:
                 self.execution_stats['rejected_orders'] += 1
         except (APIError, TimeoutError, ConnectionError) as e:

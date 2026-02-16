@@ -206,6 +206,7 @@ def _is_alpaca_error_instance(exc: BaseException, attr: str, fallback: type[Base
     try:
         return exc.__class__.__name__ == attr
     except Exception:  # pragma: no cover - defensive guard
+        logger.debug("ALPACA_ERROR_NAME_COMPARE_FAILED", exc_info=True)
         return False
 
 
@@ -1828,6 +1829,7 @@ def _normalize_unreliable_reason(reason_label: str | None) -> str:
     try:
         text = str(reason_label)
     except Exception:
+        logger.debug("UNRELIABLE_REASON_NORMALIZE_FAILED", exc_info=True)
         return "unreliable_price"
     if ";" in text:
         text = text.split(";", 1)[0]
@@ -2239,7 +2241,7 @@ def _attempt_alpaca_quote(
                 try:
                     _set_alpaca_service_available(False)
                 except Exception:
-                    pass
+                    logger.debug("ALPACA_SERVICE_AVAILABILITY_MARK_FAILED", exc_info=True)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['quote_source'] = 'alpaca_auth_failed'
@@ -2280,7 +2282,7 @@ def _attempt_alpaca_quote(
                     http_code=status,
                 )
             except Exception:
-                pass
+                logger.debug("QUOTE_HTTP_STATUS_NOT_FOUND_RECORD_FAILED", exc_info=True)
         elif status in {401, 403}:
             logger.error(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
@@ -2296,7 +2298,7 @@ def _attempt_alpaca_quote(
                     http_code=status,
                 )
             except Exception:
-                pass
+                logger.debug("QUOTE_HTTP_STATUS_AUTH_RECORD_FAILED", exc_info=True)
         else:
             _log_price_warning(
                 'ALPACA_PRICE_HTTP_ERROR',
@@ -2312,7 +2314,7 @@ def _attempt_alpaca_quote(
                     http_code=status,
                 )
             except Exception:
-                pass
+                logger.debug("QUOTE_HTTP_STATUS_ERROR_RECORD_FAILED", exc_info=True)
         cache['quote_price'] = None
         return None, cache['quote_source']
     except (
@@ -8868,7 +8870,7 @@ def _signal_strength_threshold(ctx: Any) -> float:
         if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
             return 0.0
     except Exception:
-        pass
+        logger.debug("PYTEST_ENV_DETECT_FAILED", exc_info=True)
     candidates: list[Any] = []
     params_obj = getattr(ctx, "params", None)
     if isinstance(params_obj, MappingABC):
@@ -9778,7 +9780,7 @@ class DataFetcher:
                         legacy_memo_key = (symbol, fetch_date.isoformat())
                     break
             except Exception:
-                pass
+                logger.debug("DAILY_FETCH_MEMO_KEY_RESOLVE_FAILED", exc_info=True)
         memo_ttl = float(getattr(be_module, "_DAILY_FETCH_MEMO_TTL", 0.0) or 0.0)
         memo_ttl_limit = (
             memo_ttl
@@ -12370,6 +12372,7 @@ def _metafallback_confidence_cap() -> float:
     try:
         return max(float(get_env("METALEARN_FALLBACK_CONFIDENCE_CAP", 0.35, cast=float)), 0.0)
     except Exception:
+        logger.debug("METAFALLBACK_CONFIDENCE_CAP_PARSE_FAILED", exc_info=True)
         return 0.35
 
 
@@ -13031,7 +13034,7 @@ def _persist_meta_seed(symbol: str, snapshot: Mapping[str, Any]) -> None:
         try:
             _trade_history_symbol_set.cache_clear()  # type: ignore[attr-defined]
         except Exception:
-            pass
+            logger.debug("TRADE_HISTORY_SYMBOL_SET_CACHE_CLEAR_FAILED", exc_info=True)
 
 
 def _seed_symbol_history_from_bars(symbol: str, df: pd.DataFrame | None) -> None:
@@ -13042,6 +13045,7 @@ def _seed_symbol_history_from_bars(symbol: str, df: pd.DataFrame | None) -> None
     try:
         row = df.iloc[-1]
     except Exception:
+        logger.debug("META_SEED_ROW_ACCESS_FAILED", extra={"symbol": symbol}, exc_info=True)
         return
     ts_value = None
     for key in ("timestamp", "ts", "time"):
@@ -13092,6 +13096,7 @@ def _trade_history_symbol_set() -> set[str]:
     try:
         symbols = frame["symbol"]
     except Exception:
+        logger.debug("TRADE_HISTORY_SYMBOL_COLUMN_MISSING", exc_info=True)
         return set()
     try:
         iterable = symbols.dropna()  # type: ignore[assignment]
@@ -14960,7 +14965,7 @@ def check_pdt_rule(ctx) -> bool:
             try:
                 list_orders(status="open", nested=False, limit=10)
             except Exception:
-                pass
+                logger.debug("ALPACA_LIST_OPEN_ORDERS_PROBE_FAILED", exc_info=True)
 
     explicit_account_provided = getattr(ctx, "account", None) is not None
     account = getattr(ctx, "account", None)
@@ -14981,7 +14986,7 @@ def check_pdt_rule(ctx) -> bool:
         try:
             ensure_alpaca_attached(ctx)
         except Exception:
-            pass
+            logger.debug("ALPACA_ATTACH_FOR_ACCOUNT_REFRESH_FAILED", exc_info=True)
         try:
             account = safe_alpaca_get_account(ctx)
         except Exception:
@@ -16576,7 +16581,7 @@ def submit_order(
         try:
             fallback_flag = not _is_primary_price_source(str(price_source_label))
         except Exception:
-            pass
+            logger.debug("PRICE_SOURCE_FALLBACK_FLAG_PARSE_FAILED", exc_info=True)
     if fallback_flag:
         annotations["using_fallback_price"] = True
         exec_kwargs["using_fallback_price"] = True
@@ -19248,10 +19253,12 @@ def _derive_synthetic_fallback_quote(quality: Mapping[str, Any]) -> tuple[float,
         try:
             last_ts = last_ts_obj.astimezone(UTC)
         except Exception:
+            logger.debug("FALLBACK_COVERAGE_TIMESTAMP_NORMALIZE_FAILED", exc_info=True)
             return None
     try:
         age = max(0.0, (datetime.now(UTC) - last_ts).total_seconds())
     except Exception:
+        logger.debug("FALLBACK_COVERAGE_AGE_COMPUTE_FAILED", exc_info=True)
         return None
     return age, last_ts
 
@@ -19795,7 +19802,7 @@ def _provider_backup_available(provider_state: Mapping[str, Any] | None) -> bool
         if primary and active and str(primary).strip().lower() != str(active).strip().lower():
             return True
     except Exception:
-        pass
+        logger.debug("PROVIDER_BACKUP_AVAILABILITY_COMPARE_FAILED", exc_info=True)
     return _minute_fallback_active(provider_state)
 
 
@@ -19914,7 +19921,7 @@ def _safe_mode_blocks_trading() -> bool:
                 if bool(degraded_marker()):
                     return False
             except Exception:
-                pass
+                logger.debug("SAFE_MODE_DEGRADED_MARKER_EVAL_FAILED", exc_info=True)
     if bool(getattr(cfg, "execution_market_on_degraded", False)):
         return False
     return mode == "block"
@@ -19934,6 +19941,7 @@ def _mark_ctx_degraded(ctx: BotContext | None, reason: str | None = None, *, fat
         if fatal:
             setattr(ctx, "_data_degraded_fatal", True)
     except Exception:  # pragma: no cover - context objects vary in tests
+        logger.debug("CTX_DEGRADED_MARK_FAILED", exc_info=True)
         return
 
 
@@ -21928,7 +21936,7 @@ def _current_qty(ctx, symbol: str) -> int:
         try:
             setattr(ctx, "position_map", fresh_map)
         except Exception:
-            pass
+            logger.debug("CTX_POSITION_MAP_ASSIGN_FAILED", exc_info=True)
 
     pos = None
     if isinstance(position_map, MappingABC):
@@ -26712,7 +26720,7 @@ def run_multi_strategy(ctx) -> None:
                 try:
                     state.execution_metrics.submitted += 1
                 except Exception:
-                    pass
+                    logger.debug("EXECUTION_METRIC_SUBMITTED_INCREMENT_FAILED", exc_info=True)
                 actual_side_norm = _normalize_order_side_value(getattr(result, "side", None))
                 if actual_side_norm is None:
                     actual_side_norm = _normalize_order_side_value(intent_decision.order_side)
@@ -26901,7 +26909,7 @@ def _resolve_data_provider_degraded() -> tuple[bool, str | None, bool]:
             if disabled_check("alpaca"):
                 return True, "provider_disabled", True
         except Exception:
-            pass
+            logger.debug("PROVIDER_DISABLED_CHECK_FAILED", exc_info=True)
 
     if degraded and reason is None:
         reason = "provider_degraded"
@@ -26936,6 +26944,7 @@ def _reason_implies_fatal(reason: str | None) -> bool:
     try:
         reason_lower = str(reason).strip().lower()
     except Exception:
+        logger.debug("FATAL_REASON_NORMALIZE_FAILED", exc_info=True)
         return False
     if not reason_lower:
         return False
@@ -26969,6 +26978,7 @@ def _quote_age_limit_ms() -> float:
     try:
         return max(float(get_env("QUOTE_MAX_AGE_MS", 2000, cast=float)), 0.0)
     except Exception:
+        logger.debug("QUOTE_AGE_LIMIT_PARSE_FAILED", exc_info=True)
         return 2000.0
 
 
@@ -27193,7 +27203,7 @@ def _prepare_run(
                 setattr(state, "_open_order_cleanup_done", True)
             except Exception:
                 # Best effort bookkeeping; do not block startup if state is immutable.
-                pass
+                logger.debug("OPEN_ORDER_CLEANUP_BOOKKEEPING_FAILED", exc_info=True)
         audit_positions(runtime)
     except APIError as e:
         logger.warning(
@@ -28776,6 +28786,7 @@ def _kill_switch_active(cfg: TradingConfig) -> tuple[bool, str | None]:
             if Path(path).exists():
                 return True, "file"
         except Exception:
+            logger.debug("KILL_SWITCH_PATH_CHECK_FAILED", extra={"path": path}, exc_info=True)
             return True, "file_error"
     return False, None
 
@@ -28805,6 +28816,7 @@ def _score_from_bars(df) -> tuple[float, float]:
         confidence = min(1.0, abs(score))
         return score, confidence
     except Exception:
+        logger.debug("SCORE_FROM_BARS_FAILED", exc_info=True)
         return 0.0, 0.0
 
 
@@ -30700,7 +30712,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 try:
                     state.execution_metrics.positions = len(pos_list)
                 except Exception:
-                    pass
+                    logger.debug("EXECUTION_METRIC_POSITIONS_ASSIGN_FAILED", exc_info=True)
                 if runtime.execution_engine:
                     trailing_hook = getattr(
                         runtime.execution_engine, "check_trailing_stops", None
@@ -30761,7 +30773,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 try:
                     state.execution_metrics.exposure_pct = float(exposure)
                 except Exception:
-                    pass
+                    logger.debug("EXECUTION_METRIC_EXPOSURE_ASSIGN_FAILED", exc_info=True)
                 provider_mode = "alpaca"
                 try:
                     if getattr(state, "prefer_backup_quotes", False) or provider_monitor.is_disabled("alpaca"):
@@ -30887,7 +30899,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                             {"stage": "cycle_execute"},
                         )
                     except Exception:
-                        pass
+                        logger.debug("CYCLE_EXECUTE_LATENCY_OBSERVE_FAILED", exc_info=True)
                     execution_stage_start = None
                 cfg = get_trading_config()
                 stale_ratio = float(getattr(cfg, "execution_stale_ratio_shadow", 0.30))
@@ -31726,6 +31738,7 @@ def _alpha_decay_entry_guard(
             try:
                 return float(timestamp.timestamp()) > float(cutoff.timestamp())
             except Exception:
+                logger.debug("RECENT_TRADE_TIMESTAMP_COMPARE_FAILED", exc_info=True)
                 return False
 
     trades_in_window = sum(
@@ -32268,7 +32281,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 if getattr(canonical_fn, "__globals__", None) is not globals():
                     return canonical_fn(symbol, *_, **__)
             except Exception:
-                pass
+                logger.debug("CANONICAL_FETCH_BARS_DELEGATE_FAILED", exc_info=True)
 
     prefer_backup = bool(__.get("prefer_backup", False))
     feed_override_raw = __.get("feed")
