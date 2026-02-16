@@ -166,7 +166,12 @@ def _resolve_switch_cooldown_seconds() -> int:
         candidate = 900
     try:
         return max(int(candidate), 0)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "PROVIDER_SWITCH_COOLDOWN_PARSE_FAILED",
+            extra={"value": candidate},
+            exc_info=exc,
+        )
         return 900
 
 
@@ -209,7 +214,12 @@ def _resolve_health_passes_required() -> int:
         candidate = 4
     try:
         return max(int(candidate), 1)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "PROVIDER_HEALTH_PASSES_PARSE_FAILED",
+            extra={"value": candidate},
+            exc_info=exc,
+        )
         return 4
 
 
@@ -245,7 +255,12 @@ def _resolve_safe_mode_recovery_passes() -> int:
         candidate = _resolve_health_passes_required()
     try:
         return max(int(candidate), 1)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "SAFE_MODE_RECOVERY_PASSES_PARSE_FAILED",
+            extra={"value": candidate},
+            exc_info=exc,
+        )
         return 3
 
 
@@ -353,7 +368,12 @@ def _quote_recovery_age_limit_ms() -> float:
         candidate = 2000.0
     try:
         return max(float(candidate), 0.0)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "QUOTE_RECOVERY_AGE_PARSE_FAILED",
+            extra={"value": candidate},
+            exc_info=exc,
+        )
         return 2000.0
 
 
@@ -385,7 +405,12 @@ def _failsoft_gap_ratio_limit() -> float:
         return 0.08
     try:
         return max(max(candidates), 0.0)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "FAILSOFT_GAP_RATIO_PARSE_FAILED",
+            extra={"candidates": candidates},
+            exc_info=exc,
+        )
         return 0.08
 
 
@@ -661,7 +686,8 @@ def safe_mode_degraded_only() -> bool:
 def _safe_mode_failsoft_enabled() -> bool:
     try:
         return bool(get_env("TRADING__SAFE_MODE_FAILSOFT", True, cast=bool))
-    except Exception:
+    except Exception as exc:
+        logger.debug("SAFE_MODE_FAILSOFT_CONFIG_FAILED", exc_info=exc)
         return True
 
 
@@ -1254,7 +1280,8 @@ def _resolve_switch_quiet_seconds() -> float:
 def _logging_dedupe_ttl() -> int:
     try:
         settings = get_settings()
-    except Exception:
+    except Exception as exc:
+        logger.debug("LOGGING_DEDUPE_TTL_SETTINGS_FAILED", exc_info=exc)
         return 0
     ttl = getattr(settings, "logging_dedupe_ttl_s", 0)
     try:

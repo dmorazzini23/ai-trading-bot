@@ -377,8 +377,8 @@ def _runtime_trading_config() -> Any | None:
         if callable(getter):
             try:
                 return getter()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("RUNTIME_CONFIG_GETTER_FAILED", exc_info=exc)
     try:
         return get_trading_config()
     except Exception:
@@ -3670,8 +3670,8 @@ class ExecutionEngine:
                         "reason": "primary_quote_required",
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("ORDER_SKIPPED_LOG_FAILED", exc_info=exc)
             return None
         slippage_basis: str | None = None
         if isinstance(annotations, Mapping):
@@ -3719,8 +3719,8 @@ class ExecutionEngine:
                         "nbbo_gate_required": bool(nbbo_gate_required),
                     },
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("DEGRADED_GATE_PREFLIGHT_LOG_FAILED", exc_info=exc)
 
         if (
             require_realtime_nbbo
@@ -4904,8 +4904,12 @@ class ExecutionEngine:
                 try:
                     if str(order_symbol).strip().upper() != symbol.upper():
                         continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "OPPOSITE_GUARD_SYMBOL_NORMALIZE_FAILED",
+                        extra={"symbol": symbol},
+                        exc_info=exc,
+                    )
             filtered.append(order)
         return filtered
 

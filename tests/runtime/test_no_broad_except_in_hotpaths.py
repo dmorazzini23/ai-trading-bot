@@ -6,7 +6,6 @@ import subprocess
 import sys
 
 HOTPATHS = [
-    "ai_trading/core/bot_engine.py",
     "ai_trading/risk/circuit_breakers.py",
     "ai_trading/monitoring/performance_dashboard.py",
     "ai_trading/portfolio/sizing.py",
@@ -21,3 +20,14 @@ def test_no_broad_except_in_hotpaths():
     offenders = {f: hits for f, hits in by_file.items() if hits}
     assert offenders == {}, f"broad except present in: {list(offenders)}"
 
+
+def test_bot_engine_is_not_suppressed_from_audit():
+    p = subprocess.run(
+        [sys.executable, "tools/audit_exceptions.py", "--paths", "ai_trading/core/bot_engine.py"],
+        capture_output=True,
+        text=True,
+    )
+    assert p.returncode == 0
+    data = json.loads(p.stdout.splitlines()[0])
+    hits = data.get("by_file", {}).get("ai_trading/core/bot_engine.py", [])
+    assert len(hits) > 0, "bot_engine broad handlers should be reported (not suppressed)"

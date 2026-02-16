@@ -74,6 +74,20 @@ register_reset_hook(_ensure_orders_submitted_metric)
 _orders_rejected_total = get_counter("orders_rejected_total", "Orders rejected")
 _orders_duplicate_total = get_counter("orders_duplicate_total", "Duplicate orders prevented")
 
+
+def _safe_counter_inc(counter: Any | None, metric_name: str, *, extra: Mapping[str, Any] | None = None) -> None:
+    """Increment a metric without raising runtime exceptions."""
+
+    if counter is None:
+        return
+    payload: dict[str, Any] = {"metric": metric_name}
+    if extra:
+        payload.update(extra)
+    try:
+        counter.inc()
+    except Exception as exc:
+        logger.debug("METRIC_INCREMENT_FAILED", extra=payload, exc_info=exc)
+
 from ai_trading.monitoring.order_health_monitor import (
     OrderInfo,
     _active_orders as _mon_active,
@@ -566,10 +580,11 @@ class OrderManager:
                         },
                     )
             if not self._validate_order(order):
-                try:
-                    _orders_rejected_total.inc()
-                except Exception:
-                    pass
+                _safe_counter_inc(
+                    _orders_rejected_total,
+                    "orders_rejected_total",
+                    extra={"symbol": order.symbol, "reason": "validation_failed"},
+                )
                 return None
             cache = self._ensure_idempotency_cache()
             key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(UTC))
@@ -577,10 +592,11 @@ class OrderManager:
                 logger.error(f"Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})")
                 order.status = OrderStatus.REJECTED
                 order.notes += " | Rejected: Max concurrent orders reached"
-                try:
-                    _orders_rejected_total.inc()
-                except Exception:
-                    pass
+                _safe_counter_inc(
+                    _orders_rejected_total,
+                    "orders_rejected_total",
+                    extra={"symbol": order.symbol, "reason": "max_concurrent_orders"},
+                )
                 return None
             is_duplicate, existing_order_id = cache.check_and_mark_submitted(key, order.id)
             if is_duplicate:
@@ -595,11 +611,16 @@ class OrderManager:
                 )
                 order.status = OrderStatus.REJECTED
                 order.notes += " | Rejected: Duplicate order detected"
-                try:
-                    _orders_duplicate_total.inc()
-                    _orders_rejected_total.inc()
-                except Exception:
-                    pass
+                _safe_counter_inc(
+                    _orders_duplicate_total,
+                    "orders_duplicate_total",
+                    extra={"symbol": order.symbol, "reason": "duplicate_order"},
+                )
+                _safe_counter_inc(
+                    _orders_rejected_total,
+                    "orders_rejected_total",
+                    extra={"symbol": order.symbol, "reason": "duplicate_order"},
+                )
                 return None
             self.orders[order.id] = order
             self.active_orders[order.id] = order
@@ -625,10 +646,11 @@ class OrderManager:
             # Mimic a broker-style response object even when running without a
             # real broker (dry‑run).  ``filled_qty`` mirrors Alpaca's string
             # field for compatibility with existing call sites.
-            try:
-                _orders_submitted_total.inc()
-            except Exception:
-                pass
+            _safe_counter_inc(
+                _orders_submitted_total,
+                "orders_submitted_total",
+                extra={"symbol": order.symbol},
+            )
             return SimpleNamespace(
                 id=order.id,
                 status="pending_new",
@@ -653,10 +675,11 @@ class OrderManager:
             )
             order.status = OrderStatus.REJECTED
             order.notes += f" | Error: {e}"
-            try:
-                _orders_rejected_total.inc()
-            except Exception:
-                pass
+            _safe_counter_inc(
+                _orders_rejected_total,
+                "orders_rejected_total",
+                extra={"symbol": order.symbol, "reason": "api_error"},
+            )
             return None
 
     def cancel_order(self, order_id: str, reason: str = "User request") -> bool:
@@ -903,9 +926,9 @@ class ExecutionEngine:
         try:
             # Best-effort cleanup of very old tracked orders
             self.cleanup_stale_orders()
-        except Exception:
+        except Exception as exc:
             # Never allow lifecycle hooks to raise
-            pass
+            logger.debug("START_CYCLE_CLEANUP_FAILED", exc_info=exc)
 
     def end_cycle(self) -> None:  # optional hook
         return None
@@ -1163,8 +1186,8 @@ class ExecutionEngine:
                             "requested_qty": int(rq),
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.debug("QUANTITY_MISMATCH_LOG_FAILED", exc_info=exc)
 
             # Choose the more reliable filled metric: prefer broker value only when it matches calculation
             filled_for_eval = calc_filled if mismatch or ord_filled is None else ord_filled
@@ -1193,8 +1216,8 @@ class ExecutionEngine:
                 # Human-readable detail to satisfy substring checks in some tests
                 try:
                     self.logger.info(f"PARTIAL_FILL_DETAILS requested={int(rq)} filled={int(filled_for_eval)}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.debug("PARTIAL_FILL_DETAIL_LOG_FAILED", exc_info=exc)
                 # Thresholds per tests:
                 # - LOW at <= 20%
                 # - MODERATE at (20%, 35%]
@@ -1216,8 +1239,8 @@ class ExecutionEngine:
                             "requested_qty": int(rq),
                         },
                     )
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as exc:
+            self.logger.debug("PARTIAL_FILL_EVAL_FAILED", exc_info=exc)
 
     def execute_order(
         self,
@@ -1875,8 +1898,8 @@ class ExecutionEngine:
                 if isinstance(vol, (int, float)) and vol > 0:
                     factor = max(0.5, min(3.0, vol / 0.02))
                     return base_bps * factor
-        except Exception:
-            pass
+        except Exception as exc:
+            self.logger.debug("VOLATILITY_LOOKUP_FAILED", extra={"symbol": symbol}, exc_info=exc)
         return base_bps
 
     def _apply_slippage(
@@ -1981,8 +2004,12 @@ class ExecutionEngine:
                 try:
                     tick = TICK_BY_SYMBOL.get(order.symbol)
                     order.expected_price = Money(base_price, tick)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self.logger.debug(
+                        "EXPECTED_PRICE_ASSIGN_FAILED",
+                        extra={"symbol": order.symbol, "order_id": order.id},
+                        exc_info=exc,
+                    )
             try:
                 if getattr(order, "expected_price", None) is not None:
                     expected = float(order.expected_price)

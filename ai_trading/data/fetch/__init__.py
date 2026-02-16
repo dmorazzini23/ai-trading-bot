@@ -158,7 +158,8 @@ def _configured_primary_provider() -> str | None:
 def _drop_last_bar_enabled() -> bool:
     try:
         cfg = get_trading_config()
-    except Exception:
+    except Exception as exc:
+        logger.debug("DROP_LAST_BAR_CONFIG_UNAVAILABLE", exc_info=exc)
         return True
     return bool(getattr(cfg, "data_drop_last_partial_bar", True))
 
@@ -2160,7 +2161,8 @@ def _reset_state() -> None:
 def _preferred_feed_failover() -> tuple[str, ...]:
     try:
         feeds = alpaca_feed_failover()
-    except Exception:
+    except Exception as exc:
+        logger.debug("PREFERRED_FEED_FAILOVER_UNAVAILABLE", exc_info=exc)
         return ()
     return tuple(feeds or ())
 
@@ -2168,7 +2170,8 @@ def _preferred_feed_failover() -> tuple[str, ...]:
 def _should_use_backup_on_empty() -> bool:
     try:
         return bool(alpaca_empty_to_backup())
-    except Exception:
+    except Exception as exc:
+        logger.debug("ALPACA_EMPTY_TO_BACKUP_FALLBACK", exc_info=exc)
         return True
 
 

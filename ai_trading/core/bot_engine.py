@@ -2083,13 +2083,14 @@ def _attempt_alpaca_trade(
         )
         try:
             from ai_trading.alpaca_api import _set_alpaca_service_available
-        except Exception:
+        except Exception as exc:
+            logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=exc)
             _set_alpaca_service_available = None  # type: ignore[assignment]
         if callable(_set_alpaca_service_available):
             try:
                 _set_alpaca_service_available(False)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=exc)
         _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
         cache['alpaca_auth_failed'] = True
         cache['trade_source'] = 'alpaca_auth_failed'
@@ -2118,8 +2119,8 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_not_found',
                     http_code=status,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=exc)
             cache['trade_source'] = 'alpaca_trade_not_found'
             cache['trade_price'] = None
             return None, cache['trade_source']
@@ -2130,13 +2131,14 @@ def _attempt_alpaca_trade(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception:
+            except Exception as exc:
+                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['trade_source'] = 'alpaca_auth_failed'
@@ -2146,8 +2148,8 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_auth_failed',
                     http_code=status,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=exc)
         else:
             _log_price_warning(
                 'ALPACA_TRADE_HTTP_ERROR',
@@ -2162,8 +2164,8 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_http_error',
                     http_code=status,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=exc)
         cache['trade_price'] = None
         return None, cache['trade_source']
     except COMMON_EXC as exc:  # pragma: no cover - defensive
@@ -2174,13 +2176,14 @@ def _attempt_alpaca_trade(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception:
+            except Exception as exc:
+                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['trade_source'] = 'alpaca_auth_failed'
