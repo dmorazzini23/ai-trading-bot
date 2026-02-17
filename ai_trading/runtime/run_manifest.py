@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,6 +72,32 @@ def _enabled_flags(cfg_payload: Mapping[str, Any]) -> list[str]:
     return sorted(flags)
 
 
+def _default_manifest_path() -> str:
+    """Return configured run-manifest path with env fallback."""
+
+    try:
+        value = get_env("AI_TRADING_RUN_MANIFEST_PATH", "runtime/run_manifest.json")
+    except Exception:
+        value = "runtime/run_manifest.json"
+    normalized = str(value or "").strip()
+    return normalized or "runtime/run_manifest.json"
+
+
+def _resolve_manifest_path(cfg: Any, explicit_path: str | None) -> Path:
+    """Resolve run-manifest target path independent of process CWD."""
+
+    configured = explicit_path
+    if not configured:
+        configured = str(getattr(cfg, "run_manifest_path", "") or "").strip()
+    if not configured:
+        configured = _default_manifest_path()
+    target = Path(str(configured)).expanduser()
+    if target.is_absolute():
+        return target
+    repo_root = Path(__file__).resolve().parents[2]
+    return (repo_root / target).resolve()
+
+
 def build_run_manifest(
     cfg: Any,
     *,
@@ -97,10 +124,7 @@ def write_run_manifest(
     path: str | None = None,
 ) -> Path:
     manifest = build_run_manifest(cfg, runtime_contract=runtime_contract)
-    target = Path(
-        path
-        or str(getattr(cfg, "run_manifest_path", "") or "runtime/run_manifest.json")
-    )
+    target = _resolve_manifest_path(cfg, path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     logger.info("RUN_MANIFEST_WRITTEN", extra={"path": str(target)})

@@ -1407,7 +1407,11 @@ def log_backup_provider_used(
         or payload.get("source")
         or "unspecified"
     )
-    active_logger.warning("BACKUP_PROVIDER_USED", extra=payload)
+    reason_key = str(reason_value).strip().lower()
+    if reason_key == "configured_source_override":
+        active_logger.info("BACKUP_PROVIDER_USED", extra=payload)
+    else:
+        active_logger.warning("BACKUP_PROVIDER_USED", extra=payload)
 
     return payload
 

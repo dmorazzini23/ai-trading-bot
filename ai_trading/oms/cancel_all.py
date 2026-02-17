@@ -102,7 +102,8 @@ def cancel_all_open_orders(ctx: Any) -> CancelAllResult:
         reason_code="CANCEL_ALL_TRIGGERED",
         errors=errors,
     )
-    logger.warning(
+    log_fn = logger.warning if result.failed else logger.info
+    log_fn(
         "CANCEL_ALL_TRIGGERED",
         extra={
             "total_open": result.total_open,

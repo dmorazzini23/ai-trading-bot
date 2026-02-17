@@ -23,3 +23,25 @@ def test_run_manifest_written(tmp_path: Path) -> None:
     assert payload["mode"] == "paper"
     assert payload["runtime_contract"]["stubs_enabled"] is False
     assert payload["resolved_config_hash"]
+
+
+def test_run_manifest_uses_env_path_when_cfg_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "run_manifest_env.json"
+    monkeypatch.setenv("AI_TRADING_RUN_MANIFEST_PATH", str(target))
+
+    cfg = SimpleNamespace(
+        execution_mode="paper",
+        alpaca_api_key="PK1234567890",
+        to_dict=lambda: {
+            "execution_mode": "paper",
+            "recon_enabled": True,
+            "kill_switch": False,
+        },
+    )
+
+    path = write_run_manifest(cfg, runtime_contract={"stubs_enabled": False})
+    assert path == target
+    assert path.exists()

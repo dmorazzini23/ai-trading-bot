@@ -1843,6 +1843,12 @@ def _classify_fallback_reason(
         return "backup_cooldown_active", details
     if "forced_backup" in combined_lower or "forced backup" in combined_lower:
         return "forced_backup_provider", details
+    if (
+        "configured_daily_source" in combined_lower
+        or "configured_minute_source" in combined_lower
+        or "configured_source_override" in combined_lower
+    ):
+        return "configured_source_override", details
     if "fallback_ttl" in combined_lower:
         return "fallback_ttl_active", details
     if "probe_deferred" in combined_lower or "primary_probe" in combined_lower:
@@ -13028,6 +13034,12 @@ def get_daily_df(
             if df is not None and not getattr(df, "empty", False):
                 df = _annotate_df_source(df, provider="finnhub", feed="finnhub")
         else:
+            if forced_daily_provider == "yahoo":
+                _set_bootstrap_backup_reason(
+                    "configured_daily_source",
+                    primary=_configured_primary_provider() or "alpaca",
+                    detail="DAILY_SOURCE",
+                )
             df = _safe_backup_get_bars(
                 symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"),
             )

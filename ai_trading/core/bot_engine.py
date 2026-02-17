@@ -30100,7 +30100,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     if not symbols:
         symbols = list(getattr(runtime, "universe_tickers", []) or [])
     if not symbols:
-        logger.warning("NETTING_NO_SYMBOLS")
+        if bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool)):
+            logger.info("NETTING_NO_SYMBOLS")
+        else:
+            logger.warning("NETTING_NO_SYMBOLS")
         return
     canary_raw = str(get_env("AI_TRADING_CANARY_SYMBOLS", "") or "").strip()
     if canary_raw:
@@ -31307,7 +31310,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         ):
             startup_result = cancel_all_open_orders_oms(runtime)
             state.startup_cleanup_done = True
-            logger.warning(
+            startup_log = logger.warning if startup_result.failed else logger.info
+            startup_log(
                 "STARTUP_CLEANUP",
                 extra={
                     "cancelled": startup_result.cancelled,

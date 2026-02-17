@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 from ai_trading.oms.cancel_all import cancel_all_open_orders
@@ -28,3 +29,14 @@ def test_cancel_all_open_orders_cancels_everything() -> None:
     assert result.cancelled == 2
     assert result.failed == 0
     assert runtime.api.cancelled == ["oid-1", "oid-2"]
+
+
+def test_cancel_all_open_orders_logs_info_on_success(caplog) -> None:
+    runtime = SimpleNamespace(api=_Api())
+    with caplog.at_level(logging.INFO):
+        result = cancel_all_open_orders(runtime)
+
+    records = [record for record in caplog.records if record.getMessage() == "CANCEL_ALL_TRIGGERED"]
+    assert result.failed == 0
+    assert records
+    assert records[-1].levelname == "INFO"
