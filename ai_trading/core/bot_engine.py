@@ -153,7 +153,12 @@ from ai_trading.analytics.tca import (
     build_tca_record,
     write_tca_record,
 )
-from ai_trading.portfolio.allocation import load_allocation_state
+from ai_trading.portfolio.allocation import (
+    SleevePerfState,
+    load_allocation_state,
+    save_allocation_state,
+    update_allocation_weights,
+)
 from ai_trading.monitoring.alerts import evaluate_runtime_alert_thresholds
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
@@ -8047,6 +8052,9 @@ class BotState:
     canary_mode_logged: bool = False
     last_execution_report_date: date | None = None
     last_learning_run_date: date | None = None
+    last_replay_run_date: date | None = None
+    last_walk_forward_run_date: date | None = None
+    last_allocation_update_date: date | None = None
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -28841,22 +28849,48 @@ def _score_from_bars(df) -> tuple[float, float]:
         return 0.0, 0.0
 
 
+def _redact_snapshot_payload(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        redacted: dict[str, Any] = {}
+        for key, value in payload.items():
+            key_text = str(key).lower()
+            if any(token in key_text for token in ("secret", "token", "api_key", "password")):
+                redacted[str(key)] = "***"
+            else:
+                redacted[str(key)] = _redact_snapshot_payload(value)
+        return redacted
+    if isinstance(payload, list):
+        return [_redact_snapshot_payload(item) for item in payload]
+    return payload
+
+
 def _write_decision_record(record: Any, path: str | None) -> None:
     try:
         payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
     except Exception:
         payload = {"record": repr(record)}
+    if bool(get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_REDACT_SECRETS", True, cast=bool)):
+        payload = _redact_snapshot_payload(payload)
     logger.info("DECISION_RECORD", extra={"decision": payload})
     if not path:
-        return
-    try:
-        dest = Path(path)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with dest.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, sort_keys=True))
-            fh.write("\n")
-    except Exception as exc:
-        logger.warning("DECISION_RECORD_WRITE_FAILED", extra={"error": str(exc)})
+        path_targets: list[str] = []
+    else:
+        path_targets = [path]
+    snapshot_path = str(get_env("AI_TRADING_CONFIG_SNAPSHOT_PATH", "") or "").strip()
+    if snapshot_path:
+        path_targets.append(snapshot_path)
+    for target_path in path_targets:
+        try:
+            dest = Path(target_path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with dest.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, sort_keys=True))
+                fh.write("\n")
+        except Exception as exc:
+            logger.warning(
+                "DECISION_RECORD_WRITE_FAILED",
+                extra={"error": str(exc), "path": str(target_path)},
+            )
 
 
 def _allocation_base_weights() -> dict[str, float]:
@@ -28873,7 +28907,7 @@ def _allocation_base_weights() -> dict[str, float]:
 
 
 def _allocation_weights_for_sleeves(cfg: TradingConfig, sleeves: Sequence[Any]) -> dict[str, float]:
-    if not bool(get_env("AI_TRADING_ALLOCATION_ENABLED", "0", cast=bool)):
+    if not bool(get_env("AI_TRADING_ALLOCATION_ENABLED", False, cast=bool)):
         return {str(sleeve.name): 1.0 for sleeve in sleeves}
     path = str(
         get_env(
@@ -28894,7 +28928,7 @@ def _allocation_weights_for_sleeves(cfg: TradingConfig, sleeves: Sequence[Any]) 
 
 
 def _load_learned_overrides(cfg: TradingConfig) -> dict[str, Any]:
-    if not bool(get_env("AI_TRADING_LEARNING_APPLY_OVERRIDES", "0", cast=bool)):
+    if not bool(get_env("AI_TRADING_LEARNING_APPLY_OVERRIDES", False, cast=bool)):
         return {}
     path = str(get_env("AI_TRADING_LEARNING_OUTPUT_PATH", "runtime/learned_overrides.json"))
     max_age_days = int(get_env("AI_TRADING_LEARNING_MAX_OVERRIDE_AGE_DAYS", 30, cast=int))
@@ -28923,7 +28957,7 @@ def _post_trade_learning_schedule_due(
     now: datetime,
     market_open_now: bool,
 ) -> bool:
-    if not bool(get_env("AI_TRADING_POST_TRADE_LEARNING_ENABLED", "0", cast=bool)):
+    if not bool(get_env("AI_TRADING_POST_TRADE_LEARNING_ENABLED", False, cast=bool)):
         return False
     schedule = str(
         get_env("AI_TRADING_LEARNING_RUN_SCHEDULE", "market_close")
@@ -29071,6 +29105,462 @@ def _run_post_trade_learning_update(
     state.last_learning_run_date = now.date()
 
 
+def _parse_iso_timestamp(raw: Any) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _read_jsonl_records(path: str, *, max_records: int = 10000) -> list[dict[str, Any]]:
+    src = Path(path)
+    if not src.exists():
+        return []
+    rows: deque[dict[str, Any]] = deque(maxlen=max(1, int(max_records)))
+    try:
+        with src.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    rows.append(payload)
+    except Exception as exc:
+        logger.warning("JSONL_READ_FAILED", extra={"error": str(exc), "path": str(path)})
+        return []
+    return list(rows)
+
+
+def _latest_tca_timestamp(path: str) -> datetime | None:
+    latest: datetime | None = None
+    for record in _read_jsonl_records(path, max_records=5000):
+        for field in ("ts",):
+            ts = _parse_iso_timestamp(record.get(field))
+            if ts is not None and (latest is None or ts > latest):
+                latest = ts
+        benchmark = record.get("benchmark")
+        if isinstance(benchmark, Mapping):
+            for field in ("submit_ts", "first_fill_ts", "decision_ts"):
+                ts = _parse_iso_timestamp(benchmark.get(field))
+                if ts is not None and (latest is None or ts > latest):
+                    latest = ts
+    return latest
+
+
+def _tca_stale_block_reason(now: datetime) -> str | None:
+    if not bool(get_env("AI_TRADING_BLOCK_TRADING_IF_TCA_STALE", False, cast=bool)):
+        return None
+    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    latest = _latest_tca_timestamp(tca_path)
+    if latest is None:
+        return "TCA_STALE_BLOCK"
+    stale_seconds = max(
+        60.0,
+        float(get_env("AI_TRADING_TCA_PENDING_WRITE_SEC", 60, cast=float)),
+    )
+    if (now - latest).total_seconds() > stale_seconds:
+        return "TCA_STALE_BLOCK"
+    return None
+
+
+def _allocation_schedule_due(state: BotState, *, now: datetime, market_open_now: bool) -> bool:
+    if not bool(get_env("AI_TRADING_ALLOCATION_ENABLED", False, cast=bool)):
+        return False
+    schedule = str(
+        get_env("AI_TRADING_ALLOCATION_UPDATE_SCHEDULE", "market_close")
+    ).strip().lower()
+    if schedule == "manual":
+        return False
+    last_run = getattr(state, "last_allocation_update_date", None)
+    if schedule == "market_close":
+        return (not market_open_now) and (last_run != now.date())
+    if schedule == "daily_first_run":
+        return market_open_now and (last_run != now.date())
+    return False
+
+
+def _build_sleeve_perf_states_from_tca(
+    *,
+    records: Sequence[Mapping[str, Any]],
+    sleeves: Sequence[Any],
+    expectancy_window: int,
+) -> dict[str, SleevePerfState]:
+    by_sleeve: dict[str, list[float]] = {
+        str(getattr(sleeve, "name", "")).strip(): [] for sleeve in sleeves
+    }
+    for record in records:
+        sleeve = str(record.get("sleeve", "")).strip()
+        if not sleeve or sleeve not in by_sleeve:
+            continue
+        try:
+            is_bps = float(record.get("is_bps"))
+        except (TypeError, ValueError):
+            continue
+        by_sleeve[sleeve].append(-is_bps / 10_000.0)
+
+    out: dict[str, SleevePerfState] = {}
+    window = max(1, int(expectancy_window))
+    for sleeve_name, values in by_sleeve.items():
+        recent = values[-window:]
+        if not recent:
+            out[sleeve_name] = SleevePerfState(
+                rolling_expectancy=0.0,
+                drawdown=0.0,
+                stability_score=0.0,
+                trade_count=0,
+                confidence=0.0,
+            )
+            continue
+        cumulative = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        winners = 0
+        for value in recent:
+            cumulative += value
+            peak = max(peak, cumulative)
+            drawdown = peak - cumulative
+            max_drawdown = max(max_drawdown, drawdown)
+            if value > 0:
+                winners += 1
+        mean_return = float(sum(recent) / len(recent))
+        variance = 0.0
+        if len(recent) > 1:
+            variance = sum((value - mean_return) ** 2 for value in recent) / len(recent)
+        volatility = variance ** 0.5
+        stability = 1.0 / (1.0 + volatility * 100.0)
+        out[sleeve_name] = SleevePerfState(
+            rolling_expectancy=mean_return,
+            drawdown=float(max_drawdown),
+            stability_score=float(max(0.0, min(1.0, stability))),
+            trade_count=len(recent),
+            confidence=float(max(0.0, min(1.0, winners / len(recent)))),
+        )
+    return out
+
+
+def _maybe_update_allocation_state(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+    sleeves: Sequence[Any],
+) -> None:
+    if not _allocation_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+    base = _allocation_base_weights()
+    path = str(get_env("AI_TRADING_ALLOCATION_OUTPUT_PATH", "runtime/allocation_state.json"))
+    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    expectancy_window = int(
+        get_env("AI_TRADING_ALLOC_EXPECTANCY_WINDOW_TRADES", 60, cast=int)
+    )
+    records = _read_jsonl_records(tca_path, max_records=max(500, expectancy_window * 20))
+    if bool(get_env("AI_TRADING_REQUIRE_TCA_FOR_ALLOCATION", False, cast=bool)) and not records:
+        logger.warning("ALLOCATION_UPDATE_SKIPPED", extra={"reason": "tca_required_missing"})
+        state.last_allocation_update_date = now.date()
+        return
+    use_postcost = bool(get_env("AI_TRADING_ALLOC_USE_POSTCOST_EXPECTANCY", True, cast=bool))
+    perf_states: dict[str, SleevePerfState] = {}
+    if use_postcost:
+        perf_states = _build_sleeve_perf_states_from_tca(
+            records=records,
+            sleeves=sleeves,
+            expectancy_window=expectancy_window,
+        )
+    else:
+        for sleeve in sleeves:
+            sleeve_name = str(getattr(sleeve, "name", "")).strip()
+            perf_states[sleeve_name] = SleevePerfState(
+                rolling_expectancy=0.0,
+                drawdown=0.0,
+                stability_score=0.0,
+                trade_count=0,
+                confidence=0.0,
+            )
+    updated = update_allocation_weights(
+        base_weights=base,
+        perf_states=perf_states,
+        min_weight=float(get_env("AI_TRADING_ALLOC_MIN_WEIGHT", 0.10, cast=float)),
+        max_weight=float(get_env("AI_TRADING_ALLOC_MAX_WEIGHT", 0.60, cast=float)),
+        daily_max_delta=float(get_env("AI_TRADING_ALLOC_DAILY_MAX_DELTA", 0.05, cast=float)),
+        expectancy_floor=float(
+            get_env("AI_TRADING_ALLOC_EXPECTANCY_FLOOR_PCT", -0.0010, cast=float)
+        ),
+        drawdown_trigger=float(get_env("AI_TRADING_ALLOC_DRAWDOWN_TRIGGER", 0.06, cast=float)),
+        min_trades_for_adjust=int(
+            get_env("AI_TRADING_ALLOC_MIN_TRADES_FOR_ADJUST", 15, cast=int)
+        ),
+    )
+    try:
+        save_allocation_state(
+            path,
+            updated,
+            metadata={
+                "updated_at": now.isoformat(),
+                "source": "post_cost_expectancy" if use_postcost else "manual_base",
+            },
+        )
+    except Exception as exc:
+        logger.warning("ALLOCATION_UPDATE_FAILED", extra={"error": str(exc), "path": path})
+    else:
+        logger.info("ALLOCATION_UPDATED", extra={"path": path, "weights": updated})
+    state.last_allocation_update_date = now.date()
+
+
+def _replay_schedule_due(state: BotState, *, now: datetime, market_open_now: bool) -> bool:
+    if not bool(get_env("AI_TRADING_REPLAY_ENABLED", False, cast=bool)):
+        return False
+    if market_open_now:
+        return False
+    return getattr(state, "last_replay_run_date", None) != now.date()
+
+
+def _load_replay_bars(
+    *,
+    path: str,
+    symbols: set[str],
+    timeframes: set[str],
+    start_date: date | None,
+    end_date: date | None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    src = Path(path)
+    if not src.exists():
+        return rows
+    for file_path in sorted(src.glob("*.jsonl")):
+        rows.extend(_read_jsonl_records(str(file_path), max_records=1_000_000))
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if symbols and symbol not in symbols:
+            continue
+        timeframe = str(row.get("timeframe", "")).strip()
+        if timeframes and timeframe and timeframe not in timeframes:
+            continue
+        ts = _parse_iso_timestamp(row.get("ts") or row.get("timestamp"))
+        if ts is None:
+            continue
+        if start_date is not None and ts.date() < start_date:
+            continue
+        if end_date is not None and ts.date() > end_date:
+            continue
+        if "ts" not in row:
+            row = dict(row)
+            row["ts"] = ts.isoformat()
+        filtered.append(row)
+    return filtered
+
+
+def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: bool) -> None:
+    if not _replay_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+    from ai_trading.replay.replay_engine import ReplayConfig, ReplayEngine
+
+    raw_symbols = str(get_env("AI_TRADING_REPLAY_SYMBOLS", "") or "").strip()
+    symbols = {
+        token.strip().upper()
+        for token in raw_symbols.split(",")
+        if token and token.strip()
+    }
+    timeframes = {
+        token.strip()
+        for token in str(get_env("AI_TRADING_REPLAY_TIMEFRAMES", "5Min")).split(",")
+        if token and token.strip()
+    }
+    start_raw = str(get_env("AI_TRADING_REPLAY_START_DATE", "") or "").strip()
+    end_raw = str(get_env("AI_TRADING_REPLAY_END_DATE", "") or "").strip()
+    start_date = date.fromisoformat(start_raw) if start_raw else None
+    end_date = date.fromisoformat(end_raw) if end_raw else None
+    data_dir = str(get_env("AI_TRADING_REPLAY_DATA_DIR", "runtime/replay_data"))
+    bars = _load_replay_bars(
+        path=data_dir,
+        symbols=symbols,
+        timeframes=timeframes,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if not bars:
+        logger.warning("REPLAY_GOVERNANCE_SKIPPED", extra={"reason": "no_data", "path": data_dir})
+        state.last_replay_run_date = now.date()
+        return
+    active_symbols = tuple(sorted({str(row.get("symbol", "")).upper() for row in bars if row.get("symbol")}))
+    replay_cfg = ReplayConfig(
+        symbols=active_symbols,
+        timeframes=tuple(sorted(timeframes or {"5Min"})),
+        rth_only=bool(get_env("AI_TRADING_REPLAY_RTH_ONLY", True, cast=bool)),
+        seed=int(get_env("AI_TRADING_REPLAY_SEED", 42, cast=int)),
+        speedup=int(get_env("AI_TRADING_REPLAY_SPEEDUP", 1, cast=int)),
+        simulate_fills=bool(get_env("AI_TRADING_REPLAY_SIMULATE_FILLS", True, cast=bool)),
+        fill_model=str(get_env("AI_TRADING_REPLAY_FILL_MODEL", "next_bar_mid")),
+        fill_slippage_bps=float(get_env("AI_TRADING_REPLAY_FILL_SLIPPAGE_BPS", 5, cast=float)),
+        fill_fee_bps=float(get_env("AI_TRADING_REPLAY_FILL_FEE_BPS", 0, cast=float)),
+        enforce_oms_gates=bool(get_env("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", True, cast=bool)),
+    )
+
+    def _pipeline(event: dict[str, Any]) -> dict[str, Any]:
+        close_price = float(event.get("close", 0.0) or 0.0)
+        payload: dict[str, Any] = {
+            "symbol": str(event.get("symbol", "")).upper(),
+            "ts": str(event.get("ts")),
+            "sleeve": str(event.get("sleeve", "day")),
+            "regime_profile": str(event.get("regime_profile", get_regime_signal_profile())),
+        }
+        if replay_cfg.simulate_fills:
+            payload["order"] = {
+                "side": str(event.get("side", "buy")).lower(),
+                "qty": int(event.get("qty", 1) or 1),
+                "price": close_price,
+                "order_type": str(event.get("order_type", "limit")),
+                "client_order_id": str(event.get("client_order_id", "")),
+            }
+        return payload
+
+    engine = ReplayEngine(replay_cfg, pipeline=_pipeline)
+    first = engine.run(bars)
+    second = engine.run(bars)
+    first_hash = hashlib.sha256(
+        json.dumps(first, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    second_hash = hashlib.sha256(
+        json.dumps(second, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    if first_hash != second_hash:
+        raise RuntimeError("REPLAY_DETERMINISM_FAILED")
+    output_dir = Path(str(get_env("AI_TRADING_REPLAY_OUTPUT_DIR", "runtime/replay_outputs")))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
+    out_path.write_text(
+        json.dumps(
+            {
+                "ts": now.isoformat(),
+                "hash": first_hash,
+                "symbols": list(active_symbols),
+                "rows": len(bars),
+                "enforce_oms_gates": replay_cfg.enforce_oms_gates,
+                "speedup": replay_cfg.speedup,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    logger.info("REPLAY_GOVERNANCE_OK", extra={"hash": first_hash, "rows": len(bars), "path": str(out_path)})
+    state.last_replay_run_date = now.date()
+
+
+def _walk_forward_schedule_due(state: BotState, *, now: datetime, market_open_now: bool) -> bool:
+    if not bool(get_env("AI_TRADING_WALK_FORWARD_ENABLED", False, cast=bool)):
+        return False
+    if market_open_now:
+        return False
+    return getattr(state, "last_walk_forward_run_date", None) != now.date()
+
+
+def _run_walk_forward_governance(state: BotState, *, now: datetime, market_open_now: bool) -> None:
+    if not _walk_forward_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+    from ai_trading.research.leakage_tests import run_leakage_guards
+    from ai_trading.research.walk_forward import WalkForwardConfig, run_walk_forward
+
+    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    rows = _read_jsonl_records(tca_path, max_records=100000)
+    if not rows:
+        if bool(get_env("AI_TRADING_LEAKAGE_FAIL_HARD", True, cast=bool)):
+            raise RuntimeError("WALK_FORWARD_INPUT_EMPTY")
+        logger.warning("WALK_FORWARD_SKIPPED", extra={"reason": "empty_tca"})
+        state.last_walk_forward_run_date = now.date()
+        return
+
+    wf_cost_model = str(get_env("AI_TRADING_WF_COST_MODEL", "from_tca")).strip().lower()
+    fixed_cost_bps = float(get_env("AI_TRADING_WF_FIXED_COST_BPS", 15, cast=float))
+    dataset_rows: list[dict[str, Any]] = []
+    for row in rows:
+        ts = _parse_iso_timestamp(row.get("ts"))
+        if ts is None:
+            continue
+        is_bps = float(row.get("is_bps", 0.0) or 0.0)
+        if wf_cost_model == "fixed":
+            ret = -fixed_cost_bps / 10_000.0
+        else:
+            ret = -is_bps / 10_000.0
+        qty = float(row.get("qty", 0.0) or 0.0)
+        fill_price = float(row.get("fill_price", row.get("arrival_price", 0.0)) or 0.0)
+        turnover = abs(qty * fill_price)
+        dataset_rows.append(
+            {
+                "timestamp": ts,
+                "ret": ret,
+                "turnover": turnover,
+                "drawdown": 0.0,
+            }
+        )
+    if not dataset_rows:
+        if bool(get_env("AI_TRADING_LEAKAGE_FAIL_HARD", True, cast=bool)):
+            raise RuntimeError("WALK_FORWARD_INPUT_INVALID")
+        state.last_walk_forward_run_date = now.date()
+        return
+    dataset_rows.sort(key=lambda item: item["timestamp"])
+    cumulative = 0.0
+    peak = 0.0
+    for row in dataset_rows:
+        cumulative += float(row["ret"])
+        peak = max(peak, cumulative)
+        row["drawdown"] = max(0.0, peak - cumulative)
+    import pandas as pd
+
+    frame = pd.DataFrame(dataset_rows)
+    config = WalkForwardConfig(
+        train_days=int(get_env("AI_TRADING_WF_TRAIN_DAYS", 180, cast=int)),
+        test_days=int(get_env("AI_TRADING_WF_TEST_DAYS", 30, cast=int)),
+        step_days=int(get_env("AI_TRADING_WF_STEP_DAYS", 30, cast=int)),
+        embargo_days=int(get_env("AI_TRADING_WF_EMBARGO_DAYS", 5, cast=int)),
+    )
+
+    def _score(train_df, test_df):
+        return {
+            "post_cost_return": float(test_df["ret"].mean()),
+            "turnover": float(test_df["turnover"].mean()),
+            "drawdown": float(test_df["drawdown"].max()),
+            "hit_rate": float((test_df["ret"] > 0).mean()),
+        }
+
+    result = run_walk_forward(frame, score_fn=_score, config=config)
+    leakage_enabled = bool(get_env("AI_TRADING_LEAKAGE_GUARDS_ENABLED", True, cast=bool))
+    fail_hard = bool(get_env("AI_TRADING_LEAKAGE_FAIL_HARD", True, cast=bool))
+    if leakage_enabled:
+        try:
+            timeline = list(frame["timestamp"])
+            split_idx = max(1, int(len(timeline) * 0.7))
+            run_leakage_guards(
+                feature_timestamps=timeline,
+                label_timestamps=timeline,
+                train_label_times=timeline[:split_idx],
+                test_label_times=timeline[split_idx:],
+                horizon_days=int(get_env("AI_TRADING_WF_TEST_DAYS", 30, cast=int)),
+                embargo_days=int(get_env("AI_TRADING_WF_EMBARGO_DAYS", 5, cast=int)),
+            )
+        except Exception as exc:
+            logger.error("LEAKAGE_GUARD_FAILED", extra={"error": str(exc)})
+            if fail_hard:
+                raise RuntimeError("LEAKAGE_GUARD_FAILED") from exc
+    output_dir = Path(str(get_env("AI_TRADING_WF_OUTPUT_DIR", "runtime/walk_forward")))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"walk_forward_{now.strftime('%Y%m%d')}.json"
+    out_path.write_text(json.dumps(result, sort_keys=True, default=str), encoding="utf-8")
+    logger.info("WALK_FORWARD_GOVERNANCE_OK", extra={"path": str(out_path), "folds": result.get("fold_count", 0)})
+    state.last_walk_forward_run_date = now.date()
+
+
 def _load_quarantine_manager(state: BotState) -> Any:
     manager = getattr(state, "_quarantine_manager", None)
     if manager is not None:
@@ -29087,6 +29577,54 @@ def _persist_quarantine_manager(state: BotState) -> None:
         return
     path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
     save_quarantine_state(path, manager)
+
+
+def _quarantine_targets_from_env() -> tuple[bool, bool]:
+    applies_to = str(get_env("AI_TRADING_QUARANTINE_APPLIES_TO", "sleeve,symbol") or "").strip().lower()
+    tokens = {token.strip() for token in applies_to.split(",") if token and token.strip()}
+    if "both" in tokens:
+        return True, True
+    return ("sleeve" in tokens), ("symbol" in tokens)
+
+
+def _quarantine_duration_for_sleeve(sleeve_name: str) -> timedelta:
+    name = str(sleeve_name).strip().lower()
+    if name == "day":
+        bars = int(get_env("AI_TRADING_QUARANTINE_DURATION_BARS_DAY", 6, cast=int))
+        days = max(1.0 / 78.0, float(bars) / 78.0)
+        return timedelta(days=days)
+    if name == "swing":
+        bars = int(get_env("AI_TRADING_QUARANTINE_DURATION_BARS_SWING", 3, cast=int))
+        days = max(1.0 / 6.5, float(bars) / 6.5)
+        return timedelta(days=days)
+    return timedelta(
+        days=float(get_env("AI_TRADING_QUARANTINE_DURATION_DAYS_LONGSHORT", 2.0, cast=float))
+    )
+
+
+def _trigger_quarantine(
+    *,
+    manager: Any,
+    symbol: str,
+    sleeve: str | None,
+    reason: str,
+    metrics_snapshot: Mapping[str, Any],
+) -> None:
+    apply_sleeve, apply_symbol = _quarantine_targets_from_env()
+    if apply_symbol:
+        manager.quarantine_symbol(
+            symbol=symbol,
+            duration=_quarantine_duration_for_sleeve(sleeve or "longshort"),
+            trigger_reason="SYMBOL_QUARANTINED",
+            metrics_snapshot=dict(metrics_snapshot) | {"reason": reason},
+        )
+    if apply_sleeve and sleeve:
+        manager.quarantine_sleeve(
+            sleeve=sleeve,
+            duration=_quarantine_duration_for_sleeve(sleeve),
+            trigger_reason="SLEEVE_QUARANTINED",
+            metrics_snapshot=dict(metrics_snapshot) | {"reason": reason},
+        )
 
 
 def _liquidity_features(spread: float | None, vol: float | None, volume: float | None, price: float) -> LiquidityFeatures:
@@ -29111,6 +29649,8 @@ def _decision_record_config_snapshot(
     sleeve_configs: Mapping[str, Any] | None = None,
     liquidity_regime: str | None = None,
 ) -> dict[str, Any]:
+    if not bool(get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_ENABLED", True, cast=bool)):
+        return {}
     profile = get_regime_signal_profile()
     regime_components = _REGIME_SIGNAL_COMPONENTS.get(profile, _REGIME_SIGNAL_COMPONENTS["balanced"])
     snapshot = {
@@ -29118,32 +29658,44 @@ def _decision_record_config_snapshot(
         "execution_mode": str(getattr(cfg, "execution_mode", "sim")),
         "regime_signal_profile": profile,
         "regime_signal_components": regime_components,
-        "global_caps": {
+        "halt_reason": state.halt_reason,
+        "sleeve_configs": dict(sleeve_configs or {}),
+    }
+    if bool(
+        get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_INCLUDE_LIMITS", True, cast=bool)
+    ):
+        snapshot["global_caps"] = {
             "GLOBAL_MAX_SYMBOL_DOLLARS": float(getattr(cfg, "global_max_symbol_dollars", 0.0)),
             "GLOBAL_MAX_GROSS_DOLLARS": float(getattr(cfg, "global_max_gross_dollars", 0.0)),
             "GLOBAL_MAX_NET_DOLLARS": float(getattr(cfg, "global_max_net_dollars", 0.0)),
-        },
-        "portfolio_risk": {
+        }
+        snapshot["portfolio_risk"] = {
             "target_annual_vol": float(get_env("AI_TRADING_TARGET_ANNUAL_VOL", 0.18, cast=float)),
             "corr_threshold": float(get_env("AI_TRADING_CORR_THRESHOLD", 0.80, cast=float)),
             "corr_group_gross_cap": float(
                 get_env("AI_TRADING_CORR_GROUP_GROSS_CAP", 0.35, cast=float)
             ),
-        },
-        "allocation_weights": dict(allocation_weights),
-        "learned_overrides": dict(learned_overrides),
-        "halt_reason": state.halt_reason,
-        "liquidity_regime": liquidity_regime,
-        "liquidity_participation": {
-            "enabled": bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", "0", cast=bool)),
+        }
+        snapshot["liquidity_participation"] = {
+            "enabled": bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", False, cast=bool)),
             "max_participation_pct": float(
                 get_env("AI_TRADING_MAX_PARTICIPATION_PCT", 0.015, cast=float)
             ),
             "block_mode": str(get_env("AI_TRADING_PARTICIPATION_BLOCK_MODE", "block")),
             "scale_min": float(get_env("AI_TRADING_PARTICIPATION_SCALE_MIN", 0.25, cast=float)),
-        },
-        "sleeve_configs": dict(sleeve_configs or {}),
-    }
+        }
+    if bool(
+        get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_INCLUDE_ALLOCATION", True, cast=bool)
+    ):
+        snapshot["allocation_weights"] = dict(allocation_weights)
+    if bool(
+        get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_INCLUDE_LEARNED_OVERRIDES", True, cast=bool)
+    ):
+        snapshot["learned_overrides"] = dict(learned_overrides)
+    if bool(
+        get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_INCLUDE_LIQ_REGIME", True, cast=bool)
+    ):
+        snapshot["liquidity_regime"] = liquidity_regime
     return snapshot
 
 
@@ -29242,12 +29794,26 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     now = datetime.now(UTC)
     market_open_now = market_is_open(now)
     _run_post_trade_learning_update(state, now=now, market_open_now=market_open_now)
+    try:
+        _run_replay_governance(state, now=now, market_open_now=market_open_now)
+        _run_walk_forward_governance(state, now=now, market_open_now=market_open_now)
+    except RuntimeError as exc:
+        state.halt_trading = True
+        state.halt_reason = str(exc) or "GOVERNANCE_GUARD_FAILED"
     decision_path = getattr(cfg, "decision_log_path", None)
     allocation_weights: dict[str, float] = {}
     learned_overrides: dict[str, Any] = {}
     sleeve_snapshot: dict[str, Any] = {}
-    quarantine_enabled = bool(get_env("AI_TRADING_QUARANTINE_ENABLED", "0", cast=bool))
+    quarantine_enabled = bool(get_env("AI_TRADING_QUARANTINE_ENABLED", False, cast=bool))
     quarantine_manager = _load_quarantine_manager(state) if quarantine_enabled else None
+    quarantine_apply_sleeve = False
+    quarantine_apply_symbol = False
+    quarantine_mode = "block"
+    if quarantine_enabled:
+        quarantine_apply_sleeve, quarantine_apply_symbol = _quarantine_targets_from_env()
+        raw_mode = str(get_env("AI_TRADING_QUARANTINE_MODE", "block") or "").strip().lower()
+        if raw_mode in {"block", "zero_targets"}:
+            quarantine_mode = raw_mode
     breakers = _dependency_breakers(state)
     for dep in ("broker_submit", "broker_positions", "broker_open_orders", "data_primary"):
         if not breakers.allow(dep):
@@ -29299,7 +29865,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     rth_only = bool(getattr(cfg, "rth_only", True))
     if rth_only and not market_open_now:
         _run_reconciliation_if_due(state, runtime, cfg, now)
-        if bool(get_env("AI_TRADING_CANCEL_DAY_ORDERS_ON_CLOSE", "0", cast=bool)):
+        if bool(get_env("AI_TRADING_CANCEL_DAY_ORDERS_ON_CLOSE", False, cast=bool)):
             cleanup_date = getattr(state, "session_close_cleanup_date", None)
             if cleanup_date != now.date():
                 result = cancel_all_open_orders_oms(runtime)
@@ -29311,7 +29877,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "failed": result.failed,
                     },
                 )
-        if bool(get_env("AI_TRADING_EXECUTION_REPORT_ENABLED", "0", cast=bool)):
+        if bool(get_env("AI_TRADING_EXECUTION_REPORT_ENABLED", False, cast=bool)):
             report_date = getattr(state, "last_execution_report_date", None)
             if report_date != now.date():
                 try:
@@ -29330,6 +29896,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             ).split(",")
                             if part.strip()
                         ),
+                        rollup_tz=str(
+                            get_env(
+                                "AI_TRADING_EXECUTION_REPORT_ROLLUP_TZ",
+                                "UTC",
+                            )
+                        ).strip()
+                        or "UTC",
                     )
                 except Exception as exc:
                     logger.warning("EXECUTION_REPORT_FAILED", extra={"error": str(exc)})
@@ -29373,7 +29946,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         return
 
     kill_switch, kill_reason = _kill_switch_active(cfg)
-    if kill_switch and bool(get_env("AI_TRADING_CANCEL_ALL_ON_KILL", "0", cast=bool)):
+    if kill_switch and bool(get_env("AI_TRADING_CANCEL_ALL_ON_KILL", False, cast=bool)):
         fired_ts = getattr(state, "_cancel_all_kill_fired_at", None)
         if not isinstance(fired_ts, datetime) or (now - fired_ts).total_seconds() >= 60.0:
             result = cancel_all_open_orders_oms(runtime)
@@ -29410,6 +29983,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         }
         for name, sleeve_cfg in sleeve_configs_map.items()
     }
+    _maybe_update_allocation_state(
+        state,
+        now=now,
+        market_open_now=market_open_now,
+        sleeves=sleeves,
+    )
     allocation_weights = _allocation_weights_for_sleeves(cfg, sleeves)
     learned_overrides = _load_learned_overrides(cfg)
 
@@ -29624,19 +30203,29 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
 
             if quarantine_enabled and quarantine_manager is not None:
-                q_sleeve, reason_sleeve = quarantine_manager.is_quarantined(
-                    sleeve=sleeve.name,
-                    now=bar_ts,
-                )
-                q_symbol, reason_symbol = quarantine_manager.is_quarantined(
-                    symbol=symbol,
-                    now=bar_ts,
-                )
+                q_sleeve = False
+                reason_sleeve = None
+                if quarantine_apply_sleeve:
+                    q_sleeve, reason_sleeve = quarantine_manager.is_quarantined(
+                        sleeve=sleeve.name,
+                        now=bar_ts,
+                    )
+                q_symbol = False
+                reason_symbol = None
+                if quarantine_apply_symbol:
+                    q_symbol, reason_symbol = quarantine_manager.is_quarantined(
+                        symbol=symbol,
+                        now=bar_ts,
+                    )
                 if q_sleeve or q_symbol:
                     reason = reason_symbol or reason_sleeve or "SLEEVE_QUARANTINED"
                     proposal.blocked = True
                     proposal.reason_code = reason
-                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+                    current_position_dollars = positions.get(symbol, 0.0) * price
+                    proposal.target_dollars = (
+                        0.0 if quarantine_mode == "zero_targets" else current_position_dollars
+                    )
+                    proposal.debug["quarantine_mode"] = quarantine_mode
                     skip_reasons[symbol].append(reason)
 
             turnover_key = (now.date(), sleeve.name, symbol)
@@ -29651,6 +30240,91 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             latest_bar_ts[symbol] = bar_ts
             if price > 0:
                 latest_price[symbol] = price
+
+    if quarantine_enabled and quarantine_manager is not None:
+        quarantine_min_trades = max(
+            1,
+            int(get_env("AI_TRADING_QUARANTINE_MIN_TRADES", 12, cast=int)),
+        )
+        cost_gate_trigger = float(
+            get_env("AI_TRADING_QUARANTINE_COST_GATE_BLOCK_RATE_TRIGGER", 0.60, cast=float)
+        )
+        if cost_gate_trigger > 0:
+            cost_gate_stats = getattr(state, "_quarantine_cost_gate_stats", None)
+            if not isinstance(cost_gate_stats, dict):
+                cost_gate_stats = {}
+                setattr(state, "_quarantine_cost_gate_stats", cost_gate_stats)
+            for symbol, proposals in proposals_by_symbol.items():
+                if not proposals:
+                    continue
+                blocked_count = sum(
+                    1
+                    for proposal in proposals
+                    if str(getattr(proposal, "reason_code", "") or "") == "COST_GATE"
+                )
+                stats = cost_gate_stats.setdefault(symbol, {"blocked": 0, "total": 0})
+                stats["blocked"] = int(stats.get("blocked", 0)) + blocked_count
+                stats["total"] = int(stats.get("total", 0)) + len(proposals)
+                total_count = int(stats.get("total", 0))
+                blocked_total = int(stats.get("blocked", 0))
+                if total_count < quarantine_min_trades:
+                    continue
+                blocked_rate = blocked_total / max(1, total_count)
+                if blocked_rate >= cost_gate_trigger:
+                    _trigger_quarantine(
+                        manager=quarantine_manager,
+                        symbol=symbol,
+                        sleeve=proposals[0].sleeve if proposals else None,
+                        reason="COST_GATE_BLOCK_RATE",
+                        metrics_snapshot={
+                            "blocked_count": blocked_total,
+                            "total_count": total_count,
+                            "blocked_rate": blocked_rate,
+                            "threshold": cost_gate_trigger,
+                        },
+                    )
+        expectancy_floor = float(
+            get_env("AI_TRADING_QUARANTINE_EXPECTANCY_FLOOR_PCT", -0.0015, cast=float)
+        )
+        expectancy_window = max(
+            quarantine_min_trades,
+            int(get_env("AI_TRADING_ALLOC_EXPECTANCY_WINDOW_TRADES", 60, cast=int)),
+        )
+        tca_rows = _read_jsonl_records(
+            str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")),
+            max_records=max(500, expectancy_window * 20),
+        )
+        expectancy_by_symbol: dict[str, list[float]] = {}
+        for row in tca_rows:
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if not symbol or symbol not in proposals_by_symbol:
+                continue
+            status = str(row.get("status", "")).strip().lower()
+            if status in {"rejected", "canceled", "cancelled"}:
+                continue
+            try:
+                is_bps = float(row.get("is_bps"))
+            except (TypeError, ValueError):
+                continue
+            expectancy_by_symbol.setdefault(symbol, []).append(-is_bps / 10_000.0)
+        for symbol, values in expectancy_by_symbol.items():
+            recent = values[-expectancy_window:]
+            if len(recent) < quarantine_min_trades:
+                continue
+            mean_return = float(sum(recent) / len(recent))
+            if mean_return < expectancy_floor:
+                proposals = proposals_by_symbol.get(symbol, [])
+                _trigger_quarantine(
+                    manager=quarantine_manager,
+                    symbol=symbol,
+                    sleeve=proposals[0].sleeve if proposals else None,
+                    reason="EXPECTANCY_FLOOR_BREACH",
+                    metrics_snapshot={
+                        "expectancy_mean_pct": mean_return,
+                        "threshold": expectancy_floor,
+                        "samples": len(recent),
+                    },
+                )
 
     targets: dict[str, NettedTarget] = {}
     for symbol, proposals in proposals_by_symbol.items():
@@ -29670,14 +30344,24 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         float(getattr(cfg, "global_max_gross_dollars", 0.0)),
         float(getattr(cfg, "global_max_net_dollars", 0.0)),
     )
-    if bool(get_env("AI_TRADING_PORTFOLIO_LIMITS_ENABLED", "0", cast=bool)):
+    if bool(get_env("AI_TRADING_PORTFOLIO_LIMITS_ENABLED", False, cast=bool)):
         limits = apply_portfolio_limits(
             targets={symbol: target.target_dollars for symbol, target in targets.items()},
             symbol_returns=symbol_returns,
+            vol_targeting_enabled=bool(
+                get_env("AI_TRADING_VOL_TARGETING_ENABLED", True, cast=bool)
+            ),
             target_annual_vol=float(get_env("AI_TRADING_TARGET_ANNUAL_VOL", 0.18, cast=float)),
+            vol_lookback_days=int(get_env("AI_TRADING_VOL_LOOKBACK_DAYS", 20, cast=int)),
             vol_min_scale=float(get_env("AI_TRADING_VOL_MIN_SCALE", 0.25, cast=float)),
             vol_max_scale=float(get_env("AI_TRADING_VOL_MAX_SCALE", 1.25, cast=float)),
+            concentration_cap_enabled=bool(
+                get_env("AI_TRADING_CONCENTRATION_CAP_ENABLED", True, cast=bool)
+            ),
             max_symbol_weight=float(get_env("AI_TRADING_MAX_SYMBOL_WEIGHT", 0.12, cast=float)),
+            max_cluster_weight=float(get_env("AI_TRADING_MAX_CLUSTER_WEIGHT", 0.25, cast=float)),
+            corr_cap_enabled=bool(get_env("AI_TRADING_CORR_CAP_ENABLED", True, cast=bool)),
+            corr_lookback_days=int(get_env("AI_TRADING_CORR_LOOKBACK_DAYS", 30, cast=int)),
             corr_threshold=float(get_env("AI_TRADING_CORR_THRESHOLD", 0.80, cast=float)),
             corr_group_gross_cap=float(get_env("AI_TRADING_CORR_GROUP_GROSS_CAP", 0.35, cast=float)),
         )
@@ -29698,16 +30382,41 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
             setattr(state, "_oms_ledger", ledger)
     rate_limiter = _pretrade_rate_limiter(state)
+    tca_stale_reason = _tca_stale_block_reason(now)
+    if tca_stale_reason:
+        for symbol, net_target in targets.items():
+            symbol_snapshot = _decision_record_config_snapshot(
+                cfg=cfg,
+                state=state,
+                allocation_weights=allocation_weights,
+                learned_overrides=learned_overrides,
+                sleeve_configs=sleeve_snapshot,
+            )
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=[tca_stale_reason],
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+        return
 
     for symbol, net_target in targets.items():
         liq_features = latest_liquidity.get(
             symbol,
             LiquidityFeatures(rolling_volume=0.0, spread_bps=0.0, volatility_proxy=0.0),
         )
-        liq_regime = classify_liquidity_regime(
-            liq_features,
-            thin_spread_bps=float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float)),
-            thin_vol_mult=float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float)),
+        liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
+        liq_regime = (
+            classify_liquidity_regime(
+                liq_features,
+                thin_spread_bps=float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float)),
+                thin_vol_mult=float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float)),
+            )
+            if liq_regime_enabled
+            else LiquidityRegime.NORMAL
         )
         symbol_snapshot = _decision_record_config_snapshot(
             cfg=cfg,
@@ -29772,6 +30481,44 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             }
             for proposal in net_target.proposals
         }
+        if quarantine_enabled and quarantine_manager is not None:
+            reason_sleeve = None
+            if quarantine_apply_sleeve:
+                for proposal in net_target.proposals:
+                    q_active, q_reason = quarantine_manager.is_quarantined(
+                        sleeve=proposal.sleeve,
+                        now=net_target.bar_ts,
+                    )
+                    if q_active:
+                        reason_sleeve = q_reason or "SLEEVE_QUARANTINED"
+                        break
+            q_symbol = False
+            reason_symbol = None
+            if quarantine_apply_symbol:
+                q_symbol, reason_symbol = quarantine_manager.is_quarantined(
+                    symbol=symbol,
+                    now=net_target.bar_ts,
+                )
+            if reason_sleeve or q_symbol:
+                quarantine_reason = reason_symbol or reason_sleeve or "SLEEVE_QUARANTINED"
+                if quarantine_reason not in gates:
+                    gates.append(quarantine_reason)
+                symbol_snapshot["quarantine_mode"] = quarantine_mode
+                if quarantine_mode == "zero_targets":
+                    net_target.target_dollars = 0.0
+                    net_target.target_shares = 0
+                    delta_shares = -current_shares
+                else:
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
 
         lock = state.stop_lock.get(symbol)
         if lock:
@@ -29833,7 +30580,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
 
-        if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", "1", cast=bool)):
+        if bool(get_env("AI_TRADING_PARTICIPATION_CAP_ENABLED", True, cast=bool)):
             allowed_participation, adjusted_qty, liq_reason = enforce_participation_cap(
                 order_qty=float(delta_shares),
                 rolling_volume=liq_features.rolling_volume,
@@ -29864,6 +30611,31 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     gates.append(liq_reason)
             if liq_regime is LiquidityRegime.THIN and "LIQ_REGIME_THIN_SCALE" not in gates:
                 gates.append("LIQ_REGIME_THIN_SCALE")
+
+        if liq_regime is LiquidityRegime.THIN:
+            thin_cost_mult = float(get_env("AI_TRADING_LIQ_THIN_COST_MULT", 1.3, cast=float))
+            if thin_cost_mult > 1.0:
+                scaled_qty = int(round(delta_shares / thin_cost_mult))
+                if scaled_qty != 0 and scaled_qty != delta_shares:
+                    delta_shares = scaled_qty
+                    net_target.target_shares = current_shares + delta_shares
+                    net_target.target_dollars = net_target.target_shares * price
+                    gates.append("LIQ_THIN_COST_MULT_SCALE")
+            thin_max_order_dollars = float(
+                get_env("AI_TRADING_LIQ_THIN_MAX_ORDER_DOLLARS", 5000, cast=float)
+            )
+            if thin_max_order_dollars > 0 and abs(delta_shares) * price > thin_max_order_dollars:
+                gates.append("LIQ_THIN_MAX_ORDER_BLOCK")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
 
         min_qty = int(getattr(cfg, "execution_min_qty", 1))
         min_notional = float(getattr(cfg, "execution_min_notional", 1.0))
@@ -29928,13 +30700,35 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             mid=price,
             spread=None,
         )
+        pretrade_cfg: Any = cfg
+        effective_collar_pct: float | None = None
+        if liq_regime is LiquidityRegime.THIN:
+            collar_mult = float(get_env("AI_TRADING_LIQ_THIN_COLLAR_MULT", 0.8, cast=float))
+            if collar_mult > 0:
+                raw_collar = getattr(cfg, "price_collar_pct", None)
+                if raw_collar is None:
+                    raw_collar = get_env("PRICE_COLLAR_PCT", 0.03, cast=float)
+                try:
+                    base_collar_pct = float(raw_collar)
+                except (TypeError, ValueError):
+                    base_collar_pct = float(get_env("PRICE_COLLAR_PCT", 0.03, cast=float))
+                effective_collar_pct = max(0.0, base_collar_pct * collar_mult)
+                pretrade_cfg = SimpleNamespace(
+                    max_order_dollars=getattr(cfg, "max_order_dollars", None),
+                    max_order_shares=getattr(cfg, "max_order_shares", None),
+                    price_collar_pct=effective_collar_pct,
+                )
+                symbol_snapshot["liquidity_collar_multiplier"] = collar_mult
+                symbol_snapshot["price_collar_pct_effective"] = effective_collar_pct
         allowed, pretrade_reason, pretrade_details = validate_pretrade(
             intent,
-            cfg=cfg,
+            cfg=pretrade_cfg,
             ledger=ledger,
             rate_limiter=rate_limiter,
         )
         if not allowed:
+            if effective_collar_pct is not None:
+                pretrade_details.setdefault("price_collar_pct", effective_collar_pct)
             gates.append(pretrade_reason)
             record = DecisionRecord(
                 symbol=symbol,
@@ -29962,6 +30756,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             error_info = classify_exception(exc, dependency="broker_submit", symbol=symbol)
             breakers.record_failure("broker_submit", error_info)
             _handle_error(error_info, state=state, ctx=runtime, symbol=symbol)
+            submit_open_reason = breakers.open_reason("broker_submit")
             if quarantine_enabled and quarantine_manager is not None:
                 reject_counts = getattr(state, "_quarantine_reject_counts", None)
                 if not isinstance(reject_counts, dict):
@@ -29975,26 +30770,40 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     min_trades = int(get_env("AI_TRADING_QUARANTINE_MIN_TRADES", 12, cast=int))
                     reject_threshold = max(1, int(round(reject_trigger * min_trades)))
                     if reject_counts[symbol] >= reject_threshold:
-                        quarantine_manager.quarantine_symbol(
+                        _trigger_quarantine(
+                            manager=quarantine_manager,
                             symbol=symbol,
-                            duration=timedelta(
-                                days=float(
-                                    get_env(
-                                        "AI_TRADING_QUARANTINE_DURATION_DAYS_LONGSHORT",
-                                        2.0,
-                                        cast=float,
-                                    )
-                                )
-                            ),
-                            trigger_reason="SLEEVE_QUARANTINED",
+                            sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
+                            reason="ORDER_REJECT_RATE",
                             metrics_snapshot={
                                 "reject_count": reject_counts[symbol],
                                 "threshold": reject_threshold,
+                                "trigger": reject_trigger,
                             },
                         )
-            submit_open_reason = breakers.open_reason("broker_submit")
+                breaker_threshold = int(
+                    get_env("AI_TRADING_QUARANTINE_BREAKER_OPEN_COUNT", 2, cast=int)
+                )
+                if submit_open_reason and breaker_threshold > 0:
+                    breaker_counts = getattr(state, "_quarantine_breaker_open_counts", None)
+                    if not isinstance(breaker_counts, dict):
+                        breaker_counts = {}
+                        setattr(state, "_quarantine_breaker_open_counts", breaker_counts)
+                    breaker_counts[symbol] = int(breaker_counts.get(symbol, 0)) + 1
+                    if breaker_counts[symbol] >= breaker_threshold:
+                        _trigger_quarantine(
+                            manager=quarantine_manager,
+                            symbol=symbol,
+                            sleeve=net_target.proposals[0].sleeve if net_target.proposals else None,
+                            reason="BREAKER_OPEN_COUNT",
+                            metrics_snapshot={
+                                "breaker_open_count": breaker_counts[symbol],
+                                "threshold": breaker_threshold,
+                                "breaker_reason": submit_open_reason,
+                            },
+                        )
             if submit_open_reason and bool(
-                get_env("AI_TRADING_CANCEL_ALL_ON_SUBMIT_BREAKER", "0", cast=bool)
+                get_env("AI_TRADING_CANCEL_ALL_ON_SUBMIT_BREAKER", False, cast=bool)
             ):
                 cancel_result = cancel_all_open_orders_oms(runtime)
                 logger.warning(
@@ -30068,7 +30877,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         except Exception:
             metrics = {}
             fill_price = None
-        if bool(get_env("AI_TRADING_TCA_ENABLED", "0", cast=bool)):
+        if bool(get_env("AI_TRADING_TCA_ENABLED", False, cast=bool)):
             order_status_text = str(order_status) if order_status is not None else "submitted"
             fill_vwap = float(fill_price) if fill_price else float(price)
             arrival_benchmark = str(
@@ -30077,7 +30886,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if arrival_benchmark not in {"decision", "submit"}:
                 arrival_benchmark = "decision"
             allow_proxy_quotes = bool(
-                get_env("AI_TRADING_TCA_ALLOW_PROXY_QUOTES", "1", cast=bool)
+                get_env("AI_TRADING_TCA_ALLOW_PROXY_QUOTES", True, cast=bool)
             )
             arrival_ts = net_target.bar_ts if arrival_benchmark == "decision" else now
             benchmark = ExecutionBenchmark(
@@ -30122,7 +30931,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "spread_paid_bps": tca_record.get("spread_paid_bps"),
                 "fill_latency_ms": tca_record.get("fill_latency_ms"),
             }
-            if bool(get_env("AI_TRADING_TCA_UPDATE_ON_FILL", "1", cast=bool)):
+            if bool(get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool)):
                 try:
                     tca_path = str(
                         get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")

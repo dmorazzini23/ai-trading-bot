@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ai_trading.logging import get_logger
 
@@ -135,12 +136,20 @@ def write_daily_execution_report(
     tca_path: str,
     output_dir: str,
     formats: tuple[str, ...] = ("json", "csv"),
+    rollup_tz: str = "UTC",
 ) -> dict[str, Any]:
     records = _parse_jsonl(tca_path)
     report = build_daily_execution_report(records)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    day = datetime.now(UTC).strftime("%Y%m%d")
+    tz_name = str(rollup_tz or "UTC").strip() or "UTC"
+    try:
+        rollup_zone = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("EXECUTION_REPORT_INVALID_ROLLUP_TZ", extra={"rollup_tz": tz_name})
+        rollup_zone = UTC
+        tz_name = "UTC"
+    day = datetime.now(rollup_zone).strftime("%Y%m%d")
 
     normalized = {fmt.strip().lower() for fmt in formats}
     if "json" in normalized:
@@ -152,6 +161,11 @@ def write_daily_execution_report(
 
     logger.info(
         "EXECUTION_REPORT_WRITTEN",
-        extra={"output_dir": str(out_dir), "records": len(records)},
+        extra={
+            "output_dir": str(out_dir),
+            "records": len(records),
+            "rollup_tz": tz_name,
+            "rollup_day": day,
+        },
     )
     return report

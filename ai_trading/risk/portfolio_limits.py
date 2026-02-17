@@ -79,10 +79,16 @@ def apply_portfolio_limits(
     *,
     targets: dict[str, float],
     symbol_returns: dict[str, list[float]] | None = None,
+    vol_targeting_enabled: bool = True,
     target_annual_vol: float = 0.18,
+    vol_lookback_days: int = 20,
     vol_min_scale: float = 0.25,
     vol_max_scale: float = 1.25,
+    concentration_cap_enabled: bool = True,
     max_symbol_weight: float = 0.12,
+    max_cluster_weight: float = 0.25,
+    corr_cap_enabled: bool = True,
+    corr_lookback_days: int = 30,
     corr_threshold: float = 0.80,
     corr_group_gross_cap: float = 0.35,
 ) -> PortfolioLimitsResult:
@@ -91,11 +97,14 @@ def apply_portfolio_limits(
     gross = sum(abs(value) for value in scaled.values())
     scale = 1.0
 
-    if symbol_returns:
+    if symbol_returns and vol_targeting_enabled:
         portfolio_returns = _portfolio_return_series(
             targets=scaled,
             symbol_returns=symbol_returns,
         )
+        lookback = max(0, int(vol_lookback_days))
+        if lookback > 0 and len(portfolio_returns) > lookback:
+            portfolio_returns = portfolio_returns[-lookback:]
         realized = _annualized_vol(portfolio_returns)
         if realized > 0 and target_annual_vol > 0:
             scale = min(float(vol_max_scale), max(float(vol_min_scale), target_annual_vol / realized))
@@ -107,7 +116,7 @@ def apply_portfolio_limits(
             scaled[symbol] = float(scaled[symbol]) * scale
         gross = sum(abs(value) for value in scaled.values())
 
-    if gross > 0 and max_symbol_weight > 0:
+    if concentration_cap_enabled and gross > 0 and max_symbol_weight > 0:
         symbol_cap = gross * float(max_symbol_weight)
         for symbol, value in list(scaled.items()):
             clipped = max(-symbol_cap, min(symbol_cap, float(value)))
@@ -116,14 +125,22 @@ def apply_portfolio_limits(
                 if "RISK_CAP_PORTFOLIO" not in reasons:
                     reasons.append("RISK_CAP_PORTFOLIO")
 
-    if symbol_returns and corr_group_gross_cap > 0:
+    if symbol_returns and corr_cap_enabled and corr_group_gross_cap > 0:
         symbols = list(symbol_returns.keys())
         if len(symbols) >= 2:
             most_corr_pair: tuple[str, str] | None = None
             most_corr = 0.0
             for idx, left in enumerate(symbols):
                 for right in symbols[idx + 1 :]:
-                    corr = abs(_correlation(symbol_returns[left], symbol_returns[right]))
+                    left_series = symbol_returns[left]
+                    right_series = symbol_returns[right]
+                    lookback = max(0, int(corr_lookback_days))
+                    if lookback > 0:
+                        if len(left_series) > lookback:
+                            left_series = left_series[-lookback:]
+                        if len(right_series) > lookback:
+                            right_series = right_series[-lookback:]
+                    corr = abs(_correlation(left_series, right_series))
                     if corr > most_corr:
                         most_corr = corr
                         most_corr_pair = (left, right)
@@ -131,7 +148,10 @@ def apply_portfolio_limits(
                 left, right = most_corr_pair
                 gross_now = sum(abs(v) for v in scaled.values()) or 1.0
                 pair_gross = abs(scaled.get(left, 0.0)) + abs(scaled.get(right, 0.0))
-                allowed = gross_now * float(corr_group_gross_cap)
+                corr_cap_fraction = float(corr_group_gross_cap)
+                if max_cluster_weight > 0:
+                    corr_cap_fraction = min(corr_cap_fraction, float(max_cluster_weight))
+                allowed = gross_now * corr_cap_fraction
                 if pair_gross > allowed:
                     ratio = allowed / pair_gross
                     scaled[left] *= ratio
