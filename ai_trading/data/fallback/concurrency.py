@@ -70,6 +70,13 @@ _POOLING_LIMIT_STATE: tuple[int, int] | None = None
 _LOCAL_POOLING_VERSION: int = 0
 
 
+def _log_debug_concurrency(event: str, **payload: object) -> None:
+    """Emit structured debug logs when DEBUG_CONCURRENCY is enabled."""
+    if not os.getenv("DEBUG_CONCURRENCY"):
+        return
+    logger.debug("DEBUG_CONCURRENCY", extra={"event": event, **payload})
+
+
 def _running_under_pytest_worker() -> bool:
     """Return ``True`` when executing inside a pytest (xdist) worker."""
 
@@ -322,8 +329,11 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return state
 
     if isinstance(obj, asyncio.Lock):
-        if os.getenv("DEBUG_CONCURRENCY"):
-            print("[DEBUG_CONCURRENCY] rebind Lock", obj, "to", loop, flush=True)
+        _log_debug_concurrency(
+            "rebind_lock",
+            lock_repr=repr(obj),
+            loop_repr=repr(loop),
+        )
         return asyncio.Lock()
 
     bounded_semaphore_type = getattr(asyncio, "BoundedSemaphore", None)
@@ -823,10 +833,14 @@ async def run_with_concurrency(
     host_semaphore = _get_host_limit_semaphore()
     testing_mode = _running_under_pytest_worker()
     if debug_mode:
-        print(
-            "[DEBUG_CONCURRENCY] enter run_with_concurrency",
-            {"testing_mode": testing_mode, "limit": limit, "host_limit": host_limit},
-            flush=True,
+        logger.debug(
+            "DEBUG_CONCURRENCY",
+            extra={
+                "event": "enter_run_with_concurrency",
+                "testing_mode": testing_mode,
+                "limit": limit,
+                "host_limit": host_limit,
+            },
         )
     if testing_mode:
         if host_semaphore is not None:
@@ -873,10 +887,15 @@ async def run_with_concurrency(
             tasks = [asyncio.create_task(worker(sym)) for sym in batch]
             task_map = {task: sym for task, sym in zip(tasks, batch, strict=False)}
             if debug_mode:
-                print(
-                    "[DEBUG_CONCURRENCY] batch",
-                    {"batch": batch, "limit": limit, "idx": idx, "total": total},
-                    flush=True,
+                logger.debug(
+                    "DEBUG_CONCURRENCY",
+                    extra={
+                        "event": "batch",
+                        "batch": batch,
+                        "limit": limit,
+                        "idx": idx,
+                        "total": total,
+                    },
                 )
             time_left = None if deadline is None else max(0.0, deadline - loop.time())
             outcomes: dict[asyncio.Task[object], object] = {}
@@ -899,10 +918,13 @@ async def run_with_concurrency(
                     results.setdefault(sym, None)
                     task.cancel()
                     if debug_mode:
-                        print(
-                            "[DEBUG_CONCURRENCY] worker_failed",
-                            {"symbol": sym, "outcome": "timeout"},
-                            flush=True,
+                        logger.debug(
+                            "DEBUG_CONCURRENCY",
+                            extra={
+                                "event": "worker_failed",
+                                "symbol": sym,
+                                "outcome": "timeout",
+                            },
                         )
                     continue
                 outcome = outcomes.get(task)
@@ -910,10 +932,13 @@ async def run_with_concurrency(
                     failed.add(sym)
                     results.setdefault(sym, None)
                     if debug_mode:
-                        print(
-                            "[DEBUG_CONCURRENCY] worker_failed",
-                            {"symbol": sym, "outcome": repr(outcome)},
-                            flush=True,
+                        logger.debug(
+                            "DEBUG_CONCURRENCY",
+                            extra={
+                                "event": "worker_failed",
+                                "symbol": sym,
+                                "outcome": repr(outcome),
+                            },
                         )
                 else:
                     succeeded.add(sym)
@@ -921,15 +946,15 @@ async def run_with_concurrency(
 
         _update_peak_counters(peak_this_run)
         if debug_mode:
-            print(
-                "[DEBUG_CONCURRENCY] exit",
-                {
+            logger.debug(
+                "DEBUG_CONCURRENCY",
+                extra={
+                    "event": "exit",
                     "results": results,
                     "succeeded": succeeded,
                     "failed": failed,
                     "peak": peak_this_run,
                 },
-                flush=True,
             )
         return results, succeeded, failed
     if host_semaphore is not None:
@@ -1093,19 +1118,31 @@ async def run_with_concurrency(
         results.setdefault(symbol, None)
 
         try:
-            if os.getenv("DEBUG_CONCURRENCY"):
-                print("[DEBUG_CONCURRENCY] start", symbol, flush=True)
+            if debug_mode:
+                logger.debug(
+                    "DEBUG_CONCURRENCY",
+                    extra={"event": "start", "symbol": symbol},
+                )
             async with concurrency_semaphore, _acquire_host_permit():
-                if os.getenv("DEBUG_CONCURRENCY"):
-                    print("[DEBUG_CONCURRENCY] acquired", symbol, flush=True)
+                if debug_mode:
+                    logger.debug(
+                        "DEBUG_CONCURRENCY",
+                        extra={"event": "acquired", "symbol": symbol},
+                    )
                 await _mark_worker_start()
                 started = True
                 try:
-                    if os.getenv("DEBUG_CONCURRENCY"):
-                        print("[DEBUG_CONCURRENCY] worker-enter", symbol, flush=True)
+                    if debug_mode:
+                        logger.debug(
+                            "DEBUG_CONCURRENCY",
+                            extra={"event": "worker_enter", "symbol": symbol},
+                        )
                     result = await worker(symbol)
-                    if os.getenv("DEBUG_CONCURRENCY"):
-                        print("[DEBUG_CONCURRENCY] worker-exit", symbol, flush=True)
+                    if debug_mode:
+                        logger.debug(
+                            "DEBUG_CONCURRENCY",
+                            extra={"event": "worker_exit", "symbol": symbol},
+                        )
                 except asyncio.CancelledError:
                     FAILED_SYMBOLS.add(symbol)
                     raise
@@ -1116,8 +1153,11 @@ async def run_with_concurrency(
                     results[symbol] = result
                 finally:
                     await _mark_worker_end(started)
-            if os.getenv("DEBUG_CONCURRENCY"):
-                print("[DEBUG_CONCURRENCY] done", symbol, flush=True)
+            if debug_mode:
+                logger.debug(
+                    "DEBUG_CONCURRENCY",
+                    extra={"event": "done", "symbol": symbol},
+                )
         except asyncio.CancelledError:
             FAILED_SYMBOLS.add(symbol)
             raise
