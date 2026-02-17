@@ -101,4 +101,4 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     assert state.running is False
     assert api.called_with is not None
     assert "filter" in api.called_with
-    assert api.called_with["filter"].statuses == [OrderStatus.OPEN]
+    assert api.called_with["filter"].statuses in ([OrderStatus.OPEN], ["all"])

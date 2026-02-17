@@ -330,8 +330,45 @@ def _validate_trading_api(api: Any) -> bool:
 
 
 def list_open_orders(api: Any):
-    """Return open orders from api, compatible across SDK versions."""
-    return api.list_orders(status="open")
+    """Return orders considered open across Alpaca SDK variants.
+
+    Some broker/API combinations do not include ``pending_new``/``accepted``
+    orders in ``status="open"`` responses. This helper widens coverage by
+    falling back to ``status="all"`` and filtering known active statuses.
+    """
+
+    open_orders = api.list_orders(status="open")
+    if open_orders:
+        return open_orders
+
+    active_statuses = {
+        "open",
+        "new",
+        "pending_new",
+        "accepted",
+        "accepted_for_bidding",
+        "partially_filled",
+        "pending_replace",
+        "pending_cancel",
+        "held",
+    }
+
+    try:
+        all_orders = api.list_orders(status="all")
+    except TypeError:
+        return open_orders
+
+    filtered: list[Any] = []
+    for order in all_orders or []:
+        status_raw = getattr(order, "status", "")
+        status_value = getattr(status_raw, "value", status_raw)
+        try:
+            status_text = str(status_value).strip().lower()
+        except Exception:
+            status_text = ""
+        if status_text in active_statuses:
+            filtered.append(order)
+    return filtered
 
 
 def ensure_alpaca_attached(ctx) -> None:

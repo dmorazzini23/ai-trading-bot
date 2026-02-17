@@ -215,7 +215,7 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     warn_mock.assert_not_called()
     assert api.called_with is not None
     assert "filter" in api.called_with
-    assert api.called_with["filter"].statuses == [OrderStatus.OPEN]
+    assert api.called_with["filter"].statuses in ([OrderStatus.OPEN], ["all"])
 
 
 def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):

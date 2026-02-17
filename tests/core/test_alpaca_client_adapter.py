@@ -2,7 +2,7 @@
 
 import os
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
@@ -269,3 +269,67 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
         else:
             sys.modules["ai_trading.core.bot_engine"] = original_bot_engine
 
+
+def test_list_open_orders_uses_open_query_when_available() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def list_orders(self, *, status: str) -> list[Any]:
+            self.calls.append(status)
+            if status == "open":
+                return [SimpleNamespace(id="o1", status="open")]
+            return []
+
+    api = _Api()
+    orders = alpaca_client.list_open_orders(api)
+
+    assert len(orders) == 1
+    assert orders[0].id == "o1"
+    assert api.calls == ["open"]
+
+
+def test_list_open_orders_falls_back_to_all_and_keeps_active_statuses() -> None:
+    class _Status:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def list_orders(self, *, status: str) -> list[Any]:
+            self.calls.append(status)
+            if status == "open":
+                return []
+            if status == "all":
+                return [
+                    SimpleNamespace(id="p1", status=_Status("pending_new")),
+                    SimpleNamespace(id="n1", status="new"),
+                    SimpleNamespace(id="f1", status="filled"),
+                ]
+            return []
+
+    api = _Api()
+    orders = alpaca_client.list_open_orders(api)
+
+    assert [order.id for order in orders] == ["p1", "n1"]
+    assert api.calls == ["open", "all"]
+
+
+def test_list_open_orders_returns_open_when_all_not_supported() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def list_orders(self, *, status: str) -> list[Any]:
+            self.calls.append(status)
+            if status == "open":
+                return []
+            raise TypeError("status=all unsupported")
+
+    api = _Api()
+    orders = alpaca_client.list_open_orders(api)
+
+    assert orders == []
+    assert api.calls == ["open", "all"]
