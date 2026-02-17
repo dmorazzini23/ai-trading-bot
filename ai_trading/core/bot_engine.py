@@ -30100,6 +30100,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     if not symbols:
         symbols = list(getattr(runtime, "universe_tickers", []) or [])
     if not symbols:
+        try:
+            symbols = load_candidate_universe(runtime)
+        except Exception as exc:
+            logger.warning(
+                "NETTING_UNIVERSE_LOAD_FAILED",
+                extra={"error": str(exc)},
+            )
+            symbols = []
+    if not symbols:
         if bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool)):
             logger.debug("NETTING_NO_SYMBOLS")
         else:
