@@ -106,3 +106,25 @@ def test_tca_stale_block_reason_respects_latest_timestamp(
         handle.write(json.dumps(fresh_record))
         handle.write("\n")
     assert bot_engine._tca_stale_block_reason(now) is None
+
+
+def test_tca_stale_block_reason_relative_path_uses_data_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    relative_tca_path = "runtime/tca_records.jsonl"
+    resolved = (data_dir / relative_tca_path).resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("AI_TRADING_BLOCK_TRADING_IF_TCA_STALE", "1")
+    monkeypatch.setenv("AI_TRADING_TCA_PENDING_WRITE_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", relative_tca_path)
+
+    now = datetime.now(UTC)
+    resolved.write_text(
+        json.dumps({"ts": (now - timedelta(seconds=120)).isoformat(), "symbol": "AAPL"})
+        + "\n",
+        encoding="utf-8",
+    )
+    assert bot_engine._tca_stale_block_reason(now) == "TCA_STALE_BLOCK"

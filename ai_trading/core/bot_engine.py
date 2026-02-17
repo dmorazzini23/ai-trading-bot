@@ -28993,6 +28993,12 @@ def _resolve_runtime_artifact_path(path_value: str) -> Path:
     return (repo_root / target).resolve()
 
 
+def _resolved_tca_path() -> Path:
+    return _resolve_runtime_artifact_path(
+        str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    )
+
+
 def _json_dump_default(value: Any) -> Any:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value).decode("utf-8", errors="replace")
@@ -29209,7 +29215,7 @@ def _run_post_trade_learning_update(
 ) -> None:
     if not _post_trade_learning_schedule_due(state, now=now, market_open_now=market_open_now):
         return
-    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    tca_path = str(_resolved_tca_path())
     output_path = str(get_env("AI_TRADING_LEARNING_OUTPUT_PATH", "runtime/learned_overrides.json"))
     min_samples = int(get_env("AI_TRADING_MIN_TCA_SAMPLES_FOR_ADAPT", 20, cast=int))
     window_trades = int(get_env("AI_TRADING_ALLOC_EXPECTANCY_WINDOW_TRADES", 60, cast=int))
@@ -29318,7 +29324,7 @@ def _latest_tca_timestamp(path: str) -> datetime | None:
 def _tca_stale_block_reason(now: datetime) -> str | None:
     if not bool(get_env("AI_TRADING_BLOCK_TRADING_IF_TCA_STALE", False, cast=bool)):
         return None
-    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    tca_path = str(_resolved_tca_path())
     latest = _latest_tca_timestamp(tca_path)
     if latest is None:
         return "TCA_STALE_BLOCK"
@@ -29417,7 +29423,7 @@ def _maybe_update_allocation_state(
         return
     base = _allocation_base_weights()
     path = str(get_env("AI_TRADING_ALLOCATION_OUTPUT_PATH", "runtime/allocation_state.json"))
-    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    tca_path = str(_resolved_tca_path())
     expectancy_window = int(
         get_env("AI_TRADING_ALLOC_EXPECTANCY_WINDOW_TRADES", 60, cast=int)
     )
@@ -29628,7 +29634,7 @@ def _run_walk_forward_governance(state: BotState, *, now: datetime, market_open_
     from ai_trading.research.leakage_tests import run_leakage_guards
     from ai_trading.research.walk_forward import WalkForwardConfig, run_walk_forward
 
-    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    tca_path = str(_resolved_tca_path())
     rows = _read_jsonl_records(tca_path, max_records=100000)
     if not rows:
         if bool(get_env("AI_TRADING_LEAKAGE_FAIL_HARD", True, cast=bool)):
@@ -30051,7 +30057,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             if report_date != now.date():
                 try:
                     write_daily_execution_report(
-                        tca_path=str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")),
+                        tca_path=str(_resolved_tca_path()),
                         output_dir=str(
                             get_env(
                                 "AI_TRADING_EXECUTION_REPORT_DIR",
@@ -30472,7 +30478,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             int(get_env("AI_TRADING_ALLOC_EXPECTANCY_WINDOW_TRADES", 60, cast=int)),
         )
         tca_rows = _read_jsonl_records(
-            str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")),
+            str(_resolved_tca_path()),
             max_records=max(500, expectancy_window * 20),
         )
         expectancy_by_symbol: dict[str, list[float]] = {}
@@ -31116,13 +31122,19 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "fill_latency_ms": tca_record.get("fill_latency_ms"),
             }
             if bool(get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool)):
+                resolved_tca_path = str(
+                    get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
+                )
                 try:
-                    tca_path = str(
-                        get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
-                    )
-                    write_tca_record(tca_path, tca_record)
+                    resolved_tca_path = str(_resolved_tca_path())
+                    write_tca_record(resolved_tca_path, tca_record)
                 except Exception as exc:
-                    logger.warning("TCA_WRITE_FAILED", extra={"error": str(exc)})
+                    logger.warning(
+                        "TCA_WRITE_FAILED path=%s error=%s",
+                        resolved_tca_path,
+                        str(exc),
+                        extra={"error": str(exc), "path": resolved_tca_path},
+                    )
         gates.append("OK_TRADE")
         record = DecisionRecord(
             symbol=symbol,
