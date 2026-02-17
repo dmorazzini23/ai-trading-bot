@@ -29009,16 +29009,20 @@ def _write_decision_record(record: Any, path: str | None) -> None:
     if snapshot_path:
         path_targets.append(snapshot_path)
     for target_path in path_targets:
+        resolved_path = str(target_path)
         try:
             dest = _resolve_runtime_artifact_path(str(target_path))
+            resolved_path = str(dest)
             dest.parent.mkdir(parents=True, exist_ok=True)
             with dest.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, sort_keys=True))
                 fh.write("\n")
         except Exception as exc:
             logger.warning(
-                "DECISION_RECORD_WRITE_FAILED",
-                extra={"error": str(exc), "path": str(target_path)},
+                "DECISION_RECORD_WRITE_FAILED path=%s error=%s",
+                resolved_path,
+                str(exc),
+                extra={"error": str(exc), "path": resolved_path},
             )
 
 
