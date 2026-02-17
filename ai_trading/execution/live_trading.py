@@ -1320,6 +1320,28 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
             account = None
 
     if account is None:
+        execution_mode_raw: Any = None
+        if _config_get_env is not None:
+            try:
+                execution_mode_raw = _config_get_env("EXECUTION_MODE", None)
+            except Exception:
+                execution_mode_raw = None
+        if execution_mode_raw in (None, ""):
+            execution_mode_raw = os.getenv("EXECUTION_MODE")
+        execution_mode = str(execution_mode_raw or "sim").strip().lower()
+        if execution_mode in {"paper", "live"} and not _pytest_mode_active():
+            logger.warning(
+                "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+                symbol,
+                side,
+                qty_int,
+                _format_money(
+                    None if price_decimal is None else (price_decimal * Decimal(qty_int)).copy_abs()
+                ),
+                _format_money(None),
+                "account_unavailable",
+            )
+            return CapacityCheck(False, 0, "account_unavailable")
         logger.info(
             "BROKER_CAPACITY_SKIP",
             extra={
@@ -4199,7 +4221,22 @@ class ExecutionEngine:
                 extra=base_extra | {"code": code, "detail": detail_val},
             )
 
-            retry_allowed = using_fallback_price and order_type_submitted in {"limit", "stop_limit"}
+            fallback_market_retry_enabled = False
+            try:
+                cfg = get_trading_config()
+                fallback_market_retry_enabled = bool(
+                    getattr(cfg, "execution_market_on_fallback", False)
+                )
+            except Exception:
+                env_flag = _resolve_bool_env("EXECUTION_MARKET_ON_FALLBACK")
+                if env_flag is None:
+                    env_flag = _resolve_bool_env("AI_TRADING_EXEC_MARKET_FALLBACK")
+                fallback_market_retry_enabled = bool(env_flag) if env_flag is not None else False
+            retry_allowed = (
+                fallback_market_retry_enabled
+                and using_fallback_price
+                and order_type_submitted in {"limit", "stop_limit"}
+            )
             msg = (str(exc) or "") + " " + (detail_val or "")
             looks_price_related = any(
                 keyword in msg.lower()
@@ -5351,10 +5388,19 @@ class ExecutionEngine:
                 return None
             return text
 
+        runtime_tif: Any | None = None
+        try:
+            runtime_tif = getattr(get_trading_config(), "execution_time_in_force", None)
+        except Exception:
+            runtime_tif = None
+
         candidates: tuple[Any | None, ...] = (
             requested,
             getattr(getattr(self, "settings", None), "time_in_force", None),
+            getattr(getattr(self, "settings", None), "execution_time_in_force", None),
             getattr(getattr(self, "config", None), "time_in_force", None),
+            getattr(getattr(self, "config", None), "execution_time_in_force", None),
+            runtime_tif,
             os.getenv("EXECUTION_TIME_IN_FORCE"),
             os.getenv("ALPACA_TIME_IN_FORCE"),
         )
@@ -5362,7 +5408,7 @@ class ExecutionEngine:
             normalized = _normalize(candidate)
             if normalized is not None:
                 return normalized
-        return "gtc"
+        return "day"
 
     def _evaluate_pdt_preflight(
         self,
@@ -5978,8 +6024,9 @@ class ExecutionEngine:
                         )
                         cleaned = {
                             k: v
-                            for k, v in order_data.items()
+                            for k, v in alpaca_payload.items()
                             if k not in {"order_class", "take_profit", "stop_loss"}
+                            and not str(k).startswith("_")
                         }
                         resp = self.trading_client.submit_order(**cleaned)
                 else:
@@ -6189,7 +6236,19 @@ class ExecutionEngine:
         else:
             replacement_price = base_price * (1 - basis)
         replacement_payload = dict(order_data_snapshot)
-        replacement_payload["limit_price"] = round(replacement_price, 6)
+        snapped_replacement_price = round(replacement_price, 6)
+        try:
+            tick_size = get_tick_size(symbol)
+            snapped_replacement_price = float(
+                Money(replacement_price).quantize(tick_size).amount
+            )
+        except Exception:
+            logger.debug(
+                "ORDER_TTL_REPLACE_PRICE_NORMALIZE_FAILED",
+                extra={"symbol": symbol, "replacement_price": replacement_price},
+                exc_info=True,
+            )
+        replacement_payload["limit_price"] = snapped_replacement_price
         replacement_payload["client_order_id"] = f"{_stable_order_id(symbol, side)}-ttl"
         if existing_order_id:
             try:

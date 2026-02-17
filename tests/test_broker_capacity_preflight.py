@@ -27,6 +27,12 @@ class FakeBroker:
         return {"id": "fake", "status": "accepted", "qty": order_data.get("quantity")}
 
 
+class NoAccountBroker(FakeBroker):
+    def get_account(self):
+        self.get_account_calls += 1
+        raise RuntimeError("account endpoint unavailable")
+
+
 def test_preflight_capacity_downsizes_quantity(monkeypatch):
     monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
     broker = FakeBroker(
@@ -58,6 +64,18 @@ def test_preflight_capacity_rejects_when_below_minimums(monkeypatch):
     assert check.can_submit is False
     assert check.suggested_qty == 7
     assert check.reason == "below_min_notional"
+
+
+def test_preflight_capacity_fails_closed_when_account_unavailable_in_paper(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    broker = NoAccountBroker(buying_power="0", orders=[])
+
+    check = preflight_capacity("AAPL", "buy", 100, 5, broker)
+
+    assert check.can_submit is False
+    assert check.suggested_qty == 0
+    assert check.reason == "account_unavailable"
 
 
 def test_submit_limit_order_skips_when_capacity_fails(monkeypatch):

@@ -219,6 +219,173 @@ def test_execute_order_uses_limit_with_fallback(engine_factory, monkeypatch, cap
     assert "QUOTE_QUALITY_BLOCKED" not in messages
 
 
+def test_execute_order_fallback_reject_no_market_retry_by_default(engine_factory, monkeypatch, caplog):
+    def _reject_limit(*_args, **_kwargs):
+        raise lt.NonRetryableBrokerError(
+            "rejected",
+            code="400",
+            detail="price outside allowed band",
+        )
+
+    market_calls: list[tuple[str, str, int]] = []
+
+    def _submit_market(symbol, side, quantity, **_kwargs):
+        market_calls.append((symbol, side, quantity))
+        return {"id": "mk-1", "status": "accepted", "qty": quantity}
+
+    monkeypatch.setattr(
+        lt,
+        "get_trading_config",
+        lambda: SimpleNamespace(
+            nbbo_required_for_limit=False,
+            execution_require_realtime_nbbo=False,
+            execution_market_on_degraded=False,
+            execution_market_on_fallback=False,
+            degraded_feed_mode="widen",
+            degraded_feed_limit_widen_bps=0,
+            min_quote_freshness_ms=1500,
+        ),
+    )
+
+    engine = engine_factory()
+    engine.submit_limit_order = _reject_limit
+    engine.submit_market_order = _submit_market
+
+    caplog.set_level("WARNING", logger=lt.logger.name)
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        5,
+        order_type="limit",
+        limit_price=100.0,
+        annotations={"using_fallback_price": True},
+    )
+
+    assert result is None
+    assert market_calls == []
+    assert all(record.msg != "ORDER_DOWNGRADED_TO_MARKET" for record in caplog.records)
+
+
+def test_execute_order_fallback_reject_market_retry_when_enabled(engine_factory, monkeypatch, caplog):
+    def _reject_limit(*_args, **_kwargs):
+        raise lt.NonRetryableBrokerError(
+            "rejected",
+            code="400",
+            detail="price outside allowed band",
+        )
+
+    market_calls: list[tuple[str, str, int]] = []
+
+    def _submit_market(symbol, side, quantity, **_kwargs):
+        market_calls.append((symbol, side, quantity))
+        return {
+            "id": "mk-1",
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+            "symbol": symbol,
+            "side": side,
+        }
+
+    engine = engine_factory()
+    monkeypatch.setattr(
+        lt,
+        "get_trading_config",
+        lambda: SimpleNamespace(
+            nbbo_required_for_limit=False,
+            execution_require_realtime_nbbo=False,
+            execution_market_on_degraded=False,
+            execution_market_on_fallback=True,
+            degraded_feed_mode="widen",
+            degraded_feed_limit_widen_bps=0,
+            min_quote_freshness_ms=1500,
+        ),
+    )
+    engine.submit_limit_order = _reject_limit
+    engine.submit_market_order = _submit_market
+
+    caplog.set_level("WARNING", logger=lt.logger.name)
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        5,
+        order_type="limit",
+        limit_price=100.0,
+        annotations={"using_fallback_price": True},
+    )
+
+    assert result is not None
+    assert market_calls == [("AAPL", "buy", 5)]
+    assert any(record.msg == "ORDER_DOWNGRADED_TO_MARKET" for record in caplog.records)
+
+
+def test_bracket_fallback_reuses_normalized_payload(engine_factory, monkeypatch):
+    class _BracketClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def submit_order(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            if len(self.calls) == 1:
+                raise TypeError("nested bracket unsupported")
+            return {"id": "ok", "status": "accepted", **kwargs}
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    client = _BracketClient()
+    engine = engine_factory(None, use_real_submit=True, trading_client=client)
+
+    result = engine.submit_limit_order(
+        "AAPL",
+        "buy",
+        5,
+        123.45,
+        order_class="bracket",
+        take_profit=130.0,
+        stop_loss=120.0,
+    )
+
+    assert result is not None
+    assert len(client.calls) == 2
+    assert "qty" in client.calls[-1]
+    assert client.calls[-1]["qty"] == 5
+    assert "quantity" not in client.calls[-1]
+    assert "order_class" not in client.calls[-1]
+
+
+def test_ttl_replacement_price_uses_tick_quantization(engine_factory, monkeypatch):
+    monkeypatch.setattr(lt, "get_tick_size", lambda _symbol: Decimal("0.1"))
+    engine = engine_factory()
+    captured: dict[str, Any] = {}
+    engine.order_ttl_seconds = 20
+    engine._cancel_order_alpaca = lambda _order_id: True
+
+    def _capture_submit(payload: dict[str, Any]) -> dict[str, Any]:
+        captured["payload"] = dict(payload)
+        return {
+            "id": "replace-1",
+            "status": "accepted",
+            "qty": payload.get("quantity", 0),
+            "symbol": payload.get("symbol"),
+            "side": payload.get("side"),
+            "client_order_id": payload.get("client_order_id"),
+        }
+
+    engine._submit_order_to_alpaca = _capture_submit
+
+    replacement = engine._replace_limit_order_with_marketable(
+        symbol="AAPL",
+        side="buy",
+        qty=2,
+        existing_order_id="old-order",
+        client_order_id="cid-old",
+        order_data_snapshot={"symbol": "AAPL", "side": "buy", "quantity": 2, "type": "limit"},
+        limit_price=100.123,
+    )
+
+    assert replacement is not None
+    assert captured["payload"]["limit_price"] == pytest.approx(100.2)
+
+
 def test_submit_market_order_pdt_lockout_logs(caplog):
     account_snapshot = {
         "pattern_day_trader": True,

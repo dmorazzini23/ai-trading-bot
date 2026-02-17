@@ -1,6 +1,7 @@
 """Portfolio-level risk targeting and caps."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from statistics import pstdev
 from typing import Any
@@ -32,6 +33,48 @@ def _correlation(x: list[float], y: list[float]) -> float:
     return float(cov / ((var_x ** 0.5) * (var_y ** 0.5)))
 
 
+def _portfolio_return_series(
+    *,
+    targets: dict[str, float],
+    symbol_returns: dict[str, list[float]],
+) -> list[float]:
+    gross = sum(abs(float(value)) for value in targets.values())
+    if gross <= 0:
+        return []
+    weighted_series: dict[str, list[float]] = {}
+    signed_weights: dict[str, float] = {}
+    for symbol, returns in symbol_returns.items():
+        if symbol not in targets:
+            continue
+        weight = float(targets.get(symbol, 0.0)) / gross
+        if abs(weight) <= 0:
+            continue
+        cleaned: list[float] = []
+        for value in returns:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed):
+                cleaned.append(parsed)
+        if len(cleaned) < 2:
+            continue
+        weighted_series[symbol] = cleaned
+        signed_weights[symbol] = weight
+    if not weighted_series:
+        return []
+    aligned_len = min(len(values) for values in weighted_series.values())
+    if aligned_len < 2:
+        return []
+    portfolio_returns: list[float] = []
+    for idx in range(-aligned_len, 0):
+        step_return = 0.0
+        for symbol, series in weighted_series.items():
+            step_return += signed_weights[symbol] * series[idx]
+        portfolio_returns.append(step_return)
+    return portfolio_returns
+
+
 def apply_portfolio_limits(
     *,
     targets: dict[str, float],
@@ -49,10 +92,11 @@ def apply_portfolio_limits(
     scale = 1.0
 
     if symbol_returns:
-        combined: list[float] = []
-        for series in symbol_returns.values():
-            combined.extend(float(x) for x in series)
-        realized = _annualized_vol(combined)
+        portfolio_returns = _portfolio_return_series(
+            targets=scaled,
+            symbol_returns=symbol_returns,
+        )
+        realized = _annualized_vol(portfolio_returns)
         if realized > 0 and target_annual_vol > 0:
             scale = min(float(vol_max_scale), max(float(vol_min_scale), target_annual_vol / realized))
             if abs(scale - 1.0) > 1e-12:

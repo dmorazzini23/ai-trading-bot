@@ -140,7 +140,12 @@ from ai_trading.oms.pretrade import (
     validate_pretrade,
 )
 from ai_trading.oms.orders import validate_order_type_support
-from ai_trading.analytics.post_trade_learning import load_learning_overrides
+from ai_trading.analytics.post_trade_learning import (
+    LearningBounds,
+    compute_learning_updates,
+    load_learning_overrides,
+    write_learning_overrides,
+)
 from ai_trading.analytics.execution_report import write_daily_execution_report
 from ai_trading.analytics.tca import (
     ExecutionBenchmark,
@@ -8041,6 +8046,7 @@ class BotState:
     startup_cleanup_done: bool = False
     canary_mode_logged: bool = False
     last_execution_report_date: date | None = None
+    last_learning_run_date: date | None = None
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
@@ -16639,6 +16645,21 @@ def submit_order(
             TypeError,
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
+            execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").lower()
+            if execution_mode in {"paper", "live"} and not bool(
+                get_env("PYTEST_RUNNING", "0", cast=bool)
+            ):
+                logger.error(
+                    "LIQUIDITY_PRECHECK_FAILED_BLOCK",
+                    extra={
+                        "symbol": symbol,
+                        "qty": qty,
+                        "side": side,
+                        "mode": execution_mode,
+                        "error": str(e),
+                    },
+                )
+                return None
             logger.warning("Liquidity checks failed open-loop: %s", e)
 
     try:
@@ -28880,6 +28901,176 @@ def _load_learned_overrides(cfg: TradingConfig) -> dict[str, Any]:
     return load_learning_overrides(path, max_age_days=max_age_days)
 
 
+def _rolling_volume_from_bars(df: Any, lookback_bars: int) -> float:
+    if df is None or getattr(df, "empty", True):
+        return 0.0
+    if "volume" not in getattr(df, "columns", []):
+        return 0.0
+    lookback = max(1, int(lookback_bars))
+    try:
+        raw = [float(v) for v in df["volume"].tail(lookback).tolist()]
+    except Exception:
+        return 0.0
+    usable = [value for value in raw if value > 0]
+    if not usable:
+        return 0.0
+    return float(sum(usable) / len(usable))
+
+
+def _post_trade_learning_schedule_due(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> bool:
+    if not bool(get_env("AI_TRADING_POST_TRADE_LEARNING_ENABLED", "0", cast=bool)):
+        return False
+    schedule = str(
+        get_env("AI_TRADING_LEARNING_RUN_SCHEDULE", "market_close")
+    ).strip().lower()
+    if schedule == "manual":
+        return False
+    last_run = getattr(state, "last_learning_run_date", None)
+    if schedule == "market_close":
+        return (not market_open_now) and (last_run != now.date())
+    if schedule == "daily_first_run":
+        return market_open_now and (last_run != now.date())
+    return False
+
+
+def _read_recent_tca_records(path: str, *, max_records: int) -> list[dict[str, Any]]:
+    src = Path(path)
+    if not src.exists():
+        return []
+    window: deque[dict[str, Any]] = deque(maxlen=max(1, int(max_records)))
+    try:
+        with src.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    window.append(payload)
+    except Exception as exc:
+        logger.warning("POST_TRADE_LEARNING_TCA_READ_FAILED", extra={"error": str(exc), "path": str(src)})
+        return []
+    return list(window)
+
+
+def _build_symbol_learning_metrics(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    min_samples: int,
+) -> dict[str, dict[str, float]]:
+    aggregates: dict[str, dict[str, Any]] = {}
+    for record in records:
+        symbol = str(record.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+        status = str(record.get("status", "")).strip().lower()
+        if status in {"rejected", "canceled", "cancelled"}:
+            continue
+        side = str(record.get("side", "")).strip().lower()
+        row = aggregates.setdefault(
+            symbol,
+            {
+                "trades": 0,
+                "is_sum": 0.0,
+                "is_count": 0,
+                "flip_count": 0,
+                "last_side": None,
+            },
+        )
+        row["trades"] = int(row["trades"]) + 1
+        if side and row.get("last_side") and row["last_side"] != side:
+            row["flip_count"] = int(row["flip_count"]) + 1
+        if side:
+            row["last_side"] = side
+        try:
+            is_bps = float(record.get("is_bps"))
+        except (TypeError, ValueError):
+            is_bps = None
+        if is_bps is not None:
+            row["is_sum"] = float(row["is_sum"]) + is_bps
+            row["is_count"] = int(row["is_count"]) + 1
+
+    metrics: dict[str, dict[str, float]] = {}
+    threshold = max(1, int(min_samples))
+    for symbol, row in aggregates.items():
+        trades = int(row.get("trades", 0))
+        if trades < threshold:
+            continue
+        is_count = int(row.get("is_count", 0))
+        is_mean = float(row.get("is_sum", 0.0)) / is_count if is_count > 0 else 0.0
+        flip_rate = float(row.get("flip_count", 0)) / max(1, trades)
+        metrics[symbol] = {"is_bps": is_mean, "flip_rate": flip_rate}
+    return metrics
+
+
+def _run_post_trade_learning_update(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> None:
+    if not _post_trade_learning_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+    tca_path = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"))
+    output_path = str(get_env("AI_TRADING_LEARNING_OUTPUT_PATH", "runtime/learned_overrides.json"))
+    min_samples = int(get_env("AI_TRADING_MIN_TCA_SAMPLES_FOR_ADAPT", 20, cast=int))
+    window_trades = int(get_env("AI_TRADING_ALLOC_EXPECTANCY_WINDOW_TRADES", 60, cast=int))
+    records = _read_recent_tca_records(tca_path, max_records=max(min_samples, window_trades))
+    symbol_metrics = _build_symbol_learning_metrics(records, min_samples=min_samples)
+    if not symbol_metrics:
+        logger.info(
+            "POST_TRADE_LEARNING_SKIPPED",
+            extra={"reason": "insufficient_samples", "records": len(records)},
+        )
+        state.last_learning_run_date = now.date()
+        return
+
+    bounds = LearningBounds(
+        max_daily_delta_bps=float(
+            get_env("AI_TRADING_LEARNING_MAX_DAILY_DELTA_BPS", 3, cast=float)
+        ),
+        max_daily_delta_frac=float(
+            get_env("AI_TRADING_LEARNING_MAX_DAILY_DELTA_FRAC", 0.05, cast=float)
+        ),
+    )
+    updates = compute_learning_updates(
+        symbol_metrics=symbol_metrics,
+        bounds=bounds,
+        is_bps_trigger=float(get_env("AI_TRADING_LEARNING_IS_BPS_TRIGGER", 18, cast=float)),
+        flip_rate_trigger=float(get_env("AI_TRADING_LEARNING_FLIP_RATE_TRIGGER", 0.25, cast=float)),
+    )
+    overrides = updates.get("overrides")
+    if not isinstance(overrides, dict):
+        logger.warning("POST_TRADE_LEARNING_INVALID_OVERRIDES")
+        state.last_learning_run_date = now.date()
+        return
+    if not bool(get_env("AI_TRADING_LEARNING_ADJUST_COST_BUFFER", "1", cast=bool)):
+        overrides["per_symbol_cost_buffer_bps"] = {}
+    if not bool(get_env("AI_TRADING_LEARNING_ADJUST_DEADBANDS", "1", cast=bool)):
+        overrides["global_deadband_frac_delta"] = 0.0
+    try:
+        write_learning_overrides(output_path, updates)
+    except Exception as exc:
+        logger.warning(
+            "POST_TRADE_LEARNING_WRITE_FAILED",
+            extra={"error": str(exc), "path": output_path},
+        )
+    else:
+        logger.info(
+            "POST_TRADE_LEARNING_UPDATED",
+            extra={"path": output_path, "symbols": sorted(symbol_metrics)},
+        )
+    state.last_learning_run_date = now.date()
+
+
 def _load_quarantine_manager(state: BotState) -> Any:
     manager = getattr(state, "_quarantine_manager", None)
     if manager is not None:
@@ -29049,6 +29240,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     cfg = _resolve_trading_config(runtime)
     now = datetime.now(UTC)
+    market_open_now = market_is_open(now)
+    _run_post_trade_learning_update(state, now=now, market_open_now=market_open_now)
     decision_path = getattr(cfg, "decision_log_path", None)
     allocation_weights: dict[str, float] = {}
     learned_overrides: dict[str, Any] = {}
@@ -29104,7 +29297,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         return
 
     rth_only = bool(getattr(cfg, "rth_only", True))
-    if rth_only and not market_is_open(now):
+    if rth_only and not market_open_now:
         _run_reconciliation_if_due(state, runtime, cfg, now)
         if bool(get_env("AI_TRADING_CANCEL_DAY_ORDERS_ON_CLOSE", "0", cast=bool)):
             cleanup_date = getattr(state, "session_close_cleanup_date", None)
@@ -29285,6 +29478,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     latest_liquidity: dict[str, LiquidityFeatures] = {}
     symbol_returns: dict[str, list[float]] = {}
     skip_reasons: dict[str, list[str]] = {sym: [] for sym in symbols}
+    liq_lookback_bars = max(1, int(get_env("AI_TRADING_LIQ_LOOKBACK_BARS", 60, cast=int)))
 
     for sleeve in sleeves:
         end = now
@@ -29394,8 +29588,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 vol,
                 volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
             )
-            volume_last = float(df["volume"].iloc[-1]) if "volume" in df.columns else None
-            latest_liquidity[symbol] = _liquidity_features(spread, vol, volume_last, price)
+            rolling_volume = _rolling_volume_from_bars(df, liq_lookback_bars)
+            latest_liquidity[symbol] = _liquidity_features(
+                spread,
+                vol,
+                rolling_volume,
+                price,
+            )
 
             close_returns: list[float] = []
             try:
@@ -29870,14 +30069,24 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             metrics = {}
             fill_price = None
         if bool(get_env("AI_TRADING_TCA_ENABLED", "0", cast=bool)):
+            order_status_text = str(order_status) if order_status is not None else "submitted"
             fill_vwap = float(fill_price) if fill_price else float(price)
+            arrival_benchmark = str(
+                get_env("AI_TRADING_TCA_ARRIVAL_BENCHMARK", "decision")
+            ).strip().lower()
+            if arrival_benchmark not in {"decision", "submit"}:
+                arrival_benchmark = "decision"
+            allow_proxy_quotes = bool(
+                get_env("AI_TRADING_TCA_ALLOW_PROXY_QUOTES", "1", cast=bool)
+            )
+            arrival_ts = net_target.bar_ts if arrival_benchmark == "decision" else now
             benchmark = ExecutionBenchmark(
                 arrival_price=float(price),
-                mid_at_arrival=float(price),
+                mid_at_arrival=float(price) if allow_proxy_quotes else None,
                 bid_at_arrival=None,
                 ask_at_arrival=None,
                 bar_close_price=float(price),
-                decision_ts=net_target.bar_ts,
+                decision_ts=arrival_ts,
                 submit_ts=now,
                 first_fill_ts=now,
             )
@@ -29885,8 +30094,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 fill_vwap=fill_vwap,
                 total_qty=float(abs(delta_shares)),
                 fees=0.0,
-                status=str(order_status) if order_status is not None else "submitted",
-                partial_fill=str(order_status).lower() == "partially_filled",
+                status=order_status_text,
+                partial_fill=order_status_text.lower() == "partially_filled",
             )
             tca_record = build_tca_record(
                 client_order_id=client_order_id,
@@ -29898,8 +30107,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 regime_profile=get_regime_signal_profile(),
                 provider="alpaca",
                 order_type="limit",
-                quote_proxy=True,
+                quote_proxy=allow_proxy_quotes,
             )
+            tca_record["arrival_benchmark"] = arrival_benchmark
+            tca_record["pending_write_sec"] = int(
+                get_env("AI_TRADING_TCA_PENDING_WRITE_SEC", 60, cast=int)
+            )
+            if allow_proxy_quotes:
+                tca_record["quote_proxy_source"] = str(
+                    get_env("AI_TRADING_TCA_PROXY_MID_SOURCE", "last_trade")
+                )
             metrics["tca"] = {
                 "is_bps": tca_record.get("is_bps"),
                 "spread_paid_bps": tca_record.get("spread_paid_bps"),

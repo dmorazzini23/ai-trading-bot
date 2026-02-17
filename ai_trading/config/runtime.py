@@ -528,6 +528,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="When market data is degraded, convert entries to market orders instead of blocking.",
     ),
     ConfigSpec(
+        field="execution_market_on_fallback",
+        env=("EXECUTION_MARKET_ON_FALLBACK", "AI_TRADING_EXEC_MARKET_FALLBACK"),
+        cast="bool",
+        default=False,
+        description="Allow retrying fallback-priced limit rejects as market orders.",
+    ),
+    ConfigSpec(
         field="execution_max_staleness_sec",
         env=("EXECUTION_MAX_STALENESS_SEC", "AI_TRADING_EXEC_MAX_STALENESS_SEC"),
         cast="int",

@@ -190,5 +190,41 @@ def test_submit_order_stub_engine_accepts_price(monkeypatch):
         importlib.reload(importlib.import_module("ai_trading.core.bot_engine"))
 
 
+def test_submit_order_blocks_on_liquidity_precheck_failure_in_paper_mode(monkeypatch):
+    from ai_trading.core import bot_engine
+    from ai_trading.core.bot_engine import submit_order
+
+    original_exec_engine = bot_engine._exec_engine
+    bot_engine._exec_engine = Mock()
+
+    class _FailingLiquidityManager:
+        def pre_trade_check(self, *_args, **_kwargs):
+            raise ValueError("liquidity precheck failed")
+
+    try:
+        monkeypatch.setenv("PYTEST_RUNNING", "0")
+        monkeypatch.setattr(bot_engine, "market_is_open", lambda *a, **k: True)
+        monkeypatch.setattr(
+            bot_engine,
+            "_resolve_trading_config",
+            lambda _ctx: Mock(rth_only=False, allow_extended=True, execution_mode="paper"),
+        )
+        monkeypatch.setattr(bot_engine, "S", Mock(liquidity_checks_enabled=True), raising=False)
+        monkeypatch.setattr(bot_engine, "CFG", Mock(liquidity_checks_enabled=True), raising=False)
+        monkeypatch.setattr(
+            "ai_trading.execution.liquidity.LiquidityManager",
+            lambda: _FailingLiquidityManager(),
+        )
+
+        mock_ctx = Mock()
+        mock_ctx.market_data = None
+        result = submit_order(mock_ctx, "AAPL", 10, "buy", price=101.0)
+
+        assert result is None
+        bot_engine._exec_engine.execute_order.assert_not_called()
+    finally:
+        bot_engine._exec_engine = original_exec_engine
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
