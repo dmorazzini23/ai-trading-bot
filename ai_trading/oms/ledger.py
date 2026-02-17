@@ -72,7 +72,6 @@ class OrderLedger:
         return client_order_id in self._seen
 
     def record(self, entry: LedgerEntry) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "client_order_id": entry.client_order_id,
             "symbol": entry.symbol,
@@ -85,9 +84,17 @@ class OrderLedger:
             "status": entry.status,
         }
         with self._lock:
-            with self._path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload, sort_keys=True))
-                fh.write("\n")
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                with self._path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(payload, sort_keys=True))
+                    fh.write("\n")
+            except OSError as exc:
+                logger.warning(
+                    "LEDGER_RECORD_FAILED",
+                    extra={"path": str(self._path), "error": str(exc)},
+                )
+                return
             self._seen.add(entry.client_order_id)
 
 

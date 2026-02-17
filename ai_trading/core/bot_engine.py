@@ -30557,8 +30557,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     if bool(getattr(cfg, "ledger_enabled", False)):
         ledger = getattr(state, "_oms_ledger", None)
         if ledger is None:
+            ledger_path = _resolve_runtime_artifact_path(
+                str(getattr(cfg, "ledger_path", "runtime/oms_ledger.jsonl"))
+            )
             ledger = OrderLedger(
-                str(getattr(cfg, "ledger_path", "runtime/oms_ledger.jsonl")),
+                str(ledger_path),
                 float(getattr(cfg, "ledger_lookback_hours", 24.0)),
             )
             setattr(state, "_oms_ledger", ledger)
