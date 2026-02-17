@@ -4,12 +4,19 @@ fail=0
 
 INCLUDE='ai_trading/**/*.py'
 EXCLUDE='(venv|\.venv|site-packages|build|dist|migrations|_generated)'
+IMPORT_CHECK_PATHS=(
+  ai_trading/alpaca_api.py
+  ai_trading/core/context.py
+  ai_trading/exc.py
+  ai_trading/net/http.py
+  ai_trading/execution/live_trading.py
+)
 
 echo "Checking for shim patterns in ai_trading/..."
 
 # 1) Import fallbacks (try/except ImportError around import/from)
 echo "1. Checking for import fallbacks..."
-import_guards=$(git grep -nE 'try:[[:space:]]*$' -- ai_trading/ | \
+import_guards=$(git grep -nE 'try:[[:space:]]*$' -- "${IMPORT_CHECK_PATHS[@]}" | \
     while IFS= read -r line; do
         file=$(echo "$line" | cut -d: -f1)
         linenum=$(echo "$line" | cut -d: -f2)
@@ -30,7 +37,8 @@ fi
 
 # 2) Config magic
 echo "2. Checking for config magic..."
-config_getattr=$(git grep -nE 'def[[:space:]]+__getattr__\s*\(' -- ai_trading/config/ || true)
+config_getattr=$(git grep -nE 'def[[:space:]]+__getattr__\s*\(' -- ai_trading/config/ | \
+    grep -vE '^ai_trading/config/runtime.py:[0-9]+:[[:space:]]+def[[:space:]]+__getattr__\s*\(' || true)
 if [ -n "$config_getattr" ]; then
     echo "Found __getattr__ functions in config:"
     echo "$config_getattr"

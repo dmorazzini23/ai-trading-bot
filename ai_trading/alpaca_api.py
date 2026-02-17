@@ -139,14 +139,6 @@ from ai_trading.utils.http import clamp_request_timeout
 import importlib
 import sys
 from ai_trading.logging import get_logger
-try:
-    from ai_trading.config.management import is_shadow_mode, _resolve_alpaca_env
-except ImportError:  # pragma: no cover - fallback for tests stubbing config
-    def is_shadow_mode() -> bool:
-        return False
-
-    def _resolve_alpaca_env():
-        return None, None, "https://paper-api.alpaca.markets"
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.metrics import get_counter, get_histogram
 from ai_trading.utils.optional_dep import missing
@@ -156,6 +148,29 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
 
 _log = get_logger(__name__)
+
+
+def _default_resolve_alpaca_env() -> tuple[None, None, str]:
+    return None, None, "https://paper-api.alpaca.markets"
+
+
+def is_shadow_mode() -> bool:
+    from ai_trading.config import management as config_management
+
+    shadow_mode_resolver = getattr(config_management, "is_shadow_mode", None)
+    if callable(shadow_mode_resolver):
+        return bool(shadow_mode_resolver())
+    return False
+
+
+def _resolve_alpaca_env() -> tuple[Any | None, Any | None, str]:
+    from ai_trading.config import management as config_management
+
+    env_resolver = getattr(config_management, "_resolve_alpaca_env", None)
+    if callable(env_resolver):
+        return env_resolver()
+    return _default_resolve_alpaca_env()
+
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC

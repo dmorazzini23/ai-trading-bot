@@ -38,8 +38,8 @@ except Exception:  # pragma: no cover - provide fallbacks when bot_engine unavai
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 
 
-class MockTradingClient:
-    """Fallback Alpaca trading client used when the SDK is unavailable."""
+class UnavailableTradingClient:
+    """Placeholder trading client that fails fast when Alpaca is unavailable."""
 
     def __init__(self, *_, paper: bool | None = None, **__):
         self.paper = paper
@@ -48,8 +48,8 @@ class MockTradingClient:
         raise RuntimeError("Alpaca trading client unavailable")
 
 
-class MockDataClient:
-    """Fallback Alpaca data client used when the SDK is unavailable."""
+class UnavailableDataClient:
+    """Placeholder data client that fails fast when Alpaca is unavailable."""
 
     def __init__(self, *_, paper: bool | None = None, **__):
         self.paper = paper
@@ -86,7 +86,7 @@ def get_context() -> SimpleNamespace:
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.trading.client import TradingClient  # type: ignore
     except Exception:  # pragma: no cover - client unavailable
-        trading_client = MockTradingClient(paper=is_paper)
+        trading_client = UnavailableTradingClient(paper=is_paper)
     else:
         try:
             trading_client = TradingClient(
@@ -95,12 +95,12 @@ def get_context() -> SimpleNamespace:
                 paper=is_paper,
             )
         except Exception:
-            trading_client = MockTradingClient(paper=is_paper)
+            trading_client = UnavailableTradingClient(paper=is_paper)
 
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
     except Exception:  # pragma: no cover - client unavailable
-        data_client = MockDataClient(paper=is_paper)
+        data_client = UnavailableDataClient(paper=is_paper)
     else:
         try:
             data_client = StockHistoricalDataClient(
@@ -116,9 +116,9 @@ def get_context() -> SimpleNamespace:
                     secret_key=secret_key,
                 )
             except Exception:
-                data_client = MockDataClient(paper=is_paper)
+                data_client = UnavailableDataClient(paper=is_paper)
         except Exception:
-            data_client = MockDataClient(paper=is_paper)
+            data_client = UnavailableDataClient(paper=is_paper)
 
     _CTX = SimpleNamespace(
         alpaca_trading_client=trading_client,
@@ -138,6 +138,6 @@ __all__ = [
     "maybe_init_brokers",
     "init_alpaca_clients",
     "get_context",
-    "MockTradingClient",
-    "MockDataClient",
+    "UnavailableTradingClient",
+    "UnavailableDataClient",
 ]
