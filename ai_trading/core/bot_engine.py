@@ -167,7 +167,11 @@ from ai_trading.risk.liquidity_regime import (
     enforce_participation_cap,
 )
 from ai_trading.risk.portfolio_limits import apply_portfolio_limits
-from ai_trading.runtime.quarantine import load_quarantine_state, save_quarantine_state
+from ai_trading.runtime.quarantine import (
+    QuarantineManager,
+    load_quarantine_state,
+    save_quarantine_state,
+)
 from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import verify_artifact
 
@@ -28968,6 +28972,27 @@ def _redact_snapshot_payload(payload: Any) -> Any:
     return payload
 
 
+def _resolve_runtime_artifact_path(path_value: str) -> Path:
+    target = Path(str(path_value)).expanduser()
+    if target.is_absolute():
+        return target
+
+    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "") or "").strip()
+    if data_root_raw:
+        data_root = Path(data_root_raw.split(":")[0]).expanduser()
+        if data_root.is_absolute():
+            return (data_root / target).resolve()
+
+    state_dir_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
+    if state_dir_raw:
+        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
+        if state_root.is_absolute():
+            return (state_root / target).resolve()
+
+    repo_root = Path(__file__).resolve().parents[2]
+    return (repo_root / target).resolve()
+
+
 def _write_decision_record(record: Any, path: str | None) -> None:
     try:
         payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
@@ -28985,7 +29010,7 @@ def _write_decision_record(record: Any, path: str | None) -> None:
         path_targets.append(snapshot_path)
     for target_path in path_targets:
         try:
-            dest = Path(target_path)
+            dest = _resolve_runtime_artifact_path(str(target_path))
             dest.parent.mkdir(parents=True, exist_ok=True)
             with dest.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, sort_keys=True))
@@ -29670,7 +29695,14 @@ def _load_quarantine_manager(state: BotState) -> Any:
     if manager is not None:
         return manager
     path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
-    manager = load_quarantine_state(path)
+    try:
+        manager = load_quarantine_state(path)
+    except Exception as exc:
+        logger.warning(
+            "QUARANTINE_STATE_LOAD_FAILED",
+            extra={"error": str(exc), "path": path},
+        )
+        manager = QuarantineManager()
     setattr(state, "_quarantine_manager", manager)
     return manager
 
@@ -29680,7 +29712,13 @@ def _persist_quarantine_manager(state: BotState) -> None:
     if manager is None:
         return
     path = str(get_env("AI_TRADING_QUARANTINE_STATE_PATH", "runtime/quarantine_state.json"))
-    save_quarantine_state(path, manager)
+    try:
+        save_quarantine_state(path, manager)
+    except Exception as exc:
+        logger.warning(
+            "QUARANTINE_STATE_WRITE_FAILED",
+            extra={"error": str(exc), "path": path},
+        )
 
 
 def _quarantine_targets_from_env() -> tuple[bool, bool]:

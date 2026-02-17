@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
+
+from ai_trading.config.management import get_env
+from ai_trading.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -121,19 +127,43 @@ class QuarantineManager:
         return manager
 
 
+def _resolve_state_path(path: str | Path) -> Path:
+    target = Path(path).expanduser()
+    if target.is_absolute():
+        return target
+
+    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "") or "").strip()
+    if data_root_raw:
+        data_root = Path(data_root_raw.split(":")[0]).expanduser()
+        if data_root.is_absolute():
+            return (data_root / target).resolve()
+
+    state_dir_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
+    if state_dir_raw:
+        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
+        if state_root.is_absolute():
+            return (state_root / target).resolve()
+
+    repo_root = Path(__file__).resolve().parents[2]
+    return (repo_root / target).resolve()
+
+
 def save_quarantine_state(path: str, manager: QuarantineManager) -> None:
-    dest = Path(path)
+    dest = _resolve_state_path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(manager.to_dict(), sort_keys=True), encoding="utf-8")
 
 
 def load_quarantine_state(path: str) -> QuarantineManager:
-    src = Path(path)
+    src = _resolve_state_path(path)
     if not src.exists():
         return QuarantineManager()
     try:
         payload = json.loads(src.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        return QuarantineManager()
+    except OSError as exc:
+        logger.warning("QUARANTINE_STATE_READ_FAILED", extra={"error": str(exc), "path": str(src)})
         return QuarantineManager()
     if not isinstance(payload, dict):
         return QuarantineManager()

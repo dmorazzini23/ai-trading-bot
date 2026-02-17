@@ -42,6 +42,26 @@ def test_write_decision_record_writes_secondary_snapshot_and_redacts(
     assert snapshot_payload["config_snapshot"]["safe"] == "ok"
 
 
+def test_write_decision_record_relative_path_uses_data_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("AI_TRADING_DECISION_RECORD_SNAPSHOT_REDACT_SECRETS", "1")
+    monkeypatch.setenv("AI_TRADING_CONFIG_SNAPSHOT_PATH", "")
+
+    bot_engine._write_decision_record(
+        _DummyDecisionRecord(),
+        "runtime/decision_records.jsonl",
+    )
+
+    expected = (data_dir / "runtime" / "decision_records.jsonl").resolve()
+    assert expected.exists()
+    payload = _read_single_json(expected)
+    assert payload["symbol"] == "AAPL"
+    assert payload["config_snapshot"]["api_key"] == "***"
+
+
 def test_tca_stale_block_reason_respects_latest_timestamp(
     tmp_path: Path, monkeypatch
 ) -> None:
