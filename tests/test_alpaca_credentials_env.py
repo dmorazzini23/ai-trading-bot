@@ -36,26 +36,26 @@ class TestAlpacaCredentials:
             assert secret_key == "alias_secret"
             assert base_url == "https://alias-api.alpaca.markets"
 
-    def test_resolve_legacy_apca_env(self) -> None:
+    def test_resolve_legacy_apca_env_ignored(self) -> None:
         env_vars = {
             "APCA_API_KEY_ID": "legacy_key",
             "APCA_API_SECRET_KEY": "legacy_secret",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             api_key, secret_key, base_url = _resolve_alpaca_env()
-        assert api_key == "legacy_key"
-        assert secret_key == "legacy_secret"
+        assert api_key is None
+        assert secret_key is None
         assert base_url == "https://paper-api.alpaca.markets"
 
-    def test_http_headers_include_apca_fallback(self) -> None:
+    def test_http_headers_ignore_apca_env(self) -> None:
         env_vars = {
             "APCA_API_KEY_ID": "legacy_key",
             "APCA_API_SECRET_KEY": "legacy_secret",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             headers = get_alpaca_http_headers()
-        assert headers["APCA-API-KEY-ID"] == "legacy_key"
-        assert headers["APCA-API-SECRET-KEY"] == "legacy_secret"
+        assert "APCA-API-KEY-ID" not in headers
+        assert "APCA-API-SECRET-KEY" not in headers
 
     def test_default_base_url_when_missing(self) -> None:
         env_vars = {

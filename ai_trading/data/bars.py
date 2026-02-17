@@ -551,7 +551,7 @@ def _resolve_client_token(client: Any) -> str | None:
         token = getattr(client, attr, None)
         if isinstance(token, str) and token.strip():
             return token.strip()
-    for env_key in ("ALPACA_API_KEY", "AP" "CA_" "API_KEY_ID"):
+    for env_key in ("ALPACA_API_KEY",):
         try:
             candidate = get_env(env_key)  # type: ignore[arg-type]
         except RuntimeError:

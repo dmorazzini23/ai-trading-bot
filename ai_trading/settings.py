@@ -145,9 +145,8 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         validation_alias=AliasChoices(
             "ALPACA_API_KEY",
             "AI_TRADING_ALPACA_API_KEY",
-            "AP" "CA_API_KEY_ID",
         ),
-        env=("ALPACA_API_KEY", "AI_TRADING_ALPACA_API_KEY", "AP" "CA_API_KEY_ID"),
+        env=("ALPACA_API_KEY", "AI_TRADING_ALPACA_API_KEY"),
     )
     alpaca_secret_key: SecretStr | None = Field(
         default=None,
@@ -155,9 +154,8 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         validation_alias=AliasChoices(
             "ALPACA_SECRET_KEY",
             "AI_TRADING_ALPACA_SECRET_KEY",
-            "AP" "CA_API_SECRET_KEY",
         ),
-        env=("ALPACA_SECRET_KEY", "AI_TRADING_ALPACA_SECRET_KEY", "AP" "CA_API_SECRET_KEY"),
+        env=("ALPACA_SECRET_KEY", "AI_TRADING_ALPACA_SECRET_KEY"),
     )
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     enable_finnhub: bool = Field(True, alias="ENABLE_FINNHUB")

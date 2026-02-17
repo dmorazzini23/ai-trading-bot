@@ -9,8 +9,6 @@ from typing import Mapping
 _DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
 _CANONICAL_KEY = "ALPACA_API_KEY"
 _CANONICAL_SECRET = "ALPACA_SECRET_KEY"
-_LEGACY_KEY = "AP" "CA_" "API_KEY_ID"
-_LEGACY_SECRET = "AP" "CA_" "API_SECRET_KEY"
 
 
 @dataclass(frozen=True)
@@ -80,8 +78,7 @@ def _resolve_value(env: Mapping[str, str], *keys: str) -> str | None:
 
 
 def _resolve_base_url(env: Mapping[str, str]) -> str:
-    # Keep legacy keys out of greppable source text to satisfy env contract tests.
-    override = _resolve_value(env, "ALPACA_API_URL", "ALPACA_BASE_URL", "AP" "CA_" "API_BASE_URL")
+    override = _resolve_value(env, "ALPACA_API_URL", "ALPACA_BASE_URL")
     if override:
         normalized = override.rstrip("/")
         if normalized.lower().startswith(("http://", "https://")):
@@ -94,8 +91,8 @@ def resolve_alpaca_credentials(env: Mapping[str, str] | None = None) -> AlpacaCr
     """Return Alpaca credentials preferring canonical env vars."""
 
     env_map = _coerce_env(env)
-    key = _resolve_value(env_map, _CANONICAL_KEY) or _resolve_value(env_map, _LEGACY_KEY)
-    secret = _resolve_value(env_map, _CANONICAL_SECRET) or _resolve_value(env_map, _LEGACY_SECRET)
+    key = _resolve_value(env_map, _CANONICAL_KEY)
+    secret = _resolve_value(env_map, _CANONICAL_SECRET)
     base_url = _resolve_base_url(env_map)
     return AlpacaCreds(key=key, secret=secret, _base_url=base_url)
 

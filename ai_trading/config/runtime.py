@@ -28,14 +28,12 @@ _FEED_IGNORE_LOCK = threading.Lock()
 def _reject_legacy_apca_env() -> None:
     """Abort startup when unsupported AP""" "CA_* environment variables are present."""
 
-    allowlisted = {"AP" "CA_" "API_KEY_ID", "AP" "CA_" "API_SECRET_KEY"}
     legacy_keys = [key for key in os.environ if key.startswith(_LEGACY_BROKER_PREFIX)]
-    filtered = sorted(key for key in legacy_keys if key not in allowlisted)
-    if not filtered:
+    if not legacy_keys:
         return
 
-    preview = ", ".join(filtered[:5])
-    if len(filtered) > 5:
+    preview = ", ".join(sorted(legacy_keys)[:5])
+    if len(legacy_keys) > 5:
         preview += " ..."
 
     raise RuntimeError(
