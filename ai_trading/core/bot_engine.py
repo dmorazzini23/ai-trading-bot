@@ -28993,6 +28993,29 @@ def _resolve_runtime_artifact_path(path_value: str) -> Path:
     return (repo_root / target).resolve()
 
 
+def _json_dump_default(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
+
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        try:
+            return isoformat()
+        except Exception:
+            pass
+
+    scalar = getattr(value, "item", None)
+    if callable(scalar):
+        try:
+            candidate = scalar()
+        except Exception:
+            candidate = None
+        if isinstance(candidate, (str, int, float, bool)) or candidate is None:
+            return candidate
+
+    return str(value)
+
+
 def _write_decision_record(record: Any, path: str | None) -> None:
     try:
         payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
@@ -29015,7 +29038,7 @@ def _write_decision_record(record: Any, path: str | None) -> None:
             resolved_path = str(dest)
             dest.parent.mkdir(parents=True, exist_ok=True)
             with dest.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(payload, sort_keys=True))
+                fh.write(json.dumps(payload, sort_keys=True, default=_json_dump_default))
                 fh.write("\n")
         except Exception as exc:
             logger.warning(
