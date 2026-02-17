@@ -288,3 +288,42 @@ def test_preflight_helper_legacy_signature():
 
     assert check.can_submit is True
     assert called["args"][:4] == ("MSFT", "sell", 250.0, 3)
+
+
+def test_preflight_capacity_respects_global_open_order_cap(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", "1")
+    monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS_PER_SYMBOL", raising=False)
+    monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS", raising=False)
+
+    broker = SimpleNamespace(
+        list_orders=lambda status="open": [
+            SimpleNamespace(symbol="AAPL", side="buy", qty="1", limit_price="100.0")
+        ]
+    )
+    account = SimpleNamespace(buying_power="100000")
+
+    check = lt.preflight_capacity("MSFT", "buy", 250.0, 2, broker, account=account)
+
+    assert check.can_submit is False
+    assert check.suggested_qty == 0
+    assert check.reason == "max_open_orders_global"
+
+
+def test_preflight_capacity_respects_per_symbol_open_order_cap(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MAX_OPEN_ORDERS_PER_SYMBOL", "1")
+    monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", raising=False)
+    monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS", raising=False)
+
+    broker = SimpleNamespace(
+        list_orders=lambda status="open": [
+            SimpleNamespace(symbol="AAPL", side="buy", qty="1", limit_price="100.0"),
+            SimpleNamespace(symbol="MSFT", side="buy", qty="1", limit_price="200.0"),
+        ]
+    )
+    account = SimpleNamespace(buying_power="100000")
+
+    check = lt.preflight_capacity("AAPL", "buy", 250.0, 2, broker, account=account)
+
+    assert check.can_submit is False
+    assert check.suggested_qty == 0
+    assert check.reason == "max_open_orders_per_symbol"

@@ -4452,6 +4452,7 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
 _DEFAULT_FEED = "iex"
 _DATA_FEED_OVERRIDE: str | None = None
 _LAST_OVERRIDE_LOGGED: str | None = None
+_SOURCE_REGIME_LOGGED: set[tuple[str, str, str]] = set()
 
 
 def _normalize_feed_name(feed: str | None) -> str:
@@ -4459,7 +4460,7 @@ def _normalize_feed_name(feed: str | None) -> str:
     return normalized or "iex"
 
 
-def _env_source_override(timeframe: str) -> tuple[str, ...] | None:
+def _env_source_override_raw(timeframe: str) -> tuple[str, ...] | None:
     """Return provider override tuple for the given timeframe, if configured."""
     tf = (timeframe or "").strip().lower()
     if tf in {"1min", "minute", "minutes", "intraday"}:
@@ -4505,6 +4506,60 @@ def _env_source_override(timeframe: str) -> tuple[str, ...] | None:
         return (normalized,)
 
     return (normalized,)
+
+
+def _source_regime_mode() -> str:
+    """Return source-regime consistency mode."""
+
+    try:
+        raw_value = get_env("AI_TRADING_SOURCE_REGIME_MODE")
+    except Exception:
+        raw_value = os.getenv("AI_TRADING_SOURCE_REGIME_MODE")
+    mode = str(raw_value or "").strip().lower()
+    if mode in {"consistent", "lockstep", "strict"}:
+        return "consistent"
+    return "off"
+
+
+def _env_source_override(timeframe: str) -> tuple[str, ...] | None:
+    """Return provider override tuple for timeframe with optional consistency policy."""
+
+    direct_override = _env_source_override_raw(timeframe)
+    if direct_override:
+        return direct_override
+    if _source_regime_mode() != "consistent":
+        return None
+
+    tf = (timeframe or "").strip().lower()
+    if tf in {"1min", "minute", "minutes", "intraday"}:
+        partner_tf = "1Day"
+    elif tf in {"1day", "1d", "daily", "day"}:
+        partner_tf = "1Min"
+    else:
+        return None
+
+    partner_override = _env_source_override_raw(partner_tf)
+    if not partner_override:
+        return None
+    provider = str(partner_override[0] or "").strip().lower()
+    if not provider:
+        return None
+    if provider not in {"yahoo", "finnhub"} and not provider.startswith("alpaca_"):
+        return None
+
+    log_key = (_canon_tf(timeframe), _canon_tf(partner_tf), provider)
+    if log_key not in _SOURCE_REGIME_LOGGED:
+        logger.info(
+            "SOURCE_REGIME_OVERRIDE",
+            extra={
+                "timeframe": log_key[0],
+                "partner_timeframe": log_key[1],
+                "provider": provider,
+                "mode": "consistent",
+            },
+        )
+        _SOURCE_REGIME_LOGGED.add(log_key)
+    return (provider,)
 
 
 def refresh_default_feed(feed: str | None = None) -> str:

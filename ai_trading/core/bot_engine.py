@@ -325,6 +325,8 @@ _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
 _PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
 _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
+_PENDING_ORDER_WARMUP_REMAINING_KEY = "warmup_cycles_remaining"
+_STARTUP_CLEANUP_STALE_SEC_DEFAULT = 120.0
 
 _EASTERN_TZ = ZoneInfo("America/New_York")
 
@@ -561,11 +563,13 @@ def _get_pending_tracker(runtime: Any | None) -> dict[str, float | None]:
         tracker = {
             _PENDING_ORDER_FIRST_SEEN_KEY: None,
             _PENDING_ORDER_LAST_LOG_KEY: None,
+            _PENDING_ORDER_WARMUP_REMAINING_KEY: 0.0,
         }
         state[_PENDING_ORDER_TRACKER_KEY] = tracker
     else:
         tracker.setdefault(_PENDING_ORDER_FIRST_SEEN_KEY, None)
         tracker.setdefault(_PENDING_ORDER_LAST_LOG_KEY, None)
+        tracker.setdefault(_PENDING_ORDER_WARMUP_REMAINING_KEY, 0.0)
     return tracker
 
 
@@ -28425,6 +28429,163 @@ def _pending_order_force_cleanup_seconds() -> float:
     return max(5.0, min(value, 3600.0))
 
 
+def _pending_cleanup_warmup_cycles() -> int:
+    """Return how many cycles to skip after forced pending-order cleanup."""
+
+    try:
+        raw_value = get_env("AI_TRADING_PENDING_CLEANUP_WARMUP_CYCLES", 0, cast=int)
+    except COMMON_EXC:
+        raw_value = 0
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 0
+    return max(0, min(value, 10))
+
+
+def _arm_pending_cleanup_warmup(
+    runtime: Any,
+    *,
+    source: str,
+    open_count: int,
+    pending_count: int,
+) -> bool:
+    """Arm skip-cycle warmup after a cleanup action when configured."""
+
+    cycles = _pending_cleanup_warmup_cycles()
+    tracker = _get_pending_tracker(runtime)
+    if cycles <= 0:
+        tracker[_PENDING_ORDER_WARMUP_REMAINING_KEY] = 0.0
+        return False
+    tracker[_PENDING_ORDER_WARMUP_REMAINING_KEY] = float(max(cycles - 1, 0))
+    logger.info(
+        "PENDING_CLEANUP_WARMUP_ARMED",
+        extra={
+            "source": source,
+            "warmup_cycles": cycles,
+            "open_count": open_count,
+            "pending_count": pending_count,
+        },
+    )
+    return True
+
+
+def _consume_pending_cleanup_warmup(runtime: Any, *, open_count: int) -> bool:
+    """Consume one warmup cycle, returning True when cycle should be skipped."""
+
+    tracker = _get_pending_tracker(runtime)
+    raw_remaining = tracker.get(_PENDING_ORDER_WARMUP_REMAINING_KEY, 0.0)
+    try:
+        remaining = int(float(raw_remaining or 0.0))
+    except (TypeError, ValueError):
+        remaining = 0
+    if remaining <= 0:
+        tracker[_PENDING_ORDER_WARMUP_REMAINING_KEY] = 0.0
+        return False
+    remaining = max(remaining - 1, 0)
+    tracker[_PENDING_ORDER_WARMUP_REMAINING_KEY] = float(remaining)
+    logger.info(
+        "PENDING_CLEANUP_WARMUP_SKIP",
+        extra={
+            "remaining_cycles": remaining,
+            "open_count": open_count,
+        },
+    )
+    return True
+
+
+def _startup_cancel_mode() -> str:
+    """Resolve startup cleanup mode with legacy env compatibility."""
+
+    try:
+        raw_mode = str(get_env("AI_TRADING_STARTUP_CANCEL_MODE", "", cast=str) or "")
+    except COMMON_EXC:
+        raw_mode = ""
+    mode = raw_mode.strip().lower()
+    if mode in {"off", "none", "disabled", "0", "false", "no"}:
+        return "off"
+    if mode in {"all", "always", "force"}:
+        return "all"
+    if mode in {"stale", "stale_only", "stale_pending"}:
+        return "stale_only"
+    try:
+        legacy_enabled = bool(
+            get_env("AI_TRADING_STARTUP_CANCEL_UNEXPECTED_ORDERS", "0", cast=bool)
+        )
+    except COMMON_EXC:
+        legacy_enabled = False
+    if legacy_enabled:
+        return "all"
+    return "off"
+
+
+def _startup_cancel_stale_seconds() -> float:
+    """Return stale-age threshold used by startup stale-only cleanup mode."""
+
+    try:
+        raw_value = float(
+            get_env(
+                "AI_TRADING_STARTUP_CANCEL_STALE_SEC",
+                _STARTUP_CLEANUP_STALE_SEC_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        raw_value = _STARTUP_CLEANUP_STALE_SEC_DEFAULT
+    return max(10.0, min(raw_value, 7200.0))
+
+
+def _startup_cancel_decision(
+    open_orders: Iterable[Any],
+    *,
+    mode: str,
+) -> tuple[bool, dict[str, Any]]:
+    """Return (should_cancel, diagnostics) for startup cleanup."""
+
+    open_list = list(open_orders)
+    details: dict[str, Any] = {"mode": mode, "open_count": len(open_list)}
+    if mode == "off":
+        details["reason"] = "disabled"
+        return False, details
+    if not open_list:
+        details["reason"] = "no_open_orders"
+        return False, details
+    if mode == "all":
+        details["reason"] = "mode_all"
+        return True, details
+
+    stale_after = _startup_cancel_stale_seconds()
+    now_dt = datetime.now(UTC)
+    stale_ids: list[str] = []
+    stale_statuses: set[str] = set()
+    oldest_stuck_age_s: float | None = None
+    for order in open_list:
+        status = _normalize_broker_order_status(getattr(order, "status", None))
+        if status and status not in _PENDING_ORDER_STUCK_STATUSES:
+            continue
+        age_s = _pending_order_broker_age_seconds(order, now_dt)
+        if age_s is None:
+            continue
+        if oldest_stuck_age_s is None or age_s > oldest_stuck_age_s:
+            oldest_stuck_age_s = age_s
+        if age_s >= stale_after:
+            stale_ids.append(str(getattr(order, "id", "?")))
+            if status:
+                stale_statuses.add(status)
+    details["stale_after_s"] = int(stale_after)
+    details["stale_count"] = len(stale_ids)
+    details["stale_ids"] = stale_ids[:_PENDING_ORDER_SAMPLE_LIMIT]
+    if oldest_stuck_age_s is not None:
+        details["oldest_stuck_age_s"] = int(max(oldest_stuck_age_s, 0))
+    if stale_statuses:
+        details["stale_statuses"] = sorted(stale_statuses)
+    if stale_ids:
+        details["reason"] = "stale_pending"
+        return True, details
+    details["reason"] = "no_stale_pending"
+    return False, details
+
+
 def _pending_order_broker_age_seconds(order: Any, now_dt: datetime) -> float | None:
     """Return broker-reported order age in seconds when timestamps are available."""
 
@@ -28509,6 +28670,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             )
         tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
+        if _consume_pending_cleanup_warmup(runtime, open_count=len(open_list)):
+            return True
         return False
 
     cfg_interval = getattr(
@@ -28645,6 +28808,13 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     )
     tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
     tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
+    if _arm_pending_cleanup_warmup(
+        runtime,
+        source="pending_cleanup",
+        open_count=len(open_list),
+        pending_count=len(pending_ids),
+    ):
+        return True
     return False
 
 
@@ -31397,20 +31567,60 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             logging.warning("ALPACA_CLIENT_MISSING")
             _log_loop_heartbeat(loop_id, loop_start)
             return
-        if (
-            not state.startup_cleanup_done
-            and bool(get_env("AI_TRADING_STARTUP_CANCEL_UNEXPECTED_ORDERS", "0", cast=bool))
-        ):
-            startup_result = cancel_all_open_orders_oms(runtime)
+        if not state.startup_cleanup_done:
+            startup_mode = _startup_cancel_mode()
+            if startup_mode != "off":
+                startup_open_orders: list[Any] = []
+                startup_should_cancel = True
+                startup_details: dict[str, Any] = {"mode": startup_mode}
+                try:
+                    startup_open_orders = list_open_orders(api)
+                    startup_should_cancel, startup_details = _startup_cancel_decision(
+                        startup_open_orders,
+                        mode=startup_mode,
+                    )
+                except COMMON_EXC as exc:
+                    startup_should_cancel = False
+                    startup_details = {
+                        "mode": startup_mode,
+                        "reason": "evaluation_failed",
+                        "detail": str(exc),
+                    }
+                    logger.warning(
+                        "STARTUP_CLEANUP_EVALUATION_FAILED",
+                        extra=startup_details,
+                        exc_info=True,
+                    )
+                if startup_should_cancel:
+                    startup_result = cancel_all_open_orders_oms(runtime)
+                    startup_log = logger.warning if startup_result.failed else logger.info
+                    try:
+                        startup_open_count = int(
+                            startup_details.get("open_count", len(startup_open_orders))
+                        )
+                    except (TypeError, ValueError):
+                        startup_open_count = len(startup_open_orders)
+                    try:
+                        startup_pending_count = int(startup_details.get("stale_count", 0))
+                    except (TypeError, ValueError):
+                        startup_pending_count = 0
+                    startup_log(
+                        "STARTUP_CLEANUP",
+                        extra={
+                            **startup_details,
+                            "cancelled": startup_result.cancelled,
+                            "failed": startup_result.failed,
+                        },
+                    )
+                    _arm_pending_cleanup_warmup(
+                        runtime,
+                        source="startup_cleanup",
+                        open_count=startup_open_count,
+                        pending_count=startup_pending_count,
+                    )
+                else:
+                    logger.info("STARTUP_CLEANUP_SKIPPED", extra=startup_details)
             state.startup_cleanup_done = True
-            startup_log = logger.warning if startup_result.failed else logger.info
-            startup_log(
-                "STARTUP_CLEANUP",
-                extra={
-                    "cancelled": startup_result.cancelled,
-                    "failed": startup_result.failed,
-                },
-            )
         try:
             safe_mode_live = provider_monitor.is_safe_mode_active()
         except Exception:

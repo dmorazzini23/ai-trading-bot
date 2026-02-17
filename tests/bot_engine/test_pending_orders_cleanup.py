@@ -198,3 +198,53 @@ def test_handle_pending_orders_stale_broker_age_triggers_immediate_cleanup(monke
 
     assert be._handle_pending_orders([stale_order], runtime) is False
     cancel_mock.assert_called_once_with(runtime)
+
+
+def test_handle_pending_orders_cleanup_warmup(monkeypatch):
+    runtime = types.SimpleNamespace(state={})
+    cancel_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=10),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_CLEANUP_WARMUP_CYCLES", "2")
+
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    orders = [_order("pending_new", "o-warm")]
+
+    assert be._handle_pending_orders(orders, runtime) is True
+    clock.value = 112.0
+    assert be._handle_pending_orders(orders, runtime) is True
+    cancel_mock.assert_called_once_with(runtime)
+
+    # One additional warmup cycle should be skipped even after pending clears.
+    assert be._handle_pending_orders([], runtime) is True
+    assert be._handle_pending_orders([], runtime) is False
+
+
+def test_startup_cancel_decision_stale_only(monkeypatch):
+    now = datetime(2026, 2, 17, 14, 0, tzinfo=UTC)
+    monkeypatch.setattr(be, "datetime", types.SimpleNamespace(now=lambda tz=None: now))
+    monkeypatch.setenv("AI_TRADING_STARTUP_CANCEL_STALE_SEC", "60")
+
+    stale_order = _order("pending_new", "stale-1", created_at=now - timedelta(seconds=120))
+    fresh_order = _order("pending_new", "fresh-1", created_at=now - timedelta(seconds=20))
+    terminal_order = _order("filled", "filled-1", created_at=now - timedelta(seconds=300))
+
+    should_cancel, details = be._startup_cancel_decision(
+        [fresh_order, terminal_order],
+        mode="stale_only",
+    )
+    assert should_cancel is False
+    assert details["reason"] == "no_stale_pending"
+
+    should_cancel, details = be._startup_cancel_decision(
+        [fresh_order, stale_order],
+        mode="stale_only",
+    )
+    assert should_cancel is True
+    assert details["reason"] == "stale_pending"
+    assert details["stale_ids"] == ["stale-1"]

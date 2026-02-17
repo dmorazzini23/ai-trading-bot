@@ -16,6 +16,7 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("DAILY_SOURCE", raising=False)
     monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
     monkeypatch.delenv("DATA_FEED_INTRADAY", raising=False)
+    monkeypatch.delenv("AI_TRADING_SOURCE_REGIME_MODE", raising=False)
     yield
 
 
@@ -117,3 +118,26 @@ def test_daily_source_override_yahoo(monkeypatch):
     result = data_fetcher.get_daily_df("AAPL", start=start, end=end)
     assert not result.empty
     assert result.attrs.get("data_provider") == "yahoo"
+
+
+def test_source_regime_consistency_applies_daily_override_to_minute(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SOURCE_REGIME_MODE", "consistent")
+    monkeypatch.setenv("DAILY_SOURCE", "yahoo")
+
+    assert data_fetcher._env_source_override("1Min") == ("yahoo",)
+
+
+def test_source_regime_consistency_respects_explicit_minute_override(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SOURCE_REGIME_MODE", "consistent")
+    monkeypatch.setenv("DAILY_SOURCE", "yahoo")
+    monkeypatch.setenv("MINUTE_SOURCE", "alpaca")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+
+    assert data_fetcher._env_source_override("1Min") == ("alpaca_iex",)
+
+
+def test_source_regime_consistency_applies_minute_override_to_daily(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_SOURCE_REGIME_MODE", "consistent")
+    monkeypatch.setenv("MINUTE_SOURCE", "yahoo")
+
+    assert data_fetcher._env_source_override("1Day") == ("yahoo",)

@@ -11,6 +11,7 @@ import inspect
 import math
 import os
 import random
+import statistics
 import sys
 import time
 from dataclasses import dataclass
@@ -1120,6 +1121,35 @@ def _config_int(name: str, default: int | None) -> int | None:
         return default
 
 
+def _config_float(name: str, default: float | None) -> float | None:
+    """Fetch float configuration via get_env with os fallback."""
+
+    raw: Any = None
+    if _config_get_env is not None:
+        try:
+            raw = _config_get_env(name, default=None)
+        except Exception:
+            raw = None
+    if raw in (None, ""):
+        raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_int_alias(names: Sequence[str], default: int | None = None) -> int | None:
+    """Resolve integer config value from the first populated env name."""
+
+    for name in names:
+        value = _config_int(name, None)
+        if value is not None:
+            return value
+    return default
+
+
 def _config_decimal(name: str, default: Decimal) -> Decimal:
     """Fetch decimal configuration using same semantics as _config_int."""
 
@@ -1267,7 +1297,19 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     min_qty_default = 1
     min_qty = _config_int("EXECUTION_MIN_QTY", min_qty_default) or min_qty_default
     min_notional = _config_decimal("EXECUTION_MIN_NOTIONAL", Decimal("0"))
-    max_open_orders = _config_int("EXECUTION_MAX_OPEN_ORDERS", None)
+    max_open_orders_global = _config_int_alias(
+        ("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", "AI_TRADING_EXEC_MAX_OPEN_ORDERS_GLOBAL"),
+        None,
+    )
+    if max_open_orders_global is None:
+        max_open_orders_global = _config_int("EXECUTION_MAX_OPEN_ORDERS", None)
+    max_open_orders_per_symbol = _config_int_alias(
+        (
+            "EXECUTION_MAX_OPEN_ORDERS_PER_SYMBOL",
+            "AI_TRADING_EXEC_MAX_OPEN_ORDERS_PER_SYMBOL",
+        ),
+        None,
+    )
 
     open_orders: list[Any] = []
     if broker is not None and hasattr(broker, "list_orders"):
@@ -1286,6 +1328,8 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
 
     open_notional = Decimal("0")
     countable_orders = 0
+    countable_symbol_orders = 0
+    symbol_key = str(symbol or "").strip().upper()
     for order in open_orders:
         order_side = _extract_value(order, "side")
         if not _order_consumes_capacity(order_side):
@@ -1313,8 +1357,16 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
             notional_val = (price_val * qty_val).copy_abs()
         open_notional += notional_val.copy_abs()
         countable_orders += 1
+        if symbol_key:
+            order_symbol = str(_extract_value(order, "symbol") or "").strip().upper()
+            if order_symbol == symbol_key:
+                countable_symbol_orders += 1
 
-    if max_open_orders is not None and countable_orders >= max_open_orders:
+    if (
+        max_open_orders_per_symbol is not None
+        and symbol_key
+        and countable_symbol_orders >= max_open_orders_per_symbol
+    ):
         available_display = _format_money(None)
         logger.warning(
             "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
@@ -1325,9 +1377,24 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
                 None if price_decimal is None else (price_decimal * Decimal(qty_int)).copy_abs()
             ),
             available_display,
-            "max_open_orders",
+            "max_open_orders_per_symbol",
         )
-        return CapacityCheck(False, 0, "max_open_orders")
+        return CapacityCheck(False, 0, "max_open_orders_per_symbol")
+
+    if max_open_orders_global is not None and countable_orders >= max_open_orders_global:
+        available_display = _format_money(None)
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(
+                None if price_decimal is None else (price_decimal * Decimal(qty_int)).copy_abs()
+            ),
+            available_display,
+            "max_open_orders_global",
+        )
+        return CapacityCheck(False, 0, "max_open_orders_global")
 
     if account is None and broker is not None and hasattr(broker, "get_account"):
         try:
@@ -1734,6 +1801,10 @@ class ExecutionEngine:
         self._cred_error: Exception | None = None
         self._pending_orders: dict[str, dict[str, Any]] = {}
         self._order_signal_meta: dict[str, _SignalMeta] = {}
+        self._cycle_submitted_orders: int = 0
+        self._cycle_order_outcomes: list[dict[str, Any]] = []
+        self._recent_order_intents: dict[tuple[str, str], float] = {}
+        self._pending_new_actions_this_cycle: int = 0
         self._broker_locked_until: float = 0.0
         self._broker_lock_reason: str | None = None
         self._long_only_mode_reason: str | None = None
@@ -1793,6 +1864,9 @@ class ExecutionEngine:
     def start_cycle(self) -> None:
         """Cache the Alpaca account snapshot for this trading cycle."""
 
+        self._cycle_submitted_orders = 0
+        self._pending_new_actions_this_cycle = 0
+        self._cycle_order_outcomes = []
         self._cycle_account = None
         self._cycle_account_fetched = False
         account = self._refresh_cycle_account()
@@ -1830,10 +1904,12 @@ class ExecutionEngine:
                             "message": "Automatically switched to swing trading mode to avoid PDT violations"
                         }
                     )
+        self._apply_pending_new_timeout_policy()
 
     def end_cycle(self) -> None:
         """Best-effort end-of-cycle hook aligned with core engine expectations."""
 
+        self._emit_cycle_execution_kpis()
         self._cycle_account = None
         self._cycle_account_fetched = False
         order_mgr = getattr(self, "order_manager", None)
@@ -1845,6 +1921,409 @@ class ExecutionEngine:
                 flush()
             except Exception:  # pragma: no cover - diagnostics only
                 logger.debug("ORDER_MANAGER_FLUSH_FAILED", exc_info=True)
+
+    @staticmethod
+    def _order_age_seconds(order: Any, now_dt: datetime) -> float | None:
+        """Return broker-reported order age in seconds when available."""
+
+        for attr in ("updated_at", "submitted_at", "created_at"):
+            raw_value = _extract_value(order, attr)
+            if raw_value in (None, ""):
+                continue
+            if isinstance(raw_value, datetime):
+                ts = raw_value.astimezone(UTC)
+            else:
+                try:
+                    ts = datetime.fromisoformat(str(raw_value))
+                except Exception:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=UTC)
+                else:
+                    ts = ts.astimezone(UTC)
+            age_s = (now_dt - ts).total_seconds()
+            return max(age_s, 0.0)
+        return None
+
+    def _list_open_orders_snapshot(self) -> list[Any]:
+        """Return current open orders from the active broker client."""
+
+        client = self._capacity_broker(getattr(self, "trading_client", None))
+        if client is None:
+            return []
+        list_orders = getattr(client, "list_orders", None)
+        if callable(list_orders):
+            try:
+                orders = list_orders(status="open")  # type: ignore[call-arg]
+            except TypeError:
+                orders = list_orders()  # type: ignore[call-arg]
+            except Exception:
+                logger.debug("PENDING_POLICY_LIST_ORDERS_FAILED", exc_info=True)
+                return []
+            return list(orders or [])
+        get_orders = getattr(client, "get_orders", None)
+        if callable(get_orders):
+            try:
+                orders = get_orders(status="open")  # type: ignore[call-arg]
+            except TypeError:
+                orders = get_orders()  # type: ignore[call-arg]
+            except Exception:
+                logger.debug("PENDING_POLICY_GET_ORDERS_FAILED", exc_info=True)
+                return []
+            return list(orders or [])
+        return []
+
+    def _pending_new_policy_config(self) -> tuple[str, float, int, int]:
+        """Resolve pending-new timeout policy settings from environment."""
+
+        policy_raw: Any = None
+        if _config_get_env is not None:
+            try:
+                policy_raw = _config_get_env("AI_TRADING_PENDING_NEW_POLICY", None)
+            except Exception:
+                policy_raw = None
+        if policy_raw in (None, ""):
+            policy_raw = os.getenv("AI_TRADING_PENDING_NEW_POLICY")
+        policy = str(policy_raw or "off").strip().lower()
+        if policy in {"", "0", "false", "no", "none", "off", "disabled"}:
+            policy = "off"
+        elif policy in {"replace", "replace_widen", "widen"}:
+            policy = "replace_widen"
+        elif policy != "cancel":
+            policy = "off"
+
+        timeout_s = _config_float("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", None)
+        if timeout_s is None:
+            timeout_s = _config_float("ORDER_TTL_SECONDS", None)
+        if timeout_s is None:
+            timeout_s = float(max(getattr(self, "order_ttl_seconds", 0), 30))
+        timeout_s = max(5.0, min(float(timeout_s), 3600.0))
+
+        max_actions = _config_int_alias(
+            (
+                "AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE",
+                "EXECUTION_PENDING_NEW_MAX_ACTIONS_PER_CYCLE",
+            ),
+            2,
+        )
+        if max_actions is None:
+            max_actions = 2
+        max_actions = max(0, min(int(max_actions), 50))
+
+        replace_widen_bps = _config_int_alias(
+            (
+                "AI_TRADING_PENDING_NEW_REPLACE_WIDEN_BPS",
+                "EXECUTION_PENDING_NEW_REPLACE_WIDEN_BPS",
+            ),
+            int(getattr(self, "marketable_limit_slippage_bps", 10)),
+        )
+        if replace_widen_bps is None:
+            replace_widen_bps = int(getattr(self, "marketable_limit_slippage_bps", 10))
+        replace_widen_bps = max(0, min(int(replace_widen_bps), 1000))
+
+        return policy, timeout_s, max_actions, replace_widen_bps
+
+    def _apply_pending_new_timeout_policy(self) -> None:
+        """Apply pending-new timeout actions for stale broker-open orders."""
+
+        policy, timeout_s, max_actions, replace_widen_bps = self._pending_new_policy_config()
+        if policy == "off" or max_actions <= 0:
+            return
+        open_orders = self._list_open_orders_snapshot()
+        if not open_orders:
+            return
+
+        now_dt = datetime.now(UTC)
+        actions_taken = 0
+        stale_detected = 0
+        stale_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
+
+        for order in open_orders:
+            if actions_taken >= max_actions:
+                break
+            status = _normalize_status(_extract_value(order, "status")) or ""
+            if status not in stale_statuses:
+                continue
+            age_s = self._order_age_seconds(order, now_dt)
+            if age_s is None or age_s < timeout_s:
+                continue
+            stale_detected += 1
+
+            order_id = _extract_value(order, "id", "order_id", "client_order_id")
+            symbol = str(_extract_value(order, "symbol") or "").strip().upper()
+            side = self._normalized_order_side(_extract_value(order, "side"))
+            quantity = _safe_int(_extract_value(order, "qty", "quantity", "remaining_qty"), 0)
+            if not order_id:
+                continue
+
+            action = "cancel"
+            action_success = False
+            if (
+                policy == "replace_widen"
+                and symbol
+                and side in {"buy", "sell"}
+                and quantity > 0
+            ):
+                order_type = str(_extract_value(order, "type", "order_type") or "").strip().lower()
+                limit_price = _safe_float(
+                    _extract_value(order, "limit_price", "price", "stop_price")
+                )
+                if order_type in {"limit", "stop_limit"} and limit_price is not None:
+                    snapshot: dict[str, Any] = {
+                        "symbol": symbol,
+                        "side": side,
+                        "quantity": quantity,
+                        "type": "limit",
+                        "limit_price": limit_price,
+                        "time_in_force": str(
+                            _extract_value(order, "time_in_force") or "day"
+                        ).strip().lower(),
+                        "extended_hours": bool(_extract_value(order, "extended_hours") or False),
+                    }
+                    replacement = self._replace_limit_order_with_marketable(
+                        symbol=symbol,
+                        side=side,
+                        qty=quantity,
+                        existing_order_id=order_id,
+                        client_order_id=_extract_value(order, "client_order_id"),
+                        order_data_snapshot=snapshot,
+                        limit_price=limit_price,
+                        slippage_bps=replace_widen_bps,
+                    )
+                    if replacement is not None:
+                        action = "replace_widen"
+                        action_success = True
+
+            if not action_success:
+                try:
+                    self._cancel_order_alpaca(str(order_id))
+                except Exception:
+                    logger.warning(
+                        "PENDING_NEW_POLICY_ACTION_FAILED",
+                        extra={
+                            "policy": policy,
+                            "action": "cancel",
+                            "symbol": symbol or None,
+                            "order_id": str(order_id),
+                            "status": status,
+                            "age_s": round(age_s, 3) if age_s is not None else None,
+                        },
+                        exc_info=True,
+                    )
+                    continue
+                action = "cancel"
+                action_success = True
+
+            if action_success:
+                actions_taken += 1
+                self._pending_new_actions_this_cycle += 1
+                logger.warning(
+                    "PENDING_NEW_TIMEOUT_ACTION",
+                    extra={
+                        "policy": policy,
+                        "action": action,
+                        "symbol": symbol or None,
+                        "order_id": str(order_id),
+                        "status": status,
+                        "age_s": round(age_s, 3) if age_s is not None else None,
+                        "timeout_s": timeout_s,
+                        "actions_taken": actions_taken,
+                        "max_actions": max_actions,
+                    },
+                )
+
+        if stale_detected > actions_taken and actions_taken >= max_actions:
+            logger.info(
+                "PENDING_NEW_TIMEOUT_ACTION_CAP_REACHED",
+                extra={
+                    "policy": policy,
+                    "stale_detected": stale_detected,
+                    "actions_taken": actions_taken,
+                    "max_actions": max_actions,
+                    "timeout_s": timeout_s,
+                },
+            )
+
+    def _duplicate_intent_window_seconds(self) -> float:
+        """Return duplicate-intent suppression window in seconds."""
+
+        value = _config_float("AI_TRADING_DUPLICATE_INTENT_WINDOW_SEC", None)
+        if value is None:
+            value = _config_float("EXECUTION_DUPLICATE_INTENT_WINDOW_SEC", None)
+        if value is None:
+            return 0.0
+        return max(0.0, min(float(value), 3600.0))
+
+    def _max_new_orders_per_cycle(self) -> int | None:
+        """Return max new-order submits allowed per cycle."""
+
+        value = _config_int_alias(
+            ("EXECUTION_MAX_NEW_ORDERS_PER_CYCLE", "AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE"),
+            None,
+        )
+        if value is None:
+            return None
+        return max(1, int(value))
+
+    def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
+        """Return True when duplicate intent should be skipped."""
+
+        window_s = self._duplicate_intent_window_seconds()
+        if window_s <= 0:
+            return False
+        key = (str(symbol or "").upper(), str(side or "").lower())
+        if not key[0] or key[1] not in {"buy", "sell"}:
+            return False
+        now_ts = monotonic_time()
+        intents = getattr(self, "_recent_order_intents", None)
+        if not isinstance(intents, dict):
+            intents = {}
+            self._recent_order_intents = intents
+        last_ts = intents.get(key)
+        if last_ts is None:
+            return False
+        age_s = max(now_ts - last_ts, 0.0)
+        if age_s >= window_s:
+            return False
+        logger.warning(
+            "ORDER_INTENT_SUPPRESSED_DUPLICATE",
+            extra={
+                "symbol": key[0],
+                "side": key[1],
+                "age_s": round(age_s, 3),
+                "window_s": round(window_s, 3),
+            },
+        )
+        return True
+
+    def _record_order_intent(self, symbol: str, side: str) -> None:
+        """Persist latest submit timestamp for duplicate-intent suppression."""
+
+        key = (str(symbol or "").upper(), str(side or "").lower())
+        if not key[0] or key[1] not in {"buy", "sell"}:
+            return
+        intents = getattr(self, "_recent_order_intents", None)
+        if not isinstance(intents, dict):
+            intents = {}
+            self._recent_order_intents = intents
+        intents[key] = monotonic_time()
+
+    def _emit_cycle_execution_kpis(self) -> None:
+        """Emit per-cycle execution KPIs and optional runtime alerts."""
+
+        outcomes = list(getattr(self, "_cycle_order_outcomes", []) or [])
+        submitted = len(outcomes)
+        if submitted <= 0:
+            return
+
+        filled = sum(1 for item in outcomes if item.get("status") == "filled")
+        cancelled = sum(
+            1
+            for item in outcomes
+            if item.get("status") in {"canceled", "cancelled", "expired", "done_for_day"}
+        )
+        pending_durations = [
+            float(item.get("duration_s", 0.0))
+            for item in outcomes
+            if item.get("status")
+            in {"new", "pending_new", "accepted", "acknowledged", "submitted", "pending_replace"}
+            or bool(item.get("ack_timed_out"))
+        ]
+        median_pending_s = (
+            float(statistics.median(pending_durations)) if pending_durations else 0.0
+        )
+        fill_ratio = float(filled) / float(submitted)
+        cancel_ratio = float(cancelled) / float(submitted)
+
+        now_dt = datetime.now(UTC)
+        pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
+        open_orders = self._list_open_orders_snapshot()
+        pending_open_ages: list[float] = []
+        for order in open_orders:
+            status = _normalize_status(_extract_value(order, "status")) or ""
+            if status not in pending_statuses:
+                continue
+            age_s = self._order_age_seconds(order, now_dt)
+            if age_s is not None:
+                pending_open_ages.append(age_s)
+        oldest_pending_s = max(pending_open_ages) if pending_open_ages else 0.0
+
+        logger.info(
+            "EXECUTION_KPI_SNAPSHOT",
+            extra={
+                "submitted": submitted,
+                "filled": filled,
+                "cancelled": cancelled,
+                "fill_ratio": round(fill_ratio, 4),
+                "cancel_ratio": round(cancel_ratio, 4),
+                "median_pending_s": round(median_pending_s, 3),
+                "open_pending_count": len(pending_open_ages),
+                "oldest_pending_s": round(oldest_pending_s, 3),
+                "pending_new_actions": int(
+                    max(getattr(self, "_pending_new_actions_this_cycle", 0), 0)
+                ),
+            },
+        )
+
+        alerts_enabled = _resolve_bool_env("AI_TRADING_EXEC_KPI_ALERTS_ENABLED")
+        if alerts_enabled is None:
+            alerts_enabled = bool(_config_int("AI_TRADING_EXEC_KPI_ALERTS_ENABLED", 0))
+        if not alerts_enabled:
+            return
+
+        min_fill_ratio = _config_float("AI_TRADING_KPI_MIN_FILL_RATIO", 0.25)
+        max_cancel_ratio = _config_float("AI_TRADING_KPI_MAX_CANCEL_RATIO", 0.75)
+        max_median_pending_s = _config_float("AI_TRADING_KPI_MAX_MEDIAN_PENDING_SEC", 30.0)
+        max_open_pending_age_s = _config_float("AI_TRADING_KPI_PENDING_AGE_ALERT_SEC", 120.0)
+
+        from ai_trading.monitoring.alerts import emit_runtime_alert
+
+        if min_fill_ratio is not None and fill_ratio < float(min_fill_ratio):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_LOW_FILL_RATIO",
+                severity="warning",
+                details={
+                    "fill_ratio": round(fill_ratio, 4),
+                    "threshold": float(min_fill_ratio),
+                    "submitted": submitted,
+                    "filled": filled,
+                },
+            )
+        if max_cancel_ratio is not None and cancel_ratio > float(max_cancel_ratio):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_HIGH_CANCEL_RATIO",
+                severity="warning",
+                details={
+                    "cancel_ratio": round(cancel_ratio, 4),
+                    "threshold": float(max_cancel_ratio),
+                    "submitted": submitted,
+                    "cancelled": cancelled,
+                },
+            )
+        if max_median_pending_s is not None and median_pending_s > float(max_median_pending_s):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_MEDIAN_PENDING_HIGH",
+                severity="warning",
+                details={
+                    "median_pending_s": round(median_pending_s, 3),
+                    "threshold": float(max_median_pending_s),
+                    "submitted": submitted,
+                },
+            )
+        if (
+            max_open_pending_age_s is not None
+            and pending_open_ages
+            and oldest_pending_s > float(max_open_pending_age_s)
+        ):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_OPEN_PENDING_AGED",
+                severity="warning",
+                details={
+                    "oldest_pending_s": round(oldest_pending_s, 3),
+                    "threshold": float(max_open_pending_age_s),
+                    "open_pending_count": len(pending_open_ages),
+                },
+            )
 
     def _refresh_cycle_account(self) -> Any | None:
         """Fetch and cache the current Alpaca account if available."""
@@ -3505,6 +3984,30 @@ class ExecutionEngine:
 
         if not pytest_mode and not self._pre_execution_checks():
             return None
+        if not closing_position and self._should_suppress_duplicate_intent(symbol, mapped_side):
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            return None
+        if not hasattr(self, "_cycle_submitted_orders"):
+            self._cycle_submitted_orders = 0
+        max_new_orders_per_cycle = self._max_new_orders_per_cycle()
+        if (
+            not closing_position
+            and max_new_orders_per_cycle is not None
+            and int(self._cycle_submitted_orders) >= int(max_new_orders_per_cycle)
+        ):
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            logger.warning(
+                "ORDER_PACING_CAP_HIT",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "submitted_this_cycle": int(self._cycle_submitted_orders),
+                    "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
+                },
+            )
+            return None
         capacity_broker = self._capacity_broker(trading_client)
         account_snapshot = self._resolve_capacity_account_snapshot(
             capacity_broker,
@@ -4648,6 +5151,16 @@ class ExecutionEngine:
         poll_attempts = 0
         last_polled_status = initial_status_token
         last_status_raw = final_status
+        status_lower = _normalize_status(status) or str(status or "").strip().lower()
+        terminal_statuses = {
+            "filled",
+            "partially_filled",
+            "canceled",
+            "cancelled",
+            "rejected",
+            "expired",
+            "done_for_day",
+        }
 
         if client is not None:
             order_id_hint = _extract_value(final_order, "id", "order_id")
@@ -4660,15 +5173,6 @@ class ExecutionEngine:
                 4,
                 int(max(_ACK_TIMEOUT_SECONDS, 0.1) / max(poll_interval, 0.05)) * 8,
             )
-            terminal_statuses = {
-                "filled",
-                "partially_filled",
-                "canceled",
-                "cancelled",
-                "rejected",
-                "expired",
-                "done_for_day",
-            }
             while poll_attempts < max_poll_attempts and time.monotonic() < poll_deadline:
                 refreshed = None
                 try:
@@ -4865,7 +5369,16 @@ class ExecutionEngine:
             logger.warning("ORDER_REJECTED", extra=final_payload)
         if order_id_display:
             store = getattr(self, "_pending_orders", None) or {}
-            store.pop(str(order_id_display), None)
+            key = str(order_id_display)
+            if order_status_lower in _TERMINAL_ORDER_STATUSES:
+                store.pop(key, None)
+            else:
+                pending_entry = store.setdefault(key, {})
+                pending_entry["status"] = order_status_lower or "submitted"
+                pending_entry["symbol"] = symbol
+                pending_entry["side"] = mapped_side
+                pending_entry["qty"] = requested_qty
+                pending_entry["updated_at"] = datetime.now(UTC).isoformat()
             self._pending_orders = store
 
         symbol_key = symbol.upper()
@@ -4992,6 +5505,31 @@ class ExecutionEngine:
                 execution_result.status = "submitted"
             elif not execution_result.status:
                 execution_result.status = order_status_lower or "submitted"
+
+        if not closing_position:
+            current_submits = int(getattr(self, "_cycle_submitted_orders", 0))
+            self._cycle_submitted_orders = current_submits + 1
+            self._record_order_intent(symbol, mapped_side)
+
+        outcome_status = (
+            _normalize_status(execution_result.status)
+            or _normalize_status(status)
+            or str(status or execution_result.status or "").strip().lower()
+            or "unknown"
+        )
+        outcomes = getattr(self, "_cycle_order_outcomes", None)
+        if not isinstance(outcomes, list):
+            outcomes = []
+        outcomes.append(
+            {
+                "symbol": symbol,
+                "side": mapped_side,
+                "status": outcome_status,
+                "ack_timed_out": bool(ack_timed_out),
+                "duration_s": max(time.monotonic() - submit_started_at, 0.0),
+            }
+        )
+        self._cycle_order_outcomes = outcomes
 
         logger.info(
             "EXEC_ENGINE_EXECUTE_ORDER",
@@ -6442,6 +6980,7 @@ class ExecutionEngine:
         client_order_id: Any | None,
         order_data_snapshot: Mapping[str, Any],
         limit_price: float | None,
+        slippage_bps: int | None = None,
     ) -> tuple[Any, str, float, int, Any, Any] | None:
         """Cancel an idle limit order and replace it with a marketable limit."""
 
@@ -6451,8 +6990,13 @@ class ExecutionEngine:
             base_price = float(limit_price)
         except (TypeError, ValueError):
             return None
-        slippage_bps = max(0, int(getattr(self, "marketable_limit_slippage_bps", 10)))
-        basis = slippage_bps / 10000.0
+        slippage_value = (
+            int(slippage_bps)
+            if slippage_bps is not None
+            else int(getattr(self, "marketable_limit_slippage_bps", 10))
+        )
+        slippage_value = max(0, slippage_value)
+        basis = slippage_value / 10000.0
         if side.lower() == "buy":
             replacement_price = base_price * (1 + basis)
         else:
@@ -6510,7 +7054,7 @@ class ExecutionEngine:
                 "original_limit_price": limit_price,
                 "replacement_limit_price": replacement_payload["limit_price"],
                 "ttl_seconds": self.order_ttl_seconds,
-                "slippage_bps": slippage_bps,
+                "slippage_bps": slippage_value,
             },
         )
         return _normalize_order_payload(replacement, qty)
