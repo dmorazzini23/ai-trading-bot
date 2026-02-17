@@ -30101,7 +30101,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         symbols = list(getattr(runtime, "universe_tickers", []) or [])
     if not symbols:
         if bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool)):
-            logger.info("NETTING_NO_SYMBOLS")
+            logger.debug("NETTING_NO_SYMBOLS")
         else:
             logger.warning("NETTING_NO_SYMBOLS")
         return
@@ -31231,7 +31231,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     runtime_contract={"stubs_enabled": False},
                 )
             except Exception as exc:
-                logger.warning("RUN_MANIFEST_WRITE_FAILED", extra={"error": str(exc)})
+                logger.warning(
+                    "RUN_MANIFEST_WRITE_FAILED error=%s",
+                    str(exc),
+                    extra={"error": str(exc)},
+                )
             else:
                 state.run_manifest_written = True
         if not hasattr(state, "trade_cooldowns"):

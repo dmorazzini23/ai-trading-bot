@@ -45,3 +45,27 @@ def test_run_manifest_uses_env_path_when_cfg_missing(
     path = write_run_manifest(cfg, runtime_contract={"stubs_enabled": False})
     assert path == target
     assert path.exists()
+
+
+def test_run_manifest_relative_path_prefers_state_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.delenv("AI_TRADING_DATA_DIR", raising=False)
+    monkeypatch.setenv("STATE_DIRECTORY", str(state_dir))
+    monkeypatch.setenv("AI_TRADING_RUN_MANIFEST_PATH", "runtime/run_manifest.jsonl")
+
+    cfg = SimpleNamespace(
+        execution_mode="paper",
+        alpaca_api_key="PK1234567890",
+        to_dict=lambda: {
+            "execution_mode": "paper",
+            "recon_enabled": True,
+            "kill_switch": False,
+        },
+    )
+
+    path = write_run_manifest(cfg, runtime_contract={"stubs_enabled": False})
+    assert path == (state_dir / "runtime" / "run_manifest.jsonl").resolve()
+    assert path.exists()

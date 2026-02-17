@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,6 +95,20 @@ def _resolve_manifest_path(cfg: Any, explicit_path: str | None) -> Path:
     target = Path(str(configured)).expanduser()
     if target.is_absolute():
         return target
+
+    # Prefer systemd/runtime writable roots for relative paths in production.
+    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "") or "").strip()
+    if data_root_raw:
+        data_root = Path(data_root_raw.split(":")[0]).expanduser()
+        if data_root.is_absolute():
+            return (data_root / target).resolve()
+
+    state_dir_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
+    if state_dir_raw:
+        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
+        if state_root.is_absolute():
+            return (state_root / target).resolve()
+
     repo_root = Path(__file__).resolve().parents[2]
     return (repo_root / target).resolve()
 
