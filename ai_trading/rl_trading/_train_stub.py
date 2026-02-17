@@ -81,7 +81,8 @@ class Model:
         self.config = config
 
     def predict(self, _state: Any, deterministic: bool = True) -> tuple[int, None]:  # pragma: no cover - deterministic stub
-        return (1, None)
+        # Stub mode must remain non-trading by default.
+        return (0, None)
 
     def save(self, path: str | os.PathLike[str]) -> None:
         Path(path).write_bytes(b"0")

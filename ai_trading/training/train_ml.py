@@ -444,7 +444,18 @@ def train_model_cli(
         wf_smoke: Whether to run walk-forward smoke test
     """
     try:
-        logger.info(f"CLI training started: symbols={symbol_list}, model={model_type}")
+        normalized_symbols: list[str] = []
+        seen_symbols: set[str] = set()
+        for raw_symbol in symbol_list:
+            symbol = str(raw_symbol or "").strip().upper()
+            if not symbol or symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+            normalized_symbols.append(symbol)
+        if not normalized_symbols:
+            raise ValueError("symbol_list must include at least one non-empty symbol")
+
+        logger.info(f"CLI training started: symbols={normalized_symbols}, model={model_type}")
         if dry_run:
             logger.info("DRY RUN MODE - No actual training performed")
             return
@@ -459,9 +470,43 @@ def train_model_cli(
             results = trainer.train(X, y, optimize_hyperparams=False)
             logger.info(f"Smoke test completed: {results['cv_metrics']['mean_score']:.4f}")
         else:
-            logger.info("Full training mode would require actual market data")
-            logger.info("Placeholder for full training implementation")
+            from ai_trading.model_loader import train_and_save_model
+            from ai_trading.paths import MODELS_DIR
+
+            trained_symbols: list[str] = []
+            failed_symbols: dict[str, str] = {}
+            logger.info(
+                "Full training mode started",
+                extra={"symbols": normalized_symbols, "models_dir": str(MODELS_DIR)},
+            )
+            for symbol in normalized_symbols:
+                try:
+                    train_and_save_model(symbol, MODELS_DIR)
+                except (RuntimeError, ValueError, TypeError, ImportError) as exc:
+                    failed_symbols[symbol] = str(exc)
+                    logger.error(
+                        "MODEL_TRAIN_FAILED",
+                        extra={"symbol": symbol, "error": str(exc)},
+                    )
+                    continue
+                trained_symbols.append(symbol)
+                logger.info("MODEL_TRAINED", extra={"symbol": symbol})
+
+            if not trained_symbols:
+                raise RuntimeError(
+                    f"Full ML training failed for all symbols: {normalized_symbols}"
+                )
+            logger.info(
+                "Full training mode completed",
+                extra={
+                    "trained_symbols": trained_symbols,
+                    "failed_symbols": failed_symbols,
+                },
+            )
     except (ValueError, TypeError) as e:
+        logger.error(f"Error in CLI training: {e}")
+        raise
+    except RuntimeError as e:
         logger.error(f"Error in CLI training: {e}")
         raise
 

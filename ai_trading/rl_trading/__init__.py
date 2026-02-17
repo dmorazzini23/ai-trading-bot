@@ -65,6 +65,8 @@ class RLAgent:
     def __init__(self, model_path: str | Path) -> None:
         self.model_path = str(model_path)
         self.model: Any | None = None
+        self._using_stub_model = False
+        self._stub_signal_warned = False
 
     def _load_stub_model(self, model_path: Path) -> None:
         """Load the lightweight stub model used when RL dependencies are missing."""
@@ -75,6 +77,8 @@ class RLAgent:
             "RL stack unavailable – falling back to stub model for %s",
             model_path,
         )
+        self._using_stub_model = True
+        self._stub_signal_warned = False
         if model_path.exists():
             try:
                 self.model = train.Model.load(model_path)
@@ -100,6 +104,8 @@ class RLAgent:
             return
         try:
             self.model = PPO.load(self.model_path)
+            self._using_stub_model = False
+            self._stub_signal_warned = False
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.error("RL model load failed for %s: %s", self.model_path, exc)
             self._load_stub_model(model_path)
@@ -125,6 +131,14 @@ class RLAgent:
         """
         if self.model is None:
             logger.error("RL model not loaded")
+            return None
+        if self._using_stub_model:
+            if not self._stub_signal_warned:
+                logger.warning(
+                    "RL prediction skipped because agent is using stub model",
+                    extra={"model_path": self.model_path},
+                )
+                self._stub_signal_warned = True
             return None
         from ai_trading.strategies.base import StrategySignal  # noqa: E402
 

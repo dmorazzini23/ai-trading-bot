@@ -86,7 +86,8 @@ class Model:
         self.config = config
 
     def predict(self, state: Any, deterministic: bool = True) -> tuple[int, None]:
-        return (1, None)
+        # Default to hold when running in stub mode to avoid accidental buys.
+        return (0, None)
 
     def save(self, path: str | os.PathLike[str]) -> None:
         Path(path).write_bytes(b"0")

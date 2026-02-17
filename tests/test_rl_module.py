@@ -19,6 +19,7 @@ def test_rl_train_and_infer(monkeypatch, tmp_path):
             return cls()
     monkeypatch.setattr(train_mod, "PPO", DummyPPO)
     import ai_trading.rl_trading as rl
+    monkeypatch.setattr(inf, "RLAgent", rl.RLAgent)
     monkeypatch.setattr(rl, "PPO", DummyPPO)
     monkeypatch.setattr(rl, "is_rl_available", lambda: True)
     path = tmp_path / "model.zip"
@@ -116,3 +117,16 @@ def test_rl_wrapper_without_c_defaults(monkeypatch, tmp_path):
     agent = rl_mod.load(path)
     sig = rl_mod.predict(agent, data[0])
     assert sig and sig.side == "buy"
+
+
+def test_rl_agent_stub_mode_is_non_trading(monkeypatch, tmp_path):
+    import ai_trading.rl_trading as rl
+
+    monkeypatch.setattr(rl, "is_rl_available", lambda: False)
+
+    agent = rl.RLAgent(tmp_path / "missing.zip")
+    agent.load()
+    signal = agent.predict(np.zeros(4, dtype=float))
+
+    assert agent._using_stub_model is True
+    assert signal is None

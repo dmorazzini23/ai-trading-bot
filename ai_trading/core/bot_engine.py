@@ -12654,17 +12654,20 @@ class SignalManager:
         if model is None or not (
             hasattr(model, "predict") and hasattr(model, "predict_proba")
         ):
-            _path = os.getenv("AI_TRADING_MODEL_PATH")
-            _mod = os.getenv("AI_TRADING_MODEL_MODULE")
+            _path = str(get_env("AI_TRADING_MODEL_PATH", "") or "")
+            _mod = str(get_env("AI_TRADING_MODEL_MODULE", "") or "")
             if not getattr(self, "_ml_warned", False):
                 logger.warning(
                     "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE "
                     f"(AI_TRADING_MODEL_PATH={_path!r}, AI_TRADING_MODEL_MODULE={_mod!r})",
-                    extra={"model_path": _path, "model_module": _mod},
+                    extra={
+                        "model_path": _path,
+                        "model_module": _mod,
+                        "fallback_to_vsa": False,
+                    },
                 )
                 self._ml_warned = True
-            # AI-AGENT-REF: guard absent model with heuristic fallback
-            return self.signal_vsa(df)
+            return None
         try:
             if hasattr(model, "feature_names_in_"):
                 feat = list(model.feature_names_in_)
@@ -26275,9 +26278,11 @@ def run_multi_strategy(ctx) -> None:
                 # Compute meaningful feature vectors for each symbol
                 import numpy as _np  # AI-AGENT-REF: alias to avoid shadowing global np
 
-                from ai_trading.rl_trading.features import compute_features
+                from ai_trading.rl_trading.features import FeatureConfig, compute_features
 
                 states: list[_np.ndarray] = []
+                rl_symbols: list[str] = []
+                feature_cfg = FeatureConfig(window=10)
                 for sym in all_symbols:
                     df = None
                     try:
@@ -26307,11 +26312,22 @@ def run_multi_strategy(ctx) -> None:
                             OSError,
                         ):
                             df = None
-                    state_vec = compute_features(df, window=10)
+                    if df is None or getattr(df, "empty", True):
+                        logger.debug("RL_FEATURES_SKIPPED_NO_DATA", extra={"symbol": sym})
+                        continue
+                    try:
+                        state_vec = compute_features(df, cfg=feature_cfg)
+                    except (ValueError, TypeError, KeyError) as exc:
+                        logger.debug(
+                            "RL_FEATURES_BUILD_FAILED",
+                            extra={"symbol": sym, "error": str(exc)},
+                        )
+                        continue
                     states.append(state_vec)
-                if states:
+                    rl_symbols.append(sym)
+                if states and rl_symbols:
                     state_mat = _np.stack(states).astype(_np.float32)
-                    rl_sigs = RL_AGENT.predict(state_mat, symbols=all_symbols)
+                    rl_sigs = RL_AGENT.predict(state_mat, symbols=rl_symbols)
                     if rl_sigs:
                         signals_by_strategy["rl"] = (
                             rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]

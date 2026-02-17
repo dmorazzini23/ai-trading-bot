@@ -39,17 +39,19 @@ def test_signal_ml_with_dummy_model(monkeypatch, caplog):
 
 
 def test_signal_ml_warns_once(monkeypatch, caplog):
-    """Missing models trigger a single warning and fall back to VSA."""
+    """Missing models trigger a single warning and disable ML signals by default."""
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
     manager = SignalManager()
     df = _minimal_df()
 
     caplog.set_level("WARNING")
-    manager.signal_ml(df)
-    manager.signal_ml(df)
+    first = manager.signal_ml(df)
+    second = manager.signal_ml(df)
 
     warnings = [
         rec for rec in caplog.records if "ML predictions disabled" in rec.getMessage()
     ]
+    assert first is None
+    assert second is None
     assert len(warnings) == 1
