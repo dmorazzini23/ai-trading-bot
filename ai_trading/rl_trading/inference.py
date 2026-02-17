@@ -44,14 +44,21 @@ class UnifiedRLInference:
         self._obs_buffer = []
         self._last_prediction = None
         self._prediction_confidence = 0.0
+        self._stub_warned = False
         self._inference_stats = {'total_predictions': 0, 'hold_predictions': 0, 'buy_predictions': 0, 'sell_predictions': 0, 'avg_confidence': 0.0}
 
     def _validate_action_space(self) -> None:
         """Validate that model action space matches configuration."""
+        if getattr(self.agent, "_using_stub_model", False):
+            self.logger.warning("RL_INFERENCE_STUB_MODEL")
+            return
         if self.agent.model is None:
             self.logger.warning('Cannot validate action space - model not loaded')
             return
-        model_action_space = self.agent.model.action_space
+        model_action_space = getattr(self.agent.model, "action_space", None)
+        if model_action_space is None:
+            self.logger.warning("Cannot validate action space - model has no action_space")
+            return
         if self.config.action_config.action_type == 'discrete':
             if hasattr(model_action_space, 'n'):
                 if model_action_space.n != self.config.action_config.discrete_actions:
@@ -126,6 +133,14 @@ class UnifiedRLInference:
         Returns:
             TradeSignal or None if prediction fails
         """
+        if getattr(self.agent, "_using_stub_model", False):
+            if not self._stub_warned:
+                self.logger.warning(
+                    "RL_INFERENCE_DISABLED_STUB",
+                    extra={"model_path": self.config.model_path},
+                )
+                self._stub_warned = True
+            return None
         if self.agent.model is None:
             self.logger.error('Model not loaded')
             return None

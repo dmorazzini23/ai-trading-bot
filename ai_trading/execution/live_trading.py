@@ -1720,6 +1720,7 @@ class ExecutionEngine:
         self._cycle_account_fetched: bool = False
         self.order_ttl_seconds = 0
         self.marketable_limit_slippage_bps = 10
+        self.max_participation_rate: float | None = None
         try:
             key, secret = get_alpaca_creds()
         except RuntimeError as exc:
@@ -1970,6 +1971,18 @@ class ExecutionEngine:
         self.slippage_limit_bps = int(settings.slippage_limit_bps)
         self.order_ttl_seconds = int(getattr(settings, "order_ttl_seconds", 20))
         self.marketable_limit_slippage_bps = int(getattr(settings, "marketable_limit_slippage_bps", 10))
+        raw_participation_rate = getattr(settings, "max_participation_rate", None)
+        try:
+            parsed_participation_rate = float(raw_participation_rate)
+        except (TypeError, ValueError):
+            parsed_participation_rate = None
+        if parsed_participation_rate is not None and (
+            not math.isfinite(parsed_participation_rate)
+            or parsed_participation_rate <= 0.0
+            or parsed_participation_rate > 1.0
+        ):
+            parsed_participation_rate = None
+        self.max_participation_rate = parsed_participation_rate
         self.price_provider_order = tuple(settings.price_provider_order)
         self.data_feed_intraday = str(settings.data_feed_intraday or "iex").lower()
         if self._explicit_mode is not None:
@@ -3325,6 +3338,27 @@ class ExecutionEngine:
         signal_weight = kwargs.pop("signal_weight", None)
         price_alias = kwargs.get("price")
         limit_price_kwarg = kwargs.pop("limit_price", None)
+        participation_cap_input = kwargs.get("max_participation_rate")
+        participation_mode_input = kwargs.get("participation_mode")
+        extra_volume_hints = {
+            "rolling_volume": kwargs.get("rolling_volume"),
+            "avg_daily_volume": kwargs.get("avg_daily_volume"),
+            "adv": kwargs.get("adv"),
+            "volume_1d": kwargs.get("volume_1d"),
+            "volume": kwargs.get("volume"),
+        }
+        metadata_volume_hints: dict[str, Any] = {}
+        metadata_raw = kwargs.get("metadata")
+        if isinstance(metadata_raw, Mapping):
+            metadata_volume_hints = {
+                "rolling_volume": metadata_raw.get("rolling_volume"),
+                "avg_daily_volume": metadata_raw.get("avg_daily_volume"),
+                "adv": metadata_raw.get("adv"),
+                "volume_1d": metadata_raw.get("volume_1d"),
+                "volume": metadata_raw.get("volume"),
+                "max_participation_rate": metadata_raw.get("max_participation_rate"),
+                "participation_mode": metadata_raw.get("participation_mode"),
+            }
         ignored_keys = {key for key in original_kwarg_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
         for key in list(ignored_keys):
             kwargs.pop(key, None)
@@ -3976,6 +4010,114 @@ class ExecutionEngine:
                 },
             )
             return None
+
+        def _finite_positive_float(value: Any) -> float | None:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(parsed) or parsed <= 0.0:
+                return None
+            return parsed
+
+        raw_participation_rate = participation_cap_input
+        if raw_participation_rate in (None, ""):
+            raw_participation_rate = metadata_volume_hints.get("max_participation_rate")
+        if raw_participation_rate in (None, ""):
+            raw_participation_rate = getattr(self, "max_participation_rate", None)
+        participation_rate = _finite_positive_float(raw_participation_rate)
+        if participation_rate is not None and participation_rate > 1.0:
+            participation_rate = None
+
+        if not closing_position and participation_rate is not None:
+            annotation_volume_hints: dict[str, Any] = {}
+            if isinstance(annotations, Mapping):
+                annotation_volume_hints = {
+                    "rolling_volume": annotations.get("rolling_volume"),
+                    "avg_daily_volume": annotations.get("avg_daily_volume"),
+                    "adv": annotations.get("adv"),
+                    "volume_1d": annotations.get("volume_1d"),
+                    "volume": annotations.get("volume"),
+                    "participation_mode": annotations.get("participation_mode"),
+                }
+            volume_hint: float | None = None
+            for value in (
+                extra_volume_hints.get("rolling_volume"),
+                extra_volume_hints.get("avg_daily_volume"),
+                extra_volume_hints.get("adv"),
+                extra_volume_hints.get("volume_1d"),
+                extra_volume_hints.get("volume"),
+                metadata_volume_hints.get("rolling_volume"),
+                metadata_volume_hints.get("avg_daily_volume"),
+                metadata_volume_hints.get("adv"),
+                metadata_volume_hints.get("volume_1d"),
+                metadata_volume_hints.get("volume"),
+                annotation_volume_hints.get("rolling_volume"),
+                annotation_volume_hints.get("avg_daily_volume"),
+                annotation_volume_hints.get("adv"),
+                annotation_volume_hints.get("volume_1d"),
+                annotation_volume_hints.get("volume"),
+            ):
+                parsed_volume = _finite_positive_float(value)
+                if parsed_volume is not None:
+                    volume_hint = parsed_volume
+                    break
+
+            if volume_hint is not None:
+                max_qty_allowed = int(math.floor(volume_hint * participation_rate))
+                if max_qty_allowed <= 0:
+                    logger.warning(
+                        "ORDER_PARTICIPATION_BLOCKED",
+                        extra={
+                            "symbol": symbol,
+                            "side": mapped_side,
+                            "requested_qty": quantity,
+                            "max_qty": max_qty_allowed,
+                            "volume_hint": volume_hint,
+                            "participation_rate": participation_rate,
+                            "reason": "zero_capacity",
+                        },
+                    )
+                    return None
+
+                participation_mode = (
+                    participation_mode_input
+                    or metadata_volume_hints.get("participation_mode")
+                    or annotation_volume_hints.get("participation_mode")
+                    or "scale"
+                )
+                mode = str(participation_mode).strip().lower()
+                if mode not in {"block", "scale"}:
+                    mode = "scale"
+
+                if quantity > max_qty_allowed:
+                    if mode == "block":
+                        logger.warning(
+                            "ORDER_PARTICIPATION_BLOCKED",
+                            extra={
+                                "symbol": symbol,
+                                "side": mapped_side,
+                                "requested_qty": quantity,
+                                "max_qty": max_qty_allowed,
+                                "volume_hint": volume_hint,
+                                "participation_rate": participation_rate,
+                                "reason": "cap_exceeded",
+                            },
+                        )
+                        return None
+                    logger.info(
+                        "ORDER_PARTICIPATION_SCALED",
+                        extra={
+                            "symbol": symbol,
+                            "side": mapped_side,
+                            "requested_qty": quantity,
+                            "adjusted_qty": max_qty_allowed,
+                            "volume_hint": volume_hint,
+                            "participation_rate": participation_rate,
+                        },
+                    )
+                    quantity = max_qty_allowed
+                    order_data["quantity"] = quantity
 
         capacity = _call_preflight_capacity(
             symbol,

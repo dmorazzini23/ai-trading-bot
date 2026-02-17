@@ -295,6 +295,9 @@ class ExecutionSettingsSnapshot:
     price_provider_order: tuple[str, ...]
     data_feed_intraday: str
     time_in_force: str | None = None
+    order_ttl_seconds: int = 20
+    marketable_limit_slippage_bps: int = 10
+    max_participation_rate: float | None = None
 
 
 def get_execution_settings() -> ExecutionSettingsSnapshot:
@@ -302,6 +305,17 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
 
     cfg = get_trading_config()
     provider_order = tuple(getattr(cfg, "price_provider_order", ()) or PRICE_PROVIDER_ORDER)
+    raw_participation_cap = getattr(cfg, "exec_max_participation_rate", None)
+    if raw_participation_cap in (None, ""):
+        raw_participation_cap = getattr(cfg, "participation_rate", None)
+    participation_cap: float | None
+    try:
+        participation_cap = float(raw_participation_cap)
+    except (TypeError, ValueError):
+        participation_cap = None
+    else:
+        if not (0.0 < participation_cap <= 1.0):
+            participation_cap = None
     return ExecutionSettingsSnapshot(
         mode=str(getattr(cfg, "execution_mode", EXECUTION_MODE) or EXECUTION_MODE).lower(),
         shadow_mode=bool(getattr(cfg, "shadow_mode", SHADOW_MODE)),
@@ -314,6 +328,11 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
         time_in_force=(
             (str(getattr(cfg, "execution_time_in_force", "")).strip().lower() or None)
         ),
+        order_ttl_seconds=int(getattr(cfg, "order_ttl_seconds", 20)),
+        marketable_limit_slippage_bps=int(
+            getattr(cfg, "marketable_limit_slippage_bps", 10)
+        ),
+        max_participation_rate=participation_cap,
     )
 
 

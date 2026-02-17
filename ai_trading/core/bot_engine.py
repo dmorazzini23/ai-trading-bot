@@ -4068,8 +4068,16 @@ if getattr(S, "use_rl_agent", False) and RL_MODEL_PATH:
         try:
             rl = RLTrader(RL_MODEL_PATH)
             rl.load()  # load PPO policy from zip path
-            RL_AGENT = rl
-            info_kv(logger, "RL_AGENT_READY", extra={"model": str(RL_MODEL_PATH)})
+            if getattr(rl, "_using_stub_model", False):
+                warning_kv(
+                    logger,
+                    "RL_AGENT_DISABLED_STUB",
+                    extra={"model": str(RL_MODEL_PATH)},
+                )
+                RL_AGENT = None
+            else:
+                RL_AGENT = rl
+                info_kv(logger, "RL_AGENT_READY", extra={"model": str(RL_MODEL_PATH)})
         except COMMON_EXC as e:  # noqa: BLE001
             warning_kv(logger, "RL_AGENT_INIT_FAILED", extra={"error": str(e)})
             RL_AGENT = None
@@ -12654,8 +12662,18 @@ class SignalManager:
         if model is None or not (
             hasattr(model, "predict") and hasattr(model, "predict_proba")
         ):
+            require_model = bool(get_env("AI_TRADING_REQUIRE_ML_MODEL", False, cast=bool))
             _path = str(get_env("AI_TRADING_MODEL_PATH", "") or "")
             _mod = str(get_env("AI_TRADING_MODEL_MODULE", "") or "")
+            if require_model:
+                logger.error(
+                    "ML_MODEL_REQUIRED_MISSING",
+                    extra={
+                        "symbol": symbol,
+                        "model_path": _path,
+                        "model_module": _mod,
+                    },
+                )
             if not getattr(self, "_ml_warned", False):
                 logger.warning(
                     "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE "
@@ -12673,11 +12691,34 @@ class SignalManager:
                 feat = list(model.feature_names_in_)
             else:
                 feat = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
-
+            missing = [column for column in feat if column not in df.columns]
+            if missing:
+                logger.error(
+                    "ML_SIGNAL_MISSING_FEATURES",
+                    extra={"symbol": symbol, "missing_features": missing},
+                )
+                return None
             X = df[feat].iloc[-1].values.reshape(1, -1)
             try:
                 pred = model.predict(X)[0]
-                proba = float(model.predict_proba(X)[0][pred])
+                proba_row = model.predict_proba(X)[0]
+                pred_index: int | None = None
+                classes = getattr(model, "classes_", None)
+                if classes is not None:
+                    try:
+                        classes_list = list(classes)
+                    except TypeError:
+                        classes_list = []
+                    if classes_list:
+                        try:
+                            pred_index = classes_list.index(pred)
+                        except ValueError:
+                            pred_index = None
+                if pred_index is None:
+                    pred_index = int(pred)
+                if pred_index < 0 or pred_index >= len(proba_row):
+                    pred_index = max(0, min(len(proba_row) - 1, pred_index))
+                proba = float(proba_row[pred_index])
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -12689,7 +12730,19 @@ class SignalManager:
                 OSError,
             ) as e:  # AI-AGENT-REF: narrow exception
                 logger.error("signal_ml predict failed: %s", e)
-                return -1, 0.0, "ml"
+                return None
+            min_confidence = float(get_env("AI_TRADING_ML_MIN_CONFIDENCE", 0.0, cast=float))
+            if min_confidence > 0.0 and proba < min_confidence:
+                logger.info(
+                    "ML_SIGNAL_BELOW_CONFIDENCE",
+                    extra={
+                        "symbol": symbol,
+                        "prediction": int(pred),
+                        "probability": proba,
+                        "min_confidence": min_confidence,
+                    },
+                )
+                return None
             s = 1 if pred == 1 else -1
             logger.info(
                 "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
@@ -12706,7 +12759,7 @@ class SignalManager:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.exception(f"signal_ml failed: {e}")
-            return -1, 0.0, "ml"
+            return None
 
     def signal_sentiment(
         self, ctx: BotContext, ticker: str, df: pd.DataFrame = None, model: Any = None
@@ -26282,7 +26335,12 @@ def run_multi_strategy(ctx) -> None:
 
                 states: list[_np.ndarray] = []
                 rl_symbols: list[str] = []
-                feature_cfg = FeatureConfig(window=10)
+                rl_feature_window = int(get_env("AI_TRADING_RL_FEATURE_WINDOW", 10, cast=int))
+                if rl_feature_window < 5:
+                    rl_feature_window = 5
+                elif rl_feature_window > 256:
+                    rl_feature_window = 256
+                feature_cfg = FeatureConfig(window=rl_feature_window)
                 for sym in all_symbols:
                     df = None
                     try:

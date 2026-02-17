@@ -55,3 +55,64 @@ def test_signal_ml_warns_once(monkeypatch, caplog):
     assert first is None
     assert second is None
     assert len(warnings) == 1
+
+
+def test_signal_ml_returns_none_when_features_missing(caplog):
+    class DummyModel:
+        feature_names_in_ = ["feature_x"]
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    manager = SignalManager()
+    df = _minimal_df()
+    caplog.set_level("ERROR")
+
+    result = manager.signal_ml(df, model=DummyModel(), symbol="AAPL")
+
+    assert result is None
+    assert "ML_SIGNAL_MISSING_FEATURES" in caplog.text
+
+
+def test_signal_ml_prediction_error_returns_none(caplog):
+    class DummyModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+
+        def predict(self, _X):
+            raise ValueError("bad input")
+
+        def predict_proba(self, _X):
+            return [[0.5, 0.5]]
+
+    manager = SignalManager()
+    df = _minimal_df()
+    caplog.set_level("ERROR")
+
+    result = manager.signal_ml(df, model=DummyModel(), symbol="AAPL")
+
+    assert result is None
+    assert "signal_ml predict failed" in caplog.text
+
+
+def test_signal_ml_respects_min_confidence(monkeypatch, caplog):
+    class DummyModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    monkeypatch.setenv("AI_TRADING_ML_MIN_CONFIDENCE", "0.95")
+    manager = SignalManager()
+    df = _minimal_df()
+    caplog.set_level("INFO")
+
+    result = manager.signal_ml(df, model=DummyModel(), symbol="AAPL")
+
+    assert result is None
+    assert "ML_SIGNAL_BELOW_CONFIDENCE" in caplog.text

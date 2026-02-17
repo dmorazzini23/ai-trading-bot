@@ -113,6 +113,8 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "expected_price_ts",
         "extended_hours",
         "id",
+        "adv",
+        "avg_daily_volume",
         "limit_price",
         "max_participation_rate",
         "max_slippage_bps",
@@ -129,6 +131,8 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "price_hint",
         "price_improvement",
         "price_source",
+        "participation_mode",
+        "rolling_volume",
         "using_fallback_price",
         "annotations",
         "reduce_only",
@@ -149,6 +153,8 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "trail_price",
         "urgency_level",
         "user_data",
+        "volume",
+        "volume_1d",
     }
 )
 

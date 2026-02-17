@@ -81,13 +81,22 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
 class FeatureConfig:
     window: int = 64
 
-def compute_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> np.ndarray:
+def compute_features(
+    df: pd.DataFrame,
+    cfg: FeatureConfig | None = None,
+    *,
+    window: int | None = None,
+) -> np.ndarray:
     pd = load_pandas()
     import numpy as np
 
+    if window is not None:
+        cfg = FeatureConfig(window=int(window))
     if cfg is None:
         cfg = FeatureConfig()
-    w = cfg.window
+    w = int(cfg.window)
+    if w <= 0:
+        raise ValueError("Feature window must be positive")
     df = df.copy()
     close = df.get('close', df.get('Close'))
     high = df.get('high', df.get('High', close))
