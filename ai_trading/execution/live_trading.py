@@ -26,6 +26,7 @@ from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
 from ai_trading.config.settings import get_settings
 from ai_trading.config import EXECUTION_MODE, SAFE_MODE_ALLOW_PAPER, get_trading_config
+from ai_trading.broker.adapters import build_broker_adapter
 from ai_trading.execution.guards import (
     can_execute,
     pdt_guard,
@@ -1329,7 +1330,13 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         if execution_mode_raw in (None, ""):
             execution_mode_raw = os.getenv("EXECUTION_MODE")
         execution_mode = str(execution_mode_raw or "sim").strip().lower()
-        if execution_mode in {"paper", "live"} and not _pytest_mode_active():
+        has_account_endpoint = bool(
+            broker is not None and callable(getattr(broker, "get_account", None)),
+        )
+        fail_closed = execution_mode in {"paper", "live"} and (
+            has_account_endpoint or not _pytest_mode_active()
+        )
+        if fail_closed:
             logger.warning(
                 "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
                 symbol,
@@ -1823,7 +1830,7 @@ class ExecutionEngine:
     def _refresh_cycle_account(self) -> Any | None:
         """Fetch and cache the current Alpaca account if available."""
 
-        client = getattr(self, "trading_client", None)
+        client = self._capacity_broker(getattr(self, "trading_client", None))
         get_account = getattr(client, "get_account", None) if client is not None else None
         if not callable(get_account):
             self._cycle_account_fetched = True
@@ -1840,6 +1847,49 @@ class ExecutionEngine:
         self._cycle_account = account
         self._cycle_account_fetched = True
         return account
+
+    def _capacity_broker(self, broker_client: Any | None) -> Any | None:
+        """Return broker object used for capacity and account snapshots."""
+
+        provider_raw = os.getenv("AI_TRADING_BROKER_PROVIDER", "alpaca")
+        provider = str(provider_raw or "alpaca").strip().lower()
+        adapter = build_broker_adapter(provider=provider, client=broker_client)
+        if adapter is not None:
+            return adapter
+        return broker_client
+
+    def _resolve_capacity_account_snapshot(
+        self,
+        broker: Any | None,
+        account_snapshot: Any | None,
+    ) -> Any | None:
+        """Resolve account snapshot for capacity checks with stale-cache recovery."""
+
+        if account_snapshot is not None:
+            return account_snapshot
+
+        account_snapshot = self._get_account_snapshot()
+        if account_snapshot is not None:
+            return account_snapshot
+
+        get_account = getattr(broker, "get_account", None) if broker is not None else None
+        if not callable(get_account):
+            return None
+        try:
+            account_snapshot = get_account()
+        except Exception as exc:  # pragma: no cover - network variability
+            logger.debug(
+                "BROKER_ACCOUNT_SNAPSHOT_FAILED",
+                extra={
+                    "error": getattr(exc, "__class__", type(exc)).__name__,
+                    "detail": str(exc),
+                },
+            )
+            return None
+
+        self._cycle_account = account_snapshot
+        self._cycle_account_fetched = True
+        return account_snapshot
 
     def _get_account_snapshot(self) -> Any | None:
         """Return the cached account snapshot, refreshing once per cycle."""
@@ -2285,11 +2335,13 @@ class ExecutionEngine:
         nbbo_gate_prefetch = require_nbbo and not closing_position
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
         trading_client = getattr(self, "trading_client", None)
-        account_snapshot = precheck_order.get("account_snapshot")
-        if account_snapshot is None:
-            account_snapshot = self._get_account_snapshot()
-            if isinstance(precheck_order, dict):
-                precheck_order["account_snapshot"] = account_snapshot
+        capacity_broker = self._capacity_broker(trading_client)
+        account_snapshot = self._resolve_capacity_account_snapshot(
+            capacity_broker,
+            precheck_order.get("account_snapshot"),
+        )
+        if isinstance(precheck_order, dict):
+            precheck_order["account_snapshot"] = account_snapshot
 
         short_ok, short_extra, short_reason = _short_sale_precheck(
             self,
@@ -2464,7 +2516,7 @@ class ExecutionEngine:
             side_lower,
             None,
             quantity,
-            trading_client,
+            capacity_broker,
             account_snapshot,
         )
         if not capacity.can_submit:
@@ -2845,11 +2897,13 @@ class ExecutionEngine:
         prefetch_quotes = ((require_quotes and not closing_position) or nbbo_gate_prefetch)
 
         trading_client = getattr(self, "trading_client", None)
-        account_snapshot = precheck_order.get("account_snapshot")
-        if account_snapshot is None:
-            account_snapshot = self._get_account_snapshot()
-            if isinstance(precheck_order, dict):
-                precheck_order["account_snapshot"] = account_snapshot
+        capacity_broker = self._capacity_broker(trading_client)
+        account_snapshot = self._resolve_capacity_account_snapshot(
+            capacity_broker,
+            precheck_order.get("account_snapshot"),
+        )
+        if isinstance(precheck_order, dict):
+            precheck_order["account_snapshot"] = account_snapshot
 
         short_ok, short_extra, short_reason = _short_sale_precheck(
             self,
@@ -2930,7 +2984,7 @@ class ExecutionEngine:
             side_lower,
             limit_price,
             quantity,
-            trading_client,
+            capacity_broker,
             account_snapshot,
         )
         if not capacity.can_submit:
@@ -3419,18 +3473,27 @@ class ExecutionEngine:
             precheck_order["time_in_force"] = time_in_force_pref
 
         if precheck_order["account_snapshot"] is None:
-            if pytest_mode:
-                precheck_order["account_snapshot"] = {}
-            else:
-                if not self.is_initialized and not self._ensure_initialized():
-                    return None
-                precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
+            has_is_initialized = hasattr(self, "is_initialized")
+            is_initialized = bool(getattr(self, "is_initialized", False))
+            if not is_initialized:
+                # Unit tests may instantiate via __new__ without full engine init.
+                # In pytest mode, skip eager init when initialization state is absent.
+                if not (pytest_mode and not has_is_initialized):
+                    if not self._ensure_initialized():
+                        return None
+            precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
 
         if not self._pre_execution_order_checks(precheck_order):
             return None
 
         if not pytest_mode and not self._pre_execution_checks():
             return None
+        capacity_broker = self._capacity_broker(trading_client)
+        account_snapshot = self._resolve_capacity_account_snapshot(
+            capacity_broker,
+            precheck_order.get("account_snapshot"),
+        )
+        precheck_order["account_snapshot"] = account_snapshot
 
         require_quotes = _require_bid_ask_quotes()
         cfg: Any | None = None
@@ -4124,7 +4187,7 @@ class ExecutionEngine:
             side_lower,
             price_hint,
             quantity,
-            trading_client,
+            capacity_broker,
             account_snapshot,
         )
         if not capacity.can_submit:

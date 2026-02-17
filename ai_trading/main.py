@@ -85,7 +85,7 @@ def _http_profile_logging_enabled() -> bool:
         )
         return bool(value)
 
-# Detect Alpaca SDK availability without importing heavy modules
+# Detect runtime Alpaca SDK availability without importing heavy modules
 def _safe_find_spec(module_name: str):
     try:
         return importlib.util.find_spec(module_name)
@@ -93,15 +93,9 @@ def _safe_find_spec(module_name: str):
         return None
 
 
-ALPACA_AVAILABLE = (
-    _safe_find_spec("alpaca") is not None
-    and _safe_find_spec("alpaca.trading.client") is not None
-)
+ALPACA_AVAILABLE = _safe_find_spec("alpaca_trade_api") is not None
 if not ALPACA_AVAILABLE:
-    if (
-        sys.modules.get("alpaca") is not None
-        and sys.modules.get("alpaca.trading.client") is not None
-    ):
+    if sys.modules.get("alpaca_trade_api") is not None:
         ALPACA_AVAILABLE = True
 
 from ai_trading.settings import get_seed_int
@@ -361,6 +355,9 @@ def preflight_import_health() -> bool:
 def should_enforce_strict_import_preflight() -> bool:
     """Return ``True`` when import preflight failures should abort startup."""
 
+    if _is_truthy_env("IMPORT_PREFLIGHT_STRICT"):
+        return True
+
     if _is_truthy_env("IMPORT_PREFLIGHT_DISABLED"):
         return False
 
@@ -369,6 +366,10 @@ def should_enforce_strict_import_preflight() -> bool:
         for flag in ("AI_TRADING_SYSTEMD_COMPAT", "SYSTEMD_COMPAT", "SYSTEMD_COMPAT_MODE")
     ):
         logger.info("IMPORT_PREFLIGHT_COMPAT_MODE", extra={"mode": "systemd"})
+        return False
+
+    if _is_truthy_env("PYTEST_RUNNING"):
+        logger.info("IMPORT_PREFLIGHT_RELAXED", extra={"reason": "pytest_running"})
         return False
 
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -391,12 +392,12 @@ def _check_alpaca_sdk() -> None:
 
     if not should_enforce_strict_import_preflight():
         logger.warning(
-            "ALPACA_PY_SKIPPED_UNDER_TEST",
+            "ALPACA_SDK_CHECK_SKIPPED_UNDER_TEST",
             extra={"reason": "import_preflight_relaxed"},
         )
         return
 
-    logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py (alpaca-trade-api==3.2.0) is required")
+    logger.error("ALPACA_TRADE_API_REQUIRED: pip install alpaca-trade-api==3.2.0 is required")
     raise SystemExit(1)
 
 

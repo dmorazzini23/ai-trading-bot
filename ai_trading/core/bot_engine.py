@@ -649,15 +649,15 @@ COMMON_EXC = (
 
 # Environment keys (defined early to support import-time fallbacks)
 # Allow NEWS_API_KEY to serve as the default sentiment key if SENTIMENT_API_KEY is unset.  # AI-AGENT-REF: env alias
-SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY") or os.getenv("NEWS_API_KEY")
-NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
+SENTIMENT_API_KEY: str | None = get_env("SENTIMENT_API_KEY") or get_env("NEWS_API_KEY")
+NEWS_API_KEY: str | None = get_env("NEWS_API_KEY")
 
 # Longest intraday indicator window (200-minute SMA) expressed in minutes. The
 # fetch path must cover at least this lookback so early-session runs have
 # enough history to maintain indicator continuity.
 _LONGEST_INTRADAY_INDICATOR_MINUTES = 200
-SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
-TESTING = os.getenv("TESTING", "").lower() == "true"
+SENTIMENT_API_URL: str = str(get_env("SENTIMENT_API_URL", "") or "")
+TESTING = str(get_env("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
 _TEST_ENV_VARS = ("PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING")
 
 

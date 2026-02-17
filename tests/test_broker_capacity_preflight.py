@@ -78,6 +78,18 @@ def test_preflight_capacity_fails_closed_when_account_unavailable_in_paper(monke
     assert check.reason == "account_unavailable"
 
 
+def test_preflight_capacity_fails_closed_in_pytest_when_account_endpoint_unavailable(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    broker = NoAccountBroker(buying_power="0", orders=[])
+
+    check = preflight_capacity("AAPL", "buy", 100, 5, broker)
+
+    assert check.can_submit is False
+    assert check.suggested_qty == 0
+    assert check.reason == "account_unavailable"
+
+
 def test_submit_limit_order_skips_when_capacity_fails(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
@@ -90,6 +102,29 @@ def test_submit_limit_order_skips_when_capacity_fails(monkeypatch):
 
     broker = FakeBroker(buying_power="0", orders=[])
     engine.trading_client = broker
+
+    result = engine.submit_limit_order("TSLA", "buy", 10, limit_price=50)
+
+    assert result is None
+    assert broker.submit_calls == 0
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_submit_limit_order_skips_when_account_cache_is_stale(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
+    monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "0")
+
+    engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
+    engine.is_initialized = True
+
+    broker = FakeBroker(buying_power="0", orders=[])
+    engine.trading_client = broker
+    engine._cycle_account = None
+    engine._cycle_account_fetched = True
 
     result = engine.submit_limit_order("TSLA", "buy", 10, limit_price=50)
 

@@ -15,6 +15,23 @@ from ai_trading.telemetry import runtime_state
 from ai_trading.utils.optional_dep import missing
 
 try:
+    from ai_trading.config.management import get_env as _managed_get_env
+except Exception:  # pragma: no cover - fallback for minimal bootstraps
+    _managed_get_env = None
+
+
+def _managed_env(name: str, default: Any = None) -> Any:
+    """Read environment values via config management when available."""
+
+    if _managed_get_env is not None:
+        try:
+            return _managed_get_env(name, default)
+        except Exception:
+            return os.getenv(name, default)
+    return os.getenv(name, default)
+
+
+try:
     from flask import jsonify as _jsonify
 except ImportError as _jsonify_import_error:  # pragma: no cover - exercised via tests
     jsonify = None  # type: ignore[assignment]
@@ -56,18 +73,18 @@ _ALPACA_BOOL_KEYS = {
 
 _SERVICE_NAME = "ai-trading"
 _REQUIRED_TEST_ENV = {
-    "ALPACA_API_KEY": os.getenv("ALPACA_API_KEY", "test-key"),
-    "ALPACA_SECRET_KEY": os.getenv("ALPACA_SECRET_KEY", "test-secret"),
-    "WEBHOOK_SECRET": os.getenv("WEBHOOK_SECRET", "test-webhook-secret"),
+    "ALPACA_API_KEY": _managed_env("ALPACA_API_KEY", "test-key"),
+    "ALPACA_SECRET_KEY": _managed_env("ALPACA_SECRET_KEY", "test-secret"),
+    "WEBHOOK_SECRET": _managed_env("WEBHOOK_SECRET", "test-webhook-secret"),
 }
 
 
 def _pytest_active() -> bool:
     """Return True when running under pytest (via env hints or modules)."""
-    flag = os.getenv("PYTEST_RUNNING")
+    flag = _managed_env("PYTEST_RUNNING")
     if flag is not None and str(flag).strip():
         return str(flag).strip().lower() not in {"0", "false", "no", "off"}
-    current = os.getenv("PYTEST_CURRENT_TEST")
+    current = _managed_env("PYTEST_CURRENT_TEST")
     if current:
         return True
     active = "pytest" in sys.modules
@@ -89,7 +106,7 @@ def _seed_pytest_env_defaults() -> None:
     if not active:
         return
     for key, default in _REQUIRED_TEST_ENV.items():
-        if str(os.getenv(key, "")).strip():
+        if str(_managed_env(key, "")).strip():
             continue
         os.environ[key] = default
 
@@ -212,6 +229,15 @@ def create_app():
             app.register_blueprint(diag_bp)
         except Exception:
             _log.debug("DIAG_BLUEPRINT_REGISTER_FAILED", exc_info=True)
+    try:
+        from ai_trading.operator_ui import operator_bp
+    except ImportError:
+        operator_bp = None  # type: ignore[assignment]
+    if operator_bp is not None:
+        try:
+            app.register_blueprint(operator_bp)
+        except Exception:
+            _log.debug("OPERATOR_BLUEPRINT_REGISTER_FAILED", exc_info=True)
 
     # Some tests may monkeypatch Flask and return objects without a real config
     if not isinstance(getattr(app, "config", None), dict):
@@ -441,6 +467,30 @@ def create_app():
                     pass
                 return response
         return payload if status == 200 else (payload, status)
+
+    @app.route("/operator/presets")
+    def operator_presets() -> Any:
+        """Expose preset choices for operator-driven no-code configuration."""
+
+        try:
+            from ai_trading.operator_presets import list_presets
+            payload = {"ok": True, "presets": list_presets()}
+            return _safe_response(payload, status=200)
+        except (ImportError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_PRESETS_UNAVAILABLE", extra={"error": str(exc)})
+            return _safe_response({"ok": False, "error": "operator presets unavailable"}, status=503)
+
+    @app.route("/operator/plan")
+    def operator_plan() -> Any:
+        """Return a default guarded plan for lightweight operator workflows."""
+
+        try:
+            from ai_trading.operator_presets import PresetValidationError, build_plan
+            plan = build_plan("balanced")
+            return _safe_response({"ok": True, "plan": plan}, status=200)
+        except (ImportError, PresetValidationError, ValueError, TypeError) as exc:
+            _log.warning("OPERATOR_PLAN_UNAVAILABLE", extra={"error": str(exc)})
+            return _safe_response({"ok": False, "error": "operator plan unavailable"}, status=503)
 
     @app.route("/health")
     def health():
@@ -820,7 +870,7 @@ def get_test_client():
 
 
 if __name__ == "__main__":
-    if os.getenv("RUN_HEALTHCHECK") == "1":
+    if _managed_env("RUN_HEALTHCHECK") == "1":
         from ai_trading.config.settings import get_settings
 
         app = create_app()

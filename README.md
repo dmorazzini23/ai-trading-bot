@@ -18,7 +18,7 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 
 ```bash
 python -m pip install -U pip
-pip install -e .  # installs alpaca-trade-api==3.2.0 and alpaca-py==0.42.1
+pip install -e .  # installs runtime deps including alpaca-trade-api==3.2.0
 python -c "import alpaca_trade_api, pkgutil; assert alpaca_trade_api.__version__=='3.2.0'"  # verify runtime SDK pin
 python -m ai_trading --dry-run
 ruff check .
@@ -39,7 +39,7 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 
 The health server binds to `HEALTHCHECK_PORT` (default **8081**) and must not reuse the API port (**9001**).
 
-Runtime pins to **`alpaca-trade-api==3.2.0`**; the repo also installs **`alpaca-py==0.42.1`** for tests and helper utilities.
+Runtime pins to **`alpaca-trade-api==3.2.0`**. Install **`alpaca-py`** only in dev/test environments for mocks and helper tooling.
 Startup validates required environment variables (API keys, feed selection, risk
 parameters) at launch and exits early with clear remediation hints if
 configuration is missing.
@@ -195,12 +195,14 @@ are imported directly.
 
 ### 🔄 Live Trading & Execution
 - **Alpaca Integration**: Seamless broker connectivity with paper/live trading
+- **Broker Adapter Layer**: Provider abstraction with Alpaca and paper adapters
 - **Smart Order Routing**: Multiple data providers with automatic failover
 - **Slippage Tracking**: Real-time execution cost monitoring
 - **Async Execution**: Non-blocking order processing and monitoring
 
 ### 📈 Performance & Monitoring
 - **Real-time Dashboard**: Web-based monitoring and control interface
+- **Operator Presets API**: `/operator/presets` and `/operator/plan` for no-code guarded setup
 - **Comprehensive Logging**: Detailed trade and performance logging
 - **Metrics Collection**: Prometheus-compatible performance metrics
 - **Health Monitoring**: System health checks and alerting
@@ -265,7 +267,8 @@ All Python packages are specified in `requirements.txt`, including:
 - **pandas**, **numpy**: Data processing and numerical computations
 - **pandas-market-calendars**: Exchange session calendars
 - **scikit-learn**: Machine learning algorithms
-- **alpaca-py==0.42.0**: Broker integration
+- **alpaca-trade-api==3.2.0**: Runtime broker integration
+- **alpaca-py==0.42.x**: Dev/test-only helpers, mocks, and tooling
 - **tenacity** *(optional)*: Robust retry helpers; falls back to a lightweight internal version if absent
 
 **Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
@@ -836,7 +839,7 @@ fall back to another feed or skip the symbol to avoid infinite loops.
   equity-based sizing. Optionally set `MAX_POSITION_SIZE_PCT` to cap positions as
   a percentage of the portfolio.
 
-If any `ALPACA_*` credentials are missing or `alpaca-py` is not installed,
+If any `ALPACA_*` credentials are missing or `alpaca-trade-api` is not installed,
 the bot now aborts startup with a clear error instead of running without broker
 connectivity.
 
