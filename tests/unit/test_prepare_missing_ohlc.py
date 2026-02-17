@@ -11,5 +11,5 @@ def test_prepare_indicators_requires_open_column():
         "close": [1.5],
         "volume": [100],
     })
-    with pytest.raises(KeyError, match="missing required column\(s\): \['open'\]"):
+    with pytest.raises(KeyError, match=r"missing required column\(s\): \['open'\]"):
         signals.prepare_indicators(df)

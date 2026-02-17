@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import MutableMapping
-from typing import cast
+from typing import Any, cast
 import sys
 import types
 import unittest.mock as _mock
@@ -49,7 +49,9 @@ def _ensure_import_machinery(modules: dict[str, types.ModuleType]) -> None:
             continue
 
 
-def _safe_clear_dict(target, *args, **kwargs):  # pragma: no cover - behavior exercised in tests
+def _safe_clear_dict(  # pragma: no cover - behavior exercised in tests
+    target: MutableMapping[object, object], *args: object, **kwargs: object
+) -> Any:
     preserved: dict[str, types.ModuleType] | None = None
     if target is sys.modules:
         preserved = {
@@ -63,29 +65,29 @@ def _safe_clear_dict(target, *args, **kwargs):  # pragma: no cover - behavior ex
         finally:
             if preserved is not None:
                 target.update(preserved)
-                _ensure_import_machinery(target)
+                _ensure_import_machinery(cast(dict[str, types.ModuleType], target))
         return result
     target.clear()
     if preserved is not None:
         target.update(preserved)
-        _ensure_import_machinery(target)
+        _ensure_import_machinery(cast(dict[str, types.ModuleType], target))
     return None
 
 
-_mock._clear_dict = _safe_clear_dict
+setattr(_mock, "_clear_dict", _safe_clear_dict)
 
 
 try:  # pragma: no cover - optional dependency
     import freezegun
 except Exception:
-    freezegun = None  # type: ignore[assignment]
+    freezegun = None
 else:
-    _orig_freeze_time = freezegun.freeze_time
+    _orig_freeze_time: Any = freezegun.freeze_time
 
-    def _freeze_time_with_real_asyncio(*args, **kwargs):
+    def _freeze_time_with_real_asyncio(*args: object, **kwargs: object) -> Any:
         kwargs.setdefault("real_asyncio", True)
         return _orig_freeze_time(*args, **kwargs)
 
-    freezegun.freeze_time = _freeze_time_with_real_asyncio  # type: ignore[assignment]
+    freezegun.freeze_time = _freeze_time_with_real_asyncio
     if hasattr(freezegun, "api") and hasattr(freezegun.api, "freeze_time"):
-        freezegun.api.freeze_time = _freeze_time_with_real_asyncio  # type: ignore[attr-defined]
+        freezegun.api.freeze_time = _freeze_time_with_real_asyncio

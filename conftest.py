@@ -373,16 +373,16 @@ def _reset_loaded_singletons() -> None:
         cb_cls = getattr(pybreaker_mod, "CircuitBreaker", None)
         if _is_mock_like(cb_cls):
             class _NoopCircuitBreaker:
-                def __init__(self, *args, **kwargs):
+                def __init__(self, *args: object, **kwargs: object) -> None:
                     pass
 
-                def call(self, func):
-                    def _wrapped(*a, **kw):
+                def call(self, func: Any) -> Any:
+                    def _wrapped(*a: Any, **kw: Any) -> Any:
                         return func(*a, **kw)
 
                     return _wrapped
 
-                def __call__(self, func):
+                def __call__(self, func: Any) -> Any:
                     return self.call(func)
 
             try:
