@@ -603,6 +603,7 @@ _ACK_TRIGGER_STATUSES = frozenset(
     }
 )
 _SUBMITTED_STATUS_MIN_RANK = _ORDER_STATUS_RANK.get("accepted", 20)
+_PDT_MIN_EQUITY = 25_000.0
 
 
 def _normalize_status(value: Any) -> str | None:
@@ -676,6 +677,8 @@ def _sanitize_pdt_context(raw_context: Mapping[str, Any] | None) -> dict[str, An
         "pattern_day_trader": bool(context.get("pattern_day_trader", False)),
         "daytrade_limit": _safe_int(context.get("daytrade_limit"), 0),
         "daytrade_count": _safe_int(context.get("daytrade_count"), 0),
+        "equity": _safe_float(context.get("equity")),
+        "pdt_equity_exempt": bool(context.get("pdt_equity_exempt", False)),
     }
 
     lock_info = pdt_lockout_info()
@@ -703,6 +706,22 @@ def _extract_value(record: Any, *names: str) -> Any:
         if hasattr(record, name):
             return getattr(record, name)
     return None
+
+
+def _pdt_limit_applies(account: Any | None) -> bool:
+    """Return ``True`` when PDT day-trade counters should be enforced."""
+
+    if account is None:
+        return False
+    pattern_flag = _safe_bool(
+        _extract_value(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
+    )
+    if not pattern_flag:
+        return False
+    equity = _safe_float(_extract_value(account, "equity", "last_equity", "portfolio_value"))
+    if equity is not None and math.isfinite(equity) and equity >= _PDT_MIN_EQUITY:
+        return False
+    return True
 
 
 def _bool_from_record(record: Any, *names: str) -> bool | None:
@@ -1907,15 +1926,7 @@ class ExecutionEngine:
         if not account:
             return False
         try:
-            pattern_flag = _safe_bool(
-                _extract_value(
-                    account,
-                    "pattern_day_trader",
-                    "is_pattern_day_trader",
-                    "pdt",
-                )
-            )
-            if not pattern_flag:
+            if not _pdt_limit_applies(account):
                 return False
             limit_val = _safe_int(
                 _extract_value(
@@ -1958,6 +1969,12 @@ class ExecutionEngine:
         context["pattern_day_trader"] = pattern_flag
         if not pattern_flag:
             return (False, None, context)
+        equity = _safe_float(_extract_value(account, "equity", "last_equity", "portfolio_value"))
+        context["equity"] = equity
+        if equity is not None and math.isfinite(equity) and equity >= _PDT_MIN_EQUITY:
+            context["pdt_equity_exempt"] = True
+            return (False, "pdt_equity_exempt", context)
+        context["pdt_equity_exempt"] = False
 
         daytrade_limit = _config_int("EXECUTION_DAYTRADE_LIMIT", 3)
         account_limit = _extract_value(account, "daytrade_limit", "day_trade_limit", "pattern_day_trade_limit")

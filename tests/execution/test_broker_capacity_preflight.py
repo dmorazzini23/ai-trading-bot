@@ -201,6 +201,48 @@ def test_pdt_limit_imminent_warns_but_allows_trade(monkeypatch, caplog):
     assert getattr(warning, "daytrade_limit", None) == 3
 
 
+def test_pdt_limit_imminent_not_emitted_for_high_equity(monkeypatch, caplog):
+    guards.STATE.pdt = guards.PDTState()
+    guards.STATE.shadow_cycle = False
+    guards.STATE.shadow_cycle_forced = False
+
+    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {
+        "total_execution_time": 0.0,
+        "total_orders": 0,
+        "successful_orders": 0,
+        "failed_orders": 0,
+    }
+    engine.trading_client = object()
+    monkeypatch.setenv("EXECUTION_DAYTRADE_LIMIT", "3")
+
+    account_snapshot = {"pattern_day_trader": True, "daytrade_count": 2, "equity": "30000"}
+    engine._get_account_snapshot = lambda: account_snapshot
+
+    preflight_calls = {"count": 0}
+
+    def fake_preflight(symbol, side, price_hint, quantity, trading_client, account=None):
+        preflight_calls["count"] += 1
+        return lt.CapacityCheck(True, quantity, None)
+
+    monkeypatch.setattr(lt, "preflight_capacity", fake_preflight)
+    monkeypatch.setattr(engine, "_execute_with_retry", lambda fn, payload: {"id": "ok"})
+
+    caplog.set_level(logging.WARNING)
+
+    result = engine.submit_market_order("AAPL", "buy", 1)
+
+    assert result == {"id": "ok"}
+    assert preflight_calls["count"] == 1
+    warnings = [record for record in caplog.records if record.getMessage() == "PDT_LIMIT_IMMINENT"]
+    assert not warnings
+
+
 def test_preflight_helper_supports_account_kwarg():
     lt._preflight_supports_account_kwarg.cache_clear()
     account = {"id": "acct"}

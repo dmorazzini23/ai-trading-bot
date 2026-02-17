@@ -94,6 +94,24 @@ class TestPDTManager:
         
         assert status.remaining_daytrades == 1
         assert status.strategy_recommendation == "conservative"
+
+    def test_pdt_high_equity_exempts_daytrade_limit(self):
+        """Pattern-day-trader flag should not constrain accounts above $25k equity."""
+
+        manager = PDTManager()
+        account = SimpleNamespace(
+            pattern_day_trader=True,
+            daytrade_count=2,
+            daytrade_limit=3,
+            equity=30000,
+        )
+
+        status = manager.get_pdt_status(account)
+
+        assert status.is_pattern_day_trader is True
+        assert status.pdt_limit_applicable is False
+        assert status.can_daytrade is True
+        assert status.strategy_recommendation == "normal"
     
     def test_should_allow_order_non_pdt(self):
         """Test order allowance for non-PDT account."""
@@ -148,6 +166,23 @@ class TestPDTManager:
         assert allow is True
         assert reason == "pdt_conservative"
         assert context["daytrade_count"] == 5
+
+    def test_should_allow_order_high_equity_returns_exempt_reason(self):
+        manager = PDTManager()
+        account = SimpleNamespace(
+            pattern_day_trader=True,
+            daytrade_count=2,
+            daytrade_limit=3,
+            equity=35000,
+        )
+
+        allow, reason, context = manager.should_allow_order(
+            account, "AAPL", "buy", current_position=0
+        )
+
+        assert allow is True
+        assert reason == "pdt_equity_exempt"
+        assert context["pdt_limit_applicable"] is False
 
     def test_reset_cache_clears_cached_status(self):
         """Resetting the cache removes the cached status and timestamp."""

@@ -5,11 +5,14 @@ while maximizing trading opportunities within regulatory constraints.
 """
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any, Optional, Mapping
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+PDT_MIN_EQUITY = 25_000.0
 
 
 @dataclass
@@ -22,6 +25,9 @@ class PDTStatus:
     can_daytrade: bool
     remaining_daytrades: int
     strategy_recommendation: str
+    equity: float | None = None
+    min_equity: float = PDT_MIN_EQUITY
+    pdt_limit_applicable: bool = True
 
 
 class PDTManager:
@@ -64,13 +70,29 @@ class PDTManager:
             "pattern_day_trades_count",
             default=0
         )
+
+        equity = self._extract_float(account, "equity", "last_equity", "portfolio_value")
+        pdt_limit_applicable = bool(is_pdt)
+        if (
+            pdt_limit_applicable
+            and equity is not None
+            and math.isfinite(equity)
+            and float(equity) >= PDT_MIN_EQUITY
+        ):
+            pdt_limit_applicable = False
         
         # Calculate status
-        can_daytrade = daytrade_count < daytrade_limit
-        remaining = max(0, daytrade_limit - daytrade_count)
+        if pdt_limit_applicable:
+            can_daytrade = daytrade_count < daytrade_limit
+            remaining = max(0, daytrade_limit - daytrade_count)
+        else:
+            can_daytrade = True
+            remaining = max(0, daytrade_limit - daytrade_count)
         
         # Determine strategy recommendation
         if not is_pdt:
+            strategy = "normal"
+        elif not pdt_limit_applicable:
             strategy = "normal"
         elif daytrade_count >= daytrade_limit:
             strategy = "swing_only"  # Must hold overnight
@@ -85,7 +107,10 @@ class PDTManager:
             daytrade_limit=daytrade_limit,
             can_daytrade=can_daytrade,
             remaining_daytrades=remaining,
-            strategy_recommendation=strategy
+            strategy_recommendation=strategy,
+            equity=equity,
+            min_equity=PDT_MIN_EQUITY,
+            pdt_limit_applicable=pdt_limit_applicable,
         )
         
         # Update cache
@@ -119,12 +144,18 @@ class PDTManager:
             "daytrade_count": status.daytrade_count,
             "daytrade_limit": status.daytrade_limit,
             "remaining_daytrades": status.remaining_daytrades,
-            "strategy": status.strategy_recommendation
+            "strategy": status.strategy_recommendation,
+            "equity": status.equity,
+            "min_equity": status.min_equity,
+            "pdt_limit_applicable": status.pdt_limit_applicable,
         }
         
         # Not a PDT account - allow all trades
         if not status.is_pattern_day_trader:
             return (True, "not_pdt", context)
+
+        if not status.pdt_limit_applicable:
+            return (True, "pdt_equity_exempt", context)
         
         # Closing existing position - always allowed (doesn't count as day trade if held overnight)
         is_closing = (current_position > 0 and side.lower() in ["sell", "close"]) or \
@@ -167,6 +198,9 @@ class PDTManager:
         
         if not status.is_pattern_day_trader:
             return "day_trading"  # Can day trade freely
+
+        if not status.pdt_limit_applicable:
+            return "day_trading"
         
         if status.daytrade_count >= status.daytrade_limit:
             return "swing_trading"  # Must hold overnight
@@ -224,3 +258,25 @@ class PDTManager:
                 )
                 continue
         return default
+
+    def _extract_float(self, obj: Any, *attrs: str) -> float | None:
+        """Extract float value from object attributes."""
+
+        for attr in attrs:
+            try:
+                if isinstance(obj, Mapping) and attr in obj:
+                    val = obj[attr]
+                else:
+                    val = getattr(obj, attr, None)
+                if val is None or val == "":
+                    continue
+                candidate = float(val)
+                if math.isfinite(candidate):
+                    return candidate
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "PDT_ATTR_FLOAT_EXTRACT_FAILED",
+                    extra={"attribute": attr, "error": str(exc)},
+                )
+                continue
+        return None
