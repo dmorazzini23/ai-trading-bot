@@ -176,6 +176,31 @@ class CycleAbortSafeMode(RuntimeError):
     """Raised when provider safe mode requires aborting the active cycle."""
 
 
+_BOOTSTRAP_GET_ENV_READY = False
+_BOOTSTRAP_GET_ENV: Any | None = None
+
+
+def _bootstrap_env(name: str, default: Any = None) -> Any:
+    """Read env via config management when available during import bootstrap."""
+
+    global _BOOTSTRAP_GET_ENV_READY, _BOOTSTRAP_GET_ENV
+    if not _BOOTSTRAP_GET_ENV_READY:
+        try:
+            from ai_trading.config.management import get_env as _cfg_get_env
+        except (ImportError, RuntimeError):
+            _BOOTSTRAP_GET_ENV = None
+        else:
+            _BOOTSTRAP_GET_ENV = _cfg_get_env
+        _BOOTSTRAP_GET_ENV_READY = True
+
+    if _BOOTSTRAP_GET_ENV is not None:
+        try:
+            return _BOOTSTRAP_GET_ENV(name, default)
+        except (TypeError, ValueError, RuntimeError):
+            return os.getenv(name, default)
+    return os.getenv(name, default)
+
+
 try:
     importlib.import_module("alpaca.trading.client")
     importlib.import_module("alpaca.data.historical.stock")
@@ -190,7 +215,7 @@ except ImportError as exc:  # pragma: no cover - log once when SDK missing
 
 _TEST_FLAG_VALUES = {"1", "true", "yes", "on"}
 if (
-    str(os.getenv("TESTING", "")).strip().lower() in _TEST_FLAG_VALUES
+    str(_bootstrap_env("TESTING", "")).strip().lower() in _TEST_FLAG_VALUES
     and sys.modules.get("alpaca") is None
 ):
     ALPACA_AVAILABLE = False
@@ -707,7 +732,12 @@ def _is_testing_env() -> bool:
     if TESTING:
         return True
     for key in _TEST_ENV_VARS:
-        if _truthy_env(os.getenv(key)):
+        raw = None
+        try:
+            raw = get_env(key, None)
+        except COMMON_EXC:
+            raw = os.getenv(key)
+        if raw is not None and _truthy_env(str(raw)):
             return True
     return False
 
@@ -763,19 +793,19 @@ def list_open_orders(api: Any):
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
-    if os.getenv("PYTEST_RUNNING") and not (
-        os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")
+    if get_env("PYTEST_RUNNING", None) and not (
+        get_env("ALPACA_API_KEY", None) and get_env("ALPACA_SECRET_KEY", None)
     ):
         raise RuntimeError("Missing Alpaca API credentials")
 
     if not should_import_alpaca_sdk():
-        if not os.getenv("PYTEST_RUNNING"):
+        if not get_env("PYTEST_RUNNING", None):
             return
     if getattr(ctx, "api", None) is not None:
         return
     key_check, secret_check, _ = _resolve_alpaca_env()
     if (not key_check or not secret_check) and (
-        os.getenv("PYTEST_RUNNING") or not is_shadow_mode()
+        get_env("PYTEST_RUNNING", None) or not is_shadow_mode()
     ):
         raise RuntimeError("Missing Alpaca API credentials")
 
@@ -855,11 +885,11 @@ from ai_trading.data.provider_monitor import (
 SENTIMENT_FAILURE_THRESHOLD = 8  # Audit: trip circuit after 8 consecutive failures
 _SENTIMENT_FAILURES: int = 0
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
-SENTIMENT_SUCCESS_TTL_SEC: int = int(os.getenv("SENTIMENT_SUCCESS_TTL_SEC", "900"))
+SENTIMENT_SUCCESS_TTL_SEC: int = int(get_env("SENTIMENT_SUCCESS_TTL_SEC", "900"))
 SENTIMENT_MAX_RETRIES: int = sentiment_retry_max()
 SENTIMENT_BACKOFF_BASE: float = sentiment_backoff_base()
 SENTIMENT_BACKOFF_STRATEGY: str = sentiment_backoff_strategy()
-SENTIMENT_MAX_CALLS_PER_MIN: int = int(os.getenv("SENTIMENT_MAX_CALLS_PER_MIN", "0"))
+SENTIMENT_MAX_CALLS_PER_MIN: int = int(get_env("SENTIMENT_MAX_CALLS_PER_MIN", "0"))
 _SENTIMENT_CALL_TIMES: deque[float] = deque()
 
 from enum import Enum

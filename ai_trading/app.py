@@ -726,12 +726,12 @@ def create_app():
             if pytest_mode:
                 payload["ok"] = True
                 payload.setdefault("status", payload.get("status") or "healthy")
-            elif os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+            elif _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST"):
                 _log.warning(
                     "PYTEST_OVERRIDE_SKIPPED",
                     extra={
-                        "env_flag": os.getenv("PYTEST_RUNNING"),
-                        "current_test": os.getenv("PYTEST_CURRENT_TEST"),
+                        "env_flag": _managed_env("PYTEST_RUNNING"),
+                        "current_test": _managed_env("PYTEST_CURRENT_TEST"),
                         "has_pytest_module": "pytest" in sys.modules,
                     },
                 )

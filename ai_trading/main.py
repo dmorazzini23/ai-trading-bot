@@ -29,11 +29,44 @@ from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
 from ai_trading.execution import timing as execution_timing
 from ai_trading.utils.datetime import ensure_datetime
 
+_MANAGED_GET_ENV_READY = False
+_MANAGED_GET_ENV: Callable[..., Any] | None = None
+
+
+def _managed_env(name: str, default: Any = None) -> Any:
+    """Read env via config management with os.getenv fallback."""
+
+    global _MANAGED_GET_ENV_READY, _MANAGED_GET_ENV
+    if not _MANAGED_GET_ENV_READY:
+        try:
+            from ai_trading.config.management import get_env as _cfg_get_env
+        except (ImportError, RuntimeError):
+            _MANAGED_GET_ENV = None
+        else:
+            _MANAGED_GET_ENV = _cfg_get_env
+        _MANAGED_GET_ENV_READY = True
+
+    if _MANAGED_GET_ENV is not None:
+        try:
+            return _MANAGED_GET_ENV(name, default)
+        except (TypeError, ValueError, RuntimeError):
+            return os.getenv(name, default)
+    return os.getenv(name, default)
+
+
+def _raw_env(name: str, default: Any = None) -> Any:
+    """Return raw process env value without config-layer defaults."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value
+
 
 def _resolve_log_file() -> str:
     """Resolve the bot log path from environment or defaults."""
 
-    explicit = os.getenv("BOT_LOG_FILE")
+    explicit = _managed_env("BOT_LOG_FILE")
     if explicit:
         path = Path(explicit).expanduser()
         if not path.is_absolute():
@@ -69,7 +102,7 @@ def _http_profile_logging_enabled() -> bool:
     try:
         value = get_env("HTTP_PROFILE_LOG_ENABLED", "0", cast=bool)
     except Exception:
-        raw = os.getenv("HTTP_PROFILE_LOG_ENABLED", "").strip().lower()
+        raw = str(_managed_env("HTTP_PROFILE_LOG_ENABLED", "") or "").strip().lower()
         return raw in truthy
     if isinstance(value, str):
         return value.strip().lower() in truthy
@@ -213,7 +246,11 @@ def _reset_warmup_cooldown_timestamp() -> None:
 def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
     """Log the resolved feed/provider configuration after any fallbacks."""
 
-    provider_for_log = getattr(cfg_obj, "data_provider", None) or os.environ.get("DATA_PROVIDER") or "unknown"
+    provider_for_log = (
+        getattr(cfg_obj, "data_provider", None)
+        or _managed_env("DATA_PROVIDER")
+        or "unknown"
+    )
     feed_for_log = getattr(settings, "alpaca_data_feed", "")
     adjustment_for_log = getattr(settings, "alpaca_adjustment", "")
     try:
@@ -261,7 +298,7 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
 def _is_truthy_env(name: str) -> bool:
     """Return ``True`` when environment variable ``name`` is truthy."""
 
-    value = os.environ.get(name, "")
+    value = str(_managed_env(name, "") or "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -269,10 +306,10 @@ def _is_test_mode() -> bool:
     """Detect whether the process is running under automated tests."""
 
     def _flag_enabled(flag: str) -> bool:
-        raw = os.getenv(flag)
+        raw = _managed_env(flag)
         if raw is None:
             return False
-        candidate = raw.strip()
+        candidate = str(raw).strip()
         if not candidate:
             return False
         return candidate.lower() not in {"0", "false", "no", "off"}
@@ -372,7 +409,7 @@ def should_enforce_strict_import_preflight() -> bool:
         logger.info("IMPORT_PREFLIGHT_RELAXED", extra={"reason": "pytest_running"})
         return False
 
-    if os.environ.get("PYTEST_CURRENT_TEST"):
+    if str(_managed_env("PYTEST_CURRENT_TEST", "") or "").strip():
         has_key, has_secret = alpaca_credential_status()
         if not (has_key and has_secret):
             logger.info(
@@ -416,7 +453,11 @@ def run_cycle() -> None:
     )
 
     execution_mode = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim").lower()
-    warmup_mode = os.getenv("AI_TRADING_WARMUP_MODE", "").strip().lower() in {"1", "true", "yes"}
+    warmup_mode = str(_managed_env("AI_TRADING_WARMUP_MODE", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     if execution_mode == "disabled":
         _set_alpaca_service_available(False)
         _log_auth_preflight_failure(
@@ -855,21 +896,19 @@ def _fail_fast_env() -> None:
         }
         risk_default = defaults.pop("DOLLAR_RISK_LIMIT")
         for key, value in defaults.items():
-            if not os.getenv(key):
+            if not str(_raw_env(key, "") or "").strip():
                 os.environ[key] = value
                 if key in {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}:
                     backfilled_alpaca.append(key)
                     alpaca_backfilled_during_failfast = True
 
     alias_backfilled = False
-    alias_risk_limit = os.getenv("DAILY_LOSS_LIMIT")
-    canonical_risk_limit = os.getenv("DOLLAR_RISK_LIMIT")
-    if (canonical_risk_limit is None or canonical_risk_limit.strip() == "") and (
-        alias_risk_limit is not None and alias_risk_limit.strip() != ""
-    ):
+    alias_risk_limit = str(_raw_env("DAILY_LOSS_LIMIT", "") or "").strip()
+    canonical_risk_limit = str(_raw_env("DOLLAR_RISK_LIMIT", "") or "").strip()
+    if canonical_risk_limit == "" and alias_risk_limit != "":
         os.environ["DOLLAR_RISK_LIMIT"] = alias_risk_limit
         alias_backfilled = True
-    elif test_mode and (canonical_risk_limit is None or canonical_risk_limit.strip() == ""):
+    elif test_mode and canonical_risk_limit == "":
         if risk_default is not None:
             os.environ["DOLLAR_RISK_LIMIT"] = risk_default
 
@@ -938,7 +977,7 @@ def _fail_fast_env() -> None:
         extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
     )
 
-    if os.getenv("RUN_HEALTHCHECK", "").strip() == "1":
+    if str(_managed_env("RUN_HEALTHCHECK", "") or "").strip() == "1":
         from ai_trading.settings import get_settings
 
         settings = get_settings()
@@ -958,7 +997,7 @@ def _fail_fast_env() -> None:
     raw_risk_limit = get_env("DOLLAR_RISK_LIMIT")
     cfg_risk_limit = getattr(trading_cfg, "dollar_risk_limit", None)
     alias_raw = get_env("DAILY_LOSS_LIMIT")
-    canonical_env_value = os.getenv("DOLLAR_RISK_LIMIT")
+    canonical_env_value = _raw_env("DOLLAR_RISK_LIMIT")
     if alias_backfilled:
         logger.warning(
             "DOLLAR_RISK_LIMIT_ALIAS_OVERRIDE",
@@ -1409,7 +1448,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     start_time = time.monotonic()
     truthy_env = {"1", "true", "yes", "on"}
     is_pytest = (
-        os.getenv("PYTEST_RUNNING", "").strip().lower() in truthy_env
+        str(_managed_env("PYTEST_RUNNING", "") or "").strip().lower() in truthy_env
         or "pytest" in sys.modules
     )
 
@@ -1509,7 +1548,7 @@ def _assert_singleton_api(settings) -> None:
 
     env_label = str(getattr(settings, "env", "")).strip().lower()
     if (
-        os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
+        str(_managed_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes"}
         or env_label == "test"
         or "pytest" in sys.modules
     ):
@@ -1574,10 +1613,8 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
                 if host:
                     # ENV override pattern: HTTP_RETRIES_<host> (dots → underscores), HTTP_BACKOFF_<host>
                     key = host.replace(".", "_")
-                    import os as _os
-
-                    _retries = int(_os.getenv(f"HTTP_RETRIES_{key}", "2"))
-                    _bof = float(_os.getenv(f"HTTP_BACKOFF_{key}", "0.2"))
+                    _retries = int(_managed_env(f"HTTP_RETRIES_{key}", "2") or "2")
+                    _bof = float(_managed_env(f"HTTP_BACKOFF_{key}", "0.2") or "0.2")
                     mount_host_retry_profile(session, host, total_retries=_retries, backoff_factor=_bof, pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)))
             except Exception:
                 logger.debug("HTTP_HOST_RETRY_PROFILE_INIT_FAILED", exc_info=True)
@@ -1640,7 +1677,7 @@ def main(argv: list[str] | None = None) -> None:
             "API_PORT_CONFLICT_FATAL",
             extra={"port": exc.port, "pid": exc.pid},
         )
-        if os.getenv("PYTEST_RUNNING", "").strip():
+        if str(_managed_env("PYTEST_RUNNING", "") or "").strip():
             logger.warning("API_PORT_CONFLICT_IGNORED_UNDER_TEST")
         else:
             raise SystemExit(errno.EADDRINUSE) from exc
@@ -1715,7 +1752,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
     if not _is_test_mode():
-        _cap_env = os.getenv("CAPITAL_CAP")
+        _cap_env = _raw_env("CAPITAL_CAP")
         if _cap_env:
             try:
                 _cap_val = float(_cap_env)
@@ -1782,8 +1819,8 @@ def main(argv: list[str] | None = None) -> None:
         try:
             key, secret, _ = _resolve_alpaca_env()
         except Exception:
-            key = os.getenv("ALPACA_API_KEY")
-            secret = os.getenv("ALPACA_SECRET_KEY")
+            key = _managed_env("ALPACA_API_KEY")
+            secret = _managed_env("ALPACA_SECRET_KEY")
         run_warmup = not (key and secret)
     if run_warmup:
         os.environ["AI_TRADING_WARMUP_MODE"] = "1"
@@ -1898,7 +1935,7 @@ def main(argv: list[str] | None = None) -> None:
                         read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout_closed", getattr(S, "http_read_timeout", 10.0)) or getattr(S, "http_read_timeout", 10.0)))
                         # Optional hint for executors to downsize when closed
                         try:
-                            _ewc = os.getenv("EXEC_WORKERS_WHEN_CLOSED")
+                            _ewc = _managed_env("EXEC_WORKERS_WHEN_CLOSED")
                             if _ewc:
                                 os.environ["AI_TRADING_EXEC_WORKERS"] = _ewc
                                 os.environ["AI_TRADING_PRED_WORKERS"] = _ewc
@@ -1951,8 +1988,14 @@ def main(argv: list[str] | None = None) -> None:
                             from urllib.parse import urlparse as _urlparse
                             host = _urlparse(str(getattr(S, "alpaca_base_url", ""))).netloc
                             if host:
-                                _retries = int(os.getenv(host.replace('.', '_').join(["HTTP_RETRIES_", ""])) or getattr(S, "http_total_retries", 3))
-                                _bof = float(os.getenv(host.replace('.', '_').join(["HTTP_BACKOFF_", ""])) or getattr(S, "http_backoff_factor", 0.3))
+                                _retries = int(
+                                    _managed_env(host.replace('.', '_').join(["HTTP_RETRIES_", ""]))
+                                    or getattr(S, "http_total_retries", 3)
+                                )
+                                _bof = float(
+                                    _managed_env(host.replace('.', '_').join(["HTTP_BACKOFF_", ""]))
+                                    or getattr(S, "http_backoff_factor", 0.3)
+                                )
                                 mount_host_retry_profile(session, host, total_retries=int(_retries), backoff_factor=float(_bof), pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
                         except Exception:
                             logger.debug("HTTP_PROFILE_OPEN_HOST_MOUNT_FAILED", exc_info=True)
@@ -2100,7 +2143,9 @@ def main(argv: list[str] | None = None) -> None:
                 last_health = now_mono
             try:
                 # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
-                _mode_env = os.getenv("MAX_POSITION_MODE") or os.getenv("AI_TRADING_MAX_POSITION_MODE")
+                _mode_env = _raw_env("MAX_POSITION_MODE") or _raw_env(
+                    "AI_TRADING_MAX_POSITION_MODE",
+                )
                 mode_now = str(
                     _mode_env
                     if _mode_env is not None
