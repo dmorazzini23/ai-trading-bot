@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -251,3 +251,49 @@ def test_after_hours_uses_dedicated_ticker_csv(
         "QQQ",
         "SPY",
     }
+
+
+def test_cost_floor_estimate_stabilizes_with_tca_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    old = now - timedelta(days=200)
+    records = [
+        {"ts": now.isoformat(), "status": "filled", "is_bps": 8.0},
+        {"ts": now.isoformat(), "status": "filled", "is_bps": 10.0},
+        {"ts": now.isoformat(), "status": "partially_filled", "is_bps": 12.0},
+        {"ts": now.isoformat(), "status": "filled", "is_bps": 14.0},
+        {"ts": now.isoformat(), "status": "filled", "is_bps": 500.0},  # outlier
+        {"ts": old.isoformat(), "status": "filled", "is_bps": 60.0},  # stale
+        {"ts": now.isoformat(), "status": "new", "is_bps": 2.0},  # not filled
+    ]
+    monkeypatch.setenv("AI_TRADING_COST_FLOOR_BPS", "12")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_BPS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MAX_BPS", "25")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_LOOKBACK_DAYS", "45")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_SAMPLES", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_REQUIRE_FILLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_OUTLIER_BPS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_QUANTILE", "0.5")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_TCA_WEIGHT", "1.0")
+
+    value = after_hours._estimate_cost_floor_bps(records)
+    assert value == pytest.approx(11.0, abs=0.05)
+
+
+def test_cost_floor_estimate_falls_back_to_baseline_when_samples_low(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    records = [
+        {"ts": now.isoformat(), "status": "filled", "is_bps": 6.0},
+        {"ts": now.isoformat(), "status": "filled", "is_bps": 9.0},
+    ]
+    monkeypatch.setenv("AI_TRADING_COST_FLOOR_BPS", "12")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_BPS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MAX_BPS", "25")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_SAMPLES", "10")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_REQUIRE_FILLED", "1")
+
+    value = after_hours._estimate_cost_floor_bps(records)
+    assert value == pytest.approx(12.0, abs=0.001)

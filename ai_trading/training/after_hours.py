@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -43,6 +43,15 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     "sma_200",
 )
 _THRESHOLD_GRID: tuple[float, ...] = (0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7)
+_TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
+    "ts",
+    "timestamp",
+    "created_at",
+    "updated_at",
+    "submitted_at",
+    "decision_ts",
+    "fill_ts",
+)
 
 
 @dataclass(slots=True)
@@ -181,6 +190,20 @@ def _parse_ts(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _tca_row_timestamp(row: Mapping[str, Any]) -> datetime | None:
+    for key in _TCA_TIMESTAMP_KEYS:
+        parsed = _parse_ts(row.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _clamp(value: float, *, low: float, high: float) -> float:
+    lo = min(low, high)
+    hi = max(low, high)
+    return float(min(max(float(value), lo), hi))
+
+
 def _build_fill_quality_metrics(tca_records: list[dict[str, Any]]) -> dict[str, float]:
     if not tca_records:
         return {
@@ -221,17 +244,74 @@ def _build_fill_quality_metrics(tca_records: list[dict[str, Any]]) -> dict[str, 
 
 
 def _estimate_cost_floor_bps(tca_records: list[dict[str, Any]]) -> float:
+    baseline = float(get_env("AI_TRADING_COST_FLOOR_BPS", 12.0, cast=float))
+    min_bps = float(get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_BPS", 4.0, cast=float))
+    max_bps = float(get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_MAX_BPS", 25.0, cast=float))
     if not tca_records:
-        return float(get_env("AI_TRADING_COST_FLOOR_BPS", 12.0, cast=float))
-    is_bps_vals: list[float] = []
+        return _clamp(baseline, low=min_bps, high=max_bps)
+
+    lookback_days = int(get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_LOOKBACK_DAYS", 45, cast=int))
+    min_samples = int(get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_SAMPLES", 40, cast=int))
+    require_filled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_REQUIRE_FILLED", True, cast=bool)
+    )
+    outlier_cap_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_OUTLIER_BPS", 120.0, cast=float)
+    )
+    quantile = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_QUANTILE", 0.6, cast=float)),
+        low=0.05,
+        high=0.95,
+    )
+    tca_weight = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_COST_FLOOR_TCA_WEIGHT", 0.65, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+
+    cutoff = datetime.now(UTC) - timedelta(days=max(1, lookback_days))
+    values: list[float] = []
     for row in tca_records:
+        status = str(row.get("status", "")).lower()
+        if require_filled and status not in {"filled", "partially_filled"}:
+            continue
+        row_ts = _tca_row_timestamp(row)
+        if row_ts is not None and row_ts < cutoff:
+            continue
         try:
-            is_bps_vals.append(abs(float(row.get("is_bps", 0.0) or 0.0)))
+            value = abs(float(row.get("is_bps", 0.0) or 0.0))
         except (TypeError, ValueError):
             continue
-    if not is_bps_vals:
-        return float(get_env("AI_TRADING_COST_FLOOR_BPS", 12.0, cast=float))
-    return float(np.percentile(is_bps_vals, 60))
+        if not np.isfinite(value):
+            continue
+        if outlier_cap_bps > 0.0 and value > outlier_cap_bps:
+            continue
+        values.append(value)
+
+    if len(values) < max(1, min_samples):
+        return _clamp(baseline, low=min_bps, high=max_bps)
+
+    arr = np.asarray(values, dtype=float)
+    if arr.size >= 20:
+        lo = float(np.percentile(arr, 5))
+        hi = float(np.percentile(arr, 95))
+        arr = np.clip(arr, lo, hi)
+    tca_estimate = float(np.percentile(arr, quantile * 100.0))
+    blended = (tca_weight * tca_estimate) + ((1.0 - tca_weight) * baseline)
+    stabilized = _clamp(blended, low=min_bps, high=max_bps)
+    logger.info(
+        "AFTER_HOURS_COST_FLOOR_ESTIMATE",
+        extra={
+            "baseline_bps": baseline,
+            "tca_samples": int(len(values)),
+            "tca_estimate_bps": tca_estimate,
+            "stabilized_bps": stabilized,
+            "lookback_days": int(max(1, lookback_days)),
+            "quantile": quantile,
+            "tca_weight": tca_weight,
+        },
+    )
+    return stabilized
 
 
 def _infer_regime(close: np.ndarray) -> np.ndarray:
@@ -987,6 +1067,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "ts": now_utc.isoformat(),
         "symbols": symbols,
         "rows": int(len(dataset)),
+        "cost_floor_bps": float(cost_floor_bps),
         "feature_columns": list(FEATURE_COLUMNS),
         "model": {
             "model_id": model_id,
