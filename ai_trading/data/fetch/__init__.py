@@ -3078,6 +3078,19 @@ def _attach_payload_metadata(
     symbol: str | None = None,
 ) -> None:
     """Annotate *frame* with metadata about the originating payload."""
+
+    def _set_plain_attr(target: Any, name: str, value: Any) -> None:
+        """Set a non-column attribute without triggering pandas assignment warnings."""
+        try:
+            object.__setattr__(target, name, value)
+            return
+        except Exception:
+            pass
+        try:
+            setattr(target, name, value)
+        except Exception:  # pragma: no cover - defensive attribute set
+            return
+
     try:
         attrs = getattr(frame, "attrs", None)
     except Exception:  # pragma: no cover - defensive access
@@ -3106,23 +3119,14 @@ def _attach_payload_metadata(
         if keys:
             attrs["raw_payload_keys"] = keys
             if not hasattr(frame, "_raw_payload_keys"):
-                try:
-                    frame._raw_payload_keys = keys
-                except Exception:  # pragma: no cover - defensive attribute set
-                    pass
+                _set_plain_attr(frame, "_raw_payload_keys", keys)
 
     # Provide a plain attribute fallback for callers that may not propagate
     # pandas ``attrs`` (for example when serialising/deserialising test frames).
     if column_snapshot and not hasattr(frame, "_raw_payload_columns"):
-        try:
-            frame._raw_payload_columns = column_snapshot
-        except Exception:  # pragma: no cover - defensive attribute set
-            pass
+        _set_plain_attr(frame, "_raw_payload_columns", column_snapshot)
     if symbol and not hasattr(frame, "_raw_payload_symbol"):
-        try:
-            frame._raw_payload_symbol = str(symbol)
-        except Exception:  # pragma: no cover - defensive attribute set
-            pass
+        _set_plain_attr(frame, "_raw_payload_symbol", str(symbol))
 
 
 _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
