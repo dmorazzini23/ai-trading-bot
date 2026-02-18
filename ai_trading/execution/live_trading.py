@@ -1803,6 +1803,7 @@ class ExecutionEngine:
         self._order_signal_meta: dict[str, _SignalMeta] = {}
         self._cycle_submitted_orders: int = 0
         self._cycle_order_pacing_cap_logged: bool = False
+        self._last_order_pacing_cap_log_ts: float = 0.0
         self._cycle_order_outcomes: list[dict[str, Any]] = []
         self._recent_order_intents: dict[tuple[str, str], float] = {}
         self._pending_new_actions_this_cycle: int = 0
@@ -2166,6 +2167,25 @@ class ExecutionEngine:
         if value is None:
             return None
         return max(1, int(value))
+
+    def _order_pacing_cap_log_cooldown_seconds(self) -> float:
+        """Return minimum seconds between ORDER_PACING_CAP_HIT warning logs."""
+
+        value = _config_float("AI_TRADING_ORDER_PACING_CAP_LOG_COOLDOWN_SEC", 300.0)
+        if value is None:
+            value = 300.0
+        return max(0.0, min(float(value), 3600.0))
+
+    def _should_emit_order_pacing_cap_log(self, *, now_ts: float | None = None) -> bool:
+        """Return True when ORDER_PACING_CAP_HIT should be emitted this cycle."""
+
+        current_ts = float(monotonic_time() if now_ts is None else now_ts)
+        cooldown_s = self._order_pacing_cap_log_cooldown_seconds()
+        last_ts = float(getattr(self, "_last_order_pacing_cap_log_ts", 0.0) or 0.0)
+        if cooldown_s <= 0.0 or last_ts <= 0.0 or (current_ts - last_ts) >= cooldown_s:
+            self._last_order_pacing_cap_log_ts = current_ts
+            return True
+        return False
 
     def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
         """Return True when duplicate intent should be skipped."""
@@ -4007,15 +4027,16 @@ class ExecutionEngine:
             self.stats["skipped_orders"] += 1
             if not bool(getattr(self, "_cycle_order_pacing_cap_logged", False)):
                 self._cycle_order_pacing_cap_logged = True
-                logger.warning(
-                    "ORDER_PACING_CAP_HIT",
-                    extra={
-                        "symbol": symbol,
-                        "side": mapped_side,
-                        "submitted_this_cycle": int(self._cycle_submitted_orders),
-                        "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
-                    },
-                )
+                if self._should_emit_order_pacing_cap_log():
+                    logger.warning(
+                        "ORDER_PACING_CAP_HIT",
+                        extra={
+                            "symbol": symbol,
+                            "side": mapped_side,
+                            "submitted_this_cycle": int(self._cycle_submitted_orders),
+                            "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
+                        },
+                    )
             return None
         capacity_broker = self._capacity_broker(trading_client)
         account_snapshot = self._resolve_capacity_account_snapshot(

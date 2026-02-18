@@ -62,6 +62,23 @@ def test_duplicate_intent_window(monkeypatch):
     assert engine._should_suppress_duplicate_intent("AAPL", "buy") is False
 
 
+def test_order_pacing_cap_warning_cooldown(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CAP_LOG_COOLDOWN_SEC", "300")
+
+    assert engine._should_emit_order_pacing_cap_log(now_ts=100.0) is True
+    assert engine._should_emit_order_pacing_cap_log(now_ts=200.0) is False
+    assert engine._should_emit_order_pacing_cap_log(now_ts=401.0) is True
+
+
+def test_order_pacing_cap_warning_cooldown_zero_disables(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CAP_LOG_COOLDOWN_SEC", "0")
+
+    assert engine._should_emit_order_pacing_cap_log(now_ts=100.0) is True
+    assert engine._should_emit_order_pacing_cap_log(now_ts=101.0) is True
+
+
 def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)
