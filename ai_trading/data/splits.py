@@ -70,7 +70,6 @@ class PurgedGroupTimeSeriesSplit:
                 try:
                     indices = pd.to_datetime(indices)
                 except (ValueError, TypeError) as e:
-                    from ai_trading.logging import logger
                     logger.debug('Datetime index cast failed; using positional indices: %s', e)
             if self.test_size is None:
                 test_size = n_samples // (self.n_splits + 1)

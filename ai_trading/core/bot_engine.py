@@ -25216,6 +25216,32 @@ def on_market_close() -> None:
     if now_est.time() < dt_time(16, 0):
         logger.info("RETRAIN_SKIP_EARLY", extra={"time": now_est.isoformat()})
         return
+    after_hours_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False, cast=bool)
+    )
+    if after_hours_enabled:
+        try:
+            from ai_trading.training.after_hours import run_after_hours_training
+
+            outcome = run_after_hours_training(now=now_est.astimezone(UTC))
+            logger.info(
+                "AFTER_HOURS_TRAINING_OUTCOME",
+                extra={
+                    "status": outcome.get("status"),
+                    "model_id": outcome.get("model_id"),
+                    "model_name": outcome.get("model_name"),
+                    "governance_status": outcome.get("governance_status"),
+                    "reason": outcome.get("reason"),
+                },
+            )
+        except Exception as exc:
+            logger.exception(f"after-hours training failed: {exc}")
+    legacy_daily_retrain = bool(
+        get_env("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", True, cast=bool)
+    )
+    if not legacy_daily_retrain:
+        logger.info("LEGACY_DAILY_RETRAIN_SKIPPED")
+        return
     try:
         load_or_retrain_daily(get_ctx())
     except (
