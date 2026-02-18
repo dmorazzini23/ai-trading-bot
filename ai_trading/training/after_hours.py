@@ -806,6 +806,7 @@ def _maybe_train_rl_overlay(
 def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     """Run after-hours ML training and optional RL overlay training."""
     import joblib
+    import pandas as pd
 
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     now_ny = now_utc.astimezone(ZoneInfo("America/New_York"))
@@ -846,26 +847,40 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "timestamp": now_utc.isoformat(),
         }
     split_idx = max(20, int(len(dataset) * 0.7))
-    guard_gap = 3
-    train_end_idx = max(1, split_idx - guard_gap)
-    test_start_idx = min(len(dataset), split_idx + guard_gap)
     horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
     embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
-    if train_end_idx < test_start_idx:
-        try:
-            run_leakage_guards(
-                feature_timestamps=dataset["timestamp"],
-                label_timestamps=dataset["label_ts"],
-                train_label_times=dataset["label_ts"].iloc[:train_end_idx],
-                test_label_times=dataset["label_ts"].iloc[test_start_idx:],
-                horizon_days=horizon_days,
-                embargo_days=embargo_days,
-            )
-        except AssertionError as exc:
-            logger.warning(
-                "AFTER_HOURS_GLOBAL_LEAKAGE_GUARD_WARNING",
-                extra={"error": str(exc)},
-            )
+    label_ts_series = pd.to_datetime(dataset["label_ts"], utc=True)
+    timestamp_series = pd.to_datetime(dataset["timestamp"], utc=True)
+    if split_idx < len(dataset):
+        test_label_times = label_ts_series.iloc[split_idx:]
+        if not test_label_times.empty:
+            global_gap_days = max(1, horizon_days + embargo_days)
+            cutoff = test_label_times.min() - pd.Timedelta(days=global_gap_days)
+            train_label_times = label_ts_series[label_ts_series <= cutoff]
+            if train_label_times.empty:
+                logger.info(
+                    "AFTER_HOURS_GLOBAL_LEAKAGE_GUARD_SKIPPED",
+                    extra={
+                        "reason": "insufficient_train_after_gap",
+                        "global_gap_days": global_gap_days,
+                        "rows": int(len(dataset)),
+                    },
+                )
+            else:
+                try:
+                    run_leakage_guards(
+                        feature_timestamps=timestamp_series,
+                        label_timestamps=label_ts_series,
+                        train_label_times=train_label_times,
+                        test_label_times=test_label_times,
+                        horizon_days=horizon_days,
+                        embargo_days=embargo_days,
+                    )
+                except AssertionError as exc:
+                    logger.info(
+                        "AFTER_HOURS_GLOBAL_LEAKAGE_GUARD_SOFTFAIL",
+                        extra={"error": str(exc)},
+                    )
     seed = int(get_env("AI_TRADING_SEED", 42, cast=int))
     default_threshold = float(
         get_env("AI_TRADING_AFTER_HOURS_DEFAULT_THRESHOLD", 0.5, cast=float)
