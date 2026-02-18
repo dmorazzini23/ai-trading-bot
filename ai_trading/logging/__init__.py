@@ -1408,7 +1408,14 @@ def log_backup_provider_used(
         or "unspecified"
     )
     reason_key = str(reason_value).strip().lower()
-    if reason_key == "configured_source_override":
+    info_reasons = {
+        "configured_source_override",
+        "upstream_unavailable",
+        "backup_cooldown_active",
+        "primary_probe_deferred",
+        "fallback_ttl_active",
+    }
+    if reason_key in info_reasons:
         active_logger.info("BACKUP_PROVIDER_USED", extra=payload)
     else:
         active_logger.warning("BACKUP_PROVIDER_USED", extra=payload)

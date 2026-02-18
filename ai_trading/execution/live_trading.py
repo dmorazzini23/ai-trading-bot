@@ -1802,6 +1802,7 @@ class ExecutionEngine:
         self._pending_orders: dict[str, dict[str, Any]] = {}
         self._order_signal_meta: dict[str, _SignalMeta] = {}
         self._cycle_submitted_orders: int = 0
+        self._cycle_order_pacing_cap_logged: bool = False
         self._cycle_order_outcomes: list[dict[str, Any]] = []
         self._recent_order_intents: dict[tuple[str, str], float] = {}
         self._pending_new_actions_this_cycle: int = 0
@@ -1865,6 +1866,7 @@ class ExecutionEngine:
         """Cache the Alpaca account snapshot for this trading cycle."""
 
         self._cycle_submitted_orders = 0
+        self._cycle_order_pacing_cap_logged = False
         self._pending_new_actions_this_cycle = 0
         self._cycle_order_outcomes = []
         self._cycle_account = None
@@ -4003,15 +4005,17 @@ class ExecutionEngine:
         ):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
-            logger.warning(
-                "ORDER_PACING_CAP_HIT",
-                extra={
-                    "symbol": symbol,
-                    "side": mapped_side,
-                    "submitted_this_cycle": int(self._cycle_submitted_orders),
-                    "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
-                },
-            )
+            if not bool(getattr(self, "_cycle_order_pacing_cap_logged", False)):
+                self._cycle_order_pacing_cap_logged = True
+                logger.warning(
+                    "ORDER_PACING_CAP_HIT",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "submitted_this_cycle": int(self._cycle_submitted_orders),
+                        "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
+                    },
+                )
             return None
         capacity_broker = self._capacity_broker(trading_client)
         account_snapshot = self._resolve_capacity_account_snapshot(

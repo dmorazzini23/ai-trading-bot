@@ -28,7 +28,7 @@ def test_backup_provider_used_logs_info_for_configured_override(caplog) -> None:
     assert records[-1].levelname == "INFO"
 
 
-def test_backup_provider_used_logs_warning_for_unavailable_primary(caplog) -> None:
+def test_backup_provider_used_logs_info_for_unavailable_primary(caplog) -> None:
     start, end = _window()
     with caplog.at_level(logging.INFO, logger="ai_trading.logging"):
         log_backup_provider_used(
@@ -42,4 +42,4 @@ def test_backup_provider_used_logs_warning_for_unavailable_primary(caplog) -> No
 
     records = [record for record in caplog.records if record.getMessage() == "BACKUP_PROVIDER_USED"]
     assert records
-    assert records[-1].levelname == "WARNING"
+    assert records[-1].levelname == "INFO"

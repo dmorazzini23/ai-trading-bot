@@ -1918,6 +1918,7 @@ _FALLBACK_SUPPRESS_UNTIL: dict[tuple[str, str], float] = {}
 _BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
 _BACKUP_PRIMARY_PROBE_AT: dict[tuple[str, str], datetime] = {}
 _BACKUP_SKIP_WINDOW = timedelta(minutes=10)
+_GLOBAL_BACKUP_SKIP_UNTIL: dict[str, datetime] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
@@ -1932,6 +1933,73 @@ _YF_WARNING_MAX_CYCLES = 6
 
 _SAFE_MODE_CYCLE_STATE: dict[str, Any] = {"cycle_id": None, "reason": None, "version": 0}
 _SAFE_MODE_LOGGED: set[str] = set()
+
+
+def _global_backup_skip_enabled(timeframe: str) -> bool:
+    """Return True when timeframe-level primary-skip is enabled."""
+
+    if str(timeframe or "").strip().lower() != "1min":
+        return False
+    raw = os.getenv("AI_TRADING_GLOBAL_BACKUP_SKIP_ENABLED", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _global_backup_skip_window() -> timedelta:
+    """Return global backup skip window duration."""
+
+    raw = os.getenv("AI_TRADING_GLOBAL_BACKUP_SKIP_SECONDS", "45").strip()
+    try:
+        seconds = int(raw)
+    except (TypeError, ValueError):
+        seconds = 45
+    seconds = max(0, min(seconds, 900))
+    return timedelta(seconds=seconds)
+
+
+def _set_global_backup_skip(timeframe: str, *, until: datetime | float | None = None) -> None:
+    """Apply a timeframe-level cooldown to avoid repeated primary probes across symbols."""
+
+    if not _global_backup_skip_enabled(timeframe):
+        return
+    key = str(timeframe or "").strip()
+    if not key:
+        return
+    until_dt: datetime | None = None
+    if until is None:
+        until_dt = datetime.now(tz=UTC) + _global_backup_skip_window()
+    elif isinstance(until, datetime):
+        until_dt = until
+    else:
+        try:
+            until_dt = datetime.fromtimestamp(float(until), tz=UTC)
+        except Exception:
+            until_dt = None
+    if until_dt is None:
+        return
+    _GLOBAL_BACKUP_SKIP_UNTIL[key] = until_dt
+
+
+def _get_global_backup_skip_until(timeframe: str) -> datetime | None:
+    """Return active timeframe-level backup cooldown, if any."""
+
+    key = str(timeframe or "").strip()
+    if not key:
+        return None
+    until_dt = _GLOBAL_BACKUP_SKIP_UNTIL.get(key)
+    if not isinstance(until_dt, datetime):
+        return None
+    if until_dt <= datetime.now(tz=UTC):
+        _GLOBAL_BACKUP_SKIP_UNTIL.pop(key, None)
+        return None
+    return until_dt
+
+
+def _clear_global_backup_skip(timeframe: str) -> None:
+    """Clear timeframe-level backup cooldown."""
+
+    key = str(timeframe or "").strip()
+    if key:
+        _GLOBAL_BACKUP_SKIP_UNTIL.pop(key, None)
 
 
 def _backup_primary_probe_interval() -> timedelta:
@@ -2815,6 +2883,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 _BACKUP_SKIP_UNTIL.pop(key, None)
                 _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
                 _SKIPPED_SYMBOLS.add(key)
+                _set_global_backup_skip(timeframe)
                 return
             try:
                 until_dt = datetime.fromtimestamp(until_float, tz=UTC)
@@ -2822,10 +2891,12 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 _BACKUP_SKIP_UNTIL.pop(key, None)
                 _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
                 _SKIPPED_SYMBOLS.add(key)
+                _set_global_backup_skip(timeframe)
                 return
         _BACKUP_SKIP_UNTIL[key] = until_dt
         _schedule_backup_primary_probe(key)
         _SKIPPED_SYMBOLS.add(key)
+        _set_global_backup_skip(timeframe, until=until_dt)
         return
     _SKIPPED_SYMBOLS.add(key)
     try:
@@ -2834,6 +2905,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
     _schedule_backup_primary_probe(key)
+    _set_global_backup_skip(timeframe, until=until_dt)
 
 
 def _clear_backup_skip(symbol: str, timeframe: str) -> None:
@@ -8280,6 +8352,12 @@ def _fetch_bars(
     now = datetime.now(UTC)
     tf_key = (symbol, _interval)
     skip_until_dt = _BACKUP_SKIP_UNTIL.get(tf_key)
+    global_skip_until_dt = _get_global_backup_skip_until(_interval)
+    skip_from_global = False
+    if isinstance(global_skip_until_dt, datetime):
+        if not isinstance(skip_until_dt, datetime) or global_skip_until_dt >= skip_until_dt:
+            skip_until_dt = global_skip_until_dt
+            skip_from_global = True
     if pytest_active and skip_until_dt is not None:
         preserve_skip = bool(os.getenv("ENABLE_HTTP_FALLBACK"))
         if not preserve_skip:
@@ -8316,10 +8394,16 @@ def _fetch_bars(
                 skip_payload["end"] = _end.isoformat()
             except Exception:
                 pass
+            if skip_from_global:
+                skip_payload["global_skip"] = True
             logger.info(
                 "PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE",
                 extra=_norm_extra(skip_payload),
             )
+            try:
+                _state["empty_data_logged"] = True
+            except Exception:
+                pass
             fallback_df = _run_backup_fetch(fb_interval, from_provider=f"alpaca_{_feed}")
             return _finalize_frame(fallback_df)
     if skip_window_active:
@@ -8346,10 +8430,16 @@ def _fetch_bars(
                     skip_payload["end"] = _end.isoformat()
                 except Exception:
                     pass
+                if skip_from_global:
+                    skip_payload["global_skip"] = True
                 logger.info(
                     "PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE",
                     extra=_norm_extra(skip_payload),
                 )
+                try:
+                    _state["empty_data_logged"] = True
+                except Exception:
+                    pass
                 fallback_df = _run_backup_fetch(fb_interval, from_provider=f"alpaca_{_feed}")
                 return _finalize_frame(fallback_df)
     disable_expired = False
@@ -8373,6 +8463,7 @@ def _fetch_bars(
             _SKIPPED_SYMBOLS.discard(tf_key)
             _FALLBACK_WINDOWS.discard(_fallback_key(symbol, _interval, _start, _end))
             _clear_backup_skip(symbol, _interval)
+            _clear_global_backup_skip(_interval)
             _clear_minute_fallback_state(symbol, _interval, _start, _end)
         except Exception:
             pass
@@ -11252,6 +11343,7 @@ def get_minute_df(
     tf_key = (symbol, "1Min")
     skip_until_raw = _BACKUP_SKIP_UNTIL.get(tf_key)
     skip_until_dt: datetime | None = None
+    global_skip_window_active = False
     if isinstance(skip_until_raw, datetime):
         skip_until_dt = skip_until_raw
     elif skip_until_raw is not None:
@@ -11259,6 +11351,11 @@ def get_minute_df(
             skip_until_dt = datetime.fromtimestamp(float(skip_until_raw), tz=UTC)
         except Exception:
             skip_until_dt = None
+    global_skip_until_dt = _get_global_backup_skip_until("1Min")
+    if isinstance(global_skip_until_dt, datetime):
+        global_skip_window_active = True
+        if skip_until_dt is None or global_skip_until_dt >= skip_until_dt:
+            skip_until_dt = global_skip_until_dt
     try:
         skip_window_active = bool(skip_until_dt and datetime.now(tz=UTC) < skip_until_dt)
     except Exception:
@@ -11272,7 +11369,7 @@ def get_minute_df(
         _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
         fallback_window_used = False
     fallback_metadata: dict[str, str] | None = None
-    skip_primary_due_to_fallback = bool(forced_provider_label)
+    skip_primary_due_to_fallback = bool(forced_provider_label) or bool(global_skip_window_active)
     skip_due_to_metadata = False
     fallback_ttl_active = False
     safe_mode_forced_skip = False

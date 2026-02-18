@@ -117,3 +117,24 @@ def test_backup_skip_window_rechecks_primary_on_probe_due(monkeypatch):
     assert not out.empty
     assert calls["alpaca"] >= 1
     assert calls["yahoo"] == 0
+
+
+def test_backup_skip_sets_global_minute_cooldown(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_GLOBAL_BACKUP_SKIP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_GLOBAL_BACKUP_SKIP_SECONDS", "120")
+    data_fetcher._GLOBAL_BACKUP_SKIP_UNTIL.clear()
+
+    data_fetcher._set_backup_skip("AAPL", "1Min")
+    global_until = data_fetcher._get_global_backup_skip_until("1Min")
+
+    assert isinstance(global_until, datetime)
+    assert global_until > datetime.now(UTC) + timedelta(seconds=100)
+
+
+def test_backup_skip_does_not_set_global_non_minute(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_GLOBAL_BACKUP_SKIP_ENABLED", "1")
+    data_fetcher._GLOBAL_BACKUP_SKIP_UNTIL.clear()
+
+    data_fetcher._set_backup_skip("AAPL", "1Day")
+
+    assert data_fetcher._get_global_backup_skip_until("1Day") is None
