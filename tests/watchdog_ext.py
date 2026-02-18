@@ -16,7 +16,13 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in CI
 @pytest.fixture(scope="session", autouse=True)
 def _watchdog():
     faulthandler.enable()
-    faulthandler.dump_traceback_later(120, repeat=True)
+    watchdog_seconds_raw = os.getenv("PYTEST_WATCHDOG_SECONDS", "0")
+    watchdog_repeat_raw = os.getenv("PYTEST_WATCHDOG_REPEAT", "0")
+    with contextlib.suppress(ValueError):
+        watchdog_seconds = int(float(watchdog_seconds_raw))
+        watchdog_repeat = watchdog_repeat_raw.strip().lower() in {"1", "true", "yes", "on"}
+        if watchdog_seconds > 0:
+            faulthandler.dump_traceback_later(watchdog_seconds, repeat=watchdog_repeat)
     try:
         yield
     finally:

@@ -1,4 +1,15 @@
+import pytest
+
+from ai_trading.execution import live_trading as lt
 from ai_trading.execution.live_trading import CapacityCheck, ExecutionEngine, preflight_capacity
+
+
+_REAL_CALL_PREFLIGHT_CAPACITY = lt._call_preflight_capacity
+
+
+@pytest.fixture(autouse=True)
+def _restore_capacity_helper(monkeypatch):
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _REAL_CALL_PREFLIGHT_CAPACITY)
 
 
 class FakeBroker:
@@ -125,6 +136,28 @@ def test_submit_limit_order_skips_when_account_cache_is_stale(monkeypatch):
     engine.trading_client = broker
     engine._cycle_account = None
     engine._cycle_account_fetched = True
+
+    result = engine.submit_limit_order("TSLA", "buy", 10, limit_price=50)
+
+    assert result is None
+    assert broker.submit_calls == 0
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_submit_limit_order_uses_explicit_broker_when_provider_is_paper(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
+    monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "0")
+    monkeypatch.setenv("AI_TRADING_BROKER_PROVIDER", "paper")
+
+    engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
+    engine.is_initialized = True
+
+    broker = FakeBroker(buying_power="0", orders=[])
+    engine.trading_client = broker
 
     result = engine.submit_limit_order("TSLA", "buy", 10, limit_price=50)
 

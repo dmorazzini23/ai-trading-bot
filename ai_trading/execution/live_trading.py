@@ -2349,6 +2349,11 @@ class ExecutionEngine:
     def _capacity_broker(self, broker_client: Any | None) -> Any | None:
         """Return broker object used for capacity and account snapshots."""
 
+        has_account = callable(getattr(broker_client, "get_account", None))
+        has_orders = callable(getattr(broker_client, "list_orders", None))
+        if broker_client is not None and has_account and has_orders:
+            return broker_client
+
         provider_raw = os.getenv("AI_TRADING_BROKER_PROVIDER", "alpaca")
         provider = str(provider_raw or "alpaca").strip().lower()
         adapter = build_broker_adapter(provider=provider, client=broker_client)
