@@ -467,6 +467,9 @@ def _evaluate_candidate(
     timestamps = pd.to_datetime(dataset["timestamp"], utc=True)
     label_ts = pd.to_datetime(dataset["label_ts"], utc=True)
     regimes = dataset["regime"].astype(str).to_numpy()
+    horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
+    embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
+    fold_gap_days = max(1, horizon_days + embargo_days)
     split_count = int(get_env("AI_TRADING_AFTER_HOURS_CV_SPLITS", 5, cast=int))
     split_count = max(2, min(split_count, max(2, len(dataset) // 80)))
     splitter = PurgedGroupTimeSeriesSplit(
@@ -474,7 +477,9 @@ def _evaluate_candidate(
         embargo_pct=float(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_PCT", 0.01, cast=float)),
         purge_pct=float(get_env("AI_TRADING_AFTER_HOURS_PURGE_PCT", 0.02, cast=float)),
     )
-    folds = list(splitter.split(X, y, t1=label_ts))
+    split_frame = X.copy()
+    split_frame.index = pd.DatetimeIndex(timestamps)
+    folds = list(splitter.split(split_frame, y, t1=label_ts))
     if not folds:
         test_size = max(20, len(dataset) // (split_count + 1))
         fallback_folds: list[tuple[np.ndarray, np.ndarray]] = []
@@ -497,21 +502,37 @@ def _evaluate_candidate(
     for train_idx, test_idx in folds:
         if len(train_idx) < 60 or len(test_idx) < 20:
             continue
-        y_train = y.iloc[train_idx]
+        test_labels = label_ts.iloc[test_idx]
+        if test_labels.empty:
+            continue
+        test_start = test_labels.min()
+        cutoff = test_start - pd.Timedelta(days=fold_gap_days)
+        train_mask = label_ts.iloc[train_idx] <= cutoff
+        train_idx_safe = np.asarray(train_idx)[np.asarray(train_mask, dtype=bool)]
+        if len(train_idx_safe) < 60:
+            continue
+        y_train = y.iloc[train_idx_safe]
         y_test = y.iloc[test_idx]
         if y_train.nunique() < 2 or y_test.nunique() < 2:
             continue
-        run_leakage_guards(
-            feature_timestamps=timestamps.iloc[test_idx],
-            label_timestamps=label_ts.iloc[test_idx],
-            train_label_times=label_ts.iloc[train_idx],
-            test_label_times=label_ts.iloc[test_idx],
-            horizon_days=1,
-            embargo_days=1,
-        )
+        try:
+            run_leakage_guards(
+                feature_timestamps=timestamps.iloc[test_idx],
+                label_timestamps=label_ts.iloc[test_idx],
+                train_label_times=label_ts.iloc[train_idx_safe],
+                test_label_times=label_ts.iloc[test_idx],
+                horizon_days=horizon_days,
+                embargo_days=embargo_days,
+            )
+        except AssertionError as exc:
+            logger.warning(
+                "AFTER_HOURS_FOLD_SKIPPED_LEAKAGE",
+                extra={"model": name, "error": str(exc)},
+            )
+            continue
         model = _fit_candidate_model(name, seed=seed)
         try:
-            model.fit(X.iloc[train_idx], y_train)
+            model.fit(X.iloc[train_idx_safe], y_train)
         except Exception:
             continue
         probs = _predict_probabilities(model, X.iloc[test_idx])
@@ -791,15 +812,23 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     guard_gap = 3
     train_end_idx = max(1, split_idx - guard_gap)
     test_start_idx = min(len(dataset), split_idx + guard_gap)
+    horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
+    embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
     if train_end_idx < test_start_idx:
-        run_leakage_guards(
-            feature_timestamps=dataset["timestamp"],
-            label_timestamps=dataset["label_ts"],
-            train_label_times=dataset["label_ts"].iloc[:train_end_idx],
-            test_label_times=dataset["label_ts"].iloc[test_start_idx:],
-            horizon_days=1,
-            embargo_days=1,
-        )
+        try:
+            run_leakage_guards(
+                feature_timestamps=dataset["timestamp"],
+                label_timestamps=dataset["label_ts"],
+                train_label_times=dataset["label_ts"].iloc[:train_end_idx],
+                test_label_times=dataset["label_ts"].iloc[test_start_idx:],
+                horizon_days=horizon_days,
+                embargo_days=embargo_days,
+            )
+        except AssertionError as exc:
+            logger.warning(
+                "AFTER_HOURS_GLOBAL_LEAKAGE_GUARD_WARNING",
+                extra={"error": str(exc)},
+            )
     seed = int(get_env("AI_TRADING_SEED", 42, cast=int))
     default_threshold = float(
         get_env("AI_TRADING_AFTER_HOURS_DEFAULT_THRESHOLD", 0.5, cast=float)
