@@ -102,6 +102,12 @@ def test_after_hours_training_trains_and_writes_outputs(
     report_payload = json.loads(Path(result["report_path"]).read_text(encoding="utf-8"))
     assert "metrics" in report_payload
     assert "thresholds_by_regime" in report_payload
+    assert "candidate_metrics" in report_payload
+    assert isinstance(report_payload["candidate_metrics"], list)
+    assert report_payload["candidate_metrics"]
+    assert "candidate_metrics" in result
+    assert isinstance(result["candidate_metrics"], list)
+    assert result["candidate_metrics"]
 
 
 def test_on_market_close_runs_after_hours_pipeline(
@@ -171,3 +177,41 @@ def test_after_hours_training_handles_leakage_assertions(
     )
     assert result["status"] == "skipped"
     assert result["reason"] == "no_candidate_models"
+
+
+def test_after_hours_uses_dedicated_ticker_csv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live_tickers = tmp_path / "tickers.live.csv"
+    live_tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    train_tickers = tmp_path / "tickers.train.csv"
+    train_tickers.write_text("symbol\nSPY\nQQQ\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(live_tickers))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TICKERS_CSV", str(train_tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LIGHTGBM_VERBOSITY", "-1")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),  # 16:10 New York
+    )
+    assert result["status"] == "trained"
+    assert set(json.loads(Path(result["report_path"]).read_text(encoding="utf-8"))["symbols"]) == {
+        "QQQ",
+        "SPY",
+    }

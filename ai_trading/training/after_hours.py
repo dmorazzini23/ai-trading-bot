@@ -123,7 +123,9 @@ def _fetch_daily_bars(symbol: str, start_dt: datetime, end_dt: datetime):
 
 
 def _load_symbols() -> list[str]:
-    path_raw = str(get_env("AI_TRADING_TICKERS_CSV", "") or "").strip()
+    path_raw = str(get_env("AI_TRADING_AFTER_HOURS_TICKERS_CSV", "") or "").strip()
+    if not path_raw:
+        path_raw = str(get_env("AI_TRADING_TICKERS_CSV", "") or "").strip()
     path = Path(path_raw) if path_raw else None
     symbols: list[str] = []
     if path is not None and path.exists():
@@ -379,6 +381,7 @@ def _fit_candidate_model(name: str, seed: int):
             objective="binary",
             subsample=0.8,
             colsample_bytree=0.8,
+            verbosity=int(get_env("AI_TRADING_AFTER_HOURS_LIGHTGBM_VERBOSITY", -1, cast=int)),
         )
         return CalibratedClassifierCV(base, method="sigmoid", cv=3)
     if name == "xgboost":
@@ -652,6 +655,40 @@ def _candidate_names() -> list[str]:
     return names
 
 
+def _serialize_candidate_metrics(
+    candidates: list[CandidateMetrics],
+    *,
+    best_name: str,
+) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            item.mean_expectancy_bps,
+            -item.max_drawdown_bps,
+            item.support,
+        ),
+        reverse=True,
+    )
+    for rank, item in enumerate(ranked, start=1):
+        payload.append(
+            {
+                "rank": rank,
+                "name": item.name,
+                "selected": item.name == best_name,
+                "fold_count": item.fold_count,
+                "support": item.support,
+                "mean_expectancy_bps": item.mean_expectancy_bps,
+                "max_drawdown_bps": item.max_drawdown_bps,
+                "turnover_ratio": item.turnover_ratio,
+                "mean_hit_rate": item.mean_hit_rate,
+                "hit_rate_stability": item.hit_rate_stability,
+                "regime_metrics": item.regime_metrics,
+            }
+        )
+    return payload
+
+
 def _fit_final_model(name: str, dataset: Any, *, seed: int):
     model = _fit_candidate_model(name, seed=seed)
     X = dataset.loc[:, FEATURE_COLUMNS]
@@ -853,6 +890,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         candidate_results,
         key=lambda item: (item.mean_expectancy_bps, -item.max_drawdown_bps, item.support),
     )
+    candidate_metrics_payload = _serialize_candidate_metrics(
+        candidate_results,
+        best_name=best.name,
+    )
     thresholds_by_regime = _threshold_by_regime(
         dataset,
         best.oof_probabilities,
@@ -949,6 +990,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "support": best.support,
         },
         "fill_quality": fill_quality,
+        "candidate_metrics": candidate_metrics_payload,
         "regime_metrics": best.regime_metrics,
         "thresholds_by_regime": thresholds_by_regime,
         "edge_gates": gate_map,
@@ -986,6 +1028,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "governance_status": status,
         "edge_gates": gate_map,
         "rows": int(len(dataset)),
+        "candidate_metrics": candidate_metrics_payload,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
         "rl_overlay": rl_overlay,
