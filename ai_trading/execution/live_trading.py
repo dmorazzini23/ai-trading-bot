@@ -2648,6 +2648,7 @@ class ExecutionEngine:
             self.trading_client = raw_client
             if self._validate_connection():
                 self.is_initialized = True
+                self._reconcile_durable_intents()
                 logger.info("Alpaca execution engine ready for trading")
                 return True
             else:
@@ -7260,6 +7261,32 @@ class ExecutionEngine:
             self._broker_sync = BrokerSyncResult((), (), {}, {}, monotonic_time())
         return self._broker_sync
 
+    def _reconcile_durable_intents(
+        self,
+        *,
+        open_orders: Iterable[Any] | None = None,
+    ) -> None:
+        """Reconcile durable intent records with broker open orders."""
+
+        manager = getattr(self, "order_manager", None)
+        reconcile_fn = getattr(manager, "reconcile_open_intents", None)
+        if not callable(reconcile_fn):
+            return
+        kwargs: dict[str, Any] = {}
+        if open_orders is not None:
+            kwargs["broker_orders"] = open_orders
+        else:
+            client = getattr(self, "trading_client", None)
+            list_orders = getattr(client, "list_orders", None)
+            if not callable(list_orders):
+                list_orders = getattr(client, "get_orders", None)
+            if callable(list_orders):
+                kwargs["list_orders_fn"] = list_orders
+        try:
+            reconcile_fn(**kwargs)
+        except Exception:
+            logger.debug("OMS_INTENT_RECONCILE_FAILED", exc_info=True)
+
     def open_order_totals(self, symbol: str) -> tuple[float, float]:
         """Return aggregate (buy_qty, sell_qty) for *symbol* from cached snapshot."""
 
@@ -7320,6 +7347,7 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         """Refresh and return broker state snapshot."""
 
         open_orders, positions = self._fetch_broker_state()
+        self._reconcile_durable_intents(open_orders=open_orders)
         try:
             return self._update_broker_snapshot(open_orders, positions)
         except Exception:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ai_trading.logging import get_logger
+from ai_trading.replay.event_loop import ReplayEventLoop
 
 logger = get_logger(__name__)
 
@@ -74,6 +76,30 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trailing-stop-bps", type=float, default=90.0)
     parser.add_argument("--fee-bps", type=float, default=1.0)
     parser.add_argument("--slippage-bps", type=float, default=2.0)
+    parser.add_argument(
+        "--simulation-mode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run parity replay using async simulated broker events.",
+    )
+    parser.add_argument(
+        "--replay-seed",
+        type=int,
+        default=42,
+        help="Deterministic seed used by simulation replay mode.",
+    )
+    parser.add_argument(
+        "--max-symbol-notional",
+        type=float,
+        default=None,
+        help="Optional replay per-symbol notional cap for invariant checks.",
+    )
+    parser.add_argument(
+        "--max-gross-notional",
+        type=float,
+        default=None,
+        help="Optional replay gross notional cap for invariant checks.",
+    )
     parser.add_argument("--output-json", type=Path, default=None)
     return parser
 
@@ -323,6 +349,129 @@ def _resolve_inputs(args: argparse.Namespace) -> dict[str, Path]:
     return paths
 
 
+def _normalize_bar_ts(value: Any, fallback_index: int) -> str:
+    """Return UTC ISO timestamp for replay bars."""
+
+    ts = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(ts):
+        ts = pd.Timestamp("1970-01-01T00:00:00Z") + pd.Timedelta(minutes=fallback_index)
+    return ts.isoformat()
+
+
+def _run_parity_simulation(
+    *,
+    args: argparse.Namespace,
+    cfg: ReplayConfig,
+    symbol_paths: dict[str, Path],
+) -> dict[str, Any]:
+    """Run deterministic replay parity simulation with async fill events."""
+
+    bars: list[dict[str, Any]] = []
+    signal_lookup: dict[tuple[str, str], tuple[float, float]] = {}
+    per_symbol: list[dict[str, Any]] = []
+    synthetic_index = 0
+    for symbol, csv_path in symbol_paths.items():
+        frame = _load_frame(csv_path, args.timestamp_col)
+        score, confidence = _compute_signal(frame)
+        per_symbol.append({"symbol": symbol, "bars": int(len(frame))})
+        for pos, (ts, row) in enumerate(frame.iterrows()):
+            close = float(row["close"])
+            if not np.isfinite(close) or close <= 0.0:
+                continue
+            ts_iso = _normalize_bar_ts(ts, synthetic_index)
+            synthetic_index += 1
+            signal_lookup[(symbol, ts_iso)] = (
+                float(score.iloc[pos]),
+                float(confidence.iloc[pos]),
+            )
+            bars.append(
+                {
+                    "symbol": symbol,
+                    "ts": ts_iso,
+                    "close": close,
+                }
+            )
+
+    def strategy(bar: dict[str, Any]) -> dict[str, Any] | None:
+        symbol = str(bar.get("symbol", "")).upper()
+        ts_iso = str(bar.get("ts", ""))
+        score, confidence = signal_lookup.get((symbol, ts_iso), (0.0, 0.0))
+        if confidence < cfg.confidence_threshold:
+            return None
+        side: str | None = None
+        if score >= cfg.entry_score_threshold:
+            side = "buy"
+        elif cfg.allow_shorts and score <= -cfg.entry_score_threshold:
+            side = "sell"
+        if side is None:
+            return None
+        price = float(bar.get("close", 0.0) or 0.0)
+        if not np.isfinite(price) or price <= 0.0:
+            return None
+        intent_key = f"{symbol}|{ts_iso}|{side}"
+        return {
+            "symbol": symbol,
+            "side": side,
+            "qty": 1.0,
+            "type": "limit",
+            "price": price,
+            "limit_price": price,
+            "intent_key": intent_key,
+            "client_order_id": intent_key,
+        }
+
+    replay = ReplayEventLoop(
+        strategy=strategy,
+        seed=int(args.replay_seed),
+        max_symbol_notional=args.max_symbol_notional,
+        max_gross_notional=args.max_gross_notional,
+    ).run(bars)
+
+    events = list(replay.get("events", []))
+    fill_events = [event for event in events if event.get("event_type") == "fill"]
+    violations = list(replay.get("violations", []))
+    violation_counts = Counter(
+        str(item.get("code", "unknown"))
+        for item in violations
+    )
+    total_bars = int(len(bars))
+    total_trades = int(len(fill_events))
+    aggregate: dict[str, Any] = {
+        "simulation_mode": True,
+        "replay_seed": int(args.replay_seed),
+        "symbols": len(per_symbol),
+        "total_bars": total_bars,
+        "total_trades": total_trades,
+        "win_rate": 0.0,
+        "avg_win_bps": 0.0,
+        "avg_loss_bps": 0.0,
+        "profit_factor": 0.0,
+        "expectancy_bps": 0.0,
+        "net_pnl_bps": 0.0,
+        "median_hold_bars": 0.0,
+        "churn_trades_per_100_bars": float((total_trades / max(total_bars, 1)) * 100.0),
+        "exposure_ratio": 0.0,
+        "orders_submitted": int(len(replay.get("orders", []))),
+        "intents_created": int(len(replay.get("intents", []))),
+        "fill_events": total_trades,
+        "violation_count": int(len(violations)),
+        "violations_by_code": dict(sorted(violation_counts.items())),
+        "config": {
+            "confidence_threshold": cfg.confidence_threshold,
+            "entry_score_threshold": cfg.entry_score_threshold,
+            "allow_shorts": cfg.allow_shorts,
+            "replay_seed": int(args.replay_seed),
+            "max_symbol_notional": args.max_symbol_notional,
+            "max_gross_notional": args.max_gross_notional,
+        },
+    }
+    return {
+        "aggregate": aggregate,
+        "symbols": per_symbol,
+        "replay": replay,
+    }
+
+
 def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     cfg = ReplayConfig(
         confidence_threshold=float(args.confidence_threshold),
@@ -340,6 +489,9 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("max-hold-bars must be >= min-hold-bars")
 
     symbol_paths = _resolve_inputs(args)
+    if bool(args.simulation_mode):
+        return _run_parity_simulation(args=args, cfg=cfg, symbol_paths=symbol_paths)
+
     per_symbol: list[dict[str, Any]] = []
     for symbol, csv_path in symbol_paths.items():
         frame = _load_frame(csv_path, args.timestamp_col)

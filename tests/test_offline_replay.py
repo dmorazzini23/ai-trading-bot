@@ -102,3 +102,35 @@ def test_offline_replay_higher_min_hold_reduces_churn(tmp_path: Path) -> None:
     slow_trades = int(_load_json(out_slow)["aggregate"]["total_trades"])
     assert fast_trades > 0
     assert slow_trades <= fast_trades
+
+
+def test_offline_replay_simulation_mode_is_deterministic(tmp_path: Path) -> None:
+    csv_path = tmp_path / "QQQ.csv"
+    out_first = tmp_path / "sim_first.json"
+    out_second = tmp_path / "sim_second.json"
+    _write_synthetic_bars(csv_path, periods=240)
+
+    args = [
+        "--csv",
+        str(csv_path),
+        "--simulation-mode",
+        "--replay-seed",
+        "123",
+        "--confidence-threshold",
+        "0.05",
+        "--entry-score-threshold",
+        "0.03",
+    ]
+
+    rc_first = main(args + ["--output-json", str(out_first)])
+    rc_second = main(args + ["--output-json", str(out_second)])
+    assert rc_first == 0
+    assert rc_second == 0
+
+    first = _load_json(out_first)
+    second = _load_json(out_second)
+    assert first["aggregate"]["simulation_mode"] is True
+    assert second["aggregate"]["simulation_mode"] is True
+    assert first["aggregate"]["replay_seed"] == 123
+    assert second["aggregate"]["replay_seed"] == 123
+    assert first["replay"]["events"] == second["replay"]["events"]

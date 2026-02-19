@@ -49,3 +49,63 @@ def test_restart_like_pending_intent_submits_once(tmp_path) -> None:
     duplicate_response = manager.submit_order(duplicate_order)
     assert duplicate_response is None
 
+
+def test_reconcile_marks_missing_submitted_intent_failed(tmp_path) -> None:
+    store = IntentStore(path=str(tmp_path / "reconcile_missing.db"))
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+
+    intent, created = store.create_intent(
+        intent_id="intent-missing-broker",
+        idempotency_key="missing-broker-key",
+        symbol="MSFT",
+        side="buy",
+        quantity=5.0,
+        status="SUBMITTED",
+    )
+    assert created is True
+    store.mark_submitted(intent.intent_id, "broker-order-404")
+
+    summary = manager.reconcile_open_intents(broker_orders=[])
+    assert summary["intents_checked"] == 1
+    assert summary["marked_failed"] == 1
+
+    refreshed = store.get_intent(intent.intent_id)
+    assert refreshed is not None
+    assert refreshed.status == "FAILED"
+    assert refreshed.last_error == "reconcile_missing_broker_order"
+
+
+def test_reconcile_links_broker_id_from_client_order_id(tmp_path) -> None:
+    store = IntentStore(path=str(tmp_path / "reconcile_client_id.db"))
+    manager = OrderManager()
+    manager.configure_intent_store(store)
+
+    intent, created = store.create_intent(
+        intent_id="intent-client-link",
+        idempotency_key="intent-client-link-key",
+        symbol="NVDA",
+        side="buy",
+        quantity=2.0,
+        status="SUBMITTED",
+    )
+    assert created is True
+
+    broker_orders = [
+        {
+            "id": "broker-order-200",
+            "client_order_id": "intent-client-link",
+            "status": "open",
+            "symbol": "NVDA",
+        }
+    ]
+    summary = manager.reconcile_open_intents(broker_orders=broker_orders)
+    assert summary["intents_checked"] == 1
+    assert summary["matched_open_orders"] == 1
+    assert summary["marked_submitted"] == 1
+    assert summary["marked_failed"] == 0
+
+    refreshed = store.get_intent(intent.intent_id)
+    assert refreshed is not None
+    assert refreshed.status == "SUBMITTED"
+    assert refreshed.broker_order_id == "broker-order-200"

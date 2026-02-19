@@ -569,6 +569,175 @@ class OrderManager:
         self._intent_store = intent_store
         self._idempotency_cache = None
 
+    @staticmethod
+    def _extract_payload_value(payload: Any, *keys: str) -> Any:
+        """Return first non-empty key/attribute value from mapping or object."""
+
+        for key in keys:
+            if isinstance(payload, Mapping):
+                value = payload.get(key)
+            else:
+                value = getattr(payload, key, None)
+            if value not in (None, ""):
+                return value
+        return None
+
+    @staticmethod
+    def _parse_iso_utc(raw: Any) -> datetime | None:
+        """Best-effort ISO8601 parser returning UTC-aware datetimes."""
+
+        if raw in (None, ""):
+            return None
+        text = str(raw).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    def reconcile_open_intents(
+        self,
+        *,
+        broker_orders: Iterable[Any] | None = None,
+        list_orders_fn: Callable[..., Iterable[Any]] | None = None,
+    ) -> dict[str, int]:
+        """Reconcile non-terminal intents against broker open-order state."""
+
+        summary: dict[str, int] = {
+            "intents_checked": 0,
+            "matched_open_orders": 0,
+            "marked_submitted": 0,
+            "marked_failed": 0,
+            "deferred_submitting": 0,
+            "pending_submit": 0,
+            "errors": 0,
+        }
+        if self._intent_store is None:
+            return summary
+
+        try:
+            open_intents = self._intent_store.get_open_intents()
+        except Exception:
+            logger.debug("OMS_INTENT_RECONCILE_LOAD_FAILED", exc_info=True)
+            summary["errors"] += 1
+            return summary
+        if not open_intents:
+            return summary
+
+        orders_payload: list[Any]
+        if broker_orders is not None:
+            orders_payload = list(broker_orders)
+        elif callable(list_orders_fn):
+            try:
+                fetched = list_orders_fn(status="open")  # type: ignore[misc]
+            except TypeError:
+                fetched = list_orders_fn()  # type: ignore[misc]
+            except Exception:
+                logger.debug("OMS_INTENT_RECONCILE_BROKER_FETCH_FAILED", exc_info=True)
+                summary["errors"] += 1
+                fetched = ()
+            orders_payload = list(fetched or ())
+        else:
+            orders_payload = []
+
+        open_by_order_id: dict[str, Any] = {}
+        open_by_client_order_id: dict[str, Any] = {}
+        for order_payload in orders_payload:
+            raw_order_id = self._extract_payload_value(
+                order_payload,
+                "id",
+                "order_id",
+            )
+            if raw_order_id not in (None, ""):
+                open_by_order_id[str(raw_order_id)] = order_payload
+            raw_client_order_id = self._extract_payload_value(
+                order_payload,
+                "client_order_id",
+            )
+            if raw_client_order_id not in (None, ""):
+                open_by_client_order_id[str(raw_client_order_id)] = order_payload
+
+        submitting_stale_seconds = max(
+            1,
+            int(get_env("AI_TRADING_OMS_RECONCILE_SUBMIT_STALE_SEC", "90", cast=int)),
+        )
+        now_utc = safe_utcnow()
+        for intent in open_intents:
+            summary["intents_checked"] += 1
+            intent_status = str(intent.status or "").strip().upper()
+
+            if intent_status == "PENDING_SUBMIT":
+                summary["pending_submit"] += 1
+                continue
+
+            matched_order: Any | None = None
+            if intent.broker_order_id:
+                matched_order = open_by_order_id.get(str(intent.broker_order_id))
+            if matched_order is None:
+                # Local fallback client_order_id defaults to intent_id.
+                matched_order = open_by_client_order_id.get(str(intent.intent_id))
+            if matched_order is not None:
+                summary["matched_open_orders"] += 1
+                if not intent.broker_order_id:
+                    raw_order_id = self._extract_payload_value(
+                        matched_order,
+                        "id",
+                        "order_id",
+                    )
+                    if raw_order_id not in (None, ""):
+                        try:
+                            self._intent_store.mark_submitted(
+                                intent.intent_id,
+                                str(raw_order_id),
+                            )
+                        except Exception:
+                            logger.debug(
+                                "OMS_INTENT_RECONCILE_MARK_SUBMITTED_FAILED",
+                                exc_info=True,
+                            )
+                            summary["errors"] += 1
+                        else:
+                            summary["marked_submitted"] += 1
+                continue
+
+            # Fresh SUBMITTING intents can legitimately be in-flight and absent
+            # from broker snapshots for a short interval after restart.
+            if intent_status == "SUBMITTING":
+                updated_at = self._parse_iso_utc(intent.updated_at)
+                if updated_at is not None:
+                    age_seconds = max(
+                        0.0,
+                        (now_utc - updated_at).total_seconds(),
+                    )
+                    if age_seconds < submitting_stale_seconds:
+                        summary["deferred_submitting"] += 1
+                        continue
+
+            if intent_status not in {"SUBMITTED", "SUBMITTING", "PARTIALLY_FILLED"}:
+                continue
+
+            try:
+                self._intent_store.close_intent(
+                    intent.intent_id,
+                    final_status="FAILED",
+                    last_error="reconcile_missing_broker_order",
+                )
+            except Exception:
+                logger.debug("OMS_INTENT_RECONCILE_MARK_FAILED_FAILED", exc_info=True)
+                summary["errors"] += 1
+            else:
+                summary["marked_failed"] += 1
+
+        if summary["intents_checked"] > 0:
+            logger.info("OMS_INTENT_RECONCILE", extra=summary)
+        return summary
+
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
         """Ensure idempotency cache is instantiated."""
         if self._idempotency_cache is None:
