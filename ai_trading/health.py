@@ -127,6 +127,36 @@ class HealthCheck:
                 except Exception:
                     pass
 
+                # Fallback to resolved runtime env when context does not provide
+                # Alpaca details (common for the dedicated health server path).
+                try:
+                    from ai_trading.utils.env import (
+                        alpaca_credential_status,
+                        get_alpaca_base_url,
+                    )
+
+                    has_key, has_secret = alpaca_credential_status()
+                    if has_key:
+                        alpaca_payload["has_key"] = True
+                    if has_secret:
+                        alpaca_payload["has_secret"] = True
+                    if not alpaca_payload.get("base_url"):
+                        alpaca_payload["base_url"] = str(get_alpaca_base_url() or "")
+                except Exception:
+                    logger.debug("HEALTH_ALPACA_ENV_RESOLVE_FAILED", exc_info=True)
+
+                if alpaca_payload.get("base_url"):
+                    alpaca_payload["paper"] = "paper" in str(
+                        alpaca_payload["base_url"]
+                    ).lower()
+
+                try:
+                    from ai_trading.alpaca_api import ALPACA_AVAILABLE as _alpaca_sdk_ok
+
+                    alpaca_payload["sdk_ok"] = bool(_alpaca_sdk_ok)
+                except Exception:
+                    logger.debug("HEALTH_ALPACA_SDK_RESOLVE_FAILED", exc_info=True)
+
                 try:
                     provider_state = runtime_state.observe_data_provider_state()
                 except Exception:
