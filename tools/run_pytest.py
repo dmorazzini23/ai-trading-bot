@@ -14,6 +14,8 @@ from pathlib import Path
 
 
 _IMPORT_SANITY_FLAG = "AI_TRADING_IMPORT_SANITY"
+_ENV_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,20 +134,60 @@ def _ensure_repo_on_path() -> None:
         logger.warning("[run_pytest] ai_trading not importable yet (%s); pytest will handle it", e)
 
 
+def _load_envfile_keys(path: Path) -> set[str]:
+    """Return assignment keys found in an env file."""
+
+    keys: set[str] = set()
+    if not path.exists():
+        return keys
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if not raw:
+                continue
+            stripped = raw.lstrip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = _ENV_KEY_RE.match(raw)
+            if match:
+                keys.add(match.group(1))
+    except OSError:
+        return keys
+    return keys
+
+
+def _build_subprocess_env(repo_root: Path) -> dict[str, str]:
+    """Create a hermetic env for pytest subprocesses.
+
+    This avoids leaked shell-exported production variables (for example from
+    ``set -a; source .env``) changing test behavior.
+    """
+
+    env = dict(os.environ)
+    keep_env = str(env.get("AI_TRADING_PYTEST_KEEP_ENV", "")).strip().lower() in _TRUTHY
+    if not keep_env:
+        env_keys = _load_envfile_keys(repo_root / ".env")
+        for key in env_keys:
+            env.pop(key, None)
+    env.setdefault("PYTEST_RUNNING", "1")
+    return env
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger("run_pytest")
     os.environ.setdefault(_IMPORT_SANITY_FLAG, "1")
+    repo_root = Path(__file__).resolve().parent.parent
     _ensure_repo_on_path()
     # AI-AGENT-REF: disable implicit plugin autoload for deterministic xdist startup
     os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     parser = build_parser()
     args = parser.parse_args(argv)
     os.environ.setdefault("PYTHONHASHSEED", "0")
+    child_env = _build_subprocess_env(repo_root)
     cmd = build_pytest_cmd(args)
     # AI-AGENT-REF: echo exact command for smoke test assertions
     logger.info(echo_command(cmd))
-    rc = subprocess.call(cmd)
+    rc = subprocess.call(cmd, env=child_env)
     if rc != 0 and "-n" in cmd and os.environ.get("NO_XDIST") != "1":
         logger.info("[run_pytest] xdist run failed; retrying without xdist…")
         xdist_pairs = [
@@ -163,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             cmd_wo.append(c)
         logger.info(echo_command(cmd_wo))
-        rc = subprocess.call(cmd_wo)
+        rc = subprocess.call(cmd_wo, env=child_env)
     if rc in {4, 5}:  # 5: no tests collected, 4: early exit via pytest.exit
         return 0
     return rc

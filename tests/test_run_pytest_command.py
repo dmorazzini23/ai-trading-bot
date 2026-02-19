@@ -44,3 +44,35 @@ def test_build_pytest_cmd_echo(monkeypatch):  # AI-AGENT-REF: verify exact comma
     assert cmd == expected
     assert run_pytest.echo_command(cmd) == "[run_pytest] " + " ".join(expected)
 
+
+def test_build_subprocess_env_scrubs_envfile_keys(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_API_KEY=from_file\nTRADING_MODE=balanced\n# comment\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ALPACA_API_KEY", "exported")
+    monkeypatch.setenv("TRADING_MODE", "aggressive")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.delenv("AI_TRADING_PYTEST_KEEP_ENV", raising=False)
+
+    child_env = run_pytest._build_subprocess_env(tmp_path)
+
+    assert "ALPACA_API_KEY" not in child_env
+    assert "TRADING_MODE" not in child_env
+    assert child_env["PATH"] == os.environ.get("PATH", "")
+    assert child_env["PYTEST_RUNNING"] == "1"
+
+
+def test_build_subprocess_env_respects_keep_env_opt_out(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("ALPACA_API_KEY=from_file\n", encoding="utf-8")
+
+    monkeypatch.setenv("ALPACA_API_KEY", "exported")
+    monkeypatch.setenv("AI_TRADING_PYTEST_KEEP_ENV", "1")
+
+    child_env = run_pytest._build_subprocess_env(tmp_path)
+
+    assert child_env.get("ALPACA_API_KEY") == "exported"
+    assert child_env["PYTEST_RUNNING"] == "1"
