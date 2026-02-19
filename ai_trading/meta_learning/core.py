@@ -8,6 +8,7 @@ weights; paths are resolved and constrained before deserialization. Prefer
 
 from importlib.util import find_spec
 from ai_trading.config import get_settings
+from ai_trading.config.management import get_env
 
 from ai_trading.utils.device import TORCH_AVAILABLE
 
@@ -1215,6 +1216,15 @@ def _append_bootstrap_trades_to_log(trade_log_path: str, bootstrap_trades: list)
 def _attempt_synthetic_data_generation(trade_log_path: str, min_samples: int) -> None:
     """Generate synthetic training data when insufficient real data exists."""
     try:
+        if not _synthetic_bootstrap_allowed():
+            logger.warning(
+                "META_LEARNING_SYNTHETIC_BLOCKED",
+                extra={
+                    "reason": "disabled_outside_test_or_explicit_override",
+                    "path": trade_log_path,
+                },
+            )
+            return
         logger.info(
             f'META_LEARNING_SYNTHETIC: Attempting to generate synthetic data for bootstrapping (need {min_samples} samples)'
         )
@@ -1243,6 +1253,13 @@ def _attempt_synthetic_data_generation(trade_log_path: str, min_samples: int) ->
             logger.info('META_LEARNING_SYNTHETIC: Sufficient existing data patterns - skipping synthetic generation')
     except COMMON_EXC as e:
         logger.error(f'META_LEARNING_SYNTHETIC: Failed to generate synthetic data: {e}')
+
+
+def _synthetic_bootstrap_allowed() -> bool:
+    """Allow synthetic bootstrap only in tests or with explicit override."""
+    if bool(get_env("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", False, cast=bool)):
+        return True
+    return bool(get_env("PYTEST_RUNNING", False, cast=bool))
 
 def _generate_synthetic_trades(num_trades: int, pattern_data: list) -> list:
     """Generate realistic synthetic trades based on existing patterns."""

@@ -30,6 +30,7 @@ from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.model_registry import ModelRegistry
 from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.registry.manifest import validate_manifest_metadata
 from ai_trading.research.leakage_tests import run_leakage_guards
 
 logger = get_logger(__name__)
@@ -964,7 +965,7 @@ def _build_manifest_metadata(
     feature_hash = hashlib.sha256(
         json.dumps(list(FEATURE_COLUMNS), sort_keys=True).encode("utf-8")
     ).hexdigest()
-    return {
+    manifest_metadata = {
         "strategy": "after_hours_ml_edge",
         "symbols": list(symbols),
         "rows": int(rows),
@@ -980,10 +981,10 @@ def _build_manifest_metadata(
             get_env("AI_TRADING_AFTER_HOURS_COST_MODEL_VERSION", "tca_floor_v1") or "tca_floor_v1"
         ),
         "data_sources": {
-            "daily_source": str(get_env("DAILY_SOURCE", "") or ""),
-            "minute_source": str(get_env("MINUTE_SOURCE", "") or ""),
+            "daily_source": str(get_env("DAILY_SOURCE", "unknown") or "unknown"),
+            "minute_source": str(get_env("MINUTE_SOURCE", "unknown") or "unknown"),
             "data_provenance": str(get_env("DATA_PROVENANCE", "iex") or "iex"),
-            "alpaca_data_feed": str(get_env("ALPACA_DATA_FEED", "") or ""),
+            "alpaca_data_feed": str(get_env("ALPACA_DATA_FEED", "unknown") or "unknown"),
         },
         "dataset_fingerprint": dataset_fingerprint,
         "sensitivity_sweep": {
@@ -992,6 +993,7 @@ def _build_manifest_metadata(
             "summary": sensitivity_sweep.get("summary", {}),
         },
     }
+    return validate_manifest_metadata(manifest_metadata)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:

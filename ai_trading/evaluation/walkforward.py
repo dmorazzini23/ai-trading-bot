@@ -9,6 +9,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, TYPE_CHECKING
 import numpy as np
+from ai_trading.config.management import get_env
 from ai_trading.logging import logger
 if TYPE_CHECKING:  # pragma: no cover - only for type hints
     import pandas as pd
@@ -61,7 +62,7 @@ class WalkForwardEvaluator:
         self.test_span = test_span
         self.embargo_pct = embargo_pct
         if output_dir is None:
-            base = os.getenv('ARTIFACTS_DIR', 'artifacts')
+            base = str(get_env('ARTIFACTS_DIR', 'artifacts') or 'artifacts')
             self.output_dir = os.path.join(base, 'walkforward')
         else:
             self.output_dir = output_dir
@@ -71,6 +72,25 @@ class WalkForwardEvaluator:
         self.aggregate_results = {}
         self.equity_curve = pd.Series(dtype=float)
         self.drawdown_series = pd.Series(dtype=float)
+        self.trade_simulation_params = {
+            "signal_threshold": max(
+                0.0,
+                float(get_env("AI_TRADING_WALK_FORWARD_SIGNAL_THRESHOLD", 0.0, cast=float)),
+            ),
+            "transaction_cost_bps": max(
+                0.0,
+                float(get_env("AI_TRADING_WALK_FORWARD_TRANSACTION_COST_BPS", 0.0, cast=float)),
+            ),
+            "slippage_bps": max(
+                0.0,
+                float(get_env("AI_TRADING_WALK_FORWARD_SLIPPAGE_BPS", 0.0, cast=float)),
+            ),
+            "allow_short": bool(get_env("AI_TRADING_WALK_FORWARD_ALLOW_SHORT", True, cast=bool)),
+            "max_abs_position": max(
+                0.0,
+                float(get_env("AI_TRADING_WALK_FORWARD_MAX_ABS_POSITION", 1.0, cast=float)),
+            ),
+        }
         os.makedirs(self.output_dir, exist_ok=True)
 
     def run_walkforward(self, data: 'pd.DataFrame', target_col: str, feature_cols: list[str] | None=None, model_type: str='lightgbm', feature_pipeline_params: dict[str, Any] | None=None, save_results: bool=True) -> dict[str, Any]:
@@ -101,6 +121,7 @@ class WalkForwardEvaluator:
             self.fold_results = []
             predictions_all = []
             actual_all = []
+            fold_trade_metrics: list[dict[str, float]] = []
             equity_values = [100.0]
             for fold_idx, split_info in enumerate(splits):
                 logger.debug(f'Processing fold {fold_idx + 1}/{len(splits)}')
@@ -109,14 +130,24 @@ class WalkForwardEvaluator:
                 if 'predictions' in fold_result and 'actual' in fold_result:
                     predictions_all.extend(fold_result['predictions'])
                     actual_all.extend(fold_result['actual'])
-                    if len(fold_result['predictions']) > 0:
-                        fold_return = np.mean(fold_result['predictions']) * 0.01
-                        new_equity = equity_values[-1] * (1 + fold_return)
+                    trade_metrics = fold_result.get("trade_metrics", {})
+                    if isinstance(trade_metrics, dict):
+                        fold_trade_metrics.append(trade_metrics)
+                        fold_return = float(trade_metrics.get("net_return", 0.0) or 0.0)
+                        new_equity = equity_values[-1] * max(0.0, 1.0 + fold_return)
                         equity_values.append(new_equity)
-            self.aggregate_results = self._calculate_aggregate_metrics(predictions_all, actual_all, splits)
-            equity_dates = [split['test_start'] for split in splits] + [splits[-1]['test_end']]
-            self.equity_curve = pd.Series(equity_values, index=equity_dates[:len(equity_values)])
+            if splits:
+                equity_dates = [split['test_start'] for split in splits] + [splits[-1]['test_end']]
+                self.equity_curve = pd.Series(equity_values, index=equity_dates[:len(equity_values)])
+            else:
+                self.equity_curve = pd.Series([100.0], index=[datetime.now(UTC)])
             self.drawdown_series = self._calculate_drawdown(self.equity_curve)
+            self.aggregate_results = self._calculate_aggregate_metrics(
+                predictions_all,
+                actual_all,
+                splits,
+                fold_trade_metrics=fold_trade_metrics,
+            )
             if save_results:
                 self._save_results()
             results = {'mode': self.mode, 'n_folds': len(splits), 'aggregate_metrics': self.aggregate_results, 'fold_results': self.fold_results, 'equity_curve': self.equity_curve.to_dict(), 'max_drawdown': self.drawdown_series.max(), 'final_equity': equity_values[-1], 'total_return': equity_values[-1] / equity_values[0] - 1}
@@ -155,7 +186,11 @@ class WalkForwardEvaluator:
                 X_test_processed = X_test
             predictions = trainer.model.predict(X_test_processed)
             fold_metrics = self._calculate_fold_metrics(y_test, predictions, test_start, test_end)
-            fold_result = {'fold': fold_idx, 'train_start': train_start.isoformat(), 'train_end': train_end.isoformat(), 'test_start': test_start.isoformat(), 'test_end': test_end.isoformat(), 'train_samples': len(X_train), 'test_samples': len(X_test), 'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else list(predictions), 'actual': y_test.values.tolist(), 'metrics': fold_metrics, 'model_params': trainer.best_params}
+            trade_metrics = self._simulate_fold_trades(
+                y_true=y_test,
+                y_pred=predictions,
+            )
+            fold_result = {'fold': fold_idx, 'train_start': train_start.isoformat(), 'train_end': train_end.isoformat(), 'test_start': test_start.isoformat(), 'test_end': test_end.isoformat(), 'train_samples': len(X_train), 'test_samples': len(X_test), 'predictions': predictions.tolist() if hasattr(predictions, 'tolist') else list(predictions), 'actual': y_test.values.tolist(), 'metrics': fold_metrics, 'trade_metrics': trade_metrics, 'model_params': trainer.best_params}
             return fold_result
         except (ValueError, TypeError) as e:
             logger.error(f'Error in fold {fold_idx}: {e}')
@@ -181,7 +216,92 @@ class WalkForwardEvaluator:
             logger.error(f'Error calculating fold metrics: {e}')
             return {}
 
-    def _calculate_aggregate_metrics(self, predictions_all: list[float], actual_all: list[float], splits: list[dict[str, Any]]) -> dict[str, Any]:
+    def _simulate_fold_trades(
+        self,
+        *,
+        y_true: 'pd.Series',
+        y_pred: np.ndarray,
+    ) -> dict[str, float]:
+        """Simulate fold-level executed trades from predictions and realized returns."""
+        try:
+            if len(y_pred) == 0:
+                return {
+                    "gross_return": 0.0,
+                    "net_return": 0.0,
+                    "cost_return": 0.0,
+                    "turnover_units": 0.0,
+                    "trade_count": 0.0,
+                    "signal_count": 0.0,
+                    "max_drawdown": 0.0,
+                    "hit_rate": 0.0,
+                }
+            threshold = float(self.trade_simulation_params.get("signal_threshold", 0.0))
+            allow_short = bool(self.trade_simulation_params.get("allow_short", True))
+            max_abs_position = float(self.trade_simulation_params.get("max_abs_position", 1.0))
+            max_abs_position = max(0.0, max_abs_position)
+            transaction_cost_bps = float(self.trade_simulation_params.get("transaction_cost_bps", 0.0))
+            slippage_bps = float(self.trade_simulation_params.get("slippage_bps", 0.0))
+            total_cost_rate = (transaction_cost_bps + slippage_bps) / 10_000.0
+            prev_position = 0.0
+            equity = 1.0
+            running_peak = equity
+            max_drawdown = 0.0
+            gross_return = 0.0
+            cost_return = 0.0
+            turnover_units = 0.0
+            trade_count = 0
+            active_signals = 0
+            profitable_steps = 0
+            for pred, actual in zip(y_pred, y_true.values, strict=False):
+                if pred > threshold:
+                    target_position = max_abs_position
+                elif pred < -threshold and allow_short:
+                    target_position = -max_abs_position
+                else:
+                    target_position = 0.0
+                turnover = abs(target_position - prev_position)
+                if turnover > 0:
+                    trade_count += 1
+                if target_position != 0:
+                    active_signals += 1
+                step_gross = float(target_position * float(actual))
+                step_cost = float(turnover * total_cost_rate)
+                step_net = step_gross - step_cost
+                step_net = max(step_net, -0.99)
+                gross_return += step_gross
+                cost_return += step_cost
+                turnover_units += turnover
+                equity *= 1.0 + step_net
+                running_peak = max(running_peak, equity)
+                drawdown = 0.0 if running_peak <= 0 else (running_peak - equity) / running_peak
+                max_drawdown = max(max_drawdown, drawdown)
+                if step_net > 0:
+                    profitable_steps += 1
+                prev_position = target_position
+            return {
+                "gross_return": float(gross_return),
+                "net_return": float(equity - 1.0),
+                "cost_return": float(cost_return),
+                "turnover_units": float(turnover_units),
+                "trade_count": float(trade_count),
+                "signal_count": float(active_signals),
+                "max_drawdown": float(max_drawdown),
+                "hit_rate": float(profitable_steps / max(1, active_signals)),
+            }
+        except (TypeError, ValueError) as e:
+            logger.error(f'Error simulating fold trades: {e}')
+            return {
+                "gross_return": 0.0,
+                "net_return": 0.0,
+                "cost_return": 0.0,
+                "turnover_units": 0.0,
+                "trade_count": 0.0,
+                "signal_count": 0.0,
+                "max_drawdown": 0.0,
+                "hit_rate": 0.0,
+            }
+
+    def _calculate_aggregate_metrics(self, predictions_all: list[float], actual_all: list[float], splits: list[dict[str, Any]], *, fold_trade_metrics: list[dict[str, float]]) -> dict[str, Any]:
         """Calculate aggregate metrics across all folds."""
         try:
             if not predictions_all or not actual_all:
@@ -193,21 +313,51 @@ class WalkForwardEvaluator:
             correlation = np.corrcoef(actual, predictions)[0, 1] if len(predictions) > 1 else 0.0
             directional_accuracy = np.mean(np.sign(predictions) == np.sign(actual))
             if np.std(predictions) > 0:
-                sharpe_like = np.mean(predictions) / np.std(predictions) * np.sqrt(252)
+                prediction_sharpe = np.mean(predictions) / np.std(predictions) * np.sqrt(252)
             else:
-                sharpe_like = 0.0
+                prediction_sharpe = 0.0
             downside_returns = predictions[predictions < 0]
-            if len(downside_returns) > 0:
-                sortino_ratio = np.mean(predictions) / np.std(downside_returns) * np.sqrt(252)
+            downside_std = float(np.std(downside_returns)) if len(downside_returns) > 0 else 0.0
+            if len(downside_returns) > 0 and downside_std > 0:
+                prediction_sortino = np.mean(predictions) / downside_std * np.sqrt(252)
             else:
-                sortino_ratio = sharpe_like
+                prediction_sortino = prediction_sharpe
+            fold_net_returns = [
+                float(item.get("net_return", 0.0) or 0.0)
+                for item in fold_trade_metrics
+                if isinstance(item, dict)
+            ]
+            if fold_net_returns:
+                fold_net_array = np.array(fold_net_returns, dtype=float)
+                executed_sharpe = (
+                    float(np.mean(fold_net_array) / np.std(fold_net_array) * np.sqrt(252))
+                    if np.std(fold_net_array) > 0
+                    else 0.0
+                )
+                downside_fold = fold_net_array[fold_net_array < 0]
+                if len(downside_fold) > 0 and np.std(downside_fold) > 0:
+                    executed_sortino = float(np.mean(fold_net_array) / np.std(downside_fold) * np.sqrt(252))
+                else:
+                    executed_sortino = executed_sharpe
+                executed_total_return = float(np.prod(1.0 + fold_net_array) - 1.0)
+            else:
+                executed_sharpe = 0.0
+                executed_sortino = 0.0
+                executed_total_return = 0.0
             max_drawdown = self.drawdown_series.max() if len(self.drawdown_series) > 0 else 0.0
-            annual_return = (self.equity_curve.iloc[-1] / self.equity_curve.iloc[0]) ** (252 / len(splits)) - 1
+            period_count = max(1, len(splits))
+            annual_return = (self.equity_curve.iloc[-1] / self.equity_curve.iloc[0]) ** (252 / period_count) - 1
             calmar_ratio = annual_return / max_drawdown if max_drawdown > 0 else 0.0
             n_predictions = len(predictions)
-            total_days = sum((split['period_days'] for split in self.fold_results if 'metrics' in split))
+            total_days = sum(
+                (
+                    int(result.get("metrics", {}).get("period_days", 0) or 0)
+                    for result in self.fold_results
+                    if isinstance(result, dict) and isinstance(result.get("metrics"), dict)
+                )
+            )
             turnover = n_predictions / max(1, total_days) * 252
-            aggregate_metrics = {'net_sharpe': float(sharpe_like), 'sortino_ratio': float(sortino_ratio), 'calmar_ratio': float(calmar_ratio), 'max_drawdown': float(max_drawdown), 'turnover_annual': float(turnover), 'correlation': float(correlation) if not np.isnan(correlation) else 0.0, 'directional_accuracy': float(directional_accuracy), 'mse': float(mse), 'mae': float(mae), 'total_predictions': int(n_predictions), 'evaluation_period_days': int(total_days)}
+            aggregate_metrics = {'net_sharpe': float(executed_sharpe), 'sortino_ratio': float(executed_sortino), 'calmar_ratio': float(calmar_ratio), 'max_drawdown': float(max_drawdown), 'turnover_annual': float(turnover), 'correlation': float(correlation) if not np.isnan(correlation) else 0.0, 'directional_accuracy': float(directional_accuracy), 'mse': float(mse), 'mae': float(mae), 'total_predictions': int(n_predictions), 'evaluation_period_days': int(total_days), 'executed_total_return': float(executed_total_return), 'prediction_sharpe': float(prediction_sharpe), 'prediction_sortino': float(prediction_sortino), 'executed_trade_count': int(sum((int(item.get('trade_count', 0)) for item in fold_trade_metrics if isinstance(item, dict)))), 'executed_turnover_units': float(sum((float(item.get('turnover_units', 0.0)) for item in fold_trade_metrics if isinstance(item, dict)))), 'executed_cost_return': float(sum((float(item.get('cost_return', 0.0)) for item in fold_trade_metrics if isinstance(item, dict))))}
             return aggregate_metrics
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating aggregate metrics: {e}')

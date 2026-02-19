@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping
 
 try:  # optional dependency
     import numpy as np
@@ -43,7 +43,7 @@ class _SB3Stub:
         return cls()
 
 
-PPO = A2C = DQN = _SB3Stub
+PPO = A2C = DQN = SAC = TD3 = _SB3Stub
 
 
 class BaseCallback:
@@ -77,6 +77,113 @@ class TrainingConfig:
     data: Any | None = None
     model_path: str | os.PathLike[str] | None = None
     timesteps: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RLAlgoConfig:
+    """Declarative algorithm config used by the trainer."""
+
+    name: str
+    policy: str = "MlpPolicy"
+    requires_continuous_actions: bool = False
+    default_params: tuple[tuple[str, Any], ...] = ()
+
+    def merged_params(
+        self,
+        *,
+        common: Mapping[str, Any],
+        overrides: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        merged = dict(common)
+        merged.update(dict(self.default_params))
+        merged.update(dict(overrides or {}))
+        return merged
+
+
+RL_ALGO_CONFIGS: dict[str, RLAlgoConfig] = {
+    "PPO": RLAlgoConfig(
+        name="PPO",
+        default_params=(
+            ("learning_rate", 0.0003),
+            ("n_steps", 2048),
+            ("batch_size", 64),
+            ("n_epochs", 10),
+            ("gamma", 0.99),
+            ("gae_lambda", 0.95),
+            ("clip_range", 0.2),
+            ("ent_coef", 0.0),
+        ),
+    ),
+    "A2C": RLAlgoConfig(
+        name="A2C",
+        default_params=(
+            ("learning_rate", 0.0007),
+            ("n_steps", 20),
+            ("gamma", 0.99),
+            ("gae_lambda", 1.0),
+            ("ent_coef", 0.0),
+            ("vf_coef", 0.25),
+        ),
+    ),
+    "DQN": RLAlgoConfig(
+        name="DQN",
+        default_params=(
+            ("learning_rate", 0.0001),
+            ("buffer_size", 50000),
+            ("learning_starts", 1000),
+            ("batch_size", 32),
+            ("tau", 1.0),
+            ("gamma", 0.99),
+            ("train_freq", 4),
+            ("gradient_steps", 1),
+            ("target_update_interval", 1000),
+            ("exploration_fraction", 0.1),
+            ("exploration_initial_eps", 1.0),
+            ("exploration_final_eps", 0.05),
+        ),
+    ),
+    "SAC": RLAlgoConfig(
+        name="SAC",
+        requires_continuous_actions=True,
+        default_params=(
+            ("learning_rate", 0.0003),
+            ("buffer_size", 100000),
+            ("learning_starts", 1000),
+            ("batch_size", 256),
+            ("tau", 0.005),
+            ("gamma", 0.99),
+            ("train_freq", 1),
+            ("gradient_steps", 1),
+            ("ent_coef", "auto"),
+        ),
+    ),
+    "TD3": RLAlgoConfig(
+        name="TD3",
+        requires_continuous_actions=True,
+        default_params=(
+            ("learning_rate", 0.001),
+            ("buffer_size", 100000),
+            ("learning_starts", 1000),
+            ("batch_size", 100),
+            ("tau", 0.005),
+            ("gamma", 0.99),
+            ("train_freq", (1, "step")),
+            ("gradient_steps", 1),
+            ("policy_delay", 2),
+            ("target_policy_noise", 0.2),
+            ("target_noise_clip", 0.5),
+        ),
+    ),
+}
+
+
+def _resolve_algo_config(algorithm: str) -> RLAlgoConfig:
+    normalized = str(algorithm or "").strip().upper()
+    config = RL_ALGO_CONFIGS.get(normalized)
+    if config is None:
+        supported = ", ".join(sorted(RL_ALGO_CONFIGS))
+        raise ValueError(f"Unknown algorithm: {algorithm!r}. Supported algorithms: {supported}")
+    return config
 
 
 class Model:
@@ -129,7 +236,7 @@ def train(
 
 def _ensure_rl() -> bool:
     """Import the RL stack on demand, replacing global stubs."""
-    global PPO, A2C, DQN, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
+    global PPO, A2C, DQN, SAC, TD3, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
     if PPO is not _SB3Stub:
         return True
     if not is_rl_available():
@@ -139,6 +246,8 @@ def _ensure_rl() -> bool:
     PPO = sb3.PPO
     A2C = sb3.A2C
     DQN = sb3.DQN
+    SAC = sb3.SAC
+    TD3 = sb3.TD3
     BaseCallback = sb3.common.callbacks.BaseCallback
     EvalCallback = sb3.common.callbacks.EvalCallback
     make_vec_env = sb3.common.env_util.make_vec_env
@@ -296,7 +405,7 @@ class RLTrainer:
         Initialize RL trainer.
 
         Args:
-            algorithm: RL algorithm ('PPO', 'A2C', 'DQN')
+            algorithm: RL algorithm ('PPO', 'A2C', 'DQN', 'SAC', 'TD3')
             total_timesteps: Total training timesteps
             eval_freq: Evaluation frequency
             early_stopping_patience: Early stopping patience
@@ -351,13 +460,19 @@ class RLTrainer:
     def _create_environments(self, data: np.ndarray, env_params: dict[str, Any] | None) -> None:
         """Create training and evaluation environments."""
         try:
-            from .env import TradingEnv  # noqa: E402 - local import
+            from .env import ActionSpaceConfig, TradingEnv  # noqa: E402 - local import
 
             env_params = env_params or {}
             split_idx = int(len(data) * 0.8)
             train_data = data[:split_idx]
             eval_data = data[split_idx:]
             enhanced_env_params = {'transaction_cost': 0.001, 'slippage': 0.0005, 'half_spread': 0.0002, **env_params}
+            algo_config = _resolve_algo_config(self.algorithm)
+            if (
+                algo_config.requires_continuous_actions
+                and "action_config" not in enhanced_env_params
+            ):
+                enhanced_env_params["action_config"] = ActionSpaceConfig(action_type="continuous")
 
             def make_train_env():
                 return TradingEnv(train_data, **enhanced_env_params)
@@ -375,6 +490,7 @@ class RLTrainer:
         """Create RL model."""
         try:
             model_params = model_params or {}
+            algo_config = _resolve_algo_config(self.algorithm)
             if 'tensorboard_log' not in (model_params or {}):
                 from ai_trading.paths import OUTPUT_DIR
 
@@ -389,20 +505,18 @@ class RLTrainer:
                     tensorboard_path = (OUTPUT_DIR / tensorboard_path).resolve()
             tensorboard_path.mkdir(parents=True, exist_ok=True)
             default_params = {'verbose': 1, 'seed': self.seed, 'tensorboard_log': str(tensorboard_path)}
-            if self.algorithm == 'PPO':
-                default_params.update({'learning_rate': 0.0003, 'n_steps': 2048, 'batch_size': 64, 'n_epochs': 10, 'gamma': 0.99, 'gae_lambda': 0.95, 'clip_range': 0.2, 'ent_coef': 0.0})
-                final_params = {**default_params, **model_params}
-                self.model = PPO('MlpPolicy', self.train_env, **final_params)
-            elif self.algorithm == 'A2C':
-                default_params.update({'learning_rate': 0.0007, 'n_steps': 20, 'gamma': 0.99, 'gae_lambda': 1.0, 'ent_coef': 0.0, 'vf_coef': 0.25})
-                final_params = {**default_params, **model_params}
-                self.model = A2C('MlpPolicy', self.train_env, **final_params)
-            elif self.algorithm == 'DQN':
-                default_params.update({'learning_rate': 0.0001, 'buffer_size': 50000, 'learning_starts': 1000, 'batch_size': 32, 'tau': 1.0, 'gamma': 0.99, 'train_freq': 4, 'gradient_steps': 1, 'target_update_interval': 1000, 'exploration_fraction': 0.1, 'exploration_initial_eps': 1.0, 'exploration_final_eps': 0.05})
-                final_params = {**default_params, **model_params}
-                self.model = DQN('MlpPolicy', self.train_env, **final_params)
-            else:
+            final_params = algo_config.merged_params(common=default_params, overrides=model_params)
+            algo_klass_map = {
+                "PPO": PPO,
+                "A2C": A2C,
+                "DQN": DQN,
+                "SAC": SAC,
+                "TD3": TD3,
+            }
+            algo_klass = algo_klass_map.get(algo_config.name)
+            if algo_klass is None:
                 raise ValueError(f'Unknown algorithm: {self.algorithm}')
+            self.model = algo_klass(algo_config.policy, self.train_env, **final_params)
             logger.debug(f'Model created: {self.algorithm} with {len(final_params)} parameters')
         except (AttributeError, RuntimeError, TypeError, ValueError) as e:  # invalid algorithm or params
             logger.error(f'Error creating model: {e}')
@@ -474,6 +588,7 @@ class RLTrainer:
             logger.error(f'Error saving model and results: {e}')
 
 __all__ = [
+    "RLAlgoConfig",
     "TrainingConfig",
     "Model",
     "train",

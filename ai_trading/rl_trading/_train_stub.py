@@ -36,7 +36,7 @@ class _SB3Stub:
         return cls()
 
 
-PPO = A2C = DQN = _SB3Stub
+PPO = A2C = DQN = SAC = TD3 = _SB3Stub
 
 
 class BaseCallback:
@@ -117,6 +117,8 @@ __all__ = [
     "EvalCallback",
     "Model",
     "PPO",
+    "SAC",
+    "TD3",
     "TrainingConfig",
     "evaluate_policy",
     "make_vec_env",

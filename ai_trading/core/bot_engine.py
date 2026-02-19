@@ -153,6 +153,7 @@ from ai_trading.analytics.tca import (
     build_tca_record,
     write_tca_record,
 )
+from ai_trading.tca.rollups import calibrate_cost_model_from_tca
 from ai_trading.portfolio.allocation import (
     SleevePerfState,
     load_allocation_state,
@@ -8097,6 +8098,7 @@ class BotState:
     startup_cleanup_done: bool = False
     canary_mode_logged: bool = False
     last_execution_report_date: date | None = None
+    last_tca_cost_calibration_date: date | None = None
     last_learning_run_date: date | None = None
     last_replay_run_date: date | None = None
     last_walk_forward_run_date: date | None = None
@@ -29463,6 +29465,73 @@ def _run_post_trade_learning_update(
     state.last_learning_run_date = now.date()
 
 
+def _tca_cost_calibration_schedule_due(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> bool:
+    if not bool(get_env("AI_TRADING_TCA_COST_CALIBRATION_ENABLED", True, cast=bool)):
+        return False
+    schedule = str(
+        get_env("AI_TRADING_TCA_COST_CALIBRATION_SCHEDULE", "market_close")
+    ).strip().lower()
+    if schedule == "manual":
+        return False
+    last_run = getattr(state, "last_tca_cost_calibration_date", None)
+    if schedule == "market_close":
+        return (not market_open_now) and (last_run != now.date())
+    if schedule == "daily_first_run":
+        return market_open_now and (last_run != now.date())
+    return False
+
+
+def _run_tca_cost_calibration(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> None:
+    if not _tca_cost_calibration_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+    model_path = str(
+        get_env(
+            "AI_TRADING_EXEC_COST_MODEL_PATH",
+            "runtime/execution_cost_model.json",
+        )
+    )
+    lookback_days = int(
+        get_env("AI_TRADING_TCA_COST_CALIBRATION_LOOKBACK_DAYS", 45, cast=int)
+    )
+    try:
+        result = calibrate_cost_model_from_tca(
+            tca_path=str(_resolved_tca_path()),
+            model_path=model_path,
+            lookback_days=lookback_days,
+        )
+    except Exception as exc:
+        logger.warning(
+            "TCA_COST_CALIBRATION_FAILED",
+            extra={"error": str(exc), "model_path": model_path},
+        )
+    else:
+        logger.info(
+            "TCA_COST_CALIBRATION_UPDATED",
+            extra={
+                "records": int(result.get("records", 0) or 0),
+                "model_path": str(result.get("model_path", model_path)),
+                "version": (
+                    result.get("after", {}).get("version")
+                    if isinstance(result.get("after"), Mapping)
+                    else None
+                ),
+                "lookback_days": lookback_days,
+            },
+        )
+    finally:
+        state.last_tca_cost_calibration_date = now.date()
+
+
 def _parse_iso_timestamp(raw: Any) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
@@ -30240,6 +30309,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     now = datetime.now(UTC)
     market_open_now = market_is_open(now)
     _run_post_trade_learning_update(state, now=now, market_open_now=market_open_now)
+    _run_tca_cost_calibration(state, now=now, market_open_now=market_open_now)
     try:
         _run_replay_governance(state, now=now, market_open_now=market_open_now)
         _run_walk_forward_governance(state, now=now, market_open_now=market_open_now)
