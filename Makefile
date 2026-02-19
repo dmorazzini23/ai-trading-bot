@@ -1,5 +1,9 @@
 		# ==== knobs with safe defaults ====
+ifneq ("$(wildcard .venv/bin/python)","")
+PYTHON ?= .venv/bin/python
+else
 PYTHON ?= python3
+endif
 TOP_N ?= 5
 FAIL_ON_IMPORT_ERRORS ?= 0
 DISABLE_ENV_ASSERT ?= 0
