@@ -7,8 +7,23 @@ Recover safely when the bot restarts while orders are in flight, using durable i
 ## Preconditions
 
 - `AI_TRADING_OMS_INTENT_STORE_ENABLED=1`
-- `AI_TRADING_OMS_INTENT_STORE_PATH` points to persistent storage
+- `DATABASE_URL` configured for `EXECUTION_MODE=live` (Postgres recommended)
+- `AI_TRADING_OMS_INTENT_STORE_PATH` may remain configured for sqlite fallback or migration source
 - Service runs with broker access (`paper` or `live`)
+
+## One-Time Migration (sqlite -> DATABASE_URL)
+
+```bash
+python3 scripts/migrate_oms_intent_store.py \
+  --source-sqlite /home/aiuser/ai-trading-bot/runtime/oms_intents.db \
+  --target-url "$DATABASE_URL"
+```
+
+Dry-run preview:
+
+```bash
+python3 scripts/migrate_oms_intent_store.py --dry-run
+```
 
 ## What Happens Automatically
 

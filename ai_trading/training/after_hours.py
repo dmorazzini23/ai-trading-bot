@@ -692,6 +692,165 @@ def _threshold_by_regime(
     return out
 
 
+def _parse_float_grid(raw: str, *, fallback: tuple[float, ...]) -> list[float]:
+    tokens = [token.strip() for token in str(raw).split(",") if token.strip()]
+    parsed: list[float] = []
+    for token in tokens:
+        try:
+            parsed.append(float(token))
+        except (TypeError, ValueError):
+            continue
+    if parsed:
+        return parsed
+    return list(fallback)
+
+
+def _threshold_metrics_snapshot(
+    dataset: Any,
+    probabilities: np.ndarray,
+    *,
+    threshold: float,
+) -> dict[str, Any]:
+    edge = dataset["realized_edge_bps"].astype(float).to_numpy()
+    regimes = dataset["regime"].astype(str).to_numpy()
+    valid_mask = np.isfinite(probabilities)
+    selected = valid_mask & (probabilities >= threshold)
+    support = int(np.sum(selected))
+    selected_edges = edge[selected] if support > 0 else np.asarray([], dtype=float)
+    strategy_path = np.where(selected, edge, 0.0)
+    return {
+        "threshold": float(threshold),
+        "support": support,
+        "mean_expectancy_bps": (
+            float(np.mean(selected_edges)) if selected_edges.size > 0 else 0.0
+        ),
+        "max_drawdown_bps": float(_max_drawdown_bps(strategy_path)),
+        "turnover_ratio": float(np.mean(selected)) if selected.size > 0 else 0.0,
+        "mean_hit_rate": (
+            float(np.mean(selected_edges > 0)) if selected_edges.size > 0 else 0.0
+        ),
+        "regime_metrics": _regime_summary(regimes, selected, edge),
+    }
+
+
+def _run_sensitivity_sweep(
+    dataset: Any,
+    probabilities: np.ndarray,
+    *,
+    default_threshold: float,
+    targets: EdgeTargets,
+) -> dict[str, Any]:
+    enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", True, cast=bool)
+    )
+    if not enabled:
+        return {
+            "enabled": False,
+            "gate": True,
+            "summary": {"reason": "disabled"},
+            "scenarios": [],
+        }
+
+    deltas = _parse_float_grid(
+        str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_SENSITIVITY_THRESHOLD_DELTAS",
+                "-0.04,-0.02,0.0,0.02,0.04",
+            )
+            or ""
+        ),
+        fallback=(-0.04, -0.02, 0.0, 0.02, 0.04),
+    )
+    thresholds = sorted(
+        {
+            round(_clamp(default_threshold + delta, low=0.05, high=0.95), 4)
+            for delta in deltas
+        }
+        | {round(_clamp(default_threshold, low=0.05, high=0.95), 4)}
+    )
+    min_support = int(get_env("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", 25, cast=int))
+    scenarios = [
+        _threshold_metrics_snapshot(
+            dataset,
+            probabilities,
+            threshold=threshold,
+        )
+        for threshold in thresholds
+    ]
+
+    valid_scenarios = [item for item in scenarios if int(item["support"]) >= min_support]
+    if not valid_scenarios:
+        return {
+            "enabled": True,
+            "gate": False,
+            "summary": {
+                "reason": "insufficient_support",
+                "min_support": min_support,
+                "valid_scenarios": 0,
+                "total_scenarios": len(scenarios),
+            },
+            "scenarios": scenarios,
+        }
+
+    pass_count = 0
+    expectancies: list[float] = []
+    for scenario in valid_scenarios:
+        expectancy = float(scenario["mean_expectancy_bps"])
+        drawdown = float(scenario["max_drawdown_bps"])
+        turnover = float(scenario["turnover_ratio"])
+        gates = {
+            "expectancy": expectancy >= targets.min_expectancy_bps,
+            "drawdown": drawdown <= targets.max_drawdown_bps,
+            "turnover": turnover <= targets.max_turnover_ratio,
+        }
+        scenario["edge_gates"] = gates
+        scenario["edge_pass"] = bool(all(gates.values()))
+        if scenario["edge_pass"]:
+            pass_count += 1
+        expectancies.append(expectancy)
+
+    expectancy_std_bps = float(pstdev(expectancies)) if len(expectancies) > 1 else 0.0
+    min_expectancy = float(min(expectancies))
+    pass_ratio = float(pass_count) / float(max(1, len(valid_scenarios)))
+
+    max_expectancy_std_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_SWEEP_MAX_EXPECTANCY_STD_BPS", 6.0, cast=float)
+    )
+    min_scenario_expectancy_bps = float(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_SWEEP_MIN_SCENARIO_EXPECTANCY_BPS",
+            targets.min_expectancy_bps - 2.0,
+            cast=float,
+        )
+    )
+    min_pass_ratio = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_SWEEP_MIN_PASS_RATIO", 0.6, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+    gate = bool(
+        expectancy_std_bps <= max_expectancy_std_bps
+        and min_expectancy >= min_scenario_expectancy_bps
+        and pass_ratio >= min_pass_ratio
+    )
+    return {
+        "enabled": True,
+        "gate": gate,
+        "summary": {
+            "valid_scenarios": len(valid_scenarios),
+            "total_scenarios": len(scenarios),
+            "min_support": min_support,
+            "expectancy_std_bps": expectancy_std_bps,
+            "max_expectancy_std_bps": max_expectancy_std_bps,
+            "min_scenario_expectancy_bps": min_scenario_expectancy_bps,
+            "observed_min_expectancy_bps": min_expectancy,
+            "min_pass_ratio": min_pass_ratio,
+            "observed_pass_ratio": pass_ratio,
+        },
+        "scenarios": scenarios,
+    }
+
+
 def _edge_targets() -> EdgeTargets:
     return EdgeTargets(
         min_expectancy_bps=float(
@@ -791,13 +950,61 @@ def _dataset_fingerprint(dataset: Any, *, symbols: list[str], cost_floor_bps: fl
     return hashlib.sha256(raw).hexdigest()
 
 
+def _build_manifest_metadata(
+    *,
+    symbols: list[str],
+    rows: int,
+    lookback_days: int,
+    default_threshold: float,
+    thresholds_by_regime: Mapping[str, float],
+    cost_floor_bps: float,
+    dataset_fingerprint: str,
+    sensitivity_sweep: Mapping[str, Any],
+) -> dict[str, Any]:
+    feature_hash = hashlib.sha256(
+        json.dumps(list(FEATURE_COLUMNS), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "strategy": "after_hours_ml_edge",
+        "symbols": list(symbols),
+        "rows": int(rows),
+        "lookback_days": int(lookback_days),
+        "horizon_days": int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int)),
+        "embargo_days": int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int)),
+        "feature_columns": list(FEATURE_COLUMNS),
+        "feature_hash": feature_hash,
+        "default_threshold": float(default_threshold),
+        "thresholds_by_regime": dict(thresholds_by_regime),
+        "cost_floor_bps": float(cost_floor_bps),
+        "cost_model_version": str(
+            get_env("AI_TRADING_AFTER_HOURS_COST_MODEL_VERSION", "tca_floor_v1") or "tca_floor_v1"
+        ),
+        "data_sources": {
+            "daily_source": str(get_env("DAILY_SOURCE", "") or ""),
+            "minute_source": str(get_env("MINUTE_SOURCE", "") or ""),
+            "data_provenance": str(get_env("DATA_PROVENANCE", "iex") or "iex"),
+            "alpaca_data_feed": str(get_env("ALPACA_DATA_FEED", "") or ""),
+        },
+        "dataset_fingerprint": dataset_fingerprint,
+        "sensitivity_sweep": {
+            "enabled": bool(sensitivity_sweep.get("enabled", False)),
+            "gate": bool(sensitivity_sweep.get("gate", True)),
+            "summary": sensitivity_sweep.get("summary", {}),
+        },
+    }
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, sort_keys=True, default=str, indent=2), encoding="utf-8")
     return path
 
 
-def _maybe_promote_to_runtime_model_path(model_path: Path) -> tuple[str | None, str | None]:
+def _maybe_promote_to_runtime_model_path(
+    model_path: Path,
+    *,
+    manifest_metadata: Mapping[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
     promote_enabled = bool(
         get_env("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", True, cast=bool)
     )
@@ -813,6 +1020,7 @@ def _maybe_promote_to_runtime_model_path(model_path: Path) -> tuple[str | None, 
         model_path=str(runtime_model_path),
         model_version=f"edge_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
         training_data_range=None,
+        metadata=manifest_metadata,
     )
     return str(runtime_model_path), str(manifest_path)
 
@@ -994,6 +1202,33 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         best.oof_probabilities,
         default_threshold=default_threshold,
     )
+    targets = _edge_targets()
+    sensitivity_sweep = _run_sensitivity_sweep(
+        dataset,
+        best.oof_probabilities,
+        default_threshold=default_threshold,
+        targets=targets,
+    )
+    gate_map = _meets_edge_targets(best, targets)
+    gate_map["sensitivity"] = bool(sensitivity_sweep.get("gate", True))
+    gates_passed = all(gate_map.values())
+    status = "shadow"
+    auto_promote = bool(get_env("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", False, cast=bool))
+    if gates_passed and auto_promote:
+        status = "production"
+
+    dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
+    manifest_metadata = _build_manifest_metadata(
+        symbols=symbols,
+        rows=int(len(dataset)),
+        lookback_days=lookback_days,
+        default_threshold=default_threshold,
+        thresholds_by_regime=thresholds_by_regime,
+        cost_floor_bps=cost_floor_bps,
+        dataset_fingerprint=dataset_fp,
+        sensitivity_sweep=sensitivity_sweep,
+    )
+
     final_model = _fit_final_model(best.name, dataset, seed=seed)
     setattr(final_model, "edge_thresholds_by_regime_", thresholds_by_regime)
     setattr(final_model, "edge_global_threshold_", float(default_threshold))
@@ -1009,8 +1244,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "start": str(dataset["timestamp"].iloc[0]),
             "end": str(dataset["timestamp"].iloc[-1]),
         },
+        metadata=manifest_metadata,
     )
-    dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
     registry = ModelRegistry()
     model_id = registry.register_model(
         final_model,
@@ -1025,18 +1260,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "manifest_path": str(manifest_path),
             "model_path": str(model_path),
             "fill_quality": fill_quality,
+            "sensitivity_sweep": sensitivity_sweep,
+            "manifest_metadata": manifest_metadata,
         },
         dataset_fingerprint=dataset_fp,
         tags=["after_hours", "cost_aware", "purged_walk_forward"],
         activate=True,
     )
-    targets = _edge_targets()
-    gate_map = _meets_edge_targets(best, targets)
-    gates_passed = all(gate_map.values())
-    status = "shadow"
-    auto_promote = bool(get_env("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", False, cast=bool))
-    if gates_passed and auto_promote:
-        status = "production"
     registry.update_governance_status(
         model_id,
         status,
@@ -1047,6 +1277,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "max_drawdown_bps": targets.max_drawdown_bps,
                 "max_turnover_ratio": targets.max_turnover_ratio,
                 "min_hit_rate_stability": targets.min_hit_rate_stability,
+                "sensitivity_gate": bool(sensitivity_sweep.get("gate", True)),
             },
             "metrics": {
                 "mean_expectancy_bps": best.mean_expectancy_bps,
@@ -1055,9 +1286,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "mean_hit_rate": best.mean_hit_rate,
                 "hit_rate_stability": best.hit_rate_stability,
             },
+            "sensitivity_sweep": sensitivity_sweep,
         },
     )
-    promoted_model_path, promoted_manifest_path = _maybe_promote_to_runtime_model_path(model_path)
+    promoted_model_path, promoted_manifest_path = _maybe_promote_to_runtime_model_path(
+        model_path,
+        manifest_metadata=manifest_metadata,
+    )
     rl_overlay = _maybe_train_rl_overlay(
         dataset,
         now_utc=now_utc,
@@ -1074,6 +1309,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "name": best.name,
             "model_path": str(model_path),
             "manifest_path": str(manifest_path),
+            "manifest_metadata": manifest_metadata,
             "governance_status": status,
         },
         "metrics": {
@@ -1089,6 +1325,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "candidate_metrics": candidate_metrics_payload,
         "regime_metrics": best.regime_metrics,
         "thresholds_by_regime": thresholds_by_regime,
+        "sensitivity_sweep": sensitivity_sweep,
         "edge_gates": gate_map,
         "rl_overlay": rl_overlay,
         "runtime_promotion": {
@@ -1125,6 +1362,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "edge_gates": gate_map,
         "rows": int(len(dataset)),
         "candidate_metrics": candidate_metrics_payload,
+        "sensitivity_sweep": sensitivity_sweep,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
         "rl_overlay": rl_overlay,

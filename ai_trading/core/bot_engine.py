@@ -29723,7 +29723,7 @@ def _load_replay_bars(
 def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: bool) -> None:
     if not _replay_schedule_due(state, now=now, market_open_now=market_open_now):
         return
-    from ai_trading.replay.replay_engine import ReplayConfig, ReplayEngine
+    from ai_trading.replay.event_loop import ReplayEventLoop
 
     raw_symbols = str(get_env("AI_TRADING_REPLAY_SYMBOLS", "") or "").strip()
     symbols = {
@@ -29752,41 +29752,93 @@ def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: b
         logger.warning("REPLAY_GOVERNANCE_SKIPPED", extra={"reason": "no_data", "path": data_dir})
         state.last_replay_run_date = now.date()
         return
-    active_symbols = tuple(sorted({str(row.get("symbol", "")).upper() for row in bars if row.get("symbol")}))
-    replay_cfg = ReplayConfig(
-        symbols=active_symbols,
-        timeframes=tuple(sorted(timeframes or {"5Min"})),
-        rth_only=bool(get_env("AI_TRADING_REPLAY_RTH_ONLY", True, cast=bool)),
-        seed=int(get_env("AI_TRADING_REPLAY_SEED", 42, cast=int)),
-        speedup=int(get_env("AI_TRADING_REPLAY_SPEEDUP", 1, cast=int)),
-        simulate_fills=bool(get_env("AI_TRADING_REPLAY_SIMULATE_FILLS", True, cast=bool)),
-        fill_model=str(get_env("AI_TRADING_REPLAY_FILL_MODEL", "next_bar_mid")),
-        fill_slippage_bps=float(get_env("AI_TRADING_REPLAY_FILL_SLIPPAGE_BPS", 5, cast=float)),
-        fill_fee_bps=float(get_env("AI_TRADING_REPLAY_FILL_FEE_BPS", 0, cast=float)),
-        enforce_oms_gates=bool(get_env("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", True, cast=bool)),
+    active_symbols = tuple(
+        sorted({str(row.get("symbol", "")).upper() for row in bars if row.get("symbol")})
+    )
+    replay_seed = int(get_env("AI_TRADING_REPLAY_SEED", 42, cast=int))
+    simulate_fills = bool(get_env("AI_TRADING_REPLAY_SIMULATE_FILLS", True, cast=bool))
+    enforce_oms_gates = bool(get_env("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", True, cast=bool))
+    max_symbol_notional = float(
+        get_env(
+            "AI_TRADING_REPLAY_MAX_SYMBOL_NOTIONAL",
+            get_env("GLOBAL_MAX_SYMBOL_DOLLARS", 25000, cast=float),
+            cast=float,
+        )
+    )
+    max_gross_notional = float(
+        get_env(
+            "AI_TRADING_REPLAY_MAX_GROSS_NOTIONAL",
+            get_env("GLOBAL_MAX_GROSS_DOLLARS", 150000, cast=float),
+            cast=float,
+        )
     )
 
-    def _pipeline(event: dict[str, Any]) -> dict[str, Any]:
-        close_price = float(event.get("close", 0.0) or 0.0)
-        payload: dict[str, Any] = {
-            "symbol": str(event.get("symbol", "")).upper(),
-            "ts": str(event.get("ts")),
-            "sleeve": str(event.get("sleeve", "day")),
-            "regime_profile": str(event.get("regime_profile", get_regime_signal_profile())),
-        }
-        if replay_cfg.simulate_fills:
-            payload["order"] = {
-                "side": str(event.get("side", "buy")).lower(),
-                "qty": int(event.get("qty", 1) or 1),
-                "price": close_price,
-                "order_type": str(event.get("order_type", "limit")),
-                "client_order_id": str(event.get("client_order_id", "")),
+    normalized_bars: list[dict[str, Any]] = []
+    for row in bars:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        ts = str(row.get("ts", "")).strip()
+        if not symbol or not ts:
+            continue
+        try:
+            close_price = float(row.get("close", row.get("price", 0.0)) or 0.0)
+        except (TypeError, ValueError):
+            close_price = 0.0
+        if close_price <= 0.0:
+            continue
+        normalized_bars.append(
+            {
+                "symbol": symbol,
+                "ts": ts,
+                "close": close_price,
+                "side": str(row.get("side", "buy")).lower(),
+                "qty": float(row.get("qty", 1.0) or 1.0),
+                "order_type": str(row.get("order_type", "limit")),
+                "client_order_id": str(row.get("client_order_id", "")),
             }
-        return payload
+        )
 
-    engine = ReplayEngine(replay_cfg, pipeline=_pipeline)
-    first = engine.run(bars)
-    second = engine.run(bars)
+    def _strategy(bar: dict[str, Any]) -> dict[str, Any] | None:
+        if not simulate_fills:
+            return None
+        qty = float(bar.get("qty", 0.0) or 0.0)
+        if qty <= 0.0:
+            return None
+        symbol = str(bar.get("symbol", "")).upper()
+        ts = str(bar.get("ts", ""))
+        side = str(bar.get("side", "buy")).lower()
+        close_price = float(bar.get("close", 0.0) or 0.0)
+        if not symbol or not ts or close_price <= 0.0:
+            return None
+        intent_key = str(
+            bar.get(
+                "client_order_id",
+                "",
+            )
+            or f"{symbol}|{ts}|{side}|{round(qty, 6)}"
+        )
+        return {
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "type": str(bar.get("order_type", "limit")),
+            "price": close_price,
+            "limit_price": close_price,
+            "intent_key": intent_key,
+            "client_order_id": intent_key,
+        }
+
+    first = ReplayEventLoop(
+        strategy=_strategy,
+        seed=replay_seed,
+        max_symbol_notional=max_symbol_notional,
+        max_gross_notional=max_gross_notional,
+    ).run(normalized_bars)
+    second = ReplayEventLoop(
+        strategy=_strategy,
+        seed=replay_seed,
+        max_symbol_notional=max_symbol_notional,
+        max_gross_notional=max_gross_notional,
+    ).run(normalized_bars)
     first_hash = hashlib.sha256(
         json.dumps(first, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
@@ -29804,15 +29856,38 @@ def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: b
                 "ts": now.isoformat(),
                 "hash": first_hash,
                 "symbols": list(active_symbols),
-                "rows": len(bars),
-                "enforce_oms_gates": replay_cfg.enforce_oms_gates,
-                "speedup": replay_cfg.speedup,
+                "rows": len(normalized_bars),
+                "seed": replay_seed,
+                "simulate_fills": simulate_fills,
+                "enforce_oms_gates": enforce_oms_gates,
+                "orders_submitted": int(len(first.get("orders", []))),
+                "intents_created": int(len(first.get("intents", []))),
+                "fill_events": int(
+                    len(
+                        [
+                            event
+                            for event in first.get("events", [])
+                            if str(event.get("event_type", "")) == "fill"
+                        ]
+                    )
+                ),
+                "violations": first.get("violations", []),
             },
             sort_keys=True,
         ),
         encoding="utf-8",
     )
-    logger.info("REPLAY_GOVERNANCE_OK", extra={"hash": first_hash, "rows": len(bars), "path": str(out_path)})
+    if enforce_oms_gates and first.get("violations"):
+        raise RuntimeError("REPLAY_GOVERNANCE_INVARIANTS_FAILED")
+    logger.info(
+        "REPLAY_GOVERNANCE_OK",
+        extra={
+            "hash": first_hash,
+            "rows": len(normalized_bars),
+            "path": str(out_path),
+            "violations": len(first.get("violations", [])),
+        },
+    )
     state.last_replay_run_date = now.date()
 
 

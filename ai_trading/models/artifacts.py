@@ -16,6 +16,7 @@ class ArtifactManifest:
     created_ts: str
     training_data_range: Mapping[str, str] | None = None
     signature: str | None = None
+    metadata: Mapping[str, Any] | None = None
 
 
 def _sha256_file(path: Path) -> str:
@@ -38,6 +39,7 @@ def build_artifact_manifest(
     training_data_range: Mapping[str, str] | None = None,
     created_ts: datetime | None = None,
     signature: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> ArtifactManifest:
     path = Path(model_path)
     checksum = _sha256_file(path)
@@ -48,6 +50,7 @@ def build_artifact_manifest(
         created_ts=ts,
         training_data_range=dict(training_data_range or {}),
         signature=signature,
+        metadata=dict(metadata or {}),
     )
 
 
@@ -58,12 +61,14 @@ def write_artifact_manifest(
     training_data_range: Mapping[str, str] | None = None,
     manifest_path: str | Path | None = None,
     signature: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> Path:
     manifest = build_artifact_manifest(
         model_path=model_path,
         model_version=model_version,
         training_data_range=training_data_range,
         signature=signature,
+        metadata=metadata,
     )
     destination = Path(manifest_path) if manifest_path else default_manifest_path(model_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -79,6 +84,7 @@ def load_artifact_manifest(manifest_path: str | Path) -> ArtifactManifest:
         created_ts=str(payload.get("created_ts", "")),
         training_data_range=payload.get("training_data_range"),
         signature=payload.get("signature"),
+        metadata=payload.get("metadata"),
     )
 
 
@@ -116,4 +122,3 @@ def verify_artifact(
 
 def manifest_dict(manifest: ArtifactManifest) -> dict[str, Any]:
     return asdict(manifest)
-

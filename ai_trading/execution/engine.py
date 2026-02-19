@@ -545,22 +545,52 @@ class OrderManager:
 
         enabled = _env_bool("AI_TRADING_OMS_INTENT_STORE_ENABLED", True)
         allow_in_tests = _env_bool("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", False)
+        execution_mode = str(get_env("EXECUTION_MODE", "paper") or "").strip().lower()
+        database_url = str(get_env("DATABASE_URL", "") or "").strip()
+        allow_sqlite_live = _env_bool("AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE", False)
         if not enabled:
             return
         if self._test_mode and not allow_in_tests:
             return
+        if execution_mode == "live" and not database_url and not allow_sqlite_live:
+            message = (
+                "DATABASE_URL is required for live durable intent store. "
+                "Set DATABASE_URL=postgresql+psycopg://... or explicitly opt into "
+                "AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE=1."
+            )
+            logger.error(
+                "OMS_INTENT_STORE_DATABASE_URL_REQUIRED",
+                extra={
+                    "execution_mode": execution_mode,
+                    "allow_sqlite_live": allow_sqlite_live,
+                },
+            )
+            raise RuntimeError(message)
         path = get_env("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db")
         try:
-            self._intent_store = IntentStore(path=str(path))
+            self._intent_store = IntentStore(
+                path=str(path),
+                url=(database_url or None),
+            )
             logger.info(
                 "OMS_INTENT_STORE_ENABLED",
-                extra={"path": str(self._intent_store.path)},
+                extra={
+                    "path": str(self._intent_store.path),
+                    "database_url_configured": bool(database_url),
+                },
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
                 "OMS_INTENT_STORE_INIT_FAILED",
-                extra={"error": str(exc), "path": str(path)},
+                extra={
+                    "error": str(exc),
+                    "path": str(path),
+                    "database_url_configured": bool(database_url),
+                    "execution_mode": execution_mode,
+                },
             )
+            if execution_mode == "live":
+                raise RuntimeError("OMS_INTENT_STORE_INIT_FAILED") from exc
             self._intent_store = None
 
     def configure_intent_store(self, intent_store: IntentStore | None) -> None:

@@ -37,6 +37,8 @@ dependencies = [
   "threadpoolctl==3.5.0",
   "pandas==2.2.2",
   "hmmlearn==0.3.2",
+  "SQLAlchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
 ]
 
 [project.optional-dependencies]
