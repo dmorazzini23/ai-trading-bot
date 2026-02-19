@@ -30,6 +30,7 @@ except Exception:  # ImportError
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, register_reset_hook
 from ai_trading.config.management import get_env
+from ai_trading.oms.intent_store import IntentStore
 from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
 
@@ -212,6 +213,20 @@ def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
     except Exception:
         logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
         return None
+
+
+def _as_bool(value: Any) -> bool:
+    """Parse booleans consistently for env-driven flags."""
+
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw_default = "1" if default else "0"
+    raw = get_env(key, raw_default)
+    return _as_bool(raw)
 
 
 class ExecutionAlgorithm(Enum):
@@ -518,14 +533,49 @@ class OrderManager:
         self._monitor_thread = None
         self._monitor_running = False
         self._idempotency_cache: OrderIdempotencyCache | None = None
+        self._intent_store: IntentStore | None = None
+        self._intent_by_order_id: dict[str, str] = {}
+        self._intent_reported_fill_qty: dict[str, float] = {}
         self._test_mode = bool(get_env("PYTEST_RUNNING", default=""))
+        self._init_intent_store()
         emit_once(logger, "ORDER_MANAGER_INIT", "info", "OrderManager initialized")
+
+    def _init_intent_store(self) -> None:
+        """Initialize durable intent store when enabled."""
+
+        enabled = _env_bool("AI_TRADING_OMS_INTENT_STORE_ENABLED", True)
+        allow_in_tests = _env_bool("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", False)
+        if not enabled:
+            return
+        if self._test_mode and not allow_in_tests:
+            return
+        path = get_env("AI_TRADING_OMS_INTENT_STORE_PATH", "runtime/oms_intents.db")
+        try:
+            self._intent_store = IntentStore(path=str(path))
+            logger.info(
+                "OMS_INTENT_STORE_ENABLED",
+                extra={"path": str(self._intent_store.path)},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "OMS_INTENT_STORE_INIT_FAILED",
+                extra={"error": str(exc), "path": str(path)},
+            )
+            self._intent_store = None
+
+    def configure_intent_store(self, intent_store: IntentStore | None) -> None:
+        """Override intent store instance (used by tests/integration harnesses)."""
+
+        self._intent_store = intent_store
+        self._idempotency_cache = None
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
         """Ensure idempotency cache is instantiated."""
         if self._idempotency_cache is None:
             try:
-                self._idempotency_cache = OrderIdempotencyCache()
+                self._idempotency_cache = OrderIdempotencyCache(
+                    intent_store=self._intent_store
+                )
             except (KeyError, ValueError, TypeError, RuntimeError) as e:
                 logger.error("IDEMPOTENCY_CACHE_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
                 raise
@@ -632,13 +682,24 @@ class OrderManager:
                     extra={"symbol": order.symbol, "reason": "duplicate_order"},
                 )
                 return None
+            if self._intent_store is not None:
+                try:
+                    intent_row = self._intent_store.get_intent_by_key(key.hash())
+                    if intent_row is not None:
+                        self._intent_by_order_id[order.id] = intent_row.intent_id
+                    else:
+                        self._intent_by_order_id[order.id] = order.id
+                    self._intent_reported_fill_qty.setdefault(order.id, 0.0)
+                except Exception:
+                    logger.debug("OMS_INTENT_LOOKUP_FAILED", exc_info=True)
+                    self._intent_by_order_id[order.id] = order.id
             self.orders[order.id] = order
             self.active_orders[order.id] = order
             if not self._monitor_running:
                 # Avoid starting background monitor threads automatically during
                 # unit tests. Tests that need the thread can call
                 # ``start_monitoring()`` explicitly.
-                pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
+                pytest_running = _env_bool("PYTEST_RUNNING", False)
                 if not pytest_running:
                     self.start_monitoring()
             logger.info(f"Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}")
@@ -690,6 +751,11 @@ class OrderManager:
                 "orders_rejected_total",
                 extra={"symbol": order.symbol, "reason": "api_error"},
             )
+            if self._intent_store is not None:
+                try:
+                    self._intent_store.record_submit_error(order.id, str(e))
+                except Exception:
+                    logger.debug("OMS_INTENT_SUBMIT_ERROR_RECORD_FAILED", exc_info=True)
             return None
 
     def cancel_order(self, order_id: str, reason: str = "User request") -> bool:
@@ -831,9 +897,71 @@ class OrderManager:
 
         reconcile_positions_and_orders()
 
+    def _sync_intent_with_order_event(self, order: Order, event_type: str) -> None:
+        """Persist fill and lifecycle updates for durable OMS intents."""
+
+        if self._intent_store is None:
+            return
+        order_id = getattr(order, "id", None)
+        if not order_id:
+            return
+        intent_id = self._intent_by_order_id.get(order_id)
+        if intent_id is None:
+            intent_id = order_id
+            self._intent_by_order_id[order_id] = intent_id
+
+        try:
+            filled_qty = float(getattr(order, "filled_quantity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            filled_qty = 0.0
+        reported_qty = self._intent_reported_fill_qty.get(order_id, 0.0)
+        fill_delta = max(0.0, filled_qty - reported_qty)
+        if fill_delta > 0.0:
+            fill_price_raw = getattr(order, "average_fill_price", None)
+            try:
+                fill_price = (
+                    float(fill_price_raw) if fill_price_raw is not None else None
+                )
+            except (TypeError, ValueError):
+                fill_price = None
+            self._intent_store.record_fill(
+                intent_id,
+                fill_qty=fill_delta,
+                fill_price=fill_price,
+            )
+            self._intent_reported_fill_qty[order_id] = reported_qty + fill_delta
+
+        normalized_status = ExecutionResult._normalize_status(
+            getattr(order, "status", None)
+        )
+        status_token = (
+            str(getattr(normalized_status, "value", normalized_status)).strip().upper()
+            if normalized_status is not None
+            else ""
+        )
+        if not status_token:
+            status_token = str(event_type).strip().upper()
+        terminal_events = {"COMPLETED", "CANCELLED", "CANCELED", "EXPIRED"}
+        is_terminal = (
+            bool(getattr(normalized_status, "is_terminal", False))
+            or status_token in {"FILLED", "REJECTED", "CANCELED", "CANCELLED", "EXPIRED"}
+            or str(event_type).strip().upper() in terminal_events
+        )
+        if not is_terminal:
+            return
+
+        final_status = status_token or "CLOSED"
+        self._intent_store.close_intent(intent_id, final_status=final_status)
+        self._intent_by_order_id.pop(order_id, None)
+        self._intent_reported_fill_qty.pop(order_id, None)
+
     def _notify_callbacks(self, order: Order, event_type: str):
         """Notify registered callbacks of order events."""
         try:
+            try:
+                self._sync_intent_with_order_event(order, event_type)
+            except Exception:
+                logger.debug("OMS_INTENT_SYNC_FAILED", exc_info=True)
             for callback in self.execution_callbacks:
                 try:
                     callback(order, event_type)
@@ -882,11 +1010,191 @@ class ExecutionEngine:
         self._last_partial_fill_summary: dict[str, Any] | None = None
         self._broker_sync: BrokerSyncResult | None = None
         self._open_order_qty_index: dict[str, tuple[float, float]] = {}
+        self._policy_selector_enabled = _env_bool(
+            "AI_TRADING_EXEC_POLICY_SELECTOR_ENABLED",
+            False,
+        )
+        self._cost_model_enabled = _env_bool(
+            "AI_TRADING_EXEC_COST_MODEL_ENABLED",
+            False,
+        )
+        self._cost_model_apply_limits = _env_bool(
+            "AI_TRADING_EXEC_COST_MODEL_APPLY_LIMITS",
+            False,
+        )
+        self._cost_model_path = str(
+            get_env(
+                "AI_TRADING_EXEC_COST_MODEL_PATH",
+                "runtime/execution_cost_model.json",
+            )
+        )
+        self._execution_cost_model: Any | None = None
+        self._load_execution_cost_model()
         emit_once(logger, "EXECUTION_ENGINE_INIT", "info", "ExecutionEngine initialized")
         try:
             self.order_manager.add_execution_callback(self._handle_execution_event)
         except Exception:  # pragma: no cover - defensive, callbacks optional in some tests
             logger.debug("EXECUTION_CALLBACK_REGISTRATION_FAILED", exc_info=True)
+
+    def _load_execution_cost_model(self) -> None:
+        """Load persisted execution cost model when enabled."""
+
+        if not self._cost_model_enabled:
+            return
+        try:
+            from ai_trading.execution.cost_model import CostModel
+
+            self._execution_cost_model = CostModel.load(self._cost_model_path)
+            self.logger.info(
+                "EXEC_COST_MODEL_LOADED",
+                extra={"path": self._cost_model_path},
+            )
+        except Exception:
+            self.logger.debug("EXEC_COST_MODEL_LOAD_FAILED", exc_info=True)
+            self._execution_cost_model = None
+
+    def _estimate_cost_floor_bps(
+        self,
+        *,
+        symbol: str,
+        spread_bps: float | None,
+        volatility_pct: float | None,
+        participation_rate: float | None,
+    ) -> float | None:
+        """Return bounded estimated cost in bps from model + realized slippage EWMA."""
+
+        model = self._execution_cost_model
+        if model is None:
+            return None
+        tca_hint: float | None = None
+        try:
+            from ai_trading.execution.slippage_log import get_ewma_cost_bps
+
+            tca_hint = get_ewma_cost_bps(symbol, default=2.0)
+        except Exception:
+            tca_hint = None
+        try:
+            estimate = model.estimate_cost_bps(
+                spread_bps=spread_bps,
+                volatility_pct=volatility_pct,
+                participation_rate=participation_rate,
+                tca_cost_bps=tca_hint,
+            )
+        except Exception:
+            self.logger.debug("EXEC_COST_ESTIMATE_FAILED", exc_info=True)
+            return None
+        if not math.isfinite(estimate) or estimate <= 0:
+            return None
+        return float(estimate)
+
+    def _select_execution_policy(
+        self,
+        *,
+        symbol: str,
+        side: OrderSide,
+        quantity: int,
+        kwargs: dict[str, Any],
+        limit_price: float | None,
+    ) -> dict[str, Any]:
+        """Select policy and derive optional routing hints for execute_order."""
+
+        if not self._policy_selector_enabled:
+            return {"selected": False}
+        try:
+            from ai_trading.execution.policy_selector import (
+                ExecutionPolicy,
+                select_execution_policy,
+            )
+        except Exception:
+            self.logger.debug("EXEC_POLICY_SELECTOR_IMPORT_FAILED", exc_info=True)
+            return {"selected": False}
+
+        spread_bps = kwargs.get("spread_bps")
+        if spread_bps is None:
+            bid = kwargs.get("bid")
+            ask = kwargs.get("ask")
+            try:
+                bid_f = float(bid) if bid is not None else None
+                ask_f = float(ask) if ask is not None else None
+            except (TypeError, ValueError):
+                bid_f = None
+                ask_f = None
+            if bid_f and ask_f and bid_f > 0 and ask_f >= bid_f:
+                spread_bps = ((ask_f - bid_f) / bid_f) * 10000.0
+
+        reference_price = limit_price
+        if reference_price is None:
+            raw_price = kwargs.get("price")
+            try:
+                reference_price = float(raw_price) if raw_price is not None else None
+            except (TypeError, ValueError):
+                reference_price = None
+        if reference_price is None:
+            expected = kwargs.get("expected_price")
+            try:
+                reference_price = float(expected) if expected is not None else None
+            except (TypeError, ValueError):
+                reference_price = None
+        if reference_price is None or reference_price <= 0:
+            reference_price = 1.0
+
+        avg_daily_volume = kwargs.get("avg_daily_volume")
+        if avg_daily_volume is None:
+            avg_daily_volume = kwargs.get("volume_1d")
+        try:
+            adv_shares = float(avg_daily_volume) if avg_daily_volume is not None else 0.0
+        except (TypeError, ValueError):
+            adv_shares = 0.0
+        adv_notional = max(0.0, adv_shares * reference_price)
+
+        volatility_pct = kwargs.get("volatility_pct")
+        if volatility_pct is None:
+            volatility_pct = kwargs.get("volatility")
+
+        urgency = kwargs.get("urgency_level")
+        if urgency is None:
+            urgency = kwargs.get("urgency")
+
+        provenance = str(
+            get_env(
+                "DATA_PROVENANCE",
+                get_env("ALPACA_DATA_FEED", "iex"),
+            )
+        )
+        order_notional = abs(float(quantity) * float(reference_price))
+        decision = select_execution_policy(
+            spread_bps=spread_bps,
+            volatility_pct=volatility_pct,
+            order_notional=order_notional,
+            avg_daily_volume_notional=adv_notional,
+            urgency=urgency,
+            data_provenance=provenance,
+            allow_twap=_env_bool("AI_TRADING_TWAP_ENABLED", True),
+        )
+
+        routing: dict[str, Any] = {
+            "selected": True,
+            "policy": decision.policy.value,
+            "reasons": decision.reasons,
+            "participation_rate": decision.participation_rate,
+            "urgency_score": decision.urgency_score,
+            "spread_bps": spread_bps,
+            "volatility_pct": volatility_pct,
+            "data_provenance": provenance,
+            "symbol": symbol,
+            "side": getattr(side, "value", side),
+            "quantity": quantity,
+        }
+        if decision.policy == ExecutionPolicy.TWAP:
+            routing["use_twap"] = True
+            routing["execution_algorithm"] = ExecutionAlgorithm.TWAP
+        elif decision.policy == ExecutionPolicy.POV:
+            routing["execution_algorithm"] = ExecutionAlgorithm.IMPLEMENTATION_SHORTFALL
+        elif decision.policy == ExecutionPolicy.PASSIVE_LIMIT:
+            routing["execution_algorithm"] = ExecutionAlgorithm.LIMIT
+        else:
+            routing["execution_algorithm"] = ExecutionAlgorithm.MARKET
+        return routing
 
     def _select_api(self):
         """Return the active broker API interface."""
@@ -1325,6 +1633,46 @@ class ExecutionEngine:
             tif_alias = kwargs.pop("tif", None)
             if tif_alias is not None and not kwargs.get("time_in_force"):
                 kwargs["time_in_force"] = tif_alias
+
+            policy_routing = self._select_execution_policy(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                kwargs=kwargs,
+                limit_price=limit_price,
+            )
+            if policy_routing.get("selected"):
+                self.logger.info("EXEC_POLICY_SELECTED", extra=policy_routing)
+                if kwargs.get("execution_algorithm") is None:
+                    kwargs["execution_algorithm"] = policy_routing.get("execution_algorithm")
+                if "use_twap" in policy_routing and "use_twap" not in kwargs:
+                    kwargs["use_twap"] = bool(policy_routing["use_twap"])
+
+                cost_floor_bps = self._estimate_cost_floor_bps(
+                    symbol=symbol,
+                    spread_bps=policy_routing.get("spread_bps"),
+                    volatility_pct=policy_routing.get("volatility_pct"),
+                    participation_rate=policy_routing.get("participation_rate"),
+                )
+                if cost_floor_bps is not None:
+                    self.logger.info(
+                        "EXEC_COST_FLOOR_ESTIMATE",
+                        extra={"symbol": symbol, "cost_floor_bps": round(cost_floor_bps, 4)},
+                    )
+                    if self._cost_model_apply_limits:
+                        current_cap = kwargs.get("max_slippage_bps")
+                        try:
+                            cap_value = float(current_cap) if current_cap is not None else float(
+                                EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 50)
+                            )
+                        except Exception:
+                            cap_value = float(EXECUTION_PARAMETERS.get("MAX_SLIPPAGE_BPS", 50))
+                        derived_cap = max(cap_value, cost_floor_bps * 2.0)
+                        kwargs["max_slippage_bps"] = derived_cap
+                        self.logger.info(
+                            "EXEC_COST_MODEL_APPLIED",
+                            extra={"symbol": symbol, "max_slippage_bps": round(derived_cap, 4)},
+                        )
             tif_value = kwargs.get("time_in_force") or "day"
             payload: dict[str, Any] = {
                 "symbol": symbol,
@@ -1370,7 +1718,7 @@ class ExecutionEngine:
                     "EXECUTE_ORDER_IGNORED_KWARGS",
                     extra={"ignored_keys": tuple(sorted(ignored_keys))},
                 )
-            testing_mode = bool(get_env("TESTING", "false", cast=bool))
+            testing_mode = _env_bool("TESTING", False)
             if order_type == OrderType.MARKET:
                 if not testing_mode:
                     try:
@@ -1452,12 +1800,18 @@ class ExecutionEngine:
 
             # Optional TWAP routing for large orders (config/kwargs gated)
             use_twap = bool(kwargs.get("use_twap", False))
-            if not use_twap:
+            if not use_twap and getattr(order, "execution_algorithm", None) == ExecutionAlgorithm.TWAP:
+                use_twap = True
+            auto_twap_enabled = _env_bool(
+                "AI_TRADING_EXEC_AUTO_TWAP_ENABLED",
+                False,
+            )
+            if not use_twap and auto_twap_enabled:
                 try:
                     from ai_trading.core.constants import EXECUTION_PARAMETERS as _EXECUTION_PARAMETERS
 
                     twap_min_qty = int(_EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
-                    use_twap = quantity >= twap_min_qty or getattr(order, "execution_algorithm", None) == ExecutionAlgorithm.TWAP
+                    use_twap = quantity >= twap_min_qty
                 except Exception:
                     use_twap = False
             if use_twap and quantity > 0:
@@ -2049,7 +2403,7 @@ class ExecutionEngine:
             else:
                 directional_predicted = predicted_slippage_bps if side == OrderSide.BUY else -predicted_slippage_bps
                 adverse_predicted_bps = max(directional_predicted, 0.0)
-            testing_mode = get_env("TESTING", "false", cast=bool)
+            testing_mode = _env_bool("TESTING", False)
             effective_threshold = threshold
             if testing_mode and (not math.isfinite(effective_threshold) or effective_threshold <= 0):
                 effective_threshold = base_threshold_candidate
@@ -2219,7 +2573,7 @@ class ExecutionEngine:
                         },
                     )
                     testing_flag = os.getenv("TESTING", "").strip().lower()
-                    exec_strict = bool(get_env("EXECUTION_STRICT", "0", cast=bool))
+                    exec_strict = _env_bool("EXECUTION_STRICT", False)
                     if exec_strict or testing_flag in {"1", "true", "yes"}:
                         raise AssertionError(
                             "SLIPPAGE_THRESHOLD_EXCEEDED: predicted slippage exceeds limit"

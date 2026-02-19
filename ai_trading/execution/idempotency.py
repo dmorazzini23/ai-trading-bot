@@ -8,6 +8,7 @@ import hashlib
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 try:
     from cachetools import TTLCache  # type: ignore
@@ -96,6 +97,10 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
             return f"TTLCache(maxsize={self.maxsize}, ttl={self.ttl}, size={len(self)})"
 
 from ai_trading.core.interfaces import OrderSide
+from ai_trading.config.management import get_env
+
+if TYPE_CHECKING:
+    from ai_trading.oms.intent_store import IntentStore
 
 @dataclass
 class IdempotencyKey:
@@ -121,7 +126,13 @@ class OrderIdempotencyCache:
     orders using (symbol, side, qty, intent_ts_bucket) as the key.
     """
 
-    def __init__(self, ttl_seconds: int=300, max_size: int=10000):
+    def __init__(
+        self,
+        ttl_seconds: int = 300,
+        max_size: int = 10000,
+        *,
+        intent_store: "IntentStore | None" = None,
+    ):
         """
         Initialize idempotency cache.
 
@@ -131,6 +142,7 @@ class OrderIdempotencyCache:
         """
         self._cache: TTLCache = TTLCache(maxsize=max_size, ttl=ttl_seconds)
         self._lock = threading.RLock()
+        self._intent_store = intent_store
 
     def generate_key(self, symbol: str, side: OrderSide | str, quantity: float, intent_timestamp: datetime | None=None, bucket_minutes: int=1) -> IdempotencyKey:
         """
@@ -194,6 +206,32 @@ class OrderIdempotencyCache:
             if isinstance(existing, dict):
                 existing_order_id = existing.get("order_id")
                 return (True, str(existing_order_id) if existing_order_id is not None else None)
+            if self._intent_store is not None:
+                stale_after = get_env(
+                    "AI_TRADING_OMS_INTENT_CLAIM_STALE_SEC",
+                    "180",
+                    cast=int,
+                )
+                intent, _created = self._intent_store.create_intent(
+                    intent_id=order_id,
+                    idempotency_key=key_hash,
+                    symbol=key.symbol,
+                    side=key.side.value,
+                    quantity=key.quantity,
+                    decision_ts=datetime.now(UTC).isoformat(),
+                    status="PENDING_SUBMIT",
+                    metadata={"intent_bucket": key.intent_bucket},
+                )
+                claimed = self._intent_store.claim_for_submit(
+                    intent.intent_id,
+                    stale_after_seconds=max(1, int(stale_after)),
+                )
+                if not claimed:
+                    existing_order_id = intent.broker_order_id
+                    if existing_order_id is None:
+                        existing_order_id = intent.intent_id
+                    return (True, existing_order_id)
+                self._intent_store.mark_submitted(intent.intent_id, order_id)
             self._cache[key_hash] = {
                 "order_id": order_id,
                 "submitted_at": datetime.now(UTC),
