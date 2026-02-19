@@ -79,6 +79,18 @@ def test_order_pacing_cap_warning_cooldown_zero_disables(monkeypatch):
     assert engine._should_emit_order_pacing_cap_log(now_ts=101.0) is True
 
 
+def test_order_pacing_cap_log_level_warmup(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")
+    assert engine._order_pacing_cap_log_level() == "info"
+
+
+def test_order_pacing_cap_log_level_runtime(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.delenv("AI_TRADING_WARMUP_MODE", raising=False)
+    assert engine._order_pacing_cap_log_level() == "warning"
+
+
 def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)

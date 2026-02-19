@@ -2187,6 +2187,14 @@ class ExecutionEngine:
             return True
         return False
 
+    def _order_pacing_cap_log_level(self) -> str:
+        """Return log level label for pacing-cap events."""
+
+        warmup_mode = _resolve_bool_env("AI_TRADING_WARMUP_MODE")
+        if bool(warmup_mode):
+            return "info"
+        return "warning"
+
     def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
         """Return True when duplicate intent should be skipped."""
 
@@ -4029,15 +4037,18 @@ class ExecutionEngine:
             if not bool(getattr(self, "_cycle_order_pacing_cap_logged", False)):
                 self._cycle_order_pacing_cap_logged = True
                 if self._should_emit_order_pacing_cap_log():
-                    logger.warning(
-                        "ORDER_PACING_CAP_HIT",
-                        extra={
-                            "symbol": symbol,
-                            "side": mapped_side,
-                            "submitted_this_cycle": int(self._cycle_submitted_orders),
-                            "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
-                        },
-                    )
+                    payload = {
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "submitted_this_cycle": int(self._cycle_submitted_orders),
+                        "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
+                    }
+                    if self._order_pacing_cap_log_level() == "info":
+                        payload["phase"] = "warmup"
+                        logger.info("ORDER_PACING_CAP_HIT", extra=payload)
+                    else:
+                        payload["phase"] = "runtime"
+                        logger.warning("ORDER_PACING_CAP_HIT", extra=payload)
             return None
         capacity_broker = self._capacity_broker(trading_client)
         account_snapshot = self._resolve_capacity_account_snapshot(

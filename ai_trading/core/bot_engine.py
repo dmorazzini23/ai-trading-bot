@@ -323,6 +323,8 @@ _PENDING_ORDER_STUCK_STATUSES = frozenset(
 _PENDING_ORDER_FORCE_CLEANUP_SEC_DEFAULT = 45.0
 _PENDING_ORDER_SAMPLE_LIMIT = 20
 _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
+_PENDING_ORDER_WARN_SEC_DEFAULT = 60.0
+_PENDING_ORDER_ERROR_SEC_DEFAULT = 180.0
 _PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
 _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
@@ -28457,6 +28459,47 @@ def _pending_order_force_cleanup_seconds() -> float:
     return max(5.0, min(value, 3600.0))
 
 
+def _pending_order_log_thresholds(cfg: Any | None) -> tuple[float, float]:
+    """Resolve pending-order warning/error escalation thresholds."""
+
+    warn_raw: Any = _PENDING_ORDER_WARN_SEC_DEFAULT
+    error_raw: Any = _PENDING_ORDER_ERROR_SEC_DEFAULT
+    if cfg is not None:
+        warn_raw = getattr(cfg, "orders_pending_new_warn_s", warn_raw)
+        error_raw = getattr(cfg, "orders_pending_new_error_s", error_raw)
+    try:
+        warn_after_s = float(warn_raw)
+    except (TypeError, ValueError):
+        warn_after_s = _PENDING_ORDER_WARN_SEC_DEFAULT
+    try:
+        error_after_s = float(error_raw)
+    except (TypeError, ValueError):
+        error_after_s = _PENDING_ORDER_ERROR_SEC_DEFAULT
+    warn_after_s = max(0.0, min(warn_after_s, 86400.0))
+    error_after_s = max(warn_after_s, min(error_after_s, 86400.0))
+    return warn_after_s, error_after_s
+
+
+def _pending_order_log_level(
+    age_s: float,
+    *,
+    warn_after_s: float,
+    error_after_s: float,
+) -> int:
+    """Return log level for pending-order age-based escalation."""
+
+    effective_age_s = max(float(age_s), 0.0)
+    if error_after_s <= 0.0:
+        return logging.ERROR
+    if effective_age_s >= error_after_s:
+        return logging.ERROR
+    if warn_after_s <= 0.0:
+        return logging.WARNING
+    if effective_age_s >= warn_after_s:
+        return logging.WARNING
+    return logging.INFO
+
+
 def _pending_cleanup_warmup_cycles() -> int:
     """Return how many cycles to skip after forced pending-order cleanup."""
 
@@ -28702,11 +28745,12 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             return True
         return False
 
-    cfg_interval = getattr(
-        get_trading_config(),
-        "order_stale_cleanup_interval",
-        120,
-    )
+    try:
+        cfg = get_trading_config()
+    except COMMON_EXC:
+        cfg = None
+    cfg_interval = getattr(cfg, "order_stale_cleanup_interval", 120)
+    warn_after_s, error_after_s = _pending_order_log_thresholds(cfg)
     try:
         cleanup_after = float(cfg_interval)
     except (TypeError, ValueError):  # pragma: no cover - defensive
@@ -28730,15 +28774,26 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             first_seen_ts = now - cleanup_after
         tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = first_seen_ts
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-        logger.warning(
+        initial_age_s = max(float(oldest_pending_age_s or 0.0), 0.0)
+        initial_level = logging.INFO
+        if stale_stuck_detected:
+            initial_level = _pending_order_log_level(
+                initial_age_s,
+                warn_after_s=warn_after_s,
+                error_after_s=error_after_s,
+            )
+        logger.log(
+            initial_level,
             "PENDING_ORDERS_DETECTED",
             extra={
                 "open_count": len(open_list),
                 "pending_count": len(pending_ids),
                 "pending_ids": sample_ids,
                 "pending_statuses": statuses,
-                "age_s": 0,
+                "age_s": int(initial_age_s),
                 "cleanup_after_s": int(cleanup_after),
+                "warn_after_s": int(warn_after_s),
+                "error_after_s": int(error_after_s),
                 "oldest_pending_age_s": (
                     int(max(oldest_pending_age_s, 0))
                     if oldest_pending_age_s is not None
@@ -28762,7 +28817,13 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         last_log is None
         or now - float(last_log) >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
     ):
-        logger.warning(
+        effective_age_s = max(float(age), float(oldest_pending_age_s or 0.0))
+        logger.log(
+            _pending_order_log_level(
+                effective_age_s,
+                warn_after_s=warn_after_s,
+                error_after_s=error_after_s,
+            ),
             "PENDING_ORDERS_STILL_PRESENT",
             extra={
                 "open_count": len(open_list),
@@ -28771,6 +28832,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 "pending_statuses": statuses,
                 "age_s": int(max(age, 0)),
                 "cleanup_after_s": int(cleanup_after),
+                "warn_after_s": int(warn_after_s),
+                "error_after_s": int(error_after_s),
                 "oldest_pending_age_s": (
                     int(max(oldest_pending_age_s, 0))
                     if oldest_pending_age_s is not None

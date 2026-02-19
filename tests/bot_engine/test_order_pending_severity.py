@@ -103,7 +103,7 @@ def _reset_pending_tracker():
 
 
 def test_pending_orders_log_warning_levels(monkeypatch, caplog):
-    """The first detection and follow-up log entries use warning severity."""
+    """Pending-order logs escalate from info to warning as age grows."""
 
     runtime = types.SimpleNamespace(state={})
     cancel_called: list[types.SimpleNamespace] = []
@@ -128,7 +128,7 @@ def test_pending_orders_log_warning_levels(monkeypatch, caplog):
 
     assert be._handle_pending_orders(pending, runtime) is True
     assert caplog.records[0].message == "PENDING_ORDERS_DETECTED"
-    assert caplog.records[0].levelno == logging.WARNING
+    assert caplog.records[0].levelno == logging.INFO
 
     caplog.clear()
     clock.value += be._PENDING_ORDER_LOG_INTERVAL_SECONDS + 1
@@ -146,4 +146,73 @@ def test_pending_orders_log_warning_levels(monkeypatch, caplog):
     detection_logs = [
         rec for rec in caplog.records if rec.message == "PENDING_ORDERS_DETECTED"
     ]
-    assert detection_logs and detection_logs[0].levelno == logging.WARNING
+    assert detection_logs and detection_logs[0].levelno == logging.INFO
+
+
+def test_pending_orders_log_escalates_to_error(monkeypatch, caplog):
+    """Long-lived pending orders escalate to error-level logs."""
+
+    runtime = types.SimpleNamespace(state={})
+    cancel_called: list[types.SimpleNamespace] = []
+
+    monkeypatch.setattr(
+        be,
+        "cancel_all_open_orders",
+        lambda rt: cancel_called.append(rt),
+    )
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(
+            order_stale_cleanup_interval=600,
+            orders_pending_new_warn_s=60,
+            orders_pending_new_error_s=180,
+        ),
+    )
+
+    clock = types.SimpleNamespace(value=1000.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+
+    caplog.set_level(logging.INFO)
+    pending = [_order("pending_new", "alpha")]
+
+    assert be._handle_pending_orders(pending, runtime) is True
+    caplog.clear()
+    clock.value += 181.0
+    assert be._handle_pending_orders(pending, runtime) is False
+    assert cancel_called == [runtime]
+    still_present = [
+        rec for rec in caplog.records if rec.message == "PENDING_ORDERS_STILL_PRESENT"
+    ]
+    assert still_present and still_present[0].levelno == logging.ERROR
+
+
+def test_pending_orders_first_detection_stays_info_for_fresh_orders(monkeypatch, caplog):
+    """First pending-order detection is informational even with aggressive thresholds."""
+
+    runtime = types.SimpleNamespace(state={})
+
+    monkeypatch.setattr(be, "cancel_all_open_orders", lambda _rt: None)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(
+            order_stale_cleanup_interval=60,
+            orders_pending_new_warn_s=5,
+            orders_pending_new_error_s=10,
+        ),
+    )
+    monkeypatch.setattr(
+        be,
+        "_pending_order_broker_age_seconds",
+        lambda _order, _now_dt: 8.0,
+    )
+
+    clock = types.SimpleNamespace(value=1000.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+
+    caplog.set_level(logging.INFO)
+    pending = [_order("pending_new", "alpha")]
+    assert be._handle_pending_orders(pending, runtime) is True
+    assert caplog.records[0].message == "PENDING_ORDERS_DETECTED"
+    assert caplog.records[0].levelno == logging.INFO
