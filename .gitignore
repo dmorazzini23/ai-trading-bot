@@ -95,3 +95,9 @@ patch_full_cleanup.patch
 
 # Runtime trade log
 /trades.csv
+
+
+# Generated runtime artifacts
+/runtime/execution_cost_model.json
+/runtime/run_manifest.jsonl
+/runtime/research_reports/
