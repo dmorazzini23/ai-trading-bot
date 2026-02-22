@@ -170,7 +170,7 @@ def test_get_trade_logger_falls_back_when_dir_not_writable(tmp_path, monkeypatch
     with caplog.at_level(logging.WARNING):
         logger_instance = bot_engine.get_trade_logger()
 
-    fallback_path = Path.cwd() / "logs" / log_path.name
+    fallback_path = state_home / "ai-trading-bot" / log_path.name
     assert logger_instance.path == str(fallback_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
@@ -353,7 +353,7 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     with caplog.at_level(logging.WARNING):
         logger_instance = bot_engine.get_trade_logger()
 
-    fallback_path = Path.cwd() / "logs" / log_path.name
+    fallback_path = state_home / "ai-trading-bot" / log_path.name
     assert logger_instance.path == str(fallback_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
