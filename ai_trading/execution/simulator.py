@@ -4,10 +4,43 @@ Fill simulation and slippage modeling for execution testing.
 Provides realistic execution simulation including slippage,
 partial fills, and market impact modeling.
 """
+
+from __future__ import annotations
+
 import math
 import random
+
+from ai_trading.config.management import get_env
 from ai_trading.logging import logger
 from ..core.enums import OrderSide, OrderType
+
+
+_NONDETERMINISTIC_SIM_ENV = "AI_TRADING_ALLOW_NONDETERMINISTIC_SIM"
+
+
+def _resolve_rng(*, seed: int | None, rng: random.Random | None, component: str) -> random.Random:
+    """Resolve deterministic RNG unless an explicit nondeterministic opt-in is provided."""
+
+    if rng is not None and seed is not None:
+        raise ValueError("Provide only one of seed or rng")
+    if rng is not None:
+        return rng
+    if seed is not None:
+        return random.Random(int(seed))
+
+    allow_nondeterministic = bool(get_env(_NONDETERMINISTIC_SIM_ENV, False, cast=bool))
+    if allow_nondeterministic:
+        logger.warning(
+            "SIMULATOR_NONDETERMINISTIC_OPT_IN",
+            extra={"component": component, "env": _NONDETERMINISTIC_SIM_ENV},
+        )
+        return random.Random()
+
+    raise RuntimeError(
+        f"{component} requires deterministic RNG via seed/rng; set "
+        f"{_NONDETERMINISTIC_SIM_ENV}=1 to opt in to nondeterministic behavior."
+    )
+
 
 class SlippageModel:
     """
@@ -17,8 +50,14 @@ class SlippageModel:
     and execution urgency for backtesting and simulation.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        seed: int | None = None,
+        rng: random.Random | None = None,
+    ) -> None:
         """Initialize slippage model."""
+        self._rng = _resolve_rng(seed=seed, rng=rng, component=self.__class__.__name__)
         self.base_slippage_bps = 5
         self.market_impact_factor = 0.1
         self.volatility_factor = 1.0
@@ -46,7 +85,7 @@ class SlippageModel:
             volatility_impact = base_slippage * self.volatility_factor
             side_multiplier = 1 if side == OrderSide.BUY else -1
             total_slippage = (base_slippage + size_impact + urgency_impact + volatility_impact) * side_multiplier
-            random_component = random.gauss(0, base_slippage * 0.2)
+            random_component = self._rng.gauss(0, base_slippage * 0.2)
             total_slippage += random_component
             logger.debug(f'Slippage calculated for {symbol}: {total_slippage:.4f} per share')
             return total_slippage
@@ -82,9 +121,20 @@ class FillSimulator:
     and realistic fill patterns for backtesting.
     """
 
-    def __init__(self, slippage_model: SlippageModel=None):
+    def __init__(
+        self,
+        slippage_model: SlippageModel | None = None,
+        *,
+        seed: int | None = None,
+        rng: random.Random | None = None,
+    ) -> None:
         """Initialize fill simulator."""
-        self.slippage_model = slippage_model or SlippageModel()
+        inherited_rng = getattr(slippage_model, "_rng", None)
+        resolved_rng: random.Random | None = rng
+        if seed is None and resolved_rng is None and isinstance(inherited_rng, random.Random):
+            resolved_rng = inherited_rng
+        self._rng = _resolve_rng(seed=seed, rng=resolved_rng, component=self.__class__.__name__)
+        self.slippage_model = slippage_model or SlippageModel(rng=self._rng)
         self.fill_probability = 0.95
         self.partial_fill_probability = 0.3
         self.max_fill_delay = 60
@@ -132,15 +182,15 @@ class FillSimulator:
     def _should_fill(self, order_type: OrderType, price: float) -> bool:
         """Determine if order should be filled."""
         if order_type == OrderType.MARKET:
-            return random.random() < 0.98
-        return random.random() < self.fill_probability
+            return self._rng.random() < 0.98
+        return self._rng.random() < self.fill_probability
 
     def _should_partial_fill(self, quantity: int, order_type: OrderType) -> bool:
         """Determine if order should have partial fills."""
         size_factor = min(1.0, quantity / 1000)
         type_factor = 0.5 if order_type == OrderType.MARKET else 1.0
         partial_prob = self.partial_fill_probability * size_factor * type_factor
-        return random.random() < partial_prob
+        return self._rng.random() < partial_prob
 
     def _simulate_partial_fills(self, total_quantity: int, fill_price: float) -> list[dict]:
         """Simulate sequence of partial fills."""
@@ -148,12 +198,12 @@ class FillSimulator:
         remaining = total_quantity
         fill_time = 0
         while remaining > 0 and len(fills) < 5:
-            fill_pct = random.uniform(0.2, 0.8)
+            fill_pct = self._rng.uniform(0.2, 0.8)
             fill_qty = max(1, int(remaining * fill_pct))
             fill_qty = min(fill_qty, remaining)
-            price_variation = random.gauss(0, fill_price * 0.001)
+            price_variation = self._rng.gauss(0, fill_price * 0.001)
             actual_fill_price = fill_price + price_variation
-            fill_time += random.randint(5, 30)
+            fill_time += self._rng.randint(5, 30)
             fills.append({'quantity': fill_qty, 'price': actual_fill_price, 'time': fill_time})
             remaining -= fill_qty
         return fills
@@ -162,7 +212,7 @@ class FillSimulator:
         """Calculate realistic fill time."""
         base_times = {OrderType.MARKET: 5, OrderType.LIMIT: 30, OrderType.STOP: 15, OrderType.STOP_LIMIT: 45}
         base_time = base_times.get(order_type, 30)
-        variation = random.randint(-base_time // 2, base_time)
+        variation = self._rng.randint(-base_time // 2, base_time)
         fill_time = max(1, base_time + variation)
         return fill_time
 
