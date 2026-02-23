@@ -1762,7 +1762,7 @@ def main(argv: list[str] | None = None) -> None:
                     cap = 300.0
                 cap = max(cap, 0.0)
                 sleep_for = min(wait, cap) if cap > 0 else 0.0
-                logger.warning(
+                logger.info(
                     "MARKET_CLOSED_SLEEP",
                     extra={
                         "now": now.isoformat(),

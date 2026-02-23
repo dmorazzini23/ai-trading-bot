@@ -86,7 +86,7 @@ def test_consecutive_closed_days_log_each_day(monkeypatch, caplog):
 def test_market_closed_sleep_is_capped(monkeypatch, caplog):
     from ai_trading import main as main_module
 
-    caplog.set_level(logging.WARNING, logger=main_module.logger.name)
+    caplog.set_level(logging.INFO, logger=main_module.logger.name)
 
     stub_settings = types.SimpleNamespace(
         interval_when_closed=120,
@@ -118,7 +118,7 @@ def test_market_closed_sleep_is_capped(monkeypatch, caplog):
     assert sleep_calls == [pytest.approx(120.0)]
 
     records = [r for r in caplog.records if r.msg == "MARKET_CLOSED_SLEEP"]
-    assert records, "expected MARKET_CLOSED_SLEEP warning"
+    assert records, "expected MARKET_CLOSED_SLEEP info log"
     record = records[-1]
     assert record.sleep_original_s == int(delta.total_seconds())
     assert record.sleep_s == 120
