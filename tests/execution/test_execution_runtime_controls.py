@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from ai_trading.execution import live_trading as lt
 
 
@@ -125,3 +127,28 @@ def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     assert "ALERT_EXEC_KPI_HIGH_CANCEL_RATIO" in emitted
     assert "ALERT_EXEC_KPI_MEDIAN_PENDING_HIGH" in emitted
     assert "ALERT_EXEC_KPI_OPEN_PENDING_AGED" in emitted
+
+
+def test_execution_kpi_snapshot_includes_lockout_and_skip_reasons(monkeypatch, caplog):
+    engine = _engine_stub()
+    engine._cycle_order_outcomes = [
+        {"status": "skipped", "reason": "broker_lock", "duration_s": 0.1, "ack_timed_out": False},
+        {"status": "failed", "reason": "submit_exception", "duration_s": 0.2, "ack_timed_out": False},
+        {"status": "filled", "duration_s": 0.3, "ack_timed_out": False},
+    ]
+    engine._list_open_orders_snapshot = lambda: []
+    engine._broker_lock_reason = "unauthorized"
+    engine._broker_locked_until = 160.0
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 100.0)
+
+    caplog.set_level(logging.INFO)
+    engine._emit_cycle_execution_kpis()
+
+    record = next(rec for rec in caplog.records if rec.message == "EXECUTION_KPI_SNAPSHOT")
+    assert record.submitted == 1
+    assert record.failed == 1
+    assert record.skipped == 1
+    assert record.skip_reason_counts == {"broker_lock": 1}
+    assert record.broker_lock_active is True
+    assert record.broker_lock_reason == "unauthorized"
+    assert record.broker_lock_ttl_s == pytest.approx(60.0, abs=0.1)

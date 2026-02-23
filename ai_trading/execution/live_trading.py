@@ -2238,32 +2238,177 @@ class ExecutionEngine:
             self._recent_order_intents = intents
         intents[key] = monotonic_time()
 
+    def _record_cycle_order_outcome(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        status: str | None,
+        reason: str | None = None,
+        submit_started_at: float | None = None,
+        duration_s: float | None = None,
+        ack_timed_out: bool = False,
+    ) -> None:
+        """Append a normalized order outcome entry for cycle-level KPI reporting."""
+
+        normalized_status = (
+            _normalize_status(status) or str(status or "").strip().lower() or "unknown"
+        )
+        outcome_duration = duration_s
+        if outcome_duration is None:
+            if submit_started_at is None:
+                outcome_duration = 0.0
+            else:
+                outcome_duration = max(time.monotonic() - submit_started_at, 0.0)
+        try:
+            outcome_duration = float(outcome_duration)
+        except (TypeError, ValueError):
+            outcome_duration = 0.0
+        if not math.isfinite(outcome_duration) or outcome_duration < 0.0:
+            outcome_duration = 0.0
+
+        outcomes = getattr(self, "_cycle_order_outcomes", None)
+        if not isinstance(outcomes, list):
+            outcomes = []
+        payload: dict[str, Any] = {
+            "status": normalized_status,
+            "ack_timed_out": bool(ack_timed_out),
+            "duration_s": outcome_duration,
+        }
+        if symbol:
+            payload["symbol"] = str(symbol)
+        if side:
+            payload["side"] = str(side)
+        if reason:
+            payload["reason"] = str(reason)
+        outcomes.append(payload)
+        self._cycle_order_outcomes = outcomes
+
+    def _skip_submit(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        reason: str,
+        order_type: str | None = None,
+        detail: str | None = None,
+        context: Mapping[str, Any] | None = None,
+        submit_started_at: float | None = None,
+    ) -> None:
+        """Record and log an intentionally skipped submit path."""
+
+        payload: dict[str, Any] = {
+            "reason": str(reason),
+        }
+        if symbol:
+            payload["symbol"] = str(symbol)
+        if side:
+            payload["side"] = str(side)
+        if order_type:
+            payload["order_type"] = str(order_type)
+        if detail:
+            payload["detail"] = str(detail)
+        if context:
+            payload["context"] = dict(context)
+        logger.info("ORDER_SUBMIT_SKIPPED", extra=payload)
+        self._record_cycle_order_outcome(
+            symbol=symbol,
+            side=side,
+            status="skipped",
+            reason=reason,
+            submit_started_at=submit_started_at,
+        )
+
+    def _record_submit_failure(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        reason: str,
+        order_type: str | None = None,
+        status_code: int | None = None,
+        detail: str | None = None,
+        submit_started_at: float | None = None,
+    ) -> None:
+        """Record and log a failed submit path before returning ``None``."""
+
+        payload: dict[str, Any] = {
+            "reason": str(reason),
+        }
+        if symbol:
+            payload["symbol"] = str(symbol)
+        if side:
+            payload["side"] = str(side)
+        if order_type:
+            payload["order_type"] = str(order_type)
+        if status_code is not None:
+            payload["status_code"] = int(status_code)
+        if detail:
+            payload["detail"] = str(detail)
+        logger.error("ORDER_SUBMIT_FAILED", extra=payload)
+        self._record_cycle_order_outcome(
+            symbol=symbol,
+            side=side,
+            status="failed",
+            reason=reason,
+            submit_started_at=submit_started_at,
+        )
+
     def _emit_cycle_execution_kpis(self) -> None:
         """Emit per-cycle execution KPIs and optional runtime alerts."""
 
         outcomes = list(getattr(self, "_cycle_order_outcomes", []) or [])
-        submitted = len(outcomes)
-        if submitted <= 0:
+        if not outcomes:
             return
 
-        filled = sum(1 for item in outcomes if item.get("status") == "filled")
+        normalized_outcomes: list[tuple[dict[str, Any], str]] = []
+        for item in outcomes:
+            if not isinstance(item, dict):
+                continue
+            normalized_outcomes.append(
+                (
+                    item,
+                    _normalize_status(item.get("status"))
+                    or str(item.get("status") or "").strip().lower()
+                    or "unknown",
+                )
+            )
+        if not normalized_outcomes:
+            return
+
+        skipped = sum(1 for _, status in normalized_outcomes if status == "skipped")
+        failed = sum(1 for _, status in normalized_outcomes if status == "failed")
+        submitted = max(len(normalized_outcomes) - skipped - failed, 0)
+        filled = sum(1 for _, status in normalized_outcomes if status == "filled")
         cancelled = sum(
             1
-            for item in outcomes
-            if item.get("status") in {"canceled", "cancelled", "expired", "done_for_day"}
+            for _, status in normalized_outcomes
+            if status in {"canceled", "cancelled", "expired", "done_for_day"}
         )
+        skip_reason_counts: dict[str, int] = {}
+        for item, status in normalized_outcomes:
+            if status != "skipped":
+                continue
+            try:
+                reason = str(item.get("reason") or "").strip().lower()
+            except Exception:
+                reason = ""
+            if not reason:
+                reason = "unspecified"
+            skip_reason_counts[reason] = skip_reason_counts.get(reason, 0) + 1
+        skip_reason_counts = {key: skip_reason_counts[key] for key in sorted(skip_reason_counts)}
         pending_durations = [
             float(item.get("duration_s", 0.0))
-            for item in outcomes
-            if item.get("status")
+            for item, status in normalized_outcomes
+            if status
             in {"new", "pending_new", "accepted", "acknowledged", "submitted", "pending_replace"}
             or bool(item.get("ack_timed_out"))
         ]
         median_pending_s = (
             float(statistics.median(pending_durations)) if pending_durations else 0.0
         )
-        fill_ratio = float(filled) / float(submitted)
-        cancel_ratio = float(cancelled) / float(submitted)
+        fill_ratio = (float(filled) / float(submitted)) if submitted > 0 else 0.0
+        cancel_ratio = (float(cancelled) / float(submitted)) if submitted > 0 else 0.0
 
         now_dt = datetime.now(UTC)
         pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
@@ -2277,6 +2422,14 @@ class ExecutionEngine:
             if age_s is not None:
                 pending_open_ages.append(age_s)
         oldest_pending_s = max(pending_open_ages) if pending_open_ages else 0.0
+        broker_lock_active = self._is_broker_locked()
+        broker_lock_reason = getattr(self, "_broker_lock_reason", None) if broker_lock_active else None
+        broker_lock_ttl_s = 0.0
+        if broker_lock_active:
+            broker_lock_ttl_s = max(
+                float(getattr(self, "_broker_locked_until", 0.0) or 0.0) - monotonic_time(),
+                0.0,
+            )
 
         logger.info(
             "EXECUTION_KPI_SNAPSHOT",
@@ -2284,11 +2437,17 @@ class ExecutionEngine:
                 "submitted": submitted,
                 "filled": filled,
                 "cancelled": cancelled,
+                "failed": failed,
+                "skipped": skipped,
+                "skip_reason_counts": skip_reason_counts,
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
                 "median_pending_s": round(median_pending_s, 3),
                 "open_pending_count": len(pending_open_ages),
                 "oldest_pending_s": round(oldest_pending_s, 3),
+                "broker_lock_active": bool(broker_lock_active),
+                "broker_lock_reason": broker_lock_reason,
+                "broker_lock_ttl_s": round(broker_lock_ttl_s, 1),
                 "pending_new_actions": int(
                     max(getattr(self, "_pending_new_actions_this_cycle", 0), 0)
                 ),
@@ -2299,6 +2458,8 @@ class ExecutionEngine:
         if alerts_enabled is None:
             alerts_enabled = bool(_config_int("AI_TRADING_EXEC_KPI_ALERTS_ENABLED", 0))
         if not alerts_enabled:
+            return
+        if submitted <= 0:
             return
 
         min_fill_ratio = _config_float("AI_TRADING_KPI_MIN_FILL_RATIO", 0.25)
@@ -4012,17 +4173,45 @@ class ExecutionEngine:
                 # In pytest mode, skip eager init when initialization state is absent.
                 if not (pytest_mode and not has_is_initialized):
                     if not self._ensure_initialized():
+                        self._record_submit_failure(
+                            symbol=symbol,
+                            side=mapped_side,
+                            reason="initialization_failed",
+                            order_type=order_type_normalized,
+                            submit_started_at=submit_started_at,
+                        )
                         return None
             precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
 
         if not self._pre_execution_order_checks(precheck_order):
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="pre_execution_order_checks_failed",
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
             return None
 
         if not pytest_mode and not self._pre_execution_checks():
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="pre_execution_checks_failed",
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
             return None
         if not closing_position and self._should_suppress_duplicate_intent(symbol, mapped_side):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="duplicate_intent",
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
             return None
         if not hasattr(self, "_cycle_submitted_orders"):
             self._cycle_submitted_orders = 0
@@ -4049,6 +4238,14 @@ class ExecutionEngine:
                     else:
                         payload["phase"] = "runtime"
                         logger.warning("ORDER_PACING_CAP_HIT", extra=payload)
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="order_pacing_cap",
+                order_type=order_type_normalized,
+                detail="max_new_orders_per_cycle reached",
+                submit_started_at=submit_started_at,
+            )
             return None
         capacity_broker = self._capacity_broker(trading_client)
         account_snapshot = self._resolve_capacity_account_snapshot(
@@ -4365,6 +4562,13 @@ class ExecutionEngine:
                 )
             except Exception as exc:
                 logger.debug("ORDER_SKIPPED_LOG_FAILED", exc_info=exc)
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="primary_quote_required",
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
             return None
         slippage_basis: str | None = None
         if isinstance(annotations, Mapping):
@@ -4439,6 +4643,13 @@ class ExecutionEngine:
                         "provider": provider_for_log,
                         "nbbo_required": nbbo_gate_required,
                     },
+                )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=mapped_side,
+                    reason="realtime_nbbo_required",
+                    order_type=order_type_normalized,
+                    submit_started_at=submit_started_at,
                 )
                 return None
 
@@ -4566,6 +4777,14 @@ class ExecutionEngine:
                     "quality_reason": quality_reason or "degraded_feed",
                 },
             )
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="degraded_feed_block",
+                order_type=order_type_normalized,
+                detail=str(quality_reason or "degraded_feed"),
+                submit_started_at=submit_started_at,
+            )
             return None
 
         widen_applied = False
@@ -4633,6 +4852,13 @@ class ExecutionEngine:
                     "degraded": bool(degrade_active),
                     "mode": degraded_mode,
                 },
+            )
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason=str(gate_log_extra.get("reason") or "price_gate"),
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
             )
             return None
 
@@ -4703,6 +4929,13 @@ class ExecutionEngine:
                             "reason": "zero_capacity",
                         },
                     )
+                    self._skip_submit(
+                        symbol=symbol,
+                        side=mapped_side,
+                        reason="participation_zero_capacity",
+                        order_type=order_type_normalized,
+                        submit_started_at=submit_started_at,
+                    )
                     return None
 
                 participation_mode = (
@@ -4728,6 +4961,13 @@ class ExecutionEngine:
                                 "participation_rate": participation_rate,
                                 "reason": "cap_exceeded",
                             },
+                        )
+                        self._skip_submit(
+                            symbol=symbol,
+                            side=mapped_side,
+                            reason="participation_cap_exceeded",
+                            order_type=order_type_normalized,
+                            submit_started_at=submit_started_at,
                         )
                         return None
                     logger.info(
@@ -4757,6 +4997,13 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason=str(capacity.reason or "capacity_preflight_blocked"),
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
             return None
         if capacity.suggested_qty != quantity:
             quantity = capacity.suggested_qty
@@ -4782,6 +5029,19 @@ class ExecutionEngine:
             side=mapped_side,
             order_type=order_type_normalized,
         ):
+            lock_reason = str(getattr(self, "_broker_lock_reason", None) or "broker_lock")
+            lock_remaining_s = max(
+                float(getattr(self, "_broker_locked_until", 0.0) or 0.0) - monotonic_time(),
+                0.0,
+            )
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason=lock_reason,
+                order_type=order_type_normalized,
+                context={"retry_after": round(lock_remaining_s, 1)},
+                submit_started_at=submit_started_at,
+            )
             return None
 
         pre_positions_map: dict[str, float] = {}
@@ -4930,6 +5190,13 @@ class ExecutionEngine:
                         "quality_reason": quality_reason or "fallback_price_unavailable",
                     },
                 )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=mapped_side,
+                    reason="fallback_price_invalid",
+                    order_type=order_type_normalized,
+                    submit_started_at=submit_started_at,
+                )
                 return None
             resolved_limit_price = fallback_value
             price_for_limit = fallback_value
@@ -5040,6 +5307,14 @@ class ExecutionEngine:
                         md2.get("detail"),
                         extra=base_extra | {"detail": md2.get("detail")},
                     )
+                    self._skip_submit(
+                        symbol=symbol,
+                        side=mapped_side,
+                        reason="nonretryable_retry_failed",
+                        order_type=order_type_submitted,
+                        detail=str(md2.get("detail") or "retry_failed"),
+                        submit_started_at=submit_started_at,
+                    )
                     return None
             else:
                 logger.info(
@@ -5051,6 +5326,14 @@ class ExecutionEngine:
                     detail_val,
                     extra=base_extra | {"detail": detail_val},
                 )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=mapped_side,
+                    reason="nonretryable_rejected",
+                    order_type=order_type_submitted,
+                    detail=str(detail_val or exc),
+                    submit_started_at=submit_started_at,
+                )
                 return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             status_code = getattr(exc, "status_code", None)
@@ -5061,15 +5344,30 @@ class ExecutionEngine:
                     status_code = 503
                 else:
                     status_code = 500
+            status_code_int: int | None = None
+            if status_code is not None:
+                try:
+                    status_code_int = int(status_code)
+                except (TypeError, ValueError):
+                    status_code_int = None
             logger.error(
                 "EXEC_ORDER_SUBMIT_FAILED",
                 extra={
                     "symbol": symbol,
                     "side": mapped_side,
                     "type": order_type_normalized,
-                    "status_code": status_code,
+                    "status_code": status_code_int if status_code_int is not None else status_code,
                     "detail": str(exc) or "order execution failed",
                 },
+            )
+            self._record_submit_failure(
+                symbol=symbol,
+                side=mapped_side,
+                reason="submit_exception",
+                order_type=order_type_normalized,
+                status_code=status_code_int,
+                detail=str(exc) or "order execution failed",
+                submit_started_at=submit_started_at,
             )
             return None
         finally:
@@ -5077,6 +5375,21 @@ class ExecutionEngine:
                 delattr(self, "_pending_order_kwargs")
 
         order_type_normalized = order_type_submitted
+        if isinstance(order, Mapping):
+            order_status = _normalize_status(order.get("status"))
+            if order_status == "skipped":
+                reason_token = str(order.get("reason") or "skipped").strip().lower() or "skipped"
+                raw_context = order.get("context")
+                skip_context = raw_context if isinstance(raw_context, Mapping) else None
+                self._skip_submit(
+                    symbol=symbol,
+                    side=mapped_side,
+                    reason=reason_token,
+                    order_type=order_type_normalized,
+                    context=skip_context,
+                    submit_started_at=submit_started_at,
+                )
+                return None
         if order is None:
             logger.warning(
                 "EXEC_ORDER_NO_RESULT",
@@ -5085,6 +5398,13 @@ class ExecutionEngine:
                     "side": mapped_side,
                     "type": order_type_normalized,
                 },
+            )
+            self._record_submit_failure(
+                symbol=symbol,
+                side=mapped_side,
+                reason="submit_no_result",
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
             )
             return None
 
@@ -5340,6 +5660,14 @@ class ExecutionEngine:
                     "status": status,
                 },
             )
+            self._record_submit_failure(
+                symbol=symbol,
+                side=mapped_side,
+                reason="invalid_order_response",
+                order_type=order_type_normalized,
+                detail=str(status),
+                submit_started_at=submit_started_at,
+            )
             return None
 
         order_id_display = order_id or client_order_id
@@ -5559,19 +5887,13 @@ class ExecutionEngine:
             or str(status or execution_result.status or "").strip().lower()
             or "unknown"
         )
-        outcomes = getattr(self, "_cycle_order_outcomes", None)
-        if not isinstance(outcomes, list):
-            outcomes = []
-        outcomes.append(
-            {
-                "symbol": symbol,
-                "side": mapped_side,
-                "status": outcome_status,
-                "ack_timed_out": bool(ack_timed_out),
-                "duration_s": max(time.monotonic() - submit_started_at, 0.0),
-            }
+        self._record_cycle_order_outcome(
+            symbol=symbol,
+            side=mapped_side,
+            status=outcome_status,
+            submit_started_at=submit_started_at,
+            ack_timed_out=bool(ack_timed_out),
         )
-        self._cycle_order_outcomes = outcomes
 
         logger.info(
             "EXEC_ENGINE_EXECUTE_ORDER",

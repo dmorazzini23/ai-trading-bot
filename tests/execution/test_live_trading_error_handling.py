@@ -434,3 +434,37 @@ def test_submit_market_order_pdt_lockout_logs(caplog):
     detail_message = detail_records[0].message
     for key in ("pattern_day_trader", "daytrade_limit", "daytrade_count", "active", "limit", "count"):
         assert key in detail_message
+
+
+def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory, caplog):
+    engine = engine_factory()
+    engine._cycle_order_outcomes = []
+    engine._should_suppress_duplicate_intent = lambda *_args, **_kwargs: True
+
+    caplog.set_level("INFO", logger=lt.logger.name)
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is None
+    assert engine._cycle_order_outcomes
+    assert engine._cycle_order_outcomes[-1]["status"] == "skipped"
+    assert engine._cycle_order_outcomes[-1]["reason"] == "duplicate_intent"
+    assert any(record.msg == "ORDER_SUBMIT_SKIPPED" for record in caplog.records)
+
+
+def test_execute_order_records_failure_outcome_on_submit_exception(engine_factory, caplog):
+    engine = engine_factory()
+    engine._cycle_order_outcomes = []
+
+    def _raise_submit_exception(*_args, **_kwargs):
+        raise lt.APIError("order submit failed")
+
+    engine.submit_market_order = _raise_submit_exception
+
+    caplog.set_level("ERROR", logger=lt.logger.name)
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is None
+    assert engine._cycle_order_outcomes
+    assert engine._cycle_order_outcomes[-1]["status"] == "failed"
+    assert engine._cycle_order_outcomes[-1]["reason"] == "submit_exception"
+    assert any(record.msg == "ORDER_SUBMIT_FAILED" for record in caplog.records)
