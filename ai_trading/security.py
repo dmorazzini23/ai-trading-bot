@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 from ai_trading.logging import get_logger
+from ai_trading.config.management import get_env
 import os
 import secrets
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ try:
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     _CRYPTOGRAPHY_AVAILABLE = True
-except (ValueError, TypeError):
+except (ImportError, ValueError, TypeError):
     _CRYPTOGRAPHY_AVAILABLE = False
 
     class Fernet:
@@ -38,6 +39,14 @@ except (ValueError, TypeError):
             return token
     hashes = PBKDF2HMAC = None
 logger = get_logger(__name__)
+
+
+def _is_production_mode() -> bool:
+    """Return ``True`` when runtime mode requires fail-closed crypto behavior."""
+
+    execution_mode = str(get_env("EXECUTION_MODE", "sim")).strip().lower()
+    app_env = str(get_env("APP_ENV", "")).strip().lower()
+    return execution_mode == "live" or app_env in {"prod", "production"}
 
 class SecurityLevel(Enum):
     """Security event severity levels."""
@@ -77,8 +86,15 @@ class SecureConfig:
 
     def __init__(self, master_key: str | None=None):
         self.logger = get_logger(__name__)
+        self._production_mode = _is_production_mode()
+        if self._production_mode and not _CRYPTOGRAPHY_AVAILABLE:
+            raise RuntimeError(
+                "Cryptography library is required when running in production mode."
+            )
         self._master_key = master_key or self._generate_master_key()
         self._fernet = self._init_encryption() if _CRYPTOGRAPHY_AVAILABLE else None
+        if self._production_mode and self._fernet is None:
+            raise RuntimeError("Encryption initialization failed in production mode.")
         self._config_cache: dict[str, Any] = {}
         self._sensitive_keys = {'ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'WEBHOOK_SECRET', 'NEWS_API_KEY', 'FINNHUB_API_KEY', 'FUNDAMENTAL_API_KEY', 'IEX_API_TOKEN', 'DATABASE_URL', 'REDIS_URL'}
         self.audit_logger = self._setup_audit_logging()
@@ -86,9 +102,13 @@ class SecureConfig:
 
     def _generate_master_key(self) -> str:
         """Generate a secure master key for encryption."""
-        env_key = os.getenv('MASTER_ENCRYPTION_KEY')
+        env_key = str(get_env('MASTER_ENCRYPTION_KEY', '') or '').strip()
         if env_key:
             return env_key
+        if self._production_mode:
+            raise RuntimeError(
+                'MASTER_ENCRYPTION_KEY is required when running in production mode'
+            )
         key = secrets.token_urlsafe(32)
         self.logger.warning('Generated new master encryption key - save MASTER_ENCRYPTION_KEY to environment')
         return key
@@ -96,7 +116,10 @@ class SecureConfig:
     def _init_encryption(self) -> Fernet | None:
         """Initialize encryption cipher."""
         if not _CRYPTOGRAPHY_AVAILABLE:
-            self.logger.warning('Cryptography library not available - encryption disabled')
+            message = 'Cryptography library not available - encryption disabled'
+            if self._production_mode:
+                raise RuntimeError(message)
+            self.logger.warning(message)
             return None
         try:
             master_key_bytes = self._master_key.encode()
@@ -106,6 +129,8 @@ class SecureConfig:
             return Fernet(key)
         except (ValueError, TypeError) as e:
             self.logger.error(f'Failed to initialize encryption: {e}')
+            if self._production_mode:
+                raise RuntimeError('Failed to initialize encryption in production mode') from e
             return None
 
     def _setup_audit_logging(self) -> logging.Logger:
@@ -124,18 +149,28 @@ class SecureConfig:
 
     def encrypt_value(self, value: str) -> str:
         """Encrypt a sensitive value."""
-        if not self._fernet or not value:
+        if not value:
+            return value
+        if not self._fernet:
+            if self._production_mode:
+                raise RuntimeError('Encryption unavailable in production mode')
             return value
         try:
             encrypted = self._fernet.encrypt(value.encode())
             return base64.urlsafe_b64encode(encrypted).decode()
         except (ValueError, TypeError) as e:
             self.logger.error(f'Encryption failed: {e}')
+            if self._production_mode:
+                raise RuntimeError('Encryption failed in production mode') from e
             return value
 
     def decrypt_value(self, encrypted_value: str) -> str:
         """Decrypt a sensitive value."""
-        if not self._fernet or not encrypted_value:
+        if not encrypted_value:
+            return encrypted_value
+        if not self._fernet:
+            if self._production_mode:
+                raise RuntimeError('Decryption unavailable in production mode')
             return encrypted_value
         try:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_value.encode())
@@ -143,6 +178,8 @@ class SecureConfig:
             return decrypted.decode()
         except (ValueError, TypeError) as e:
             self.logger.error(f'Decryption failed: {e}')
+            if self._production_mode:
+                raise RuntimeError('Decryption failed in production mode') from e
             return encrypted_value
 
     def get_secure_config(self, key: str, default: Any=None) -> Any:

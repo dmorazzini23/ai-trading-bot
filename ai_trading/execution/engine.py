@@ -33,11 +33,30 @@ from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, register_reset_hook
 from ai_trading.config.management import get_env
 from ai_trading.oms.intent_store import IntentStore
+from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES
 from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
+_BROKER_TERMINAL_STATUS_MAP: dict[str, str] = {
+    "DONE_FOR_DAY": "EXPIRED",
+    "REPLACED": "CLOSED",
+    "STOPPED": "CLOSED",
+    "STOPPED_OUT": "CLOSED",
+}
+_BROKER_TERMINAL_EVENT_TOKENS = frozenset(
+    {
+        "COMPLETED",
+        "CANCELLED",
+        "CANCELED",
+        "EXPIRED",
+        "DONE_FOR_DAY",
+        "REPLACED",
+        "STOPPED",
+        "STOPPED_OUT",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -1160,17 +1179,21 @@ class OrderManager:
             else ""
         )
         if not status_token:
+            status_token = str(getattr(order, "status", "")).strip().upper()
+        if not status_token:
             status_token = str(event_type).strip().upper()
-        terminal_events = {"COMPLETED", "CANCELLED", "CANCELED", "EXPIRED"}
+        final_status = _BROKER_TERMINAL_STATUS_MAP.get(status_token, status_token)
         is_terminal = (
             bool(getattr(normalized_status, "is_terminal", False))
-            or status_token in {"FILLED", "REJECTED", "CANCELED", "CANCELLED", "EXPIRED"}
-            or str(event_type).strip().upper() in terminal_events
+            or status_token in _BROKER_TERMINAL_EVENT_TOKENS
+            or str(event_type).strip().upper() in _BROKER_TERMINAL_EVENT_TOKENS
+            or final_status in TERMINAL_INTENT_STATUSES
         )
         if not is_terminal:
             return
 
-        final_status = status_token or "CLOSED"
+        if final_status not in TERMINAL_INTENT_STATUSES:
+            final_status = "CLOSED"
         self._intent_store.close_intent(intent_id, final_status=final_status)
         self._intent_by_order_id.pop(order_id, None)
         self._intent_reported_fill_qty.pop(order_id, None)
