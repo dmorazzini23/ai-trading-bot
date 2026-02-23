@@ -7,6 +7,8 @@ and real-time execution monitoring with institutional controls.
 
 from __future__ import annotations
 from ai_trading.logging import get_logger
+import builtins
+import hashlib
 import math
 import os
 import threading
@@ -227,6 +229,25 @@ def _env_bool(key: str, default: bool = False) -> bool:
     raw_default = "1" if default else "0"
     raw = get_env(key, raw_default)
     return _as_bool(raw)
+
+
+def _deterministic_fill_jitter_ratio(*parts: Any) -> float:
+    """Return stable fill jitter ratio in +/- 50 bps range for simulation paths."""
+
+    # Preserve deterministic test controls that monkeypatch ``engine.hash`` without
+    # using builtin ``hash()`` in production paths.
+    patched_hash = globals().get("hash")
+    if callable(patched_hash) and patched_hash is not builtins.hash:
+        try:
+            bucket = int(patched_hash("|".join(str(part) for part in parts))) % 100
+        except Exception:
+            bucket = 0
+        return (bucket - 50) / 10000.0
+
+    token = "|".join(str(part) for part in parts).encode("utf-8")
+    digest = hashlib.sha256(token).digest()
+    bucket = int.from_bytes(digest[:2], "big") % 100
+    return (bucket - 50) / 10000.0
 
 
 class ExecutionAlgorithm(Enum):
@@ -2590,7 +2611,12 @@ class ExecutionEngine:
                 expected = float(base_price)
             if not math.isfinite(expected) or expected <= 0:
                 expected = float(base_price or 1.0)
-            predicted_fill = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
+            jitter_ratio = _deterministic_fill_jitter_ratio(
+                order.id,
+                order.symbol,
+                getattr(order.side, "value", order.side),
+            )
+            predicted_fill = base_price * (1 + jitter_ratio)
             if expected:
                 predicted_slippage_bps = ((predicted_fill - expected) / expected) * 10000
             else:
@@ -2687,7 +2713,7 @@ class ExecutionEngine:
             remaining = order.quantity
             while remaining > 0 and order.status != OrderStatus.CANCELED:
                 fill_quantity = min(remaining, max(1, remaining // 3))
-                fill_price = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
+                fill_price = base_price * (1 + jitter_ratio)
                 order.add_fill(fill_quantity, fill_price)
                 self._update_position(order.symbol, order.side, fill_quantity)
                 remaining -= fill_quantity

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from ai_trading.core.enums import OrderSide, OrderType
 from ai_trading.execution.engine import Order, OrderManager
 from ai_trading.oms.intent_store import IntentStore
+
+pytest.importorskip("sqlalchemy")
 
 
 def test_restart_like_pending_intent_submits_once(tmp_path) -> None:
@@ -74,6 +78,8 @@ def test_reconcile_marks_missing_submitted_intent_failed(tmp_path) -> None:
     assert refreshed is not None
     assert refreshed.status == "FAILED"
     assert refreshed.last_error == "reconcile_missing_broker_order"
+    open_intent_ids = {record.intent_id for record in store.get_open_intents()}
+    assert intent.intent_id not in open_intent_ids
 
 
 def test_reconcile_links_broker_id_from_client_order_id(tmp_path) -> None:

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from ai_trading.core.enums import OrderSide
 from ai_trading.execution.idempotency import OrderIdempotencyCache
 from ai_trading.oms.intent_store import IntentStore
+
+pytest.importorskip("sqlalchemy")
 
 
 def test_intent_store_enforces_unique_idempotency_key(tmp_path) -> None:
@@ -56,4 +60,3 @@ def test_idempotency_cache_uses_intent_store_for_restart_safe_dedup(tmp_path) ->
     persisted = store.get_intent_by_key(key.hash())
     assert persisted is not None
     assert persisted.broker_order_id == "order-1"
-

@@ -12,6 +12,11 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
+from ai_trading.oms.statuses import (
+    TERMINAL_INTENT_STATUSES,
+    is_terminal_intent_status,
+    normalize_intent_status,
+)
 
 logger = get_logger(__name__)
 
@@ -48,9 +53,7 @@ except Exception as exc:  # pragma: no cover - exercised in environments missing
     IntegrityError = Exception  # type: ignore[assignment]
 
 
-_TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"FILLED", "CANCELED", "CANCELLED", "REJECTED", "CLOSED"}
-)
+_TERMINAL_STATUSES: frozenset[str] = TERMINAL_INTENT_STATUSES
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,7 +525,9 @@ class IntentStore:
         """Close intent with terminal status."""
 
         assert _INTENTS_TABLE is not None
-        normalized = str(final_status).strip().upper() or "CLOSED"
+        normalized = normalize_intent_status(final_status, default="CLOSED")
+        if not is_terminal_intent_status(normalized):
+            raise ValueError(f"close_intent requires terminal status, got: {normalized}")
         now = self._utcnow_iso()
         stmt = (
             update(_INTENTS_TABLE)

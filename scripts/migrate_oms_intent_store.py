@@ -10,11 +10,10 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.oms.intent_store import IntentStore
+from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES, normalize_intent_status
 
 
-_TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"FILLED", "CANCELED", "CANCELLED", "REJECTED", "CLOSED"}
-)
+_TERMINAL_STATUSES: frozenset[str] = TERMINAL_INTENT_STATUSES
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -113,7 +112,10 @@ def _migrate(
     old_to_new_intent_id: dict[str, str] = {}
     for row in intents:
         old_intent_id = str(row.get("intent_id", ""))
-        status = str(row.get("status", "PENDING_SUBMIT") or "PENDING_SUBMIT").upper()
+        status = normalize_intent_status(
+            str(row.get("status", "PENDING_SUBMIT") or "PENDING_SUBMIT"),
+            default="PENDING_SUBMIT",
+        )
         record, created = target.create_intent(
             intent_id=old_intent_id,
             idempotency_key=str(row.get("idempotency_key", old_intent_id)),
