@@ -26456,9 +26456,25 @@ def run_multi_strategy(ctx) -> None:
                     state_mat = _np.stack(states).astype(_np.float32)
                     rl_sigs = RL_AGENT.predict(state_mat, symbols=rl_symbols)
                     if rl_sigs:
-                        signals_by_strategy["rl"] = (
-                            rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
+                        rl_signal_list = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
+                        signals_by_strategy["rl"] = rl_signal_list
+                        logger.info(
+                            "RL_SIGNALS_EMITTED",
+                            extra={
+                                "signals": len(rl_signal_list),
+                                "symbols": rl_symbols,
+                            },
                         )
+                    else:
+                        logger.debug(
+                            "RL_SIGNALS_EMPTY",
+                            extra={"symbols": rl_symbols},
+                        )
+                else:
+                    logger.debug(
+                        "RL_SIGNALS_SKIPPED",
+                        extra={"reason": "no_state_vectors", "symbols": all_symbols},
+                    )
         except (
             FileNotFoundError,
             PermissionError,

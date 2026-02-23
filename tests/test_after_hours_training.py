@@ -341,3 +341,135 @@ def test_cost_floor_estimate_falls_back_to_baseline_when_samples_low(
 
     value = after_hours._estimate_cost_floor_bps(records)
     assert value == pytest.approx(12.0, abs=0.001)
+
+
+def test_maybe_train_rl_overlay_passes_price_series_and_registry_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_trading.rl_trading.train as train_mod
+
+    n_rows = 140
+    dataset = pd.DataFrame(
+        {
+            "rsi": np.linspace(45.0, 65.0, n_rows),
+            "macd": np.linspace(-0.2, 0.3, n_rows),
+            "atr": np.linspace(1.0, 2.5, n_rows),
+            "vwap": np.linspace(99.0, 105.0, n_rows),
+            "sma_50": np.linspace(98.0, 104.0, n_rows),
+            "sma_200": np.linspace(95.0, 101.0, n_rows),
+            "close": np.linspace(100.0, 110.0, n_rows),
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class DummyTrainer:
+        def __init__(
+            self,
+            *,
+            algorithm: str,
+            total_timesteps: int,
+            eval_freq: int,
+            early_stopping_patience: int,
+            seed: int,
+        ) -> None:
+            captured["init"] = {
+                "algorithm": algorithm,
+                "total_timesteps": total_timesteps,
+                "eval_freq": eval_freq,
+                "early_stopping_patience": early_stopping_patience,
+                "seed": seed,
+            }
+
+        def train(
+            self,
+            *,
+            data: np.ndarray,
+            env_params: dict[str, object],
+            save_path: str,
+        ) -> dict[str, object]:
+            captured["train_data_shape"] = tuple(np.asarray(data).shape)
+            captured["env_params"] = dict(env_params)
+            captured["save_path"] = save_path
+            return {
+                "final_evaluation": {"mean_reward": 1.25},
+                "model_id": "rl-model-123",
+                "governance_status": "production",
+            }
+
+    def fake_train_multi_seed(
+        *,
+        data: np.ndarray,
+        seeds: list[int],
+        algorithm: str,
+        total_timesteps: int,
+        eval_freq: int,
+        early_stopping_patience: int,
+        env_params: dict[str, object],
+        model_params: dict[str, object] | None,
+        save_root: str | None,
+    ) -> dict[str, object]:
+        captured["multi_seed"] = {
+            "data_shape": tuple(np.asarray(data).shape),
+            "seeds": list(seeds),
+            "algorithm": algorithm,
+            "total_timesteps": total_timesteps,
+            "eval_freq": eval_freq,
+            "early_stopping_patience": early_stopping_patience,
+            "env_params": dict(env_params),
+            "model_params": model_params,
+            "save_root": save_root,
+        }
+        return {"run_count": len(seeds), "seeds": list(seeds)}
+
+    monkeypatch.setattr(train_mod, "RLTrainer", DummyTrainer)
+    monkeypatch.setattr(train_mod, "train_multi_seed", fake_train_multi_seed)
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_TIMESTEPS", "2500")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_ALGO", "PPO")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_DIR", str(tmp_path / "rl"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_MULTI_SEED_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_MULTI_SEEDS", "7,11,7,invalid")
+    monkeypatch.setenv("AI_TRADING_RL_MIN_MEAN_REWARD", "0.0")
+    monkeypatch.setenv("AI_TRADING_RL_REQUIRE_BASELINE_EXPECTANCY_BPS", "1.0")
+    monkeypatch.setenv("AI_TRADING_SEED", "42")
+
+    result = after_hours._maybe_train_rl_overlay(
+        dataset,
+        now_utc=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+        baseline_expectancy_bps=2.2,
+        dataset_fingerprint="dataset-fp-001",
+        feature_hash="feature-hash-001",
+        governance_status="production",
+    )
+
+    assert result["enabled"] is True
+    assert result["trained"] is True
+    assert result["recommend_use_rl_agent"] is True
+    assert result["model_id"] == "rl-model-123"
+    assert result["governance_status"] == "production"
+    assert result["multi_seed_summary"] == {"run_count": 2, "seeds": [7, 11]}
+
+    env_params = captured["env_params"]
+    assert isinstance(env_params, dict)
+    assert env_params["dataset_fingerprint"] == "dataset-fp-001"
+    assert env_params["feature_spec_hash"] == "feature-hash-001"
+    assert env_params["registry_strategy"] == "rl_overlay"
+    assert env_params["registry_model_type"] == "ppo"
+    assert env_params["registry_requested_status"] == "production"
+    np.testing.assert_allclose(
+        np.asarray(env_params["price_series"], dtype=float),
+        dataset["close"].to_numpy(dtype=float),
+    )
+
+    multi_seed = captured["multi_seed"]
+    assert isinstance(multi_seed, dict)
+    assert multi_seed["seeds"] == [7, 11]
+    multi_env_params = multi_seed["env_params"]
+    assert isinstance(multi_env_params, dict)
+    assert multi_env_params["dataset_fingerprint"] == "dataset-fp-001"
+    assert multi_env_params["feature_spec_hash"] == "feature-hash-001"
+    np.testing.assert_allclose(
+        np.asarray(multi_env_params["price_series"], dtype=float),
+        dataset["close"].to_numpy(dtype=float),
+    )

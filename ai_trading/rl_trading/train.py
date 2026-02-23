@@ -1,12 +1,13 @@
 """Enhanced RL training with reward shaping and evaluation callbacks."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 try:  # optional dependency
     import numpy as np
@@ -22,6 +23,7 @@ def _require_numpy(context: str) -> None:
             "NumPy is required for "
             f"{context}. Install the 'numpy' package or the 'ai-trading-bot[rl]' extras."
         )
+from ai_trading.config.management import get_env
 from ai_trading.logging import logger
 from . import _load_rl_stack, is_rl_available
 
@@ -256,6 +258,61 @@ def _ensure_rl() -> bool:
     return True
 
 
+def _reset_obs(env: Any) -> Any:
+    """Reset an environment and return the observation only."""
+
+    payload = env.reset()
+    if isinstance(payload, tuple):
+        return payload[0]
+    return payload
+
+
+def _step_env(env: Any, action: Any) -> tuple[Any, float, bool, bool, dict[str, Any]]:
+    """Execute one environment step supporting gym and gymnasium signatures."""
+
+    payload = env.step(action)
+    if not isinstance(payload, tuple):
+        raise ValueError("environment step returned non-tuple payload")
+    if len(payload) == 5:
+        obs, reward, terminated, truncated, info = payload
+    elif len(payload) == 4:
+        obs, reward, done, info = payload
+        terminated = bool(done)
+        truncated = False
+    else:
+        raise ValueError(f"unexpected environment step payload size: {len(payload)}")
+    if not isinstance(info, dict):
+        info = {}
+    return obs, float(reward), bool(terminated), bool(truncated), info
+
+
+def _normalise_tags(raw_tags: Sequence[str] | None) -> list[str]:
+    if not raw_tags:
+        return []
+    tags: list[str] = []
+    for item in raw_tags:
+        token = str(item).strip()
+        if token and token not in tags:
+            tags.append(token)
+    return tags
+
+
+def _dataset_fingerprint_from_matrix(
+    matrix: np.ndarray,
+    *,
+    algorithm: str,
+    seed: int,
+) -> str:
+    _require_numpy("dataset fingerprint")
+    payload = {
+        "shape": list(matrix.shape),
+        "algorithm": str(algorithm).upper(),
+        "seed": int(seed),
+        "sha_data": hashlib.sha256(matrix.tobytes()).hexdigest(),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 class EarlyStoppingCallback(BaseCallback):
     """
     Early stopping callback for RL training.
@@ -347,26 +404,39 @@ class DetailedEvalCallback(BaseCallback):
     def _collect_detailed_metrics(self) -> dict[str, float]:
         """Collect detailed performance metrics."""
         try:
-            obs = self.eval_env.reset()
+            obs = _reset_obs(self.eval_env)
             total_reward = 0
             total_turnover = 0
             total_drawdown = 0
             total_variance = 0
+            total_constraint_violations = 0
             episode_length = 0
             done = False
             while not done:
                 action, _ = self.model.predict(obs, deterministic=self.deterministic)
-                obs, reward, done, info = self.eval_env.step(action)
+                obs, reward, terminated, truncated, info = _step_env(self.eval_env, action)
                 total_reward += reward
                 episode_length += 1
                 if isinstance(info, dict):
                     total_turnover += info.get('turnover_penalty', 0)
                     total_drawdown += info.get('drawdown_penalty', 0)
                     total_variance += info.get('variance_penalty', 0)
+                    total_constraint_violations += len(info.get("constraint_violations", ()) or ())
+                done = terminated or truncated
             avg_turnover = total_turnover / episode_length if episode_length > 0 else 0
             avg_drawdown = total_drawdown / episode_length if episode_length > 0 else 0
             avg_variance = total_variance / episode_length if episode_length > 0 else 0
-            return {'avg_turnover_penalty': float(avg_turnover), 'avg_drawdown_penalty': float(avg_drawdown), 'avg_variance_penalty': float(avg_variance), 'sharpe_ratio': self._calculate_sharpe_ratio(), 'max_drawdown': float(total_drawdown) if total_drawdown > 0 else 0.0}
+            violation_rate = (
+                float(total_constraint_violations) / float(max(1, episode_length))
+            )
+            return {
+                'avg_turnover_penalty': float(avg_turnover),
+                'avg_drawdown_penalty': float(avg_drawdown),
+                'avg_variance_penalty': float(avg_variance),
+                'constraint_violation_rate': float(violation_rate),
+                'sharpe_ratio': self._calculate_sharpe_ratio(),
+                'max_drawdown': float(total_drawdown) if total_drawdown > 0 else 0.0,
+            }
         except (AttributeError, TypeError, ValueError) as e:  # model or env returned unexpected values
             logger.error(f'Error collecting detailed metrics: {e}')
             return {}
@@ -420,9 +490,111 @@ class RLTrainer:
         self.train_env = None
         self.eval_env = None
         self.state_builder = None
+        self._raw_data: np.ndarray | None = None
+        self._raw_prices: np.ndarray | None = None
+        self._artifact_context: dict[str, Any] = {}
         self.training_results = {}
         self.eval_callback = None
         logger.info(f'RLTrainer initialized with {algorithm} algorithm')
+
+    def _build_artifact_context(
+        self,
+        *,
+        data: np.ndarray,
+        prices: np.ndarray | None,
+        env_params: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        params = dict(env_params or {})
+        tags = _normalise_tags(params.pop("registry_tags", None))
+        dataset_fingerprint = str(params.pop("dataset_fingerprint", "") or "").strip()
+        strategy = str(params.pop("registry_strategy", "rl_overlay") or "rl_overlay").strip()
+        model_type = str(params.pop("registry_model_type", self.algorithm.lower()) or self.algorithm.lower()).strip()
+        requested_governance_status = str(
+            params.pop("registry_requested_status", "shadow") or "shadow"
+        ).strip().lower()
+        register_model = bool(params.pop("register_model", True))
+        feature_spec_hash = str(params.pop("feature_spec_hash", "") or "").strip()
+        if not dataset_fingerprint:
+            dataset_fingerprint = _dataset_fingerprint_from_matrix(
+                data,
+                algorithm=self.algorithm,
+                seed=self.seed,
+            )
+        if not feature_spec_hash:
+            feature_payload = {
+                "columns": int(data.shape[1]),
+                "state_builder": (
+                    self.state_builder.describe()
+                    if self.state_builder is not None and hasattr(self.state_builder, "describe")
+                    else {"schema": "raw"}
+                ),
+            }
+            feature_spec_hash = hashlib.sha256(
+                json.dumps(feature_payload, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+        return {
+            "dataset_fingerprint": dataset_fingerprint,
+            "feature_spec_hash": feature_spec_hash,
+            "strategy": strategy,
+            "model_type": model_type,
+            "register_model": register_model,
+            "tags": tags,
+            "requested_governance_status": requested_governance_status or "shadow",
+        }
+
+    def _resolve_governance_decision(self) -> tuple[str, dict[str, Any]]:
+        final_eval = self.training_results.get("final_evaluation", {})
+        if not isinstance(final_eval, Mapping):
+            final_eval = {}
+        mean_reward = float(final_eval.get("mean_reward", 0.0) or 0.0)
+        avg_net_return = float(final_eval.get("avg_episode_net_return", 0.0) or 0.0)
+        avg_max_drawdown = float(final_eval.get("avg_episode_max_drawdown", 0.0) or 0.0)
+        violation_rate = float(final_eval.get("constraint_violation_rate", 0.0) or 0.0)
+        termination_rate = float(final_eval.get("constraint_termination_rate", 0.0) or 0.0)
+
+        min_reward = float(get_env("AI_TRADING_RL_MIN_MEAN_REWARD", 0.0, cast=float))
+        min_net_return = float(get_env("AI_TRADING_RL_MIN_AVG_NET_RETURN", 0.0, cast=float))
+        max_drawdown = float(get_env("AI_TRADING_RL_MAX_EVAL_DRAWDOWN", 0.25, cast=float))
+        max_violation_rate = float(
+            get_env("AI_TRADING_RL_MAX_CONSTRAINT_VIOLATION_RATE", 0.0, cast=float)
+        )
+        max_termination_rate = float(
+            get_env("AI_TRADING_RL_MAX_CONSTRAINT_TERMINATION_RATE", 0.0, cast=float)
+        )
+
+        gates = {
+            "reward": mean_reward >= min_reward,
+            "net_return": avg_net_return >= min_net_return,
+            "drawdown": avg_max_drawdown <= max_drawdown,
+            "constraint_violations": violation_rate <= max_violation_rate,
+            "constraint_terminations": termination_rate <= max_termination_rate,
+        }
+        all_pass = all(gates.values())
+        requested = str(self._artifact_context.get("requested_governance_status", "shadow")).lower()
+        if requested == "production" and all_pass:
+            status = "production"
+        elif all_pass and bool(get_env("AI_TRADING_RL_AUTO_PROMOTE", False, cast=bool)):
+            status = "production"
+        else:
+            status = "shadow"
+        details = {
+            "gates": gates,
+            "thresholds": {
+                "min_reward": min_reward,
+                "min_net_return": min_net_return,
+                "max_drawdown": max_drawdown,
+                "max_violation_rate": max_violation_rate,
+                "max_termination_rate": max_termination_rate,
+            },
+            "metrics": {
+                "mean_reward": mean_reward,
+                "avg_net_return": avg_net_return,
+                "avg_max_drawdown": avg_max_drawdown,
+                "constraint_violation_rate": violation_rate,
+                "constraint_termination_rate": termination_rate,
+            },
+        }
+        return status, details
 
     def train(self, data: np.ndarray, env_params: dict[str, Any] | None=None, model_params: dict[str, Any] | None=None, save_path: str | None=None) -> dict[str, Any]:
         """
@@ -442,26 +614,43 @@ class RLTrainer:
             logger.warning('Stable-baselines3 not available - returning dummy results')
             return {'training_time': 0.0, 'final_evaluation': {'mean_reward': 0.0, 'std_reward': 0.0}, 'total_timesteps': 0, 'algorithm': self.algorithm}
         try:
+            env_params_local = dict(env_params or {})
+            model_params_local = dict(model_params or {})
             logger.info(f'Starting RL training with {len(data)} data points')
-            self._create_environments(data, env_params)
-            self._create_model(model_params)
+            self._create_environments(data, env_params_local)
+            self._create_model(model_params_local)
             callbacks = self._setup_callbacks(save_path)
             start_time = datetime.now(UTC)
             self.model.learn(total_timesteps=self.total_timesteps, callback=callbacks, progress_bar=True)
             end_time = datetime.now(UTC)
+            artifact_context = self._build_artifact_context(
+                data=self._raw_data if self._raw_data is not None else np.asarray(data, dtype=np.float32),
+                prices=self._raw_prices,
+                env_params=env_params_local,
+            )
+            self._artifact_context = artifact_context
+            state_builder_summary = (
+                self.state_builder.describe()
+                if self.state_builder is not None and hasattr(self.state_builder, "describe")
+                else {"enabled": False}
+            )
+            env_summary: dict[str, Any] = {}
+            for key, value in env_params_local.items():
+                if key == "price_series":
+                    env_summary["price_series"] = f"array[{len(np.asarray(value).reshape(-1))}]"
+                else:
+                    env_summary[str(key)] = value
             self.training_results = {
                 'algorithm': self.algorithm,
                 'total_timesteps': self.total_timesteps,
                 'training_time_seconds': (end_time - start_time).total_seconds(),
                 'seed': self.seed,
                 'final_evaluation': self._final_evaluation(),
-                'env_params': env_params or {},
-                'model_params': model_params or {},
-                'state_builder': (
-                    self.state_builder.describe()
-                    if self.state_builder is not None and hasattr(self.state_builder, "describe")
-                    else {"enabled": False}
-                ),
+                'env_params': env_summary,
+                'model_params': model_params_local,
+                'state_builder': state_builder_summary,
+                'dataset_fingerprint': artifact_context.get("dataset_fingerprint"),
+                'feature_spec_hash': artifact_context.get("feature_spec_hash"),
             }
             if save_path:
                 self._save_model_and_results(save_path)
@@ -481,6 +670,19 @@ class RLTrainer:
             if matrix.ndim != 2:
                 raise ValueError("RL training data must be a 2D matrix")
             env_params = dict(env_params or {})
+            price_series_raw = env_params.pop("price_series", None)
+            if price_series_raw is None:
+                prices = np.asarray(matrix[:, 0], dtype=np.float32).reshape(-1)
+            else:
+                prices = np.asarray(price_series_raw, dtype=np.float32).reshape(-1)
+            if prices.shape[0] != matrix.shape[0]:
+                raise ValueError(
+                    "price_series length must match RL training rows"
+                )
+            prices = np.clip(np.nan_to_num(prices, nan=0.0, posinf=0.0, neginf=0.0), 1e-06, None)
+
+            self._raw_data = matrix.copy()
+            self._raw_prices = prices.copy()
             window = max(int(env_params.get("window", 10)), 1)
             min_rows = max(2 * (window + 1), 20)
             if len(matrix) < min_rows:
@@ -492,6 +694,8 @@ class RLTrainer:
             split_idx = max(window + 1, min(split_idx, len(matrix) - (window + 1)))
             raw_train = matrix[:split_idx]
             raw_eval = matrix[split_idx:]
+            raw_train_prices = prices[:split_idx]
+            raw_eval_prices = prices[split_idx:]
             if len(raw_train) <= window or len(raw_eval) <= window:
                 raise ValueError("RL train/eval split is too small for configured window")
 
@@ -514,8 +718,6 @@ class RLTrainer:
                 train_data = raw_train
                 eval_data = raw_eval
 
-            train_prices = raw_train[:, 0]
-            eval_prices = raw_eval[:, 0]
             enhanced_env_params = {'transaction_cost': 0.001, 'slippage': 0.0005, 'half_spread': 0.0002, **env_params}
             algo_config = _resolve_algo_config(self.algorithm)
             if (
@@ -525,10 +727,10 @@ class RLTrainer:
                 enhanced_env_params["action_config"] = ActionSpaceConfig(action_type="continuous")
 
             def make_train_env():
-                return TradingEnv(train_data, price_series=train_prices, **enhanced_env_params)
+                return TradingEnv(train_data, price_series=raw_train_prices, **enhanced_env_params)
 
             def make_eval_env():
-                return TradingEnv(eval_data, price_series=eval_prices, **enhanced_env_params)
+                return TradingEnv(eval_data, price_series=raw_eval_prices, **enhanced_env_params)
             self.train_env = DummyVecEnv([make_train_env])
             self.eval_env = make_eval_env()
             logger.debug(
@@ -606,24 +808,63 @@ class RLTrainer:
             mean_reward, std_reward = evaluate_policy(self.model, self.eval_env, n_eval_episodes=10, deterministic=True)
             detailed_results = []
             for _ in range(10):
-                obs = self.eval_env.reset()
-                episode_reward = 0
-                episode_metrics = {'turnover': 0, 'drawdown': 0, 'variance': 0}
+                obs = _reset_obs(self.eval_env)
+                episode_reward = 0.0
+                episode_metrics = {
+                    'turnover': 0.0,
+                    'drawdown': 0.0,
+                    'variance': 0.0,
+                    'constraint_violations': 0.0,
+                    'constraint_terminations': 0.0,
+                    'net_return': 0.0,
+                    'max_drawdown': 0.0,
+                }
                 steps = 0
                 done = False
                 while not done:
                     action, _ = self.model.predict(obs, deterministic=True)
-                    obs, reward, done, info = self.eval_env.step(action)
+                    obs, reward, terminated, truncated, info = _step_env(self.eval_env, action)
                     episode_reward += reward
                     steps += 1
                     if isinstance(info, dict):
                         episode_metrics['turnover'] += info.get('turnover_penalty', 0)
                         episode_metrics['drawdown'] += info.get('drawdown_penalty', 0)
                         episode_metrics['variance'] += info.get('variance_penalty', 0)
+                        episode_metrics['constraint_violations'] += float(
+                            len(info.get('constraint_violations', ()) or ())
+                        )
+                        episode_metrics['constraint_terminations'] += 1.0 if info.get('constraint_terminated') else 0.0
+                        try:
+                            episode_metrics['max_drawdown'] = max(
+                                float(episode_metrics['max_drawdown']),
+                                float(info.get('drawdown', 0.0) or 0.0),
+                            )
+                        except (TypeError, ValueError):
+                            pass
+                        stats = info.get("episode_stats")
+                        if isinstance(stats, Mapping):
+                            try:
+                                episode_metrics['net_return'] = float(
+                                    stats.get('total_return', episode_metrics['net_return']) or episode_metrics['net_return']
+                                )
+                            except (TypeError, ValueError):
+                                pass
+                    done = terminated or truncated
                 for key in episode_metrics:
                     episode_metrics[key] = episode_metrics[key] / steps if steps > 0 else 0
                 detailed_results.append({'total_reward': episode_reward, **episode_metrics})
-            final_metrics = {'mean_reward': float(mean_reward), 'std_reward': float(std_reward), 'avg_turnover_penalty': float(np.mean([r['turnover'] for r in detailed_results])), 'avg_drawdown_penalty': float(np.mean([r['drawdown'] for r in detailed_results])), 'avg_variance_penalty': float(np.mean([r['variance'] for r in detailed_results])), 'reward_stability': float(1.0 / (1.0 + std_reward))}
+            final_metrics = {
+                'mean_reward': float(mean_reward),
+                'std_reward': float(std_reward),
+                'avg_turnover_penalty': float(np.mean([r['turnover'] for r in detailed_results])),
+                'avg_drawdown_penalty': float(np.mean([r['drawdown'] for r in detailed_results])),
+                'avg_variance_penalty': float(np.mean([r['variance'] for r in detailed_results])),
+                'avg_episode_net_return': float(np.mean([r['net_return'] for r in detailed_results])),
+                'avg_episode_max_drawdown': float(np.mean([r['max_drawdown'] for r in detailed_results])),
+                'constraint_violation_rate': float(np.mean([r['constraint_violations'] for r in detailed_results])),
+                'constraint_termination_rate': float(np.mean([r['constraint_terminations'] for r in detailed_results])),
+                'reward_stability': float(1.0 / (1.0 + std_reward)),
+            }
             return final_metrics
         except (AttributeError, TypeError, ValueError) as e:  # evaluation failed due to bad env or metrics
             logger.error(f'Error in final evaluation: {e}')
@@ -638,6 +879,7 @@ class RLTrainer:
             results_path = os.path.join(save_path, 'training_results.json')
             with open(results_path, 'w') as f:
                 json.dump(self.training_results, f, indent=2, default=str)
+            eval_path: str | None = None
             if self.eval_callback and hasattr(self.eval_callback, 'eval_results'):
                 eval_path = os.path.join(save_path, 'evaluation_results.json')
                 self.eval_callback.save_results(eval_path)
@@ -645,9 +887,142 @@ class RLTrainer:
             meta_path = os.path.join(save_path, 'meta.json')
             with open(meta_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
+
+            if bool(self._artifact_context.get("register_model", True)):
+                try:
+                    from ai_trading.model_registry import ModelRegistry
+
+                    registry = ModelRegistry()
+                    descriptor = {
+                        "artifact_kind": "sb3_zip",
+                        "artifact_path": str(model_path),
+                        "results_path": str(results_path),
+                        "evaluation_path": str(eval_path) if eval_path else "",
+                        "metadata_path": str(meta_path),
+                    }
+                    model_id = registry.register_model(
+                        descriptor,
+                        strategy=str(self._artifact_context.get("strategy", "rl_overlay")),
+                        model_type=str(self._artifact_context.get("model_type", self.algorithm.lower())),
+                        metadata={
+                            "algorithm": self.algorithm,
+                            "seed": self.seed,
+                            "total_timesteps": self.total_timesteps,
+                            "training_results": self.training_results,
+                            "dataset_fingerprint": self._artifact_context.get("dataset_fingerprint"),
+                            "feature_spec_hash": self._artifact_context.get("feature_spec_hash"),
+                            "state_builder": self.training_results.get("state_builder"),
+                            "paths": descriptor,
+                        },
+                        dataset_fingerprint=str(
+                            self._artifact_context.get("dataset_fingerprint", "")
+                        )
+                        or None,
+                        tags=_normalise_tags(
+                            list(self._artifact_context.get("tags", []))
+                            + ["rl", self.algorithm.lower()]
+                        ),
+                        activate=True,
+                    )
+                    governance_status, governance_extra = self._resolve_governance_decision()
+                    registry.update_governance_status(
+                        model_id,
+                        governance_status,
+                        extra=governance_extra,
+                    )
+                    self.training_results["model_id"] = model_id
+                    self.training_results["governance_status"] = governance_status
+                    with open(results_path, 'w') as f:
+                        json.dump(self.training_results, f, indent=2, default=str)
+                except (
+                    ImportError,
+                    AttributeError,
+                    TypeError,
+                    ValueError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                ) as exc:  # pragma: no cover - governance errors should not delete artifacts
+                    logger.warning("RL_MODEL_REGISTRY_UPDATE_FAILED: %s", exc)
+
             logger.info(f'Model and results saved to {save_path}')
         except (OSError, AttributeError, TypeError, ValueError) as e:  # file or serialization problems
             logger.error(f'Error saving model and results: {e}')
+
+
+def train_multi_seed(
+    data: np.ndarray,
+    *,
+    seeds: Sequence[int],
+    algorithm: str = "PPO",
+    total_timesteps: int = 100000,
+    eval_freq: int = 10000,
+    early_stopping_patience: int = 10,
+    env_params: Mapping[str, Any] | None = None,
+    model_params: Mapping[str, Any] | None = None,
+    save_root: str | None = None,
+) -> dict[str, Any]:
+    """Run RL training over multiple seeds and return aggregate robustness metrics."""
+
+    _require_numpy("train_multi_seed")
+    seeds_list = [int(seed) for seed in seeds]
+    if not seeds_list:
+        raise ValueError("train_multi_seed requires at least one seed")
+
+    runs: list[dict[str, Any]] = []
+    for seed in seeds_list:
+        trainer = RLTrainer(
+            algorithm=algorithm,
+            total_timesteps=total_timesteps,
+            eval_freq=eval_freq,
+            early_stopping_patience=early_stopping_patience,
+            seed=seed,
+        )
+        run_save_path = None
+        if save_root:
+            run_save_path = str(Path(save_root) / f"seed_{seed}")
+        result = trainer.train(
+            data=np.asarray(data, dtype=np.float32),
+            env_params=dict(env_params or {}),
+            model_params=dict(model_params or {}),
+            save_path=run_save_path,
+        )
+        final_eval = result.get("final_evaluation", {}) if isinstance(result, Mapping) else {}
+        runs.append(
+            {
+                "seed": seed,
+                "mean_reward": float(final_eval.get("mean_reward", 0.0) or 0.0),
+                "avg_episode_net_return": float(
+                    final_eval.get("avg_episode_net_return", 0.0) or 0.0
+                ),
+                "constraint_violation_rate": float(
+                    final_eval.get("constraint_violation_rate", 0.0) or 0.0
+                ),
+                "result": result,
+            }
+        )
+
+    reward_values = np.asarray([run["mean_reward"] for run in runs], dtype=np.float64)
+    net_return_values = np.asarray(
+        [run["avg_episode_net_return"] for run in runs], dtype=np.float64
+    )
+    violation_values = np.asarray(
+        [run["constraint_violation_rate"] for run in runs], dtype=np.float64
+    )
+    summary = {
+        "algorithm": algorithm,
+        "seeds": seeds_list,
+        "run_count": len(runs),
+        "mean_reward_mean": float(np.mean(reward_values)),
+        "mean_reward_median": float(np.median(reward_values)),
+        "mean_reward_min": float(np.min(reward_values)),
+        "mean_reward_max": float(np.max(reward_values)),
+        "avg_episode_net_return_mean": float(np.mean(net_return_values)),
+        "avg_episode_net_return_median": float(np.median(net_return_values)),
+        "constraint_violation_rate_mean": float(np.mean(violation_values)),
+        "runs": runs,
+    }
+    return summary
 
 __all__ = [
     "RLAlgoConfig",
@@ -655,6 +1030,7 @@ __all__ = [
     "Model",
     "train",
     "RLTrainer",
+    "train_multi_seed",
     "train_rl_model_cli",
 ]
 

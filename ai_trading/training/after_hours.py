@@ -1032,12 +1032,15 @@ def _maybe_train_rl_overlay(
     *,
     now_utc: datetime,
     baseline_expectancy_bps: float,
+    dataset_fingerprint: str | None = None,
+    feature_hash: str | None = None,
+    governance_status: str = "shadow",
 ) -> dict[str, Any]:
     enabled = bool(get_env("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", False, cast=bool))
     if not enabled:
         return {"enabled": False, "trained": False, "recommend_use_rl_agent": False}
     try:
-        from ai_trading.rl_trading.train import RLTrainer
+        from ai_trading.rl_trading.train import RLTrainer, train_multi_seed
     except Exception as exc:
         return {
             "enabled": True,
@@ -1046,6 +1049,11 @@ def _maybe_train_rl_overlay(
             "error": str(exc),
         }
     data = dataset.loc[:, FEATURE_COLUMNS].astype(float).to_numpy()
+    close_series = dataset.get("close")
+    if close_series is not None:
+        close_prices = close_series.astype(float).to_numpy()
+    else:
+        close_prices = data[:, 0]
     if data.shape[0] < 120:
         return {
             "enabled": True,
@@ -1057,6 +1065,8 @@ def _maybe_train_rl_overlay(
     algorithm = str(get_env("AI_TRADING_AFTER_HOURS_RL_ALGO", "PPO") or "PPO").upper()
     out_dir = Path(str(get_env("AI_TRADING_AFTER_HOURS_RL_DIR", "models/after_hours_rl")))
     run_dir = out_dir / now_utc.strftime("%Y%m%d_%H%M%S")
+    tags = ["after_hours", "rl_overlay", "cost_aware", "walk_forward"]
+    multi_seed_summary: dict[str, Any] | None = None
     trainer = RLTrainer(
         algorithm=algorithm,
         total_timesteps=max(2000, timesteps),
@@ -1064,15 +1074,57 @@ def _maybe_train_rl_overlay(
         early_stopping_patience=5,
         seed=int(get_env("AI_TRADING_SEED", 42, cast=int)),
     )
+    env_params: dict[str, Any] = {
+        "transaction_cost": float(get_env("AI_TRADING_RL_TRANSACTION_COST", 0.001, cast=float)),
+        "slippage": float(get_env("AI_TRADING_RL_SLIPPAGE", 0.0005, cast=float)),
+        "half_spread": float(get_env("AI_TRADING_RL_HALF_SPREAD", 0.0002, cast=float)),
+        "price_series": close_prices,
+        "register_model": True,
+        "registry_strategy": "rl_overlay",
+        "registry_model_type": algorithm.lower(),
+        "registry_tags": tags,
+        "registry_requested_status": governance_status,
+    }
+    if dataset_fingerprint:
+        env_params["dataset_fingerprint"] = str(dataset_fingerprint)
+    if feature_hash:
+        env_params["feature_spec_hash"] = str(feature_hash)
     results = trainer.train(
         data=data,
-        env_params={
-            "transaction_cost": float(get_env("AI_TRADING_RL_TRANSACTION_COST", 0.001, cast=float)),
-            "slippage": float(get_env("AI_TRADING_RL_SLIPPAGE", 0.0005, cast=float)),
-            "half_spread": float(get_env("AI_TRADING_RL_HALF_SPREAD", 0.0002, cast=float)),
-        },
+        env_params=env_params,
         save_path=str(run_dir),
     )
+    multi_seed_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_RL_MULTI_SEED_ENABLED", False, cast=bool)
+    )
+    if multi_seed_enabled:
+        seeds_raw = str(
+            get_env("AI_TRADING_AFTER_HOURS_RL_MULTI_SEEDS", "11,23,37", cast=str) or ""
+        )
+        seeds: list[int] = []
+        for token in seeds_raw.split(","):
+            token_clean = token.strip()
+            if not token_clean:
+                continue
+            try:
+                seed_value = int(token_clean)
+            except ValueError:
+                continue
+            if seed_value not in seeds:
+                seeds.append(seed_value)
+        if seeds:
+            seed_run_root = run_dir / "seed_matrix"
+            multi_seed_summary = train_multi_seed(
+                data=data,
+                seeds=seeds,
+                algorithm=algorithm,
+                total_timesteps=max(2000, timesteps),
+                eval_freq=max(1000, timesteps // 5),
+                early_stopping_patience=5,
+                env_params=env_params,
+                model_params=None,
+                save_root=str(seed_run_root),
+            )
     final_eval = results.get("final_evaluation", {}) if isinstance(results, dict) else {}
     mean_reward = float(final_eval.get("mean_reward", 0.0) or 0.0)
     rl_reward_target = float(get_env("AI_TRADING_RL_MIN_MEAN_REWARD", 0.0, cast=float))
@@ -1090,6 +1142,9 @@ def _maybe_train_rl_overlay(
         "rl_reward_target": rl_reward_target,
         "baseline_expectancy_bps": baseline_expectancy_bps,
         "recommend_use_rl_agent": bool(recommend),
+        "model_id": results.get("model_id") if isinstance(results, dict) else None,
+        "governance_status": results.get("governance_status") if isinstance(results, dict) else None,
+        "multi_seed_summary": multi_seed_summary,
     }
 
 
@@ -1299,6 +1354,9 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         dataset,
         now_utc=now_utc,
         baseline_expectancy_bps=best.mean_expectancy_bps,
+        dataset_fingerprint=dataset_fp,
+        feature_hash=str(manifest_metadata.get("feature_hash", "")),
+        governance_status=status,
     )
     report = {
         "ts": now_utc.isoformat(),
