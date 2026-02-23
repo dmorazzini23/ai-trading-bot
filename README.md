@@ -1556,6 +1556,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **IMPORTANT RISK DISCLOSURE:**
 
+- Non-goal: this project does not and cannot guarantee profitability
 - This software is for educational and research purposes
 - Trading involves substantial risk of loss
 - Past performance does not guarantee future results

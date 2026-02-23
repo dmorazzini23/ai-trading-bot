@@ -7,7 +7,9 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 import math
 import os
 import random
@@ -17,7 +19,9 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
@@ -41,13 +45,12 @@ from ai_trading.utils.env import (
     get_alpaca_creds,
 )
 from ai_trading.utils.ids import stable_client_order_id
+from ai_trading.utils.process_manager import file_lock as process_file_lock
 from ai_trading.utils.time import monotonic_time
 
 try:  # pragma: no cover - optional dependency
     from alpaca.common.exceptions import APIError as _AlpacaAPIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
-
-    import json
 
     class APIError(Exception):
         """Fallback APIError when alpaca-py is unavailable."""
@@ -1014,6 +1017,78 @@ def _extract_api_error_metadata(err: BaseException | None) -> dict[str, Any]:
     if rendered:
         metadata.setdefault("error", rendered)
     return {key: value for key, value in metadata.items() if value not in (None, "")}
+
+
+def _parse_retry_after_seconds(raw_value: Any) -> float | None:
+    """Parse Retry-After values from seconds or HTTP-date headers."""
+
+    if raw_value in (None, ""):
+        return None
+    if isinstance(raw_value, (int, float)):
+        parsed = float(raw_value)
+        if not math.isfinite(parsed):
+            return None
+        return max(0.0, parsed)
+
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    try:
+        parsed_seconds = float(text)
+    except (TypeError, ValueError):
+        parsed_seconds = None
+    if parsed_seconds is not None:
+        if not math.isfinite(parsed_seconds):
+            return None
+        return max(0.0, parsed_seconds)
+
+    try:
+        parsed_dt = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if parsed_dt.tzinfo is None:
+        parsed_dt = parsed_dt.replace(tzinfo=UTC)
+    delta = (parsed_dt.astimezone(UTC) - datetime.now(UTC)).total_seconds()
+    if not math.isfinite(delta):
+        return None
+    return max(0.0, float(delta))
+
+
+def _extract_retry_after_seconds(err: BaseException | None) -> float | None:
+    """Return Retry-After duration in seconds when available."""
+
+    if err is None:
+        return None
+
+    metadata = _extract_api_error_metadata(err)
+    for key in ("retry_after", "Retry-After", "retry-after"):
+        parsed = _parse_retry_after_seconds(metadata.get(key))
+        if parsed is not None:
+            return parsed
+
+    response = getattr(err, "response", None)
+    if response is None:
+        http_error = getattr(err, "http_error", None)
+        if http_error is not None:
+            response = getattr(http_error, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    if headers is not None:
+        for header_key in ("Retry-After", "retry-after"):
+            header_value = None
+            if isinstance(headers, Mapping):
+                header_value = headers.get(header_key)
+            else:
+                get_fn = getattr(headers, "get", None)
+                if callable(get_fn):
+                    try:
+                        header_value = get_fn(header_key)
+                    except Exception:
+                        header_value = None
+            parsed = _parse_retry_after_seconds(header_value)
+            if parsed is not None:
+                return parsed
+
+    return None
 
 
 def _classify_rejection_reason(detail: str | None) -> str | None:
@@ -2910,6 +2985,268 @@ class ExecutionEngine:
         if detail:
             extra["detail"] = detail
         logger.error("BROKER_UNAUTHORIZED", extra=extra)
+
+    def _submit_rate_limit_config(self) -> dict[str, Any]:
+        """Resolve submit rate limiting configuration."""
+
+        enabled_flag = _resolve_bool_env("AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_ENABLED")
+        rpm_raw = _config_int_alias(
+            (
+                "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_PER_MIN",
+                "ORDER_SUBMIT_RATE_LIMIT_PER_MIN",
+                "ALPACA_RATE_LIMIT_PER_MIN",
+            ),
+            default=200,
+        )
+        rpm = max(1, int(rpm_raw or 200))
+        burst_default = max(1, min(rpm, 20))
+        burst_raw = _config_int_alias(
+            (
+                "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_BURST",
+                "ORDER_SUBMIT_RATE_LIMIT_BURST",
+            ),
+            default=burst_default,
+        )
+        burst = max(1, int(burst_raw or burst_default))
+        queue_timeout_raw = _config_float(
+            "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_QUEUE_TIMEOUT_SEC",
+            2.0,
+        )
+        queue_timeout = max(0.0, float(queue_timeout_raw if queue_timeout_raw is not None else 2.0))
+        enabled = bool(enabled_flag) if enabled_flag is not None else True
+
+        raw_state_path: Any = None
+        if _config_get_env is not None:
+            try:
+                raw_state_path = _config_get_env(
+                    "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_STATE_PATH",
+                    "/tmp/ai-trading-order-submit-rate-limit.json",
+                )
+            except Exception:
+                raw_state_path = None
+        if raw_state_path in (None, ""):
+            raw_state_path = os.getenv(
+                "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_STATE_PATH",
+                "/tmp/ai-trading-order-submit-rate-limit.json",
+            )
+        state_path = Path(str(raw_state_path))
+        if not state_path.is_absolute():
+            data_dir: Any = None
+            if _config_get_env is not None:
+                try:
+                    data_dir = _config_get_env("AI_TRADING_DATA_DIR", None)
+                except Exception:
+                    data_dir = None
+            if data_dir not in (None, ""):
+                state_path = Path(str(data_dir)) / state_path
+        lock_name = (
+            "submit-rate-"
+            + hashlib.sha256(str(state_path).encode("utf-8")).hexdigest()[:16]
+        )
+        return {
+            "enabled": enabled,
+            "rpm": rpm,
+            "burst": burst,
+            "refill_rate": float(rpm) / 60.0,
+            "queue_timeout_sec": queue_timeout,
+            "state_path": state_path,
+            "lock_name": lock_name,
+        }
+
+    @staticmethod
+    def _read_submit_rate_limit_state(
+        path: Path,
+        *,
+        capacity: int,
+        now_epoch: float,
+    ) -> dict[str, float]:
+        """Read persisted token bucket state with safe defaults."""
+
+        state: dict[str, float] = {
+            "tokens": float(capacity),
+            "last_refill_epoch": float(now_epoch),
+            "cooldown_until_epoch": 0.0,
+        }
+        if not path.exists():
+            return state
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return state
+        if not isinstance(payload, Mapping):
+            return state
+        for key in ("tokens", "last_refill_epoch", "cooldown_until_epoch"):
+            raw_value = payload.get(key)
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric):
+                state[key] = numeric
+        state["tokens"] = max(0.0, min(float(capacity), float(state["tokens"])))
+        state["last_refill_epoch"] = max(0.0, float(state["last_refill_epoch"]))
+        state["cooldown_until_epoch"] = max(0.0, float(state["cooldown_until_epoch"]))
+        return state
+
+    @staticmethod
+    def _write_submit_rate_limit_state(path: Path, state: Mapping[str, float]) -> None:
+        """Persist submit rate limiter state atomically."""
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {
+            "tokens": float(state.get("tokens", 0.0)),
+            "last_refill_epoch": float(state.get("last_refill_epoch", 0.0)),
+            "cooldown_until_epoch": float(state.get("cooldown_until_epoch", 0.0)),
+        }
+        path.write_text(
+            json.dumps(serializable, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def _reserve_submit_rate_limit_wait(
+        self,
+        *,
+        config: Mapping[str, Any],
+    ) -> tuple[float, str | None]:
+        """Reserve a submit token and return wait duration when unavailable."""
+
+        state_path = Path(str(config["state_path"]))
+        lock_name = str(config["lock_name"])
+        capacity = max(1, int(config["burst"]))
+        refill_rate = float(config["refill_rate"])
+        if refill_rate <= 0.0:
+            return 0.0, None
+        try:
+            with process_file_lock(lock_name, timeout=1.0):
+                now_epoch = time.time()
+                state = self._read_submit_rate_limit_state(
+                    state_path,
+                    capacity=capacity,
+                    now_epoch=now_epoch,
+                )
+                elapsed = max(0.0, now_epoch - float(state["last_refill_epoch"]))
+                tokens = min(float(capacity), float(state["tokens"]) + elapsed * refill_rate)
+                cooldown_until = max(0.0, float(state["cooldown_until_epoch"]))
+                wait_reason: str | None = None
+                wait_seconds = 0.0
+                if cooldown_until > now_epoch:
+                    wait_seconds = max(cooldown_until - now_epoch, 0.0)
+                    wait_reason = "broker_retry_after"
+                elif tokens >= 1.0:
+                    tokens -= 1.0
+                else:
+                    wait_seconds = max((1.0 - tokens) / refill_rate, 0.0)
+                    wait_reason = "submit_rate_limit"
+                state["tokens"] = tokens
+                state["last_refill_epoch"] = now_epoch
+                self._write_submit_rate_limit_state(state_path, state)
+                return wait_seconds, wait_reason
+        except TimeoutError:
+            return 0.05, "submit_rate_lock_busy"
+        except Exception as exc:
+            logger.debug(
+                "ORDER_SUBMIT_RATE_LIMIT_STATE_FAILED",
+                extra={"error": str(exc), "path": str(state_path)},
+                exc_info=True,
+            )
+            return 0.0, None
+
+    def _acquire_submit_rate_limit_permit(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        order_type: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Acquire a token from the shared submit limiter."""
+
+        config = self._submit_rate_limit_config()
+        if not bool(config.get("enabled", True)):
+            return True, {"reason": None, "wait_s": 0.0}
+
+        queue_timeout = float(config.get("queue_timeout_sec", 0.0) or 0.0)
+        deadline = monotonic_time() + queue_timeout
+        first_wait_logged = False
+        while True:
+            wait_seconds, wait_reason = self._reserve_submit_rate_limit_wait(config=config)
+            if wait_seconds <= 0.0:
+                return True, {"reason": None, "wait_s": 0.0}
+            remaining = deadline - monotonic_time()
+            if remaining <= 0.0:
+                return False, {
+                    "reason": wait_reason or "submit_rate_limit",
+                    "wait_s": round(wait_seconds, 3),
+                    "queue_timeout_s": round(queue_timeout, 3),
+                }
+            sleep_for = min(wait_seconds, remaining)
+            if sleep_for <= 0.0:
+                return False, {
+                    "reason": wait_reason or "submit_rate_limit",
+                    "wait_s": round(wait_seconds, 3),
+                    "queue_timeout_s": round(queue_timeout, 3),
+                }
+            if not first_wait_logged:
+                payload: dict[str, Any] = {
+                    "reason": wait_reason or "submit_rate_limit",
+                    "wait_s": round(wait_seconds, 3),
+                    "order_type": order_type,
+                }
+                if symbol:
+                    payload["symbol"] = symbol
+                if side:
+                    payload["side"] = side
+                logger.info("ORDER_SUBMIT_RATE_LIMIT_WAIT", extra=payload)
+                first_wait_logged = True
+            time.sleep(sleep_for)
+
+    def _apply_submit_rate_limit_cooldown(
+        self,
+        *,
+        retry_after_seconds: float,
+        symbol: str | None,
+        side: str | None,
+    ) -> None:
+        """Propagate broker Retry-After cooldown to shared limiter state."""
+
+        if retry_after_seconds <= 0.0:
+            return
+        config = self._submit_rate_limit_config()
+        if not bool(config.get("enabled", True)):
+            return
+        state_path = Path(str(config["state_path"]))
+        lock_name = str(config["lock_name"])
+        capacity = max(1, int(config["burst"]))
+        now_epoch = time.time()
+        cooldown_until = now_epoch + float(retry_after_seconds)
+        try:
+            with process_file_lock(lock_name, timeout=1.0):
+                state = self._read_submit_rate_limit_state(
+                    state_path,
+                    capacity=capacity,
+                    now_epoch=now_epoch,
+                )
+                state["cooldown_until_epoch"] = max(
+                    float(state.get("cooldown_until_epoch", 0.0)),
+                    cooldown_until,
+                )
+                self._write_submit_rate_limit_state(state_path, state)
+        except Exception as exc:
+            logger.debug(
+                "ORDER_SUBMIT_RATE_LIMIT_COOLDOWN_WRITE_FAILED",
+                extra={"error": str(exc), "path": str(state_path)},
+                exc_info=True,
+            )
+            return
+
+        payload: dict[str, Any] = {
+            "retry_after_s": round(float(retry_after_seconds), 3),
+            "state_path": str(state_path),
+        }
+        if symbol:
+            payload["symbol"] = symbol
+        if side:
+            payload["side"] = side
+        logger.warning("ORDER_SUBMIT_RATE_LIMIT_COOLDOWN", extra=payload)
 
     def submit_market_order(self, symbol: str, side: str, quantity: int, **kwargs) -> dict | None:
         """
@@ -6920,15 +7257,47 @@ class ExecutionEngine:
 
         backoffs = [0.5, 1.0]
         max_attempts = len(backoffs) + 1
+        func_name = str(getattr(func, "__name__", ""))
+        is_submit_call = func_name == "_submit_order_to_alpaca"
+        submit_symbol: str | None = None
+        submit_side: str | None = None
+        submit_order_type = "unknown"
+        if args:
+            submit_payload = args[0] if isinstance(args[0], Mapping) else None
+            if submit_payload is not None:
+                symbol_raw = submit_payload.get("symbol")
+                if symbol_raw not in (None, ""):
+                    submit_symbol = str(symbol_raw)
+                side_raw = submit_payload.get("side")
+                if side_raw not in (None, ""):
+                    submit_side = str(side_raw)
+                order_type_raw = submit_payload.get("type") or submit_payload.get("order_type")
+                if order_type_raw not in (None, ""):
+                    submit_order_type = str(order_type_raw).lower()
 
         for attempt_index in range(max_attempts):
+            if is_submit_call:
+                permit_ok, permit_context = self._acquire_submit_rate_limit_permit(
+                    symbol=submit_symbol,
+                    side=submit_side,
+                    order_type=submit_order_type,
+                )
+                if not permit_ok:
+                    raise NonRetryableBrokerError(
+                        "submit_rate_limit_timeout",
+                        status=429,
+                        symbol=submit_symbol,
+                        detail=str(permit_context.get("reason") or "submit_rate_limit_timeout"),
+                    )
             try:
                 result = func(*args, **kwargs)
             except (APIError, TimeoutError, ConnectionError) as exc:
+                retry_after_seconds: float | None = None
                 if isinstance(exc, APIError):
                     nonretryable = self._handle_nonretryable_api_error(exc, *args, **kwargs)
                     if nonretryable:
                         raise nonretryable
+                    retry_after_seconds = _extract_retry_after_seconds(exc)
 
                 reason = self._classify_retry_reason(exc)
                 if reason is None:
@@ -6937,13 +7306,23 @@ class ExecutionEngine:
                 if attempt_index >= len(backoffs):
                     logger.error(
                         "ORDER_RETRY_GAVE_UP",
-                        extra={"reason": reason, "func": func.__name__},
+                        extra={"reason": reason, "func": func_name},
                     )
                     self._handle_execution_failure(exc)
                     raise
 
                 delay = backoffs[attempt_index]
-                jitter = random.uniform(0.0, max(delay * 0.25, 0.0))
+                if reason == "status_429":
+                    if retry_after_seconds is None:
+                        retry_after_seconds = delay
+                    delay = max(delay, float(retry_after_seconds))
+                    if is_submit_call:
+                        self._apply_submit_rate_limit_cooldown(
+                            retry_after_seconds=float(retry_after_seconds),
+                            symbol=submit_symbol,
+                            side=submit_side,
+                        )
+                jitter = 0.0 if reason == "status_429" else random.uniform(0.0, max(delay * 0.25, 0.0))
                 sleep_for = delay + jitter
 
                 self.stats["retry_count"] += 1
@@ -6953,7 +7332,12 @@ class ExecutionEngine:
                         "attempt": attempt_index + 2,
                         "reason": reason,
                         "delay": round(sleep_for, 3),
-                        "func": func.__name__,
+                        "retry_after": (
+                            round(float(retry_after_seconds), 3)
+                            if retry_after_seconds is not None
+                            else None
+                        ),
+                        "func": func_name,
                     },
                 )
                 time.sleep(sleep_for)
@@ -6977,6 +7361,8 @@ class ExecutionEngine:
                 status_int = int(status) if status is not None else None
             except (TypeError, ValueError):
                 status_int = None
+            if status_int == 429:
+                return "status_429"
             if status_int is not None and 500 <= status_int < 600:
                 return f"status_{status_int}"
             detail = getattr(exc, "message", None)
@@ -6997,6 +7383,8 @@ class ExecutionEngine:
                 or any(token in normalized for token in price_tokens)
             ):
                 return "invalid_price"
+            if "rate limit" in normalized or "too many requests" in normalized:
+                return "status_429"
 
         if isinstance(exc, ConnectionResetError):
             return "connection_reset"

@@ -29650,7 +29650,44 @@ def _latest_tca_timestamp(path: str) -> datetime | None:
     return latest
 
 
+def _tca_model_out_of_bounds_reason() -> str | None:
+    """Return guard reason when calibrated cost model parameters are inconsistent."""
+
+    if not bool(get_env("AI_TRADING_BLOCK_TRADING_IF_TCA_OUT_OF_BOUNDS", False, cast=bool)):
+        return None
+    model_path = str(
+        get_env(
+            "AI_TRADING_EXEC_COST_MODEL_PATH",
+            "runtime/execution_cost_model.json",
+        )
+    )
+    try:
+        from ai_trading.execution.cost_model import CostModel
+
+        params = CostModel.load(model_path).params
+        min_bps = float(params.min_bps)
+        max_bps = float(params.max_bps)
+        base_cost = float(params.base_cost_bps)
+    except Exception as exc:
+        logger.warning(
+            "TCA_MODEL_BOUNDS_CHECK_FAILED",
+            extra={"error": str(exc), "model_path": model_path},
+        )
+        return "TCA_OUT_OF_BOUNDS_BLOCK"
+
+    if not all(math.isfinite(value) for value in (min_bps, max_bps, base_cost)):
+        return "TCA_OUT_OF_BOUNDS_BLOCK"
+    if min_bps < 0.0 or max_bps <= min_bps:
+        return "TCA_OUT_OF_BOUNDS_BLOCK"
+    if base_cost < min_bps or base_cost > max_bps:
+        return "TCA_OUT_OF_BOUNDS_BLOCK"
+    return None
+
+
 def _tca_stale_block_reason(now: datetime) -> str | None:
+    out_of_bounds_reason = _tca_model_out_of_bounds_reason()
+    if out_of_bounds_reason is not None:
+        return out_of_bounds_reason
     if not bool(get_env("AI_TRADING_BLOCK_TRADING_IF_TCA_STALE", False, cast=bool)):
         return None
     tca_path = str(_resolved_tca_path())

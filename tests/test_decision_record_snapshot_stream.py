@@ -128,3 +128,25 @@ def test_tca_stale_block_reason_relative_path_uses_data_dir(
         encoding="utf-8",
     )
     assert bot_engine._tca_stale_block_reason(now) == "TCA_STALE_BLOCK"
+
+
+def test_tca_stale_block_reason_blocks_out_of_bounds_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    model_path = tmp_path / "execution_cost_model.json"
+    model_path.write_text(
+        json.dumps(
+            {
+                "version": "v-test",
+                "base_cost_bps": 7.5,
+                "min_bps": 8.0,
+                "max_bps": 25.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_BLOCK_TRADING_IF_TCA_STALE", "0")
+    monkeypatch.setenv("AI_TRADING_BLOCK_TRADING_IF_TCA_OUT_OF_BOUNDS", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_COST_MODEL_PATH", str(model_path))
+
+    assert bot_engine._tca_stale_block_reason(datetime.now(UTC)) == "TCA_OUT_OF_BOUNDS_BLOCK"
