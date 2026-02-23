@@ -55,3 +55,41 @@ jobs:
         run: make legacy-scan
       - name: Tests
         run: pytest -q -n auto --maxfail=1
+
+  determinism-seed-matrix:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 42, 1337]
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      ALPACA_ENV: "paper"
+      SEED: "${{ matrix.seed }}"
+      AI_TRADING_SEED: "${{ matrix.seed }}"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            requirements/*.txt
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Deterministic replay checks
+        run: |
+          pytest -q \
+            tests/integration/test_replay_seed_matrix_env.py \
+            tests/integration/test_replay_async_order_events.py \
+            tests/integration/test_parity_invariants.py \
+            tests/unit/test_simulated_broker_reproducible.py \
+            tests/unit/test_no_unseeded_global_random_simulator_usage.py

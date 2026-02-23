@@ -10,6 +10,7 @@ call :func:`get_trading_config` when runtime settings are required.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -2177,11 +2178,12 @@ def _validate_override_keys(overrides: Mapping[str, Any]) -> None:
 class _EnvSnapshotDict(dict):
     """Dictionary subclass tagging mappings produced by :func:`_env_snapshot`."""
 
-    __slots__ = ("is_snapshot",)
+    __slots__ = ("is_snapshot", "override_keys")
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.is_snapshot = True
+        self.override_keys: frozenset[str] = frozenset()
 
 
 def _normalize_env_label(value: Any, *, default: str = "") -> str:
@@ -2222,6 +2224,95 @@ def _infer_paper_mode(values: Mapping[str, Any]) -> bool:
         return True
 
     return app_env not in _LIVE_ENV_VALUES
+
+
+def _is_live_like_env(env_map: Mapping[str, Any]) -> bool:
+    """Return ``True`` when ``env_map`` resolves to live/production execution."""
+
+    app_env = _normalize_env_label(env_map.get("APP_ENV"), default="test")
+    if app_env in _LIVE_ENV_VALUES:
+        return True
+
+    for key in (
+        "EXECUTION_MODE",
+        "AI_TRADING_EXECUTION_MODE",
+        "AI_TRADING_EXECUTION_IMPL",
+        "EXECUTION_IMPL",
+    ):
+        raw_mode = env_map.get(key)
+        if raw_mode in (None, ""):
+            continue
+        try:
+            return _parse_execution_mode(str(raw_mode)) == "live"
+        except Exception:
+            normalized = _normalize_env_label(raw_mode)
+            return normalized in _LIVE_ENV_VALUES
+    return False
+
+
+def _normalize_for_conflict_compare(spec: ConfigSpec, raw_value: Any) -> Any:
+    """Coerce ``raw_value`` into the spec type for robust alias comparison."""
+
+    text = str(raw_value)
+    try:
+        parsed = _cast_value(spec, text)
+        return _validate_bounds(spec, parsed)
+    except Exception:
+        return text.strip()
+
+
+def _detect_env_alias_conflict(spec: ConfigSpec, env_map: Mapping[str, str]) -> None:
+    """Warn or fail when canonical and deprecated env aliases disagree."""
+
+    if not spec.deprecated_env:
+        return
+
+    canonical_key: str | None = None
+    canonical_raw: str | None = None
+    for candidate in spec.env:
+        raw = env_map.get(candidate)
+        if raw not in (None, ""):
+            canonical_key = candidate
+            canonical_raw = raw
+            break
+    if canonical_key is None or canonical_raw in (None, ""):
+        return
+
+    explicit_override_keys = frozenset(getattr(env_map, "override_keys", frozenset()))
+    canonical_explicit = canonical_key in explicit_override_keys
+    canonical_value = _normalize_for_conflict_compare(spec, canonical_raw)
+    for alias in spec.deprecated_env:
+        alias_raw = env_map.get(alias)
+        if alias_raw in (None, ""):
+            continue
+        alias_explicit = alias in explicit_override_keys
+        if explicit_override_keys and not (canonical_explicit and alias_explicit):
+            continue
+        alias_value = _normalize_for_conflict_compare(spec, alias_raw)
+        if alias_value == canonical_value:
+            continue
+
+        if spec.field == "alpaca_base_url":
+            default_value = _normalize_for_conflict_compare(spec, spec.default)
+            if canonical_value == default_value or alias_value == default_value:
+                # Ignore stale/default dual-key state when one side still carries
+                # the schema default and the other side is explicitly configured.
+                continue
+
+        payload = {
+            "field": spec.field,
+            "canonical_env": canonical_key,
+            "canonical_value": canonical_raw,
+            "alias_env": alias,
+            "alias_value": alias_raw,
+        }
+        if _is_live_like_env(env_map):
+            raise RuntimeError(
+                "Conflicting values for canonical/deprecated env keys: "
+                f"{canonical_key}={canonical_raw!r} vs {alias}={alias_raw!r}. "
+                f"Resolve the conflict for '{spec.field}'."
+            )
+        logger.warning("CONFIG_ENV_ALIAS_CONFLICT", extra=payload)
 
 
 class TradingConfig:
@@ -2431,6 +2522,8 @@ class TradingConfig:
 
 
 def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
+    _detect_env_alias_conflict(spec, env_map)
+
     canonical_keys: Sequence[str] = spec.env
     found_key: str | None = None
     raw_value: str | None = None
@@ -2504,6 +2597,7 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
                 snap[canonical_key] = str(raw_value)
             else:
                 snap.setdefault(canonical_key, str(raw_value))
+    snap.override_keys = frozenset(override_keys)
     return snap
 
 
@@ -2579,6 +2673,29 @@ def generate_config_schema() -> str:
     return "\n".join(lines)
 
 
+def config_snapshot_hash(cfg: TradingConfig | Mapping[str, Any]) -> str:
+    """Return deterministic SHA256 hash of a sanitized config snapshot."""
+
+    payload: Mapping[str, Any]
+    if isinstance(cfg, Mapping):
+        payload = cfg
+    else:
+        snapshot_fn = getattr(cfg, "snapshot_sanitized", None)
+        if callable(snapshot_fn):
+            payload = dict(snapshot_fn())
+        else:
+            to_dict = getattr(cfg, "to_dict", None)
+            payload = dict(to_dict()) if callable(to_dict) else {}
+
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 __all__ = [
     "TradingConfig",
     "CONFIG_SPECS",
@@ -2586,4 +2703,5 @@ __all__ = [
     "get_trading_config",
     "reload_trading_config",
     "generate_config_schema",
+    "config_snapshot_hash",
 ]

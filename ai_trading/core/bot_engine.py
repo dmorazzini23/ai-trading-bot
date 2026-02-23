@@ -272,6 +272,7 @@ from ai_trading.config.management import (
     get_env,
     is_shadow_mode,
     TradingConfig,
+    config_snapshot_hash,
     get_trading_config,
 )
 try:
@@ -30234,6 +30235,7 @@ def _decision_record_config_snapshot(
     snapshot = {
         "trading_mode": str(getattr(cfg, "trading_mode", TRADING_MODE)),
         "execution_mode": str(getattr(cfg, "execution_mode", "sim")),
+        "config_snapshot_hash": config_snapshot_hash(cfg),
         "regime_signal_profile": profile,
         "regime_signal_components": regime_components,
         "halt_reason": state.halt_reason,

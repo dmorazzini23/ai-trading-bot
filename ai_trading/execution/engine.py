@@ -95,9 +95,23 @@ ORDERS_SUBMITTED = _ensure_orders_submitted_metric(_metrics_registry)
 register_reset_hook(_ensure_orders_submitted_metric)
 _orders_rejected_total = get_counter("orders_rejected_total", "Orders rejected")
 _orders_duplicate_total = get_counter("orders_duplicate_total", "Duplicate orders prevented")
+_oms_open_intent_alerts_total = get_counter(
+    "oms_open_intent_alerts_total",
+    "Alerts emitted when open intents exceed configured threshold",
+)
+_oms_reconcile_marked_failed_total = get_counter(
+    "oms_reconcile_marked_failed_total",
+    "Intents marked FAILED during reconciliation",
+)
 
 
-def _safe_counter_inc(counter: Any | None, metric_name: str, *, extra: Mapping[str, Any] | None = None) -> None:
+def _safe_counter_inc(
+    counter: Any | None,
+    metric_name: str,
+    *,
+    amount: float = 1.0,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
     """Increment a metric without raising runtime exceptions."""
 
     if counter is None:
@@ -106,7 +120,7 @@ def _safe_counter_inc(counter: Any | None, metric_name: str, *, extra: Mapping[s
     if extra:
         payload.update(extra)
     try:
-        counter.inc()
+        counter.inc(float(amount))
     except Exception as exc:
         logger.debug("METRIC_INCREMENT_FAILED", extra=payload, exc_info=exc)
 
@@ -700,6 +714,34 @@ class OrderManager:
         if not open_intents:
             return summary
 
+        status_counts: dict[str, int] = {}
+        for intent in open_intents:
+            status_token = str(intent.status or "").strip().upper() or "UNKNOWN"
+            status_counts[status_token] = status_counts.get(status_token, 0) + 1
+
+        alert_threshold = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_OMS_OPEN_INTENT_ALERT_THRESHOLD",
+                    "25",
+                    cast=int,
+                )
+            ),
+        )
+        if len(open_intents) >= alert_threshold:
+            payload = {
+                "open_intents": len(open_intents),
+                "threshold": alert_threshold,
+                "status_counts": status_counts,
+            }
+            logger.warning("OMS_OPEN_INTENT_THRESHOLD_EXCEEDED", extra=payload)
+            _safe_counter_inc(
+                _oms_open_intent_alerts_total,
+                "oms_open_intent_alerts_total",
+                extra=payload,
+            )
+
         orders_payload: list[Any]
         if broker_orders is not None:
             orders_payload = list(broker_orders)
@@ -803,9 +845,15 @@ class OrderManager:
                 summary["errors"] += 1
             else:
                 summary["marked_failed"] += 1
+                _safe_counter_inc(
+                    _oms_reconcile_marked_failed_total,
+                    "oms_reconcile_marked_failed_total",
+                )
 
         if summary["intents_checked"] > 0:
-            logger.info("OMS_INTENT_RECONCILE", extra=summary)
+            payload: dict[str, Any] = dict(summary)
+            payload["status_counts"] = status_counts
+            logger.info("OMS_INTENT_RECONCILE", extra=payload)
         return summary
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:

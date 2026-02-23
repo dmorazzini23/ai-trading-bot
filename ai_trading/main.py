@@ -169,6 +169,7 @@ from ai_trading.config.management import (
     reload_env,
     _resolve_alpaca_env,
     TradingConfig,
+    config_snapshot_hash,
     enforce_alpaca_feed_policy,
     get_trading_config,
 )
@@ -293,6 +294,30 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
     if note_msg:
         log_extra["note"] = note_msg
     logger.info(log_message, extra=log_extra)
+
+
+def _log_config_effective_summary(cfg: Any) -> None:
+    """Emit a redacted startup config summary with deterministic snapshot hash."""
+
+    try:
+        snapshot_fn = getattr(cfg, "snapshot_sanitized", None)
+        if callable(snapshot_fn):
+            snapshot = dict(snapshot_fn())
+        else:
+            to_dict_fn = getattr(cfg, "to_dict", None)
+            snapshot = dict(to_dict_fn()) if callable(to_dict_fn) else {}
+        snapshot_hash = config_snapshot_hash(cfg)
+        logger.info(
+            "CONFIG_EFFECTIVE_SUMMARY",
+            extra={
+                "config_snapshot_hash": snapshot_hash,
+                "config_snapshot": snapshot,
+            },
+        )
+    except Exception:
+        debug_log = getattr(logger, "debug", None)
+        if callable(debug_log):
+            debug_log("CONFIG_EFFECTIVE_SUMMARY_FAILED", exc_info=True)
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -932,6 +957,7 @@ def _fail_fast_env() -> None:
     except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
+    _log_config_effective_summary(trading_cfg)
 
     credential_warning_logged = False
     try:

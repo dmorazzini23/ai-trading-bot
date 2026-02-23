@@ -20,6 +20,7 @@ from .runtime import (
     SPEC_BY_ENV,
     SPEC_BY_FIELD,
     TradingConfig,
+    config_snapshot_hash,
     ensure_trading_config_current,
     generate_config_schema,
     get_trading_config,
@@ -510,4 +511,5 @@ __all__ = [
     "MAX_EMPTY_RETRIES",
     "Settings",
     "derive_cap_from_settings",
+    "config_snapshot_hash",
 ]

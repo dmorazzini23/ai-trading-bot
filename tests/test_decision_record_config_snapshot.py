@@ -51,6 +51,8 @@ def test_decision_record_config_snapshot_included() -> None:
     )
     payload = record.to_dict()
     assert "config_snapshot" in payload
+    assert isinstance(payload["config_snapshot"]["config_snapshot_hash"], str)
+    assert len(payload["config_snapshot"]["config_snapshot_hash"]) == 64
     assert payload["config_snapshot"]["allocation_weights"]["day"] == 0.4
     assert payload["config_snapshot"]["learned_overrides"]["per_symbol_cost_buffer_bps"]["AAPL"] == 2.0
     assert payload["config_snapshot"]["sleeve_configs"]["day"]["entry_threshold"] == 0.3
