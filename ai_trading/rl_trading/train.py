@@ -419,6 +419,7 @@ class RLTrainer:
         self.model = None
         self.train_env = None
         self.eval_env = None
+        self.state_builder = None
         self.training_results = {}
         self.eval_callback = None
         logger.info(f'RLTrainer initialized with {algorithm} algorithm')
@@ -448,7 +449,20 @@ class RLTrainer:
             start_time = datetime.now(UTC)
             self.model.learn(total_timesteps=self.total_timesteps, callback=callbacks, progress_bar=True)
             end_time = datetime.now(UTC)
-            self.training_results = {'algorithm': self.algorithm, 'total_timesteps': self.total_timesteps, 'training_time_seconds': (end_time - start_time).total_seconds(), 'seed': self.seed, 'final_evaluation': self._final_evaluation(), 'env_params': env_params or {}, 'model_params': model_params or {}}
+            self.training_results = {
+                'algorithm': self.algorithm,
+                'total_timesteps': self.total_timesteps,
+                'training_time_seconds': (end_time - start_time).total_seconds(),
+                'seed': self.seed,
+                'final_evaluation': self._final_evaluation(),
+                'env_params': env_params or {},
+                'model_params': model_params or {},
+                'state_builder': (
+                    self.state_builder.describe()
+                    if self.state_builder is not None and hasattr(self.state_builder, "describe")
+                    else {"enabled": False}
+                ),
+            }
             if save_path:
                 self._save_model_and_results(save_path)
             logger.info('RL training completed successfully')
@@ -461,11 +475,47 @@ class RLTrainer:
         """Create training and evaluation environments."""
         try:
             from .env import ActionSpaceConfig, TradingEnv  # noqa: E402 - local import
+            from .state_builder import MarketStateBuilder, StateBuilderConfig  # noqa: E402 - local import
 
-            env_params = env_params or {}
-            split_idx = int(len(data) * 0.8)
-            train_data = data[:split_idx]
-            eval_data = data[split_idx:]
+            matrix = np.asarray(data, dtype=np.float32)
+            if matrix.ndim != 2:
+                raise ValueError("RL training data must be a 2D matrix")
+            env_params = dict(env_params or {})
+            window = max(int(env_params.get("window", 10)), 1)
+            min_rows = max(2 * (window + 1), 20)
+            if len(matrix) < min_rows:
+                raise ValueError(
+                    f"RL training data must include at least {min_rows} rows for window={window}"
+                )
+
+            split_idx = int(len(matrix) * 0.8)
+            split_idx = max(window + 1, min(split_idx, len(matrix) - (window + 1)))
+            raw_train = matrix[:split_idx]
+            raw_eval = matrix[split_idx:]
+            if len(raw_train) <= window or len(raw_eval) <= window:
+                raise ValueError("RL train/eval split is too small for configured window")
+
+            builder_enabled = bool(env_params.pop("use_state_builder", True))
+            builder_config_raw = env_params.pop("state_builder_config", None)
+            if isinstance(builder_config_raw, StateBuilderConfig):
+                builder_config = builder_config_raw
+            elif isinstance(builder_config_raw, Mapping):
+                builder_config = StateBuilderConfig(**dict(builder_config_raw))
+            else:
+                builder_config = StateBuilderConfig()
+
+            self.state_builder = None
+            if builder_enabled:
+                builder = MarketStateBuilder(builder_config)
+                train_data = builder.fit_transform(raw_train)
+                eval_data = builder.transform(raw_eval)
+                self.state_builder = builder
+            else:
+                train_data = raw_train
+                eval_data = raw_eval
+
+            train_prices = raw_train[:, 0]
+            eval_prices = raw_eval[:, 0]
             enhanced_env_params = {'transaction_cost': 0.001, 'slippage': 0.0005, 'half_spread': 0.0002, **env_params}
             algo_config = _resolve_algo_config(self.algorithm)
             if (
@@ -475,13 +525,25 @@ class RLTrainer:
                 enhanced_env_params["action_config"] = ActionSpaceConfig(action_type="continuous")
 
             def make_train_env():
-                return TradingEnv(train_data, **enhanced_env_params)
+                return TradingEnv(train_data, price_series=train_prices, **enhanced_env_params)
 
             def make_eval_env():
-                return TradingEnv(eval_data, **enhanced_env_params)
+                return TradingEnv(eval_data, price_series=eval_prices, **enhanced_env_params)
             self.train_env = DummyVecEnv([make_train_env])
             self.eval_env = make_eval_env()
-            logger.debug(f'Environments created: train_data={len(train_data)}, eval_data={len(eval_data)}')
+            logger.debug(
+                "RL_ENVIRONMENTS_CREATED",
+                extra={
+                    "train_rows": len(train_data),
+                    "eval_rows": len(eval_data),
+                    "state_builder_enabled": bool(self.state_builder is not None),
+                    "state_builder_schema": (
+                        self.state_builder.describe().get("schema")
+                        if self.state_builder is not None
+                        else "raw"
+                    ),
+                },
+            )
         except (ImportError, AttributeError, TypeError, ValueError) as e:  # TradingEnv missing or params invalid
             logger.error(f'Error creating environments: {e}')
             raise
