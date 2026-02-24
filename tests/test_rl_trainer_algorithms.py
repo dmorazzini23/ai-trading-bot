@@ -158,6 +158,31 @@ def test_rl_trainer_setup_callbacks_disables_incompatible_callback_classes(
     assert trainer.eval_callback is None
 
 
+def test_rl_trainer_setup_callbacks_rebinds_after_base_callback_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer = train_mod.RLTrainer(algorithm="PPO")
+    trainer.eval_env = object()
+
+    class CompatibleBase:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def init_callback(self, *_args, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(train_mod, "BaseCallback", CompatibleBase)
+    monkeypatch.setattr(train_mod, "EarlyStoppingCallback", type("LegacyEarly", (), {}))
+    monkeypatch.setattr(train_mod, "DetailedEvalCallback", type("LegacyEval", (), {}))
+
+    callbacks = trainer._setup_callbacks(save_path=None)
+
+    assert len(callbacks) == 2
+    assert isinstance(callbacks[0], CompatibleBase)
+    assert isinstance(callbacks[1], CompatibleBase)
+    assert trainer.eval_callback is callbacks[1]
+
+
 def test_rl_trainer_state_builder_wires_price_series(monkeypatch) -> None:
     captured: list[tuple[np.ndarray, np.ndarray | None]] = []
 

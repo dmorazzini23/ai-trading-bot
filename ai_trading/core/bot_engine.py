@@ -25489,6 +25489,92 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     return mp
 
 
+def _resolve_after_hours_training_marker_path() -> Path:
+    raw_marker_path = str(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH",
+            "runtime/after_hours_training.marker.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    marker_path = Path(raw_marker_path or "runtime/after_hours_training.marker.json").expanduser()
+    if not marker_path.is_absolute():
+        marker_path = (Path.cwd() / marker_path).resolve()
+    return marker_path
+
+
+def _load_after_hours_training_marker(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (
+        PermissionError,
+        IsADirectoryError,
+        JSONDecodeError,
+        ValueError,
+        TypeError,
+        OSError,
+    ) as exc:
+        logger.warning(
+            "AFTER_HOURS_TRAINING_MARKER_READ_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        return {}
+    if not isinstance(payload, Mapping):
+        logger.warning(
+            "AFTER_HOURS_TRAINING_MARKER_INVALID",
+            extra={"path": str(path), "reason": "non_mapping_payload"},
+        )
+        return {}
+    return dict(payload)
+
+
+def _after_hours_training_completed_for_date(date_key: str) -> bool:
+    marker_path = _resolve_after_hours_training_marker_path()
+    marker = _load_after_hours_training_marker(marker_path)
+    marker_date = str(marker.get("date") or "").strip()
+    marker_status = str(marker.get("status") or "").strip().lower()
+    return marker_date == date_key and marker_status == "trained"
+
+
+def _write_after_hours_training_marker(date_key: str, outcome: Mapping[str, Any]) -> None:
+    marker_path = _resolve_after_hours_training_marker_path()
+    tmp_path = marker_path.with_suffix(marker_path.suffix + ".tmp")
+    payload = {
+        "date": date_key,
+        "status": str(outcome.get("status") or "").strip().lower(),
+        "model_id": str(outcome.get("model_id") or "").strip(),
+        "model_name": str(outcome.get("model_name") or "").strip(),
+        "governance_status": str(outcome.get("governance_status") or "").strip(),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, marker_path)
+    except (
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        ValueError,
+        TypeError,
+        OSError,
+    ) as exc:
+        logger.warning(
+            "AFTER_HOURS_TRAINING_MARKER_WRITE_FAILED",
+            extra={"path": str(marker_path), "error": str(exc)},
+        )
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def on_market_close() -> None:
     """Trigger daily retraining after the market closes."""
     now_est = dt_.now(UTC).astimezone(ZoneInfo("America/New_York"))
@@ -25501,6 +25587,20 @@ def on_market_close() -> None:
     after_hours_enabled = bool(
         get_env("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False, cast=bool)
     )
+    after_hours_once_per_day = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", True, cast=bool)
+    )
+    after_hours_date_key = now_est.date().isoformat()
+    if (
+        after_hours_enabled
+        and after_hours_once_per_day
+        and _after_hours_training_completed_for_date(after_hours_date_key)
+    ):
+        logger.info(
+            "AFTER_HOURS_TRAINING_ALREADY_COMPLETED",
+            extra={"date": after_hours_date_key},
+        )
+        after_hours_enabled = False
     if after_hours_enabled:
         try:
             from ai_trading.training.after_hours import run_after_hours_training
@@ -25516,6 +25616,12 @@ def on_market_close() -> None:
                     "reason": outcome.get("reason"),
                 },
             )
+            if (
+                after_hours_once_per_day
+                and isinstance(outcome, Mapping)
+                and str(outcome.get("status") or "").strip().lower() == "trained"
+            ):
+                _write_after_hours_training_marker(after_hours_date_key, outcome)
             if isinstance(outcome, Mapping):
                 promoted_model_path = str(outcome.get("promoted_model_path") or "").strip()
                 promoted_manifest_path = str(outcome.get("promoted_manifest_path") or "").strip()

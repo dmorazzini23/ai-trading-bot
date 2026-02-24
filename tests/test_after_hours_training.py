@@ -155,6 +155,7 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
 
 
 def test_on_market_close_runs_after_hours_pipeline(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_trading.core import bot_engine
@@ -166,7 +167,10 @@ def test_on_market_close_runs_after_hours_pipeline(
         def now(_tz=None):
             return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
 
+    marker_path = tmp_path / "after_hours.marker.json"
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", str(marker_path))
     monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "1")
     monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
     monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
@@ -186,6 +190,79 @@ def test_on_market_close_runs_after_hours_pipeline(
     bot_engine.on_market_close()
     assert calls["after_hours"] == 1
     assert calls["legacy"] == 1
+
+
+def test_on_market_close_skips_after_hours_pipeline_when_marker_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(_tz=None):
+            return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    marker_path.write_text(
+        json.dumps({"date": "2026-01-06", "status": "trained"}) + "\n",
+        encoding="utf-8",
+    )
+    calls: dict[str, int] = {"after_hours": 0}
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", str(marker_path))
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        after_hours,
+        "run_after_hours_training",
+        lambda **_kwargs: calls.__setitem__("after_hours", calls["after_hours"] + 1)
+        or {"status": "trained"},
+    )
+
+    bot_engine.on_market_close()
+
+    assert calls["after_hours"] == 0
+
+
+def test_on_market_close_writes_after_hours_training_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(_tz=None):
+            return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", str(marker_path))
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        after_hours,
+        "run_after_hours_training",
+        lambda **_kwargs: {
+            "status": "trained",
+            "model_id": "m-1",
+            "model_name": "logreg",
+            "governance_status": "production",
+        },
+    )
+
+    bot_engine.on_market_close()
+
+    payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert payload["date"] == "2026-01-06"
+    assert payload["status"] == "trained"
+    assert payload["model_id"] == "m-1"
+    assert payload["model_name"] == "logreg"
 
 
 def test_after_hours_training_handles_leakage_assertions(
@@ -626,6 +703,7 @@ def test_maybe_train_rl_overlay_promotion_permission_denied_is_fail_soft(
 
 
 def test_on_market_close_applies_promoted_model_artifacts(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_trading.core import bot_engine
@@ -636,7 +714,10 @@ def test_on_market_close_applies_promoted_model_artifacts(
             return datetime(2026, 1, 6, 21, 10, tzinfo=UTC)
 
     calls: dict[str, list[dict[str, object]]] = {"ml": [], "rl": []}
+    marker_path = tmp_path / "after_hours.marker.json"
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", str(marker_path))
     monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
     monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
     monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
