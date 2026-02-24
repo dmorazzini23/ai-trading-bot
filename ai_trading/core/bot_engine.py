@@ -1147,6 +1147,31 @@ def _resolve_execution_candidate_top_n() -> int | None:
     return max(1, min(top_n, 500))
 
 
+def _resolve_prepare_symbol_limit() -> int | None:
+    """Return optional symbol cap for expensive pre-execution preparation work."""
+
+    try:
+        raw_limit = get_env("AI_TRADING_PREPARE_SYMBOL_LIMIT", 0, cast=int)
+    except Exception:
+        raw_limit = 0
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0:
+        try:
+            fallback_limit = get_env("MAX_SYMBOLS_PER_CYCLE", 0, cast=int)
+        except Exception:
+            fallback_limit = 0
+        try:
+            limit = int(fallback_limit)
+        except (TypeError, ValueError):
+            limit = 0
+    if limit <= 0:
+        return None
+    return max(1, min(limit, 500))
+
+
 def _pre_rank_execution_candidates(
     symbols: Sequence[str],
     *,
@@ -24601,9 +24626,41 @@ def _safe_env_int(key: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _safe_env_non_negative_int(key: str, default: int) -> int:
+    try:
+        value = int(get_env(key, str(default), cast=int))
+    except COMMON_EXC:
+        return default
+    return value if value >= 0 else default
+
+
+def _safe_env_float(key: str, default: float, *, min_value: float | None = None) -> float:
+    try:
+        value = float(get_env(key, str(default), cast=float))
+    except COMMON_EXC:
+        return default
+    if min_value is not None and value < min_value:
+        return min_value
+    return value
+
+
+def _safe_env_bool(key: str, default: bool) -> bool:
+    try:
+        return bool(get_env(key, default, cast=bool))
+    except COMMON_EXC:
+        return default
+
+
 _SCREEN_BATCH_SIZE = max(1, _safe_env_int("SCREEN_BATCH_SIZE", 25))
 _SCREEN_TOPN = max(1, _safe_env_int("SCREEN_TOPN", 20))
-_SCREEN_MIN_REFETCH_SEC = max(0, _safe_env_int("SCREEN_MIN_REFETCH_SEC", 900))
+_SCREEN_MIN_REFETCH_SEC = _safe_env_non_negative_int("SCREEN_MIN_REFETCH_SEC", 900)
+_SCREEN_ROTATE_UNSEEN_ENABLED = _safe_env_bool("AI_TRADING_SCREEN_ROTATE_UNSEEN_ENABLED", False)
+_SCREEN_CYCLE_BUDGET_MS = _safe_env_non_negative_int("AI_TRADING_SCREEN_CYCLE_BUDGET_MS", 12_000)
+_SCREEN_INTER_SYMBOL_SLEEP_SEC = _safe_env_float(
+    "AI_TRADING_SCREEN_INTER_SYMBOL_SLEEP_SEC",
+    0.0,
+    min_value=0.0,
+)
 _LAST_SCREEN_FETCH: dict[str, float] = {}
 _MINUTE_STALE_TOLERANCE_OVERRIDE = max(0, _safe_env_int("MINUTE_STALE_TOLERANCE_SEC", 420))
 _SKIP_MINUTE_CHECK_WHEN = str(
@@ -24620,19 +24677,34 @@ def _should_refetch_screen_symbol(symbol: str, now_ts: float | None = None) -> b
     return False
 
 
-def _prefilter_screen_symbols(candidates: Sequence[str]) -> list[str]:
+def _screen_pause(multiplier: float = 1.0) -> None:
+    try:
+        scale = max(0.0, float(multiplier))
+    except (TypeError, ValueError):
+        scale = 1.0
+    delay_s = _SCREEN_INTER_SYMBOL_SLEEP_SEC * scale
+    if delay_s > 0:
+        time.sleep(delay_s)
+
+
+def _prefilter_screen_symbols(candidates: Sequence[str]) -> tuple[list[str], list[str]]:
     now_ts = time.time()
     filtered: list[str] = []
+    throttled: list[str] = []
+    seen: set[str] = set()
     for candidate in candidates:
         symbol = str(candidate).strip().upper()
-        if not symbol:
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        if len(filtered) >= _SCREEN_TOPN:
+            throttled.append(symbol)
             continue
         if not _should_refetch_screen_symbol(symbol, now_ts):
+            throttled.append(symbol)
             continue
         filtered.append(symbol)
-        if len(filtered) >= _SCREEN_TOPN:
-            break
-    return filtered
+    return filtered, throttled
 
 
 def _iter_screen_batches(symbols: Sequence[str]) -> Iterable[list[str]]:
@@ -24914,10 +24986,38 @@ def screen_universe(
             normalized_candidates = [
                 sym.strip().upper() for sym in ordered_candidates if str(sym).strip()
             ]
-            filtered_candidates = _prefilter_screen_symbols(ordered_candidates)
-            if not filtered_candidates and normalized_candidates:
+            filtered_candidates, throttled_candidates = _prefilter_screen_symbols(ordered_candidates)
+            cached_candidates = [sym for sym in normalized_candidates if sym in _SCREEN_CACHE]
+            if not filtered_candidates and cached_candidates:
+                filtered_candidates = cached_candidates[:_SCREEN_TOPN]
+                logger.info(
+                    "SCREEN_CACHE_REUSED",
+                    extra={
+                        "cached_candidates": len(cached_candidates),
+                        "selected": len(filtered_candidates),
+                    },
+                )
+            elif (
+                not filtered_candidates
+                and normalized_candidates
+                and _SCREEN_ROTATE_UNSEEN_ENABLED
+            ):
                 filtered_candidates = normalized_candidates[:_SCREEN_TOPN]
+                logger.info(
+                    "SCREEN_ROTATE_UNSEEN_FALLBACK",
+                    extra={"selected": len(filtered_candidates)},
+                )
             cand_set = set(filtered_candidates)
+            if not cand_set:
+                logger.info(
+                    "SCREEN_NO_ELIGIBLE_CANDIDATES",
+                    extra={
+                        "candidates": len(normalized_candidates),
+                        "top_n": _SCREEN_TOPN,
+                        "rotate_unseen": _SCREEN_ROTATE_UNSEEN_ENABLED,
+                    },
+                )
+                return []
             top_n = min(_SCREEN_TOPN, max(len(cand_set), 1))
             logger.info(
                 f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
@@ -24925,7 +25025,7 @@ def screen_universe(
 
             spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
             if spy_df is None or spy_df.empty:
-                time.sleep(0.25)
+                _screen_pause(multiplier=2.5)
                 spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
             if spy_df is None or spy_df.empty:
                 if not is_market_open():
@@ -24970,16 +25070,16 @@ def screen_universe(
                 if sym not in cand_set:
                     _SCREEN_CACHE.pop(sym, None)
 
-            throttled = {
-                sym
-                for sym in normalized_candidates
-                if sym not in filtered_candidates and sym in cand_set
-            }
+            throttled = set(throttled_candidates) - cand_set
             filtered_out = {sym: "throttled" for sym in throttled}
             new_syms = [sym for sym in filtered_candidates if sym not in _SCREEN_CACHE]
             tried = len(filtered_candidates)
             valid = sum(1 for sym in filtered_candidates if sym in _SCREEN_CACHE)
             empty = failed = 0
+            budget_ms = _SCREEN_CYCLE_BUDGET_MS
+            screening_started = time.monotonic()
+            processed_new_symbols = 0
+            budget_exhausted = False
 
             minute_fetcher = getattr(runtime, "data_fetcher", None)
             minute_loader = (
@@ -25010,9 +25110,28 @@ def screen_universe(
                 return ser if isinstance(ser, pd.Series) else pd.Series()
 
             for batch in _iter_screen_batches(new_syms):
+                if budget_ms > 0:
+                    elapsed_ms = int((time.monotonic() - screening_started) * 1000)
+                    if elapsed_ms >= budget_ms:
+                        budget_exhausted = True
+                        logger.info(
+                            "SCREEN_CYCLE_BUDGET_REACHED",
+                            extra={
+                                "elapsed_ms": elapsed_ms,
+                                "budget_ms": budget_ms,
+                                "remaining_new_symbols": max(0, len(new_syms) - processed_new_symbols),
+                            },
+                        )
+                        break
                 primary_frames: dict[str, pd.DataFrame | None] = {}
                 missing_symbols: list[str] = []
                 for sym in batch:
+                    if budget_ms > 0:
+                        elapsed_ms = int((time.monotonic() - screening_started) * 1000)
+                        if elapsed_ms >= budget_ms:
+                            budget_exhausted = True
+                            break
+                    processed_new_symbols += 1
                     if callable(minute_loader) and not _screen_schema_recent(sym, "1Min", "alpaca_iex"):
                         try:
                             minute_frame = minute_loader(runtime, sym, lookback_minutes=5)
@@ -25028,6 +25147,8 @@ def screen_universe(
                     primary_frames[sym] = df_primary
                     if not is_valid_ohlcv(df_primary):
                         missing_symbols.append(sym)
+                if budget_exhausted:
+                    break
 
                 backup_frames: dict[str, pd.DataFrame] = {}
                 if missing_symbols:
@@ -25047,7 +25168,7 @@ def screen_universe(
                         empty += 1
                         filtered_out[sym] = "no_data"
                         logger.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe (post-backup)")
-                        time.sleep(0.1)
+                        _screen_pause()
                         continue
 
                     validation_result = _validate_market_data_quality(df, sym)
@@ -25055,7 +25176,7 @@ def screen_universe(
                         failed += 1
                         filtered_out[sym] = validation_result["reason"]
                         logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
-                        time.sleep(0.1)
+                        _screen_pause()
                         continue
 
                     original_len = len(df)
@@ -25066,7 +25187,7 @@ def screen_universe(
                         logger.debug(
                             f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
                         )
-                        time.sleep(0.1)
+                        _screen_pause()
                         continue
 
                     try:
@@ -25092,7 +25213,7 @@ def screen_universe(
                             avg_volume,
                             min_liquidity,
                         )
-                        time.sleep(0.1)
+                        _screen_pause()
                         continue
 
                     series = _calc_atr(df)
@@ -25112,7 +25233,7 @@ def screen_universe(
                                 logger.warning(
                                     f"[SCREEN_UNIVERSE] {sym}: ATR unavailable after extended fetch"
                                 )
-                                time.sleep(0.25)
+                                _screen_pause(multiplier=2.5)
                                 continue
                             df = df2
                         except (ValueError, TypeError, OSError):
@@ -25121,7 +25242,7 @@ def screen_universe(
                             logger.warning(
                                 f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
                             )
-                            time.sleep(0.25)
+                            _screen_pause(multiplier=2.5)
                             continue
 
                     atr_val = series.iloc[-1]
@@ -25154,7 +25275,7 @@ def screen_universe(
                                 signal_strength,
                                 min_signal_strength,
                             )
-                            time.sleep(0.1)
+                            _screen_pause()
                             continue
                     if not pd.isna(atr_val):
                         _SCREEN_CACHE[sym] = float(atr_val)
@@ -25165,7 +25286,9 @@ def screen_universe(
                         failed += 1
                         filtered_out[sym] = "atr_nan"
                         logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
-                    time.sleep(0.25)
+                    _screen_pause(multiplier=2.5)
+                if budget_exhausted:
+                    break
 
             atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
             ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
@@ -25188,6 +25311,10 @@ def screen_universe(
                     "empty": empty,
                     "failed": failed,
                     "failed_total": total_failed,
+                    "budget_ms": budget_ms,
+                    "budget_exhausted": budget_exhausted,
+                    "new_symbols_considered": len(new_syms),
+                    "new_symbols_processed": processed_new_symbols,
                 },
             )
 
@@ -28184,6 +28311,25 @@ def _prepare_run(
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
     if degraded_cycle and symbols:
         symbols = _truncate_degraded_candidates(symbols, runtime, reason=degrade_reason)
+        runtime.tickers = symbols
+    if symbols:
+        pre_ranked_symbols = _pre_rank_execution_candidates(symbols, runtime=runtime)
+        prepare_limit = _resolve_prepare_symbol_limit()
+        if prepare_limit is not None and len(pre_ranked_symbols) > prepare_limit:
+            dropped_count = len(pre_ranked_symbols) - prepare_limit
+            symbols = pre_ranked_symbols[:prepare_limit]
+            logger.info(
+                "PREPARE_SYMBOL_LIMIT_APPLIED",
+                extra={
+                    "before": len(pre_ranked_symbols),
+                    "after": len(symbols),
+                    "limit": prepare_limit,
+                    "dropped": dropped_count,
+                    "selected_sample": symbols[:10],
+                },
+            )
+        else:
+            symbols = pre_ranked_symbols
         runtime.tickers = symbols
     setattr(runtime, "_data_degraded", bool(degraded_cycle))
     if degrade_reason:

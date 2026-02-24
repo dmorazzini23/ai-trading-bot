@@ -10,6 +10,7 @@ from ai_trading.data.bars import StockBarsRequest, TimeFrame
 
 def test_screen_universe_apierror_skips_symbol(monkeypatch):
     monkeypatch.setattr(bot, "_SCREEN_CACHE", {})
+    monkeypatch.setattr(bot, "_LAST_SCREEN_FETCH", {})
     monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "is_valid_ohlcv", lambda df: df is not None and not df.empty)

@@ -142,6 +142,7 @@ def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest
     monkeypatch.setattr(bot_engine, "ta", DummyTA(), raising=False)
     monkeypatch.setattr(bot_engine.time, "sleep", lambda *_, **__: None)
     bot_engine._SCREEN_CACHE.clear()
+    bot_engine._LAST_SCREEN_FETCH.clear()
     bot_engine._screening_in_progress = False
 
     caplog.set_level(logging.INFO)

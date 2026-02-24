@@ -187,6 +187,7 @@ def test_screen_universe_atr_fallback(monkeypatch):
 
     monkeypatch.setattr(bot, "ta", types.SimpleNamespace(_failed=True))
     monkeypatch.setattr(bot, "_SCREEN_CACHE", {})
+    monkeypatch.setattr(bot, "_LAST_SCREEN_FETCH", {})
     monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "is_valid_ohlcv", lambda df: True)
@@ -227,6 +228,7 @@ def test_screen_universe_refetches_for_missing_atr(monkeypatch):
     import ai_trading.data.fetch as data_fetch
 
     monkeypatch.setattr(bot, "_SCREEN_CACHE", {})
+    monkeypatch.setattr(bot, "_LAST_SCREEN_FETCH", {})
     monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "is_valid_ohlcv", lambda df: True)
@@ -282,6 +284,7 @@ def test_screen_universe_skips_when_atr_still_missing(monkeypatch):
     import ai_trading.data.fetch as data_fetch
 
     monkeypatch.setattr(bot, "_SCREEN_CACHE", {})
+    monkeypatch.setattr(bot, "_LAST_SCREEN_FETCH", {})
     monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
     monkeypatch.setattr(bot, "is_market_open", lambda: True)
     monkeypatch.setattr(bot, "is_valid_ohlcv", lambda df: True)
@@ -322,3 +325,69 @@ def test_screen_universe_skips_when_atr_still_missing(monkeypatch):
 
     assert result == []
     assert called["extended"] is True
+
+
+def test_screen_universe_reuses_cached_candidates_when_refetch_window_open(monkeypatch):
+    monkeypatch.setattr(bot, "_SCREEN_CACHE", {"AAA": 1.25})
+    monkeypatch.setattr(bot, "_LAST_SCREEN_FETCH", {"AAA": bot.time.time()})
+    monkeypatch.setattr(bot, "_SCREEN_ROTATE_UNSEEN_ENABLED", False)
+    monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "is_market_open", lambda: True)
+
+    rows = bot.ATR_LENGTH + 3
+    df_spy = pd.DataFrame(
+        {
+            "open": [100.0] * rows,
+            "high": [101.0] * rows,
+            "low": [99.0] * rows,
+            "close": [100.5] * rows,
+            "volume": [500_000] * rows,
+        }
+    )
+
+    class DummyFetcher:
+        def __init__(self):
+            self.requested: list[str] = []
+
+        def get_daily_df(self, runtime, sym):
+            self.requested.append(sym)
+            if sym == "SPY":
+                return df_spy
+            raise AssertionError(f"unexpected fetch for {sym}")
+
+    fetcher = DummyFetcher()
+    runtime = types.SimpleNamespace(data_fetcher=fetcher)
+
+    selected = bot.screen_universe(["AAA"], runtime)
+
+    assert selected == ["AAA"]
+    assert fetcher.requested == ["SPY"]
+
+
+def test_screen_universe_does_not_rotate_unseen_when_window_throttled(monkeypatch):
+    monkeypatch.setattr(bot, "_SCREEN_CACHE", {})
+    monkeypatch.setattr(bot, "_LAST_SCREEN_FETCH", {"AAA": bot.time.time()})
+    monkeypatch.setattr(bot, "_SCREEN_ROTATE_UNSEEN_ENABLED", False)
+    monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
+
+    class DummyFetcher:
+        def get_daily_df(self, runtime, sym):
+            raise AssertionError(f"unexpected fetch for {sym}")
+
+    runtime = types.SimpleNamespace(data_fetcher=DummyFetcher())
+
+    selected = bot.screen_universe(["AAA"], runtime)
+
+    assert selected == []
+
+
+def test_resolve_prepare_symbol_limit_prefers_explicit_setting(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_PREPARE_SYMBOL_LIMIT", "12")
+    monkeypatch.setenv("MAX_SYMBOLS_PER_CYCLE", "3")
+    assert bot._resolve_prepare_symbol_limit() == 12
+
+
+def test_resolve_prepare_symbol_limit_falls_back_to_max_symbols(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_PREPARE_SYMBOL_LIMIT", "0")
+    monkeypatch.setenv("MAX_SYMBOLS_PER_CYCLE", "4")
+    assert bot._resolve_prepare_symbol_limit() == 4

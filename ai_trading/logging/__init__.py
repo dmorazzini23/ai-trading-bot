@@ -1360,9 +1360,17 @@ def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | 
         payload["status"] = status
     if error is not None:
         payload["error"] = error
-        logger.warning("FETCH_ATTEMPT", extra=payload)
-    else:
-        logger.info("FETCH_ATTEMPT", extra=payload)
+    level = logging.WARNING if error is not None else logging.INFO
+    status_key = str(status) if status is not None else "none"
+    error_key = str(error).strip().lower().replace(" ", "_") if error is not None else "ok"
+    throttle_key = f"FETCH_ATTEMPT_{provider}_{status_key}_{error_key}"
+    log_throttled_event(
+        logger,
+        throttle_key,
+        level=level,
+        extra=payload,
+        message="FETCH_ATTEMPT",
+    )
 
 
 def log_backup_provider_used(
