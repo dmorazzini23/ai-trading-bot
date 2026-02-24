@@ -133,7 +133,10 @@ from ai_trading.core.runtime_contract import (
     require_dependency,
     require_no_stubs,
 )
-from ai_trading.oms.cancel_all import cancel_all_open_orders as cancel_all_open_orders_oms
+from ai_trading.oms.cancel_all import (
+    CancelAllResult,
+    cancel_all_open_orders as cancel_all_open_orders_oms,
+)
 from ai_trading.oms.pretrade import (
     OrderIntent as PretradeOrderIntent,
     SlidingWindowRateLimiter,
@@ -286,6 +289,7 @@ try:
     )
     from ai_trading.execution.timing import execution_span, record_cycle_wall
 except (ImportError, ModuleNotFoundError, AttributeError):
+    from contextlib import contextmanager
     from types import SimpleNamespace as _SimpleNamespace
 
     EXEC_GUARD_STATE = _SimpleNamespace(active=False)
@@ -301,6 +305,10 @@ except (ImportError, ModuleNotFoundError, AttributeError):
 
     def guard_shadow_active() -> bool:
         return bool(getattr(EXEC_GUARD_STATE, 'active', False))
+
+    @contextmanager
+    def execution_span(*_a, **_k):
+        yield
 
     def record_cycle_wall(*_a, **_k):
         return None
@@ -17395,13 +17403,15 @@ def submit_order(
             for key, value in exec_kwargs.items()
             if key not in {"annotations", "using_fallback_price", "price_hint"}
         }
-        return _exec_engine.execute_order(
-            symbol,
-            core_side,
-            qty,
-            price=price,
-            **engine_kwargs,
-        )
+        timing_meta = {"symbol": symbol, "side": side_norm, "qty": int(max(qty, 0))}
+        with execution_span(None, **timing_meta):
+            return _exec_engine.execute_order(
+                symbol,
+                core_side,
+                qty,
+                price=price,
+                **engine_kwargs,
+            )
     except (APIError, TimeoutError, ConnectionError, AlpacaOrderHTTPError) as e:
         logger.error(
             "BROKER_OP_FAILED",
@@ -29586,6 +29596,105 @@ def _startup_cancel_stale_seconds() -> float:
     return max(10.0, min(raw_value, 7200.0))
 
 
+def _extract_order_identifier(order: Any) -> str | None:
+    """Return broker order id/client_order_id when available."""
+
+    if isinstance(order, MappingABC):
+        for key in ("id", "client_order_id"):
+            value = order.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return None
+    for attr in ("id", "client_order_id"):
+        value = getattr(order, attr, None)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _select_startup_stale_orders(open_orders: Iterable[Any]) -> list[Any]:
+    """Return stale pending orders for startup cleanup in stale-only mode."""
+
+    stale_after = _startup_cancel_stale_seconds()
+    now_dt = datetime.now(UTC)
+    selected: list[Any] = []
+    for order in open_orders:
+        status = _normalize_broker_order_status(getattr(order, "status", None))
+        if status and status not in _PENDING_ORDER_STUCK_STATUSES:
+            continue
+        age_s = _pending_order_broker_age_seconds(order, now_dt)
+        if age_s is None or age_s < stale_after:
+            continue
+        selected.append(order)
+    return selected
+
+
+def _cancel_open_orders_subset(
+    runtime: Any,
+    *,
+    orders: Iterable[Any],
+    reason_code: str,
+) -> CancelAllResult:
+    """Cancel only ``orders`` and return a structured result summary."""
+
+    target_orders = list(orders)
+    if not target_orders:
+        return CancelAllResult(
+            total_open=0,
+            cancelled=0,
+            failed=0,
+            reason_code=reason_code,
+            errors=[],
+        )
+
+    api = getattr(runtime, "api", None)
+    if api is None:
+        return CancelAllResult(
+            total_open=len(target_orders),
+            cancelled=0,
+            failed=len(target_orders),
+            reason_code=reason_code,
+            errors=[{"error": "missing_api"}],
+        )
+
+    cancel_order = getattr(api, "cancel_order", None)
+    cancel_order_by_id = getattr(api, "cancel_order_by_id", None)
+    if not callable(cancel_order) and not callable(cancel_order_by_id):
+        return CancelAllResult(
+            total_open=len(target_orders),
+            cancelled=0,
+            failed=len(target_orders),
+            reason_code=reason_code,
+            errors=[{"error": "missing_cancel_capability"}],
+        )
+
+    cancelled = 0
+    failed = 0
+    errors: list[dict[str, Any]] = []
+    for order in target_orders:
+        order_id = _extract_order_identifier(order)
+        if not order_id:
+            failed += 1
+            errors.append({"error": "missing_order_identifier"})
+            continue
+        try:
+            if callable(cancel_order):
+                cancel_order(order_id)
+            elif callable(cancel_order_by_id):
+                cancel_order_by_id(order_id)
+            cancelled += 1
+        except Exception as exc:
+            failed += 1
+            errors.append({"order_id": order_id, "error": str(exc)})
+    return CancelAllResult(
+        total_open=len(target_orders),
+        cancelled=cancelled,
+        failed=failed,
+        reason_code=reason_code,
+        errors=errors,
+    )
+
+
 def _startup_cancel_decision(
     open_orders: Iterable[Any],
     *,
@@ -33094,7 +33203,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         exc_info=True,
                     )
                 if startup_should_cancel:
-                    startup_result = cancel_all_open_orders_oms(runtime)
+                    if startup_mode == "stale_only":
+                        startup_result = _cancel_open_orders_subset(
+                            runtime,
+                            orders=_select_startup_stale_orders(startup_open_orders),
+                            reason_code="STARTUP_STALE_PENDING",
+                        )
+                    else:
+                        startup_result = cancel_all_open_orders_oms(runtime)
                     startup_log = logger.warning if startup_result.failed else logger.info
                     try:
                         startup_open_count = int(
@@ -33110,6 +33226,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         "STARTUP_CLEANUP",
                         extra={
                             **startup_details,
+                            "cancel_scope": startup_mode,
+                            "targeted_orders": int(startup_result.total_open),
                             "cancelled": startup_result.cancelled,
                             "failed": startup_result.failed,
                         },

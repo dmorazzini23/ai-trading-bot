@@ -283,3 +283,73 @@ def test_startup_cancel_decision_stale_only(monkeypatch):
     assert should_cancel is True
     assert details["reason"] == "stale_pending"
     assert details["stale_ids"] == ["stale-1"]
+
+
+def test_select_startup_stale_orders(monkeypatch):
+    now = datetime(2026, 2, 24, 19, 0, tzinfo=UTC)
+    monkeypatch.setattr(be, "datetime", types.SimpleNamespace(now=lambda tz=None: now))
+    monkeypatch.setenv("AI_TRADING_STARTUP_CANCEL_STALE_SEC", "60")
+
+    stale = _order("pending_new", "stale-1", created_at=now - timedelta(seconds=120))
+    fresh = _order("pending_new", "fresh-1", created_at=now - timedelta(seconds=20))
+    terminal = _order("filled", "filled-1", created_at=now - timedelta(seconds=180))
+
+    selected = be._select_startup_stale_orders([fresh, terminal, stale])
+    selected_ids = [getattr(order, "id", None) for order in selected]
+    assert selected_ids == ["stale-1"]
+
+
+def test_cancel_open_orders_subset_cancels_target_orders():
+    cancelled_ids: list[str] = []
+
+    class _API:
+        def cancel_order(self, order_id):
+            cancelled_ids.append(str(order_id))
+
+    runtime = types.SimpleNamespace(api=_API())
+    stale_a = _order("pending_new", "stale-a", client_order_id="client-a")
+    stale_b = _order("pending_new", "stale-b", client_order_id="client-b")
+
+    result = be._cancel_open_orders_subset(
+        runtime,
+        orders=[stale_a, stale_b],
+        reason_code="STARTUP_STALE_PENDING",
+    )
+
+    assert result.reason_code == "STARTUP_STALE_PENDING"
+    assert result.total_open == 2
+    assert result.cancelled == 2
+    assert result.failed == 0
+    assert cancelled_ids == ["stale-a", "stale-b"]
+
+
+def test_cancel_open_orders_subset_never_falls_back_to_cancel_all(monkeypatch):
+    class _API:
+        pass
+
+    runtime = types.SimpleNamespace(api=_API())
+    stale_order = _order("pending_new", "stale-a")
+    cancel_all_called = {"value": False}
+
+    def _unexpected_cancel_all(_runtime):
+        cancel_all_called["value"] = True
+        return be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="CANCEL_ALL_TRIGGERED",
+            errors=[],
+        )
+
+    monkeypatch.setattr(be, "cancel_all_open_orders_oms", _unexpected_cancel_all)
+    result = be._cancel_open_orders_subset(
+        runtime,
+        orders=[stale_order],
+        reason_code="STARTUP_STALE_PENDING",
+    )
+
+    assert cancel_all_called["value"] is False
+    assert result.reason_code == "STARTUP_STALE_PENDING"
+    assert result.total_open == 1
+    assert result.cancelled == 0
+    assert result.failed == 1

@@ -1,5 +1,6 @@
 import logging
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,3 +56,22 @@ def test_stage_timer_minimum_elapsed_ms():
     tiny = [record for record in records if getattr(record, "stage", None) == "TINY"]
     assert tiny
     assert tiny[0].elapsed_ms == 1
+
+
+def test_submit_order_records_execution_timing(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    class _ExecEngine:
+        @staticmethod
+        def execute_order(symbol, side, qty, price=None, **kwargs):  # noqa: ARG004
+            time.sleep(0.002)
+            return {"id": "order-1", "symbol": symbol, "side": side, "qty": qty}
+
+    execution_timing.reset_cycle()
+    monkeypatch.setattr(bot_engine, "_exec_engine", _ExecEngine())
+    monkeypatch.setattr(bot_engine, "_resolve_trading_config", lambda _ctx: SimpleNamespace(rth_only=False, allow_extended=True))
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+
+    order = bot_engine.submit_order(SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
+    assert order is not None
+    assert execution_timing.cycle_seconds() > 0.0
