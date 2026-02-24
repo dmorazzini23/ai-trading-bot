@@ -519,6 +519,37 @@ def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_fa
     assert detail_records[-1].reason == "cycle_duplicate_intent"
 
 
+def test_skip_submit_detail_logs_are_ttl_coalesced(engine_factory, caplog, monkeypatch):
+    engine = engine_factory()
+    monkeypatch.setenv("AI_TRADING_ORDER_SKIP_LOG_TTL_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_ORDER_SKIP_DETAIL_LOG_TTL_SEC", "600")
+
+    caplog.set_level("INFO", logger=lt.logger.name)
+    engine._skip_submit(
+        symbol="AAPL",
+        side="buy",
+        reason="order_pacing_cap",
+        detail="max_new_orders_per_cycle reached",
+    )
+    engine._skip_submit(
+        symbol="AAPL",
+        side="buy",
+        reason="order_pacing_cap",
+        detail="max_new_orders_per_cycle reached",
+    )
+
+    skipped_records = [
+        record for record in caplog.records if str(record.message) == "ORDER_SUBMIT_SKIPPED"
+    ]
+    assert len(skipped_records) == 1
+    detail_records = [
+        record
+        for record in caplog.records
+        if str(record.message).startswith("ORDER_SUBMIT_SKIPPED_DETAIL")
+    ]
+    assert len(detail_records) == 1
+
+
 def test_execute_order_records_failure_outcome_on_submit_exception(engine_factory, caplog):
     engine = engine_factory()
     engine._cycle_order_outcomes = []

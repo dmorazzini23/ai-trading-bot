@@ -114,3 +114,19 @@ def test_env_terminates_on_drawdown_violation(monkeypatch):
     assert violation_seen is True
     assert terminated is True
     assert info["constraint_terminated"] is True
+
+
+def test_env_exposes_episode_returns_for_callback_compat(monkeypatch):
+    _stub_gym_stack(monkeypatch)
+    data = _ohlcv_rows(120)
+    env = env_mod.TradingEnv(
+        data,
+        window=10,
+        action_config=env_mod.ActionSpaceConfig(action_type="continuous"),
+        constraint_config=env_mod.ConstraintConfig(initial_cash=10_000.0),
+    )
+
+    env.reset()
+    returns = env.episode_returns
+
+    assert isinstance(returns, list)

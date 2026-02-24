@@ -326,6 +326,20 @@ def _dataset_fingerprint_from_matrix(
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def _resolve_rl_verbose_level(env_name: str, default: int) -> int:
+    """Resolve an SB3/callback verbosity level in the supported 0..2 range."""
+
+    try:
+        raw_level = get_env(env_name, default, cast=int)
+    except (RuntimeError, TypeError, ValueError):
+        raw_level = default
+    try:
+        level = int(raw_level)
+    except (TypeError, ValueError):
+        level = int(default)
+    return max(0, min(level, 2))
+
+
 def _build_early_stopping_callback(base_cls: type[Any]) -> type[Any]:
     class EarlyStoppingCallbackImpl(base_cls):
         """
@@ -349,27 +363,52 @@ def _build_early_stopping_callback(base_cls: type[Any]) -> type[Any]:
         def _on_rollout_end(self) -> bool:
             """Called at the end of each rollout."""
             _require_numpy("EarlyStoppingCallback rollout handling")
-            if hasattr(self.training_env, "get_attr"):
+            current_mean_reward: float | None = None
+            if hasattr(self, "model"):
+                ep_info_buffer = getattr(self.model, "ep_info_buffer", None)
+                if ep_info_buffer:
+                    try:
+                        recent_rewards = [
+                            float(item.get("r"))
+                            for item in list(ep_info_buffer)[-10:]
+                            if isinstance(item, Mapping) and item.get("r") is not None
+                        ]
+                    except (AttributeError, TypeError, ValueError):
+                        recent_rewards = []
+                    if recent_rewards:
+                        current_mean_reward = float(np.mean(recent_rewards))
+            if current_mean_reward is None and hasattr(self.training_env, "get_attr"):
                 try:
                     env_rewards = self.training_env.get_attr("episode_returns")
-                    if env_rewards and len(env_rewards[0]) > 0:
-                        current_mean_reward = np.mean(env_rewards[0][-10:])
-                        if current_mean_reward > self.best_mean_reward + self.min_improvement:
-                            self.best_mean_reward = current_mean_reward
-                            self.patience_counter = 0
-                            if self.verbose > 0:
-                                logger.info(f"New best reward: {self.best_mean_reward:.4f}")
-                        else:
-                            self.patience_counter += 1
-                        if self.patience_counter >= self.patience:
-                            if self.verbose > 0:
-                                logger.info(
-                                    f"Early stopping after {self.patience} evaluations without improvement"
-                                )
-                            return False
-                except (AttributeError, TypeError, ValueError) as e:  # env may lack returns or contain bad data
-                    if self.verbose > 0:
-                        logger.warning(f"Error in early stopping callback: {e}")
+                except (AttributeError, TypeError, ValueError):
+                    env_rewards = None
+                rewards_series: list[float] = []
+                if isinstance(env_rewards, (list, tuple)) and env_rewards:
+                    first_env_rewards = env_rewards[0]
+                    if isinstance(first_env_rewards, (list, tuple)):
+                        try:
+                            rewards_series = [
+                                float(value) for value in first_env_rewards if value is not None
+                            ]
+                        except (TypeError, ValueError):
+                            rewards_series = []
+                if rewards_series:
+                    current_mean_reward = float(np.mean(rewards_series[-10:]))
+            if current_mean_reward is None:
+                return True
+            if current_mean_reward > self.best_mean_reward + self.min_improvement:
+                self.best_mean_reward = current_mean_reward
+                self.patience_counter = 0
+                if self.verbose > 0:
+                    logger.info(f"New best reward: {self.best_mean_reward:.4f}")
+            else:
+                self.patience_counter += 1
+            if self.patience_counter >= self.patience:
+                if self.verbose > 0:
+                    logger.info(
+                        f"Early stopping after {self.patience} evaluations without improvement"
+                    )
+                return False
             return True
 
     EarlyStoppingCallbackImpl.__name__ = "EarlyStoppingCallback"
@@ -862,7 +901,8 @@ class RLTrainer:
         try:
             model_params = dict(model_params or {})
             algo_config = _resolve_algo_config(self.algorithm)
-            default_params: dict[str, Any] = {"verbose": 1, "seed": self.seed}
+            sb3_verbose = _resolve_rl_verbose_level("AI_TRADING_RL_SB3_VERBOSE", 0)
+            default_params: dict[str, Any] = {"verbose": sb3_verbose, "seed": self.seed}
             tensorboard_available = importlib.util.find_spec("tensorboard") is not None
             requested_tensorboard = "tensorboard_log" in model_params
             if requested_tensorboard and not tensorboard_available:
@@ -912,9 +952,23 @@ class RLTrainer:
                 self.eval_callback = None
                 return []
             callbacks = []
-            early_stopping = EarlyStoppingCallback(patience=self.early_stopping_patience, verbose=1)
+            callback_verbose = _resolve_rl_verbose_level(
+                "AI_TRADING_RL_CALLBACK_VERBOSE",
+                0,
+            )
+            early_stopping = EarlyStoppingCallback(
+                patience=self.early_stopping_patience,
+                verbose=callback_verbose,
+            )
             callbacks.append(early_stopping)
-            self.eval_callback = DetailedEvalCallback(eval_env=self.eval_env, eval_freq=self.eval_freq, n_eval_episodes=5, deterministic=True, save_path=save_path, verbose=1)
+            self.eval_callback = DetailedEvalCallback(
+                eval_env=self.eval_env,
+                eval_freq=self.eval_freq,
+                n_eval_episodes=5,
+                deterministic=True,
+                save_path=save_path,
+                verbose=callback_verbose,
+            )
             callbacks.append(self.eval_callback)
             return callbacks
         except (AttributeError, TypeError, ValueError) as e:  # callback or env misconfiguration

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
 import math
 import os
 import random
@@ -26,7 +27,7 @@ from threading import Lock
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
-from ai_trading.logging import get_logger, log_pdt_enforcement
+from ai_trading.logging import get_logger, log_pdt_enforcement, log_throttled_event
 from ai_trading.telemetry import runtime_state
 from ai_trading.market.symbol_specs import get_tick_size
 from ai_trading.math.money import Money
@@ -1255,6 +1256,32 @@ def _config_decimal(name: str, default: Decimal) -> Decimal:
         return default
 
 
+def _resolve_skip_detail_log_ttl_seconds() -> float:
+    """Resolve per-reason TTL used to coalesce skipped-submit detail logs."""
+
+    raw_ttl = _config_float("AI_TRADING_ORDER_SKIP_DETAIL_LOG_TTL_SEC", 180.0)
+    try:
+        ttl = float(raw_ttl) if raw_ttl is not None else 180.0
+    except (TypeError, ValueError):
+        ttl = 180.0
+    if not math.isfinite(ttl):
+        ttl = 180.0
+    return max(0.0, min(ttl, 3600.0))
+
+
+def _resolve_skip_log_ttl_seconds() -> float:
+    """Resolve per-reason TTL used to coalesce skipped-submit primary logs."""
+
+    raw_ttl = _config_float("AI_TRADING_ORDER_SKIP_LOG_TTL_SEC", 120.0)
+    try:
+        ttl = float(raw_ttl) if raw_ttl is not None else 120.0
+    except (TypeError, ValueError):
+        ttl = 120.0
+    if not math.isfinite(ttl):
+        ttl = 120.0
+    return max(0.0, min(ttl, 3600.0))
+
+
 def _format_money(value: Decimal | None) -> str:
     """Return a human-readable string for Decimal money values."""
 
@@ -1886,10 +1913,16 @@ class ExecutionEngine:
         self._cred_error: Exception | None = None
         self._pending_orders: dict[str, dict[str, Any]] = {}
         self._order_signal_meta: dict[str, _SignalMeta] = {}
+        self._last_submit_outcome: dict[str, Any] = {}
+        self._last_initialize_attempt_mono: float = 0.0
+        self._last_initialize_success_mono: float = 0.0
+        self._last_broker_healthcheck_mono: float = 0.0
         self._cycle_submitted_orders: int = 0
         self._cycle_order_pacing_cap_logged: bool = False
         self._last_order_pacing_cap_log_ts: float = 0.0
         self._cycle_order_outcomes: list[dict[str, Any]] = []
+        self._skip_last_logged_at: dict[str, float] = {}
+        self._skip_detail_last_logged_at: dict[str, float] = {}
         self._recent_order_intents: dict[tuple[str, str], float] = {}
         self._cycle_reserved_intents: set[tuple[str, str]] = set()
         self._cycle_reserved_intents_lock = Lock()
@@ -1968,6 +2001,7 @@ class ExecutionEngine:
             self._cycle_reserved_intents_lock = Lock()
         self._cycle_account = None
         self._cycle_account_fetched = False
+        self._last_submit_outcome = {}
         account = self._refresh_cycle_account()
         
         # Check PDT status and activate swing mode if needed
@@ -2334,6 +2368,36 @@ class ExecutionEngine:
             return cap
         return None
 
+    def _pending_backlog_order_cap(self) -> int | None:
+        """Return emergency cap when pending backlog rises beyond threshold."""
+
+        threshold = _config_int("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", 0)
+        if threshold is None:
+            threshold = 0
+        threshold = max(0, int(threshold))
+        if threshold <= 0:
+            return None
+
+        cap_value = _config_int("AI_TRADING_PENDING_BACKLOG_CAP_VALUE", 1)
+        if cap_value is None:
+            cap_value = 1
+        cap_value = max(1, int(cap_value))
+
+        backlog = 0
+        try:
+            backlog = max(backlog, len(getattr(self, "_pending_orders", {}) or {}))
+        except Exception:
+            backlog = max(backlog, 0)
+        broker_sync = getattr(self, "_broker_sync", None)
+        if broker_sync is not None:
+            try:
+                backlog = max(backlog, len(getattr(broker_sync, "open_orders", ()) or ()))
+            except Exception:
+                backlog = max(backlog, 0)
+        if backlog < threshold:
+            return None
+        return cap_value
+
     def _resolve_order_submit_cap(self) -> tuple[int | None, str]:
         configured_cap = _config_int_alias(
             ("EXECUTION_MAX_NEW_ORDERS_PER_CYCLE", "AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE"),
@@ -2351,6 +2415,7 @@ class ExecutionEngine:
                 candidate = 0
             if candidate > 0:
                 adaptive_cap = candidate
+        backlog_cap = self._pending_backlog_order_cap()
 
         cap_sources: list[str] = []
         cap_values: list[int] = []
@@ -2363,6 +2428,9 @@ class ExecutionEngine:
         if adaptive_cap is not None:
             cap_sources.append("adaptive")
             cap_values.append(adaptive_cap)
+        if backlog_cap is not None:
+            cap_sources.append("pending_backlog")
+            cap_values.append(backlog_cap)
         if not cap_values:
             return None, "none"
         return min(cap_values), "+".join(cap_sources)
@@ -2473,6 +2541,28 @@ class ExecutionEngine:
 
     def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
         """Return True when duplicate intent should be skipped."""
+
+        suppress_when_open = _resolve_bool_env("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER")
+        if suppress_when_open is None:
+            suppress_when_open = True
+        if suppress_when_open:
+            symbol_key = str(symbol or "").upper()
+            side_key = str(side or "").lower()
+            if symbol_key and side_key in {"buy", "sell"}:
+                buy_open, sell_open = self.open_order_totals(symbol_key)
+                if (side_key == "buy" and buy_open > 0.0) or (
+                    side_key == "sell" and sell_open > 0.0
+                ):
+                    logger.info(
+                        "ORDER_INTENT_SUPPRESSED_OPEN_BROKER_ORDER",
+                        extra={
+                            "symbol": symbol_key,
+                            "side": side_key,
+                            "open_buy_qty": round(float(buy_open), 6),
+                            "open_sell_qty": round(float(sell_open), 6),
+                        },
+                    )
+                    return True
 
         window_s = self._duplicate_intent_window_seconds()
         if window_s <= 0:
@@ -2586,14 +2676,64 @@ class ExecutionEngine:
             payload["detail"] = str(detail)
         if context:
             payload["context"] = dict(context)
-        logger.info("ORDER_SUBMIT_SKIPPED", extra=payload)
-        logger.info(
-            "ORDER_SUBMIT_SKIPPED_DETAIL | reason=%s detail=%s context=%s",
-            str(reason),
-            str(detail) if detail else None,
-            dict(context) if context else None,
-            extra=payload,
+        reason_token = "".join(
+            ch if ch.isalnum() else "_"
+            for ch in str(reason or "unspecified").upper()
+        ).strip("_") or "UNSPECIFIED"
+        now_mono = float(monotonic_time())
+        skip_log_tracker_raw = getattr(self, "_skip_last_logged_at", None)
+        if isinstance(skip_log_tracker_raw, dict):
+            skip_log_tracker = skip_log_tracker_raw
+        else:
+            skip_log_tracker = {}
+            self._skip_last_logged_at = skip_log_tracker
+        skip_log_ttl_s = _resolve_skip_log_ttl_seconds()
+        last_skip_logged_raw = skip_log_tracker.get(reason_token, 0.0)
+        try:
+            last_skip_logged = float(last_skip_logged_raw)
+        except (TypeError, ValueError):
+            last_skip_logged = 0.0
+        should_log_skip = (
+            skip_log_ttl_s <= 0.0
+            or last_skip_logged <= 0.0
+            or now_mono - last_skip_logged >= skip_log_ttl_s
         )
+        if should_log_skip:
+            skip_log_tracker[reason_token] = now_mono
+            logger.info("ORDER_SUBMIT_SKIPPED", extra=payload)
+        skip_tracker_raw = getattr(self, "_skip_detail_last_logged_at", None)
+        if isinstance(skip_tracker_raw, dict):
+            skip_tracker = skip_tracker_raw
+        else:
+            skip_tracker = {}
+            self._skip_detail_last_logged_at = skip_tracker
+        detail_ttl_s = _resolve_skip_detail_log_ttl_seconds()
+        last_logged_raw = skip_tracker.get(reason_token, 0.0)
+        try:
+            last_logged = float(last_logged_raw)
+        except (TypeError, ValueError):
+            last_logged = 0.0
+        should_log_detail = (
+            detail_ttl_s <= 0.0
+            or last_logged <= 0.0
+            or now_mono - last_logged >= detail_ttl_s
+        )
+        if should_log_detail:
+            skip_tracker[reason_token] = now_mono
+            log_throttled_event(
+                logger,
+                f"ORDER_SUBMIT_SKIPPED_DETAIL_{reason_token}",
+                level=logging.INFO,
+                extra=payload,
+                message="ORDER_SUBMIT_SKIPPED_DETAIL",
+            )
+        self._last_submit_outcome = {
+            "status": "skipped",
+            "reason": str(reason),
+            "symbol": str(symbol) if symbol else None,
+            "side": str(side) if side else None,
+            "detail": str(detail) if detail else None,
+        }
         self._record_cycle_order_outcome(
             symbol=symbol,
             side=side,
@@ -2629,6 +2769,14 @@ class ExecutionEngine:
         if detail:
             payload["detail"] = str(detail)
         logger.error("ORDER_SUBMIT_FAILED", extra=payload)
+        self._last_submit_outcome = {
+            "status": "failed",
+            "reason": str(reason),
+            "symbol": str(symbol) if symbol else None,
+            "side": str(side) if side else None,
+            "detail": str(detail) if detail else None,
+            "status_code": int(status_code) if status_code is not None else None,
+        }
         self._record_cycle_order_outcome(
             symbol=symbol,
             side=side,
@@ -3023,11 +3171,49 @@ class ExecutionEngine:
             True if initialization successful, False otherwise
         """
         try:
+            now_mono = float(monotonic_time())
             self._refresh_settings()
             if self._explicit_mode is not None:
                 self.execution_mode = str(self._explicit_mode).lower()
             if self._explicit_shadow is not None:
                 self.shadow_mode = bool(self._explicit_shadow)
+            healthcheck_sec = _config_float("AI_TRADING_ENGINE_HEALTHCHECK_SEC", 120.0)
+            if healthcheck_sec is None:
+                healthcheck_sec = 120.0
+            healthcheck_sec = max(5.0, min(float(healthcheck_sec), 3600.0))
+            if self.trading_client is not None and self.is_initialized:
+                last_health_mono = float(getattr(self, "_last_broker_healthcheck_mono", 0.0) or 0.0)
+                if last_health_mono > 0.0 and (now_mono - last_health_mono) < healthcheck_sec:
+                    return True
+                if self._validate_connection():
+                    self.is_initialized = True
+                    self._last_broker_healthcheck_mono = now_mono
+                    return True
+                self.is_initialized = False
+            cooldown_sec = _config_float("AI_TRADING_ENGINE_INIT_COOLDOWN_SEC", 30.0)
+            if cooldown_sec is None:
+                cooldown_sec = 30.0
+            cooldown_sec = max(0.0, min(float(cooldown_sec), 600.0))
+            last_attempt_mono = float(getattr(self, "_last_initialize_attempt_mono", 0.0) or 0.0)
+            if (
+                self.trading_client is not None
+                and cooldown_sec > 0.0
+                and last_attempt_mono > 0.0
+                and (now_mono - last_attempt_mono) < cooldown_sec
+            ):
+                if self._validate_connection():
+                    self.is_initialized = True
+                    self._last_broker_healthcheck_mono = now_mono
+                    return True
+                logger.debug(
+                    "ALPACA_CLIENT_INIT_COOLDOWN_ACTIVE",
+                    extra={
+                        "cooldown_sec": round(cooldown_sec, 1),
+                        "retry_after_sec": round(cooldown_sec - (now_mono - last_attempt_mono), 1),
+                    },
+                )
+                return False
+            self._last_initialize_attempt_mono = now_mono
             if _pytest_mode_active():
                 try:
                     from tests.support.mocks import MockTradingClient  # type: ignore
@@ -3036,6 +3222,8 @@ class ExecutionEngine:
                 if MockTradingClient:
                     self.trading_client = MockTradingClient(paper=True)
                     self.is_initialized = True
+                    self._last_initialize_success_mono = now_mono
+                    self._last_broker_healthcheck_mono = now_mono
                     return True
             key = self._api_key
             secret = self._api_secret
@@ -3100,6 +3288,8 @@ class ExecutionEngine:
             self.trading_client = raw_client
             if self._validate_connection():
                 self.is_initialized = True
+                self._last_initialize_success_mono = float(monotonic_time())
+                self._last_broker_healthcheck_mono = self._last_initialize_success_mono
                 self._reconcile_durable_intents()
                 logger.info("Alpaca execution engine ready for trading")
                 return True
@@ -3117,7 +3307,11 @@ class ExecutionEngine:
             return False
 
     def _ensure_initialized(self) -> bool:
-        if self.is_initialized:
+        if self.is_initialized and self.trading_client is not None:
+            return True
+        if self.trading_client is not None and self._validate_connection():
+            self.is_initialized = True
+            self._last_broker_healthcheck_mono = float(monotonic_time())
             return True
         return self.initialize()
 
@@ -6544,6 +6738,13 @@ class ExecutionEngine:
             submit_started_at=submit_started_at,
             ack_timed_out=bool(ack_timed_out),
         )
+        self._last_submit_outcome = {
+            "status": outcome_status,
+            "reason": None,
+            "symbol": symbol,
+            "side": mapped_side,
+            "order_id": str(order_id_display) if order_id_display is not None else None,
+        }
 
         logger.info(
             "EXEC_ENGINE_EXECUTE_ORDER",
@@ -7431,7 +7632,7 @@ class ExecutionEngine:
             else:
                 logger.error("Failed to get account info during validation")
                 return False
-        except (APIError, TimeoutError, ConnectionError) as e:
+        except (APIError, TimeoutError, ConnectionError, AttributeError) as e:
             logger.error("CONNECTION_VALIDATION_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return False
 
@@ -8327,7 +8528,10 @@ class ExecutionEngine:
         if not symbol:
             return (0.0, 0.0)
         key = symbol.upper()
-        return self._open_order_qty_index.get(key, (0.0, 0.0))
+        index = getattr(self, "_open_order_qty_index", None)
+        if not isinstance(index, Mapping):
+            return (0.0, 0.0)
+        return index.get(key, (0.0, 0.0))
 
 
 class LiveTradingExecutionEngine(ExecutionEngine):

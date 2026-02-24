@@ -340,6 +340,17 @@ _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
 _PENDING_ORDER_WARMUP_REMAINING_KEY = "warmup_cycles_remaining"
 _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR = "_cycle_pending_blocked_symbols"
+_PENDING_SYMBOL_DECAY_TRACKER_KEY = "_pending_symbol_decay_tracker"
+_RUNTIME_INFO_LOG_TRACKER_KEY = "_runtime_info_log_tracker"
+_PENDING_SYMBOL_DECAY_MIN_SEC_DEFAULT = 45.0
+_PENDING_SYMBOL_DECAY_ACK_MULT_DEFAULT = 8.0
+_PENDING_SYMBOL_DECAY_MIN_CYCLES_DEFAULT = 2
+_PENDING_SYMBOL_RELEASE_COOLDOWN_SEC_DEFAULT = 120.0
+_PENDING_POLICY_APPLIED_LOG_TTL_SEC_DEFAULT = 180.0
+_PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC_DEFAULT = 180.0
+_PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC_DEFAULT = 120.0
+_PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT_DEFAULT = 8
+_NETTING_CYCLE_SLO_LOG_TTL_SEC_DEFAULT = 180.0
 _STARTUP_CLEANUP_STALE_SEC_DEFAULT = 120.0
 
 _EASTERN_TZ = ZoneInfo("America/New_York")
@@ -1200,10 +1211,14 @@ def _pre_rank_execution_candidates(
 
     top_n = _resolve_execution_candidate_top_n()
     weights: Mapping[str, Any] | None = None
+    runtime_rank: Mapping[str, Any] | None = None
     if runtime is not None:
         candidate = getattr(runtime, "portfolio_weights", None)
         if isinstance(candidate, Mapping):
             weights = candidate
+        rank_candidate = getattr(runtime, "execution_candidate_rank", None)
+        if isinstance(rank_candidate, Mapping):
+            runtime_rank = rank_candidate
 
     def _weight(sym: str) -> float:
         if not weights:
@@ -1214,11 +1229,30 @@ def _pre_rank_execution_candidates(
         except (TypeError, ValueError):
             return 0.0
 
-    ranked = (
-        sorted(deduped, key=lambda sym: (-_weight(sym), sym))
-        if weights
-        else list(deduped)
-    )
+    def _runtime_rank_score(sym: str) -> float:
+        if not runtime_rank:
+            return 0.0
+        raw_rank = runtime_rank.get(sym, runtime_rank.get(sym.lower(), 0.0))  # type: ignore[union-attr]
+        try:
+            rank = float(raw_rank)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(rank):
+            return 0.0
+        return rank
+
+    rank_source = "input_order"
+    if runtime_rank:
+        ranked = sorted(
+            deduped,
+            key=lambda sym: (-_runtime_rank_score(sym), -_weight(sym), sym),
+        )
+        rank_source = "runtime_rank"
+    elif weights:
+        ranked = sorted(deduped, key=lambda sym: (-_weight(sym), sym))
+        rank_source = "portfolio_weights"
+    else:
+        ranked = list(deduped)
     if top_n is None or len(ranked) <= top_n:
         return ranked
 
@@ -1230,6 +1264,7 @@ def _pre_rank_execution_candidates(
             "requested": len(ranked),
             "selected": len(selected),
             "top_n": top_n,
+            "rank_source": rank_source,
             "selected_sample": selected[:10],
             "dropped_sample": dropped[:10],
         },
@@ -29335,6 +29370,10 @@ def _ensure_execution_engine(runtime) -> None:
     exec_engine = getattr(runtime, "execution_engine", None) or getattr(
         runtime, "exec_engine", None
     )
+    if exec_engine is None and _exec_engine is not None:
+        exec_engine = _exec_engine
+        runtime.execution_engine = exec_engine
+        runtime.exec_engine = exec_engine
     if exec_engine is None:
         try:
             exec_engine = _ExecutionEngine(runtime)
@@ -29815,6 +29854,366 @@ def _set_pending_blocked_symbols(runtime: Any, symbols: Iterable[str]) -> None:
             logger.debug("PENDING_BLOCKED_SYMBOLS_STATE_SET_FAILED", exc_info=True)
 
 
+def _resolve_runtime_info_log_ttl_seconds(
+    env_name: str,
+    default_seconds: float,
+) -> float:
+    """Resolve throttled INFO cadence from managed environment config."""
+
+    try:
+        ttl = float(get_env(env_name, default_seconds, cast=float))
+    except COMMON_EXC:
+        ttl = float(default_seconds)
+    if not math.isfinite(ttl):
+        ttl = float(default_seconds)
+    return max(0.0, min(ttl, 3600.0))
+
+
+def _should_emit_runtime_info_log(
+    runtime: Any,
+    key: str,
+    *,
+    ttl_seconds: float,
+    now_mono: float | None = None,
+) -> bool:
+    """Return ``True`` when INFO log ``key`` should emit under TTL coalescing."""
+
+    ttl = max(float(ttl_seconds), 0.0)
+    if ttl <= 0.0:
+        return True
+    state = _ensure_runtime_state(runtime)
+    tracker_raw = state.get(_RUNTIME_INFO_LOG_TRACKER_KEY)
+    tracker: dict[str, float]
+    if isinstance(tracker_raw, dict):
+        tracker = tracker_raw
+    else:
+        tracker = {}
+        state[_RUNTIME_INFO_LOG_TRACKER_KEY] = tracker
+    now_value = float(now_mono if now_mono is not None else monotonic_time())
+    try:
+        last_value = float(tracker.get(key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        last_value = 0.0
+    if last_value <= 0.0 or now_value - last_value >= ttl:
+        tracker[key] = now_value
+        return True
+    return False
+
+
+def _get_pending_symbol_decay_tracker(runtime: Any) -> dict[str, dict[str, Any]]:
+    """Return per-symbol pending block decay state."""
+
+    state = _ensure_runtime_state(runtime)
+    tracker = state.get(_PENDING_SYMBOL_DECAY_TRACKER_KEY)
+    if not isinstance(tracker, dict):
+        tracker = {}
+        state[_PENDING_SYMBOL_DECAY_TRACKER_KEY] = tracker
+    return tracker
+
+
+def _pending_symbol_decay_config(*, force_cleanup_after: float) -> dict[str, Any]:
+    """Resolve per-symbol pending block decay configuration."""
+
+    try:
+        enabled = bool(get_env("AI_TRADING_PENDING_SYMBOL_DECAY_ENABLED", False, cast=bool))
+    except COMMON_EXC:
+        enabled = False
+
+    try:
+        ack_timeout_s = float(get_env("ORDER_ACK_TIMEOUT_SECONDS", 20.0, cast=float))
+    except COMMON_EXC:
+        ack_timeout_s = 20.0
+    ack_timeout_s = max(1.0, min(ack_timeout_s, 3600.0))
+
+    try:
+        ack_mult = float(
+            get_env(
+                "AI_TRADING_PENDING_SYMBOL_DECAY_ACK_MULT",
+                _PENDING_SYMBOL_DECAY_ACK_MULT_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        ack_mult = _PENDING_SYMBOL_DECAY_ACK_MULT_DEFAULT
+    ack_mult = max(1.0, min(ack_mult, 100.0))
+
+    try:
+        min_sec = float(
+            get_env(
+                "AI_TRADING_PENDING_SYMBOL_DECAY_MIN_SEC",
+                _PENDING_SYMBOL_DECAY_MIN_SEC_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        min_sec = _PENDING_SYMBOL_DECAY_MIN_SEC_DEFAULT
+    min_sec = max(1.0, min(min_sec, 86400.0))
+
+    try:
+        max_sec = float(
+            get_env(
+                "AI_TRADING_PENDING_SYMBOL_DECAY_MAX_SEC",
+                force_cleanup_after,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        max_sec = float(force_cleanup_after)
+    max_sec = max(min_sec, min(max_sec, 86400.0))
+
+    release_after_s = max(min_sec, ack_timeout_s * ack_mult)
+    release_after_s = min(release_after_s, max_sec)
+
+    try:
+        min_cycles = int(
+            get_env(
+                "AI_TRADING_PENDING_SYMBOL_DECAY_MIN_CYCLES",
+                _PENDING_SYMBOL_DECAY_MIN_CYCLES_DEFAULT,
+                cast=int,
+            )
+        )
+    except COMMON_EXC:
+        min_cycles = _PENDING_SYMBOL_DECAY_MIN_CYCLES_DEFAULT
+    min_cycles = max(1, min(min_cycles, 120))
+
+    try:
+        release_cooldown_s = float(
+            get_env(
+                "AI_TRADING_PENDING_SYMBOL_RELEASE_COOLDOWN_SEC",
+                _PENDING_SYMBOL_RELEASE_COOLDOWN_SEC_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        release_cooldown_s = _PENDING_SYMBOL_RELEASE_COOLDOWN_SEC_DEFAULT
+    release_cooldown_s = max(0.0, min(release_cooldown_s, 86400.0))
+
+    return {
+        "enabled": enabled,
+        "ack_timeout_s": ack_timeout_s,
+        "ack_mult": ack_mult,
+        "release_after_s": release_after_s,
+        "min_cycles": min_cycles,
+        "release_cooldown_s": release_cooldown_s,
+    }
+
+
+def _apply_pending_symbol_block_decay(
+    runtime: Any,
+    raw_symbols: Iterable[str],
+    *,
+    symbol_oldest_age_s: Mapping[str, float],
+    symbol_statuses: Mapping[str, set[str]],
+    now: float,
+    block_scope: str,
+    force_cleanup_after: float,
+) -> tuple[set[str], dict[str, Any] | None]:
+    """Return effective blocked symbols after optional stale-age decay."""
+
+    raw_blocked = sorted(
+        {str(symbol).strip().upper() for symbol in raw_symbols if str(symbol).strip()}
+    )
+    if block_scope != "symbol":
+        return set(raw_blocked), None
+
+    tracker = _get_pending_symbol_decay_tracker(runtime)
+    config = _pending_symbol_decay_config(force_cleanup_after=force_cleanup_after)
+    decay_enabled = bool(config["enabled"])
+    release_after_s = float(config["release_after_s"])
+    min_cycles_required = int(config["min_cycles"])
+    try:
+        sample_limit = int(
+            get_env(
+                "AI_TRADING_PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT",
+                _PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT_DEFAULT,
+                cast=int,
+            )
+        )
+    except COMMON_EXC:
+        sample_limit = _PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT_DEFAULT
+    sample_limit = max(1, min(sample_limit, _PENDING_ORDER_SAMPLE_LIMIT))
+
+    effective_blocked: set[str] = set()
+    released_symbols: list[str] = []
+    cooldown_symbols: list[str] = []
+    symbol_states: list[dict[str, Any]] = []
+    now_s = float(now)
+
+    for symbol in raw_blocked:
+        raw_entry = tracker.get(symbol)
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+
+        raw_first_seen = entry.get("first_seen_ts", now_s)
+        try:
+            first_seen_ts = float(raw_first_seen)
+        except (TypeError, ValueError):
+            first_seen_ts = now_s
+        if first_seen_ts <= 0.0:
+            first_seen_ts = now_s
+
+        raw_cycles = entry.get("cycles_seen", 0)
+        try:
+            cycles_seen = int(raw_cycles)
+        except (TypeError, ValueError):
+            cycles_seen = 0
+        cycles_seen = max(cycles_seen + 1, 1)
+
+        raw_prev_age = entry.get("max_age_s", 0.0)
+        try:
+            prev_max_age_s = float(raw_prev_age)
+        except (TypeError, ValueError):
+            prev_max_age_s = 0.0
+        prev_max_age_s = max(prev_max_age_s, 0.0)
+
+        current_age_s = max(float(symbol_oldest_age_s.get(symbol, 0.0) or 0.0), 0.0)
+        max_age_s = max(prev_max_age_s, current_age_s)
+
+        statuses = {
+            str(status).strip().lower()
+            for status in symbol_statuses.get(symbol, set())
+            if str(status).strip()
+        }
+        statuses_stuck = (not statuses) or statuses.issubset(_PENDING_ORDER_STUCK_STATUSES)
+
+        raw_released_until = entry.get("released_until_ts", 0.0)
+        try:
+            released_until_ts = float(raw_released_until)
+        except (TypeError, ValueError):
+            released_until_ts = 0.0
+
+        entry.update(
+            {
+                "first_seen_ts": first_seen_ts,
+                "last_seen_ts": now_s,
+                "cycles_seen": cycles_seen,
+                "max_age_s": max_age_s,
+                "statuses": sorted(statuses),
+            }
+        )
+        statuses_sample = sorted(statuses)[:4]
+
+        if released_until_ts > now_s:
+            cooldown_symbols.append(symbol)
+            tracker[symbol] = entry
+            if len(symbol_states) < sample_limit:
+                symbol_states.append(
+                    {
+                        "symbol": symbol,
+                        "state": "cooldown",
+                        "cycles_seen": cycles_seen,
+                        "max_age_s": round(max_age_s, 3),
+                        "release_after_s": round(release_after_s, 3),
+                        "age_to_release_s": round(max(release_after_s - max_age_s, 0.0), 3),
+                        "cooldown_remaining_s": round(max(released_until_ts - now_s, 0.0), 3),
+                        "statuses": statuses_sample,
+                        "statuses_stuck": bool(statuses_stuck),
+                        "eligible_for_release": False,
+                    }
+                )
+            continue
+
+        if (
+            decay_enabled
+            and statuses_stuck
+            and cycles_seen >= min_cycles_required
+            and max_age_s >= release_after_s
+        ):
+            released_symbols.append(symbol)
+            release_count_raw = entry.get("release_count", 0)
+            try:
+                release_count = int(release_count_raw)
+            except (TypeError, ValueError):
+                release_count = 0
+            entry["release_count"] = max(release_count + 1, 1)
+            entry["last_released_ts"] = now_s
+            cooldown_s = float(config["release_cooldown_s"])
+            entry["released_until_ts"] = now_s + cooldown_s if cooldown_s > 0.0 else now_s
+            tracker[symbol] = entry
+            if len(symbol_states) < sample_limit:
+                symbol_states.append(
+                    {
+                        "symbol": symbol,
+                        "state": "released",
+                        "cycles_seen": cycles_seen,
+                        "max_age_s": round(max_age_s, 3),
+                        "release_after_s": round(release_after_s, 3),
+                        "age_to_release_s": 0.0,
+                        "cooldown_remaining_s": round(
+                            max(float(entry["released_until_ts"]) - now_s, 0.0),
+                            3,
+                        ),
+                        "statuses": statuses_sample,
+                        "statuses_stuck": bool(statuses_stuck),
+                        "eligible_for_release": True,
+                    }
+                )
+            continue
+
+        entry["released_until_ts"] = 0.0
+        tracker[symbol] = entry
+        effective_blocked.add(symbol)
+        if len(symbol_states) < sample_limit:
+            eligible_for_release = (
+                decay_enabled
+                and statuses_stuck
+                and cycles_seen >= min_cycles_required
+                and max_age_s >= release_after_s
+            )
+            symbol_states.append(
+                {
+                    "symbol": symbol,
+                    "state": "blocked",
+                    "cycles_seen": cycles_seen,
+                    "max_age_s": round(max_age_s, 3),
+                    "release_after_s": round(release_after_s, 3),
+                    "age_to_release_s": round(max(release_after_s - max_age_s, 0.0), 3),
+                    "cooldown_remaining_s": 0.0,
+                    "statuses": statuses_sample,
+                    "statuses_stuck": bool(statuses_stuck),
+                    "eligible_for_release": bool(eligible_for_release),
+                }
+            )
+
+    for symbol in list(tracker.keys()):
+        if symbol in raw_blocked:
+            continue
+        entry = tracker.get(symbol)
+        if not isinstance(entry, dict):
+            tracker.pop(symbol, None)
+            continue
+        raw_released_until = entry.get("released_until_ts", 0.0)
+        try:
+            released_until_ts = float(raw_released_until)
+        except (TypeError, ValueError):
+            released_until_ts = 0.0
+        if released_until_ts > now_s:
+            continue
+        tracker.pop(symbol, None)
+
+    if not raw_blocked:
+        return set(), None
+
+    telemetry: dict[str, Any] = {
+        "raw_blocked_count": len(raw_blocked),
+        "effective_blocked_count": len(effective_blocked),
+        "released_count": len(released_symbols),
+        "cooldown_active_count": len(cooldown_symbols),
+        "release_after_s": round(float(config["release_after_s"]), 3),
+        "min_cycles": int(config["min_cycles"]),
+        "cooldown_s": round(float(config["release_cooldown_s"]), 3),
+        "ack_timeout_s": round(float(config["ack_timeout_s"]), 3),
+        "ack_mult": round(float(config["ack_mult"]), 3),
+        "telemetry_sample_limit": sample_limit,
+    }
+    if released_symbols:
+        telemetry["released_symbols"] = released_symbols[:_PENDING_ORDER_SAMPLE_LIMIT]
+    if cooldown_symbols:
+        telemetry["cooldown_symbols"] = cooldown_symbols[:_PENDING_ORDER_SAMPLE_LIMIT]
+    if symbol_states:
+        telemetry["symbol_states"] = symbol_states
+    return effective_blocked, telemetry
+
+
 def _apply_pending_new_timeout_policy(runtime: Any) -> bool:
     """Best-effort per-order pending policy action using execution engine hooks."""
 
@@ -29864,7 +30263,6 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         confirmed_pending = open_list
 
     blocked_symbols = _collect_pending_blocked_symbols(confirmed_pending)
-    _set_pending_blocked_symbols(runtime, blocked_symbols)
 
     now = time.time()
     now_dt = datetime.fromtimestamp(now, tz=UTC)
@@ -29873,11 +30271,16 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     pending_statuses: set[str] = set()
     oldest_pending_age_s: float | None = None
     oldest_stuck_age_s: float | None = None
+    symbol_oldest_age_s: dict[str, float] = {}
+    symbol_statuses: dict[str, set[str]] = {}
     for order in confirmed_pending:
         status = _normalize_broker_order_status(getattr(order, "status", None))
+        symbol = _extract_pending_order_symbol(order)
         pending_ids.append(str(getattr(order, "id", "?")))
         if status:
             pending_statuses.add(status)
+            if symbol:
+                symbol_statuses.setdefault(symbol, set()).add(status)
         broker_age_s = _pending_order_broker_age_seconds(order, now_dt)
         if broker_age_s is not None:
             if oldest_pending_age_s is None or broker_age_s > oldest_pending_age_s:
@@ -29886,6 +30289,11 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 oldest_stuck_age_s is None or broker_age_s > oldest_stuck_age_s
             ):
                 oldest_stuck_age_s = broker_age_s
+            if symbol:
+                symbol_oldest_age_s[symbol] = max(
+                    symbol_oldest_age_s.get(symbol, 0.0),
+                    float(broker_age_s),
+                )
 
     tracker = _get_pending_tracker(runtime)
     first_seen = tracker.get(_PENDING_ORDER_FIRST_SEEN_KEY)
@@ -29929,8 +30337,71 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     if stale_stuck_detected:
         cleanup_after = min(cleanup_after, force_cleanup_after)
 
+    had_blocked_symbols = bool(blocked_symbols)
+    blocked_symbols, decay_telemetry = _apply_pending_symbol_block_decay(
+        runtime,
+        blocked_symbols,
+        symbol_oldest_age_s=symbol_oldest_age_s,
+        symbol_statuses=symbol_statuses,
+        now=now,
+        block_scope=block_scope,
+        force_cleanup_after=force_cleanup_after,
+    )
+    _set_pending_blocked_symbols(runtime, blocked_symbols)
+    if decay_telemetry is not None:
+        decay_payload = dict(decay_telemetry)
+        if decay_payload.get("released_count", 0) > 0:
+            logger.warning(
+                "PENDING_SYMBOL_BLOCK_DECAY_RELEASED",
+                extra=decay_payload,
+            )
+        else:
+            log_throttled_event(
+                logger,
+                "PENDING_SYMBOL_BLOCK_DECAY_METRIC",
+                level=logging.INFO,
+                extra=decay_payload,
+                message="PENDING_SYMBOL_BLOCK_DECAY_METRIC",
+            )
+        symbol_states = decay_payload.get("symbol_states")
+        if isinstance(symbol_states, list) and symbol_states:
+            cooldown_ttl_s = _resolve_runtime_info_log_ttl_seconds(
+                "AI_TRADING_PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC",
+                _PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC_DEFAULT,
+            )
+            signature_states: list[str] = []
+            for entry in symbol_states[:3]:
+                if not isinstance(entry, dict):
+                    continue
+                symbol_token = str(entry.get("symbol") or "?").strip().upper() or "?"
+                state_token = str(entry.get("state") or "unknown").strip().lower() or "unknown"
+                signature_states.append(f"{symbol_token}:{state_token}")
+            cooldown_signature = (
+                f"{int(decay_payload.get('raw_blocked_count', 0))}:"
+                f"{int(decay_payload.get('effective_blocked_count', 0))}:"
+                f"{int(decay_payload.get('released_count', 0))}:"
+                f"{int(decay_payload.get('cooldown_active_count', 0))}"
+            )
+            if signature_states:
+                cooldown_signature = f"{cooldown_signature}:{','.join(signature_states)}"
+            if _should_emit_runtime_info_log(
+                runtime,
+                f"PENDING_SYMBOL_COOLDOWN_TELEMETRY:{cooldown_signature}",
+                ttl_seconds=cooldown_ttl_s,
+            ):
+                log_throttled_event(
+                    logger,
+                    f"PENDING_SYMBOL_COOLDOWN_TELEMETRY_{cooldown_signature}",
+                    level=logging.INFO,
+                    extra=decay_payload,
+                    message="PENDING_SYMBOL_COOLDOWN_TELEMETRY",
+                )
+
     sample_ids = pending_ids[:_PENDING_ORDER_SAMPLE_LIMIT]
     statuses = sorted(pending_statuses)
+    allow_symbol_scope_continue = (
+        block_scope == "symbol" and had_blocked_symbols and not blocked_symbols
+    )
 
     if first_seen is None:
         first_seen_ts = now
@@ -29977,6 +30448,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
             },
         )
+        if allow_symbol_scope_continue:
+            return False
         if not stale_stuck_detected:
             return True
         first_seen = first_seen_ts
@@ -30025,22 +30498,44 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
     if age < cleanup_after and not stale_stuck_detected:
+        if allow_symbol_scope_continue:
+            return False
         return True
 
     if block_scope == "symbol":
         if _apply_pending_new_timeout_policy(runtime):
             tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-            logger.info(
-                "PENDING_ORDERS_POLICY_APPLIED",
-                extra={
-                    "pending_count": len(pending_ids),
-                    "pending_statuses": statuses,
-                    "blocked_symbols_count": len(blocked_symbols),
-                    "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
-                    "age_s": int(max(age, 0)),
-                    "cleanup_after_s": int(cleanup_after),
-                },
+            policy_payload = {
+                "pending_count": len(pending_ids),
+                "pending_statuses": statuses,
+                "blocked_symbols_count": len(blocked_symbols),
+                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+                "age_s": int(max(age, 0)),
+                "cleanup_after_s": int(cleanup_after),
+            }
+            policy_ttl_s = _resolve_runtime_info_log_ttl_seconds(
+                "AI_TRADING_PENDING_POLICY_APPLIED_LOG_TTL_SEC",
+                _PENDING_POLICY_APPLIED_LOG_TTL_SEC_DEFAULT,
             )
+            policy_signature = (
+                f"{policy_payload['pending_count']}:"
+                f"{policy_payload['blocked_symbols_count']}:"
+                f"{','.join(statuses[:3])}"
+            )
+            if _should_emit_runtime_info_log(
+                runtime,
+                f"PENDING_ORDERS_POLICY_APPLIED:{policy_signature}",
+                ttl_seconds=policy_ttl_s,
+            ):
+                log_throttled_event(
+                    logger,
+                    "PENDING_ORDERS_POLICY_APPLIED",
+                    level=logging.INFO,
+                    message="PENDING_ORDERS_POLICY_APPLIED",
+                    extra=policy_payload,
+                )
+            if allow_symbol_scope_continue:
+                return False
             return True
 
     try:
@@ -30394,20 +30889,130 @@ def _freshness_seconds_for_timeframe(timeframe: str) -> int:
 
 def _score_from_bars(df) -> tuple[float, float]:
     try:
-        if df is None or df.empty or len(df) < 2:
+        if df is None or df.empty:
             return 0.0, 0.0
-        close = df["close"]
-        last = float(close.iloc[-1])
-        prev = float(close.iloc[-2])
-        if prev <= 0:
+        if "close" not in getattr(df, "columns", ()):
             return 0.0, 0.0
-        ret = (last / prev) - 1.0
-        score = max(-1.0, min(1.0, ret * 100.0))
-        confidence = min(1.0, abs(score))
+
+        def _clamped_int_env(name: str, default: int, lower: int, upper: int) -> int:
+            try:
+                value = int(get_env(name, default, cast=int))
+            except Exception:
+                value = int(default)
+            return max(lower, min(value, upper))
+
+        fast_bars = _clamped_int_env("AI_TRADING_SCORE_FAST_BARS", 3, 1, 240)
+        slow_bars = _clamped_int_env("AI_TRADING_SCORE_SLOW_BARS", 12, 2, 480)
+        vol_bars = _clamped_int_env("AI_TRADING_SCORE_VOL_BARS", 30, 5, 720)
+
+        try:
+            fast_weight = float(get_env("AI_TRADING_SCORE_FAST_WEIGHT", 0.65, cast=float))
+        except Exception:
+            fast_weight = 0.65
+        if not math.isfinite(fast_weight):
+            fast_weight = 0.65
+        fast_weight = max(0.0, min(fast_weight, 1.0))
+
+        try:
+            z_clip = float(get_env("AI_TRADING_SCORE_Z_CLIP", 3.0, cast=float))
+        except Exception:
+            z_clip = 3.0
+        if not math.isfinite(z_clip):
+            z_clip = 3.0
+        z_clip = max(0.5, min(z_clip, 10.0))
+
+        try:
+            min_abs_score = float(get_env("AI_TRADING_SCORE_MIN_ABS", 0.04, cast=float))
+        except Exception:
+            min_abs_score = 0.04
+        if not math.isfinite(min_abs_score):
+            min_abs_score = 0.04
+        min_abs_score = max(0.0, min(min_abs_score, 0.95))
+
+        required_bars = max(fast_bars, slow_bars, vol_bars) + 1
+        close_tail = df["close"].tail(required_bars).tolist()
+        close_values: list[float] = []
+        for raw_value in close_tail:
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(value) or value <= 0.0:
+                continue
+            close_values.append(value)
+        if len(close_values) < 3:
+            return 0.0, 0.0
+
+        last_px = close_values[-1]
+        fast_idx = len(close_values) - 1 - min(fast_bars, len(close_values) - 1)
+        slow_idx = len(close_values) - 1 - min(slow_bars, len(close_values) - 1)
+        fast_prev = close_values[fast_idx]
+        slow_prev = close_values[slow_idx]
+        if fast_prev <= 0.0 or slow_prev <= 0.0:
+            return 0.0, 0.0
+
+        fast_ret = (last_px / fast_prev) - 1.0
+        slow_ret = (last_px / slow_prev) - 1.0
+        blended_ret = (fast_weight * fast_ret) + ((1.0 - fast_weight) * slow_ret)
+
+        returns: list[float] = []
+        vol_window = min(max(vol_bars, 2), len(close_values) - 1)
+        start_idx = len(close_values) - (vol_window + 1)
+        for idx in range(max(start_idx, 1), len(close_values)):
+            prev_px = close_values[idx - 1]
+            cur_px = close_values[idx]
+            if prev_px <= 0.0:
+                continue
+            returns.append((cur_px / prev_px) - 1.0)
+        if len(returns) < 2:
+            return 0.0, 0.0
+
+        mean_ret = sum(returns) / len(returns)
+        variance = sum((ret - mean_ret) ** 2 for ret in returns) / max(len(returns) - 1, 1)
+        realized_vol = math.sqrt(max(variance, 0.0))
+        if not math.isfinite(realized_vol) or realized_vol <= 0.0:
+            return 0.0, 0.0
+
+        z_score = blended_ret / max(realized_vol, 1e-9)
+        clipped_z = max(-z_clip, min(z_clip, z_score))
+        score = clipped_z / z_clip
+        if abs(score) < min_abs_score:
+            return 0.0, 0.0
+
+        sample_ratio = min(1.0, float(len(returns)) / float(max(vol_bars, 1)))
+        confidence = max(0.0, min(1.0, abs(score) * sample_ratio))
         return score, confidence
     except Exception:
         logger.debug("SCORE_FROM_BARS_FAILED", exc_info=True)
         return 0.0, 0.0
+
+
+def _resolve_submit_none_reason(runtime: Any) -> str:
+    """Resolve a structured gate reason when submit_order returns ``None``."""
+
+    default_reason = "ORDER_SUBMIT_SKIPPED"
+    exec_engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
+    outcome = getattr(exec_engine, "_last_submit_outcome", None)
+    if not isinstance(outcome, Mapping):
+        return default_reason
+
+    reason_raw = outcome.get("reason")
+    if reason_raw not in (None, ""):
+        try:
+            token = str(reason_raw).strip().upper()
+        except Exception:
+            token = ""
+        if token:
+            return token
+
+    status_raw = outcome.get("status")
+    try:
+        status = str(status_raw or "").strip().lower()
+    except Exception:
+        status = ""
+    if status == "failed":
+        return "ORDER_SUBMIT_FAILED"
+    return default_reason
 
 
 def _redact_snapshot_payload(payload: Any) -> Any:
@@ -32027,6 +32632,25 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     symbol_returns: dict[str, list[float]] = {}
     skip_reasons: dict[str, list[str]] = {sym: [] for sym in symbols}
     liq_lookback_bars = max(1, int(get_env("AI_TRADING_LIQ_LOOKBACK_BARS", 60, cast=int)))
+    netting_fetch_max_attempts = max(
+        1,
+        min(int(get_env("AI_TRADING_NETTING_FETCH_MAX_ATTEMPTS", 2, cast=int)), 5),
+    )
+    strict_edge_gate_enabled = bool(
+        get_env("AI_TRADING_EDGE_COST_STRICT_GATE_ENABLED", True, cast=bool)
+    )
+    edge_cost_min_ratio = float(get_env("AI_TRADING_EDGE_COST_MIN_RATIO", 1.15, cast=float))
+    edge_min_expected_bps = float(get_env("AI_TRADING_EDGE_MIN_EXPECTED_BPS", 2.0, cast=float))
+    if not math.isfinite(edge_cost_min_ratio):
+        edge_cost_min_ratio = 1.15
+    if not math.isfinite(edge_min_expected_bps):
+        edge_min_expected_bps = 2.0
+    edge_cost_min_ratio = max(0.0, min(edge_cost_min_ratio, 10.0))
+    edge_min_expected_bps = max(0.0, min(edge_min_expected_bps, 500.0))
+    proposals_total = 0
+    proposals_blocked = 0
+    orders_attempted = 0
+    orders_submitted = 0
 
     for sleeve in sleeves:
         end = now
@@ -32037,7 +32661,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 dep="data_primary",
                 breakers=breakers,
                 classify_exception=classify_exception,
-                max_attempts=3,
+                max_attempts=netting_fetch_max_attempts,
                 max_total_seconds=5.0,
                 base_delay=0.2,
                 jitter=0.1,
@@ -32136,6 +32760,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 vol,
                 volume=float(df["volume"].iloc[-1]) if "volume" in df.columns else None,
             )
+            proposals_total += 1
             rolling_volume = _rolling_volume_from_bars(df, liq_lookback_bars)
             latest_liquidity[symbol] = _liquidity_features(
                 spread,
@@ -32170,6 +32795,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     proposal.blocked = True
                     proposal.reason_code = "COST_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
+            if strict_edge_gate_enabled and not proposal.blocked:
+                edge_bps = max(float(proposal.expected_edge_bps), 0.0)
+                cost_bps = max(float(proposal.expected_cost_bps), 1e-6)
+                edge_ratio = edge_bps / cost_bps
+                if edge_bps < edge_min_expected_bps:
+                    proposal.blocked = True
+                    proposal.reason_code = "EDGE_FLOOR_GATE"
+                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+                elif edge_ratio < edge_cost_min_ratio:
+                    proposal.blocked = True
+                    proposal.reason_code = "EDGE_COST_RATIO_GATE"
+                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+                proposal.debug["edge_to_cost_ratio"] = edge_ratio
+                proposal.debug["edge_cost_min_ratio"] = edge_cost_min_ratio
+                proposal.debug["edge_min_expected_bps"] = edge_min_expected_bps
+            if proposal.blocked:
+                proposals_blocked += 1
 
             if quarantine_enabled and quarantine_manager is not None:
                 q_sleeve = False
@@ -32209,6 +32851,27 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             latest_bar_ts[symbol] = bar_ts
             if price > 0:
                 latest_price[symbol] = price
+
+    if bool(get_env("AI_TRADING_EVENT_DRIVEN_NEW_BAR_ONLY", True, cast=bool)) and symbols:
+        sleeve_count = max(len(sleeves), 1)
+        no_new_bar_symbols = [
+            symbol
+            for symbol in symbols
+            if (
+                not proposals_by_symbol.get(symbol)
+                and len(skip_reasons.get(symbol, [])) >= sleeve_count
+                and all(reason == "NO_NEW_BAR" for reason in skip_reasons.get(symbol, []))
+            )
+        ]
+        if len(no_new_bar_symbols) == len(symbols):
+            logger.info(
+                "NETTING_EVENT_DRIVEN_SKIP_NO_NEW_BARS",
+                extra={
+                    "symbols": len(symbols),
+                    "sleeves": len(sleeves),
+                },
+            )
+            return
 
     if quarantine_enabled and quarantine_manager is not None:
         quarantine_min_trades = max(
@@ -32306,6 +32969,19 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             proposals,
             float(getattr(cfg, "disagree_ratio_threshold", 0.35)),
         )
+
+    candidate_rank: dict[str, float] = {}
+    for symbol, target in targets.items():
+        edge_total = sum(max(float(proposal.expected_edge_bps), 0.0) for proposal in target.proposals)
+        cost_total = sum(max(float(proposal.expected_cost_bps), 0.0) for proposal in target.proposals)
+        max_conf = max((float(proposal.confidence) for proposal in target.proposals), default=0.0)
+        disagreement = float(target.disagreement_ratio) if target.disagreement_ratio is not None else 1.0
+        if not math.isfinite(disagreement):
+            disagreement = 1.0
+        disagreement = max(0.05, min(disagreement, 1.0))
+        rank_score = (edge_total - cost_total) * max(max_conf, 0.05) * disagreement
+        candidate_rank[symbol] = rank_score
+    setattr(runtime, "execution_candidate_rank", candidate_rank)
 
     apply_global_caps(
         targets,
@@ -32714,6 +33390,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             continue
 
         try:
+            orders_attempted += 1
             order = submit_order(
                 runtime,
                 symbol,
@@ -32797,7 +33474,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
         if order is None:
-            gates.append("MARKET_CLOSED_BLOCK")
+            gates.append(_resolve_submit_none_reason(runtime))
             record = DecisionRecord(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
@@ -32825,6 +33502,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
         state.last_order_bar_ts[symbol] = net_target.bar_ts
         state.last_order_client_id[symbol] = client_order_id
+        orders_submitted += 1
 
         total_target = sum(abs(p.target_dollars) for p in net_target.proposals)
         if total_target > 0:
@@ -32935,6 +33613,39 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             tca=tca_record,
         )
         _write_decision_record(record, decision_path)
+    cycle_elapsed_ms = int(max((monotonic_time() - float(loop_start)) * 1000.0, 0.0))
+    slo_payload = {
+        "symbols_requested": len(symbols),
+        "targets": len(targets),
+        "proposals_total": proposals_total,
+        "proposals_blocked": proposals_blocked,
+        "orders_attempted": orders_attempted,
+        "orders_submitted": orders_submitted,
+        "orders_skipped": max(orders_attempted - orders_submitted, 0),
+        "compute_ms": cycle_elapsed_ms,
+    }
+    slo_ttl_s = _resolve_runtime_info_log_ttl_seconds(
+        "AI_TRADING_NETTING_CYCLE_SLO_LOG_TTL_SEC",
+        _NETTING_CYCLE_SLO_LOG_TTL_SEC_DEFAULT,
+    )
+    slo_signature = (
+        f"{int(slo_payload['orders_submitted'])}:"
+        f"{int(slo_payload['orders_skipped'])}:"
+        f"{int(slo_payload['proposals_blocked'])}:"
+        f"{int(slo_payload['targets'])}"
+    )
+    if _should_emit_runtime_info_log(
+        runtime,
+        f"NETTING_CYCLE_SLO:{slo_signature}",
+        ttl_seconds=slo_ttl_s,
+    ):
+        log_throttled_event(
+            logger,
+            f"NETTING_CYCLE_SLO_{slo_signature}",
+            level=logging.INFO,
+            extra=slo_payload,
+            message="NETTING_CYCLE_SLO",
+        )
     if quarantine_enabled:
         _persist_quarantine_manager(state)
 
@@ -33345,13 +34056,30 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     str(sym).strip().upper() for sym in blocked_symbols_raw if str(sym).strip()
                 }
                 if _pending_orders_block_scope() == "symbol" and blocked_symbols:
-                    logger.info(
-                        "PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE",
-                        extra={
-                            "blocked_symbols_count": len(blocked_symbols),
-                            "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
-                        },
+                    blocked_payload = {
+                        "blocked_symbols_count": len(blocked_symbols),
+                        "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+                    }
+                    blocked_ttl_s = _resolve_runtime_info_log_ttl_seconds(
+                        "AI_TRADING_PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC",
+                        _PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC_DEFAULT,
                     )
+                    blocked_signature = (
+                        f"{blocked_payload['blocked_symbols_count']}:"
+                        f"{','.join(blocked_payload['blocked_symbols'][:3])}"
+                    )
+                    if _should_emit_runtime_info_log(
+                        runtime,
+                        f"PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE:{blocked_signature}",
+                        ttl_seconds=blocked_ttl_s,
+                    ):
+                        log_throttled_event(
+                            logger,
+                            "PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE",
+                            level=logging.INFO,
+                            message="PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE",
+                            extra=blocked_payload,
+                        )
                 else:
                     return
             if _netting_pipeline_enabled(runtime):

@@ -98,6 +98,8 @@ _RUNTIME_CFG_SNAPSHOT: dict[str, Any] | None = None
 _MARKET_CLOSE_TRAINING_LOCK = threading.Lock()
 _LAST_MARKET_CLOSE_TRAINING_DATE: str | None = None
 _LAST_EXECUTION_PHASE: str | None = None
+_INFO_LOG_TTL_LOCK = threading.Lock()
+_INFO_LOG_TTL_TRACKER: dict[str, float] = {}
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -118,6 +120,33 @@ def _release_market_close_training(date_key: str) -> None:
     with _MARKET_CLOSE_TRAINING_LOCK:
         if _LAST_MARKET_CLOSE_TRAINING_DATE == date_key:
             _LAST_MARKET_CLOSE_TRAINING_DATE = None
+
+
+def _resolve_info_log_ttl_seconds(env_name: str, default_seconds: float) -> float:
+    """Resolve INFO log TTL from managed env config."""
+
+    try:
+        ttl = float(get_env(env_name, default_seconds, cast=float))
+    except Exception:
+        ttl = float(default_seconds)
+    if ttl < 0.0:
+        return 0.0
+    return min(ttl, 3600.0)
+
+
+def _should_emit_info_log(key: str, *, ttl_seconds: float) -> bool:
+    """Return True when ``key`` should emit based on monotonic TTL coalescing."""
+
+    ttl = max(float(ttl_seconds), 0.0)
+    if ttl <= 0.0:
+        return True
+    now_mono = float(time.monotonic())
+    with _INFO_LOG_TTL_LOCK:
+        last = float(_INFO_LOG_TTL_TRACKER.get(key, 0.0) or 0.0)
+        if last <= 0.0 or now_mono - last >= ttl:
+            _INFO_LOG_TTL_TRACKER[key] = now_mono
+            return True
+    return False
 
 
 def _invoke_market_close_training() -> None:
@@ -423,8 +452,17 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
 
 
 def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: int) -> None:
-    cadence = int(get_env("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES", 1, cast=int))
-    cadence = max(1, cadence)
+    cadence_open = int(get_env("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES", 1, cast=int))
+    cadence_open = max(1, cadence_open)
+    cadence_closed = int(
+        get_env(
+            "AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES_CLOSED",
+            max(cadence_open, 5),
+            cast=int,
+        )
+    )
+    cadence_closed = max(1, cadence_closed)
+    cadence = cadence_closed if closed else cadence_open
     if cycle_index % cadence != 0:
         return
     try:
@@ -477,6 +515,21 @@ def _emit_cycle_slo_alerts(
         return
     warn_ms = float(get_env("AI_TRADING_SLO_CYCLE_COMPUTE_WARN_MS", 30000, cast=float))
     crit_ms = float(get_env("AI_TRADING_SLO_CYCLE_COMPUTE_CRIT_MS", 60000, cast=float))
+    if closed:
+        warn_ms = float(
+            get_env(
+                "AI_TRADING_SLO_CYCLE_COMPUTE_WARN_MS_CLOSED",
+                max(warn_ms, 120000.0),
+                cast=float,
+            )
+        )
+        crit_ms = float(
+            get_env(
+                "AI_TRADING_SLO_CYCLE_COMPUTE_CRIT_MS_CLOSED",
+                max(crit_ms, warn_ms * 2.0),
+                cast=float,
+            )
+        )
     warn_ms = max(0.0, warn_ms)
     crit_ms = max(warn_ms, crit_ms)
     if compute_ms >= crit_ms:
@@ -804,7 +857,15 @@ def run_cycle() -> None:
         try:
             if not _is_market_open_base():
                 _maybe_trigger_market_close_training()
-                logger.info("MARKET_CLOSED_SKIP_CYCLE")
+                closed_skip_ttl_s = _resolve_info_log_ttl_seconds(
+                    "AI_TRADING_MARKET_CLOSED_SKIP_LOG_TTL_SEC",
+                    300.0,
+                )
+                if _should_emit_info_log(
+                    "MARKET_CLOSED_SKIP_CYCLE",
+                    ttl_seconds=closed_skip_ttl_s,
+                ):
+                    logger.info("MARKET_CLOSED_SKIP_CYCLE")
                 return
         except Exception:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
@@ -2576,14 +2637,23 @@ def main(argv: list[str] | None = None) -> None:
                             elapsed_ms = None
                             budget_ms = None
                         if elapsed_ms is not None and budget_ms is not None:
-                            logger.info(
-                                "CYCLE_COMPUTE_BUDGET",
-                                extra={
-                                    "elapsed_ms": elapsed_ms,
-                                    "budget_ms": budget_ms,
-                                    "status": "OVER" if budget.over_budget() else "OK",
-                                },
+                            closed_cycle_detail_ttl_s = _resolve_info_log_ttl_seconds(
+                                "AI_TRADING_CLOSED_CYCLE_DETAIL_LOG_TTL_SEC",
+                                300.0,
                             )
+                            should_emit_budget_log = (not closed) or _should_emit_info_log(
+                                "CYCLE_COMPUTE_BUDGET_CLOSED",
+                                ttl_seconds=closed_cycle_detail_ttl_s,
+                            )
+                            if should_emit_budget_log:
+                                logger.info(
+                                    "CYCLE_COMPUTE_BUDGET",
+                                    extra={
+                                        "elapsed_ms": elapsed_ms,
+                                        "budget_ms": budget_ms,
+                                        "status": "OVER" if budget.over_budget() else "OK",
+                                    },
+                                )
                 except (ValueError, TypeError):
                     logger.exception("run_cycle failed")
             except Exception:
@@ -2607,10 +2677,22 @@ def main(argv: list[str] | None = None) -> None:
             if budget is None:
                 continue
             count += 1
-            logger.info(
-                "CYCLE_TIMING",
-                extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over_budget()},
+            closed_cycle_detail_ttl_s = _resolve_info_log_ttl_seconds(
+                "AI_TRADING_CLOSED_CYCLE_DETAIL_LOG_TTL_SEC",
+                300.0,
             )
+            should_emit_cycle_timing = (not closed) or _should_emit_info_log(
+                "CYCLE_TIMING_CLOSED",
+                ttl_seconds=closed_cycle_detail_ttl_s,
+            )
+            if should_emit_cycle_timing:
+                logger.info(
+                    "CYCLE_TIMING",
+                    extra={
+                        "elapsed_ms": budget.elapsed_ms(),
+                        "within_budget": not budget.over_budget(),
+                    },
+                )
             _emit_cycle_slo_alerts(
                 cycle_index=count,
                 compute_ms=compute_elapsed_ms,

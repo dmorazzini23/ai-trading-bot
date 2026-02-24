@@ -18,6 +18,10 @@ def _engine_stub() -> lt.ExecutionEngine:
     engine._pending_new_actions_this_cycle = 0
     engine.marketable_limit_slippage_bps = 10
     engine._capacity_broker = lambda client: client
+    engine._open_order_qty_index = {}
+    engine._pending_orders = {}
+    engine._broker_sync = None
+    engine._last_submit_outcome = {}
     return engine
 
 
@@ -52,6 +56,7 @@ def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
 def test_duplicate_intent_window(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}
+    monkeypatch.setenv("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER", "0")
     monkeypatch.setenv("AI_TRADING_DUPLICATE_INTENT_WINDOW_SEC", "60")
     monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
 
@@ -62,6 +67,15 @@ def test_duplicate_intent_window(monkeypatch):
 
     clock["value"] = 200.0
     assert engine._should_suppress_duplicate_intent("AAPL", "buy") is False
+
+
+def test_duplicate_intent_suppressed_when_open_order_present(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_INTENT_BLOCK_WHEN_OPEN_ORDER", "1")
+    monkeypatch.setenv("AI_TRADING_DUPLICATE_INTENT_WINDOW_SEC", "0")
+    engine._open_order_qty_index = {"AAPL": (2.0, 0.0)}
+
+    assert engine._should_suppress_duplicate_intent("AAPL", "buy") is True
 
 
 def test_cycle_intent_reservation_dedupes_symbol_side():
@@ -173,6 +187,34 @@ def test_resolve_order_submit_cap_includes_adaptive(monkeypatch):
 
     assert cap == 2
     assert source == "configured+bootstrap+adaptive"
+
+
+def test_resolve_order_submit_cap_includes_pending_backlog(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "runtime"})
+    engine._pending_orders = {"AAPL": {"status": "pending_new"}}
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "5")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_VALUE", "1")
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 1
+    assert source == "configured+pending_backlog"
+
+
+def test_ensure_initialized_uses_existing_client_validation(monkeypatch):
+    engine = _engine_stub()
+    engine.trading_client = object()
+    engine.is_initialized = False
+    init_calls: list[bool] = []
+    monkeypatch.setattr(engine, "_validate_connection", lambda: True)
+    monkeypatch.setattr(engine, "initialize", lambda: init_calls.append(True) or False)
+
+    assert engine._ensure_initialized() is True
+    assert engine.is_initialized is True
+    assert init_calls == []
 
 
 def test_resolve_midpoint_offset_bps_honors_annotation_and_clamp(monkeypatch):

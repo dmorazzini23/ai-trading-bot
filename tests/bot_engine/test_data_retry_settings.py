@@ -77,3 +77,22 @@ def test_pre_rank_execution_candidates_uses_weights_with_top_n(monkeypatch):
     )
 
     assert ranked == ["GOOG", "AAPL"]
+
+
+def test_pre_rank_execution_candidates_prefers_runtime_rank(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "2")
+    runtime = type(
+        "_Runtime",
+        (),
+        {
+            "portfolio_weights": {"MSFT": 0.8, "AAPL": 0.1, "GOOG": 0.2},
+            "execution_candidate_rank": {"MSFT": -5.0, "AAPL": 3.2, "GOOG": 2.1},
+        },
+    )()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "GOOG"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["AAPL", "GOOG"]

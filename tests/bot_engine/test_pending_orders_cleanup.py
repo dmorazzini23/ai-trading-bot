@@ -211,6 +211,142 @@ def test_handle_pending_orders_symbol_scope_applies_policy(monkeypatch, caplog):
     assert any(record.message == "PENDING_ORDERS_POLICY_APPLIED" for record in caplog.records)
 
 
+def test_handle_pending_orders_symbol_scope_decay_releases_stale_symbol(monkeypatch, caplog):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(),
+    )
+    cancel_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=600),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ACK_MULT", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MIN_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MAX_SEC", "300")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MIN_CYCLES", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_RELEASE_COOLDOWN_SEC", "60")
+    monkeypatch.setenv("ORDER_ACK_TIMEOUT_SECONDS", "8")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "300")
+
+    now_dt = datetime(2026, 2, 24, 20, 0, 0, tzinfo=UTC)
+    now_epoch = now_dt.timestamp()
+    monkeypatch.setattr(be.time, "time", lambda: now_epoch)
+    stale_order = _order(
+        "pending_new",
+        "o-decay",
+        symbol="AAPL",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders([stale_order], runtime) is False
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
+    cancel_mock.assert_not_called()
+    assert any(record.message == "PENDING_SYMBOL_BLOCK_DECAY_RELEASED" for record in caplog.records)
+
+
+def test_handle_pending_orders_symbol_scope_decay_cooldown_prevents_reblock(monkeypatch):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(),
+    )
+    monkeypatch.setattr(be, "cancel_all_open_orders", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=600),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ACK_MULT", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MIN_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MAX_SEC", "300")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MIN_CYCLES", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_RELEASE_COOLDOWN_SEC", "60")
+    monkeypatch.setenv("ORDER_ACK_TIMEOUT_SECONDS", "8")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "300")
+
+    clock = types.SimpleNamespace(value=1000.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+
+    def _stale_order(order_id: str):
+        now_dt = datetime.fromtimestamp(clock.value, tz=UTC)
+        return _order(
+            "pending_new",
+            order_id,
+            symbol="AAPL",
+            created_at=now_dt - timedelta(seconds=120),
+        )
+
+    assert be._handle_pending_orders([_stale_order("o-decay-1")], runtime) is False
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
+
+    clock.value += 10.0
+    assert be._handle_pending_orders([_stale_order("o-decay-2")], runtime) is False
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
+    tracker = runtime.state[be._PENDING_SYMBOL_DECAY_TRACKER_KEY]
+    assert "AAPL" in tracker
+    assert float(tracker["AAPL"].get("released_until_ts", 0.0)) > clock.value
+
+
+def test_handle_pending_orders_symbol_scope_emits_cooldown_telemetry(monkeypatch, caplog):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(),
+    )
+    monkeypatch.setattr(be, "cancel_all_open_orders", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=600),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_ACK_MULT", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MIN_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MAX_SEC", "300")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_DECAY_MIN_CYCLES", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_RELEASE_COOLDOWN_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT", "3")
+    monkeypatch.setenv("ORDER_ACK_TIMEOUT_SECONDS", "8")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "300")
+
+    now_dt = datetime(2026, 2, 24, 20, 0, 0, tzinfo=UTC)
+    now_epoch = now_dt.timestamp()
+    monkeypatch.setattr(be.time, "time", lambda: now_epoch)
+    stale_order = _order(
+        "pending_new",
+        "o-decay-metric",
+        symbol="AAPL",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders([stale_order], runtime) is False
+
+    telemetry_records = [
+        record
+        for record in caplog.records
+        if record.message == "PENDING_SYMBOL_COOLDOWN_TELEMETRY"
+    ]
+    assert telemetry_records
+    latest = telemetry_records[-1]
+    assert int(getattr(latest, "raw_blocked_count", 0)) == 1
+    symbol_states = getattr(latest, "symbol_states", None)
+    assert isinstance(symbol_states, list)
+    assert symbol_states
+    first = symbol_states[0]
+    assert first.get("symbol") == "AAPL"
+    assert first.get("state") == "released"
+    assert float(first.get("cooldown_remaining_s", 0.0)) >= 0.0
+
+
 def test_handle_pending_orders_stale_broker_age_triggers_immediate_cleanup(monkeypatch):
     runtime = types.SimpleNamespace(state={})
     cancel_mock = MagicMock()

@@ -199,6 +199,12 @@ class TradingEnv:
     def _get_state(self) -> np.ndarray:
         return self.data[self.current - self.window : self.current]
 
+    @property
+    def episode_returns(self) -> list[float]:
+        """Expose rolling return history for callback compatibility."""
+
+        return [float(value) for value in self._returns_history]
+
     @staticmethod
     def _normalize_price_series(raw_prices: np.ndarray) -> np.ndarray:
         prices = np.asarray(raw_prices, dtype=np.float32).reshape(-1)
