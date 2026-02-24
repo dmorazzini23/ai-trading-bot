@@ -1220,7 +1220,15 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
 
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     now_ny = now_utc.astimezone(ZoneInfo("America/New_York"))
-    if now_ny.time() < dt_time(16, 0):
+    now_minutes = (int(now_ny.hour) * 60) + int(now_ny.minute)
+    close_minutes = 16 * 60
+    catchup_end_minutes = (9 * 60) + 30
+    catchup_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", True, cast=bool)
+    )
+    in_after_hours_window = now_minutes >= close_minutes
+    in_catchup_window = catchup_enabled and now_minutes < catchup_end_minutes
+    if not (in_after_hours_window or in_catchup_window):
         return {
             "status": "skipped",
             "reason": "before_market_close",

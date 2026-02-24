@@ -62,6 +62,34 @@ def test_after_hours_training_skips_before_close() -> None:
     assert result["reason"] == "before_market_close"
 
 
+def test_after_hours_training_allows_overnight_catchup_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", "1")
+    monkeypatch.setattr(after_hours, "_load_symbols", lambda: [])
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 7, 5, 10, tzinfo=UTC),  # 00:10 New York
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no_symbols"
+
+
+def test_after_hours_training_skips_overnight_when_catchup_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", "0")
+    monkeypatch.setattr(after_hours, "_load_symbols", lambda: [])
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 7, 5, 10, tzinfo=UTC),  # 00:10 New York
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "before_market_close"
+
+
 def test_after_hours_training_trains_and_writes_outputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

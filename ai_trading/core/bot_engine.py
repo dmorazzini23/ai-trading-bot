@@ -25500,7 +25500,7 @@ def _resolve_after_hours_training_marker_path() -> Path:
     ).strip()
     marker_path = Path(raw_marker_path or "runtime/after_hours_training.marker.json").expanduser()
     if not marker_path.is_absolute():
-        marker_path = (Path.cwd() / marker_path).resolve()
+        marker_path = (Path(__file__).resolve().parents[2] / marker_path).resolve()
     return marker_path
 
 
