@@ -3415,7 +3415,12 @@ class ExecutionEngine:
             2.0,
         )
         queue_timeout = max(0.0, float(queue_timeout_raw if queue_timeout_raw is not None else 2.0))
-        enabled = bool(enabled_flag) if enabled_flag is not None else True
+        if enabled_flag is not None:
+            enabled = bool(enabled_flag)
+        else:
+            # Keep submit limiter opt-in under pytest to avoid cross-test state bleed
+            # from the shared token-bucket file unless explicitly configured.
+            enabled = not _pytest_mode_active()
 
         raw_state_path: Any = None
         if _config_get_env is not None:
