@@ -16,7 +16,7 @@ def test_empty_env_uses_default(monkeypatch):
     "env_var, expected",
     [
         ("AI_TRADING_HALT_FLAG_PATH", "halt.flag"),
-        ("AI_TRADING_RL_MODEL_PATH", "rl_agent.zip"),
+        ("AI_TRADING_RL_MODEL_PATH", "models/runtime/rl_agent.zip"),
     ],
 )
 def test_empty_env_paths_use_defaults(monkeypatch, env_var, expected):
@@ -40,4 +40,3 @@ def test_cache_ttls_default(monkeypatch):
     s = Settings()
     assert s.minute_cache_ttl == 300
     assert s.market_cache_ttl == 86400
-

@@ -1056,7 +1056,7 @@ def _maybe_promote_rl_overlay_to_runtime_path(
         runtime_model_path_raw = str(
             get_env(
                 "AI_TRADING_AFTER_HOURS_RUNTIME_RL_MODEL_PATH",
-                "rl_agent.zip",
+                "models/runtime/rl_agent.zip",
                 cast=str,
             )
             or ""

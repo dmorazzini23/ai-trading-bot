@@ -1516,7 +1516,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="rl_model_path",
         env=("AI_TRADING_RL_MODEL_PATH",),
         cast="str",
-        default="rl_agent.zip",
+        default="models/runtime/rl_agent.zip",
         description="Filesystem path to the reinforcement learning model artifact.",
     ),
     ConfigSpec(

@@ -521,7 +521,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     ai_trading_seed: int = Field(42, alias="AI_TRADING_SEED")
     model_path: str = Field("trained_model.pkl", alias="AI_TRADING_MODEL_PATH")
     halt_flag_path: str = Field("halt.flag", alias="HALT_FLAG_PATH")
-    rl_model_path: str = Field("rl_agent.zip", alias="AI_TRADING_RL_MODEL_PATH")
+    rl_model_path: str = Field("models/runtime/rl_agent.zip", alias="AI_TRADING_RL_MODEL_PATH")
     use_rl_agent: bool = Field(False, alias="USE_RL_AGENT")
     trade_cooldown_min: int = Field(15, alias="TRADE_COOLDOWN_MIN")
     health_tick_seconds: int = Field(
