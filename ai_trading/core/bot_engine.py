@@ -1100,6 +1100,36 @@ _DATA_RETRY_SETTINGS_LOCK = Lock()
 _DATA_RETRY_SETTINGS_LOGGED = False
 
 
+def _warmup_data_only_mode_active() -> bool:
+    """Return ``True`` when startup warm-up should avoid trade submission paths."""
+
+    try:
+        warmup_mode = bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool))
+    except Exception:
+        warmup_mode = False
+    if not warmup_mode:
+        return False
+    try:
+        allow_orders = bool(get_env("AI_TRADING_WARMUP_ALLOW_ORDERS", False, cast=bool))
+    except Exception:
+        allow_orders = False
+    return not allow_orders
+
+
+def _warmup_symbol_limit() -> int:
+    """Return max symbols to process during warm-up data-only cycles."""
+
+    try:
+        raw_limit = get_env("AI_TRADING_WARMUP_SYMBOL_LIMIT", 5, cast=int)
+    except Exception:
+        raw_limit = 5
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 5
+    return max(1, min(limit, 100))
+
+
 def _resolve_data_retry_settings() -> tuple[int, float]:
     """Resolve retry attempts and delay from environment with clamping."""
 
@@ -27951,6 +27981,8 @@ def _process_symbols(
     row_counts: dict[str, int] = {}
     fetch_attempts = 0
     fetch_attempts_lock = Lock()
+    warmup_data_only = _warmup_data_only_mode_active()
+    warmup_symbol_limit = _warmup_symbol_limit()
 
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
@@ -28096,7 +28128,7 @@ def _process_symbols(
                 )
                 continue
         now = datetime.now(UTC)
-        if _trade_limit_reached(state, now):
+        if not warmup_data_only and _trade_limit_reached(state, now):
             _log_trade_quota_once()
             break
         # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
@@ -28127,54 +28159,66 @@ def _process_symbols(
             break
 
         processed_symbols += 1
-        if pos < 0 and close_shorts:
-            logger.info(
-                "SKIP_SHORT_CLOSE_QUEUED | symbol=%s qty=%s",
-                symbol,
-                -pos,
-            )
-            # AI-AGENT-REF: avoid submitting orders when short-close is skipped
-            continue
-        if skip_duplicates and pos != 0:
-            log_skip_cooldown(symbol, reason="duplicate")
-            skipped_duplicates.inc()
-            continue
-        if pos > 0:
-            logger.info("SKIP_HELD_POSITION | already long, skipping close")
-            skipped_duplicates.inc()
-            continue
-        if pos < 0:
-            logger.info(
-                "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
-                symbol,
-                abs(pos),
-            )
-            try:
-                submit_order(ctx, symbol, abs(pos), "buy")
-            except (
-                APIError,
-                TimeoutError,
-                ConnectionError,
-            ) as e:  # AI-AGENT-REF: tighten order close errors
-                logger.warning(
-                    "SHORT_CLOSE_FAIL",
-                    extra={
-                        "symbol": symbol,
-                        "cause": e.__class__.__name__,
-                        "detail": str(e),
-                    },
+        if not warmup_data_only:
+            if pos < 0 and close_shorts:
+                logger.info(
+                    "SKIP_SHORT_CLOSE_QUEUED | symbol=%s qty=%s",
+                    symbol,
+                    -pos,
                 )
-            continue
-        # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
-        with trade_cooldowns_lock:
-            ts = state.trade_cooldowns.get(symbol)
-        if ts and (now - ts).total_seconds() < trade_cooldown_seconds:
-            cd_skipped.append(symbol)
-            skipped_cooldown.inc()
-            continue
+                # AI-AGENT-REF: avoid submitting orders when short-close is skipped
+                continue
+            if skip_duplicates and pos != 0:
+                log_skip_cooldown(symbol, reason="duplicate")
+                skipped_duplicates.inc()
+                continue
+            if pos > 0:
+                logger.info("SKIP_HELD_POSITION | already long, skipping close")
+                skipped_duplicates.inc()
+                continue
+            if pos < 0:
+                logger.info(
+                    "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
+                    symbol,
+                    abs(pos),
+                )
+                try:
+                    submit_order(ctx, symbol, abs(pos), "buy")
+                except (
+                    APIError,
+                    TimeoutError,
+                    ConnectionError,
+                ) as e:  # AI-AGENT-REF: tighten order close errors
+                    logger.warning(
+                        "SHORT_CLOSE_FAIL",
+                        extra={
+                            "symbol": symbol,
+                            "cause": e.__class__.__name__,
+                            "detail": str(e),
+                        },
+                    )
+                continue
+            # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
+            with trade_cooldowns_lock:
+                ts = state.trade_cooldowns.get(symbol)
+            if ts and (now - ts).total_seconds() < trade_cooldown_seconds:
+                cd_skipped.append(symbol)
+                skipped_cooldown.inc()
+                continue
         filtered.append(symbol)
 
     symbols = filtered  # replace with filtered list
+    if warmup_data_only and len(symbols) > warmup_symbol_limit:
+        original_count = len(symbols)
+        symbols = symbols[:warmup_symbol_limit]
+        logger.info(
+            "WARMUP_SYMBOL_LIMIT_APPLIED",
+            extra={
+                "limit": warmup_symbol_limit,
+                "original_count": original_count,
+                "retained_count": len(symbols),
+            },
+        )
 
     if cycle_budget:
         cycle_budget.register_total(len(symbols))
@@ -28262,7 +28306,7 @@ def _process_symbols(
             if not is_market_open():
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
-            if _trade_limit_reached(state, datetime.now(UTC)):
+            if not warmup_data_only and _trade_limit_reached(state, datetime.now(UTC)):
                 _log_trade_quota_once()
                 return
             def _halt(reason: str) -> None:
@@ -28327,11 +28371,15 @@ def _process_symbols(
                     with data_stats_lock:
                         data_stats["failed"] += 1
                     return
-            if symbol in state.position_cache:
+            if not warmup_data_only and symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
             if cycle_budget:
                 cycle_budget.note_processed()
+            if warmup_data_only:
+                completed_stages.append("warmup_data_only")
+                local_success = True
+                return
             if _checkpoint("trade"):
                 return
             _safe_trade(
@@ -32724,6 +32772,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         "reason": short_circuit_reason,
                         "attempts": attempts_limit,
                     },
+                )
+            if _warmup_data_only_mode_active() and attempts_limit > 1:
+                attempts_limit = 1
+                retry_delay = 0.0
+                logger.info(
+                    "WARMUP_DATA_ONLY_RETRY_BYPASS",
+                    extra={"attempts": attempts_limit},
                 )
             processed, row_counts = [], {}
             attempts_used = 0

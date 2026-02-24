@@ -205,6 +205,147 @@ class TestProcessSymbol:
         assert row_counts == {}
         assert skipped_symbols == [["AAPL"]]
 
+    def test_process_symbols_warmup_data_only_skips_trade_execution(self, monkeypatch):
+        pd = pytest.importorskip("pandas")
+
+        state = bot_engine.BotState()
+        state.position_cache = {"AAPL": 5}
+        bot_engine.state = state
+
+        dummy_halt = DummyHaltManager()
+        dummy_ctx = DummyContext(dummy_halt)
+        trade_calls: list[str] = []
+
+        warmup_env = {
+            "AI_TRADING_WARMUP_MODE": "1",
+            "AI_TRADING_WARMUP_ALLOW_ORDERS": "0",
+            "AI_TRADING_WARMUP_SYMBOL_LIMIT": "5",
+        }
+
+        def _get_env(key, default=None, cast=None):
+            value = warmup_env.get(key, default)
+            if cast is bool:
+                if isinstance(value, str):
+                    return value.strip().lower() in {"1", "true", "yes", "on"}
+                return bool(value)
+            if cast is int:
+                return int(value)
+            if cast is float:
+                return float(value)
+            return value
+
+        monkeypatch.setattr(bot_engine, "get_env", _get_env, raising=False)
+        monkeypatch.setattr(bot_engine, "get_ctx", lambda: dummy_ctx)
+        monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+        monkeypatch.setattr(bot_engine, "ensure_final_bar", lambda *_, **__: True)
+        monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda *_, **__: None)
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_duplicates",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_cooldown",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(bot_engine.executors, "_ensure_executors", lambda: None)
+        monkeypatch.setattr(bot_engine, "prediction_executor", DummyExecutor(), raising=False)
+        monkeypatch.setattr(
+            bot_engine,
+            "_safe_trade",
+            lambda *_, **__: trade_calls.append("called"),
+        )
+        monkeypatch.setattr(
+            bot_engine,
+            "fetch_minute_df_safe",
+            lambda _s: pd.DataFrame(
+                {"close": [1.0]},
+                index=[pd.Timestamp("2023-01-01T00:00:00Z")],
+            ),
+        )
+
+        processed, row_counts, fetch_attempts = bot_engine._process_symbols(
+            ["AAPL"], 1000.0, None, True
+        )
+
+        assert processed == ["AAPL"]
+        assert row_counts == {"AAPL": 1}
+        assert fetch_attempts == 1
+        assert trade_calls == []
+
+    def test_process_symbols_warmup_symbol_limit_applied(self, monkeypatch, caplog):
+        pd = pytest.importorskip("pandas")
+
+        state = bot_engine.BotState()
+        state.position_cache = {}
+        bot_engine.state = state
+
+        dummy_halt = DummyHaltManager()
+        dummy_ctx = DummyContext(dummy_halt)
+        fetch_calls: list[str] = []
+
+        warmup_env = {
+            "AI_TRADING_WARMUP_MODE": "1",
+            "AI_TRADING_WARMUP_ALLOW_ORDERS": "0",
+            "AI_TRADING_WARMUP_SYMBOL_LIMIT": "1",
+        }
+
+        def _get_env(key, default=None, cast=None):
+            value = warmup_env.get(key, default)
+            if cast is bool:
+                if isinstance(value, str):
+                    return value.strip().lower() in {"1", "true", "yes", "on"}
+                return bool(value)
+            if cast is int:
+                return int(value)
+            if cast is float:
+                return float(value)
+            return value
+
+        monkeypatch.setattr(bot_engine, "get_env", _get_env, raising=False)
+        monkeypatch.setattr(bot_engine, "get_ctx", lambda: dummy_ctx)
+        monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+        monkeypatch.setattr(bot_engine, "ensure_final_bar", lambda *_, **__: True)
+        monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda *_, **__: None)
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_duplicates",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_cooldown",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(bot_engine.executors, "_ensure_executors", lambda: None)
+        monkeypatch.setattr(bot_engine, "prediction_executor", DummyExecutor(), raising=False)
+        monkeypatch.setattr(bot_engine, "_safe_trade", lambda *_, **__: None)
+
+        def _fetch(symbol: str):
+            fetch_calls.append(symbol)
+            return pd.DataFrame(
+                {"close": [1.0]},
+                index=[pd.Timestamp("2023-01-01T00:00:00Z")],
+            )
+
+        monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", _fetch)
+
+        caplog.set_level("INFO")
+        processed, row_counts, fetch_attempts = bot_engine._process_symbols(
+            ["AAPL", "MSFT", "NVDA"], 1000.0, None, True
+        )
+
+        assert processed == ["AAPL"]
+        assert row_counts == {"AAPL": 1}
+        assert fetch_attempts == 1
+        assert fetch_calls == ["AAPL"]
+        assert any(record.msg == "WARMUP_SYMBOL_LIMIT_APPLIED" for record in caplog.records)
+
 
 def test_get_trade_logger_uses_fallback_when_primary_unwritable(monkeypatch, tmp_path):
     primary_dir = tmp_path / "primary"
