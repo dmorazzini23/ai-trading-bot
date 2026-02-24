@@ -93,6 +93,36 @@ def test_order_pacing_cap_log_level_runtime(monkeypatch):
     assert engine._order_pacing_cap_log_level() == "warning"
 
 
+def test_warmup_data_only_mode_defaults_to_block_orders(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")
+    monkeypatch.delenv("AI_TRADING_WARMUP_ALLOW_ORDERS", raising=False)
+    assert engine._warmup_data_only_mode_active() is True
+
+
+def test_warmup_data_only_mode_can_allow_orders(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")
+    monkeypatch.setenv("AI_TRADING_WARMUP_ALLOW_ORDERS", "1")
+    assert engine._warmup_data_only_mode_active() is False
+
+
+def test_execute_order_skips_submit_during_data_only_warmup(monkeypatch, caplog):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")
+    monkeypatch.delenv("AI_TRADING_WARMUP_ALLOW_ORDERS", raising=False)
+
+    caplog.set_level(logging.INFO)
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is None
+    assert any(
+        record.message == "ORDER_SUBMIT_SKIPPED"
+        and getattr(record, "reason", None) == "warmup_data_only"
+        for record in caplog.records
+    )
+
+
 def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)

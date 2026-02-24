@@ -2270,6 +2270,15 @@ class ExecutionEngine:
             return "info"
         return "warning"
 
+    def _warmup_data_only_mode_active(self) -> bool:
+        """Return ``True`` when startup warm-up should suppress order submissions."""
+
+        warmup_mode = _resolve_bool_env("AI_TRADING_WARMUP_MODE")
+        if not bool(warmup_mode):
+            return False
+        allow_orders = _resolve_bool_env("AI_TRADING_WARMUP_ALLOW_ORDERS")
+        return not bool(allow_orders)
+
     def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
         """Return True when duplicate intent should be skipped."""
 
@@ -3262,6 +3271,7 @@ class ExecutionEngine:
             Order details if successful, None if failed
         """
         kwargs = _merge_pending_order_kwargs(self, kwargs)
+        submit_started_at = time.monotonic()
         self._refresh_settings()
         try:
             symbol = _req_str("symbol", symbol)
@@ -3276,6 +3286,18 @@ class ExecutionEngine:
             self.stats["skipped_orders"] += 1
             return None
         side_lower = str(side).lower()
+        if self._warmup_data_only_mode_active():
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="warmup_data_only",
+                order_type="market",
+                detail="AI_TRADING_WARMUP_ALLOW_ORDERS=0",
+                submit_started_at=submit_started_at,
+            )
+            return None
         if self._broker_lock_suppressed(symbol=symbol, side=side_lower, order_type="market"):
             return None
         closing_position = bool(
@@ -3806,6 +3828,7 @@ class ExecutionEngine:
             Order details if successful, None if failed
         """
         kwargs = _merge_pending_order_kwargs(self, kwargs)
+        submit_started_at = time.monotonic()
         self._refresh_settings()
         try:
             symbol = _req_str("symbol", symbol)
@@ -3835,6 +3858,18 @@ class ExecutionEngine:
             self.stats["skipped_orders"] += 1
             return None
         side_lower = str(side).lower()
+        if self._warmup_data_only_mode_active():
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=side_lower,
+                reason="warmup_data_only",
+                order_type="limit",
+                detail="AI_TRADING_WARMUP_ALLOW_ORDERS=0",
+                submit_started_at=submit_started_at,
+            )
+            return None
         if self._broker_lock_suppressed(symbol=symbol, side=side_lower, order_type="limit"):
             return None
         closing_position = bool(
@@ -4483,6 +4518,19 @@ class ExecutionEngine:
             order_type_normalized = "market"
         elif resolved_limit_price is not None:
             order_type_normalized = "limit"
+
+        if self._warmup_data_only_mode_active():
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="warmup_data_only",
+                order_type=order_type_normalized,
+                detail="AI_TRADING_WARMUP_ALLOW_ORDERS=0",
+                submit_started_at=submit_started_at,
+            )
+            return None
 
         asset_class = asset_class or kwargs.get("asset_class")
         client_order_id_hint = kwargs.get("client_order_id")
