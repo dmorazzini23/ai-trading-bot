@@ -881,6 +881,57 @@ def _meets_edge_targets(metrics: CandidateMetrics, targets: EdgeTargets) -> dict
     }
 
 
+def _promotion_policy_name() -> str:
+    raw = str(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict", cast=str) or "")
+    normalized = raw.strip().lower()
+    if normalized in {"legacy", "strict"}:
+        return normalized
+    return "strict"
+
+
+def _promotion_gate_bundle(
+    *,
+    best: CandidateMetrics,
+    rows: int,
+    edge_gates: Mapping[str, bool],
+) -> dict[str, Any]:
+    policy = _promotion_policy_name()
+    strict_gates: dict[str, bool] = {}
+    if policy == "strict":
+        min_rows = max(
+            1, int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", 800, cast=int))
+        )
+        min_support = max(
+            1, int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", 80, cast=int))
+        )
+        min_folds = max(
+            1, int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", 4, cast=int))
+        )
+        min_hit_rate = float(
+            get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", 0.52, cast=float)
+        )
+        strict_gates = {
+            "rows": int(rows) >= min_rows,
+            "support": int(best.support) >= min_support,
+            "fold_count": int(best.fold_count) >= min_folds,
+            "hit_rate": float(best.mean_hit_rate) >= min_hit_rate,
+        }
+    combined_gates: dict[str, bool] = {str(k): bool(v) for k, v in dict(edge_gates).items()}
+    combined_gates.update(strict_gates)
+    gate_passed = all(combined_gates.values())
+    auto_promote = bool(get_env("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", False, cast=bool))
+    status = "production" if (auto_promote and gate_passed) else "shadow"
+    return {
+        "policy": policy,
+        "auto_promote": auto_promote,
+        "edge_gates": {str(k): bool(v) for k, v in dict(edge_gates).items()},
+        "strict_gates": strict_gates,
+        "combined_gates": combined_gates,
+        "gate_passed": gate_passed,
+        "status": status,
+    }
+
+
 def _candidate_names() -> list[str]:
     names: list[str] = ["logreg"]
     try:
@@ -1341,11 +1392,22 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     )
     gate_map = _meets_edge_targets(best, targets)
     gate_map["sensitivity"] = bool(sensitivity_sweep.get("gate", True))
-    gates_passed = all(gate_map.values())
-    status = "shadow"
-    auto_promote = bool(get_env("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", False, cast=bool))
-    if gates_passed and auto_promote:
-        status = "production"
+    promotion = _promotion_gate_bundle(
+        best=best,
+        rows=int(len(dataset)),
+        edge_gates=gate_map,
+    )
+    status = str(promotion["status"])
+    logger.info(
+        "AFTER_HOURS_PROMOTION_EVAL",
+        extra={
+            "policy": promotion["policy"],
+            "status": status,
+            "auto_promote": bool(promotion["auto_promote"]),
+            "gate_passed": bool(promotion["gate_passed"]),
+            "combined_gates": dict(promotion["combined_gates"]),
+        },
+    )
 
     dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
     manifest_metadata = _build_manifest_metadata(
@@ -1402,6 +1464,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         status,
         extra={
             "edge_gates": gate_map,
+            "promotion": promotion,
             "edge_targets": {
                 "min_expectancy_bps": targets.min_expectancy_bps,
                 "max_drawdown_bps": targets.max_drawdown_bps,
@@ -1460,6 +1523,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "thresholds_by_regime": thresholds_by_regime,
         "sensitivity_sweep": sensitivity_sweep,
         "edge_gates": gate_map,
+        "promotion": promotion,
         "rl_overlay": rl_overlay,
         "runtime_promotion": {
             "model_path": promoted_model_path,
@@ -1499,6 +1563,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "sensitivity_sweep": sensitivity_sweep,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
+        "promotion": promotion,
         "rl_overlay": rl_overlay,
     }
 
