@@ -918,12 +918,18 @@ def _promotion_gate_bundle(
         }
     combined_gates: dict[str, bool] = {str(k): bool(v) for k, v in dict(edge_gates).items()}
     combined_gates.update(strict_gates)
+    require_sensitivity = bool(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_SENSITIVITY", True, cast=bool)
+    )
+    if not require_sensitivity and "sensitivity" in combined_gates:
+        combined_gates["sensitivity"] = True
     gate_passed = all(combined_gates.values())
     auto_promote = bool(get_env("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", False, cast=bool))
     status = "production" if (auto_promote and gate_passed) else "shadow"
     return {
         "policy": policy,
         "auto_promote": auto_promote,
+        "require_sensitivity": require_sensitivity,
         "edge_gates": {str(k): bool(v) for k, v in dict(edge_gates).items()},
         "strict_gates": strict_gates,
         "combined_gates": combined_gates,

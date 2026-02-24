@@ -272,6 +272,47 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     assert result["promotion"]["gate_passed"] is True
 
 
+def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        support=120,
+        mean_expectancy_bps=1.2,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.5,
+        hit_rate_stability=0.6,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_SENSITIVITY", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", "100")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "50")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.49")
+
+    promotion = after_hours._promotion_gate_bundle(
+        best=best,
+        rows=400,
+        edge_gates={
+            "expectancy": True,
+            "drawdown": True,
+            "turnover": True,
+            "stability": True,
+            "sensitivity": False,
+        },
+    )
+
+    assert promotion["require_sensitivity"] is False
+    assert promotion["combined_gates"]["sensitivity"] is True
+    assert promotion["gate_passed"] is True
+    assert promotion["status"] == "production"
+
+
 def test_on_market_close_runs_after_hours_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
