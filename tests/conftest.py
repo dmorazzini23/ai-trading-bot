@@ -504,6 +504,8 @@ def _reset_bot_engine_state():
         bot_engine._GLOBAL_CYCLE_ID = None
         bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED = None
         bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
+        bot_engine._CYCLE_MINUTE_DF_CACHE.clear()
+        bot_engine._CYCLE_MINUTE_DF_CACHE_CYCLE = None
         bot_engine._cycle_feature_cache.clear()
         bot_engine._cycle_feature_cache_cycle = None
         bot_engine._cycle_budget_context = None

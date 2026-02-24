@@ -2774,6 +2774,9 @@ _GLOBAL_CYCLE_ID: int | None = None
 _GLOBAL_INTRADAY_FALLBACK_FEED: str | None = None
 _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE: dict[str, str] = {}
 _CYCLE_FEED_CACHE: dict[str, str] = {}
+_CYCLE_MINUTE_DF_CACHE: dict[tuple[int, str], pd.DataFrame] = {}
+_CYCLE_MINUTE_DF_CACHE_CYCLE: int | None = None
+_CYCLE_MINUTE_DF_CACHE_LOCK = Lock()
 _SIP_UNAUTHORIZED_LOGGED = False
 
 
@@ -2870,15 +2873,58 @@ def _reset_cycle_cache() -> None:
     """Reset module-level cycle tracking state."""
 
     global _GLOBAL_CYCLE_ID, _GLOBAL_INTRADAY_FALLBACK_FEED, _cycle_feature_cache_cycle
+    global _CYCLE_MINUTE_DF_CACHE_CYCLE
     now = datetime.now(timezone.utc)
     _GLOBAL_CYCLE_ID = int(now.timestamp())
     _GLOBAL_INTRADAY_FALLBACK_FEED = None
     _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
     _CYCLE_FEED_CACHE.clear()
+    with _CYCLE_MINUTE_DF_CACHE_LOCK:
+        _CYCLE_MINUTE_DF_CACHE.clear()
+        _CYCLE_MINUTE_DF_CACHE_CYCLE = _GLOBAL_CYCLE_ID
     price_quote_feed.clear()
     with _cycle_feature_cache_lock:
         _cycle_feature_cache.clear()
         _cycle_feature_cache_cycle = _GLOBAL_CYCLE_ID
+
+
+def _cycle_minute_df_cache_key(symbol: str) -> tuple[int, str] | None:
+    cycle_id = _GLOBAL_CYCLE_ID
+    if cycle_id is None:
+        return None
+    normalized_symbol = str(symbol).strip().upper()
+    if not normalized_symbol:
+        return None
+    return cycle_id, normalized_symbol
+
+
+def _get_cycle_minute_df_cache(symbol: str) -> pd.DataFrame | None:
+    key = _cycle_minute_df_cache_key(symbol)
+    if key is None:
+        return None
+    with _CYCLE_MINUTE_DF_CACHE_LOCK:
+        global _CYCLE_MINUTE_DF_CACHE_CYCLE
+        if _CYCLE_MINUTE_DF_CACHE_CYCLE != key[0]:
+            _CYCLE_MINUTE_DF_CACHE.clear()
+            _CYCLE_MINUTE_DF_CACHE_CYCLE = key[0]
+        cached = _CYCLE_MINUTE_DF_CACHE.get(key)
+        if cached is None:
+            return None
+        return cached.copy()
+
+
+def _set_cycle_minute_df_cache(symbol: str, frame: object) -> None:
+    if not isinstance(frame, pd.DataFrame):
+        return
+    key = _cycle_minute_df_cache_key(symbol)
+    if key is None:
+        return
+    with _CYCLE_MINUTE_DF_CACHE_LOCK:
+        global _CYCLE_MINUTE_DF_CACHE_CYCLE
+        if _CYCLE_MINUTE_DF_CACHE_CYCLE != key[0]:
+            _CYCLE_MINUTE_DF_CACHE.clear()
+            _CYCLE_MINUTE_DF_CACHE_CYCLE = key[0]
+        _CYCLE_MINUTE_DF_CACHE[key] = frame.copy()
 
 
 def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
@@ -5859,6 +5905,17 @@ def _load_ml_model(symbol: str):
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
+    cached_df = _get_cycle_minute_df_cache(symbol)
+    if cached_df is not None:
+        return cached_df
+    frame = _fetch_minute_df_safe_uncached(symbol)
+    _set_cycle_minute_df_cache(symbol, frame)
+    if isinstance(frame, pd.DataFrame):
+        return frame.copy()
+    return frame
+
+
+def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
     """Fetch recent minute bars within the active trading session window.
 
     Uses Regular Trading Hours (RTH) windows to avoid spanning weekends/holidays,

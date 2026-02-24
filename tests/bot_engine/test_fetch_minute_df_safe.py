@@ -2160,6 +2160,67 @@ def test_fetch_minute_df_safe_market_cache_hit(monkeypatch, tmp_path):
     pd.testing.assert_frame_equal(second, sample)
 
 
+def test_fetch_minute_df_safe_cycle_cache_reuses_symbol(monkeypatch):
+    pd = load_pandas()
+    bot_engine._reset_cycle_cache()
+
+    idx = pd.date_range(
+        start=pd.Timestamp("2024-01-02 15:30:00", tz="UTC"),
+        periods=1,
+        freq="min",
+    )
+    sample = pd.DataFrame({"close": [1.0], "volume": [100]}, index=idx)
+    call_count = 0
+
+    def _fake_uncached(symbol: str):
+        nonlocal call_count
+        call_count += 1
+        return sample.copy()
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_fetch_minute_df_safe_uncached",
+        _fake_uncached,
+        raising=True,
+    )
+
+    first = bot_engine.fetch_minute_df_safe("aapl")
+    first.loc[first.index[-1], "close"] = 999.0
+    second = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert call_count == 1
+    assert float(second["close"].iloc[-1]) == pytest.approx(1.0)
+
+
+def test_fetch_minute_df_safe_cycle_cache_clears_on_reset(monkeypatch):
+    pd = load_pandas()
+    calls: list[str] = []
+
+    def _fake_uncached(symbol: str):
+        calls.append(symbol)
+        value = float(len(calls))
+        return pd.DataFrame(
+            {"close": [value], "volume": [100]},
+            index=[pd.Timestamp("2024-01-02 15:30:00", tz="UTC")],
+        )
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_fetch_minute_df_safe_uncached",
+        _fake_uncached,
+        raising=True,
+    )
+
+    bot_engine._reset_cycle_cache()
+    first = bot_engine.fetch_minute_df_safe("AAPL")
+    bot_engine._reset_cycle_cache()
+    second = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert len(calls) == 2
+    assert float(first["close"].iloc[-1]) == pytest.approx(1.0)
+    assert float(second["close"].iloc[-1]) == pytest.approx(2.0)
+
+
 def test_signal_manager_evaluate_with_shorter_history(monkeypatch):
     pd = load_pandas()
 
