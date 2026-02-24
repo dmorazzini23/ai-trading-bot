@@ -118,6 +118,82 @@ def test_retrain_meta_learner_filters_non_decimal_prices(monkeypatch, tmp_path):
     assert captured["x_shape"] and captured["x_shape"][0] == 2
 
 
+def test_retrain_meta_learner_excludes_synthetic_rows_by_default(monkeypatch, tmp_path):
+    data = Path(tmp_path / "synthetic_default.csv")
+    df = pd.DataFrame(
+        {
+            "entry_price": [100.0, 101.0, 102.0],
+            "exit_price": [101.0, 102.0, 103.0],
+            "signal_tags": ["momentum", "synthetic_bootstrap_data", "trend"],
+            "side": ["buy", "sell", "buy"],
+            "strategy": ["live_trading", "bootstrap_generated", "live_trading"],
+        }
+    )
+    df.to_csv(data, index=False)
+
+    captured: dict[str, object] = {}
+
+    def _capturing_ridge(*args, **kwargs):
+        def fit(X, y, sample_weight=None):
+            captured["sample_count"] = len(y)
+            return None
+
+        def predict(X):
+            return np.zeros(len(X))
+
+        return types.SimpleNamespace(fit=fit, predict=predict)
+
+    monkeypatch.setenv("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", "0")
+    monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
+    monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
+    monkeypatch.setattr(sklearn.linear_model, "Ridge", _capturing_ridge)
+
+    ok = meta_learning.retrain_meta_learner(
+        str(data), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
+    )
+
+    assert ok
+    assert captured["sample_count"] == 2
+
+
+def test_retrain_meta_learner_keeps_synthetic_rows_with_override(monkeypatch, tmp_path):
+    data = Path(tmp_path / "synthetic_override.csv")
+    df = pd.DataFrame(
+        {
+            "entry_price": [100.0, 101.0, 102.0],
+            "exit_price": [101.0, 102.0, 103.0],
+            "signal_tags": ["momentum", "synthetic_bootstrap_data", "trend"],
+            "side": ["buy", "sell", "buy"],
+            "strategy": ["live_trading", "bootstrap_generated", "live_trading"],
+        }
+    )
+    df.to_csv(data, index=False)
+
+    captured: dict[str, object] = {}
+
+    def _capturing_ridge(*args, **kwargs):
+        def fit(X, y, sample_weight=None):
+            captured["sample_count"] = len(y)
+            return None
+
+        def predict(X):
+            return np.zeros(len(X))
+
+        return types.SimpleNamespace(fit=fit, predict=predict)
+
+    monkeypatch.setenv("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", "1")
+    monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
+    monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
+    monkeypatch.setattr(sklearn.linear_model, "Ridge", _capturing_ridge)
+
+    ok = meta_learning.retrain_meta_learner(
+        str(data), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=3
+    )
+
+    assert ok
+    assert captured["sample_count"] == 3
+
+
 def test_retrain_meta_learner_handles_non_iterable_columns(monkeypatch, tmp_path):
     """Handles DataFrames where ``columns`` is not iterable."""
     path = tmp_path / "trades.csv"

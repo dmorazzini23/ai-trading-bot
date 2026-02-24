@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
 import multiprocessing as mp
 import time
 from collections.abc import Callable
@@ -19,6 +21,27 @@ if TYPE_CHECKING:
     import pandas as pd
 
 logger = get_logger(__name__)
+
+
+def _stable_cached_call_key(
+    func_name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> str:
+    """Build deterministic cache keys without Python's randomized hash()."""
+
+    normalized_kwargs = {str(key): kwargs[key] for key in sorted(kwargs.keys(), key=str)}
+    payload_obj: dict[str, Any] = {
+        "func": str(func_name),
+        "args": args,
+        "kwargs": normalized_kwargs,
+    }
+    try:
+        payload = json.dumps(payload_obj, sort_keys=True, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        payload = repr((func_name, args, tuple(sorted(kwargs.items(), key=lambda item: str(item[0])))))
+    digest = hashlib.sha256(payload.encode("utf-8", "ignore")).hexdigest()[:16]
+    return f"{func_name}_{digest}"
 
 @dataclass
 class BenchmarkResult:
@@ -110,7 +133,7 @@ def cached_operation(cache_ttl: int=300, cache_key_func: Callable | None=None):
             if cache_key_func:
                 cache_key = cache_key_func(*args, **kwargs)
             else:
-                cache_key = f'{func.__name__}_{hash(str(args) + str(sorted(kwargs.items())))}'
+                cache_key = _stable_cached_call_key(func.__name__, args, kwargs)
             cached_result = cache.get(cache_key)
             if cached_result is not None:
                 return cached_result

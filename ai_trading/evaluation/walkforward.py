@@ -32,6 +32,7 @@ def _ensure_matplotlib() -> None:
     else:
         logger.debug('Matplotlib plotting disabled by configuration')
 from ..data.splits import walkforward_splits
+from .execution_sim import simulate_executed_trades
 from ..features.pipeline import create_feature_pipeline
 
 def _get_ml_trainer():
@@ -224,70 +225,11 @@ class WalkForwardEvaluator:
     ) -> dict[str, float]:
         """Simulate fold-level executed trades from predictions and realized returns."""
         try:
-            if len(y_pred) == 0:
-                return {
-                    "gross_return": 0.0,
-                    "net_return": 0.0,
-                    "cost_return": 0.0,
-                    "turnover_units": 0.0,
-                    "trade_count": 0.0,
-                    "signal_count": 0.0,
-                    "max_drawdown": 0.0,
-                    "hit_rate": 0.0,
-                }
-            threshold = float(self.trade_simulation_params.get("signal_threshold", 0.0))
-            allow_short = bool(self.trade_simulation_params.get("allow_short", True))
-            max_abs_position = float(self.trade_simulation_params.get("max_abs_position", 1.0))
-            max_abs_position = max(0.0, max_abs_position)
-            transaction_cost_bps = float(self.trade_simulation_params.get("transaction_cost_bps", 0.0))
-            slippage_bps = float(self.trade_simulation_params.get("slippage_bps", 0.0))
-            total_cost_rate = (transaction_cost_bps + slippage_bps) / 10_000.0
-            prev_position = 0.0
-            equity = 1.0
-            running_peak = equity
-            max_drawdown = 0.0
-            gross_return = 0.0
-            cost_return = 0.0
-            turnover_units = 0.0
-            trade_count = 0
-            active_signals = 0
-            profitable_steps = 0
-            for pred, actual in zip(y_pred, y_true.values, strict=False):
-                if pred > threshold:
-                    target_position = max_abs_position
-                elif pred < -threshold and allow_short:
-                    target_position = -max_abs_position
-                else:
-                    target_position = 0.0
-                turnover = abs(target_position - prev_position)
-                if turnover > 0:
-                    trade_count += 1
-                if target_position != 0:
-                    active_signals += 1
-                step_gross = float(target_position * float(actual))
-                step_cost = float(turnover * total_cost_rate)
-                step_net = step_gross - step_cost
-                step_net = max(step_net, -0.99)
-                gross_return += step_gross
-                cost_return += step_cost
-                turnover_units += turnover
-                equity *= 1.0 + step_net
-                running_peak = max(running_peak, equity)
-                drawdown = 0.0 if running_peak <= 0 else (running_peak - equity) / running_peak
-                max_drawdown = max(max_drawdown, drawdown)
-                if step_net > 0:
-                    profitable_steps += 1
-                prev_position = target_position
-            return {
-                "gross_return": float(gross_return),
-                "net_return": float(equity - 1.0),
-                "cost_return": float(cost_return),
-                "turnover_units": float(turnover_units),
-                "trade_count": float(trade_count),
-                "signal_count": float(active_signals),
-                "max_drawdown": float(max_drawdown),
-                "hit_rate": float(profitable_steps / max(1, active_signals)),
-            }
+            return simulate_executed_trades(
+                y_true=y_true.values,
+                y_pred=y_pred,
+                params=self.trade_simulation_params,
+            )
         except (TypeError, ValueError) as e:
             logger.error(f'Error simulating fold trades: {e}')
             return {

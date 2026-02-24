@@ -1004,6 +1004,13 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     except COMMON_EXC as e:
         logger.error('META_LEARNING_PRICE_VALIDATION_ERROR: %s', e, exc_info=True)
         return False
+    df, synthetic_removed = _exclude_synthetic_training_rows(df)
+    if synthetic_removed > 0 and len(df) == 0:
+        logger.warning(
+            "META_LEARNING_ONLY_SYNTHETIC_ROWS",
+            extra={"removed_rows": synthetic_removed},
+        )
+        return False
     if len(df) < min_samples:
         logger.warning('META_RETRAIN_INSUFFICIENT_DATA', extra={'rows': len(df)})
         return False
@@ -1260,6 +1267,44 @@ def _synthetic_bootstrap_allowed() -> bool:
     if bool(get_env("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", False, cast=bool)):
         return True
     return bool(get_env("PYTEST_RUNNING", False, cast=bool))
+
+
+def _exclude_synthetic_training_rows(df: "pd.DataFrame") -> tuple["pd.DataFrame", int]:
+    """Exclude synthetic rows from meta-learner training unless explicitly allowed."""
+
+    if df is None or len(df) == 0:
+        return df, 0
+    if bool(get_env("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", False, cast=bool)):
+        return df, 0
+
+    synth_mask = pd.Series(False, index=df.index)
+    markers = (
+        "synthetic",
+        "bootstrap_generated",
+        "bootstrap_pattern",
+    )
+    for column in ("signal_tags", "strategy", "classification"):
+        if column not in df.columns:
+            continue
+        values = df[column].fillna("").astype(str).str.lower()
+        column_mask = pd.Series(False, index=df.index)
+        for marker in markers:
+            column_mask = column_mask | values.str.contains(marker, regex=False)
+        synth_mask = synth_mask | column_mask
+
+    removed_rows = int(synth_mask.sum())
+    if removed_rows <= 0:
+        return df, 0
+
+    filtered = df.loc[~synth_mask].copy()
+    logger.warning(
+        "META_LEARNING_SYNTHETIC_ROWS_FILTERED",
+        extra={
+            "removed_rows": removed_rows,
+            "remaining_rows": int(len(filtered)),
+        },
+    )
+    return filtered, removed_rows
 
 def _generate_synthetic_trades(num_trades: int, pattern_data: list) -> list:
     """Generate realistic synthetic trades based on existing patterns."""

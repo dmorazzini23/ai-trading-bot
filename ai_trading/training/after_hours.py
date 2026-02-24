@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -53,6 +54,7 @@ _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "decision_ts",
     "fill_ts",
 )
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(slots=True)
@@ -1014,8 +1016,19 @@ def _maybe_promote_to_runtime_model_path(
         return None, None
     runtime_model_path_raw = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
     if not runtime_model_path_raw:
+        runtime_model_path_raw = str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RUNTIME_MODEL_PATH",
+                "models/runtime/ml_latest.joblib",
+                cast=str,
+            )
+            or ""
+        ).strip()
+    if not runtime_model_path_raw:
         return None, None
     runtime_model_path = Path(runtime_model_path_raw)
+    if not runtime_model_path.is_absolute():
+        runtime_model_path = (_PROJECT_ROOT / runtime_model_path).resolve()
     runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
     runtime_model_path.write_bytes(model_path.read_bytes())
     manifest_path = write_artifact_manifest(
@@ -1025,6 +1038,36 @@ def _maybe_promote_to_runtime_model_path(
         metadata=manifest_metadata,
     )
     return str(runtime_model_path), str(manifest_path)
+
+
+def _maybe_promote_rl_overlay_to_runtime_path(
+    trained_model_path: Path,
+) -> str | None:
+    promote_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTE_RL_PATH", True, cast=bool)
+    )
+    if not promote_enabled:
+        return None
+    if not trained_model_path.is_file():
+        return None
+    runtime_model_path_raw = str(get_env("AI_TRADING_RL_MODEL_PATH", "") or "").strip()
+    if not runtime_model_path_raw:
+        runtime_model_path_raw = str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RUNTIME_RL_MODEL_PATH",
+                "rl_agent.zip",
+                cast=str,
+            )
+            or ""
+        ).strip()
+    if not runtime_model_path_raw:
+        return None
+    runtime_model_path = Path(runtime_model_path_raw)
+    if not runtime_model_path.is_absolute():
+        runtime_model_path = (_PROJECT_ROOT / runtime_model_path).resolve()
+    runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(trained_model_path, runtime_model_path)
+    return str(runtime_model_path)
 
 
 def _maybe_train_rl_overlay(
@@ -1132,12 +1175,21 @@ def _maybe_train_rl_overlay(
         get_env("AI_TRADING_RL_REQUIRE_BASELINE_EXPECTANCY_BPS", 1.0, cast=float)
     )
     recommend = mean_reward >= rl_reward_target and baseline_expectancy_bps >= baseline_target
+    trained_model_path = run_dir / f"model_{algorithm.lower()}.zip"
+    trained_model_path_str = str(trained_model_path) if trained_model_path.is_file() else None
+    promoted_model_path = (
+        _maybe_promote_rl_overlay_to_runtime_path(trained_model_path)
+        if trained_model_path_str
+        else None
+    )
     return {
         "enabled": True,
         "trained": True,
         "algorithm": algorithm,
         "timesteps": timesteps,
         "output_dir": str(run_dir),
+        "trained_model_path": trained_model_path_str,
+        "promoted_model_path": promoted_model_path,
         "mean_reward": mean_reward,
         "rl_reward_target": rl_reward_target,
         "baseline_expectancy_bps": baseline_expectancy_bps,

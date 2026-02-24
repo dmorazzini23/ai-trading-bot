@@ -3371,6 +3371,50 @@ class _ModelPlaceholder:
 
 
 _MODEL_CACHE: Any | None = None
+_MODEL_CACHE_META: dict[str, Any] | None = None
+
+
+def _model_file_signature(path: str) -> tuple[int, int] | None:
+    try:
+        stats = Path(path).stat()
+    except OSError:
+        return None
+    return int(stats.st_mtime_ns), int(stats.st_size)
+
+
+def _required_model_cache_matches(path: str, modname: str) -> bool:
+    if _MODEL_CACHE is None:
+        return False
+    meta = _MODEL_CACHE_META or {}
+    kind = str(meta.get("kind") or "")
+    if path:
+        if kind != "file":
+            return False
+        if str(meta.get("path") or "") != path:
+            return False
+        return meta.get("signature") == _model_file_signature(path)
+    if modname:
+        return kind == "module" and str(meta.get("module") or "") == modname
+    return kind == "placeholder"
+
+
+def _set_required_model_cache(
+    model: Any,
+    *,
+    kind: str,
+    path: str | None = None,
+    module: str | None = None,
+) -> Any:
+    global _MODEL_CACHE, _MODEL_CACHE_META
+    _MODEL_CACHE = model
+    metadata: dict[str, Any] = {"kind": kind}
+    if path:
+        metadata["path"] = path
+        metadata["signature"] = _model_file_signature(path)
+    if module:
+        metadata["module"] = module
+    _MODEL_CACHE_META = metadata
+    return model
 
 
 def _runtime_execution_mode() -> str:
@@ -3410,12 +3454,18 @@ def _enforce_model_artifact_verification(model_path: str) -> None:
 
 def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
     """Load ML model from path or module; create placeholder if missing."""  # AI-AGENT-REF: strict model loader
-    global _MODEL_CACHE
-    if _MODEL_CACHE is not None:
-        return _MODEL_CACHE
-
     path = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
     modname = str(get_env("AI_TRADING_MODEL_MODULE", "") or "").strip()
+    if _required_model_cache_matches(path, modname):
+        return _MODEL_CACHE
+    if _MODEL_CACHE is not None:
+        logger.info(
+            "MODEL_CACHE_INVALIDATED",
+            extra={
+                "path": path,
+                "model_module": modname,
+            },
+        )
 
     if path:
         execution_mode = _runtime_execution_mode()
@@ -3457,8 +3507,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
         logger.info(
             "MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest}
         )
-        _MODEL_CACHE = mdl
-        return mdl
+        return _set_required_model_cache(mdl, kind="file", path=path)
 
     if modname:
         try:
@@ -3487,8 +3536,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
                 "model_module": modname,
             },  # AI-AGENT-REF: avoid reserved key
         )
-        _MODEL_CACHE = mdl
-        return mdl
+        return _set_required_model_cache(mdl, kind="module", module=modname)
 
     if allow_test_placeholder and _is_testing_env():
         detected = [key for key in _TEST_ENV_VARS if _truthy_env(os.getenv(key))]
@@ -3497,8 +3545,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
             extra={"source": "test", "detected_env": detected},
         )
         placeholder = _ModelPlaceholder("testing_env")
-        _MODEL_CACHE = placeholder
-        return placeholder
+        return _set_required_model_cache(placeholder, kind="placeholder")
 
     msg = (
         "Model required but not configured. "
@@ -3514,6 +3561,69 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
             },
     )
     raise RuntimeError(msg)
+
+
+def _refresh_required_model_cache_from_path(
+    model_path: str,
+    *,
+    manifest_path: str | None = None,
+    reason: str = "runtime",
+) -> bool:
+    candidate = str(model_path or "").strip()
+    if not candidate:
+        return False
+    resolved = Path(candidate)
+    if not resolved.is_absolute():
+        resolved = (Path(BASE_DIR) / resolved).resolve()
+    if not resolved.is_file():
+        logger.warning(
+            "MODEL_HOT_RELOAD_SKIPPED",
+            extra={"reason": "missing_file", "path": str(resolved)},
+        )
+        return False
+
+    verify_enabled = bool(get_env("AI_TRADING_MODEL_VERIFY_CHECKSUM", "1", cast=bool))
+    if verify_enabled:
+        manifest_candidate = str(
+            manifest_path or f"{resolved}.manifest.json"
+        )
+        verified, verify_reason = verify_artifact(
+            model_path=str(resolved),
+            manifest_path=manifest_candidate,
+        )
+        if not verified:
+            logger.warning(
+                "MODEL_HOT_RELOAD_SKIPPED",
+                extra={
+                    "reason": "manifest_verify_failed",
+                    "verify_reason": verify_reason,
+                    "model_path": str(resolved),
+                    "manifest_path": manifest_candidate,
+                },
+            )
+            return False
+
+    try:
+        model = joblib.load(resolved)
+    except COMMON_EXC as exc:  # noqa: BLE001
+        logger.warning(
+            "MODEL_HOT_RELOAD_FAILED",
+            extra={"path": str(resolved), "error": str(exc)},
+        )
+        return False
+
+    _set_required_model_cache(model, kind="file", path=str(resolved))
+    runtime_ctx = _get_runtime_context_or_none()
+    if runtime_ctx is not None:
+        try:
+            runtime_ctx.model = model
+        except COMMON_EXC:
+            logger.debug("MODEL_HOT_RELOAD_RUNTIME_ASSIGN_FAILED", exc_info=True)
+    logger.info(
+        "MODEL_HOT_RELOAD_APPLIED",
+        extra={"path": str(resolved), "reason": reason},
+    )
+    return True
 
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
@@ -4100,35 +4210,131 @@ def _seed_torch_if_available(seed: int) -> None:
         pass
 
 
-_rl_path = _secret_to_str(getattr(S, "rl_model_path", None))
-RL_MODEL_PATH = (
-    (Path(BASE_DIR) / _rl_path).resolve() if _rl_path else None
-)  # AI-AGENT-REF: resolve RL model path
-RL_AGENT: Any | None = None
-if getattr(S, "use_rl_agent", False) and RL_MODEL_PATH:
-    if RLTrader is not None:
-        try:
-            rl = RLTrader(RL_MODEL_PATH)
-            rl.load()  # load PPO policy from zip path
-            if getattr(rl, "_using_stub_model", False):
-                warning_kv(
-                    logger,
-                    "RL_AGENT_DISABLED_STUB",
-                    extra={"model": str(RL_MODEL_PATH)},
-                )
-                RL_AGENT = None
-            else:
-                RL_AGENT = rl
-                info_kv(logger, "RL_AGENT_READY", extra={"model": str(RL_MODEL_PATH)})
-        except COMMON_EXC as e:  # noqa: BLE001
-            warning_kv(logger, "RL_AGENT_INIT_FAILED", extra={"error": str(e)})
-            RL_AGENT = None
-    else:
+def _resolve_rl_model_path(raw_path: str | None = None) -> Path | None:
+    candidate = str(raw_path or "").strip()
+    if not candidate:
+        candidate = str(get_env("AI_TRADING_RL_MODEL_PATH", "") or "").strip()
+    if not candidate:
+        return None
+    path = Path(candidate)
+    if not path.is_absolute():
+        path = (Path(BASE_DIR) / path).resolve()
+    return path
+
+
+def _rl_model_signature(path: Path | None) -> tuple[str, int, int] | None:
+    if path is None:
+        return None
+    try:
+        stats = path.stat()
+    except OSError:
+        return None
+    return str(path), int(stats.st_mtime_ns), int(stats.st_size)
+
+
+def _reload_rl_agent_from_runtime_path(
+    *,
+    model_path: str | None = None,
+    reason: str = "runtime",
+    force: bool = False,
+    use_rl_enabled: bool | None = None,
+) -> bool:
+    global RL_AGENT, RL_MODEL_PATH, _RL_AGENT_SIGNATURE
+
+    enabled = (
+        bool(use_rl_enabled)
+        if use_rl_enabled is not None
+        else bool(get_env("USE_RL_AGENT", False, cast=bool))
+    )
+    target = _resolve_rl_model_path(model_path)
+    if not enabled:
+        RL_MODEL_PATH = target
+        if RL_AGENT is not None:
+            info_kv(
+                logger,
+                "RL_AGENT_DISABLED",
+                extra={"reason": "USE_RL_AGENT_FALSE"},
+            )
+        RL_AGENT = None
+        _RL_AGENT_SIGNATURE = None
+        return False
+    if target is None:
+        warning_kv(
+            logger,
+            "RL_AGENT_PATH_MISSING",
+            extra={"reason": reason},
+        )
+        return False
+    if RLTrader is None:
         warning_kv(
             logger,
             "RL_TRADER_UNAVAILABLE",
             extra={"hint": "ai_trading.rl_trading import failed"},
         )
+        return False
+    target_sig = _rl_model_signature(target)
+    if (
+        not force
+        and RL_AGENT is not None
+        and RL_MODEL_PATH == target
+        and _RL_AGENT_SIGNATURE == target_sig
+    ):
+        return True
+    try:
+        rl = RLTrader(target)
+        rl.load()  # load PPO policy from zip path
+        if getattr(rl, "_using_stub_model", False):
+            warning_kv(
+                logger,
+                "RL_AGENT_DISABLED_STUB",
+                extra={"model": str(target)},
+            )
+            return False
+    except COMMON_EXC as exc:  # noqa: BLE001
+        warning_kv(
+            logger,
+            "RL_AGENT_INIT_FAILED",
+            extra={"error": str(exc), "model": str(target)},
+        )
+        return False
+    RL_AGENT = rl
+    RL_MODEL_PATH = target
+    _RL_AGENT_SIGNATURE = target_sig
+    info_kv(
+        logger,
+        "RL_AGENT_READY",
+        extra={
+            "model": str(target),
+            "reason": reason,
+            "reloaded": bool(force),
+        },
+    )
+    return True
+
+
+def _maybe_hot_reload_runtime_models(runtime: Any | None = None) -> None:
+    path = str(get_env("AI_TRADING_MODEL_PATH", "") or "").strip()
+    if path and not _required_model_cache_matches(path, ""):
+        _refresh_required_model_cache_from_path(path, reason="cycle")
+        if runtime is not None and _MODEL_CACHE is not None:
+            try:
+                runtime.model = _MODEL_CACHE
+            except COMMON_EXC:
+                logger.debug("MODEL_HOT_RELOAD_RUNTIME_ASSIGN_FAILED", exc_info=True)
+    _reload_rl_agent_from_runtime_path(reason="cycle", force=False)
+
+
+_rl_path = _secret_to_str(getattr(S, "rl_model_path", None))
+RL_MODEL_PATH = _resolve_rl_model_path(_rl_path)  # AI-AGENT-REF: resolve RL model path
+RL_AGENT: Any | None = None
+_RL_AGENT_SIGNATURE: tuple[str, int, int] | None = None
+if getattr(S, "use_rl_agent", False):
+    _reload_rl_agent_from_runtime_path(
+        model_path=str(RL_MODEL_PATH) if RL_MODEL_PATH is not None else None,
+        reason="startup",
+        force=True,
+        use_rl_enabled=bool(getattr(S, "use_rl_agent", False)),
+    )
 
 def _normalize_feed_name(feed: str | None) -> str:
     normalized = str(feed or "iex").strip().lower()
@@ -12775,7 +12981,72 @@ class SignalManager:
                 logger.error("signal_ml predict failed: %s", e)
                 return None
             min_confidence = float(get_env("AI_TRADING_ML_MIN_CONFIDENCE", 0.0, cast=float))
-            if min_confidence > 0.0 and proba < min_confidence:
+            effective_threshold = float(min_confidence)
+            regime_threshold: float | None = None
+            regime_label = "sideways"
+            threshold_source = "min_confidence"
+            if bool(get_env("AI_TRADING_ML_USE_REGIME_THRESHOLDS", True, cast=bool)):
+                thresholds_raw = getattr(model, "edge_thresholds_by_regime_", None)
+                threshold_map: dict[str, float] = {}
+                if isinstance(thresholds_raw, Mapping):
+                    for key, value in thresholds_raw.items():
+                        try:
+                            threshold_map[str(key).strip().lower()] = float(value)
+                        except (TypeError, ValueError):
+                            continue
+
+                close_arr = np.asarray([], dtype=float)
+                if "close" in df.columns:
+                    try:
+                        close_arr = np.asarray(df["close"].astype(float).to_numpy(), dtype=float)
+                    except (AttributeError, TypeError, ValueError):
+                        close_arr = np.asarray([], dtype=float)
+
+                if close_arr.size >= 25:
+                    lookback = min(20, close_arr.size - 1)
+                    if lookback >= 5:
+                        recent = close_arr[-(lookback + 1) :]
+                        returns = np.diff(recent) / np.maximum(recent[:-1], 1e-9)
+                        trend = float((recent[-1] / max(recent[0], 1e-9)) - 1.0)
+                        vol = float(np.std(returns))
+                        baseline = np.diff(close_arr) / np.maximum(close_arr[:-1], 1e-9)
+                        baseline_vol = float(np.std(baseline)) if baseline.size else 0.0
+                        if vol >= max(0.02, baseline_vol * 1.2):
+                            regime_label = "volatile"
+                        elif trend >= 0.02:
+                            regime_label = "uptrend"
+                        elif trend <= -0.02:
+                            regime_label = "downtrend"
+                        else:
+                            regime_label = "sideways"
+
+                alias_map = {
+                    "trending": "uptrend",
+                    "bull": "uptrend",
+                    "mean_reversion": "downtrend",
+                    "bear": "downtrend",
+                    "high_volatility": "volatile",
+                }
+                regime_key = alias_map.get(regime_label, regime_label)
+                if threshold_map:
+                    if regime_key in threshold_map:
+                        regime_threshold = float(threshold_map[regime_key])
+                        threshold_source = "regime"
+                    elif "sideways" in threshold_map:
+                        regime_threshold = float(threshold_map["sideways"])
+                        threshold_source = "regime_sideways_fallback"
+                if regime_threshold is None:
+                    global_threshold_raw = getattr(model, "edge_global_threshold_", None)
+                    try:
+                        if global_threshold_raw is not None:
+                            regime_threshold = float(global_threshold_raw)
+                            threshold_source = "global"
+                    except (TypeError, ValueError):
+                        regime_threshold = None
+                if regime_threshold is not None:
+                    effective_threshold = max(effective_threshold, float(regime_threshold))
+
+            if effective_threshold > 0.0 and proba < effective_threshold:
                 logger.info(
                     "ML_SIGNAL_BELOW_CONFIDENCE",
                     extra={
@@ -12783,6 +13054,10 @@ class SignalManager:
                         "prediction": int(pred),
                         "probability": proba,
                         "min_confidence": min_confidence,
+                        "effective_threshold": effective_threshold,
+                        "regime_threshold": regime_threshold,
+                        "regime": regime_label,
+                        "threshold_source": threshold_source,
                     },
                 )
                 return None
@@ -25239,6 +25514,26 @@ def on_market_close() -> None:
                     "reason": outcome.get("reason"),
                 },
             )
+            if isinstance(outcome, Mapping):
+                promoted_model_path = str(outcome.get("promoted_model_path") or "").strip()
+                promoted_manifest_path = str(outcome.get("promoted_manifest_path") or "").strip()
+                if promoted_model_path:
+                    _refresh_required_model_cache_from_path(
+                        promoted_model_path,
+                        manifest_path=promoted_manifest_path or None,
+                        reason="after_hours_training",
+                    )
+                rl_overlay_outcome = outcome.get("rl_overlay")
+                if isinstance(rl_overlay_outcome, Mapping):
+                    promoted_rl_model_path = str(
+                        rl_overlay_outcome.get("promoted_model_path") or ""
+                    ).strip()
+                    if promoted_rl_model_path:
+                        _reload_rl_agent_from_runtime_path(
+                            model_path=promoted_rl_model_path,
+                            reason="after_hours_training",
+                            force=True,
+                        )
         except Exception as exc:
             logger.exception(f"after-hours training failed: {exc}")
     legacy_daily_retrain = bool(
@@ -32230,6 +32525,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         )
                 return
 
+            _maybe_hot_reload_runtime_models(runtime)
             alpha_model = getattr(runtime, "model", None)
             if not alpha_model:
                 logger.warning(

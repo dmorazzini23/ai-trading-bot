@@ -1,8 +1,11 @@
 """Performance metrics for trading results with numerical stability."""
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
 from importlib.util import find_spec
@@ -14,6 +17,17 @@ HAS_NUMPY = True
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
+
+
+def _metric_key(name: str, labels: Mapping[str, str] | None = None) -> str:
+    """Build deterministic metric keys independent of process hash seed."""
+
+    if not labels:
+        return f"{name}_0"
+    normalized = {str(key): str(value) for key, value in labels.items()}
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"{name}_{digest}"
 
 def compute_basic_metrics(df) -> dict[str, float]:
     """Return Sharpe ratio and max drawdown from ``df`` with a ``return`` column."""
@@ -119,19 +133,19 @@ class MetricsCollector:
 
     def inc_counter(self, name: str, value: int=1, labels: dict[str, str] | None=None):
         """Increment a counter metric."""
-        key = f"{name}_{hash(str(labels) if labels else '')}"
+        key = _metric_key(name, labels)
         self.counters[key] += value
 
     def observe_latency(self, name: str, latency_ms: float, labels: dict[str, str] | None=None):
         """Record a latency observation."""
-        key = f"{name}_{hash(str(labels) if labels else '')}"
+        key = _metric_key(name, labels)
         self.histograms[key].append(latency_ms)
         if len(self.histograms[key]) > 1000:
             self.histograms[key] = self.histograms[key][-500:]
 
     def gauge_set(self, name: str, value: float, labels: dict[str, str] | None=None):
         """Set a gauge metric value."""
-        key = f"{name}_{hash(str(labels) if labels else '')}"
+        key = _metric_key(name, labels)
         self.gauges[key] = value
 
     def record_trade_metrics(self, symbol: str, side: str, quantity: float, price: float, latency_ms: float, success: bool):

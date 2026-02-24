@@ -1,6 +1,7 @@
 import importlib
 import logging
 import sys
+import time
 import types
 
 import pytest
@@ -87,6 +88,22 @@ def test_model_loaded_once(monkeypatch):
     assert calls["count"] == 1
 
 
+def test_model_reloads_when_artifact_changes(monkeypatch, tmp_path):
+    be = reload_bot_engine()
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"version": 1}, mpath)
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+
+    first = be._load_required_model()
+    assert first["version"] == 1
+
+    time.sleep(0.02)
+    joblib.dump({"version": 2}, mpath)
+    second = be._load_required_model()
+    assert second["version"] == 2
+
+
 def test_missing_model_file_creates_placeholder(monkeypatch, tmp_path, caplog):
     missing = tmp_path / "no_model.pkl"
     monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(missing))
@@ -144,4 +161,3 @@ def test_heuristic_fallback_marked_placeholder(monkeypatch, tmp_path):
 
     assert getattr(model, "is_placeholder_model", False) is True
     assert tuple(getattr(model, "classes_", ())) == (0, 1)
-

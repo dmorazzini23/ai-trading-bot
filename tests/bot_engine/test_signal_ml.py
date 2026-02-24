@@ -116,3 +116,55 @@ def test_signal_ml_respects_min_confidence(monkeypatch, caplog):
 
     assert result is None
     assert "ML_SIGNAL_BELOW_CONFIDENCE" in caplog.text
+
+
+def test_signal_ml_respects_regime_thresholds(monkeypatch, caplog):
+    class DummyModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+        edge_thresholds_by_regime_ = {"uptrend": 0.9, "sideways": 0.4}
+        edge_global_threshold_ = 0.5
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    monkeypatch.setenv("AI_TRADING_ML_MIN_CONFIDENCE", "0.0")
+    monkeypatch.setenv("AI_TRADING_ML_USE_REGIME_THRESHOLDS", "1")
+    manager = SignalManager()
+    df = pd.concat([_minimal_df(), _minimal_df()], ignore_index=True)
+    df["close"] = [100.0 + idx for idx in range(len(df))]
+    caplog.set_level("INFO")
+
+    result = manager.signal_ml(df, model=DummyModel(), symbol="AAPL")
+
+    assert result is None
+    assert "ML_SIGNAL_BELOW_CONFIDENCE" in caplog.text
+
+
+def test_signal_ml_can_disable_regime_thresholds(monkeypatch):
+    class DummyModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+        edge_thresholds_by_regime_ = {"uptrend": 0.9, "sideways": 0.4}
+        edge_global_threshold_ = 0.5
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    monkeypatch.setenv("AI_TRADING_ML_MIN_CONFIDENCE", "0.0")
+    monkeypatch.setenv("AI_TRADING_ML_USE_REGIME_THRESHOLDS", "0")
+    manager = SignalManager()
+    df = pd.concat([_minimal_df(), _minimal_df()], ignore_index=True)
+    df["close"] = [100.0 + idx for idx in range(len(df))]
+
+    result = manager.signal_ml(df, model=DummyModel(), symbol="AAPL")
+
+    assert result is not None
+    signal, confidence, label = result
+    assert signal == 1
+    assert confidence == pytest.approx(0.8, abs=1e-6)
+    assert label == "ml"

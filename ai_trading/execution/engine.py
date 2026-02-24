@@ -868,6 +868,27 @@ class OrderManager:
                 raise
         return self._idempotency_cache
 
+    def _log_submit_skipped(
+        self,
+        order: Order,
+        *,
+        reason: str,
+        detail: str | None = None,
+        existing_order_id: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "symbol": order.symbol,
+            "side": getattr(order.side, "value", order.side),
+            "quantity": order.quantity,
+            "order_type": getattr(order.order_type, "value", order.order_type),
+            "reason": str(reason),
+        }
+        if detail:
+            payload["detail"] = str(detail)
+        if existing_order_id:
+            payload["existing_order_id"] = str(existing_order_id)
+        logger.info("ORDER_SUBMIT_SKIPPED", extra=payload)
+
     def submit_order(self, order: Order) -> object | None:
         """
         Submit order for execution.
@@ -927,6 +948,11 @@ class OrderManager:
                         },
                     )
             if not self._validate_order(order):
+                self._log_submit_skipped(
+                    order,
+                    reason="validation_failed",
+                    detail="order validation returned false",
+                )
                 _safe_counter_inc(
                     _orders_rejected_total,
                     "orders_rejected_total",
@@ -939,6 +965,11 @@ class OrderManager:
                 logger.error(f"Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})")
                 order.status = OrderStatus.REJECTED
                 order.notes += " | Rejected: Max concurrent orders reached"
+                self._log_submit_skipped(
+                    order,
+                    reason="max_concurrent_orders",
+                    detail=f"max_concurrent_orders={self.max_concurrent_orders}",
+                )
                 _safe_counter_inc(
                     _orders_rejected_total,
                     "orders_rejected_total",
@@ -955,6 +986,12 @@ class OrderManager:
                         "quantity": order.quantity,
                         "existing_order_id": existing_order_id,
                     },
+                )
+                self._log_submit_skipped(
+                    order,
+                    reason="duplicate_order",
+                    detail="idempotency cache duplicate",
+                    existing_order_id=existing_order_id,
                 )
                 order.status = OrderStatus.REJECTED
                 order.notes += " | Rejected: Duplicate order detected"

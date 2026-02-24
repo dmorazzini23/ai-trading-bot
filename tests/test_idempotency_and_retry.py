@@ -70,6 +70,38 @@ def test_order_manager_submit_order_uses_atomic_idempotency_check(monkeypatch):
     assert response is not None
 
 
+def test_order_manager_logs_submit_skipped_for_duplicate(caplog):
+    from ai_trading.execution.engine import OrderManager, Order
+    from ai_trading.core.enums import OrderSide, OrderType
+
+    manager = OrderManager()
+    first = Order(symbol="AAPL", side=OrderSide.BUY, quantity=25, order_type=OrderType.MARKET)
+    duplicate = Order(symbol="AAPL", side=OrderSide.BUY, quantity=25, order_type=OrderType.MARKET)
+
+    with caplog.at_level("INFO"):
+        assert manager.submit_order(first) is not None
+        assert manager.submit_order(duplicate) is None
+
+    skipped = [record for record in caplog.records if record.msg == "ORDER_SUBMIT_SKIPPED"]
+    assert skipped
+    assert any(getattr(record, "reason", None) == "duplicate_order" for record in skipped)
+
+
+def test_order_manager_logs_submit_skipped_for_validation_failure(caplog):
+    from ai_trading.execution.engine import OrderManager, Order
+    from ai_trading.core.enums import OrderSide, OrderType
+
+    manager = OrderManager()
+    invalid = Order(symbol="AAPL", side=OrderSide.BUY, quantity=0, order_type=OrderType.MARKET)
+
+    with caplog.at_level("INFO"):
+        assert manager.submit_order(invalid) is None
+
+    skipped = [record for record in caplog.records if record.msg == "ORDER_SUBMIT_SKIPPED"]
+    assert skipped
+    assert any(getattr(record, "reason", None) == "validation_failed" for record in skipped)
+
+
 def test_http_submit_retries_once_then_succeeds(monkeypatch):
     """Simulate transient network error on first call, success on second.
 
