@@ -161,6 +161,7 @@ from ai_trading.portfolio.allocation import (
     update_allocation_weights,
 )
 from ai_trading.monitoring.alerts import evaluate_runtime_alert_thresholds
+from ai_trading.monitoring.model_liveness import note_ml_signal, note_rl_signals_emitted
 from ai_trading.risk.liquidity_regime import (
     LiquidityFeatures,
     LiquidityRegime,
@@ -13062,6 +13063,7 @@ class SignalManager:
                 )
                 return None
             s = 1 if pred == 1 else -1
+            note_ml_signal()
             logger.info(
                 "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
             )
@@ -26753,6 +26755,7 @@ def run_multi_strategy(ctx) -> None:
                     if rl_sigs:
                         rl_signal_list = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
                         signals_by_strategy["rl"] = rl_signal_list
+                        note_rl_signals_emitted()
                         logger.info(
                             "RL_SIGNALS_EMITTED",
                             extra={

@@ -39,6 +39,18 @@ slo:
     window: per_release
     max_events: 0
     severity: critical
+  model_liveness_ml_signal:
+    window: 90m
+    max_age_seconds: 5400
+    severity: critical
+  model_liveness_rl_signal:
+    window: 90m
+    max_age_seconds: 5400
+    severity: critical
+  after_hours_training_liveness:
+    window: 36h
+    max_age_seconds: 129600
+    severity: warning
 alerts:
   notify:
     - oncall
@@ -48,9 +60,13 @@ alerts:
     - breaker_open_critical_dep
     - recon_mismatch
     - leakage_guard_failures
+    - model_liveness_ml_signal
+    - model_liveness_rl_signal
 rollback_policy:
   auto_rollback_on:
     - breaker_open_critical_dep
     - recon_mismatch
     - leakage_guard_failures
+    - model_liveness_ml_signal
+    - model_liveness_rl_signal
   manual_approval_required_for_resume: true

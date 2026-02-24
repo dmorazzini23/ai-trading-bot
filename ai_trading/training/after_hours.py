@@ -31,6 +31,7 @@ from ai_trading.indicators import rsi as rsi_indicator
 from ai_trading.logging import get_logger
 from ai_trading.model_registry import ModelRegistry
 from ai_trading.models.artifacts import write_artifact_manifest
+from ai_trading.monitoring.model_liveness import note_after_hours_training_complete
 from ai_trading.registry.manifest import validate_manifest_metadata
 from ai_trading.research.leakage_tests import run_leakage_guards
 
@@ -1463,6 +1464,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "governance_status": status,
         },
     )
+    note_after_hours_training_complete()
     return {
         "status": "trained",
         "model_id": model_id,

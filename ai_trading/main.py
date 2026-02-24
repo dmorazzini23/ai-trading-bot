@@ -235,6 +235,11 @@ from ai_trading.config.management import (
     get_trading_config,
 )
 from ai_trading.metrics import get_histogram, get_counter
+from ai_trading.monitoring.alerts import emit_runtime_alert
+from ai_trading.monitoring.model_liveness import (
+    check_model_liveness,
+    maybe_trigger_canary_auto_rollback,
+)
 from ai_trading.telemetry import runtime_state
 from ai_trading.utils.env import alpaca_credential_status
 
@@ -2164,6 +2169,26 @@ def main(argv: list[str] | None = None) -> None:
                             _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
                         except Exception:
                             logger.debug("CYCLE_BUDGET_COUNTER_INC_COMPUTE_FAILED", exc_info=True)
+                    try:
+                        liveness_breaches = check_model_liveness(market_open=not closed)
+                        for breach in liveness_breaches:
+                            emit_runtime_alert(
+                                "ALERT_MODEL_LIVENESS",
+                                severity=str(breach.get("severity") or "critical"),
+                                details=breach,
+                            )
+                        rollback_result = maybe_trigger_canary_auto_rollback(liveness_breaches)
+                        if rollback_result:
+                            if bool(rollback_result.get("triggered")):
+                                emit_runtime_alert(
+                                    "ALERT_CANARY_AUTO_ROLLBACK_TRIGGERED",
+                                    severity="critical",
+                                    details=rollback_result,
+                                )
+                            elif str(rollback_result.get("status") or "") == "cooldown":
+                                logger.info("CANARY_AUTO_ROLLBACK_COOLDOWN", extra=rollback_result)
+                    except Exception:
+                        logger.debug("MODEL_LIVENESS_EVALUATION_FAILED", exc_info=True)
                     execute_seconds = execution_timing.cycle_seconds()
                     with StageTimer(
                         logger,

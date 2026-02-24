@@ -37,10 +37,30 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+      - name: Verify institutional test dependencies
+        run: |
+          python - <<'PY'
+          import importlib
+
+          required_modules = ("sqlalchemy", "psycopg", "pytest_asyncio")
+          missing = []
+          for module_name in required_modules:
+              try:
+                  importlib.import_module(module_name)
+              except Exception:
+                  missing.append(module_name)
+
+          if missing:
+              raise SystemExit(
+                  "Missing required dependencies for institutional tests: "
+                  + ", ".join(missing)
+              )
+          print("INSTITUTIONAL_TEST_DEPENDENCIES_OK")
+          PY
       - name: Secret exposure guard
         run: make secret-scan
-      - name: Institutional gates (static bundle)
-        run: INSTITUTIONAL_SKIP_PYTEST=1 make institutional-gates
+      - name: Institutional gates (strict bundle)
+        run: INSTITUTIONAL_STRICT=1 INSTITUTIONAL_SKIP_PYTEST=0 INSTITUTIONAL_FAIL_ON_SKIP=1 make institutional-gates
       - name: Compile
         run: python -m compileall . -q
       - name: Lint + Format + Types
