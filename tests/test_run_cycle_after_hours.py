@@ -62,6 +62,56 @@ def test_market_close_training_triggers_once_per_day(monkeypatch):
     assert calls["count"] == 1
 
 
+def test_market_close_training_triggers_overnight_catchup_once_per_session(monkeypatch):
+    """Overnight catch-up should map to the previous business session key."""
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", "1")
+    monkeypatch.setattr(
+        main,
+        "_LAST_MARKET_CLOSE_TRAINING_DATE",
+        None,
+        raising=False,
+    )
+    calls = {"count": 0}
+    monkeypatch.setattr(
+        main,
+        "_invoke_market_close_training",
+        lambda: calls.__setitem__("count", calls["count"] + 1),
+    )
+    now_est = datetime(2026, 1, 7, 0, 10, tzinfo=ZoneInfo("America/New_York"))
+
+    main._maybe_trigger_market_close_training(now_est)
+    main._maybe_trigger_market_close_training(now_est)
+
+    assert calls["count"] == 1
+    assert main._LAST_MARKET_CLOSE_TRAINING_DATE == "2026-01-06"
+
+
+def test_market_close_training_skips_overnight_when_catchup_disabled(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", "0")
+    monkeypatch.setattr(
+        main,
+        "_LAST_MARKET_CLOSE_TRAINING_DATE",
+        None,
+        raising=False,
+    )
+    calls = {"count": 0}
+    monkeypatch.setattr(
+        main,
+        "_invoke_market_close_training",
+        lambda: calls.__setitem__("count", calls["count"] + 1),
+    )
+    now_est = datetime(2026, 1, 7, 0, 10, tzinfo=ZoneInfo("America/New_York"))
+
+    main._maybe_trigger_market_close_training(now_est)
+
+    assert calls["count"] == 0
+
+
 def test_run_cycle_aborts_on_alpaca_auth_failure(monkeypatch, caplog):
     sys.modules.pop("ai_trading.core.bot_engine", None)
     monkeypatch.setenv("ALLOW_AFTER_HOURS", "1")

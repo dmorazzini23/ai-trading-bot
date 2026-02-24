@@ -25575,14 +25575,31 @@ def _write_after_hours_training_marker(date_key: str, outcome: Mapping[str, Any]
             pass
 
 
+def _resolve_after_hours_training_date_key(now_est: datetime) -> str | None:
+    """Return the session date key eligible for after-hours training."""
+
+    minutes = (int(now_est.hour) * 60) + int(now_est.minute)
+    close_minutes = 16 * 60
+    catchup_end_minutes = (9 * 60) + 30
+    if minutes >= close_minutes:
+        return now_est.date().isoformat()
+    catchup_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", True, cast=bool)
+    )
+    if catchup_enabled and minutes < catchup_end_minutes:
+        return _prev_bus_day(now_est.date()).isoformat()
+    return None
+
+
 def on_market_close() -> None:
     """Trigger daily retraining after the market closes."""
     now_est = dt_.now(UTC).astimezone(ZoneInfo("America/New_York"))
     if market_is_open(now_est):
         logger.info("RETRAIN_SKIP_MARKET_OPEN")
         return
-    if now_est.time() < dt_time(16, 0):
-        logger.info("RETRAIN_SKIP_EARLY", extra={"time": now_est.isoformat()})
+    after_hours_date_key = _resolve_after_hours_training_date_key(now_est)
+    if not after_hours_date_key:
+        logger.info("RETRAIN_SKIP_WINDOW", extra={"time": now_est.isoformat()})
         return
     after_hours_enabled = bool(
         get_env("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False, cast=bool)
@@ -25590,7 +25607,6 @@ def on_market_close() -> None:
     after_hours_once_per_day = bool(
         get_env("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", True, cast=bool)
     )
-    after_hours_date_key = now_est.date().isoformat()
     if (
         after_hours_enabled
         and after_hours_once_per_day

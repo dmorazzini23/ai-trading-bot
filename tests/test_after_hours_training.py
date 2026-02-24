@@ -265,6 +265,43 @@ def test_on_market_close_writes_after_hours_training_marker(
     assert payload["model_name"] == "logreg"
 
 
+def test_on_market_close_overnight_catchup_writes_previous_business_marker_date(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    class _FixedDateTime:
+        @staticmethod
+        def now(_tz=None):
+            return datetime(2026, 1, 7, 5, 10, tzinfo=UTC)  # 00:10 New York
+
+    marker_path = tmp_path / "after_hours.marker.json"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ONCE_PER_DAY", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", str(marker_path))
+    monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
+    monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        after_hours,
+        "run_after_hours_training",
+        lambda **_kwargs: {
+            "status": "trained",
+            "model_id": "m-overnight",
+            "model_name": "logreg",
+            "governance_status": "production",
+        },
+    )
+
+    bot_engine.on_market_close()
+
+    payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert payload["date"] == "2026-01-06"
+    assert payload["status"] == "trained"
+
+
 def test_after_hours_training_handles_leakage_assertions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

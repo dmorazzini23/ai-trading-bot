@@ -10,7 +10,7 @@ import errno
 import socket
 import signal
 import sys
-from datetime import datetime, UTC
+from datetime import date as dt_date, datetime, UTC, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import importlib.util
@@ -127,8 +127,37 @@ def _invoke_market_close_training() -> None:
     bot_engine.on_market_close()
 
 
+def _previous_business_day(d: dt_date) -> dt_date:
+    """Return previous weekday date (Mon->Fri, Sun->Fri, Sat->Fri)."""
+
+    wd = d.weekday()
+    if wd == 0:
+        return d - timedelta(days=3)
+    if wd == 6:
+        return d - timedelta(days=2)
+    if wd == 5:
+        return d - timedelta(days=1)
+    return d - timedelta(days=1)
+
+
+def _resolve_market_close_training_date_key(now_local: datetime) -> str | None:
+    """Return session key eligible for market-close training trigger."""
+
+    minutes = (int(now_local.hour) * 60) + int(now_local.minute)
+    close_minutes = 16 * 60
+    catchup_end_minutes = (9 * 60) + 30
+    if minutes >= close_minutes:
+        return now_local.date().isoformat()
+    catchup_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_CATCHUP_ENABLED", True, cast=bool)
+    )
+    if catchup_enabled and minutes < catchup_end_minutes:
+        return _previous_business_day(now_local.date()).isoformat()
+    return None
+
+
 def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> None:
-    """Trigger after-hours/legacy retraining at most once per NY date after 16:00."""
+    """Trigger after-hours/legacy retraining once per eligible session window."""
 
     after_hours_enabled = bool(
         get_env("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False, cast=bool)
@@ -142,10 +171,10 @@ def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> Non
     now_local = now_est or datetime.now(ZoneInfo("America/New_York"))
     if now_local.tzinfo is None:
         now_local = now_local.replace(tzinfo=ZoneInfo("America/New_York"))
-    if now_local.time().hour < 16:
+    date_key = _resolve_market_close_training_date_key(now_local)
+    if not date_key:
         return
 
-    date_key = now_local.date().isoformat()
     if not _claim_market_close_training(date_key):
         return
     try:
