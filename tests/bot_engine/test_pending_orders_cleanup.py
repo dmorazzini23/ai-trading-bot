@@ -176,6 +176,41 @@ def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
     cancel_mock.assert_called_once_with(runtime)
 
 
+def test_handle_pending_orders_symbol_scope_applies_policy(monkeypatch, caplog):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(),
+    )
+    policy_calls: list[str] = []
+    runtime.execution_engine._apply_pending_new_timeout_policy = (
+        lambda: policy_calls.append("called")
+    )
+    cancel_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=30),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    orders = [_order("pending_new", "o-symbol", symbol="AAPL")]
+
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders(orders, runtime) is True
+    assert policy_calls == []
+
+    caplog.clear()
+    clock.value = 131.0
+    assert be._handle_pending_orders(orders, runtime) is True
+    assert policy_calls == ["called"]
+    cancel_mock.assert_not_called()
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ("AAPL",)
+    assert any(record.message == "PENDING_ORDERS_POLICY_APPLIED" for record in caplog.records)
+
+
 def test_handle_pending_orders_stale_broker_age_triggers_immediate_cleanup(monkeypatch):
     runtime = types.SimpleNamespace(state={})
     cancel_mock = MagicMock()

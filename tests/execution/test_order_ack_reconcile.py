@@ -103,6 +103,20 @@ class _AcceptedNoPollClient(_AckStubClient):
         raise ConnectionError("status endpoint unavailable")
 
 
+class _AckFirstProbeClient(_AckStubClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_calls = 0
+
+    def get_order_by_id(self, order_id: str):
+        self.poll_calls += 1
+        return super().get_order_by_id(order_id)
+
+    def get_order_by_client_order_id(self, client_order_id: str):
+        self.poll_calls += 1
+        return super().get_order_by_client_order_id(client_order_id)
+
+
 class _EnumStatusClient(_AckStubClient):
     def submit_order(self, *args, **kwargs):
         self._polls = 0
@@ -171,6 +185,21 @@ def test_order_submit_ack_and_reconcile_success(caplog, monkeypatch):
     assert "ORDER_FILL_CONFIRMED" in msgs
     assert "BROKER_RECONCILE_SUMMARY" in msgs
     assert "BROKER_RECONCILE_MISMATCH" not in msgs
+
+
+def test_ack_first_short_circuits_polling(monkeypatch, caplog):
+    client = _AckFirstProbeClient()
+    engine = _build_engine(client)
+    _prime_engine(engine, monkeypatch)
+    monkeypatch.setenv("AI_TRADING_ACK_FIRST_RECONCILE_ENABLED", "1")
+    caplog.set_level(logging.INFO)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert client.poll_calls == 0
+    msgs = {record.msg for record in caplog.records}
+    assert "ORDER_ACK_FIRST_SHORT_CIRCUIT" in msgs
 
 
 def test_order_submit_ack_timeout(monkeypatch, caplog):

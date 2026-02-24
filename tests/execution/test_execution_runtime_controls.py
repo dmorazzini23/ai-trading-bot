@@ -150,6 +150,23 @@ def test_resolve_order_submit_cap_combines_configured_and_bootstrap(monkeypatch)
     assert source == "configured+bootstrap"
 
 
+def test_resolve_order_submit_cap_includes_adaptive(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "bootstrap"})
+    engine._engine_started_mono = 100.0
+    engine._engine_cycle_index = 1
+    engine._adaptive_new_orders_cap = 2
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 110.0)
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "5")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_MAX_NEW_ORDERS_PER_CYCLE", "4")
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 2
+    assert source == "configured+bootstrap+adaptive"
+
+
 def test_resolve_midpoint_offset_bps_honors_annotation_and_clamp(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MAX_OFFSET_BPS", "12")

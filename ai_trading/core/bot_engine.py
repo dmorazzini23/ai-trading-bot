@@ -331,6 +331,7 @@ _PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
 _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
 _PENDING_ORDER_WARMUP_REMAINING_KEY = "warmup_cycles_remaining"
+_PENDING_ORDER_BLOCKED_SYMBOLS_ATTR = "_cycle_pending_blocked_symbols"
 _STARTUP_CLEANUP_STALE_SEC_DEFAULT = 120.0
 
 _EASTERN_TZ = ZoneInfo("America/New_York")
@@ -1130,6 +1131,72 @@ def _warmup_symbol_limit() -> int:
     return max(1, min(limit, 100))
 
 
+def _resolve_execution_candidate_top_n() -> int | None:
+    """Return optional top-N execution candidate cap after pre-ranking."""
+
+    try:
+        raw_top_n = get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N", 0, cast=int)
+    except Exception:
+        raw_top_n = 0
+    try:
+        top_n = int(raw_top_n)
+    except (TypeError, ValueError):
+        top_n = 0
+    if top_n <= 0:
+        return None
+    return max(1, min(top_n, 500))
+
+
+def _pre_rank_execution_candidates(
+    symbols: Sequence[str],
+    *,
+    runtime: Any | None,
+) -> list[str]:
+    """Pre-rank symbols before broker calls and optionally truncate to top-N."""
+
+    normalized = [str(sym).strip().upper() for sym in symbols if str(sym).strip()]
+    if not normalized:
+        return []
+
+    top_n = _resolve_execution_candidate_top_n()
+    weights: Mapping[str, Any] | None = None
+    if runtime is not None:
+        candidate = getattr(runtime, "portfolio_weights", None)
+        if isinstance(candidate, Mapping):
+            weights = candidate
+
+    def _weight(sym: str) -> float:
+        if not weights:
+            return 0.0
+        raw_weight = weights.get(sym, weights.get(sym.lower(), 0.0))  # type: ignore[union-attr]
+        try:
+            return abs(float(raw_weight))
+        except (TypeError, ValueError):
+            return 0.0
+
+    ranked = (
+        sorted(normalized, key=lambda sym: (-_weight(sym), sym))
+        if weights
+        else list(normalized)
+    )
+    if top_n is None or len(ranked) <= top_n:
+        return ranked
+
+    selected = ranked[:top_n]
+    dropped = ranked[top_n:]
+    logger.info(
+        "EXECUTION_CANDIDATE_PRERANK",
+        extra={
+            "requested": len(ranked),
+            "selected": len(selected),
+            "top_n": top_n,
+            "selected_sample": selected[:10],
+            "dropped_sample": dropped[:10],
+        },
+    )
+    return selected
+
+
 def _resolve_data_retry_settings() -> tuple[int, float]:
     """Resolve retry attempts and delay from environment with clamping."""
 
@@ -1155,11 +1222,51 @@ def _resolve_data_retry_settings() -> tuple[int, float]:
         except (TypeError, ValueError):
             delay = 0.5
         delay = max(0.0, min(5.0, delay))
+        flatten_enabled = False
+        try:
+            flatten_enabled = bool(
+                get_env("AI_TRADING_DATA_RETRY_FLATTEN_ENABLED", False, cast=bool)
+            )
+        except Exception:
+            flatten_enabled = False
+        if flatten_enabled:
+            try:
+                flatten_attempts_raw = get_env(
+                    "AI_TRADING_DATA_RETRY_FLATTEN_MAX_ATTEMPTS",
+                    1,
+                    cast=int,
+                )
+            except Exception:
+                flatten_attempts_raw = 1
+            try:
+                flatten_attempts = int(flatten_attempts_raw)
+            except (TypeError, ValueError):
+                flatten_attempts = 1
+            flatten_attempts = max(1, min(flatten_attempts, 3))
+            attempts = min(max(1, attempts), flatten_attempts)
+            try:
+                flatten_delay_raw = get_env(
+                    "AI_TRADING_DATA_RETRY_FLATTEN_MAX_DELAY_SECONDS",
+                    0.0,
+                    cast=float,
+                )
+            except Exception:
+                flatten_delay_raw = 0.0
+            try:
+                flatten_delay = float(flatten_delay_raw)
+            except (TypeError, ValueError):
+                flatten_delay = 0.0
+            flatten_delay = max(0.0, min(flatten_delay, 2.0))
+            delay = min(delay, flatten_delay)
         _DATA_RETRY_SETTINGS_CACHE = (attempts, delay)
         if not _DATA_RETRY_SETTINGS_LOGGED:
             get_logger(__name__).info(
                 "DATA_RETRY_SETTINGS",
-                extra={"attempts": attempts, "delay_seconds": delay},
+                extra={
+                    "attempts": attempts,
+                    "delay_seconds": delay,
+                    "flattened": flatten_enabled,
+                },
             )
             _DATA_RETRY_SETTINGS_LOGGED = True
         return _DATA_RETRY_SETTINGS_CACHE
@@ -1180,6 +1287,106 @@ def _short_circuit_retry_budget(
     if prefer_backup:
         return 1, 0.0, "prefer_backup_quotes"
     return normalized_attempts, max(0.0, float(delay)), None
+
+
+def _resolve_adaptive_order_cap(
+    *,
+    cycle_budget: Any | None,
+    last_loop_duration_s: float | int | None,
+) -> tuple[int | None, dict[str, Any]]:
+    """Return adaptive per-cycle order cap based on budget headroom."""
+
+    try:
+        enabled = bool(get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_ENABLED", False, cast=bool))
+    except Exception:
+        enabled = False
+    details: dict[str, Any] = {"enabled": enabled}
+    if not enabled:
+        return None, details
+
+    interval_candidates: list[float] = []
+    if cycle_budget is not None:
+        try:
+            interval_candidates.append(float(getattr(cycle_budget, "interval_s", 0.0) or 0.0))
+        except Exception:
+            pass
+    try:
+        interval_candidates.append(float(get_env("AI_TRADING_INTERVAL", 60, cast=float)))
+    except Exception:
+        pass
+    try:
+        interval_candidates.append(float(get_env("INTERVAL_WHEN_CLOSED", 60, cast=float)))
+    except Exception:
+        pass
+    interval_s = max((val for val in interval_candidates if val > 0.0), default=60.0)
+    details["interval_s"] = interval_s
+
+    ratios: list[float] = []
+    if cycle_budget is not None:
+        budget_obj = getattr(cycle_budget, "budget", None)
+        if budget_obj is not None:
+            try:
+                remaining_s = max(float(budget_obj.remaining()), 0.0)
+            except Exception:
+                remaining_s = None
+            if remaining_s is not None:
+                ratio = max(0.0, min(1.0, remaining_s / max(interval_s, 1e-6)))
+                ratios.append(ratio)
+                details["budget_headroom_ratio"] = ratio
+    try:
+        loop_duration = float(last_loop_duration_s or 0.0)
+    except (TypeError, ValueError):
+        loop_duration = 0.0
+    loop_duration = max(loop_duration, 0.0)
+    details["last_loop_duration_s"] = round(loop_duration, 6)
+    if interval_s > 0.0:
+        loop_headroom_ratio = max(0.0, min(1.0, (interval_s - loop_duration) / interval_s))
+        ratios.append(loop_headroom_ratio)
+        details["loop_headroom_ratio"] = loop_headroom_ratio
+
+    if not ratios:
+        return None, details
+    headroom_ratio = min(ratios)
+    details["headroom_ratio"] = headroom_ratio
+
+    try:
+        warn_ratio = float(
+            get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_WARN_HEADROOM_RATIO", 0.40, cast=float)
+        )
+    except Exception:
+        warn_ratio = 0.40
+    try:
+        crit_ratio = float(
+            get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_CRIT_HEADROOM_RATIO", 0.20, cast=float)
+        )
+    except Exception:
+        crit_ratio = 0.20
+    warn_ratio = max(0.0, min(warn_ratio, 1.0))
+    crit_ratio = max(0.0, min(crit_ratio, warn_ratio))
+    details["warn_ratio"] = warn_ratio
+    details["crit_ratio"] = crit_ratio
+
+    try:
+        warn_cap_raw = int(get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_WARN_VALUE", 2, cast=int))
+    except Exception:
+        warn_cap_raw = 2
+    try:
+        crit_cap_raw = int(get_env("AI_TRADING_ADAPTIVE_ORDER_CAP_CRIT_VALUE", 1, cast=int))
+    except Exception:
+        crit_cap_raw = 1
+    warn_cap = max(1, min(warn_cap_raw, 25))
+    crit_cap = max(1, min(crit_cap_raw, warn_cap))
+    details["warn_cap"] = warn_cap
+    details["crit_cap"] = crit_cap
+
+    if headroom_ratio <= crit_ratio:
+        details["mode"] = "critical"
+        return crit_cap, details
+    if headroom_ratio <= warn_ratio:
+        details["mode"] = "warning"
+        return warn_cap, details
+    details["mode"] = "normal"
+    return None, details
 
 
 def _current_position_qty(ctx: Any, symbol: str) -> int:
@@ -28045,6 +28252,27 @@ def _process_symbols(
 
     filtered: list[str] = []
     cd_skipped: list[str] = []
+    blocked_symbols = {
+        str(sym).strip().upper()
+        for sym in getattr(state, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
+        if str(sym).strip()
+    }
+    if blocked_symbols:
+        original_count = len(symbols)
+        symbols = [
+            str(sym).strip().upper()
+            for sym in symbols
+            if str(sym).strip() and str(sym).strip().upper() not in blocked_symbols
+        ]
+        logger.info(
+            "PENDING_ORDERS_SYMBOLS_FILTERED",
+            extra={
+                "before": original_count,
+                "after": len(symbols),
+                "blocked_symbols_count": len(blocked_symbols),
+                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+            },
+        )
 
     # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion
     _max_syms = get_env("MAX_SYMBOLS_PER_CYCLE", 50)
@@ -28220,6 +28448,8 @@ def _process_symbols(
             },
         )
 
+    symbols = _pre_rank_execution_candidates(symbols, runtime=ctx)
+
     if cycle_budget:
         cycle_budget.register_total(len(symbols))
         if symbols and cycle_budget.should_throttle():
@@ -28242,6 +28472,37 @@ def _process_symbols(
     data_stats = {"failed": 0, "succeeded": 0}
     broker_stats_before = {"capacity_skips": 0, "retry_count": 0, "skipped_orders": 0}
     exec_engine = getattr(ctx, "execution_engine", None)
+    if exec_engine is not None:
+        adaptive_cap, adaptive_details = _resolve_adaptive_order_cap(
+            cycle_budget=cycle_budget,
+            last_loop_duration_s=getattr(state, "last_loop_duration", 0.0),
+        )
+        try:
+            setattr(exec_engine, "_adaptive_new_orders_cap", adaptive_cap)
+            setattr(exec_engine, "_adaptive_new_orders_details", adaptive_details)
+        except Exception:
+            logger.debug("ADAPTIVE_ORDER_CAP_SET_FAILED", exc_info=True)
+        if adaptive_cap is not None:
+            logger.info(
+                "ADAPTIVE_ORDER_CAP_APPLIED",
+                extra={
+                    "cap": int(adaptive_cap),
+                    "mode": adaptive_details.get("mode"),
+                    "headroom_ratio": adaptive_details.get("headroom_ratio"),
+                    "loop_headroom_ratio": adaptive_details.get("loop_headroom_ratio"),
+                    "budget_headroom_ratio": adaptive_details.get("budget_headroom_ratio"),
+                },
+            )
+        start_hook = getattr(exec_engine, "start_cycle", None)
+        if callable(start_hook):
+            try:
+                start_hook()
+            except Exception as exc:
+                logger.warning(
+                    "EXECUTION_START_CYCLE_FAILED",
+                    extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+                    exc_info=True,
+                )
     stats_snapshot = getattr(exec_engine, "stats", None)
     if isinstance(stats_snapshot, dict):
         try:
@@ -29162,6 +29423,76 @@ def _pending_order_broker_age_seconds(order: Any, now_dt: datetime) -> float | N
     return None
 
 
+def _pending_orders_block_scope() -> str:
+    """Return pending-order block scope (`cycle` or `symbol`)."""
+
+    try:
+        raw_scope = str(
+            get_env("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "cycle", cast=str) or ""
+        )
+    except COMMON_EXC:
+        raw_scope = "cycle"
+    normalized = raw_scope.strip().lower()
+    if normalized in {"symbol", "per_symbol", "symbol_only"}:
+        return "symbol"
+    return "cycle"
+
+
+def _extract_pending_order_symbol(order: Any) -> str | None:
+    """Extract normalized symbol from a broker order payload."""
+
+    symbol_raw: Any = None
+    if isinstance(order, Mapping):
+        symbol_raw = order.get("symbol")
+    if symbol_raw in (None, ""):
+        symbol_raw = getattr(order, "symbol", None)
+    if symbol_raw in (None, ""):
+        return None
+    symbol = str(symbol_raw).strip().upper()
+    return symbol or None
+
+
+def _collect_pending_blocked_symbols(orders: Iterable[Any]) -> set[str]:
+    blocked: set[str] = set()
+    for order in orders:
+        symbol = _extract_pending_order_symbol(order)
+        if symbol:
+            blocked.add(symbol)
+    return blocked
+
+
+def _set_pending_blocked_symbols(runtime: Any, symbols: Iterable[str]) -> None:
+    normalized = sorted({str(sym).strip().upper() for sym in symbols if str(sym).strip()})
+    setattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, tuple(normalized))
+    state_obj = globals().get("state")
+    if state_obj is not None:
+        try:
+            setattr(state_obj, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, tuple(normalized))
+        except Exception:
+            logger.debug("PENDING_BLOCKED_SYMBOLS_STATE_SET_FAILED", exc_info=True)
+
+
+def _apply_pending_new_timeout_policy(runtime: Any) -> bool:
+    """Best-effort per-order pending policy action using execution engine hooks."""
+
+    engine = getattr(runtime, "execution_engine", None) or getattr(runtime, "exec_engine", None)
+    if engine is None:
+        return False
+    policy_hook = getattr(engine, "_apply_pending_new_timeout_policy", None)
+    if not callable(policy_hook):
+        return False
+    try:
+        policy_hook()
+    except COMMON_EXC as exc:
+        logger.warning(
+            "PENDING_NEW_POLICY_APPLY_FAILED",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     """Handle pending orders and decide whether to skip the current cycle.
 
@@ -29189,6 +29520,9 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     if not confirmed_pending and open_list:
         confirmed_pending = open_list
 
+    blocked_symbols = _collect_pending_blocked_symbols(confirmed_pending)
+    _set_pending_blocked_symbols(runtime, blocked_symbols)
+
     now = time.time()
     now_dt = datetime.fromtimestamp(now, tz=UTC)
 
@@ -29215,6 +29549,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     last_log = tracker.get(_PENDING_ORDER_LAST_LOG_KEY)
 
     if not pending_ids:
+        _set_pending_blocked_symbols(runtime, ())
         if first_seen is not None:
             resolved_age = time.time() - first_seen
             logger.info(
@@ -29290,6 +29625,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                     else None
                 ),
                 "stale_stuck_detected": stale_stuck_detected,
+                "blocked_symbols_count": len(blocked_symbols),
+                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
             },
         )
         if not stale_stuck_detected:
@@ -29329,12 +29666,30 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                     if oldest_stuck_age_s is not None
                     else None
                 ),
+                "blocked_symbols_count": len(blocked_symbols),
+                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
             },
         )
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
     if age < cleanup_after and not stale_stuck_detected:
         return True
+
+    if _pending_orders_block_scope() == "symbol":
+        if _apply_pending_new_timeout_policy(runtime):
+            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
+            logger.info(
+                "PENDING_ORDERS_POLICY_APPLIED",
+                extra={
+                    "pending_count": len(pending_ids),
+                    "pending_statuses": statuses,
+                    "blocked_symbols_count": len(blocked_symbols),
+                    "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+                    "age_s": int(max(age, 0)),
+                    "cleanup_after_s": int(cleanup_after),
+                },
+            )
+            return True
 
     try:
         cancel_all_open_orders(runtime)
@@ -32475,8 +32830,22 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     breakers.record_failure("broker_open_orders", breaker_info)
                     _handle_error(breaker_info, state=state, ctx=runtime)
                     open_orders = []
-            if _handle_pending_orders(open_orders, runtime):
-                return
+            pending_skip_cycle = _handle_pending_orders(open_orders, runtime)
+            if pending_skip_cycle:
+                blocked_symbols_raw = getattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
+                blocked_symbols = {
+                    str(sym).strip().upper() for sym in blocked_symbols_raw if str(sym).strip()
+                }
+                if _pending_orders_block_scope() == "symbol" and blocked_symbols:
+                    logger.info(
+                        "PENDING_ORDERS_SYMBOL_BLOCK_ACTIVE",
+                        extra={
+                            "blocked_symbols_count": len(blocked_symbols),
+                            "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+                        },
+                    )
+                else:
+                    return
             if _netting_pipeline_enabled(runtime):
                 _run_netting_cycle(state, runtime, loop_id, loop_start)
                 return

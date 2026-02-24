@@ -353,6 +353,15 @@ def _resolve_ack_timeout_seconds() -> float:
 _ACK_TIMEOUT_SECONDS = _resolve_ack_timeout_seconds()
 
 
+def _ack_first_reconcile_enabled() -> bool:
+    """Return True when submit flow should stop polling after broker ACK."""
+
+    resolved = _resolve_bool_env("AI_TRADING_ACK_FIRST_RECONCILE_ENABLED")
+    if resolved is None:
+        return False
+    return bool(resolved)
+
+
 def _resolve_bool_env(name: str) -> bool | None:
     resolver = _config_get_env
     if resolver is not None:
@@ -2324,13 +2333,30 @@ class ExecutionEngine:
         if configured_cap is not None:
             configured_cap = max(1, int(configured_cap))
         bootstrap_cap = self._bootstrap_new_orders_cap()
-        if configured_cap is None and bootstrap_cap is None:
+        adaptive_cap: int | None = None
+        adaptive_cap_raw = getattr(self, "_adaptive_new_orders_cap", None)
+        if adaptive_cap_raw not in (None, ""):
+            try:
+                candidate = int(adaptive_cap_raw)
+            except (TypeError, ValueError):
+                candidate = 0
+            if candidate > 0:
+                adaptive_cap = candidate
+
+        cap_sources: list[str] = []
+        cap_values: list[int] = []
+        if configured_cap is not None:
+            cap_sources.append("configured")
+            cap_values.append(configured_cap)
+        if bootstrap_cap is not None:
+            cap_sources.append("bootstrap")
+            cap_values.append(bootstrap_cap)
+        if adaptive_cap is not None:
+            cap_sources.append("adaptive")
+            cap_values.append(adaptive_cap)
+        if not cap_values:
             return None, "none"
-        if configured_cap is None:
-            return bootstrap_cap, "bootstrap"
-        if bootstrap_cap is None:
-            return configured_cap, "configured"
-        return min(configured_cap, bootstrap_cap), "configured+bootstrap"
+        return min(cap_values), "+".join(cap_sources)
 
     def _max_new_orders_per_cycle(self) -> int | None:
         """Return max new-order submits allowed per cycle."""
@@ -6067,52 +6093,69 @@ class ExecutionEngine:
             "expired",
             "done_for_day",
         }
+        ack_first_enabled = _ack_first_reconcile_enabled()
 
         if client is not None:
             order_id_hint = _extract_value(final_order, "id", "order_id")
             client_order_id_hint = _extract_value(final_order, "client_order_id")
-            poll_deadline = submit_started_at + _ACK_TIMEOUT_SECONDS
-            poll_interval = 0.5
-            # Guard against frozen monotonic clocks in tests: ensure polling
-            # eventually exits even if wall-clock progress is unavailable.
-            max_poll_attempts = max(
-                4,
-                int(max(_ACK_TIMEOUT_SECONDS, 0.1) / max(poll_interval, 0.05)) * 8,
-            )
-            while poll_attempts < max_poll_attempts and time.monotonic() < poll_deadline:
-                refreshed = None
-                try:
-                    get_by_id = getattr(client, "get_order_by_id", None)
-                    if callable(get_by_id) and order_id_hint:
-                        refreshed = get_by_id(str(order_id_hint))
-                    else:
-                        get_by_client = getattr(client, "get_order_by_client_order_id", None)
-                        if callable(get_by_client) and client_order_id_hint:
-                            refreshed = get_by_client(str(client_order_id_hint))
-                except Exception:
-                    logger.debug(
-                        "ORDER_STATUS_POLL_FAILED",
-                        extra={"symbol": symbol},
-                        exc_info=True,
-                    )
-                    break
-                if refreshed is None:
-                    break
-                final_order = refreshed
-                order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
-                    final_order, qty
+            ack_observed = bool(initial_ack_status or ack_logged)
+            if ack_first_enabled and ack_observed:
+                logger.info(
+                    "ORDER_ACK_FIRST_SHORT_CIRCUIT",
+                    extra={
+                        "symbol": symbol,
+                        "order_id": str(order_id_hint) if order_id_hint is not None else None,
+                        "client_order_id": (
+                            str(client_order_id_hint) if client_order_id_hint is not None else None
+                        ),
+                        "status": status_lower or initial_status_token,
+                    },
                 )
-                poll_attempts += 1
-                final_status = status
-                last_status_raw = final_status
-                normalized_polled_status = _normalize_status(final_status)
-                if normalized_polled_status:
-                    last_polled_status = normalized_polled_status
-                _handle_status_transition(final_status, source="poll")
-                if (normalized_polled_status or str(final_status or "").strip().lower()) in terminal_statuses:
-                    break
-                time.sleep(poll_interval)
-                poll_interval = min(poll_interval * 1.5, 2.0)
+            else:
+                poll_deadline = submit_started_at + _ACK_TIMEOUT_SECONDS
+                poll_interval = 0.5
+                # Guard against frozen monotonic clocks in tests: ensure polling
+                # eventually exits even if wall-clock progress is unavailable.
+                max_poll_attempts = max(
+                    4,
+                    int(max(_ACK_TIMEOUT_SECONDS, 0.1) / max(poll_interval, 0.05)) * 8,
+                )
+                while poll_attempts < max_poll_attempts and time.monotonic() < poll_deadline:
+                    refreshed = None
+                    try:
+                        get_by_id = getattr(client, "get_order_by_id", None)
+                        if callable(get_by_id) and order_id_hint:
+                            refreshed = get_by_id(str(order_id_hint))
+                        else:
+                            get_by_client = getattr(client, "get_order_by_client_order_id", None)
+                            if callable(get_by_client) and client_order_id_hint:
+                                refreshed = get_by_client(str(client_order_id_hint))
+                    except Exception:
+                        logger.debug(
+                            "ORDER_STATUS_POLL_FAILED",
+                            extra={"symbol": symbol},
+                            exc_info=True,
+                        )
+                        break
+                    if refreshed is None:
+                        break
+                    final_order = refreshed
+                    order_obj, status, filled_qty, requested_qty, order_id, client_order_id = _normalize_order_payload(
+                        final_order, qty
+                    )
+                    poll_attempts += 1
+                    final_status = status
+                    last_status_raw = final_status
+                    normalized_polled_status = _normalize_status(final_status)
+                    if normalized_polled_status:
+                        last_polled_status = normalized_polled_status
+                    _handle_status_transition(final_status, source="poll")
+                    if (normalized_polled_status or str(final_status or "").strip().lower()) in terminal_statuses:
+                        break
+                    if ack_first_enabled and bool(initial_ack_status or ack_logged):
+                        break
+                    time.sleep(poll_interval)
+                    poll_interval = min(poll_interval * 1.5, 2.0)
             status_lower = _normalize_status(status) or str(status or "").strip().lower()
             ack_observed = bool(initial_ack_status or ack_logged)
             if status_lower not in terminal_statuses and not ack_observed:
