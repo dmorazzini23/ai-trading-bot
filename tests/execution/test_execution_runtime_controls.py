@@ -93,6 +93,82 @@ def test_order_pacing_cap_log_level_runtime(monkeypatch):
     assert engine._order_pacing_cap_log_level() == "warning"
 
 
+def test_execution_phase_gate_blocks_open_orders(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "reconcile"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=False)
+
+    assert allowed is False
+    assert detail == "phase=reconcile"
+
+
+def test_execution_phase_gate_allows_closing_orders(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "reconcile"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=True)
+
+    assert allowed is True
+    assert detail is None
+
+
+def test_resolve_order_submit_cap_uses_bootstrap_defaults(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "bootstrap"})
+    engine._engine_started_mono = 100.0
+    engine._engine_cycle_index = 1
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 110.0)
+    monkeypatch.delenv("EXECUTION_MAX_NEW_ORDERS_PER_CYCLE", raising=False)
+    monkeypatch.delenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", raising=False)
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_MAX_NEW_ORDERS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_CAP_CYCLES", "3")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_CAP_SECONDS", "180")
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 2
+    assert source == "bootstrap"
+
+
+def test_resolve_order_submit_cap_combines_configured_and_bootstrap(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "bootstrap"})
+    engine._engine_started_mono = 100.0
+    engine._engine_cycle_index = 1
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 110.0)
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "1")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_MAX_NEW_ORDERS_PER_CYCLE", "3")
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 1
+    assert source == "configured+bootstrap"
+
+
+def test_resolve_midpoint_offset_bps_honors_annotation_and_clamp(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MAX_OFFSET_BPS", "12")
+    monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MIN_OFFSET_BPS", "2")
+    monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_HARD_CAP_BPS", "20")
+
+    resolved = engine._resolve_midpoint_offset_bps(
+        annotations={"execution_aggressiveness_bps": 15},
+        metadata=None,
+    )
+    clamped = engine._resolve_midpoint_offset_bps(
+        annotations={"execution_aggressiveness_bps": 50},
+        metadata=None,
+    )
+
+    assert resolved == 15
+    assert clamped == 20
+
+
 def test_warmup_data_only_mode_defaults_to_block_orders(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")

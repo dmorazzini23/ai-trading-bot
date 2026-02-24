@@ -97,6 +97,7 @@ _RUNTIME_CACHE: Any | None = None
 _RUNTIME_CFG_SNAPSHOT: dict[str, Any] | None = None
 _MARKET_CLOSE_TRAINING_LOCK = threading.Lock()
 _LAST_MARKET_CLOSE_TRAINING_DATE: str | None = None
+_LAST_EXECUTION_PHASE: str | None = None
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -339,6 +340,190 @@ def _reset_warmup_cooldown_timestamp() -> None:
             return
 
 
+def _normalize_execution_phase(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return "unknown"
+    return token
+
+
+def _current_service_snapshot() -> dict[str, Any]:
+    try:
+        snapshot = runtime_state.observe_service_status()
+    except Exception:
+        logger.debug("SERVICE_STATUS_OBSERVE_FAILED", exc_info=True)
+        return {}
+    if not isinstance(snapshot, dict):
+        return {}
+    return snapshot
+
+
+def _current_execution_phase() -> str:
+    snapshot = _current_service_snapshot()
+    return _normalize_execution_phase(snapshot.get("phase"))
+
+
+def _set_execution_phase(
+    phase: str,
+    *,
+    status: str | None = None,
+    reason: str | None = None,
+    cycle_index: int | None = None,
+) -> None:
+    global _LAST_EXECUTION_PHASE
+    phase_token = _normalize_execution_phase(phase)
+    snapshot = _current_service_snapshot()
+    previous_phase = _normalize_execution_phase(snapshot.get("phase"))
+    current_status = str(snapshot.get("status") or "").strip().lower() or "unknown"
+    resolved_status = status or current_status
+    if not resolved_status or resolved_status == "unknown":
+        resolved_status = "warming_up" if phase_token in {"bootstrap", "warmup", "reconcile"} else "ready"
+    try:
+        runtime_state.update_service_status(
+            status=resolved_status,
+            reason=reason,
+            phase=phase_token,
+            cycle_index=cycle_index,
+        )
+    except Exception:
+        logger.debug("SERVICE_STATUS_PHASE_UPDATE_FAILED", exc_info=True)
+        return
+    if _LAST_EXECUTION_PHASE != phase_token or previous_phase != phase_token:
+        logger.info(
+            "EXECUTION_PHASE_TRANSITION",
+            extra={
+                "from_phase": previous_phase,
+                "to_phase": phase_token,
+                "status": resolved_status,
+                "reason": reason,
+                "cycle_index": cycle_index,
+            },
+        )
+        _LAST_EXECUTION_PHASE = phase_token
+
+
+def _timestamp_age_seconds(raw_value: Any) -> float | None:
+    if raw_value in (None, ""):
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    age = (datetime.now(UTC) - parsed).total_seconds()
+    return max(age, 0.0)
+
+
+def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: int) -> None:
+    cadence = int(get_env("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES", 1, cast=int))
+    cadence = max(1, cadence)
+    if cycle_index % cadence != 0:
+        return
+    try:
+        provider_state = runtime_state.observe_data_provider_state()
+    except Exception:
+        provider_state = {}
+    try:
+        quote_state = runtime_state.observe_quote_status()
+    except Exception:
+        quote_state = {}
+    try:
+        broker_state = runtime_state.observe_broker_status()
+    except Exception:
+        broker_state = {}
+    try:
+        service_state = runtime_state.observe_service_status()
+    except Exception:
+        service_state = {}
+    provider_age_s = _timestamp_age_seconds(provider_state.get("updated"))
+    logger.info(
+        "CYCLE_MARKET_SNAPSHOT",
+        extra={
+            "cycle_index": cycle_index,
+            "closed": bool(closed),
+            "interval_s": int(max(interval_s, 0)),
+            "service_status": service_state.get("status"),
+            "service_phase": service_state.get("phase"),
+            "provider_status": provider_state.get("status"),
+            "provider_active": provider_state.get("active"),
+            "provider_reason": provider_state.get("reason"),
+            "provider_safe_mode": bool(provider_state.get("safe_mode")),
+            "provider_age_s": provider_age_s,
+            "quote_status": quote_state.get("status"),
+            "quote_allowed": bool(quote_state.get("allowed")),
+            "broker_status": broker_state.get("status"),
+            "broker_connected": bool(broker_state.get("connected")),
+            "broker_last_error": broker_state.get("last_error"),
+        },
+    )
+
+
+def _emit_cycle_slo_alerts(
+    *,
+    cycle_index: int,
+    compute_ms: float,
+    closed: bool,
+) -> None:
+    enabled = bool(get_env("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", True, cast=bool))
+    if not enabled:
+        return
+    warn_ms = float(get_env("AI_TRADING_SLO_CYCLE_COMPUTE_WARN_MS", 30000, cast=float))
+    crit_ms = float(get_env("AI_TRADING_SLO_CYCLE_COMPUTE_CRIT_MS", 60000, cast=float))
+    warn_ms = max(0.0, warn_ms)
+    crit_ms = max(warn_ms, crit_ms)
+    if compute_ms >= crit_ms:
+        emit_runtime_alert(
+            "ALERT_CYCLE_COMPUTE_CRITICAL",
+            severity="critical",
+            details={
+                "cycle_index": cycle_index,
+                "compute_ms": round(float(compute_ms), 3),
+                "threshold_ms": round(float(crit_ms), 3),
+                "market_closed": bool(closed),
+            },
+        )
+    elif compute_ms >= warn_ms:
+        emit_runtime_alert(
+            "ALERT_CYCLE_COMPUTE_WARNING",
+            severity="warning",
+            details={
+                "cycle_index": cycle_index,
+                "compute_ms": round(float(compute_ms), 3),
+                "threshold_ms": round(float(warn_ms), 3),
+                "market_closed": bool(closed),
+            },
+        )
+
+    try:
+        provider_state = runtime_state.observe_data_provider_state()
+    except Exception:
+        provider_state = {}
+    provider_age_s = _timestamp_age_seconds(provider_state.get("updated"))
+    stale_warn_s = float(get_env("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", 300, cast=float))
+    stale_warn_s = max(0.0, stale_warn_s)
+    if provider_age_s is not None and stale_warn_s > 0.0 and provider_age_s >= stale_warn_s:
+        severity = "critical" if provider_age_s >= (stale_warn_s * 2.0) else "warning"
+        emit_runtime_alert(
+            "ALERT_PROVIDER_TELEMETRY_STALE",
+            severity=severity,
+            details={
+                "cycle_index": cycle_index,
+                "provider_age_s": round(float(provider_age_s), 3),
+                "threshold_s": round(float(stale_warn_s), 3),
+                "provider_active": provider_state.get("active"),
+                "provider_status": provider_state.get("status"),
+            },
+        )
+
+
 def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
     """Log the resolved feed/provider configuration after any fallbacks."""
 
@@ -561,6 +746,8 @@ def _check_alpaca_sdk() -> None:
 def run_cycle() -> None:
     """Execute a single trading cycle using the core bot engine."""
 
+    global _STARTUP_PENDING_RECONCILED
+
     if should_stop():
         logger.info("CYCLE_STOP_REQUESTED", extra={"stage": "start"})
         return
@@ -578,6 +765,14 @@ def run_cycle() -> None:
         "true",
         "yes",
     }
+    if warmup_mode:
+        _set_execution_phase(
+            "warmup",
+            status="warming_up",
+            reason="warmup_cycle",
+        )
+    elif _STARTUP_PENDING_RECONCILED:
+        _set_execution_phase("active")
     if execution_mode == "disabled":
         _set_alpaca_service_available(False)
         _log_auth_preflight_failure(
@@ -765,9 +960,18 @@ def run_cycle() -> None:
             runtime.state = {}
         except Exception:
             logger.debug("RUNTIME_STATE_DICT_INIT_FAILED", exc_info=True)
+    runtime_state_map = getattr(runtime, "state", None)
+    if isinstance(runtime_state_map, dict):
+        runtime_state_map["service_phase"] = _current_execution_phase()
+        runtime_state_map["warmup_mode"] = bool(warmup_mode)
+        runtime_state_map["startup_pending_reconciled"] = bool(_STARTUP_PENDING_RECONCILED)
 
-    global _STARTUP_PENDING_RECONCILED
     if not _STARTUP_PENDING_RECONCILED:
+        _set_execution_phase(
+            "reconcile",
+            status="warming_up",
+            reason="startup_pending_reconcile",
+        )
         try:
             ensure_alpaca_attached(runtime)
             api = getattr(runtime, "api", None)
@@ -851,6 +1055,16 @@ def run_cycle() -> None:
                             extra=extra,
                         )
             _STARTUP_PENDING_RECONCILED = True
+        finally:
+            _set_execution_phase(
+                "warmup" if warmup_mode else "active",
+                status="warming_up" if warmup_mode else "ready",
+                reason="startup_pending_reconcile_complete",
+            )
+            runtime_state_map = getattr(runtime, "state", None)
+            if isinstance(runtime_state_map, dict):
+                runtime_state_map["service_phase"] = _current_execution_phase()
+                runtime_state_map["startup_pending_reconciled"] = bool(_STARTUP_PENDING_RECONCILED)
 
     missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
     if missing:
@@ -1861,7 +2075,12 @@ def main(argv: list[str] | None = None) -> None:
     global config
     config = S = get_settings()
     try:
-        runtime_state.update_service_status(status="warming_up", reason="startup")
+        _set_execution_phase(
+            "bootstrap",
+            status="warming_up",
+            reason="startup",
+            cycle_index=0,
+        )
     except Exception:
         logger.debug("SERVICE_STATUS_WARMUP_INIT_FAILED", exc_info=True)
     # Initialize TradingConfig-backed overrides (import-safe)
@@ -1909,7 +2128,12 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("API_STARTUP_DEGRADED", exc_info=exc)
         api_error.set()
         try:
-            runtime_state.update_service_status(status="degraded", reason="api_start_failed")
+            _set_execution_phase(
+                "bootstrap",
+                status="degraded",
+                reason="api_start_failed",
+                cycle_index=0,
+            )
         except Exception:
             logger.debug("SERVICE_STATUS_API_DEGRADED_UPDATE_FAILED", exc_info=True)
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
@@ -2025,6 +2249,12 @@ def main(argv: list[str] | None = None) -> None:
         run_warmup = not (key and secret)
     if run_warmup:
         os.environ["AI_TRADING_WARMUP_MODE"] = "1"
+        _set_execution_phase(
+            "warmup",
+            status="warming_up",
+            reason="warmup_cycle",
+            cycle_index=0,
+        )
         try:
             run_cycle()
         except (TypeError, ValueError) as e:
@@ -2065,11 +2295,26 @@ def main(argv: list[str] | None = None) -> None:
             reason = "api_start_failed"
             if not warmup_ok:
                 reason = "warmup_recovered_api_failed"
-            runtime_state.update_service_status(status="degraded", reason=reason)
+            _set_execution_phase(
+                "active",
+                status="degraded",
+                reason=reason,
+                cycle_index=0,
+            )
         elif warmup_ok:
-            runtime_state.update_service_status(status="ready")
+            _set_execution_phase(
+                "active",
+                status="ready",
+                reason="startup_complete",
+                cycle_index=0,
+            )
         else:
-            runtime_state.update_service_status(status="ready", reason="warmup_recovered")
+            _set_execution_phase(
+                "active",
+                status="ready",
+                reason="warmup_recovered",
+                cycle_index=0,
+            )
     except Exception:
         logger.debug("SERVICE_STATUS_READY_UPDATE_FAILED", exc_info=True)
     S = get_settings()
@@ -2224,7 +2469,15 @@ def main(argv: list[str] | None = None) -> None:
                 fraction = 0.9
             # Dynamic interval: slow down when closed
             effective_interval = int(closed_interval if closed else interval)
+            cycle_index = int(count + 1)
+            _set_execution_phase("active", cycle_index=cycle_index)
+            _emit_cycle_market_snapshot(
+                cycle_index=cycle_index,
+                closed=closed,
+                interval_s=effective_interval,
+            )
             budget = None
+            compute_elapsed_ms = 0.0
             try:
                 interval_ms = max(0.0, float(effective_interval)) * 1000.0
                 fraction_clamped = max(0.0, min(1.0, float(fraction)))
@@ -2267,8 +2520,9 @@ def main(argv: list[str] | None = None) -> None:
                         if budget is not None:
                             emit_cycle_budget_summary(logger)
                             clear_cycle_budget_context()
+                    compute_elapsed_ms = max(0.0, (monotonic_time() - _t1) * 1000.0)
                     try:
-                        _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, monotonic_time() - _t1))  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="compute").observe(compute_elapsed_ms / 1000.0)  # type: ignore[call-arg]
                     except Exception:
                         logger.debug("CYCLE_STAGE_METRIC_OBSERVE_COMPUTE_FAILED", exc_info=True)
                     if budget.over_budget():
@@ -2356,6 +2610,11 @@ def main(argv: list[str] | None = None) -> None:
             logger.info(
                 "CYCLE_TIMING",
                 extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over_budget()},
+            )
+            _emit_cycle_slo_alerts(
+                cycle_index=count,
+                compute_ms=compute_elapsed_ms,
+                closed=closed,
             )
             _logging.flush_log_throttle_summaries()
             now_mono = monotonic_time()

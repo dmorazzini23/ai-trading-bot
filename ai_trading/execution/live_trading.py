@@ -1882,6 +1882,8 @@ class ExecutionEngine:
         self._cycle_order_outcomes: list[dict[str, Any]] = []
         self._recent_order_intents: dict[tuple[str, str], float] = {}
         self._pending_new_actions_this_cycle: int = 0
+        self._engine_started_mono: float = float(monotonic_time())
+        self._engine_cycle_index: int = 0
         self._broker_locked_until: float = 0.0
         self._broker_lock_reason: str | None = None
         self._long_only_mode_reason: str | None = None
@@ -1941,6 +1943,7 @@ class ExecutionEngine:
     def start_cycle(self) -> None:
         """Cache the Alpaca account snapshot for this trading cycle."""
 
+        self._engine_cycle_index = int(max(getattr(self, "_engine_cycle_index", 0), 0)) + 1
         self._cycle_submitted_orders = 0
         self._cycle_order_pacing_cap_logged = False
         self._pending_new_actions_this_cycle = 0
@@ -2232,16 +2235,108 @@ class ExecutionEngine:
             return 0.0
         return max(0.0, min(float(value), 3600.0))
 
-    def _max_new_orders_per_cycle(self) -> int | None:
-        """Return max new-order submits allowed per cycle."""
+    def _service_phase(self) -> str:
+        """Resolve current service phase from runtime context with telemetry fallback."""
 
-        value = _config_int_alias(
+        state_obj = getattr(getattr(self, "ctx", None), "state", None)
+        if isinstance(state_obj, Mapping):
+            phase_value = state_obj.get("service_phase")
+            if phase_value not in (None, ""):
+                return str(phase_value).strip().lower() or "unknown"
+        try:
+            snapshot = runtime_state.observe_service_status()
+        except Exception:
+            return "unknown"
+        phase_raw = snapshot.get("phase") if isinstance(snapshot, Mapping) else None
+        return str(phase_raw or "unknown").strip().lower() or "unknown"
+
+    def _execution_phase_gate_enabled(self) -> bool:
+        gate_enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED")
+        if gate_enabled is None:
+            return True
+        return bool(gate_enabled)
+
+    def _blocked_execution_phases(self) -> set[str]:
+        raw_value: Any = None
+        if _config_get_env is not None:
+            try:
+                raw_value = _config_get_env("AI_TRADING_EXECUTION_PHASE_BLOCKED", None)
+            except Exception:
+                raw_value = None
+        if raw_value in (None, ""):
+            raw_value = os.getenv("AI_TRADING_EXECUTION_PHASE_BLOCKED")
+        if raw_value in (None, ""):
+            raw_value = "bootstrap,reconcile"
+        tokens = {
+            str(token).strip().lower()
+            for token in str(raw_value).split(",")
+            if str(token).strip()
+        }
+        if not tokens:
+            tokens = {"bootstrap", "reconcile"}
+        return tokens
+
+    def _execution_phase_allows_submits(self, *, closing_position: bool) -> tuple[bool, str | None]:
+        if closing_position:
+            return True, None
+        if not self._execution_phase_gate_enabled():
+            return True, None
+        phase = self._service_phase()
+        blocked = self._blocked_execution_phases()
+        if phase in blocked:
+            return False, f"phase={phase}"
+        return True, None
+
+    def _bootstrap_new_orders_cap(self) -> int | None:
+        enabled = _resolve_bool_env("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not enabled:
+            return None
+        raw_cap = _config_int("AI_TRADING_BOOTSTRAP_MAX_NEW_ORDERS_PER_CYCLE", 2)
+        if raw_cap is None:
+            return None
+        cap = max(1, int(raw_cap))
+        cycle_limit = _config_int("AI_TRADING_BOOTSTRAP_CAP_CYCLES", 2)
+        if cycle_limit is None:
+            cycle_limit = 2
+        cycle_limit = max(0, int(cycle_limit))
+        seconds_limit = _config_float("AI_TRADING_BOOTSTRAP_CAP_SECONDS", 180.0)
+        if seconds_limit is None:
+            seconds_limit = 180.0
+        seconds_limit = max(0.0, float(seconds_limit))
+
+        cycle_index = int(max(getattr(self, "_engine_cycle_index", 0), 0))
+        started_at = float(getattr(self, "_engine_started_mono", monotonic_time()))
+        within_cycle_window = cycle_limit <= 0 or cycle_index <= cycle_limit
+        within_time_window = seconds_limit <= 0.0 or (monotonic_time() - started_at) <= seconds_limit
+        phase = self._service_phase()
+        phase_allows_bootstrap = phase in {"bootstrap", "warmup", "reconcile"}
+        if within_cycle_window and within_time_window and phase_allows_bootstrap:
+            return cap
+        return None
+
+    def _resolve_order_submit_cap(self) -> tuple[int | None, str]:
+        configured_cap = _config_int_alias(
             ("EXECUTION_MAX_NEW_ORDERS_PER_CYCLE", "AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE"),
             None,
         )
-        if value is None:
-            return None
-        return max(1, int(value))
+        if configured_cap is not None:
+            configured_cap = max(1, int(configured_cap))
+        bootstrap_cap = self._bootstrap_new_orders_cap()
+        if configured_cap is None and bootstrap_cap is None:
+            return None, "none"
+        if configured_cap is None:
+            return bootstrap_cap, "bootstrap"
+        if bootstrap_cap is None:
+            return configured_cap, "configured"
+        return min(configured_cap, bootstrap_cap), "configured+bootstrap"
+
+    def _max_new_orders_per_cycle(self) -> int | None:
+        """Return max new-order submits allowed per cycle."""
+
+        value, _source = self._resolve_order_submit_cap()
+        return value
 
     def _order_pacing_cap_log_cooldown_seconds(self) -> float:
         """Return minimum seconds between ORDER_PACING_CAP_HIT warning logs."""
@@ -2278,6 +2373,48 @@ class ExecutionEngine:
             return False
         allow_orders = _resolve_bool_env("AI_TRADING_WARMUP_ALLOW_ORDERS")
         return not bool(allow_orders)
+
+    def _resolve_midpoint_offset_bps(
+        self,
+        *,
+        annotations: Mapping[str, Any] | None,
+        metadata: Mapping[str, Any] | None,
+    ) -> float:
+        """Resolve midpoint limit aggressiveness in basis points."""
+
+        base_bps = _config_float("AI_TRADING_MIDPOINT_LIMIT_MAX_OFFSET_BPS", 12.0)
+        if base_bps is None:
+            base_bps = 12.0
+        min_bps = _config_float("AI_TRADING_MIDPOINT_LIMIT_MIN_OFFSET_BPS", 2.0)
+        if min_bps is None:
+            min_bps = 2.0
+        hard_cap_bps = _config_float("AI_TRADING_MIDPOINT_LIMIT_HARD_CAP_BPS", 25.0)
+        if hard_cap_bps is None:
+            hard_cap_bps = 25.0
+
+        candidate_values: list[Any] = []
+        if isinstance(annotations, Mapping):
+            candidate_values.append(annotations.get("execution_aggressiveness_bps"))
+            candidate_values.append(annotations.get("midpoint_offset_bps"))
+        if isinstance(metadata, Mapping):
+            candidate_values.append(metadata.get("execution_aggressiveness_bps"))
+            candidate_values.append(metadata.get("midpoint_offset_bps"))
+
+        for candidate in candidate_values:
+            if candidate in (None, ""):
+                continue
+            try:
+                parsed = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed) and parsed > 0:
+                base_bps = parsed
+                break
+
+        lower = max(0.0, float(min_bps))
+        upper = max(lower, float(hard_cap_bps))
+        resolved = max(lower, min(float(base_bps), upper))
+        return resolved
 
     def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
         """Return True when duplicate intent should be skipped."""
@@ -4587,6 +4724,21 @@ class ExecutionEngine:
                 submit_started_at=submit_started_at,
             )
             return None
+        phase_allowed, phase_detail = self._execution_phase_allows_submits(
+            closing_position=closing_position,
+        )
+        if not phase_allowed:
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="execution_phase_gate",
+                order_type=order_type_normalized,
+                detail=phase_detail,
+                submit_started_at=submit_started_at,
+            )
+            return None
         if not closing_position and self._should_suppress_duplicate_intent(symbol, mapped_side):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
@@ -4600,7 +4752,7 @@ class ExecutionEngine:
             return None
         if not hasattr(self, "_cycle_submitted_orders"):
             self._cycle_submitted_orders = 0
-        max_new_orders_per_cycle = self._max_new_orders_per_cycle()
+        max_new_orders_per_cycle, cap_source = self._resolve_order_submit_cap()
         if (
             not closing_position
             and max_new_orders_per_cycle is not None
@@ -4616,6 +4768,8 @@ class ExecutionEngine:
                         "side": mapped_side,
                         "submitted_this_cycle": int(self._cycle_submitted_orders),
                         "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
+                        "cap_source": cap_source,
+                        "engine_cycle_index": int(max(getattr(self, "_engine_cycle_index", 0), 0)),
                     }
                     if self._order_pacing_cap_log_level() == "info":
                         payload["phase"] = "warmup"
@@ -4623,12 +4777,14 @@ class ExecutionEngine:
                     else:
                         payload["phase"] = "runtime"
                         logger.warning("ORDER_PACING_CAP_HIT", extra=payload)
+                    if "bootstrap" in cap_source:
+                        logger.warning("ORDER_BOOTSTRAP_CAP_HIT", extra=payload)
             self._skip_submit(
                 symbol=symbol,
                 side=mapped_side,
                 reason="order_pacing_cap",
                 order_type=order_type_normalized,
-                detail="max_new_orders_per_cycle reached",
+                detail=f"max_new_orders_per_cycle reached source={cap_source}",
                 submit_started_at=submit_started_at,
             )
             return None
@@ -4775,8 +4931,11 @@ class ExecutionEngine:
             mid = (bid_val + ask_val) / 2.0
             spread = ask_val - bid_val
             direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
-            # Cap the aggressiveness to avoid overpaying in wide markets.
-            max_offset_bps = 12.0
+            # Cap aggressiveness using configurable bps with optional per-order override.
+            max_offset_bps = self._resolve_midpoint_offset_bps(
+                annotations=annotations,
+                metadata=metadata_raw if isinstance(metadata_raw, Mapping) else None,
+            )
             offset_abs = min(spread * 0.25, mid * max_offset_bps / 10000.0)
             target_price = max(mid + direction * offset_abs, 0.01)
             resolved_limit_price = target_price

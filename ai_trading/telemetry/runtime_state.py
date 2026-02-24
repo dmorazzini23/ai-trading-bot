@@ -70,7 +70,12 @@ _DEFAULT_BROKER_STATE: dict[str, Any] = {
 _provider_state: dict[str, Any] = dict(_DEFAULT_PROVIDER_STATE)
 _quote_status: dict[str, Any] = dict(_DEFAULT_QUOTE_STATE)
 _broker_status: dict[str, Any] = dict(_DEFAULT_BROKER_STATE)
-_service_status: dict[str, Any] = {"status": "unknown", "updated": _now_iso()}
+_service_status: dict[str, Any] = {
+    "status": "unknown",
+    "phase": "unknown",
+    "phase_since": _now_iso(),
+    "updated": _now_iso(),
+}
 
 
 def _merge_state(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -180,12 +185,31 @@ def reset_data_provider_state() -> None:
         _provider_state = dict(_DEFAULT_PROVIDER_STATE)
 
 
-def update_service_status(*, status: str, reason: str | None = None) -> None:
+def update_service_status(
+    *,
+    status: str,
+    reason: str | None = None,
+    phase: str | None = None,
+    cycle_index: int | None = None,
+) -> None:
     updates: dict[str, Any] = {"status": str(status or "unknown")}
     if reason is not None:
         updates["reason"] = reason
+    phase_token: str | None = None
+    if phase is not None:
+        phase_token = str(phase or "").strip().lower() or "unknown"
+        updates["phase"] = phase_token
+    if cycle_index is not None:
+        try:
+            updates["cycle_index"] = max(0, int(cycle_index))
+        except (TypeError, ValueError):
+            pass
     with _LOCK:
         global _service_status
+        if phase_token is not None:
+            previous_phase = str(_service_status.get("phase") or "").strip().lower()
+            if phase_token != previous_phase:
+                updates["phase_since"] = _now_iso()
         _service_status = _merge_state(_service_status, updates)
 
 
@@ -199,7 +223,13 @@ def reset_service_status() -> None:
 
     with _LOCK:
         global _service_status
-        _service_status = {"status": "unknown", "updated": _now_iso()}
+        now_iso = _now_iso()
+        _service_status = {
+            "status": "unknown",
+            "phase": "unknown",
+            "phase_since": now_iso,
+            "updated": now_iso,
+        }
 
 
 def update_quote_status(
@@ -315,4 +345,10 @@ def reset_all_states() -> None:
         _provider_state = dict(_DEFAULT_PROVIDER_STATE)
         _quote_status = dict(_DEFAULT_QUOTE_STATE)
         _broker_status = dict(_DEFAULT_BROKER_STATE)
-        _service_status = {"status": "unknown", "updated": _now_iso()}
+        now_iso = _now_iso()
+        _service_status = {
+            "status": "unknown",
+            "phase": "unknown",
+            "phase_since": now_iso,
+            "updated": now_iso,
+        }
