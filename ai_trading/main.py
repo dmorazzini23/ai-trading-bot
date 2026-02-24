@@ -1069,6 +1069,7 @@ def _fail_fast_env() -> None:
         "ENV_CONFIG_LOADED",
         extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
     )
+    _preflight_rl_runtime_model_path_permissions()
 
     if str(_managed_env("RUN_HEALTHCHECK", "") or "").strip() == "1":
         from ai_trading.settings import get_settings
@@ -1293,6 +1294,84 @@ def ensure_trade_log_path() -> None:
             extra={"path": str(path)},
         )
         _TRADE_LOG_INITIALIZED = True
+
+
+def _resolve_rl_runtime_model_target_path() -> Path | None:
+    """Resolve the effective RL runtime artifact destination path."""
+
+    rl_model_path_raw = str(get_env("AI_TRADING_RL_MODEL_PATH", "") or "").strip()
+    if not rl_model_path_raw:
+        rl_model_path_raw = str(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RUNTIME_RL_MODEL_PATH",
+                "models/runtime/rl_agent.zip",
+                cast=str,
+            )
+            or ""
+        ).strip()
+    if not rl_model_path_raw:
+        return None
+    target = Path(rl_model_path_raw)
+    if not target.is_absolute():
+        target = (Path(__file__).resolve().parents[1] / target).resolve()
+    return target
+
+
+def _is_writable_file_target(path: Path) -> tuple[bool, str]:
+    """Return writability status for a target file path."""
+
+    try:
+        if path.exists():
+            if path.is_dir():
+                return False, "target_is_directory"
+            if os.access(path, os.W_OK):
+                return True, "ok_existing_file"
+            return False, "target_not_writable"
+
+        probe = path.parent
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        if not probe.exists():
+            return False, "no_existing_parent"
+        if os.access(probe, os.W_OK | os.X_OK):
+            return True, "ok_parent_writable"
+        return False, "parent_not_writable"
+    except OSError as exc:
+        return False, f"os_error_{exc.__class__.__name__}"
+
+
+def _preflight_rl_runtime_model_path_permissions() -> bool:
+    """Warn when RL promotion target path is not writable at startup."""
+
+    after_hours_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False, cast=bool)
+    )
+    rl_overlay_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", False, cast=bool)
+    )
+    promote_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTE_RL_PATH", True, cast=bool)
+    )
+    if not (after_hours_enabled and rl_overlay_enabled and promote_enabled):
+        return True
+
+    target = _resolve_rl_runtime_model_target_path()
+    if target is None:
+        return True
+    writable, reason = _is_writable_file_target(target)
+    if writable:
+        return True
+    logger.warning(
+        "RL_RUNTIME_MODEL_PATH_PERMISSION_WARNING",
+        extra={
+            "path": str(target),
+            "reason": reason,
+            "after_hours_training_enabled": after_hours_enabled,
+            "rl_overlay_enabled": rl_overlay_enabled,
+            "promote_enabled": promote_enabled,
+        },
+    )
+    return False
 
 
 def run_bot(*_a, **_k) -> int:
