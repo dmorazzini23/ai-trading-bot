@@ -1066,8 +1066,20 @@ def _maybe_promote_rl_overlay_to_runtime_path(
     runtime_model_path = Path(runtime_model_path_raw)
     if not runtime_model_path.is_absolute():
         runtime_model_path = (_PROJECT_ROOT / runtime_model_path).resolve()
-    runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(trained_model_path, runtime_model_path)
+    try:
+        runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(trained_model_path, runtime_model_path)
+    except OSError as exc:
+        logger.error(
+            "AFTER_HOURS_RL_PROMOTION_FAILED",
+            extra={
+                "source_path": str(trained_model_path),
+                "target_path": str(runtime_model_path),
+                "exc_type": exc.__class__.__name__,
+                "error": str(exc),
+            },
+        )
+        return None
     return str(runtime_model_path)
 
 

@@ -546,6 +546,85 @@ def test_maybe_train_rl_overlay_promotes_runtime_rl_model(
     assert promoted.read_bytes() == b"rl-model"
 
 
+def test_maybe_train_rl_overlay_promotion_permission_denied_is_fail_soft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import ai_trading.rl_trading.train as train_mod
+
+    n_rows = 140
+    dataset = pd.DataFrame(
+        {
+            "rsi": np.linspace(45.0, 65.0, n_rows),
+            "macd": np.linspace(-0.2, 0.3, n_rows),
+            "atr": np.linspace(1.0, 2.5, n_rows),
+            "vwap": np.linspace(99.0, 105.0, n_rows),
+            "sma_50": np.linspace(98.0, 104.0, n_rows),
+            "sma_200": np.linspace(95.0, 101.0, n_rows),
+            "close": np.linspace(100.0, 110.0, n_rows),
+        }
+    )
+
+    class DummyTrainer:
+        def __init__(
+            self,
+            *,
+            algorithm: str,
+            total_timesteps: int,
+            eval_freq: int,
+            early_stopping_patience: int,
+            seed: int,
+        ) -> None:
+            self.algorithm = algorithm
+
+        def train(
+            self,
+            *,
+            data: np.ndarray,
+            env_params: dict[str, object],
+            save_path: str,
+        ) -> dict[str, object]:
+            save_dir = Path(save_path)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            artifact = save_dir / f"model_{self.algorithm.lower()}.zip"
+            artifact.write_bytes(b"rl-model")
+            return {
+                "final_evaluation": {"mean_reward": 1.0},
+                "model_id": "rl-model-perm-denied",
+                "governance_status": "production",
+            }
+
+    def _raise_permission_error(*_args, **_kwargs):
+        raise PermissionError("permission denied during promote")
+
+    monkeypatch.setattr(train_mod, "RLTrainer", DummyTrainer)
+    monkeypatch.setattr(after_hours.shutil, "copy2", _raise_permission_error)
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_TIMESTEPS", "2500")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_ALGO", "PPO")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_DIR", str(tmp_path / "rl"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_RL_PATH", "1")
+    monkeypatch.setenv("AI_TRADING_RL_MODEL_PATH", str(tmp_path / "runtime_rl.zip"))
+    monkeypatch.setenv("AI_TRADING_RL_MIN_MEAN_REWARD", "0.0")
+    monkeypatch.setenv("AI_TRADING_RL_REQUIRE_BASELINE_EXPECTANCY_BPS", "0.0")
+    caplog.set_level("ERROR")
+
+    result = after_hours._maybe_train_rl_overlay(
+        dataset,
+        now_utc=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+        baseline_expectancy_bps=2.2,
+    )
+
+    assert result["enabled"] is True
+    assert result["trained"] is True
+    assert result.get("promoted_model_path") is None
+    assert any(
+        "AFTER_HOURS_RL_PROMOTION_FAILED" in record.message
+        for record in caplog.records
+    )
+
+
 def test_on_market_close_applies_promoted_model_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
