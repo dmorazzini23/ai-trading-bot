@@ -74,6 +74,8 @@ class CandidateMetrics:
 
     name: str
     fold_count: int
+    profitable_fold_count: int
+    profitable_fold_ratio: float
     support: int
     mean_expectancy_bps: float
     max_drawdown_bps: float
@@ -651,9 +653,13 @@ def _evaluate_candidate(
     hit_stability = 1.0
     if len(fold_hits) > 1:
         hit_stability = max(0.0, 1.0 - float(pstdev(fold_hits)))
+    profitable_fold_count = int(sum(1 for edge_value in fold_edges if edge_value > 0.0))
+    profitable_fold_ratio = float(profitable_fold_count) / float(max(1, valid_folds))
     return CandidateMetrics(
         name=name,
         fold_count=valid_folds,
+        profitable_fold_count=profitable_fold_count,
+        profitable_fold_ratio=profitable_fold_ratio,
         support=total_support,
         mean_expectancy_bps=float(mean(fold_edges)) if fold_edges else 0.0,
         max_drawdown_bps=float(max(fold_dd)) if fold_dd else 0.0,
@@ -663,6 +669,15 @@ def _evaluate_candidate(
         regime_metrics=regime_metrics,
         oof_probabilities=oof_probs,
     )
+
+
+def _score_expectancy_with_drawdown_penalty(
+    *,
+    expectancy_bps: float,
+    max_drawdown_bps: float,
+    penalty_per_bps: float,
+) -> float:
+    return float(expectancy_bps) - (float(max_drawdown_bps) * float(penalty_per_bps))
 
 
 def _threshold_by_regime(
@@ -675,6 +690,12 @@ def _threshold_by_regime(
     edge = dataset["realized_edge_bps"].astype(float).to_numpy()
     out: dict[str, float] = {}
     min_support = int(get_env("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", 25, cast=int))
+    drawdown_penalty_per_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_THRESHOLD_DRAWDOWN_PENALTY", 0.003, cast=float)
+    )
+    min_expectancy_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", 0.0, cast=float)
+    )
     for regime in sorted({str(v) for v in regimes}):
         regime_mask = regimes == regime
         valid_mask = regime_mask & np.isfinite(probabilities)
@@ -682,15 +703,32 @@ def _threshold_by_regime(
             out[regime] = float(default_threshold)
             continue
         best_threshold = float(default_threshold)
-        best_score = -float("inf")
+        best_key = (-1, -float("inf"), -float("inf"), -float("inf"), -1)
         for threshold in _THRESHOLD_GRID:
             selected = valid_mask & (probabilities >= threshold)
             support = int(np.sum(selected))
             if support < min_support:
                 continue
-            score = float(np.mean(edge[selected]))
-            if score > best_score:
-                best_score = score
+            selected_edges = edge[selected]
+            expectancy_bps = (
+                float(np.mean(selected_edges)) if selected_edges.size > 0 else 0.0
+            )
+            strategy_path = np.where(selected, edge, 0.0)
+            drawdown_bps = float(_max_drawdown_bps(strategy_path))
+            score = _score_expectancy_with_drawdown_penalty(
+                expectancy_bps=expectancy_bps,
+                max_drawdown_bps=drawdown_bps,
+                penalty_per_bps=drawdown_penalty_per_bps,
+            )
+            score_key = (
+                1 if expectancy_bps >= min_expectancy_bps else 0,
+                score,
+                expectancy_bps,
+                -drawdown_bps,
+                support,
+            )
+            if score_key > best_key:
+                best_key = score_key
                 best_threshold = float(threshold)
         out[regime] = best_threshold
     return out
@@ -889,14 +927,70 @@ def _promotion_policy_name() -> str:
     return "strict"
 
 
+def _promotion_score(*, expectancy_bps: float, max_drawdown_bps: float) -> float:
+    drawdown_penalty = float(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_DRAWDOWN_PENALTY", 0.003, cast=float)
+    )
+    return _score_expectancy_with_drawdown_penalty(
+        expectancy_bps=expectancy_bps,
+        max_drawdown_bps=max_drawdown_bps,
+        penalty_per_bps=drawdown_penalty,
+    )
+
+
+def _load_prior_model_metrics(*, report_dir: Path) -> dict[str, Any] | None:
+    if not report_dir.exists():
+        return None
+    report_paths = sorted(report_dir.glob("after_hours_training_*.json"))
+    for report_path in reversed(report_paths):
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        metrics = payload.get("metrics")
+        if not isinstance(metrics, Mapping):
+            continue
+        try:
+            mean_expectancy_bps = float(metrics.get("mean_expectancy_bps"))
+            max_drawdown_bps = float(metrics.get("max_drawdown_bps"))
+        except (TypeError, ValueError):
+            continue
+        model_payload = payload.get("model")
+        model_id = None
+        governance_status = None
+        if isinstance(model_payload, Mapping):
+            model_id = model_payload.get("model_id")
+            governance_status = model_payload.get("governance_status")
+        return {
+            "report_path": str(report_path),
+            "model_id": model_id,
+            "governance_status": governance_status,
+            "mean_expectancy_bps": mean_expectancy_bps,
+            "max_drawdown_bps": max_drawdown_bps,
+            "mean_hit_rate": float(metrics.get("mean_hit_rate", 0.0) or 0.0),
+            "hit_rate_stability": float(metrics.get("hit_rate_stability", 0.0) or 0.0),
+            "support": int(metrics.get("support", 0) or 0),
+            "fold_count": int(metrics.get("fold_count", 0) or 0),
+            "profitable_fold_count": int(metrics.get("profitable_fold_count", 0) or 0),
+            "profitable_fold_ratio": float(metrics.get("profitable_fold_ratio", 0.0) or 0.0),
+        }
+    return None
+
+
 def _promotion_gate_bundle(
     *,
     best: CandidateMetrics,
     rows: int,
     edge_gates: Mapping[str, bool],
+    prior_metrics: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     policy = _promotion_policy_name()
     strict_gates: dict[str, bool] = {}
+    prior_model_comparison: dict[str, Any] = {
+        "required": False,
+        "available": False,
+        "gate": True,
+    }
     if policy == "strict":
         min_rows = max(
             1, int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", 800, cast=int))
@@ -910,11 +1004,82 @@ def _promotion_gate_bundle(
         min_hit_rate = float(
             get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", 0.52, cast=float)
         )
+        min_profitable_folds = max(
+            0,
+            int(
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS",
+                    3,
+                    cast=int,
+                )
+            ),
+        )
+        min_profitable_fold_ratio = _clamp(
+            float(
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO",
+                    0.5,
+                    cast=float,
+                )
+            ),
+            low=0.0,
+            high=1.0,
+        )
+        require_prior_improvement = bool(
+            get_env("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", True, cast=bool)
+        )
+        min_score_margin = float(
+            get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SCORE_MARGIN", 0.1, cast=float)
+        )
+        candidate_score = _promotion_score(
+            expectancy_bps=best.mean_expectancy_bps,
+            max_drawdown_bps=best.max_drawdown_bps,
+        )
+        prior_gate = True
+        prior_model_comparison = {
+            "required": require_prior_improvement,
+            "available": False,
+            "gate": True,
+            "margin_required": min_score_margin,
+            "candidate_score": candidate_score,
+        }
+        if require_prior_improvement and prior_metrics is not None:
+            try:
+                prior_expectancy = float(prior_metrics.get("mean_expectancy_bps"))
+                prior_drawdown = float(prior_metrics.get("max_drawdown_bps"))
+            except (TypeError, ValueError):
+                prior_gate = True
+                prior_model_comparison["reason"] = "invalid_prior_metrics"
+            else:
+                prior_score = _promotion_score(
+                    expectancy_bps=prior_expectancy,
+                    max_drawdown_bps=prior_drawdown,
+                )
+                score_delta = candidate_score - prior_score
+                prior_gate = score_delta >= min_score_margin
+                prior_model_comparison.update(
+                    {
+                        "available": True,
+                        "prior_score": prior_score,
+                        "score_delta": score_delta,
+                        "prior_report_path": prior_metrics.get("report_path"),
+                        "prior_model_id": prior_metrics.get("model_id"),
+                        "prior_governance_status": prior_metrics.get("governance_status"),
+                    }
+                )
+        elif require_prior_improvement:
+            prior_model_comparison["reason"] = "no_prior_metrics"
+        prior_model_comparison["gate"] = bool(prior_gate)
         strict_gates = {
             "rows": int(rows) >= min_rows,
             "support": int(best.support) >= min_support,
             "fold_count": int(best.fold_count) >= min_folds,
             "hit_rate": float(best.mean_hit_rate) >= min_hit_rate,
+            "profitable_folds": int(best.profitable_fold_count) >= min_profitable_folds,
+            "profitable_fold_ratio": (
+                float(best.profitable_fold_ratio) >= min_profitable_fold_ratio
+            ),
+            "prior_model_improvement": bool(prior_gate),
         }
     combined_gates: dict[str, bool] = {str(k): bool(v) for k, v in dict(edge_gates).items()}
     combined_gates.update(strict_gates)
@@ -932,6 +1097,7 @@ def _promotion_gate_bundle(
         "require_sensitivity": require_sensitivity,
         "edge_gates": {str(k): bool(v) for k, v in dict(edge_gates).items()},
         "strict_gates": strict_gates,
+        "prior_model_comparison": prior_model_comparison,
         "combined_gates": combined_gates,
         "gate_passed": gate_passed,
         "status": status,
@@ -977,6 +1143,8 @@ def _serialize_candidate_metrics(
                 "name": item.name,
                 "selected": item.name == best_name,
                 "fold_count": item.fold_count,
+                "profitable_fold_count": item.profitable_fold_count,
+                "profitable_fold_ratio": item.profitable_fold_ratio,
                 "support": item.support,
                 "mean_expectancy_bps": item.mean_expectancy_bps,
                 "max_drawdown_bps": item.max_drawdown_bps,
@@ -1384,6 +1552,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         candidate_results,
         best_name=best.name,
     )
+    report_dir = Path(
+        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports"))
+    )
+    prior_model_metrics = _load_prior_model_metrics(report_dir=report_dir)
     thresholds_by_regime = _threshold_by_regime(
         dataset,
         best.oof_probabilities,
@@ -1402,6 +1574,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         best=best,
         rows=int(len(dataset)),
         edge_gates=gate_map,
+        prior_metrics=prior_model_metrics,
     )
     status = str(promotion["status"])
     logger.info(
@@ -1412,6 +1585,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "auto_promote": bool(promotion["auto_promote"]),
             "gate_passed": bool(promotion["gate_passed"]),
             "combined_gates": dict(promotion["combined_gates"]),
+            "prior_model_comparison": dict(promotion.get("prior_model_comparison", {})),
         },
     )
 
@@ -1484,7 +1658,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "turnover_ratio": best.turnover_ratio,
                 "mean_hit_rate": best.mean_hit_rate,
                 "hit_rate_stability": best.hit_rate_stability,
+                "profitable_fold_count": best.profitable_fold_count,
+                "profitable_fold_ratio": best.profitable_fold_ratio,
             },
+            "prior_model_metrics": prior_model_metrics,
             "sensitivity_sweep": sensitivity_sweep,
         },
     )
@@ -1521,6 +1698,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "mean_hit_rate": best.mean_hit_rate,
             "hit_rate_stability": best.hit_rate_stability,
             "fold_count": best.fold_count,
+            "profitable_fold_count": best.profitable_fold_count,
+            "profitable_fold_ratio": best.profitable_fold_ratio,
             "support": best.support,
         },
         "fill_quality": fill_quality,
@@ -1530,15 +1709,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "sensitivity_sweep": sensitivity_sweep,
         "edge_gates": gate_map,
         "promotion": promotion,
+        "prior_model_metrics": prior_model_metrics,
         "rl_overlay": rl_overlay,
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,
         },
     }
-    report_dir = Path(
-        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports"))
-    )
     report_path = _write_json(
         report_dir / f"after_hours_training_{now_utc.strftime('%Y%m%d')}.json",
         report,
@@ -1567,6 +1744,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "rows": int(len(dataset)),
         "candidate_metrics": candidate_metrics_payload,
         "sensitivity_sweep": sensitivity_sweep,
+        "prior_model_metrics": prior_model_metrics,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
         "promotion": promotion,

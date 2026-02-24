@@ -251,6 +251,9 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_EXPECTANCY_BPS", "-9999")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", "999999")
@@ -278,6 +281,8 @@ def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
     best = after_hours.CandidateMetrics(
         name="xgboost",
         fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
         support=120,
         mean_expectancy_bps=1.2,
         max_drawdown_bps=220.0,
@@ -294,6 +299,9 @@ def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "50")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "4")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.49")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
 
     promotion = after_hours._promotion_gate_bundle(
         best=best,
@@ -312,6 +320,151 @@ def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
     assert promotion["gate_passed"] is True
     assert promotion["status"] == "production"
 
+
+def test_threshold_by_regime_uses_drawdown_penalty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = pd.DataFrame(
+        {
+            "regime": ["regular"] * 12,
+            "realized_edge_bps": [
+                -18.82,
+                21.9,
+                29.6,
+                -3.65,
+                17.15,
+                -12.05,
+                14.79,
+                -6.4,
+                3.73,
+                6.78,
+                2.32,
+                14.67,
+            ],
+        }
+    )
+    probabilities = np.asarray(
+        [0.8, 0.8, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.8, 0.8, 0.8, 0.8],
+        dtype=float,
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_DRAWDOWN_PENALTY", "0.0")
+    no_penalty = after_hours._threshold_by_regime(
+        dataset,
+        probabilities,
+        default_threshold=0.5,
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_DRAWDOWN_PENALTY", "0.08")
+    with_penalty = after_hours._threshold_by_regime(
+        dataset,
+        probabilities,
+        default_threshold=0.5,
+    )
+
+    assert no_penalty["regular"] == pytest.approx(0.35)
+    assert with_penalty["regular"] == pytest.approx(0.55)
+
+
+def test_promotion_gate_bundle_requires_profitable_folds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=2,
+        profitable_fold_ratio=0.4,
+        support=120,
+        mean_expectancy_bps=1.2,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.5,
+        hit_rate_stability=0.6,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", "100")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "50")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.49")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.5")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+
+    promotion = after_hours._promotion_gate_bundle(
+        best=best,
+        rows=400,
+        edge_gates={
+            "expectancy": True,
+            "drawdown": True,
+            "turnover": True,
+            "stability": True,
+            "sensitivity": True,
+        },
+    )
+
+    assert promotion["strict_gates"]["profitable_folds"] is False
+    assert promotion["strict_gates"]["profitable_fold_ratio"] is False
+    assert promotion["gate_passed"] is False
+    assert promotion["status"] == "shadow"
+
+
+def test_promotion_gate_bundle_requires_prior_model_improvement_margin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=120,
+        mean_expectancy_bps=1.8,
+        max_drawdown_bps=250.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.52,
+        hit_rate_stability=0.6,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", "100")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "50")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.49")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_DRAWDOWN_PENALTY", "0.003")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SCORE_MARGIN", "0.6")
+
+    promotion = after_hours._promotion_gate_bundle(
+        best=best,
+        rows=400,
+        edge_gates={
+            "expectancy": True,
+            "drawdown": True,
+            "turnover": True,
+            "stability": True,
+            "sensitivity": True,
+        },
+        prior_metrics={
+            "mean_expectancy_bps": 2.0,
+            "max_drawdown_bps": 240.0,
+            "model_id": "prior-model",
+            "report_path": "/tmp/prior-report.json",
+            "governance_status": "production",
+        },
+    )
+
+    assert promotion["strict_gates"]["prior_model_improvement"] is False
+    assert promotion["prior_model_comparison"]["available"] is True
+    assert promotion["prior_model_comparison"]["gate"] is False
+    assert promotion["gate_passed"] is False
+    assert promotion["status"] == "shadow"
 
 def test_on_market_close_runs_after_hours_pipeline(
     tmp_path: Path,
