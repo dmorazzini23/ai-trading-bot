@@ -2587,6 +2587,13 @@ class ExecutionEngine:
         if context:
             payload["context"] = dict(context)
         logger.info("ORDER_SUBMIT_SKIPPED", extra=payload)
+        logger.info(
+            "ORDER_SUBMIT_SKIPPED_DETAIL | reason=%s detail=%s context=%s",
+            str(reason),
+            str(detail) if detail else None,
+            dict(context) if context else None,
+            extra=payload,
+        )
         self._record_cycle_order_outcome(
             symbol=symbol,
             side=side,

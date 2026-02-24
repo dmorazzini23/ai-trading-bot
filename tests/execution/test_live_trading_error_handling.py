@@ -488,6 +488,13 @@ def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory,
     assert engine._cycle_order_outcomes[-1]["status"] == "skipped"
     assert engine._cycle_order_outcomes[-1]["reason"] == "duplicate_intent"
     assert any(record.msg == "ORDER_SUBMIT_SKIPPED" for record in caplog.records)
+    detail_records = [
+        record
+        for record in caplog.records
+        if str(record.message).startswith("ORDER_SUBMIT_SKIPPED_DETAIL")
+    ]
+    assert detail_records
+    assert detail_records[-1].reason == "duplicate_intent"
 
 
 def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_factory, caplog):
@@ -503,6 +510,13 @@ def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_fa
     assert engine._cycle_order_outcomes[-1]["status"] == "skipped"
     assert engine._cycle_order_outcomes[-1]["reason"] == "cycle_duplicate_intent"
     assert any(record.msg == "ORDER_SUBMIT_SKIPPED" for record in caplog.records)
+    detail_records = [
+        record
+        for record in caplog.records
+        if str(record.message).startswith("ORDER_SUBMIT_SKIPPED_DETAIL")
+    ]
+    assert detail_records
+    assert detail_records[-1].reason == "cycle_duplicate_intent"
 
 
 def test_execute_order_records_failure_outcome_on_submit_exception(engine_factory, caplog):
