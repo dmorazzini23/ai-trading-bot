@@ -110,11 +110,6 @@ class TradingEnv:
         self._gym = gym
         if np is None:
             raise ImportError("numpy required; install numpy to use TradingEnv")
-        if not issubclass(TradingEnv, gym.Env):
-            try:
-                TradingEnv.__bases__ = (gym.Env,)
-            except TypeError:
-                logger.debug("RL_ENV_BASE_ASSIGNMENT_SKIPPED", exc_info=True)
         env_init = getattr(gym.Env, "__init__", None)
         if callable(env_init):
             try:

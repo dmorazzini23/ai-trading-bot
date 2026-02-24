@@ -95,6 +95,67 @@ _RUNTIME_CACHE_LOCK = threading.Lock()
 _STATE_CACHE: Any | None = None
 _RUNTIME_CACHE: Any | None = None
 _RUNTIME_CFG_SNAPSHOT: dict[str, Any] | None = None
+_MARKET_CLOSE_TRAINING_LOCK = threading.Lock()
+_LAST_MARKET_CLOSE_TRAINING_DATE: str | None = None
+
+
+def _claim_market_close_training(date_key: str) -> bool:
+    """Return ``True`` once per date key, else ``False`` for duplicate triggers."""
+
+    global _LAST_MARKET_CLOSE_TRAINING_DATE
+    with _MARKET_CLOSE_TRAINING_LOCK:
+        if _LAST_MARKET_CLOSE_TRAINING_DATE == date_key:
+            return False
+        _LAST_MARKET_CLOSE_TRAINING_DATE = date_key
+        return True
+
+
+def _release_market_close_training(date_key: str) -> None:
+    """Release the training claim when trigger execution fails."""
+
+    global _LAST_MARKET_CLOSE_TRAINING_DATE
+    with _MARKET_CLOSE_TRAINING_LOCK:
+        if _LAST_MARKET_CLOSE_TRAINING_DATE == date_key:
+            _LAST_MARKET_CLOSE_TRAINING_DATE = None
+
+
+def _invoke_market_close_training() -> None:
+    """Invoke the market-close training hook from the core engine."""
+
+    from ai_trading.core import bot_engine
+
+    bot_engine.on_market_close()
+
+
+def _maybe_trigger_market_close_training(now_est: datetime | None = None) -> None:
+    """Trigger after-hours/legacy retraining at most once per NY date after 16:00."""
+
+    after_hours_enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False, cast=bool)
+    )
+    legacy_enabled = bool(
+        get_env("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", False, cast=bool)
+    )
+    if not (after_hours_enabled or legacy_enabled):
+        return
+
+    now_local = now_est or datetime.now(ZoneInfo("America/New_York"))
+    if now_local.tzinfo is None:
+        now_local = now_local.replace(tzinfo=ZoneInfo("America/New_York"))
+    if now_local.time().hour < 16:
+        return
+
+    date_key = now_local.date().isoformat()
+    if not _claim_market_close_training(date_key):
+        return
+    try:
+        _invoke_market_close_training()
+    except Exception as exc:  # pragma: no cover - defensive fail-open
+        _release_market_close_training(date_key)
+        logger.exception(
+            "MARKET_CLOSE_TRAINING_TRIGGER_FAILED",
+            extra={"error": str(exc), "date": date_key},
+        )
 
 
 def _http_profile_logging_enabled() -> bool:
@@ -513,6 +574,7 @@ def run_cycle() -> None:
     if (rth_only or not allow_extended):
         try:
             if not _is_market_open_base():
+                _maybe_trigger_market_close_training()
                 logger.info("MARKET_CLOSED_SKIP_CYCLE")
                 return
         except Exception:

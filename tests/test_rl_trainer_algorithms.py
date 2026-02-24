@@ -61,9 +61,101 @@ def test_rl_trainer_creates_td3_model(monkeypatch, tmp_path) -> None:
     assert kwargs["seed"] == 123
 
 
+def test_rl_trainer_skips_tensorboard_when_dependency_missing(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyPPO:
+        def __init__(self, policy, env, **kwargs):
+            captured["policy"] = policy
+            captured["env"] = env
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(train_mod, "PPO", DummyPPO)
+    monkeypatch.setattr(
+        train_mod.importlib.util,
+        "find_spec",
+        lambda name: None if name == "tensorboard" else object(),
+    )
+
+    trainer = train_mod.RLTrainer(algorithm="PPO", seed=123)
+    trainer.train_env = object()
+    trainer._create_model(
+        model_params={
+            "tensorboard_log": str(tmp_path / "tb"),
+            "learning_rate": 0.001,
+        }
+    )
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["learning_rate"] == 0.001
+    assert kwargs["seed"] == 123
+    assert "tensorboard_log" not in kwargs
+
+
 def test_rl_trainer_unknown_algorithm_raises() -> None:
     with pytest.raises(ValueError, match="Unknown algorithm"):
         train_mod._resolve_algo_config("NOT_REAL")
+
+
+def test_rl_trainer_train_disables_progress_bar_without_optional_deps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DummyModel:
+        def __init__(self) -> None:
+            self.learn_calls: list[dict[str, object]] = []
+
+        def learn(self, *, total_timesteps: int, callback, progress_bar: bool) -> None:
+            self.learn_calls.append(
+                {
+                    "total_timesteps": total_timesteps,
+                    "callback": callback,
+                    "progress_bar": progress_bar,
+                }
+            )
+
+    trainer = train_mod.RLTrainer(algorithm="PPO", total_timesteps=321, seed=7)
+    dummy_model = DummyModel()
+
+    def fake_create_env(data: np.ndarray, env_params: dict[str, object] | None) -> None:
+        matrix = np.asarray(data, dtype=np.float32)
+        trainer._raw_data = matrix
+        trainer._raw_prices = np.ones(len(matrix), dtype=np.float32)
+        trainer.train_env = object()
+        trainer.eval_env = object()
+
+    def fake_create_model(model_params: dict[str, object] | None) -> None:
+        trainer.model = dummy_model
+
+    monkeypatch.setattr(train_mod, "_ensure_rl", lambda: True)
+    monkeypatch.setenv("AI_TRADING_RL_PROGRESS_BAR", "1")
+    monkeypatch.setattr(
+        train_mod.importlib.util,
+        "find_spec",
+        lambda name: None if name in {"tqdm", "rich"} else object(),
+    )
+    monkeypatch.setattr(trainer, "_create_environments", fake_create_env)
+    monkeypatch.setattr(trainer, "_create_model", fake_create_model)
+    monkeypatch.setattr(trainer, "_setup_callbacks", lambda _save_path: [])
+    monkeypatch.setattr(trainer, "_final_evaluation", lambda: {})
+
+    trainer.train(np.ones((64, 4), dtype=np.float32), env_params={}, model_params={})
+
+    assert dummy_model.learn_calls
+    assert dummy_model.learn_calls[0]["progress_bar"] is False
+
+
+def test_rl_trainer_setup_callbacks_disables_incompatible_callback_classes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer = train_mod.RLTrainer(algorithm="PPO")
+    trainer.eval_env = object()
+    monkeypatch.setattr(train_mod, "BaseCallback", type("BaseCallbackShim", (), {}))
+
+    callbacks = trainer._setup_callbacks(save_path=None)
+
+    assert callbacks == []
+    assert trainer.eval_callback is None
 
 
 def test_rl_trainer_state_builder_wires_price_series(monkeypatch) -> None:
@@ -112,6 +204,49 @@ def test_rl_trainer_rejects_mismatched_price_series_length() -> None:
             data,
             env_params={"price_series": np.linspace(1.0, 2.0, 32, dtype=np.float32)},
         )
+
+
+def test_rl_trainer_strips_registry_metadata_from_env_kwargs(monkeypatch) -> None:
+    captured_kwargs: list[dict[str, object]] = []
+
+    class DummyVec(list):
+        def __init__(self, env_fns):
+            super().__init__([fn() for fn in env_fns])
+
+    class DummyEnv:
+        def __init__(self, _data, **kwargs):
+            captured_kwargs.append(dict(kwargs))
+
+    monkeypatch.setattr(train_mod, "DummyVecEnv", DummyVec)
+    monkeypatch.setattr(env_mod, "TradingEnv", DummyEnv)
+
+    trainer = train_mod.RLTrainer(algorithm="PPO")
+    trainer._create_environments(
+        np.zeros((64, 4), dtype=np.float32),
+        env_params={
+            "use_state_builder": False,
+            "register_model": True,
+            "registry_strategy": "rl_overlay",
+            "registry_model_type": "ppo",
+            "registry_tags": ["after_hours"],
+            "registry_requested_status": "shadow",
+            "dataset_fingerprint": "dataset-123",
+            "feature_spec_hash": "feature-abc",
+        },
+    )
+
+    assert captured_kwargs
+    forbidden = {
+        "register_model",
+        "registry_strategy",
+        "registry_model_type",
+        "registry_tags",
+        "registry_requested_status",
+        "dataset_fingerprint",
+        "feature_spec_hash",
+    }
+    for kwargs in captured_kwargs:
+        assert forbidden.isdisjoint(kwargs.keys())
 
 
 def test_train_multi_seed_aggregates_metrics(monkeypatch, tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 from dataclasses import dataclass
@@ -177,6 +178,16 @@ RL_ALGO_CONFIGS: dict[str, RLAlgoConfig] = {
         ),
     ),
 }
+
+_ARTIFACT_ENV_PARAM_KEYS: tuple[str, ...] = (
+    "register_model",
+    "registry_strategy",
+    "registry_model_type",
+    "registry_tags",
+    "registry_requested_status",
+    "dataset_fingerprint",
+    "feature_spec_hash",
+)
 
 
 def _resolve_algo_config(algorithm: str) -> RLAlgoConfig:
@@ -492,10 +503,21 @@ class RLTrainer:
         self.state_builder = None
         self._raw_data: np.ndarray | None = None
         self._raw_prices: np.ndarray | None = None
+        self._artifact_env_overrides: dict[str, Any] = {}
         self._artifact_context: dict[str, Any] = {}
         self.training_results = {}
         self.eval_callback = None
         logger.info(f'RLTrainer initialized with {algorithm} algorithm')
+
+    @staticmethod
+    def _pop_artifact_env_params(params: dict[str, Any]) -> dict[str, Any]:
+        """Extract non-environment artifact keys from env params."""
+
+        extracted: dict[str, Any] = {}
+        for key in _ARTIFACT_ENV_PARAM_KEYS:
+            if key in params:
+                extracted[key] = params.pop(key)
+        return extracted
 
     def _build_artifact_context(
         self,
@@ -616,17 +638,27 @@ class RLTrainer:
         try:
             env_params_local = dict(env_params or {})
             model_params_local = dict(model_params or {})
+            self._artifact_env_overrides = self._pop_artifact_env_params(env_params_local)
             logger.info(f'Starting RL training with {len(data)} data points')
             self._create_environments(data, env_params_local)
             self._create_model(model_params_local)
             callbacks = self._setup_callbacks(save_path)
             start_time = datetime.now(UTC)
-            self.model.learn(total_timesteps=self.total_timesteps, callback=callbacks, progress_bar=True)
+            progress_bar = bool(get_env("AI_TRADING_RL_PROGRESS_BAR", False, cast=bool))
+            if progress_bar:
+                if importlib.util.find_spec("tqdm") is None or importlib.util.find_spec("rich") is None:
+                    progress_bar = False
+                    logger.warning("RL_PROGRESS_BAR_UNAVAILABLE")
+            self.model.learn(
+                total_timesteps=self.total_timesteps,
+                callback=callbacks,
+                progress_bar=progress_bar,
+            )
             end_time = datetime.now(UTC)
             artifact_context = self._build_artifact_context(
                 data=self._raw_data if self._raw_data is not None else np.asarray(data, dtype=np.float32),
                 prices=self._raw_prices,
-                env_params=env_params_local,
+                env_params=self._artifact_env_overrides,
             )
             self._artifact_context = artifact_context
             state_builder_summary = (
@@ -665,11 +697,22 @@ class RLTrainer:
         try:
             from .env import ActionSpaceConfig, TradingEnv  # noqa: E402 - local import
             from .state_builder import MarketStateBuilder, StateBuilderConfig  # noqa: E402 - local import
+            env_class: type = TradingEnv
+            stack = _load_rl_stack()
+            if stack is not None:
+                gym = stack["gym"]
+                if not issubclass(env_class, gym.Env):
+                    env_class = type(
+                        "SB3TradingEnv",
+                        (env_class, gym.Env),
+                        {},
+                    )
 
             matrix = np.asarray(data, dtype=np.float32)
             if matrix.ndim != 2:
                 raise ValueError("RL training data must be a 2D matrix")
             env_params = dict(env_params or {})
+            self._pop_artifact_env_params(env_params)
             price_series_raw = env_params.pop("price_series", None)
             if price_series_raw is None:
                 prices = np.asarray(matrix[:, 0], dtype=np.float32).reshape(-1)
@@ -727,10 +770,10 @@ class RLTrainer:
                 enhanced_env_params["action_config"] = ActionSpaceConfig(action_type="continuous")
 
             def make_train_env():
-                return TradingEnv(train_data, price_series=raw_train_prices, **enhanced_env_params)
+                return env_class(train_data, price_series=raw_train_prices, **enhanced_env_params)
 
             def make_eval_env():
-                return TradingEnv(eval_data, price_series=raw_eval_prices, **enhanced_env_params)
+                return env_class(eval_data, price_series=raw_eval_prices, **enhanced_env_params)
             self.train_env = DummyVecEnv([make_train_env])
             self.eval_env = make_eval_env()
             logger.debug(
@@ -753,22 +796,28 @@ class RLTrainer:
     def _create_model(self, model_params: dict[str, Any] | None) -> None:
         """Create RL model."""
         try:
-            model_params = model_params or {}
+            model_params = dict(model_params or {})
             algo_config = _resolve_algo_config(self.algorithm)
-            if 'tensorboard_log' not in (model_params or {}):
-                from ai_trading.paths import OUTPUT_DIR
+            default_params: dict[str, Any] = {"verbose": 1, "seed": self.seed}
+            tensorboard_available = importlib.util.find_spec("tensorboard") is not None
+            requested_tensorboard = "tensorboard_log" in model_params
+            if requested_tensorboard and not tensorboard_available:
+                model_params.pop("tensorboard_log", None)
+                logger.warning("RL_TENSORBOARD_UNAVAILABLE")
+            if tensorboard_available:
+                if "tensorboard_log" in model_params:
+                    raw_log_dir = str(model_params.get("tensorboard_log"))
+                    tensorboard_path = Path(raw_log_dir).expanduser()
+                    if not tensorboard_path.is_absolute():
+                        from ai_trading.paths import OUTPUT_DIR
 
-                tensorboard_path = (OUTPUT_DIR / 'tensorboard').resolve()
-                tensorboard_path.mkdir(parents=True, exist_ok=True)
-            else:
-                raw_log_dir = str(model_params.get('tensorboard_log'))
-                tensorboard_path = Path(raw_log_dir).expanduser()
-                if not tensorboard_path.is_absolute():
+                        tensorboard_path = (OUTPUT_DIR / tensorboard_path).resolve()
+                else:
                     from ai_trading.paths import OUTPUT_DIR
 
-                    tensorboard_path = (OUTPUT_DIR / tensorboard_path).resolve()
-            tensorboard_path.mkdir(parents=True, exist_ok=True)
-            default_params = {'verbose': 1, 'seed': self.seed, 'tensorboard_log': str(tensorboard_path)}
+                    tensorboard_path = (OUTPUT_DIR / "tensorboard").resolve()
+                tensorboard_path.mkdir(parents=True, exist_ok=True)
+                default_params["tensorboard_log"] = str(tensorboard_path)
             final_params = algo_config.merged_params(common=default_params, overrides=model_params)
             algo_klass_map = {
                 "PPO": PPO,
@@ -789,6 +838,14 @@ class RLTrainer:
     def _setup_callbacks(self, save_path: str | None) -> list[BaseCallback]:
         """Setup training callbacks."""
         try:
+            if (
+                not hasattr(BaseCallback, "init_callback")
+                or not issubclass(EarlyStoppingCallback, BaseCallback)
+                or not issubclass(DetailedEvalCallback, BaseCallback)
+            ):
+                logger.warning("RL_CALLBACK_COMPAT_DISABLED")
+                self.eval_callback = None
+                return []
             callbacks = []
             early_stopping = EarlyStoppingCallback(patience=self.early_stopping_patience, verbose=1)
             callbacks.append(early_stopping)
