@@ -31727,6 +31727,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         if not symbols:
             logger.warning("CANARY_MODE_EMPTY_UNIVERSE")
             return
+    symbols = _pre_rank_execution_candidates(symbols, runtime=runtime)
+    if not symbols:
+        if bool(get_env("AI_TRADING_WARMUP_MODE", False, cast=bool)):
+            logger.debug("NETTING_NO_SYMBOLS")
+        else:
+            logger.warning("NETTING_NO_SYMBOLS")
+        return
 
     ensure_data_fetcher(runtime)
     try:
@@ -31762,6 +31769,147 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         _write_decision_record(record, decision_path)
         return
+
+    normalized_positions: dict[str, float] = {}
+    for raw_symbol, raw_position in dict(positions or {}).items():
+        symbol_key = str(raw_symbol).strip().upper()
+        if not symbol_key:
+            continue
+        try:
+            normalized_positions[symbol_key] = float(raw_position or 0.0)
+        except (TypeError, ValueError):
+            normalized_positions[symbol_key] = 0.0
+    positions = normalized_positions
+
+    blocked_symbols = {
+        str(sym).strip().upper()
+        for sym in getattr(runtime, _PENDING_ORDER_BLOCKED_SYMBOLS_ATTR, ())
+        if str(sym).strip()
+    }
+    if blocked_symbols and _pending_orders_block_scope() == "symbol":
+        pre_filter_count = len(symbols)
+        symbols = [sym for sym in symbols if sym not in blocked_symbols]
+        if len(symbols) != pre_filter_count:
+            logger.info(
+                "NETTING_PENDING_SYMBOL_FILTER_APPLIED",
+                extra={
+                    "before": pre_filter_count,
+                    "after": len(symbols),
+                    "blocked_symbols_count": len(blocked_symbols),
+                    "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+                },
+            )
+        if not symbols:
+            logger.info(
+                "NETTING_NO_ACTIONABLE_SYMBOLS",
+                extra={
+                    "reason": "pending_symbol_block",
+                    "blocked_symbols_count": len(blocked_symbols),
+                },
+            )
+            return
+
+    exec_engine = getattr(runtime, "execution_engine", None)
+    if exec_engine is not None:
+        cycle_budget = get_cycle_budget_context()
+        adaptive_cap, adaptive_details = _resolve_adaptive_order_cap(
+            cycle_budget=cycle_budget,
+            last_loop_duration_s=getattr(state, "last_loop_duration", 0.0),
+        )
+        try:
+            setattr(exec_engine, "_adaptive_new_orders_cap", adaptive_cap)
+            setattr(exec_engine, "_adaptive_new_orders_details", adaptive_details)
+        except Exception:
+            logger.debug("ADAPTIVE_ORDER_CAP_SET_FAILED", exc_info=True)
+        adaptive_signature = (
+            adaptive_cap,
+            str(adaptive_details.get("mode") or "none"),
+            round(float(adaptive_details.get("headroom_ratio", 1.0) or 1.0), 3),
+        )
+        if adaptive_signature != getattr(state, "_last_adaptive_order_cap_signature", None):
+            if adaptive_cap is not None:
+                logger.info(
+                    "ADAPTIVE_ORDER_CAP_APPLIED",
+                    extra={
+                        "cap": int(adaptive_cap),
+                        "mode": adaptive_details.get("mode"),
+                        "headroom_ratio": adaptive_details.get("headroom_ratio"),
+                        "loop_headroom_ratio": adaptive_details.get("loop_headroom_ratio"),
+                        "budget_headroom_ratio": adaptive_details.get("budget_headroom_ratio"),
+                    },
+                )
+            state._last_adaptive_order_cap_signature = adaptive_signature
+
+    max_new_orders_per_cycle: int | None = None
+    cap_source = "none"
+    if exec_engine is not None:
+        resolve_submit_cap = getattr(exec_engine, "_resolve_order_submit_cap", None)
+        if callable(resolve_submit_cap):
+            try:
+                max_new_orders_per_cycle, cap_source = resolve_submit_cap()
+            except Exception:
+                logger.debug("NETTING_ORDER_CAP_RESOLVE_FAILED", exc_info=True)
+                max_new_orders_per_cycle = None
+                cap_source = "error"
+    try:
+        symbols_per_order = int(get_env("AI_TRADING_EXEC_SYMBOLS_PER_ORDER", 6, cast=int))
+    except Exception:
+        symbols_per_order = 6
+    try:
+        symbol_budget_min = int(get_env("AI_TRADING_EXEC_SYMBOL_BUDGET_MIN", 12, cast=int))
+    except Exception:
+        symbol_budget_min = 12
+    try:
+        symbol_budget_max = int(get_env("AI_TRADING_EXEC_SYMBOL_BUDGET_MAX", 120, cast=int))
+    except Exception:
+        symbol_budget_max = 120
+    symbols_per_order = max(1, min(symbols_per_order, 50))
+    symbol_budget_min = max(1, min(symbol_budget_min, 500))
+    symbol_budget_max = max(symbol_budget_min, min(symbol_budget_max, 500))
+    if max_new_orders_per_cycle is not None:
+        try:
+            order_cap_value = max(1, int(max_new_orders_per_cycle))
+        except (TypeError, ValueError):
+            order_cap_value = 1
+        symbol_budget_target = order_cap_value * symbols_per_order
+        symbol_budget = max(symbol_budget_min, min(symbol_budget_target, symbol_budget_max))
+        if len(symbols) > symbol_budget:
+            held_symbols = [
+                sym
+                for sym in symbols
+                if abs(float(positions.get(sym, 0.0) or 0.0)) > 0.0
+            ]
+            selected_symbols: list[str] = []
+            selected_set: set[str] = set()
+            for sym in held_symbols:
+                if sym in selected_set:
+                    continue
+                selected_symbols.append(sym)
+                selected_set.add(sym)
+            for sym in symbols:
+                if sym in selected_set:
+                    continue
+                if len(selected_symbols) >= symbol_budget:
+                    break
+                selected_symbols.append(sym)
+                selected_set.add(sym)
+            dropped_count = max(0, len(symbols) - len(selected_symbols))
+            if dropped_count > 0:
+                logger.info(
+                    "NETTING_SYMBOL_BUDGET_APPLIED",
+                    extra={
+                        "before": len(symbols),
+                        "after": len(selected_symbols),
+                        "dropped": dropped_count,
+                        "symbol_budget": symbol_budget,
+                        "order_cap": order_cap_value,
+                        "symbols_per_order": symbols_per_order,
+                        "cap_source": cap_source,
+                        "held_symbols_kept": len(held_symbols),
+                        "selected_sample": selected_symbols[:10],
+                    },
+                )
+            symbols = selected_symbols
 
     proposals_by_symbol: dict[str, list[SleeveProposal]] = {sym: [] for sym in symbols}
     latest_bar_ts: dict[str, datetime] = {}
@@ -32096,17 +32244,19 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(getattr(cfg, "ledger_lookback_hours", 24.0)),
             )
             setattr(state, "_oms_ledger", ledger)
+    decision_snapshot_template = _decision_record_config_snapshot(
+        cfg=cfg,
+        state=state,
+        allocation_weights=allocation_weights,
+        learned_overrides=learned_overrides,
+        sleeve_configs=sleeve_snapshot,
+        liquidity_regime=None,
+    )
     rate_limiter = _pretrade_rate_limiter(state)
     tca_stale_reason = _tca_stale_block_reason(now)
     if tca_stale_reason:
         for symbol, net_target in targets.items():
-            symbol_snapshot = _decision_record_config_snapshot(
-                cfg=cfg,
-                state=state,
-                allocation_weights=allocation_weights,
-                learned_overrides=learned_overrides,
-                sleeve_configs=sleeve_snapshot,
-            )
+            symbol_snapshot = dict(decision_snapshot_template)
             record = DecisionRecord(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
@@ -32118,29 +32268,26 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
         return
 
+    liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
+    thin_spread_bps = float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float))
+    thin_vol_mult = float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float))
     for symbol, net_target in targets.items():
         liq_features = latest_liquidity.get(
             symbol,
             LiquidityFeatures(rolling_volume=0.0, spread_bps=0.0, volatility_proxy=0.0),
         )
-        liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
         liq_regime = (
             classify_liquidity_regime(
                 liq_features,
-                thin_spread_bps=float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float)),
-                thin_vol_mult=float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float)),
+                thin_spread_bps=thin_spread_bps,
+                thin_vol_mult=thin_vol_mult,
             )
             if liq_regime_enabled
             else LiquidityRegime.NORMAL
         )
-        symbol_snapshot = _decision_record_config_snapshot(
-            cfg=cfg,
-            state=state,
-            allocation_weights=allocation_weights,
-            learned_overrides=learned_overrides,
-            sleeve_configs=sleeve_snapshot,
-            liquidity_regime=liq_regime.value,
-        )
+        symbol_snapshot = dict(decision_snapshot_template)
+        if "liquidity_regime" in symbol_snapshot:
+            symbol_snapshot["liquidity_regime"] = liq_regime.value
         if state.halt_trading:
             reason = state.halt_reason or "HALT_TRADING"
             record = DecisionRecord(
