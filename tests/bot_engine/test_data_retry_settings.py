@@ -52,6 +52,17 @@ def test_pre_rank_execution_candidates_preserves_input_order_without_weights(mon
     assert ranked == ["MSFT", "AAPL", "GOOG"]
 
 
+def test_pre_rank_execution_candidates_dedupes_symbols(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", raising=False)
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "MSFT", "aapl", "GOOG"],
+        runtime=None,
+    )
+
+    assert ranked == ["MSFT", "AAPL", "GOOG"]
+
+
 def test_pre_rank_execution_candidates_uses_weights_with_top_n(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "2")
     runtime = type(

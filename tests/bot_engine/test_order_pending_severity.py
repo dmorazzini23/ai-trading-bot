@@ -187,6 +187,47 @@ def test_pending_orders_log_escalates_to_error(monkeypatch, caplog):
     assert still_present and still_present[0].levelno == logging.ERROR
 
 
+def test_pending_orders_symbol_scope_caps_error_to_warning(monkeypatch, caplog):
+    """Per-symbol pending blocking should not escalate still-present logs to error."""
+
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(_apply_pending_new_timeout_policy=lambda: True),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(
+            order_stale_cleanup_interval=600,
+            orders_pending_new_warn_s=60,
+            orders_pending_new_error_s=120,
+        ),
+    )
+    monkeypatch.setattr(
+        be,
+        "_pending_order_broker_age_seconds",
+        lambda _order, _now_dt: 300.0,
+    )
+    monkeypatch.setattr(be, "cancel_all_open_orders", lambda _runtime: None)
+
+    clock = types.SimpleNamespace(value=1000.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+
+    caplog.set_level(logging.INFO)
+    pending = [_order("pending_new", "alpha")]
+    assert be._handle_pending_orders(pending, runtime) is True
+    clock.value += be._PENDING_ORDER_LOG_INTERVAL_SECONDS + 1
+    assert be._handle_pending_orders(pending, runtime) is True
+    levels = [
+        rec.levelno
+        for rec in caplog.records
+        if rec.message == "PENDING_ORDERS_STILL_PRESENT"
+    ]
+    assert levels
+    assert max(levels) == logging.WARNING
+
+
 def test_pending_orders_first_detection_stays_info_for_fresh_orders(monkeypatch, caplog):
     """First pending-order detection is informational even with aggressive thresholds."""
 

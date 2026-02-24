@@ -1182,6 +1182,13 @@ def _pre_rank_execution_candidates(
     normalized = [str(sym).strip().upper() for sym in symbols if str(sym).strip()]
     if not normalized:
         return []
+    deduped: list[str] = []
+    seen_symbols: set[str] = set()
+    for symbol in normalized:
+        if symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        deduped.append(symbol)
 
     top_n = _resolve_execution_candidate_top_n()
     weights: Mapping[str, Any] | None = None
@@ -1200,9 +1207,9 @@ def _pre_rank_execution_candidates(
             return 0.0
 
     ranked = (
-        sorted(normalized, key=lambda sym: (-_weight(sym), sym))
+        sorted(deduped, key=lambda sym: (-_weight(sym), sym))
         if weights
-        else list(normalized)
+        else list(deduped)
     )
     if top_n is None or len(ranked) <= top_n:
         return ranked
@@ -22314,7 +22321,7 @@ def _enter_short(
         intended_side="sell_short",
     )
     if not intent_decision_short:
-        logger.error("ORDER_INTENT_BLOCKED", extra=intent_decision_short.details)
+        _log_order_intent_blocked(intent_decision_short)
         return True
 
     order_id = _call_submit_order(
@@ -26601,6 +26608,18 @@ class OrderIntentDecision:
         return self.allowed
 
 
+def _log_order_intent_blocked(decision: OrderIntentDecision) -> None:
+    """Emit ORDER_INTENT_BLOCKED with reason-aware severity."""
+
+    reason = str(decision.reason or "").strip().lower()
+    level = logging.ERROR
+    if reason in {"cycle_conflict", "cycle_duplicate", "open_order_conflict"}:
+        level = logging.INFO
+    elif reason == "short_not_allowed":
+        level = logging.WARNING
+    logger.log(level, "ORDER_INTENT_BLOCKED", extra=decision.details)
+
+
 def _resolve_order_intent(
     ctx: BotContext,
     state: BotState,
@@ -26691,6 +26710,10 @@ def _resolve_order_intent(
     if any(side not in expected for side in open_sides):
         details["conflict_side"] = tuple(sorted(open_sides))
         return OrderIntentDecision(False, None, tuple(), "open_order_conflict", details)
+
+    if existing_cycle == order_side:
+        details["duplicate_side"] = existing_cycle
+        return OrderIntentDecision(False, None, tuple(), "cycle_duplicate", details)
 
     cycle_intents[symbol] = order_side
     return OrderIntentDecision(True, order_side, tuple(sorted(expected)), None, details)
@@ -27706,7 +27729,7 @@ def run_multi_strategy(ctx) -> None:
                 target_weight=target_weight_val,
             )
             if not intent_decision:
-                logger.error("ORDER_INTENT_BLOCKED", extra=intent_decision.details)
+                _log_order_intent_blocked(intent_decision)
                 continue
             expected_sides = set(intent_decision.expected_sides) or {intent_decision.order_side}
             open_buy_qty = open_sell_qty = 0
@@ -29449,6 +29472,14 @@ def _pending_order_log_level(
     return logging.INFO
 
 
+def _pending_order_scope_log_level(level: int, *, block_scope: str) -> int:
+    """Adjust pending-order log level to match the active block scope."""
+
+    if block_scope == "symbol" and int(level) > int(logging.WARNING):
+        return logging.WARNING
+    return int(level)
+
+
 def _pending_cleanup_warmup_cycles() -> int:
     """Return how many cycles to skip after forced pending-order cleanup."""
 
@@ -29774,6 +29805,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         cfg = None
     cfg_interval = getattr(cfg, "order_stale_cleanup_interval", 120)
     warn_after_s, error_after_s = _pending_order_log_thresholds(cfg)
+    block_scope = _pending_orders_block_scope()
     try:
         cleanup_after = float(cfg_interval)
     except (TypeError, ValueError):  # pragma: no cover - defensive
@@ -29805,6 +29837,10 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 warn_after_s=warn_after_s,
                 error_after_s=error_after_s,
             )
+        initial_level = _pending_order_scope_log_level(
+            initial_level,
+            block_scope=block_scope,
+        )
         logger.log(
             initial_level,
             "PENDING_ORDERS_DETECTED",
@@ -29843,12 +29879,16 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         or now - float(last_log) >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
     ):
         effective_age_s = max(float(age), float(oldest_pending_age_s or 0.0))
-        logger.log(
+        still_present_level = _pending_order_scope_log_level(
             _pending_order_log_level(
                 effective_age_s,
                 warn_after_s=warn_after_s,
                 error_after_s=error_after_s,
             ),
+            block_scope=block_scope,
+        )
+        logger.log(
+            still_present_level,
             "PENDING_ORDERS_STILL_PRESENT",
             extra={
                 "open_count": len(open_list),
@@ -29878,7 +29918,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     if age < cleanup_after and not stale_stuck_detected:
         return True
 
-    if _pending_orders_block_scope() == "symbol":
+    if block_scope == "symbol":
         if _apply_pending_new_timeout_policy(runtime):
             tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
             logger.info(

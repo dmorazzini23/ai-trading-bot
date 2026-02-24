@@ -22,6 +22,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
@@ -1890,6 +1891,8 @@ class ExecutionEngine:
         self._last_order_pacing_cap_log_ts: float = 0.0
         self._cycle_order_outcomes: list[dict[str, Any]] = []
         self._recent_order_intents: dict[tuple[str, str], float] = {}
+        self._cycle_reserved_intents: set[tuple[str, str]] = set()
+        self._cycle_reserved_intents_lock = Lock()
         self._pending_new_actions_this_cycle: int = 0
         self._engine_started_mono: float = float(monotonic_time())
         self._engine_cycle_index: int = 0
@@ -1957,6 +1960,12 @@ class ExecutionEngine:
         self._cycle_order_pacing_cap_logged = False
         self._pending_new_actions_this_cycle = 0
         self._cycle_order_outcomes = []
+        try:
+            with self._cycle_reserved_intents_lock:
+                self._cycle_reserved_intents.clear()
+        except Exception:
+            self._cycle_reserved_intents = set()
+            self._cycle_reserved_intents_lock = Lock()
         self._cycle_account = None
         self._cycle_account_fetched = False
         account = self._refresh_cycle_account()
@@ -2441,6 +2450,26 @@ class ExecutionEngine:
         upper = max(lower, float(hard_cap_bps))
         resolved = max(lower, min(float(base_bps), upper))
         return resolved
+
+    def _reserve_cycle_intent(self, symbol: str, side: str) -> bool:
+        """Reserve symbol/side for current cycle; False when already reserved."""
+
+        key = (str(symbol or "").upper(), str(side or "").lower())
+        if not key[0] or key[1] not in {"buy", "sell"}:
+            return True
+        intents = getattr(self, "_cycle_reserved_intents", None)
+        if not isinstance(intents, set):
+            intents = set()
+            self._cycle_reserved_intents = intents
+        lock = getattr(self, "_cycle_reserved_intents_lock", None)
+        if not callable(getattr(lock, "acquire", None)):
+            lock = Lock()
+            self._cycle_reserved_intents_lock = lock
+        with lock:
+            if key in intents:
+                return False
+            intents.add(key)
+        return True
 
     def _should_suppress_duplicate_intent(self, symbol: str, side: str) -> bool:
         """Return True when duplicate intent should be skipped."""
@@ -5785,6 +5814,18 @@ class ExecutionEngine:
                     "buffer_bps": fallback_buffer_bps if fallback_buffer_bps else 0,
                 },
             )
+
+        if not closing_position and not self._reserve_cycle_intent(symbol, mapped_side):
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason="cycle_duplicate_intent",
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
+            return None
 
         order_type_submitted = order_type_normalized
         order: Any | None = None

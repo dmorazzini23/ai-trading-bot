@@ -64,6 +64,14 @@ def test_duplicate_intent_window(monkeypatch):
     assert engine._should_suppress_duplicate_intent("AAPL", "buy") is False
 
 
+def test_cycle_intent_reservation_dedupes_symbol_side():
+    engine = _engine_stub()
+
+    assert engine._reserve_cycle_intent("AAPL", "buy") is True
+    assert engine._reserve_cycle_intent("AAPL", "buy") is False
+    assert engine._reserve_cycle_intent("AAPL", "sell") is True
+
+
 def test_order_pacing_cap_warning_cooldown(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_ORDER_PACING_CAP_LOG_COOLDOWN_SEC", "300")

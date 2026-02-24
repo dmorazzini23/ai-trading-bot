@@ -1,3 +1,4 @@
+import logging
 import types
 
 import pytest
@@ -75,6 +76,33 @@ def test_buy_then_sell_conflict_same_cycle():
     assert conflict.reason == "cycle_conflict"
 
 
+def test_same_side_duplicate_blocked_same_cycle():
+    ctx = _make_context()
+    state = BotState()
+
+    first = bot_engine._resolve_order_intent(  # type: ignore[attr-defined]
+        ctx,
+        state,
+        symbol="AAPL",
+        signal_side="buy",
+        target_weight=0.2,
+    )
+    assert first.allowed
+    assert first.order_side == "buy"
+
+    duplicate = bot_engine._resolve_order_intent(  # type: ignore[attr-defined]
+        ctx,
+        state,
+        symbol="AAPL",
+        signal_side="buy",
+        target_weight=0.2,
+    )
+
+    assert not duplicate.allowed
+    assert duplicate.reason == "cycle_duplicate"
+    assert duplicate.details["duplicate_side"] == "buy"
+
+
 def test_conflict_logs_structured_event(caplog):
     conflict_engine = DummyExecutionEngine(
         pending=[DummyOrderInfo("AAPL", "buy")]
@@ -100,3 +128,31 @@ def test_conflict_logs_structured_event(caplog):
     error_record = next(rec for rec in caplog.records if rec.message == "ORDER_INTENT_BLOCKED")
     assert getattr(error_record, "intended_order_side") == "sell"
     assert getattr(error_record, "conflict_side") == ("buy",)
+
+
+def test_cycle_duplicate_logs_info_level(caplog):
+    ctx = _make_context()
+    state = BotState()
+
+    assert bot_engine._resolve_order_intent(  # type: ignore[attr-defined]
+        ctx,
+        state,
+        symbol="AAPL",
+        signal_side="buy",
+        target_weight=0.2,
+    )
+    decision = bot_engine._resolve_order_intent(  # type: ignore[attr-defined]
+        ctx,
+        state,
+        symbol="AAPL",
+        signal_side="buy",
+        target_weight=0.2,
+    )
+    assert not decision
+
+    caplog.set_level(logging.INFO)
+    bot_engine._log_order_intent_blocked(decision)  # type: ignore[attr-defined]
+
+    record = next(rec for rec in caplog.records if rec.message == "ORDER_INTENT_BLOCKED")
+    assert record.levelno == logging.INFO
+    assert getattr(record, "duplicate_side") == "buy"
