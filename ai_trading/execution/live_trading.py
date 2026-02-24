@@ -3502,6 +3502,7 @@ class ExecutionEngine:
         kwargs.pop("reduce_only", None)
         using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
         kwargs.pop("using_fallback_price", None)
+        capacity_prechecked = _safe_bool(kwargs.pop("capacity_prechecked", False))
         pytest_mode = (
             "pytest" in sys.modules
             or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -3755,23 +3756,29 @@ class ExecutionEngine:
                 )
                 return None
 
-        capacity = _call_preflight_capacity(
-            symbol,
-            side_lower,
-            None,
-            quantity,
-            capacity_broker,
-            account_snapshot,
-        )
-        if not capacity.can_submit:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            return None
-        if capacity.suggested_qty != quantity:
-            quantity = capacity.suggested_qty
-            order_data["quantity"] = quantity
+        if not capacity_prechecked:
+            capacity = _call_preflight_capacity(
+                symbol,
+                side_lower,
+                None,
+                quantity,
+                capacity_broker,
+                account_snapshot,
+            )
+            if not capacity.can_submit:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                return None
+            if capacity.suggested_qty != quantity:
+                quantity = capacity.suggested_qty
+                order_data["quantity"] = quantity
+        else:
+            logger.debug(
+                "BROKER_CAPACITY_PRECHECK_REUSED",
+                extra={"symbol": symbol, "side": side_lower, "quantity": quantity, "order_type": "market"},
+            )
 
         if guard_shadow_active() and not closing_position:
             logger.info(
@@ -4073,6 +4080,7 @@ class ExecutionEngine:
         kwargs.pop("close_position", None)
         kwargs.pop("reduce_only", None)
         using_fallback_price = _safe_bool(kwargs.get("using_fallback_price"))
+        capacity_prechecked = _safe_bool(kwargs.pop("capacity_prechecked", False))
         pytest_mode = (
             "pytest" in sys.modules
             or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
@@ -4236,23 +4244,29 @@ class ExecutionEngine:
                 "asset_class": kwargs.get("asset_class"),
             }
 
-        capacity = _call_preflight_capacity(
-            symbol,
-            side_lower,
-            limit_price,
-            quantity,
-            capacity_broker,
-            account_snapshot,
-        )
-        if not capacity.can_submit:
-            self.stats.setdefault("capacity_skips", 0)
-            self.stats.setdefault("skipped_orders", 0)
-            self.stats["capacity_skips"] += 1
-            self.stats["skipped_orders"] += 1
-            return None
-        if capacity.suggested_qty != quantity:
-            quantity = capacity.suggested_qty
-            order_data["quantity"] = quantity
+        if not capacity_prechecked:
+            capacity = _call_preflight_capacity(
+                symbol,
+                side_lower,
+                limit_price,
+                quantity,
+                capacity_broker,
+                account_snapshot,
+            )
+            if not capacity.can_submit:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                return None
+            if capacity.suggested_qty != quantity:
+                quantity = capacity.suggested_qty
+                order_data["quantity"] = quantity
+        else:
+            logger.debug(
+                "BROKER_CAPACITY_PRECHECK_REUSED",
+                extra={"symbol": symbol, "side": side_lower, "quantity": quantity, "order_type": "limit"},
+            )
 
         logger.debug(
             "ORDER_PREFLIGHT_READY",
@@ -5698,6 +5712,7 @@ class ExecutionEngine:
 
         order_kwargs["using_fallback_price"] = using_fallback_price
         order_kwargs["price_hint"] = price_hint
+        order_kwargs["capacity_prechecked"] = True
         if annotations:
             order_kwargs["annotations"] = annotations
 

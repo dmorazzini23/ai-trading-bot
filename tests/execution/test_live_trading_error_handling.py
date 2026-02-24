@@ -134,6 +134,45 @@ def test_execute_order_uses_capacity_suggested_qty(engine_factory, monkeypatch):
     assert result.requested_quantity == 3
 
 
+def test_execute_order_limit_precheck_runs_once(engine_factory, monkeypatch):
+    calls: list[tuple[Any, Any, Any, Any]] = []
+
+    def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
+        calls.append((symbol, side, price_hint, quantity))
+        return lt.CapacityCheck(True, int(quantity))
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
+    engine = engine_factory(lambda order_data: {"id": "ok", "status": "accepted", **order_data})
+
+    result = engine.execute_order("AAPL", "buy", 10, order_type="limit", limit_price=123.45)
+
+    assert result is not None
+    assert len(calls) == 1
+    assert calls[0][0] == "AAPL"
+    assert calls[0][1] == "buy"
+    assert calls[0][2] == pytest.approx(123.45)
+    assert calls[0][3] == 10
+
+
+def test_execute_order_market_precheck_runs_once(engine_factory, monkeypatch):
+    calls: list[tuple[Any, Any, Any, Any]] = []
+
+    def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
+        calls.append((symbol, side, price_hint, quantity))
+        return lt.CapacityCheck(True, int(quantity))
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
+    engine = engine_factory(lambda order_data: {"id": "ok", "status": "accepted", **order_data})
+
+    result = engine.execute_order("AAPL", "buy", 10, order_type="market")
+
+    assert result is not None
+    assert len(calls) == 1
+    assert calls[0][0] == "AAPL"
+    assert calls[0][1] == "buy"
+    assert calls[0][3] == 10
+
+
 def test_submit_limit_order_returns_broker_payload(engine_factory, monkeypatch):
     submissions: list[dict[str, object]] = []
 
