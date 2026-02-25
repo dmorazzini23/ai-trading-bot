@@ -2368,6 +2368,58 @@ class ExecutionEngine:
             return cap
         return None
 
+    def _pending_backlog_local_stale_seconds(self) -> float:
+        """Return max local pending-cache age counted toward backlog pacing caps."""
+
+        configured = _config_float("AI_TRADING_PENDING_BACKLOG_LOCAL_STALE_SEC", None)
+        if configured is None:
+            configured = max(float(_ACK_TIMEOUT_SECONDS) * 6.0, 180.0)
+        try:
+            stale_seconds = float(configured)
+        except (TypeError, ValueError):
+            stale_seconds = max(float(_ACK_TIMEOUT_SECONDS) * 6.0, 180.0)
+        return max(30.0, min(stale_seconds, 86400.0))
+
+    def _effective_pending_order_cache_count(self) -> tuple[int, int]:
+        """Return (active_count, stale_ignored_count) for local pending cache."""
+
+        store_raw = getattr(self, "_pending_orders", None)
+        if not isinstance(store_raw, Mapping):
+            return 0, 0
+
+        now_dt = datetime.now(UTC)
+        stale_after_s = self._pending_backlog_local_stale_seconds()
+        stale_pending_statuses = {
+            "new",
+            "pending_new",
+            "accepted",
+            "acknowledged",
+            "submitted",
+            "pending_replace",
+            "pending_cancel",
+            "pending_cancelled",
+            "pending_cancelled_all",
+        }
+        active_count = 0
+        stale_ignored_count = 0
+        for entry in store_raw.values():
+            if not isinstance(entry, Mapping):
+                active_count += 1
+                continue
+            status = _normalize_status(entry.get("status"))
+            if status in _TERMINAL_ORDER_STATUSES:
+                continue
+            entry_age_s = self._order_age_seconds(entry, now_dt)
+            if (
+                status in stale_pending_statuses
+                and entry_age_s is not None
+                and entry_age_s >= stale_after_s
+            ):
+                stale_ignored_count += 1
+                continue
+            active_count += 1
+        return active_count, stale_ignored_count
+
     def _pending_backlog_order_cap(self) -> int | None:
         """Return emergency cap when pending backlog rises beyond threshold."""
 
@@ -2384,16 +2436,33 @@ class ExecutionEngine:
         cap_value = max(1, int(cap_value))
 
         backlog = 0
+        local_pending_count = 0
+        stale_ignored_count = 0
         try:
-            backlog = max(backlog, len(getattr(self, "_pending_orders", {}) or {}))
+            local_pending_count, stale_ignored_count = self._effective_pending_order_cache_count()
+            backlog = max(backlog, local_pending_count)
         except Exception:
+            local_pending_count = 0
+            stale_ignored_count = 0
             backlog = max(backlog, 0)
+
+        broker_open_count = 0
         broker_sync = getattr(self, "_broker_sync", None)
         if broker_sync is not None:
             try:
-                backlog = max(backlog, len(getattr(broker_sync, "open_orders", ()) or ()))
+                broker_open_count = len(getattr(broker_sync, "open_orders", ()) or ())
+                backlog = max(backlog, broker_open_count)
             except Exception:
+                broker_open_count = 0
                 backlog = max(backlog, 0)
+        self._pending_backlog_last_context = {
+            "threshold": int(threshold),
+            "cap_value": int(cap_value),
+            "local_pending_count": int(local_pending_count),
+            "broker_open_count": int(broker_open_count),
+            "stale_ignored_count": int(stale_ignored_count),
+            "effective_backlog": int(backlog),
+        }
         if backlog < threshold:
             return None
         return cap_value
@@ -2720,12 +2789,32 @@ class ExecutionEngine:
         )
         if should_log_detail:
             skip_tracker[reason_token] = now_mono
+            detail_segments = [f"reason={str(reason)}"]
+            if symbol:
+                detail_segments.append(f"symbol={str(symbol)}")
+            if side:
+                detail_segments.append(f"side={str(side)}")
+            if detail:
+                detail_segments.append(f"detail={str(detail)}")
+            if context:
+                context_rendered = ""
+                try:
+                    context_rendered = json.dumps(payload.get("context"), sort_keys=True, default=str)
+                except Exception:
+                    context_rendered = str(payload.get("context"))
+                if context_rendered:
+                    if len(context_rendered) > 240:
+                        context_rendered = f"{context_rendered[:237]}..."
+                    detail_segments.append(f"context={context_rendered}")
+            detail_message = "ORDER_SUBMIT_SKIPPED_DETAIL"
+            if detail_segments:
+                detail_message = f"{detail_message} | {' '.join(detail_segments)}"
             log_throttled_event(
                 logger,
                 f"ORDER_SUBMIT_SKIPPED_DETAIL_{reason_token}",
                 level=logging.INFO,
                 extra=payload,
-                message="ORDER_SUBMIT_SKIPPED_DETAIL",
+                message=detail_message,
             )
         self._last_submit_outcome = {
             "status": "skipped",
@@ -5046,6 +5135,23 @@ class ExecutionEngine:
                         "cap_source": cap_source,
                         "engine_cycle_index": int(max(getattr(self, "_engine_cycle_index", 0), 0)),
                     }
+                    backlog_context = getattr(self, "_pending_backlog_last_context", None)
+                    if "pending_backlog" in cap_source and isinstance(backlog_context, Mapping):
+                        payload["pending_backlog_effective"] = int(
+                            backlog_context.get("effective_backlog", 0) or 0
+                        )
+                        payload["pending_backlog_threshold"] = int(
+                            backlog_context.get("threshold", 0) or 0
+                        )
+                        payload["pending_backlog_local"] = int(
+                            backlog_context.get("local_pending_count", 0) or 0
+                        )
+                        payload["pending_backlog_broker_open"] = int(
+                            backlog_context.get("broker_open_count", 0) or 0
+                        )
+                        payload["pending_backlog_stale_ignored"] = int(
+                            backlog_context.get("stale_ignored_count", 0) or 0
+                        )
                     if self._order_pacing_cap_log_level() == "info":
                         payload["phase"] = "warmup"
                         logger.info("ORDER_PACING_CAP_HIT", extra=payload)

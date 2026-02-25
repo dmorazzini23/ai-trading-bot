@@ -204,6 +204,23 @@ def test_resolve_order_submit_cap_includes_pending_backlog(monkeypatch):
     assert source == "configured+pending_backlog"
 
 
+def test_pending_backlog_cap_ignores_stale_local_pending(monkeypatch):
+    engine = _engine_stub()
+    stale_ts = (datetime.now(UTC) - timedelta(seconds=900)).isoformat()
+    engine._pending_orders = {"ord-1": {"status": "pending_new", "updated_at": stale_ts}}
+
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_VALUE", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_LOCAL_STALE_SEC", "60")
+
+    cap = engine._pending_backlog_order_cap()
+
+    assert cap is None
+    context = getattr(engine, "_pending_backlog_last_context", {})
+    assert context.get("stale_ignored_count") == 1
+    assert context.get("local_pending_count") == 0
+
+
 def test_ensure_initialized_uses_existing_client_validation(monkeypatch):
     engine = _engine_stub()
     engine.trading_client = object()

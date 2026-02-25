@@ -87,9 +87,11 @@ def test_execute_with_retry_honors_retry_after_header(monkeypatch) -> None:
     def _submit_order_to_alpaca(order_data):
         attempts["count"] += 1
         if attempts["count"] == 1:
-            exc = _RateLimitedError(
-                "rate limited",
-                http_error=SimpleNamespace(
+            exc = _RateLimitedError("rate limited")
+            setattr(
+                exc,
+                "http_error",
+                SimpleNamespace(
                     response=SimpleNamespace(
                         status_code=429,
                         headers={"Retry-After": "2"},

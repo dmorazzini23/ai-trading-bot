@@ -548,6 +548,8 @@ def test_skip_submit_detail_logs_are_ttl_coalesced(engine_factory, caplog, monke
         if str(record.message).startswith("ORDER_SUBMIT_SKIPPED_DETAIL")
     ]
     assert len(detail_records) == 1
+    assert "reason=order_pacing_cap" in str(detail_records[0].message)
+    assert "detail=max_new_orders_per_cycle reached" in str(detail_records[0].message)
 
 
 def test_execute_order_records_failure_outcome_on_submit_exception(engine_factory, caplog):
