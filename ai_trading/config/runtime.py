@@ -2467,10 +2467,15 @@ class TradingConfig:
         else:
             env_map = _env_snapshot(env_overrides)
         if not allow_missing_drawdown:
-            has_drawdown = any(
-                env_map.get(key) not in (None, "")
-                for key in ("MAX_DRAWDOWN_THRESHOLD",)
-            )
+            canonical_drawdown = env_map.get("MAX_DRAWDOWN_THRESHOLD")
+            legacy_drawdown = env_map.get("AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+            has_drawdown = canonical_drawdown not in (None, "")
+            if not has_drawdown and legacy_drawdown not in (None, ""):
+                raise RuntimeError(
+                    "AI_TRADING_MAX_DRAWDOWN_THRESHOLD is deprecated and no longer supported. "
+                    "Use MAX_DRAWDOWN_THRESHOLD instead. "
+                    "Set MAX_DRAWDOWN_THRESHOLD and remove AI_TRADING_MAX_DRAWDOWN_THRESHOLD."
+                )
             if not has_drawdown:
                 raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
         values: dict[str, Any] = {}

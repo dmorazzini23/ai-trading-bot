@@ -20,6 +20,34 @@ def _reset_cache():
     ps._CACHE.equity_recovered_logged = False
 
 
+def test_parse_env_max_position_size_uses_canonical_key_only(monkeypatch):
+    _reset_cache()
+    monkeypatch.setenv("MAX_POSITION_SIZE", "3456")
+    monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
+
+    assert ps._parse_env_max_position_size(strict=True) == 3456.0
+
+
+def test_parse_env_max_position_size_returns_none_when_env_missing(monkeypatch):
+    _reset_cache()
+    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+    monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
+
+    assert ps._parse_env_max_position_size(strict=True) is None
+
+
+def test_parse_env_max_position_size_rejects_deprecated_alias(monkeypatch):
+    _reset_cache()
+    monkeypatch.setenv("AI_TRADING_MAX_POSITION_SIZE", "1200")
+    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="AI_TRADING_MAX_POSITION_SIZE is deprecated\\. Set MAX_POSITION_SIZE instead\\.",
+    ):
+        ps._parse_env_max_position_size(strict=True)
+
+
 def test_fetch_equity_sets_paper(monkeypatch):
     _reset_cache()
 

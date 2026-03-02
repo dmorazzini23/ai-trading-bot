@@ -337,7 +337,7 @@ print("✓ management import succeeded with rejecting SettingsConfigDict")
         alpaca_env_content = """
 ALPACA_API_KEY=test_alpaca_key_from_env
 ALPACA_SECRET_KEY=test_alpaca_secret_from_env
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
 """
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.env', delete=False) as f:

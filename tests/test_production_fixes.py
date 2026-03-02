@@ -224,8 +224,8 @@ class TestIntegration(unittest.TestCase):
             self.assertIn('SENTIMENT_API_KEY', content)
             self.assertIn('SENTIMENT_API_URL', content)
 
-            # Should maintain backwards compatibility
-            self.assertIn('NEWS_API_KEY', content)
+            # Deprecated alias should not be present in canonical env files.
+            self.assertNotIn('NEWS_API_KEY=', content)
 
     def test_all_modules_importable(self):
         """Test that all modified modules can be imported without errors."""

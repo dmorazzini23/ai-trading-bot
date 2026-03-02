@@ -42,7 +42,7 @@ def test_nested_validation_calls_no_deadlock():
     env_vars = {
         'ALPACA_API_KEY': 'test_key_1234567890',
         'ALPACA_SECRET_KEY': 'test_secret_1234567890',
-        'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+        'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
         'WEBHOOK_SECRET': 'test_webhook_secret',
         'SCHEDULER_SLEEP_SECONDS': '30',
         'CAPITAL_CAP': '0.04',
@@ -115,7 +115,7 @@ def test_validation_with_proper_env_vars():
     env_vars = {
         'ALPACA_API_KEY': 'test_key_1234567890',
         'ALPACA_SECRET_KEY': 'test_secret_1234567890',
-        'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+        'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
         'WEBHOOK_SECRET': 'test_webhook_secret',
         'SCHEDULER_SLEEP_SECONDS': '30',
         'CAPITAL_CAP': '0.04',
@@ -164,4 +164,3 @@ def test_deadlock_scenario_resolved():
 
     elapsed = time.time() - start_time
     assert elapsed < 5.0, f"Deadlock scenario took too long: {elapsed:.2f} seconds"
-

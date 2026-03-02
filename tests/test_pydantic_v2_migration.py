@@ -39,7 +39,8 @@ def test_pydantic_v2_migration_syntax():
     v2_decorators = [
         '@field_validator(\'ALPACA_API_KEY\')',
         '@field_validator(\'ALPACA_SECRET_KEY\')',
-        '@field_validator(\'ALPACA_BASE_URL\')',
+        '@field_validator(\'ALPACA_TRADING_BASE_URL\')',
+        '@field_validator(\'ALPACA_DATA_BASE_URL\')',
         '@field_validator(\'TRADING_MODE\')',
         '@field_validator(\'FORCE_TRADES\')'
     ]
@@ -51,7 +52,8 @@ def test_pydantic_v2_migration_syntax():
     v1_decorators = [
         '@validator(\'ALPACA_API_KEY\')',
         '@validator(\'ALPACA_SECRET_KEY\')',
-        '@validator(\'ALPACA_BASE_URL\')',
+        '@validator(\'ALPACA_TRADING_BASE_URL\')',
+        '@validator(\'ALPACA_DATA_BASE_URL\')',
         '@validator(\'TRADING_MODE\')',
         '@validator(\'FORCE_TRADES\')'
     ]
@@ -70,7 +72,8 @@ def test_validate_env_import():
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'TEST_API_KEY_123456789',
             'ALPACA_SECRET_KEY': 'TEST_SECRET_KEY_123456789012345',
-            'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+            'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
+            'ALPACA_DATA_BASE_URL': 'https://data.alpaca.markets',
             'TRADING_MODE': 'testing',
             'FORCE_TRADES': 'false'
         }):
@@ -100,7 +103,7 @@ def test_field_validator_functionality():
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'INVALID_KEY',  # Should trigger validation warning
             'ALPACA_SECRET_KEY': 'short',     # Should trigger validation error
-            'ALPACA_BASE_URL': 'http://insecure.com',  # Should trigger HTTPS error
+            'ALPACA_TRADING_BASE_URL': 'http://insecure.com',  # Should trigger HTTPS error
             'TRADING_MODE': 'invalid_mode',   # Should trigger validation error
         }):
             from ai_trading.validation import (
@@ -115,7 +118,7 @@ def test_field_validator_functionality():
             except ValidationError as e:
                 # Validation errors are expected with invalid inputs
                 assert "ALPACA_SECRET_KEY appears too short" in str(e) or \
-                       "ALPACA_BASE_URL must use HTTPS" in str(e) or \
+                       "ALPACA_TRADING_BASE_URL must use HTTPS" in str(e) or \
                        "TRADING_MODE must be one of" in str(e)
 
     except ImportError:

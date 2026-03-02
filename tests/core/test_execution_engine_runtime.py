@@ -31,7 +31,7 @@ def test_execution_engine_instantiated_without_stub(request) -> None:
     overrides = {
         "APP_ENV": "prod",
         "EXECUTION_MODE": "sim",
-        "AI_TRADING_MAX_POSITION_SIZE": "10000",
+        "MAX_POSITION_SIZE": "10000",
     }
     snapshot = _override_env(overrides)
 

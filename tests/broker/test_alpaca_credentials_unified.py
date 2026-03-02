@@ -12,7 +12,7 @@ from ai_trading.broker import alpaca_credentials as creds_mod
 def test_resolve_alpaca_credentials_defaults(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
+    monkeypatch.delenv("ALPACA_TRADING_BASE_URL", raising=False)
     creds = creds_mod.resolve_alpaca_credentials({})
     assert creds.api_key is None
     assert creds.secret_key is None
@@ -23,7 +23,7 @@ def test_resolve_alpaca_credentials_from_mapping():
     data = {
         "ALPACA_API_KEY": "key",
         "ALPACA_SECRET_KEY": "secret",
-        "ALPACA_BASE_URL": "https://live.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://live.alpaca.markets",
     }
     creds = creds_mod.resolve_alpaca_credentials(data)
     assert creds.api_key == "key"

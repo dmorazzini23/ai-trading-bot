@@ -6,9 +6,11 @@ from ai_trading.health import HealthCheck
 
 
 def test_healthcheck_reports_alpaca_credential_presence_from_env(monkeypatch) -> None:
+    monkeypatch.delenv("ALPACA_API_URL", raising=False)
+    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
     monkeypatch.setenv("ALPACA_API_KEY", "test-key-123")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret-123")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
 
     hc = HealthCheck(ctx=SimpleNamespace(service="ai-trading"))
     client = hc.app.test_client()

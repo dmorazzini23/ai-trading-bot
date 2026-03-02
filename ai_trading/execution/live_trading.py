@@ -8042,7 +8042,12 @@ class ExecutionEngine:
                 return "status_429"
             if status_int is not None and 500 <= status_int < 600:
                 return f"status_{status_int}"
-            detail = getattr(exc, "message", None)
+            # `alpaca.common.exceptions.APIError.message` attempts to JSON-decode
+            # the payload and can raise if the body is plain text.
+            try:
+                detail = getattr(exc, "message", None)
+            except Exception:
+                detail = getattr(exc, "_error", None)
             if isinstance(detail, dict):
                 detail = detail.get("message") or detail.get("detail")
             message_str = str(detail or exc)

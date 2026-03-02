@@ -1,6 +1,8 @@
 		# ==== knobs with safe defaults ====
 ifneq ("$(wildcard .venv/bin/python)","")
 PYTHON ?= .venv/bin/python
+else ifneq ("$(wildcard venv/bin/python)","")
+PYTHON ?= venv/bin/python
 else
 PYTHON ?= python3
 endif

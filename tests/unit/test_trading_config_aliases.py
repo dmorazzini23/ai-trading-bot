@@ -54,7 +54,7 @@ def test_trading_config_env_aliases(env_updates, expected_limit):
 
 def test_paper_inferred_from_base_url():
     env = {
-        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
         "MAX_DRAWDOWN_THRESHOLD": "0.15",
     }
     cfg = TradingConfig.from_env(env)
@@ -63,7 +63,7 @@ def test_paper_inferred_from_base_url():
 
 def test_paper_false_when_live_prod():
     env = {
-        "ALPACA_BASE_URL": "https://api.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://api.alpaca.markets",
         "APP_ENV": "prod",
         "MAX_DRAWDOWN_THRESHOLD": "0.15",
     }
@@ -79,7 +79,7 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
         "ALPACA_DATA_FEED": "iex",
         "WEBHOOK_SECRET": "hook",
         "CAPITAL_CAP": "0.25",
-        "ALPACA_API_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
     }
     for key, value in base_env.items():
         monkeypatch.setenv(key, value)
@@ -109,7 +109,7 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
     assert getattr(record, "trading_config_value", None) == 0.02
 
 
-def test_max_position_size_canonical_value_wins_over_alias():
+def test_max_position_size_canonical_value_wins_over_alias(caplog):
     env = {
         "CAPITAL_CAP": "0.05",
         "MAX_POSITION_MODE": "STATIC",
@@ -121,12 +121,20 @@ def test_max_position_size_canonical_value_wins_over_alias():
         "MIN_SAMPLE_SIZE": "50",
         "CONFIDENCE_LEVEL": "0.9",
         "MAX_POSITION_SIZE": "7000",
-        "AI_TRADING_MAX_POSITION_SIZE": "9000",
     }
 
+    caplog.set_level(logging.WARNING, logger="ai_trading.config.runtime")
+    env["AI_TRADING_MAX_POSITION_SIZE"] = "9000"
     cfg = TradingConfig.from_env(env)
-
     assert cfg.max_position_size == pytest.approx(7000)
+    conflict_records = [
+        record
+        for record in caplog.records
+        if record.name == "ai_trading.config.runtime"
+        and record.message == "CONFIG_ENV_ALIAS_CONFLICT"
+        and getattr(record, "field", None) == "max_position_size"
+    ]
+    assert conflict_records, "Expected CONFIG_ENV_ALIAS_CONFLICT for max_position_size"
 
 
 def test_explicit_mode_argument_overrides_trading_mode_env(monkeypatch):
@@ -163,7 +171,7 @@ def test_fail_fast_env_health_port_conflict(monkeypatch):
         "ALPACA_DATA_FEED": "iex",
         "WEBHOOK_SECRET": "hook",
         "CAPITAL_CAP": "0.25",
-        "ALPACA_API_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
     }
     for key, value in base_env.items():
         monkeypatch.setenv(key, value)

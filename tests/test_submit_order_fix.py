@@ -15,7 +15,8 @@ def _ensure_env(monkeypatch):
     overrides = {
         "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",
         "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",
-        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_DATA_BASE_URL": "https://data.alpaca.markets",
         "WEBHOOK_SECRET": "fake-test-webhook-not-real",
         "FLASK_PORT": "9000",
         "TRADING_MODE": "balanced",

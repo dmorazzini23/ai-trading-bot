@@ -29,6 +29,7 @@ def test_validate_alpaca_credentials_missing(monkeypatch):
     monkeypatch.setattr(config.management, "TESTING", False, raising=False)
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_TRADING_BASE_URL", raising=False)
     monkeypatch.delenv("ALPACA_API_URL", raising=False)
     monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
     with pytest.raises(RuntimeError):
@@ -40,7 +41,7 @@ def test_validate_alpaca_credentials_reads_runtime_env(monkeypatch):
     monkeypatch.setattr(config.management, "TESTING", False, raising=False)
     monkeypatch.setenv("ALPACA_API_KEY", "runtime-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "runtime-secret")
-    monkeypatch.setenv("ALPACA_API_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
 
     config.validate_alpaca_credentials()
 

@@ -13,7 +13,10 @@ def test_risk_engine_validates_env_at_runtime(monkeypatch):
     keys = (
         "ALPACA_API_KEY",
         "ALPACA_SECRET_KEY",
+        "ALPACA_TRADING_BASE_URL",
+        "ALPACA_DATA_BASE_URL",
         "ALPACA_BASE_URL",
+        "ALPACA_API_URL",
         "WEBHOOK_SECRET",
         "CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
@@ -31,8 +34,8 @@ def test_risk_engine_validates_env_at_runtime(monkeypatch):
 def test_risk_engine_tolerates_stubbed_data_client(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    monkeypatch.setenv("ALPACA_API_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
 
     class StubClient:
         def __init__(self, *args, **kwargs):  # noqa: D401, ARG002
@@ -45,4 +48,3 @@ def test_risk_engine_tolerates_stubbed_data_client(monkeypatch):
     engine = RiskEngine()
 
     assert getattr(engine, "data_client", None) is None
-

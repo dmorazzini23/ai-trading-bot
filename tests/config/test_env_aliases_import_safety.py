@@ -1,5 +1,7 @@
 import importlib
 
+import pytest
+
 
 def test_import_succeeds_with_required_threshold(monkeypatch):
     monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.1")
@@ -13,6 +15,5 @@ def test_alias_for_drawdown_threshold(monkeypatch):
     monkeypatch.setenv("AI_TRADING_MAX_DRAWDOWN_THRESHOLD", "0.08")
     from ai_trading.config.management import TradingConfig
 
-    cfg = TradingConfig.from_env()
-    assert cfg.max_drawdown_threshold == 0.08
-
+    with pytest.raises(RuntimeError, match="AI_TRADING_MAX_DRAWDOWN_THRESHOLD"):
+        TradingConfig.from_env()

@@ -86,7 +86,7 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
 
     with caplog.at_level(logging.INFO):
         result = data_fetcher.get_minute_df("AAPL", start, end, feed="sip")
@@ -146,7 +146,7 @@ def test_backup_usage_marks_primary_unhealthy(monkeypatch):
     monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
 
     result = data_fetcher.get_minute_df("AAPL", start, end, feed="sip")
 

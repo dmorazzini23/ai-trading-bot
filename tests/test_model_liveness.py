@@ -12,6 +12,7 @@ def _set_default_liveness_env(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_MODEL_LIVENESS_ALERT_COOLDOWN_SECONDS", "0")
     monkeypatch.setenv("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", "1")
     monkeypatch.setenv("AI_TRADING_RL_SIGNAL_MAX_AGE_SECONDS", "1")
+    monkeypatch.setenv("USE_RL_AGENT", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_CANARY_AUTO_ROLLBACK_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_CANARY_ROLLBACK_ON_MODEL_LIVENESS_BREACH", "1")
@@ -23,7 +24,13 @@ def test_model_liveness_breaches_when_signals_are_stale(monkeypatch) -> None:
     _set_default_liveness_env(monkeypatch)
 
     now = datetime.now(UTC) + timedelta(seconds=2)
-    breaches = model_liveness.check_model_liveness(market_open=True, now=now)
+    breaches = model_liveness.check_model_liveness(
+        market_open=True,
+        signals_expected_now=True,
+        ml_expected=True,
+        rl_expected=True,
+        now=now,
+    )
     metrics = {entry["metric"] for entry in breaches}
 
     assert "ml_signal" in metrics
@@ -47,6 +54,9 @@ def test_recorded_ml_signal_suppresses_ml_breach(monkeypatch) -> None:
 
     breaches = model_liveness.check_model_liveness(
         market_open=True,
+        signals_expected_now=True,
+        ml_expected=True,
+        rl_expected=True,
         now=base + timedelta(seconds=2),
     )
     metrics = {entry["metric"] for entry in breaches}

@@ -257,7 +257,7 @@ def _print_resolved_config() -> int:
     try:
         validate_no_deprecated_env()
     except RuntimeError as exc:
-        print(str(exc))
+        sys.stdout.write(f"{exc}\n")
         return 2
 
     cfg = get_trading_config()
@@ -273,7 +273,7 @@ def _print_resolved_config() -> int:
     payload["ENV_CANONICALIZATION_MAP"] = {
         key: list(value) for key, value in canonical_env_map().items()
     }
-    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    sys.stdout.write(f"{json.dumps(payload, indent=2, sort_keys=True, default=str)}\n")
     return 0
 
 

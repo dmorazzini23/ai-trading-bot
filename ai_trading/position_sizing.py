@@ -72,14 +72,18 @@ def _clamp(val: float, vmin: float | None, vmax: float | None) -> float:
 
 
 def _parse_env_max_position_size(*, strict: bool) -> float | None:
-    deprecated_val = get_env("AI_TRADING_MAX_POSITION_SIZE", None)
+    deprecated_val = get_env(
+        "AI_TRADING_MAX_POSITION_SIZE",
+        None,
+        resolve_aliases=False,
+    )
     if deprecated_val not in (None, ""):
         raise ValueError(
             "AI_TRADING_MAX_POSITION_SIZE is deprecated. "
             "Set MAX_POSITION_SIZE instead.",
         )
 
-    env_val = get_env("MAX_POSITION_SIZE", None)
+    env_val = get_env("MAX_POSITION_SIZE", None, resolve_aliases=False)
     if env_val in (None, ""):
         return None
     try:

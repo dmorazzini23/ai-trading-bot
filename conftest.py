@@ -245,6 +245,23 @@ def _seed_tests() -> None:
         torch.manual_seed(0)
 
 
+@pytest.fixture(autouse=True)
+def _clear_deprecated_env_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent ambient shell aliases from tripping fail-fast config paths."""
+
+    for key in (
+        "ALPACA_API_URL",
+        "ALPACA_BASE_URL",
+        "ALPACA_DATA_URL",
+        "AI_TRADING_MAX_POSITION_SIZE",
+        "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",
+        "AI_TRADING_ALLOW_SHORT",
+        "AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO",
+        "NEWS_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 def _clear_mutable_state(value: object) -> None:
     if isinstance(value, (dict, set, list)):
         value.clear()

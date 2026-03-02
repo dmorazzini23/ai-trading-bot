@@ -15,7 +15,7 @@ from ai_trading.env.config_redaction import redact_config_env
 def test_startup_logs_drop_secrets(caplog, monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "AK123456789")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "SK987654321")
-    monkeypatch.setenv("ALPACA_API_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.setenv("WEBHOOK_SECRET", "HOOK-SECRET")
     monkeypatch.setenv("CAPITAL_CAP", "0.5")
@@ -51,7 +51,7 @@ def test_redact_env_drop_removes_keys():
 def test_redact_config_env_alias_mapped():
     payload = {"ALPACA_BASE_URL": "https://alias-api.alpaca.markets"}
     redacted = redact_config_env(payload)
-    assert redacted["ALPACA_API_URL"] == "https://alias-api.alpaca.markets"
+    assert redacted["ALPACA_TRADING_BASE_URL"] == "https://alias-api.alpaca.markets"
     assert "ALPACA_BASE_URL" not in redacted
 
 
@@ -67,7 +67,7 @@ def test_validate_required_env_handles_feed(monkeypatch):
         "ALPACA_API_KEY": "key",
         "ALPACA_SECRET_KEY": "secret",
         "ALPACA_DATA_FEED": "iex",
-        "ALPACA_API_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
         "WEBHOOK_SECRET": "hook",
         "CAPITAL_CAP": "1.0",
         "DOLLAR_RISK_LIMIT": "0.5",
@@ -86,7 +86,8 @@ def test_base_url_alias_logged(caplog, monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "AK123456789")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "SK987654321")
     monkeypatch.delenv("ALPACA_API_URL", raising=False)
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://alias-api.alpaca.markets")
+    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://alias-api.alpaca.markets")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.setenv("WEBHOOK_SECRET", "HOOK-SECRET")
     monkeypatch.setenv("CAPITAL_CAP", "0.5")
@@ -95,11 +96,11 @@ def test_base_url_alias_logged(caplog, monkeypatch):
     caplog.set_level(logging.INFO)
     main._fail_fast_env()
     env_log = next(rec for rec in caplog.records if rec.getMessage() == "ENV_CONFIG_LOADED")
-    assert env_log.ALPACA_API_URL == "https://alias-api.alpaca.markets"
+    assert env_log.ALPACA_TRADING_BASE_URL == "https://alias-api.alpaca.markets"
     assert not hasattr(env_log, "ALPACA_BASE_URL")
 
     redacted = redact_env({"ALPACA_BASE_URL": "https://alias-api.alpaca.markets"})
-    assert redacted["ALPACA_API_URL"] == "https://alias-api.alpaca.markets"
+    assert redacted["ALPACA_TRADING_BASE_URL"] == "https://alias-api.alpaca.markets"
     assert "ALPACA_BASE_URL" not in redacted
 
     _, _, resolved_base_url = _resolve_alpaca_env()

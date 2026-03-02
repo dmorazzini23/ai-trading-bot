@@ -230,12 +230,28 @@ def _coerce(value: Any, cast: Optional[Callable[[Any], T]]) -> T | Any:
         raise RuntimeError(f"Failed to cast value {value!r} using {cast}: {exc}") from exc
 
 
+def _get_env_exact(
+    key: str,
+    default: Optional[str] = None,
+    *,
+    cast: Optional[Callable[[Any], T]] = None,
+    required: bool = False,
+) -> T | Any:
+    raw = os.environ.get(key)
+    if raw is None:
+        if required:
+            raise RuntimeError(f"Missing required environment variable: {key}")
+        return default
+    return _coerce(raw, cast)
+
+
 def get_env(
     key: str,
     default: Optional[str] = None,
     *,
     cast: Optional[Callable[[Any], T]] = None,
     required: bool = False,
+    resolve_aliases: bool = True,
 ) -> T | Any:
     """Compatibility shim returning values from :class:`TradingConfig`.
 
@@ -243,14 +259,12 @@ def get_env(
     avoid touching legacy call-sites in a single patch.
     """
 
+    if not resolve_aliases:
+        return _get_env_exact(key, default, cast=cast, required=required)
+
     spec = SPEC_BY_ENV.get(key.upper())
     if spec is None:
-        raw = os.environ.get(key)
-        if raw is None:
-            if required:
-                raise RuntimeError(f"Missing required environment variable: {key}")
-            return default
-        return _coerce(raw, cast)
+        return _get_env_exact(key, default, cast=cast, required=required)
 
     env_keys = tuple(
         dict.fromkeys(
