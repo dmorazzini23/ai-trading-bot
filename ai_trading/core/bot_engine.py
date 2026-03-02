@@ -330,6 +330,16 @@ _PENDING_ORDER_STATUSES = frozenset({"new", "pending_new"})
 _PENDING_ORDER_STUCK_STATUSES = frozenset(
     {"new", "pending_new", "accepted", "accepted_for_bidding"}
 )
+_OPEN_ORDER_TERMINAL_STATUSES = frozenset(
+    {
+        "filled",
+        "canceled",
+        "cancelled",
+        "expired",
+        "rejected",
+        "done_for_day",
+    }
+)
 _PENDING_ORDER_FORCE_CLEANUP_SEC_DEFAULT = 45.0
 _PENDING_ORDER_SAMPLE_LIMIT = 20
 _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
@@ -350,6 +360,10 @@ _PENDING_POLICY_APPLIED_LOG_TTL_SEC_DEFAULT = 180.0
 _PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC_DEFAULT = 180.0
 _PENDING_SYMBOL_COOLDOWN_TELEMETRY_LOG_TTL_SEC_DEFAULT = 120.0
 _PENDING_SYMBOL_COOLDOWN_TELEMETRY_SAMPLE_LIMIT_DEFAULT = 8
+_PENDING_BACKLOG_WARN_AFTER_SEC_DEFAULT = 120.0
+_PENDING_BACKLOG_WARN_EVERY_SEC_DEFAULT = 300.0
+_PENDING_BACKLOG_ACTIVE_KEY = "_pending_backlog_active"
+_PENDING_BACKLOG_LAST_WARN_TS_KEY = "_pending_backlog_last_warn_ts"
 _NETTING_CYCLE_SLO_LOG_TTL_SEC_DEFAULT = 180.0
 _STARTUP_CLEANUP_STALE_SEC_DEFAULT = 120.0
 
@@ -706,9 +720,7 @@ COMMON_EXC = (
 )
 
 # Environment keys (defined early to support import-time fallbacks)
-# Allow NEWS_API_KEY to serve as the default sentiment key if SENTIMENT_API_KEY is unset.  # AI-AGENT-REF: env alias
-SENTIMENT_API_KEY: str | None = get_env("SENTIMENT_API_KEY") or get_env("NEWS_API_KEY")
-NEWS_API_KEY: str | None = get_env("NEWS_API_KEY")
+SENTIMENT_API_KEY: str | None = get_env("SENTIMENT_API_KEY")
 
 # Longest intraday indicator window (200-minute SMA) expressed in minutes. The
 # fetch path must cover at least this lookback so early-session runs have
@@ -1571,12 +1583,8 @@ class BotEngine:
     @cached_property
     def trading_client(self):
         """Alpaca TradingClient for order/trade ops."""
-        _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
-        base_url = (
-            _get_env_str("ALPACA_API_URL")
-            if os.getenv("ALPACA_API_URL")
-            else _get_env_str("ALPACA_BASE_URL")
-        )
+        _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL")
+        base_url = _get_env_str("ALPACA_TRADING_BASE_URL")
         api_key = _get_env_str("ALPACA_API_KEY")
         secret_key = _get_env_str("ALPACA_SECRET_KEY")
         cls = self._trading_client_cls
@@ -1641,8 +1649,8 @@ class BotEngine:
         cls = self._data_client_cls
         client = None
         if callable(cls):
-            _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
-            _get_env_str("ALPACA_BASE_URL")
+            _require_env_keys("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL")
+            _get_env_str("ALPACA_TRADING_BASE_URL")
             client = cls(
                 api_key=_get_env_str("ALPACA_API_KEY"),
                 secret_key=_get_env_str("ALPACA_SECRET_KEY"),
@@ -5367,7 +5375,7 @@ def _resolve_alpaca_env():
     base_url = cast(
         str,
         config.get_env(
-            "ALPACA_BASE_URL",
+            "ALPACA_TRADING_BASE_URL",
             "https://paper-api.alpaca.markets",
         ),
     )
@@ -13416,6 +13424,8 @@ class SignalManager:
                 if regime_threshold is not None:
                     effective_threshold = max(effective_threshold, float(regime_threshold))
 
+            # Record that ML produced a decision payload even when filtered to no-trade.
+            note_ml_signal()
             if effective_threshold > 0.0 and proba < effective_threshold:
                 logger.info(
                     "ML_SIGNAL_BELOW_CONFIDENCE",
@@ -13432,7 +13442,6 @@ class SignalManager:
                 )
                 return None
             s = 1 if pred == 1 else -1
-            note_ml_signal()
             logger.info(
                 "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
             )
@@ -14518,7 +14527,7 @@ class LazyBotContext:
         except COMMON_EXC:
             pass
         try:
-            allow_short_flag = bool(get_env("AI_TRADING_ALLOW_SHORT", "0", cast=bool))
+            allow_short_flag = bool(get_env("TRADING__ALLOW_SHORTS", "0", cast=bool))
         except COMMON_EXC:
             allow_short_flag = False
         self._context.allow_short_selling = allow_short_flag
@@ -27263,6 +27272,146 @@ def _is_reliable_quote(price: float | None, source: str | None) -> bool:
     return normalized in _PRIMARY_PRICE_PROVIDERS
 
 
+def _intent_rank_score(candidate: Any) -> float:
+    for attr in ("score", "strength", "confidence", "weight"):
+        raw = getattr(candidate, attr, None)
+        if raw in (None, ""):
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            return value
+    return 0.0
+
+
+def _intent_rank_notional(candidate: Any) -> float:
+    for attr in ("notional", "target_notional", "dollar_notional"):
+        raw = getattr(candidate, attr, None)
+        if raw in (None, ""):
+            continue
+        try:
+            value = abs(float(raw))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            return value
+    raw_weight = getattr(candidate, "weight", 0.0)
+    try:
+        value = abs(float(raw_weight))
+    except (TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
+
+
+def _intent_candidate_id(candidate: Any, index: int) -> str:
+    for attr in ("candidate_id", "id", "client_order_id", "strategy"):
+        raw = getattr(candidate, attr, None)
+        if raw in (None, ""):
+            continue
+        token = str(raw).strip()
+        if token:
+            return token
+    return f"idx-{index}"
+
+
+def _should_replace_deduped_intent(
+    *,
+    current_score: float,
+    current_notional: float,
+    current_candidate_id: str,
+    existing_score: float,
+    existing_notional: float,
+    existing_candidate_id: str,
+) -> bool:
+    if current_score > existing_score:
+        return True
+    if current_score < existing_score:
+        return False
+    if current_notional > existing_notional:
+        return True
+    if current_notional < existing_notional:
+        return False
+    return (current_candidate_id or "") < (existing_candidate_id or "")
+
+
+def _dedupe_cycle_intents(candidates: list[Any]) -> tuple[list[Any], dict[str, Any]]:
+    """Deduplicate execution intents by (symbol, side) with deterministic ranking."""
+
+    deduped: list[Any] = []
+    metadata: list[dict[str, Any]] = []
+    key_to_index: dict[tuple[str, str], int] = {}
+    dropped_examples: list[dict[str, Any]] = []
+    dropped_count = 0
+
+    for idx, candidate in enumerate(candidates):
+        symbol = str(getattr(candidate, "symbol", "") or "").strip().upper()
+        side = _normalize_order_side_value(getattr(candidate, "side", None))
+        if side not in {"buy", "sell", "sell_short"}:
+            deduped.append(candidate)
+            metadata.append({})
+            continue
+        key = (symbol, side)
+        score = _intent_rank_score(candidate)
+        notional = _intent_rank_notional(candidate)
+        candidate_id = _intent_candidate_id(candidate, idx)
+
+        existing_pos = key_to_index.get(key)
+        if existing_pos is None:
+            key_to_index[key] = len(deduped)
+            deduped.append(candidate)
+            metadata.append(
+                {
+                    "score": score,
+                    "notional": notional,
+                    "candidate_id": candidate_id,
+                }
+            )
+            continue
+
+        existing_meta = metadata[existing_pos]
+        existing_score = float(existing_meta.get("score", 0.0) or 0.0)
+        existing_notional = float(existing_meta.get("notional", 0.0) or 0.0)
+        existing_candidate_id = str(existing_meta.get("candidate_id") or "")
+        replace_existing = _should_replace_deduped_intent(
+            current_score=score,
+            current_notional=notional,
+            current_candidate_id=candidate_id,
+            existing_score=existing_score,
+            existing_notional=existing_notional,
+            existing_candidate_id=existing_candidate_id,
+        )
+        dropped_count += 1
+        if len(dropped_examples) < 3:
+            dropped_examples.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "dropped_candidate_id": (
+                        existing_candidate_id if replace_existing else candidate_id
+                    ),
+                    "kept_candidate_id": (
+                        candidate_id if replace_existing else existing_candidate_id
+                    ),
+                }
+            )
+        if replace_existing:
+            deduped[existing_pos] = candidate
+            metadata[existing_pos] = {
+                "score": score,
+                "notional": notional,
+                "candidate_id": candidate_id,
+            }
+
+    summary = {
+        "kept_count": len(deduped),
+        "dropped_count": int(dropped_count),
+        "dropped_examples": dropped_examples,
+    }
+    return deduped, summary
+
+
 def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
@@ -27363,10 +27512,11 @@ def run_multi_strategy(ctx) -> None:
                 if states and rl_symbols:
                     state_mat = _np.stack(states).astype(_np.float32)
                     rl_sigs = RL_AGENT.predict(state_mat, symbols=rl_symbols)
+                    # Heartbeat is based on decision evaluation, not only actionable signals.
+                    note_rl_signals_emitted()
                     if rl_sigs:
                         rl_signal_list = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
                         signals_by_strategy["rl"] = rl_signal_list
-                        note_rl_signals_emitted()
                         logger.info(
                             "RL_SIGNALS_EMITTED",
                             extra={
@@ -27469,6 +27619,8 @@ def run_multi_strategy(ctx) -> None:
         final = list(candidate_iterable)
     else:
         final = [candidate_iterable]
+    final, dedupe_summary = _dedupe_cycle_intents(final)
+    logger.info("CYCLE_INTENTS_DEDUPED", extra=dedupe_summary)
     if not final:
         logger.info("No tradable signals after allocation; skipping execution")
         return
@@ -29788,7 +29940,7 @@ def _startup_cancel_decision(
 def _pending_order_broker_age_seconds(order: Any, now_dt: datetime) -> float | None:
     """Return broker-reported order age in seconds when timestamps are available."""
 
-    for attr in ("created_at", "submitted_at", "updated_at"):
+    for attr in ("updated_at", "submitted_at", "created_at"):
         raw_value = getattr(order, attr, None)
         if raw_value in (None, ""):
             continue
@@ -29818,6 +29970,42 @@ def _pending_orders_block_scope() -> str:
     if normalized in {"symbol", "per_symbol", "symbol_only"}:
         return "symbol"
     return "cycle"
+
+
+def _pending_orders_warn_after_seconds() -> float:
+    """Resolve pending backlog age threshold for WARNING severity."""
+
+    try:
+        value = float(
+            get_env(
+                "AI_TRADING_PENDING_ORDERS_WARN_AFTER_SEC",
+                _PENDING_BACKLOG_WARN_AFTER_SEC_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        value = _PENDING_BACKLOG_WARN_AFTER_SEC_DEFAULT
+    if not math.isfinite(value):
+        value = _PENDING_BACKLOG_WARN_AFTER_SEC_DEFAULT
+    return max(0.0, min(float(value), 86400.0))
+
+
+def _pending_orders_warn_every_seconds() -> float:
+    """Resolve cooldown between repeated pending backlog warnings."""
+
+    try:
+        value = float(
+            get_env(
+                "AI_TRADING_PENDING_ORDERS_WARN_EVERY_SEC",
+                _PENDING_BACKLOG_WARN_EVERY_SEC_DEFAULT,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        value = _PENDING_BACKLOG_WARN_EVERY_SEC_DEFAULT
+    if not math.isfinite(value):
+        value = _PENDING_BACKLOG_WARN_EVERY_SEC_DEFAULT
+    return max(0.0, min(float(value), 86400.0))
 
 
 def _extract_pending_order_symbol(order: Any) -> str | None:
@@ -30003,6 +30191,8 @@ def _apply_pending_symbol_block_decay(
     raw_symbols: Iterable[str],
     *,
     symbol_oldest_age_s: Mapping[str, float],
+    symbol_open_order_count: Mapping[str, int],
+    symbol_oldest_open_age_s: Mapping[str, float],
     symbol_statuses: Mapping[str, set[str]],
     now: float,
     block_scope: str,
@@ -30067,6 +30257,8 @@ def _apply_pending_symbol_block_decay(
 
         current_age_s = max(float(symbol_oldest_age_s.get(symbol, 0.0) or 0.0), 0.0)
         max_age_s = max(prev_max_age_s, current_age_s)
+        open_orders_count = int(symbol_open_order_count.get(symbol, 0) or 0)
+        oldest_open_age_s = float(symbol_oldest_open_age_s.get(symbol, 0.0) or 0.0)
 
         statuses = {
             str(status).strip().lower()
@@ -30117,6 +30309,7 @@ def _apply_pending_symbol_block_decay(
             and statuses_stuck
             and cycles_seen >= min_cycles_required
             and max_age_s >= release_after_s
+            and open_orders_count <= 0
         ):
             released_symbols.append(symbol)
             release_count_raw = entry.get("release_count", 0)
@@ -30145,6 +30338,43 @@ def _apply_pending_symbol_block_decay(
                         "statuses": statuses_sample,
                         "statuses_stuck": bool(statuses_stuck),
                         "eligible_for_release": True,
+                    }
+                )
+            continue
+
+        if (
+            decay_enabled
+            and statuses_stuck
+            and cycles_seen >= min_cycles_required
+            and max_age_s >= release_after_s
+            and open_orders_count > 0
+        ):
+            logger.warning(
+                "PENDING_SYMBOL_BLOCK_DECAY_DEFERRED",
+                extra={
+                    "symbol": symbol,
+                    "open_orders_count": open_orders_count,
+                    "oldest_open_order_age_s": round(max(oldest_open_age_s, 0.0), 3),
+                },
+            )
+            entry["released_until_ts"] = 0.0
+            tracker[symbol] = entry
+            effective_blocked.add(symbol)
+            if len(symbol_states) < sample_limit:
+                symbol_states.append(
+                    {
+                        "symbol": symbol,
+                        "state": "deferred",
+                        "cycles_seen": cycles_seen,
+                        "max_age_s": round(max_age_s, 3),
+                        "release_after_s": round(release_after_s, 3),
+                        "age_to_release_s": 0.0,
+                        "cooldown_remaining_s": 0.0,
+                        "statuses": statuses_sample,
+                        "statuses_stuck": bool(statuses_stuck),
+                        "eligible_for_release": False,
+                        "open_orders_count": open_orders_count,
+                        "oldest_open_order_age_s": round(max(oldest_open_age_s, 0.0), 3),
                     }
                 )
             continue
@@ -30267,6 +30497,86 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     now = time.time()
     now_dt = datetime.fromtimestamp(now, tz=UTC)
 
+    open_count = 0
+    counts_by_status: dict[str, int] = {}
+    oldest_open_age_s: float | None = None
+    symbol_open_order_count: dict[str, int] = {}
+    symbol_oldest_open_age_s: dict[str, float] = {}
+    sample_candidates: list[dict[str, Any]] = []
+    for order in open_list:
+        if isinstance(order, Mapping):
+            status_raw = order.get("status")
+        else:
+            status_raw = getattr(order, "status", None)
+        status = _normalize_broker_order_status(status_raw)
+        if status in _OPEN_ORDER_TERMINAL_STATUSES:
+            continue
+        open_count += 1
+        status_key = status or "unknown"
+        counts_by_status[status_key] = int(counts_by_status.get(status_key, 0)) + 1
+
+        symbol = _extract_pending_order_symbol(order)
+        if symbol:
+            symbol_open_order_count[symbol] = int(symbol_open_order_count.get(symbol, 0)) + 1
+
+        age_s = _pending_order_broker_age_seconds(order, now_dt)
+        if age_s is not None:
+            if oldest_open_age_s is None or age_s > oldest_open_age_s:
+                oldest_open_age_s = age_s
+            if symbol:
+                symbol_oldest_open_age_s[symbol] = max(
+                    symbol_oldest_open_age_s.get(symbol, 0.0),
+                    float(age_s),
+                )
+
+        order_id = None
+        if isinstance(order, Mapping):
+            order_id = order.get("id") or order.get("order_id") or order.get("client_order_id")
+            submitted_at = order.get("submitted_at")
+            updated_at = order.get("updated_at")
+        else:
+            order_id = (
+                getattr(order, "id", None)
+                or getattr(order, "order_id", None)
+                or getattr(order, "client_order_id", None)
+            )
+            submitted_at = getattr(order, "submitted_at", None)
+            updated_at = getattr(order, "updated_at", None)
+        sample_candidates.append(
+            {
+                "order_id": str(order_id) if order_id not in (None, "") else None,
+                "symbol": symbol,
+                "status": status_key,
+                "submitted_at": str(submitted_at) if submitted_at not in (None, "") else None,
+                "updated_at": str(updated_at) if updated_at not in (None, "") else None,
+                "age_s": age_s,
+            }
+        )
+
+    def _sample_sort_key(entry: Mapping[str, Any]) -> tuple[int, float, str]:
+        age_val = entry.get("age_s")
+        if isinstance(age_val, (int, float)):
+            return (0, -float(age_val), str(entry.get("order_id") or ""))
+        return (1, 0.0, str(entry.get("order_id") or ""))
+
+    sample_orders: list[dict[str, Any]] = []
+    for entry in sorted(sample_candidates, key=_sample_sort_key)[:5]:
+        sample_orders.append(
+            {
+                "order_id": entry.get("order_id"),
+                "symbol": entry.get("symbol"),
+                "status": entry.get("status"),
+                "submitted_at": entry.get("submitted_at"),
+                "updated_at": entry.get("updated_at"),
+                "age_s": (
+                    round(float(entry["age_s"]), 3)
+                    if isinstance(entry.get("age_s"), (int, float))
+                    else None
+                ),
+            }
+        )
+    affected_symbols_count = len({sym for sym in symbol_open_order_count if sym})
+
     pending_ids: list[str] = []
     pending_statuses: set[str] = set()
     oldest_pending_age_s: float | None = None
@@ -30298,20 +30608,40 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     tracker = _get_pending_tracker(runtime)
     first_seen = tracker.get(_PENDING_ORDER_FIRST_SEEN_KEY)
     last_log = tracker.get(_PENDING_ORDER_LAST_LOG_KEY)
+    runtime_state_map = _ensure_runtime_state(runtime)
+    backlog_active = bool(runtime_state_map.get(_PENDING_BACKLOG_ACTIVE_KEY, False))
+    last_warn_ts_raw = runtime_state_map.get(_PENDING_BACKLOG_LAST_WARN_TS_KEY)
+    try:
+        last_warn_ts = (
+            float(last_warn_ts_raw)
+            if last_warn_ts_raw not in (None, "")
+            else None
+        )
+    except (TypeError, ValueError):
+        last_warn_ts = None
 
     if not pending_ids:
         _set_pending_blocked_symbols(runtime, ())
-        if first_seen is not None:
-            resolved_age = time.time() - first_seen
+        if backlog_active or first_seen is not None:
+            resolved_age = 0.0
+            if first_seen is not None:
+                resolved_age = time.time() - float(first_seen)
             logger.info(
                 "PENDING_ORDERS_CLEARED",
                 extra={
-                    "open_count": len(open_list),
+                    "open_count": int(open_count),
+                    "pending_count": 0,
+                    "counts_by_status": counts_by_status,
+                    "oldest_open_age_s": None,
+                    "affected_symbols_count": 0,
+                    "sample_orders": [],
                     "resolved_age_s": int(max(resolved_age, 0)),
                 },
             )
         tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
+        runtime_state_map[_PENDING_BACKLOG_ACTIVE_KEY] = False
+        runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = None
         if _consume_pending_cleanup_warmup(runtime, open_count=len(open_list)):
             return True
         return False
@@ -30321,7 +30651,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     except COMMON_EXC:
         cfg = None
     cfg_interval = getattr(cfg, "order_stale_cleanup_interval", 120)
-    warn_after_s, error_after_s = _pending_order_log_thresholds(cfg)
+    warn_after_s = _pending_orders_warn_after_seconds()
+    warn_every_s = _pending_orders_warn_every_seconds()
     block_scope = _pending_orders_block_scope()
     try:
         cleanup_after = float(cfg_interval)
@@ -30342,6 +30673,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         runtime,
         blocked_symbols,
         symbol_oldest_age_s=symbol_oldest_age_s,
+        symbol_open_order_count=symbol_open_order_count,
+        symbol_oldest_open_age_s=symbol_oldest_open_age_s,
         symbol_statuses=symbol_statuses,
         now=now,
         block_scope=block_scope,
@@ -30402,6 +30735,36 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     allow_symbol_scope_continue = (
         block_scope == "symbol" and had_blocked_symbols and not blocked_symbols
     )
+    payload_base: dict[str, Any] = {
+        "open_count": int(open_count),
+        "pending_count": len(pending_ids),
+        "counts_by_status": dict(sorted(counts_by_status.items())),
+        "oldest_open_age_s": (
+            round(float(oldest_open_age_s), 3) if oldest_open_age_s is not None else None
+        ),
+        "affected_symbols_count": int(affected_symbols_count),
+        "sample_orders": sample_orders,
+        "pending_ids": sample_ids,
+        "pending_statuses": statuses,
+        "cleanup_after_s": int(cleanup_after),
+        "warn_after_s": int(warn_after_s),
+        "warn_every_s": int(warn_every_s),
+        "oldest_pending_age_s": (
+            int(max(oldest_pending_age_s, 0))
+            if oldest_pending_age_s is not None
+            else None
+        ),
+        "oldest_stuck_age_s": (
+            int(max(oldest_stuck_age_s, 0))
+            if oldest_stuck_age_s is not None
+            else None
+        ),
+        "stale_stuck_detected": bool(stale_stuck_detected),
+        "blocked_symbols_count": len(blocked_symbols),
+        "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+        "open_count_definition": "broker-active non-terminal orders",
+        "pending_count_definition": "confirmed pending-ack/stuck orders under policy tracking",
+    }
 
     if first_seen is None:
         first_seen_ts = now
@@ -30409,93 +30772,73 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             first_seen_ts = now - cleanup_after
         tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = first_seen_ts
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-        initial_age_s = max(float(oldest_pending_age_s or 0.0), 0.0)
-        initial_level = logging.INFO
-        if stale_stuck_detected:
-            initial_level = _pending_order_log_level(
-                initial_age_s,
-                warn_after_s=warn_after_s,
-                error_after_s=error_after_s,
-            )
-        initial_level = _pending_order_scope_log_level(
-            initial_level,
-            block_scope=block_scope,
-        )
-        logger.log(
-            initial_level,
+        logger.info(
             "PENDING_ORDERS_DETECTED",
-            extra={
-                "open_count": len(open_list),
-                "pending_count": len(pending_ids),
-                "pending_ids": sample_ids,
-                "pending_statuses": statuses,
-                "age_s": int(initial_age_s),
-                "cleanup_after_s": int(cleanup_after),
-                "warn_after_s": int(warn_after_s),
-                "error_after_s": int(error_after_s),
-                "oldest_pending_age_s": (
-                    int(max(oldest_pending_age_s, 0))
-                    if oldest_pending_age_s is not None
-                    else None
-                ),
-                "oldest_stuck_age_s": (
-                    int(max(oldest_stuck_age_s, 0))
-                    if oldest_stuck_age_s is not None
-                    else None
-                ),
-                "stale_stuck_detected": stale_stuck_detected,
-                "blocked_symbols_count": len(blocked_symbols),
-                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+            extra=payload_base
+            | {
+                "transition": "started",
+                "age_s": int(max(float(oldest_pending_age_s or 0.0), 0.0)),
             },
         )
-        if allow_symbol_scope_continue:
-            return False
-        if not stale_stuck_detected:
-            return True
         first_seen = first_seen_ts
 
     age = now - float(first_seen)
 
-    if (
-        last_log is None
-        or now - float(last_log) >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
-    ):
-        effective_age_s = max(float(age), float(oldest_pending_age_s or 0.0))
-        still_present_level = _pending_order_scope_log_level(
-            _pending_order_log_level(
-                effective_age_s,
-                warn_after_s=warn_after_s,
-                error_after_s=error_after_s,
-            ),
-            block_scope=block_scope,
+    if not backlog_active:
+        runtime_state_map[_PENDING_BACKLOG_ACTIVE_KEY] = True
+        backlog_level = (
+            logging.WARNING
+            if oldest_open_age_s is not None and float(oldest_open_age_s) >= warn_after_s
+            else logging.INFO
         )
         logger.log(
-            still_present_level,
-            "PENDING_ORDERS_STILL_PRESENT",
-            extra={
-                "open_count": len(open_list),
-                "pending_count": len(pending_ids),
-                "pending_ids": sample_ids,
-                "pending_statuses": statuses,
+            backlog_level,
+            "PENDING_ORDERS_BACKLOG_STARTED",
+            extra=payload_base
+            | {
+                "transition": "started",
                 "age_s": int(max(age, 0)),
-                "cleanup_after_s": int(cleanup_after),
-                "warn_after_s": int(warn_after_s),
-                "error_after_s": int(error_after_s),
-                "oldest_pending_age_s": (
-                    int(max(oldest_pending_age_s, 0))
-                    if oldest_pending_age_s is not None
-                    else None
-                ),
-                "oldest_stuck_age_s": (
-                    int(max(oldest_stuck_age_s, 0))
-                    if oldest_stuck_age_s is not None
-                    else None
-                ),
-                "blocked_symbols_count": len(blocked_symbols),
-                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
             },
         )
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
+        if backlog_level >= logging.WARNING:
+            runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = now
+        else:
+            runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = None
+    else:
+        should_warn = (
+            oldest_open_age_s is not None
+            and float(oldest_open_age_s) >= warn_after_s
+            and (
+                last_warn_ts is None
+                or warn_every_s <= 0.0
+                or (now - float(last_warn_ts)) >= warn_every_s
+            )
+        )
+        if should_warn:
+            logger.warning(
+                "PENDING_ORDERS_STILL_PRESENT",
+                extra=payload_base
+                | {
+                    "transition": "heartbeat",
+                    "age_s": int(max(age, 0)),
+                },
+            )
+            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
+            runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = now
+        elif (
+            last_log is None
+            or now - float(last_log) >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
+        ):
+            logger.info(
+                "PENDING_ORDERS_STILL_PRESENT",
+                extra=payload_base
+                | {
+                    "transition": "heartbeat_info",
+                    "age_s": int(max(age, 0)),
+                },
+            )
+            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
     if age < cleanup_after and not stale_stuck_detected:
         if allow_symbol_scope_continue:
@@ -30505,14 +30848,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     if block_scope == "symbol":
         if _apply_pending_new_timeout_policy(runtime):
             tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
-            policy_payload = {
-                "pending_count": len(pending_ids),
-                "pending_statuses": statuses,
-                "blocked_symbols_count": len(blocked_symbols),
-                "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
-                "age_s": int(max(age, 0)),
-                "cleanup_after_s": int(cleanup_after),
-            }
+            policy_payload = payload_base | {"age_s": int(max(age, 0))}
             policy_ttl_s = _resolve_runtime_info_log_ttl_seconds(
                 "AI_TRADING_PENDING_POLICY_APPLIED_LOG_TTL_SEC",
                 _PENDING_POLICY_APPLIED_LOG_TTL_SEC_DEFAULT,
@@ -30544,23 +30880,10 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
         logger.warning(
             "PENDING_ORDERS_CLEANUP_FAILED",
-            extra={
-                "open_count": len(open_list),
-                "pending_count": len(pending_ids),
-                "pending_ids": sample_ids,
-                "pending_statuses": statuses,
+            extra=payload_base
+            | {
                 "age_s": int(max(age, 0)),
                 "detail": str(exc),
-                "oldest_pending_age_s": (
-                    int(max(oldest_pending_age_s, 0))
-                    if oldest_pending_age_s is not None
-                    else None
-                ),
-                "oldest_stuck_age_s": (
-                    int(max(oldest_stuck_age_s, 0))
-                    if oldest_stuck_age_s is not None
-                    else None
-                ),
             },
             exc_info=True,
         )
@@ -30568,24 +30891,16 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
 
     logger.info(
         "PENDING_ORDERS_CANCELED",
-        extra={
+        extra=payload_base
+        | {
             "canceled_ids": sample_ids,
-            "pending_count": len(pending_ids),
             "age_s": int(max(age, 0)),
-            "oldest_pending_age_s": (
-                int(max(oldest_pending_age_s, 0))
-                if oldest_pending_age_s is not None
-                else None
-            ),
-            "oldest_stuck_age_s": (
-                int(max(oldest_stuck_age_s, 0))
-                if oldest_stuck_age_s is not None
-                else None
-            ),
         },
     )
     tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
     tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
+    runtime_state_map[_PENDING_BACKLOG_ACTIVE_KEY] = False
+    runtime_state_map[_PENDING_BACKLOG_LAST_WARN_TS_KEY] = None
     if _arm_pending_cleanup_warmup(
         runtime,
         source="pending_cleanup",
@@ -34959,7 +35274,7 @@ def main() -> None:
     logger_once.info(
         "Config: ALPACA_SECRET_KEY=***MASKED***", extra={"present": bool(api_secret)}
     )
-    logger_once.info(f"Config: ALPACA_BASE_URL={cfg.alpaca_base_url}")
+    logger_once.info(f"Config: ALPACA_TRADING_BASE_URL={cfg.alpaca_base_url}")
     logger_once.info(f"Config: TRADING_MODE={cfg.trading_mode}")
 
     _reload_env()

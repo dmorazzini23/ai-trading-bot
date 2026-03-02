@@ -26,19 +26,21 @@ def _base_env() -> dict[str, str]:
 def test_validate_env_accepts_base_url_only() -> None:
     env = {
         **_base_env(),
-        'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+        'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
     }
 
     assert validate_env(env) == []
 
 
-def test_validate_env_accepts_api_url_only() -> None:
+def test_validate_env_rejects_deprecated_api_url() -> None:
     env = {
         **_base_env(),
         'ALPACA_API_URL': 'https://paper-api.alpaca.markets',
     }
 
-    assert validate_env(env) == []
+    missing = validate_env(env)
+    assert any('ALPACA_API_URL is deprecated' in entry for entry in missing)
+    assert 'ALPACA_TRADING_BASE_URL' in missing
 
 
 def test_validate_env_requires_some_url() -> None:
@@ -46,4 +48,4 @@ def test_validate_env_requires_some_url() -> None:
 
     missing = validate_env(env)
 
-    assert 'ALPACA_BASE_URL' in missing
+    assert 'ALPACA_TRADING_BASE_URL' in missing

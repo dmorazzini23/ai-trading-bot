@@ -6,6 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from pydantic import field_validator, Field
 
+from ai_trading.config.management import validate_no_deprecated_env
 from ai_trading.logging import get_logger
 from ai_trading.logging.redact import redact_env
 
@@ -14,7 +15,12 @@ logger = get_logger(__name__)
 class Settings(BaseModel):
     ALPACA_API_KEY: str = Field(default_factory=lambda: os.environ["ALPACA_API_KEY"])
     ALPACA_SECRET_KEY: str = Field(default_factory=lambda: os.environ["ALPACA_SECRET_KEY"])
-    ALPACA_BASE_URL: str = Field(default_factory=lambda: os.environ["ALPACA_BASE_URL"])
+    ALPACA_TRADING_BASE_URL: str = Field(
+        default_factory=lambda: os.environ["ALPACA_TRADING_BASE_URL"]
+    )
+    ALPACA_DATA_BASE_URL: str = Field(
+        default_factory=lambda: os.environ.get("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+    )
     TRADING_MODE: str = Field(default_factory=lambda: os.environ.get("TRADING_MODE", "testing"))
     FORCE_TRADES: bool = Field(default_factory=lambda: os.environ.get("FORCE_TRADES", False))
 
@@ -32,11 +38,18 @@ class Settings(BaseModel):
             raise ValueError('ALPACA_SECRET_KEY appears too short')
         return v
 
-    @field_validator('ALPACA_BASE_URL')
+    @field_validator('ALPACA_TRADING_BASE_URL')
     @classmethod
     def _base_url(cls, v: str) -> str:
         if not v.startswith('https://'):
-            raise ValueError('ALPACA_BASE_URL must use HTTPS')
+            raise ValueError('ALPACA_TRADING_BASE_URL must use HTTPS')
+        return v
+
+    @field_validator('ALPACA_DATA_BASE_URL')
+    @classmethod
+    def _data_base_url(cls, v: str) -> str:
+        if not v.startswith('https://'):
+            raise ValueError('ALPACA_DATA_BASE_URL must use HTTPS')
         return v
 
     @field_validator('TRADING_MODE')
@@ -109,6 +122,11 @@ def main() -> int:
 
     Missing credentials are tolerated for dry-run scenarios.
     """
+    try:
+        validate_no_deprecated_env()
+    except RuntimeError as exc:
+        logger.error("Deprecated environment keys are not supported: %s", exc)
+        return 1
     try:
         Settings()
     except KeyError as exc:

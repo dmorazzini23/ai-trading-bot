@@ -10,7 +10,7 @@ from tests.support.mocks import MockContext, MockOrder
 os.environ.update({
     'ALPACA_API_KEY': 'test_key',
     'ALPACA_SECRET_KEY': 'test_secret',
-    'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+    'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
     'WEBHOOK_SECRET': 'test_webhook',
     'FLASK_PORT': '5000'
 })

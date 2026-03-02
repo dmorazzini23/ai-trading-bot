@@ -9,6 +9,7 @@ from typing import Mapping
 _DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
 _CANONICAL_KEY = "ALPACA_API_KEY"
 _CANONICAL_SECRET = "ALPACA_SECRET_KEY"
+_CANONICAL_TRADING_BASE_URL = "ALPACA_TRADING_BASE_URL"
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,13 @@ def _resolve_value(env: Mapping[str, str], *keys: str) -> str | None:
 
 
 def _resolve_base_url(env: Mapping[str, str]) -> str:
-    override = _resolve_value(env, "ALPACA_API_URL", "ALPACA_BASE_URL")
+    for deprecated_key in ("ALPACA_API_URL", "ALPACA_BASE_URL"):
+        if _resolve_value(env, deprecated_key):
+            raise RuntimeError(
+                "Set ALPACA_TRADING_BASE_URL for trading endpoints; "
+                "remove ALPACA_API_URL/ALPACA_BASE_URL."
+            )
+    override = _resolve_value(env, _CANONICAL_TRADING_BASE_URL)
     if override:
         normalized = override.rstrip("/")
         if normalized.lower().startswith(("http://", "https://")):

@@ -13,7 +13,7 @@ pd = pytest.importorskip("pandas")
 # Set minimal environment variables to avoid config errors
 os.environ['ALPACA_API_KEY'] = 'test'
 os.environ['ALPACA_SECRET_KEY'] = 'test'
-os.environ['ALPACA_BASE_URL'] = 'https://paper-api.alpaca.markets'
+os.environ['ALPACA_TRADING_BASE_URL'] = 'https://paper-api.alpaca.markets'
 os.environ['WEBHOOK_SECRET'] = 'test'
 os.environ['FLASK_PORT'] = '5000'
 os.environ['FINNHUB_API_KEY'] = 'test'

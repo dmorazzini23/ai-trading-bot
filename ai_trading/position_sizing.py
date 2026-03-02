@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
+from ai_trading.config.management import get_env
 from ai_trading.exc import HTTPError, RequestException
 from ai_trading.logging import EmitOnceLogger, get_logger
 from ai_trading.net.http import get_global_session
@@ -72,21 +72,28 @@ def _clamp(val: float, vmin: float | None, vmax: float | None) -> float:
 
 
 def _parse_env_max_position_size(*, strict: bool) -> float | None:
-    env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
-    if env_val is None:
+    deprecated_val = get_env("AI_TRADING_MAX_POSITION_SIZE", None)
+    if deprecated_val not in (None, ""):
+        raise ValueError(
+            "AI_TRADING_MAX_POSITION_SIZE is deprecated. "
+            "Set MAX_POSITION_SIZE instead.",
+        )
+
+    env_val = get_env("MAX_POSITION_SIZE", None)
+    if env_val in (None, ""):
         return None
     try:
         value = float(env_val)
     except ValueError as exc:
         if strict:
             raise ValueError(
-                f"AI_TRADING_MAX_POSITION_SIZE must be numeric, got {env_val!r}",
+                f"MAX_POSITION_SIZE must be numeric, got {env_val!r}",
             ) from exc
         _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
         return None
     if value <= 0:
         if strict:
-            raise ValueError("AI_TRADING_MAX_POSITION_SIZE must be positive")
+            raise ValueError("MAX_POSITION_SIZE must be positive")
         _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
         return None
     return value

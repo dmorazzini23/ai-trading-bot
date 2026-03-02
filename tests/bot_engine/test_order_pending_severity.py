@@ -118,6 +118,14 @@ def test_pending_orders_log_warning_levels(monkeypatch, caplog):
         "get_trading_config",
         lambda: types.SimpleNamespace(order_stale_cleanup_interval=60),
     )
+    monkeypatch.setattr(
+        be,
+        "_pending_order_broker_age_seconds",
+        lambda _order, _now_dt: 120.0,
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_WARN_AFTER_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_WARN_EVERY_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "360")
 
     clock = types.SimpleNamespace(value=1000.0)
     monkeypatch.setattr(be.time, "time", lambda: clock.value)
@@ -149,8 +157,8 @@ def test_pending_orders_log_warning_levels(monkeypatch, caplog):
     assert detection_logs and detection_logs[0].levelno == logging.INFO
 
 
-def test_pending_orders_log_escalates_to_error(monkeypatch, caplog):
-    """Long-lived pending orders escalate to error-level logs."""
+def test_pending_orders_long_lived_backlog_uses_warning(monkeypatch, caplog):
+    """Long-lived pending-order backlog emits WARNING (not ERROR)."""
 
     runtime = types.SimpleNamespace(state={})
     cancel_called: list[types.SimpleNamespace] = []
@@ -169,6 +177,14 @@ def test_pending_orders_log_escalates_to_error(monkeypatch, caplog):
             orders_pending_new_error_s=180,
         ),
     )
+    monkeypatch.setattr(
+        be,
+        "_pending_order_broker_age_seconds",
+        lambda _order, _now_dt: 240.0,
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_WARN_AFTER_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_WARN_EVERY_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "360")
 
     clock = types.SimpleNamespace(value=1000.0)
     monkeypatch.setattr(be.time, "time", lambda: clock.value)
@@ -178,13 +194,13 @@ def test_pending_orders_log_escalates_to_error(monkeypatch, caplog):
 
     assert be._handle_pending_orders(pending, runtime) is True
     caplog.clear()
-    clock.value += 181.0
+    clock.value += 361.0
     assert be._handle_pending_orders(pending, runtime) is False
     assert cancel_called == [runtime]
     still_present = [
         rec for rec in caplog.records if rec.message == "PENDING_ORDERS_STILL_PRESENT"
     ]
-    assert still_present and still_present[0].levelno == logging.ERROR
+    assert still_present and still_present[0].levelno == logging.WARNING
 
 
 def test_pending_orders_symbol_scope_caps_error_to_warning(monkeypatch, caplog):
@@ -210,6 +226,9 @@ def test_pending_orders_symbol_scope_caps_error_to_warning(monkeypatch, caplog):
         lambda _order, _now_dt: 300.0,
     )
     monkeypatch.setattr(be, "cancel_all_open_orders", lambda _runtime: None)
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_WARN_AFTER_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_WARN_EVERY_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_FORCE_CANCEL_SEC", "360")
 
     clock = types.SimpleNamespace(value=1000.0)
     monkeypatch.setattr(be.time, "time", lambda: clock.value)

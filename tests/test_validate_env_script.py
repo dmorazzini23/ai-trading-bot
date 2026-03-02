@@ -7,7 +7,7 @@ from pathlib import Path
 def test_validate_env_main_exits_zero_without_credentials():
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
-    for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"]:
+    for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL"]:
         env.pop(key, None)
     env["PYTHONPATH"] = str(repo_root)
     script = repo_root / "ai_trading" / "validation" / "validate_env.py"

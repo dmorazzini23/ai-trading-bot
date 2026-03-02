@@ -20,7 +20,7 @@ def validate_environment() -> None:
     if not secret:
         missing.append("ALPACA_SECRET_KEY")
     if not base_url:
-        missing.append("ALPACA_API_URL")
+        missing.append("ALPACA_TRADING_BASE_URL")
     for var in ("WEBHOOK_SECRET", "CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
         if not get_env(var):
             missing.append(var)

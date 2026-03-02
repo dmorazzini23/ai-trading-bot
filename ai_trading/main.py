@@ -286,6 +286,7 @@ except Exception:  # pragma: no cover - fallback when bot engine unavailable
 from ai_trading.config.management import (
     get_env,
     validate_required_env,
+    validate_no_deprecated_env,
     reload_env,
     _resolve_alpaca_env,
     TradingConfig,
@@ -297,6 +298,7 @@ from ai_trading.metrics import get_histogram, get_counter
 from ai_trading.monitoring.alerts import emit_runtime_alert
 from ai_trading.monitoring.model_liveness import (
     check_model_liveness,
+    get_model_liveness_snapshot,
     maybe_trigger_canary_auto_rollback,
 )
 from ai_trading.telemetry import runtime_state
@@ -1287,8 +1289,8 @@ def _fail_fast_env() -> None:
             "WEBHOOK_SECRET": "test-webhook",
             "CAPITAL_CAP": "0.25",
             "DOLLAR_RISK_LIMIT": "0.05",
-            "ALPACA_API_URL": "https://paper-api.alpaca.markets",
-            "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+            "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+            "ALPACA_DATA_BASE_URL": "https://data.alpaca.markets",
         }
         risk_default = defaults.pop("DOLLAR_RISK_LIMIT")
         for key, value in defaults.items():
@@ -1317,6 +1319,11 @@ def _fail_fast_env() -> None:
         "DOLLAR_RISK_LIMIT",
     ]
     loaded = reload_env(override=False)
+    try:
+        validate_no_deprecated_env()
+    except RuntimeError as exc:
+        logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(exc)})
+        raise SystemExit(1) from exc
     allow_missing_drawdown = test_mode or _is_truthy_env("RUN_HEALTHCHECK")
     if allow_missing_drawdown and "DOLLAR_RISK_LIMIT" in required:
         required.remove("DOLLAR_RISK_LIMIT")
@@ -1365,10 +1372,10 @@ def _fail_fast_env() -> None:
     snapshot = {k: get_env(k, "") or "" for k in required_tuple}
     _, _, base_url = _resolve_alpaca_env()
     if not base_url:
-        error = "Missing required environment variable: ALPACA_API_URL or ALPACA_BASE_URL"
+        error = "Missing required environment variable: ALPACA_TRADING_BASE_URL"
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": error})
         raise SystemExit(1)
-    snapshot["ALPACA_API_URL"] = base_url
+    snapshot["ALPACA_TRADING_BASE_URL"] = base_url
     logger.info(
         "ENV_CONFIG_LOADED",
         extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
@@ -1485,15 +1492,19 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
-            os.environ["AI_TRADING_MAX_POSITION_SIZE"] = str(float(resolved))
+            os.environ["MAX_POSITION_SIZE"] = str(float(resolved))
     except ValueError as e:
         errors.append(str(e))
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
     paper = bool(getattr(cfg, "paper", True))
     if paper and "paper" not in base_url:
-        errors.append(f"ALPACA_BASE_URL should be a paper endpoint when PAPER=True: {base_url}")
+        errors.append(
+            f"ALPACA_TRADING_BASE_URL should be a paper endpoint when PAPER=True: {base_url}"
+        )
     if not paper and "paper" in base_url:
-        errors.append(f"ALPACA_BASE_URL should be a live endpoint when PAPER=False: {base_url}")
+        errors.append(
+            f"ALPACA_TRADING_BASE_URL should be a live endpoint when PAPER=False: {base_url}"
+        )
     if errors:
         raise ValueError("; ".join(errors))
 
@@ -1527,7 +1538,7 @@ def validate_environment() -> None:
     if not secret:
         missing.append("ALPACA_SECRET_KEY")
     if not base_url:
-        missing.append("ALPACA_API_URL")
+        missing.append("ALPACA_TRADING_BASE_URL")
 
     if hasattr(config, "WEBHOOK_SECRET"):
         webhook_secret = getattr(config, "WEBHOOK_SECRET", "")
@@ -2593,11 +2604,61 @@ def main(argv: list[str] | None = None) -> None:
                         except Exception:
                             logger.debug("CYCLE_BUDGET_COUNTER_INC_COMPUTE_FAILED", exc_info=True)
                     try:
-                        liveness_breaches = check_model_liveness(market_open=not closed)
+                        phase = _current_execution_phase()
+                        warmup_complete = phase not in {"bootstrap", "warmup", "reconcile"}
+                        execution_gate_open = phase in {"active", "runtime", "ready"}
+                        try:
+                            provider_state = runtime_state.observe_data_provider_state()
+                        except Exception:
+                            provider_state = {}
+                        try:
+                            broker_state = runtime_state.observe_broker_status()
+                        except Exception:
+                            broker_state = {}
+                        provider_safe_mode = bool(
+                            provider_state.get("safe_mode")
+                            if isinstance(provider_state, Mapping)
+                            else False
+                        )
+                        broker_status = str(
+                            broker_state.get("status")
+                            if isinstance(broker_state, Mapping)
+                            else ""
+                        ).strip().lower()
+                        broker_execution_blocked = broker_status in {"unreachable", "down", "failed"}
+                        signals_expected_now = (
+                            (not closed)
+                            and bool(warmup_complete)
+                            and bool(execution_gate_open)
+                            and not provider_safe_mode
+                            and not broker_execution_blocked
+                        )
+                        bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
+                        ml_expected = True
+                        rl_expected = False
+                        if bot_engine_module is not None:
+                            ml_marker = getattr(bot_engine_module, "USE_ML", None)
+                            if ml_marker is not None:
+                                ml_expected = bool(ml_marker)
+                            rl_expected = bool(getattr(bot_engine_module, "RL_AGENT", None))
+                        if not rl_expected:
+                            try:
+                                rl_expected = bool(get_env("USE_RL_AGENT", False, cast=bool))
+                            except Exception:
+                                rl_expected = False
+                        liveness_breaches = check_model_liveness(
+                            market_open=not closed,
+                            signals_expected_now=signals_expected_now,
+                            phase=phase,
+                            execution_gate_open=execution_gate_open,
+                            warmup_complete=warmup_complete,
+                            ml_expected=ml_expected,
+                            rl_expected=rl_expected,
+                        )
                         for breach in liveness_breaches:
                             emit_runtime_alert(
                                 "ALERT_MODEL_LIVENESS",
-                                severity=str(breach.get("severity") or "critical"),
+                                severity=str(breach.get("severity") or "warning"),
                                 details=breach,
                             )
                         rollback_result = maybe_trigger_canary_auto_rollback(liveness_breaches)
@@ -2605,7 +2666,7 @@ def main(argv: list[str] | None = None) -> None:
                             if bool(rollback_result.get("triggered")):
                                 emit_runtime_alert(
                                     "ALERT_CANARY_AUTO_ROLLBACK_TRIGGERED",
-                                    severity="critical",
+                                    severity="error",
                                     details=rollback_result,
                                 )
                             elif str(rollback_result.get("status") or "") == "cooldown":
@@ -2701,7 +2762,20 @@ def main(argv: list[str] | None = None) -> None:
             _logging.flush_log_throttle_summaries()
             now_mono = monotonic_time()
             if now_mono - last_health >= health_tick_runtime:
-                logger.info("HEALTH_TICK", extra={"iteration": count, "interval": effective_interval, "closed": closed})
+                liveness_snapshot: dict[str, Any] | None = None
+                try:
+                    liveness_snapshot = get_model_liveness_snapshot()
+                except Exception:
+                    logger.debug("MODEL_LIVENESS_SNAPSHOT_FAILED", exc_info=True)
+                logger.info(
+                    "HEALTH_TICK",
+                    extra={
+                        "iteration": count,
+                        "interval": effective_interval,
+                        "closed": closed,
+                        "model_liveness": liveness_snapshot,
+                    },
+                )
                 last_health = now_mono
             try:
                 # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings

@@ -244,10 +244,10 @@ def test_handle_pending_orders_symbol_scope_decay_releases_stale_symbol(monkeypa
     )
 
     caplog.set_level(logging.INFO)
-    assert be._handle_pending_orders([stale_order], runtime) is False
-    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
+    assert be._handle_pending_orders([stale_order], runtime) is True
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ("AAPL",)
     cancel_mock.assert_not_called()
-    assert any(record.message == "PENDING_SYMBOL_BLOCK_DECAY_RELEASED" for record in caplog.records)
+    assert any(record.message == "PENDING_SYMBOL_BLOCK_DECAY_DEFERRED" for record in caplog.records)
 
 
 def test_handle_pending_orders_symbol_scope_decay_cooldown_prevents_reblock(monkeypatch):
@@ -283,15 +283,15 @@ def test_handle_pending_orders_symbol_scope_decay_cooldown_prevents_reblock(monk
             created_at=now_dt - timedelta(seconds=120),
         )
 
-    assert be._handle_pending_orders([_stale_order("o-decay-1")], runtime) is False
-    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
+    assert be._handle_pending_orders([_stale_order("o-decay-1")], runtime) is True
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ("AAPL",)
 
     clock.value += 10.0
-    assert be._handle_pending_orders([_stale_order("o-decay-2")], runtime) is False
-    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ()
+    assert be._handle_pending_orders([_stale_order("o-decay-2")], runtime) is True
+    assert getattr(runtime, be._PENDING_ORDER_BLOCKED_SYMBOLS_ATTR) == ("AAPL",)
     tracker = runtime.state[be._PENDING_SYMBOL_DECAY_TRACKER_KEY]
     assert "AAPL" in tracker
-    assert float(tracker["AAPL"].get("released_until_ts", 0.0)) > clock.value
+    assert float(tracker["AAPL"].get("released_until_ts", 0.0) or 0.0) == 0.0
 
 
 def test_handle_pending_orders_symbol_scope_emits_cooldown_telemetry(monkeypatch, caplog):
@@ -328,7 +328,7 @@ def test_handle_pending_orders_symbol_scope_emits_cooldown_telemetry(monkeypatch
     )
 
     caplog.set_level(logging.INFO)
-    assert be._handle_pending_orders([stale_order], runtime) is False
+    assert be._handle_pending_orders([stale_order], runtime) is True
 
     telemetry_records = [
         record
@@ -343,7 +343,7 @@ def test_handle_pending_orders_symbol_scope_emits_cooldown_telemetry(monkeypatch
     assert symbol_states
     first = symbol_states[0]
     assert first.get("symbol") == "AAPL"
-    assert first.get("state") == "released"
+    assert first.get("state") == "deferred"
     assert float(first.get("cooldown_remaining_s", 0.0)) >= 0.0
 
 

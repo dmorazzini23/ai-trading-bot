@@ -81,7 +81,7 @@ _install_alpaca_stub()
 
 os.environ.setdefault("ALPACA_API_KEY", "x")
 os.environ.setdefault("ALPACA_SECRET_KEY", "x")
-os.environ.setdefault("ALPACA_BASE_URL", "https://example.com")
+os.environ.setdefault("ALPACA_TRADING_BASE_URL", "https://example.com")
 os.environ.setdefault("WEBHOOK_SECRET", "x")
 
 import alpaca.trading as _alpaca_trading
@@ -203,14 +203,14 @@ def test_prepare_indicators_insufficient_data():
 @pytest.mark.parametrize("attr", ["trading_client", "data_client"])
 @pytest.mark.parametrize(
     "missing_key",
-    ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"],
+    ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL"],
 )
 def test_bot_engine_missing_env(monkeypatch, caplog, attr, missing_key):
     """BotEngine properties should raise informative errors when env vars are missing."""
 
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://example.com")
     monkeypatch.delenv(missing_key, raising=False)
     class DummyClient:
         def __init__(self, *args, **kwargs):

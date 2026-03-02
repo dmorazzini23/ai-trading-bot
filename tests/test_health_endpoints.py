@@ -49,6 +49,8 @@ def test_app_health_endpoint_shared_port():
     assert payload["gap_ratio_pct"] == 0.0
     assert payload["quote_fresh_ms"] == 250.0
     assert payload["safe_mode"] is False
+    assert "model_liveness" in payload
+    assert isinstance(payload["model_liveness"], dict)
 
 
 def test_standalone_health_server_handler():

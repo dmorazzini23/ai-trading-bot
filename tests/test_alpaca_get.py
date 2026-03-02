@@ -37,7 +37,7 @@ class _Response:
 
 @pytest.fixture(autouse=True)
 def _alpaca_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://example.com")
     monkeypatch.setenv("ALPACA_API_KEY", "key-id")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.delenv("ALPACA_SHADOW", raising=False)

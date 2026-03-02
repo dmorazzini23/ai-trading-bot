@@ -31,6 +31,68 @@ TESTING = str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", 
 
 T = TypeVar("T")
 
+ALPACA_URL_GUIDANCE = (
+    "Set ALPACA_TRADING_BASE_URL for trading endpoints. "
+    "Deprecated keys ALPACA_API_URL and ALPACA_BASE_URL are not supported."
+)
+
+_CANONICAL_ENV_MAP: dict[str, tuple[str, ...]] = {
+    "ALPACA_TRADING_BASE_URL": ("ALPACA_API_URL", "ALPACA_BASE_URL"),
+    "ALPACA_DATA_BASE_URL": ("ALPACA_DATA_URL",),
+    "MAX_POSITION_SIZE": ("AI_TRADING_MAX_POSITION_SIZE",),
+    "MAX_DRAWDOWN_THRESHOLD": ("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
+    "TRADING__ALLOW_SHORTS": ("AI_TRADING_ALLOW_SHORT",),
+    "EXECUTION_ALLOW_FALLBACK_WITHOUT_NBBO": ("AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO",),
+    "SENTIMENT_API_KEY": ("NEWS_API_KEY",),
+}
+
+
+def canonical_env_map() -> Mapping[str, tuple[str, ...]]:
+    """Return canonical key -> deprecated keys mapping for diagnostics."""
+
+    return dict(_CANONICAL_ENV_MAP)
+
+
+def _deprecated_env_violations(
+    env: Mapping[str, str] | None = None,
+) -> list[tuple[str, str, str]]:
+    """Return deprecated env key violations from *env* snapshot."""
+
+    env_map = env if env is not None else os.environ
+    violations: list[tuple[str, str, str]] = []
+    for canonical, deprecated_keys in _CANONICAL_ENV_MAP.items():
+        for deprecated in deprecated_keys:
+            raw = env_map.get(deprecated)
+            if raw in (None, ""):
+                continue
+            if canonical == "ALPACA_TRADING_BASE_URL":
+                message = (
+                    "Set ALPACA_TRADING_BASE_URL for trading endpoints; "
+                    "remove ALPACA_API_URL/ALPACA_BASE_URL."
+                )
+            elif canonical == "ALPACA_DATA_BASE_URL":
+                message = "Set ALPACA_DATA_BASE_URL and remove ALPACA_DATA_URL."
+            else:
+                message = f"Use {canonical} instead of {deprecated}."
+            violations.append((deprecated, canonical, message))
+    return violations
+
+
+def validate_no_deprecated_env(env: Mapping[str, str] | None = None) -> None:
+    """Fail fast when deprecated env aliases are present."""
+
+    violations = _deprecated_env_violations(env=env)
+    if not violations:
+        return
+    details = "; ".join(
+        f"{deprecated} is deprecated. {message}"
+        for deprecated, _canonical, message in violations
+    )
+    raise RuntimeError(
+        "Deprecated environment keys are not supported. "
+        f"{details}"
+    )
+
 
 def _normalize_alpaca_base_url(value: str | None, *, source_key: str) -> tuple[str | None, str | None]:
     """Validate Alpaca base URL strings returning sanitized value and error."""
@@ -45,7 +107,7 @@ def _normalize_alpaca_base_url(value: str | None, *, source_key: str) -> tuple[s
     if "${" in raw:
         return None, (
             f"{source_key} looks like an unresolved placeholder ({raw}). "
-            "Set ALPACA_API_URL or ALPACA_BASE_URL to a full https://... endpoint."
+            f"{ALPACA_URL_GUIDANCE}"
         )
 
     parsed = urlparse(raw)
@@ -64,13 +126,26 @@ def _select_alpaca_base_url(
     env_map = env or os.environ
     invalid_entries: list[tuple[str, str, str]] = []
 
-    for env_key in ("ALPACA_BASE_URL", "ALPACA_API_URL"):
-        raw = env_map.get(env_key)
-        normalized, message = _normalize_alpaca_base_url(raw, source_key=env_key)
-        if normalized:
-            return normalized, env_key, invalid_entries
-        if raw and message:
-            invalid_entries.append((env_key, raw, message))
+    raw = env_map.get("ALPACA_TRADING_BASE_URL")
+    normalized, message = _normalize_alpaca_base_url(
+        raw,
+        source_key="ALPACA_TRADING_BASE_URL",
+    )
+    if normalized:
+        return normalized, "ALPACA_TRADING_BASE_URL", invalid_entries
+    if raw and message:
+        invalid_entries.append(("ALPACA_TRADING_BASE_URL", raw, message))
+    for deprecated_key in ("ALPACA_API_URL", "ALPACA_BASE_URL"):
+        deprecated_value = env_map.get(deprecated_key)
+        if deprecated_value not in (None, ""):
+            invalid_entries.append(
+                (
+                    deprecated_key,
+                    deprecated_value,
+                    "Set ALPACA_TRADING_BASE_URL for trading endpoints; "
+                    "remove ALPACA_API_URL/ALPACA_BASE_URL.",
+                )
+            )
 
     return None, None, invalid_entries
 
@@ -228,6 +303,7 @@ def validate_required_env(
         else:
             overrides = None
             config_overrides = None
+    validate_no_deprecated_env(env_snapshot)
 
     cfg = TradingConfig.from_env(
         config_overrides, allow_missing_drawdown=True
@@ -237,7 +313,7 @@ def validate_required_env(
         "ALPACA_API_KEY": cfg.alpaca_api_key,
         "ALPACA_SECRET_KEY": cfg.alpaca_secret_key,
         "ALPACA_DATA_FEED": cfg.alpaca_data_feed,
-        "ALPACA_API_URL": cfg.alpaca_base_url,
+        "ALPACA_TRADING_BASE_URL": cfg.alpaca_base_url,
         "WEBHOOK_SECRET": cfg.webhook_secret,
         "CAPITAL_CAP": cfg.capital_cap,
         "DOLLAR_RISK_LIMIT": cfg.dollar_risk_limit,
@@ -254,11 +330,6 @@ def validate_required_env(
     env_lookup: dict[str, str] = {
         k.upper(): v for k, v in env_snapshot.items() if v not in (None, "")
     }
-    if "ALPACA_API_URL" not in env_lookup and "ALPACA_BASE_URL" in env_lookup:
-        env_lookup["ALPACA_API_URL"] = env_lookup["ALPACA_BASE_URL"]
-    alias_sources: dict[str, tuple[str, ...]] = {
-        "ALPACA_API_URL": ("ALPACA_BASE_URL",),
-    }
 
     for key, value in list(required_fields.items()):
         if value in (None, ""):
@@ -266,11 +337,6 @@ def validate_required_env(
             if fallback not in (None, ""):
                 required_fields[key] = fallback
                 continue
-            for alias in alias_sources.get(key, ()):  # pragma: no branch - small tuple
-                alias_value = env_lookup.get(alias)
-                if alias_value not in (None, ""):
-                    required_fields[key] = alias_value
-                    break
 
     missing = [name for name, value in required_fields.items() if not value]
     if missing:
@@ -293,8 +359,11 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
 
     base_url: str | None
     source: str | None
-    base_url, source, errors = _select_alpaca_base_url()
-    alias_used = source == "ALPACA_BASE_URL"
+    base_url, _source, errors = _select_alpaca_base_url()
+    try:
+        validate_no_deprecated_env()
+    except RuntimeError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     cfg: TradingConfig | None
     try:
@@ -309,33 +378,30 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     if base_url is None and cfg is not None:
         cfg_base_url, cfg_source, cfg_errors = _select_alpaca_base_url(
             {
-                "ALPACA_BASE_URL": cfg.alpaca_base_url or "",
-                "ALPACA_API_URL": cfg.alpaca_base_url or "",
+                "ALPACA_TRADING_BASE_URL": cfg.alpaca_base_url or "",
             }
         )
         errors.extend(cfg_errors)
         if cfg_base_url:
             base_url = cfg_base_url
-            alias_used = cfg_source == "ALPACA_BASE_URL"
+            _ = cfg_source
 
     for env_key, raw, message in errors:
         logger.error(message, extra={"env_key": env_key, "value": raw})
 
     if not base_url and cfg is not None:
         normalized_cfg, cfg_error = _normalize_alpaca_base_url(
-            cfg.alpaca_base_url, source_key="ALPACA_API_URL"
+            cfg.alpaca_base_url, source_key="ALPACA_TRADING_BASE_URL"
         )
         if normalized_cfg:
             base_url = normalized_cfg
-            alias_used = False
         elif cfg_error:
-            logger.error(cfg_error, extra={"env_key": "ALPACA_API_URL", "value": cfg.alpaca_base_url})
+            logger.error(
+                cfg_error,
+                extra={"env_key": "ALPACA_TRADING_BASE_URL", "value": cfg.alpaca_base_url},
+            )
 
     resolved_base_url = base_url or default_base_url
-    if base_url and alias_used:
-        canonical_env = os.getenv("ALPACA_API_URL")
-        if canonical_env is None or canonical_env.strip() == "":
-            os.environ["ALPACA_API_URL"] = base_url
 
     api_key = (
         (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None)
@@ -359,12 +425,15 @@ def validate_alpaca_credentials() -> None:
     if TESTING:
         return
     reload_trading_config()
+    validate_no_deprecated_env()
     _, _, url_errors = _select_alpaca_base_url()
     if url_errors:
         messages = "; ".join(error for _, _, error in url_errors)
         raise RuntimeError(messages)
     try:
-        validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL"))
+        validate_required_env(
+            ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL")
+        )
     except RuntimeError as exc:
         logger.error("ALPACA_CREDENTIALS_INVALID", extra={"error": str(exc)})
         raise
@@ -392,9 +461,8 @@ def from_env_relaxed(env_overrides: Mapping[str, Any] | None = None) -> TradingC
         )
         relaxed_overrides: dict[str, Any] = dict(env_overrides or {})
         default_drawdown = SPEC_BY_FIELD["max_drawdown_threshold"].default
-        # Ensure both canonical and legacy keys receive the default.
+        # Ensure the canonical key receives the default.
         relaxed_overrides.setdefault("MAX_DRAWDOWN_THRESHOLD", default_drawdown)
-        relaxed_overrides.setdefault("AI_TRADING_MAX_DRAWDOWN_THRESHOLD", default_drawdown)
         return TradingConfig.from_env(relaxed_overrides)
 
 

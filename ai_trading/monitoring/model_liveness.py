@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,9 +28,10 @@ class _LivenessBreach:
     threshold_seconds: float
     severity: str
     reason: str
+    context: dict[str, Any]
 
     def as_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "metric": self.metric,
             "event": self.event,
             "age_seconds": round(self.age_seconds, 3),
@@ -37,6 +39,8 @@ class _LivenessBreach:
             "severity": self.severity,
             "reason": self.reason,
         }
+        payload.update(self.context)
+        return payload
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -68,9 +72,22 @@ def _event_for_metric(metric: str) -> str:
 
 
 def _severity_for_metric(metric: str) -> str:
-    if metric == _METRIC_AFTER_HOURS:
-        return "warning"
-    return "critical"
+    _ = metric
+    return "warning"
+
+
+def _ml_liveness_expected_default() -> bool:
+    """Return whether ML signal heartbeat should be enforced by default."""
+
+    if not _env_bool("AI_TRADING_MODEL_LIVENESS_ENFORCE_ML", True):
+        return False
+    bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
+    if bot_engine_module is None:
+        return True
+    use_ml = getattr(bot_engine_module, "USE_ML", None)
+    if use_ml is None:
+        return True
+    return bool(use_ml)
 
 
 class _ModelLivenessMonitor:
@@ -92,6 +109,12 @@ class _ModelLivenessMonitor:
         self,
         *,
         market_open: bool,
+        signals_expected_now: bool,
+        phase: str | None = None,
+        execution_gate_open: bool | None = None,
+        warmup_complete: bool | None = None,
+        ml_expected: bool | None = None,
+        rl_expected: bool | None = None,
         now: datetime | None = None,
     ) -> list[_LivenessBreach]:
         if not _env_bool("AI_TRADING_MODEL_LIVENESS_ENABLED", True):
@@ -104,20 +127,37 @@ class _ModelLivenessMonitor:
             "AI_TRADING_MODEL_LIVENESS_REQUIRE_MARKET_OPEN",
             True,
         )
+        if enforce_only_when_market_open and not market_open:
+            return []
+        if not signals_expected_now:
+            return []
         alert_cooldown = max(
             0.0,
             _env_float("AI_TRADING_MODEL_LIVENESS_ALERT_COOLDOWN_SECONDS", 300.0),
         )
-        thresholds: dict[str, float] = {
-            _METRIC_ML_SIGNAL: max(
+        if ml_expected is None:
+            enforce_ml = _ml_liveness_expected_default()
+        else:
+            enforce_ml = bool(ml_expected) and _env_bool(
+                "AI_TRADING_MODEL_LIVENESS_ENFORCE_ML",
+                True,
+            )
+        enforce_rl_cfg = _env_bool("USE_RL_AGENT", False)
+        if rl_expected is None:
+            enforce_rl = bool(enforce_rl_cfg)
+        else:
+            enforce_rl = bool(enforce_rl_cfg) and bool(rl_expected)
+        thresholds: dict[str, float] = {}
+        if enforce_ml:
+            thresholds[_METRIC_ML_SIGNAL] = max(
                 1.0,
                 _env_float("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", 5400.0),
-            ),
-            _METRIC_RL_SIGNAL: max(
+            )
+        if enforce_rl:
+            thresholds[_METRIC_RL_SIGNAL] = max(
                 1.0,
                 _env_float("AI_TRADING_RL_SIGNAL_MAX_AGE_SECONDS", 5400.0),
-            ),
-        }
+            )
         if _env_bool("AI_TRADING_AFTER_HOURS_TRAINING_ENABLED", False):
             thresholds[_METRIC_AFTER_HOURS] = max(
                 60.0,
@@ -126,13 +166,48 @@ class _ModelLivenessMonitor:
 
         breaches: list[_LivenessBreach] = []
         with self._lock:
+            last_ml_signal_ts = self._last_seen.get(_METRIC_ML_SIGNAL)
+            last_rl_signal_ts = self._last_seen.get(_METRIC_RL_SIGNAL)
+            ml_age_s = (
+                max(0.0, (now_utc - last_ml_signal_ts).total_seconds())
+                if last_ml_signal_ts is not None
+                else max(0.0, (now_utc - self._started_at).total_seconds())
+            )
+            rl_age_s = (
+                max(0.0, (now_utc - last_rl_signal_ts).total_seconds())
+                if last_rl_signal_ts is not None
+                else max(0.0, (now_utc - self._started_at).total_seconds())
+            )
+            base_context = {
+                "last_ml_signal_ts": (
+                    last_ml_signal_ts.isoformat()
+                    if isinstance(last_ml_signal_ts, datetime)
+                    else None
+                ),
+                "last_rl_signal_ts": (
+                    last_rl_signal_ts.isoformat()
+                    if isinstance(last_rl_signal_ts, datetime)
+                    else None
+                ),
+                "ml_age_s": round(float(ml_age_s), 3),
+                "rl_age_s": round(float(rl_age_s), 3),
+                "ml_max_age_s": round(
+                    float(thresholds.get(_METRIC_ML_SIGNAL, 0.0)),
+                    3,
+                ),
+                "rl_max_age_s": round(
+                    float(thresholds.get(_METRIC_RL_SIGNAL, 0.0)),
+                    3,
+                ),
+                "market_open": bool(market_open),
+                "signals_expected_now": bool(signals_expected_now),
+                "phase": str(phase or "unknown"),
+                "execution_gate_open": bool(execution_gate_open),
+                "warmup_complete": bool(warmup_complete),
+                "ml_enforced": bool(enforce_ml),
+                "rl_enforced": bool(enforce_rl),
+            }
             for metric, threshold_seconds in thresholds.items():
-                if (
-                    enforce_only_when_market_open
-                    and not market_open
-                    and metric in {_METRIC_ML_SIGNAL, _METRIC_RL_SIGNAL}
-                ):
-                    continue
                 last_seen = self._last_seen.get(metric)
                 baseline = last_seen if last_seen is not None else self._started_at
                 age_seconds = max(0.0, (now_utc - baseline).total_seconds())
@@ -152,6 +227,7 @@ class _ModelLivenessMonitor:
                         threshold_seconds=threshold_seconds,
                         severity=_severity_for_metric(metric),
                         reason="never_observed" if last_seen is None else "stale",
+                        context=dict(base_context),
                     )
                 )
         return breaches
@@ -268,9 +344,38 @@ class _ModelLivenessMonitor:
                 )
         return payload
 
-    def snapshot(self) -> dict[str, str]:
+    def snapshot(self, *, now: datetime | None = None) -> dict[str, Any]:
+        now_utc = now or datetime.now(UTC)
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=UTC)
+        now_utc = now_utc.astimezone(UTC)
         with self._lock:
-            return {metric: ts.isoformat() for metric, ts in self._last_seen.items()}
+            ml_ts = self._last_seen.get(_METRIC_ML_SIGNAL)
+            rl_ts = self._last_seen.get(_METRIC_RL_SIGNAL)
+            ml_age_s = (
+                max(0.0, (now_utc - ml_ts).total_seconds())
+                if ml_ts is not None
+                else max(0.0, (now_utc - self._started_at).total_seconds())
+            )
+            rl_age_s = (
+                max(0.0, (now_utc - rl_ts).total_seconds())
+                if rl_ts is not None
+                else max(0.0, (now_utc - self._started_at).total_seconds())
+            )
+            return {
+                "last_ml_signal_ts": ml_ts.isoformat() if ml_ts is not None else None,
+                "last_rl_signal_ts": rl_ts.isoformat() if rl_ts is not None else None,
+                "ml_age_s": round(float(ml_age_s), 3),
+                "rl_age_s": round(float(rl_age_s), 3),
+                "ml_max_age_s": round(
+                    max(1.0, _env_float("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", 5400.0)),
+                    3,
+                ),
+                "rl_max_age_s": round(
+                    max(1.0, _env_float("AI_TRADING_RL_SIGNAL_MAX_AGE_SECONDS", 5400.0)),
+                    3,
+                ),
+            }
 
 
 _MONITOR = _ModelLivenessMonitor()
@@ -291,9 +396,27 @@ def note_after_hours_training_complete(*, now: datetime | None = None) -> None:
 def check_model_liveness(
     *,
     market_open: bool,
+    signals_expected_now: bool = True,
+    phase: str | None = None,
+    execution_gate_open: bool | None = None,
+    warmup_complete: bool | None = None,
+    ml_expected: bool | None = None,
+    rl_expected: bool | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    return [breach.as_payload() for breach in _MONITOR.evaluate(market_open=market_open, now=now)]
+    return [
+        breach.as_payload()
+        for breach in _MONITOR.evaluate(
+            market_open=market_open,
+            signals_expected_now=signals_expected_now,
+            phase=phase,
+            execution_gate_open=execution_gate_open,
+            warmup_complete=warmup_complete,
+            ml_expected=ml_expected,
+            rl_expected=rl_expected,
+            now=now,
+        )
+    ]
 
 
 def maybe_trigger_canary_auto_rollback(
@@ -310,8 +433,9 @@ def maybe_trigger_canary_auto_rollback(
                     event=str(entry.get("event") or ""),
                     age_seconds=float(entry.get("age_seconds") or 0.0),
                     threshold_seconds=float(entry.get("threshold_seconds") or 0.0),
-                    severity=str(entry.get("severity") or "critical"),
+                    severity=str(entry.get("severity") or "warning"),
                     reason=str(entry.get("reason") or "stale"),
+                    context={},
                 )
             )
         except Exception:
@@ -319,7 +443,7 @@ def maybe_trigger_canary_auto_rollback(
     return _MONITOR.maybe_trigger_canary_rollback(normalized, now=now)
 
 
-def get_model_liveness_snapshot() -> dict[str, str]:
+def get_model_liveness_snapshot() -> dict[str, Any]:
     return _MONITOR.snapshot()
 
 

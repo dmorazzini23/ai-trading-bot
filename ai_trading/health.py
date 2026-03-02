@@ -169,6 +169,14 @@ class HealthCheck:
                     broker_state = runtime_state.observe_broker_status()
                 except Exception:
                     broker_state = {}
+                try:
+                    from ai_trading.monitoring.model_liveness import (
+                        get_model_liveness_snapshot,
+                    )
+
+                    model_liveness = get_model_liveness_snapshot()
+                except Exception:
+                    model_liveness = {}
 
                 provider_section = {
                     "primary": provider_state.get("primary"),
@@ -224,6 +232,7 @@ class HealthCheck:
                     "quote_fresh_ms": provider_section.get("quote_fresh_ms"),
                     "safe_mode": provider_section.get("safe_mode"),
                     "cooldown_seconds_remaining": provider_section.get("cooldown_seconds_remaining"),
+                    "model_liveness": model_liveness,
                 }
                 reason_text = provider_section.get("reason")
                 if degraded and reason_text:

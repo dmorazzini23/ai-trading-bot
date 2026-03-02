@@ -8312,7 +8312,7 @@ def _fetch_bars(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
                         "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
-                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
+                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_TRADING_BASE_URL to use Alpaca data",
                     },
                 )
                 provider_monitor.alert_manager.create_alert(
@@ -13537,7 +13537,7 @@ def get_bars(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
                         "provider": backup_provider,
-                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
+                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_TRADING_BASE_URL to use Alpaca data",
                     },
                 )
                 provider_monitor.alert_manager.create_alert(

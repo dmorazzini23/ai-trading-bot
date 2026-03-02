@@ -405,10 +405,15 @@ def _runtime_trading_config() -> Any | None:
 
 
 def _allow_shorts_configured() -> bool:
-    for key in ("TRADING__ALLOW_SHORTS", "AI_TRADING_ALLOW_SHORT"):
-        flag = _resolve_bool_env(key)
-        if flag is not None:
-            return bool(flag)
+    deprecated_flag = _resolve_bool_env("AI_TRADING_ALLOW_SHORT")
+    if deprecated_flag is not None:
+        raise RuntimeError(
+            "AI_TRADING_ALLOW_SHORT is deprecated. "
+            "Set TRADING__ALLOW_SHORTS instead."
+        )
+    flag = _resolve_bool_env("TRADING__ALLOW_SHORTS")
+    if flag is not None:
+        return bool(flag)
     return True
 
 
@@ -1918,6 +1923,8 @@ class ExecutionEngine:
         self._last_initialize_success_mono: float = 0.0
         self._last_broker_healthcheck_mono: float = 0.0
         self._cycle_submitted_orders: int = 0
+        self._cycle_new_orders_submitted: int = 0
+        self._cycle_maintenance_actions: int = 0
         self._cycle_order_pacing_cap_logged: bool = False
         self._last_order_pacing_cap_log_ts: float = 0.0
         self._cycle_order_outcomes: list[dict[str, Any]] = []
@@ -1927,6 +1934,7 @@ class ExecutionEngine:
         self._cycle_reserved_intents: set[tuple[str, str]] = set()
         self._cycle_reserved_intents_lock = Lock()
         self._pending_new_actions_this_cycle: int = 0
+        self._pending_new_policy_last_cycle_index: int | None = None
         self._engine_started_mono: float = float(monotonic_time())
         self._engine_cycle_index: int = 0
         self._broker_locked_until: float = 0.0
@@ -1990,8 +1998,11 @@ class ExecutionEngine:
 
         self._engine_cycle_index = int(max(getattr(self, "_engine_cycle_index", 0), 0)) + 1
         self._cycle_submitted_orders = 0
+        self._cycle_new_orders_submitted = 0
+        self._cycle_maintenance_actions = 0
         self._cycle_order_pacing_cap_logged = False
         self._pending_new_actions_this_cycle = 0
+        self._pending_new_policy_last_cycle_index = None
         self._cycle_order_outcomes = []
         try:
             with self._cycle_reserved_intents_lock:
@@ -2035,9 +2046,16 @@ class ExecutionEngine:
                             "daytrade_count": status.daytrade_count,
                             "daytrade_limit": status.daytrade_limit,
                             "message": "Automatically switched to swing trading mode to avoid PDT violations"
-                        }
-                    )
+                }
+            )
         self._apply_pending_new_timeout_policy()
+
+    def _reset_pending_new_policy_state_for_tests(self) -> None:
+        """Reset pending-new policy guard/counters for direct test invocation."""
+
+        self._pending_new_policy_last_cycle_index = None
+        self._pending_new_actions_this_cycle = 0
+        self._cycle_maintenance_actions = 0
 
     def end_cycle(self) -> None:
         """Best-effort end-of-cycle hook aligned with core engine expectations."""
@@ -2159,6 +2177,11 @@ class ExecutionEngine:
     def _apply_pending_new_timeout_policy(self) -> None:
         """Apply pending-new timeout actions for stale broker-open orders."""
 
+        cycle_index = int(max(getattr(self, "_engine_cycle_index", 0), 0))
+        if getattr(self, "_pending_new_policy_last_cycle_index", None) == cycle_index:
+            return
+        self._pending_new_policy_last_cycle_index = cycle_index
+
         policy, timeout_s, max_actions, replace_widen_bps = self._pending_new_policy_config()
         if policy == "off" or max_actions <= 0:
             return
@@ -2250,6 +2273,9 @@ class ExecutionEngine:
             if action_success:
                 actions_taken += 1
                 self._pending_new_actions_this_cycle += 1
+                self._cycle_maintenance_actions = int(
+                    getattr(self, "_cycle_maintenance_actions", 0)
+                ) + 1
                 logger.warning(
                     "PENDING_NEW_TIMEOUT_ACTION",
                     extra={
@@ -5116,22 +5142,35 @@ class ExecutionEngine:
             return None
         if not hasattr(self, "_cycle_submitted_orders"):
             self._cycle_submitted_orders = 0
+        if not hasattr(self, "_cycle_new_orders_submitted"):
+            self._cycle_new_orders_submitted = int(self._cycle_submitted_orders)
         max_new_orders_per_cycle, cap_source = self._resolve_order_submit_cap()
+        used_new_orders = int(getattr(self, "_cycle_new_orders_submitted", 0))
         if (
             not closing_position
             and max_new_orders_per_cycle is not None
-            and int(self._cycle_submitted_orders) >= int(max_new_orders_per_cycle)
+            and used_new_orders >= int(max_new_orders_per_cycle)
         ):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
             if not bool(getattr(self, "_cycle_order_pacing_cap_logged", False)):
                 self._cycle_order_pacing_cap_logged = True
                 if self._should_emit_order_pacing_cap_log():
+                    cap_limit = int(max_new_orders_per_cycle)
+                    headroom = max(cap_limit - used_new_orders, 0)
                     payload = {
                         "symbol": symbol,
                         "side": mapped_side,
-                        "submitted_this_cycle": int(self._cycle_submitted_orders),
-                        "max_new_orders_per_cycle": int(max_new_orders_per_cycle),
+                        "cap_type": "new_orders",
+                        "limit": cap_limit,
+                        "used": used_new_orders,
+                        "headroom": headroom,
+                        "submitted_this_cycle": used_new_orders,
+                        "max_new_orders_per_cycle": cap_limit,
+                        "new_orders_submitted_this_cycle": used_new_orders,
+                        "maintenance_actions_this_cycle": int(
+                            getattr(self, "_cycle_maintenance_actions", 0)
+                        ),
                         "cap_source": cap_source,
                         "engine_cycle_index": int(max(getattr(self, "_engine_cycle_index", 0), 0)),
                     }
@@ -5166,6 +5205,12 @@ class ExecutionEngine:
                 reason="order_pacing_cap",
                 order_type=order_type_normalized,
                 detail=f"max_new_orders_per_cycle reached source={cap_source}",
+                context={
+                    "cap_type": "new_orders",
+                    "limit": int(max_new_orders_per_cycle),
+                    "used": used_new_orders,
+                    "headroom": max(int(max_new_orders_per_cycle) - used_new_orders, 0),
+                },
                 submit_started_at=submit_started_at,
             )
             return None
@@ -6832,8 +6877,15 @@ class ExecutionEngine:
                 execution_result.status = order_status_lower or "submitted"
 
         if not closing_position:
-            current_submits = int(getattr(self, "_cycle_submitted_orders", 0))
-            self._cycle_submitted_orders = current_submits + 1
+            current_submits = int(
+                getattr(
+                    self,
+                    "_cycle_new_orders_submitted",
+                    getattr(self, "_cycle_submitted_orders", 0),
+                )
+            )
+            self._cycle_new_orders_submitted = current_submits + 1
+            self._cycle_submitted_orders = self._cycle_new_orders_submitted
             self._record_order_intent(symbol, mapped_side)
 
         outcome_status = (

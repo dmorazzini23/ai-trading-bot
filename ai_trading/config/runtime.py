@@ -259,6 +259,14 @@ def _validate_bounds(spec: ConfigSpec, value: Any) -> Any:
 SPEC_BY_FIELD: dict[str, ConfigSpec] = {}
 SPEC_BY_ENV: dict[str, ConfigSpec] = {}
 _DEPRECATION_LOGGED: set[str] = set()
+_FAIL_FAST_DEPRECATED_FIELDS: frozenset[str] = frozenset(
+    {
+        "alpaca_base_url",
+        "alpaca_data_base_url",
+        "max_position_size",
+        "max_drawdown_threshold",
+    }
+)
 
 
 CONFIG_SPECS: tuple[ConfigSpec, ...] = (
@@ -331,11 +339,24 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="alpaca_base_url",
-        env=("ALPACA_API_URL", "ALPACA_BASE_URL"),
+        env=("ALPACA_TRADING_BASE_URL",),
         cast="str",
         default="https://paper-api.alpaca.markets",
         description="Alpaca REST endpoint base URL.",
-        deprecated_env={"ALPACA_BASE_URL": "Use ALPACA_API_URL instead."},
+        deprecated_env={
+            "ALPACA_API_URL": "Use ALPACA_TRADING_BASE_URL instead.",
+            "ALPACA_BASE_URL": "Use ALPACA_TRADING_BASE_URL instead.",
+        },
+    ),
+    ConfigSpec(
+        field="alpaca_data_base_url",
+        env=("ALPACA_DATA_BASE_URL",),
+        cast="str",
+        default="https://data.alpaca.markets",
+        description="Alpaca market-data endpoint base URL.",
+        deprecated_env={
+            "ALPACA_DATA_URL": "Use ALPACA_DATA_BASE_URL instead.",
+        },
     ),
     ConfigSpec(
         field="alpaca_allow_sip",
@@ -440,7 +461,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="max_drawdown_threshold",
-        env=("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD"),
+        env=("MAX_DRAWDOWN_THRESHOLD",),
         cast="float",
         default=0.08,
         description="Maximum rolling drawdown before trading halts.",
@@ -457,7 +478,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="max_position_size",
-        env=("MAX_POSITION_SIZE", "AI_TRADING_MAX_POSITION_SIZE"),
+        env=("MAX_POSITION_SIZE",),
         cast="float",
         default=8000.0,
         description="Absolute maximum position notional in USD.",
@@ -2448,7 +2469,7 @@ class TradingConfig:
         if not allow_missing_drawdown:
             has_drawdown = any(
                 env_map.get(key) not in (None, "")
-                for key in ("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+                for key in ("MAX_DRAWDOWN_THRESHOLD",)
             )
             if not has_drawdown:
                 raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
@@ -2537,6 +2558,12 @@ def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
             if alias in env_map and env_map[alias] not in (None, ""):
                 found_key = alias
                 raw_value = env_map[alias]
+                if spec.field in _FAIL_FAST_DEPRECATED_FIELDS:
+                    canonical = spec.env[0] if spec.env else spec.field
+                    raise RuntimeError(
+                        f"{alias} is deprecated and no longer supported. "
+                        f"{message} Set {canonical} and remove {alias}."
+                    )
                 if alias not in _DEPRECATION_LOGGED:
                     logger.warning(
                         "CONFIG_ENV_DEPRECATED",

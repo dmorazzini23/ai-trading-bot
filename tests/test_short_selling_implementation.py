@@ -13,7 +13,7 @@ from ai_trading.order.types import OrderSide
 # Set minimal environment variables
 os.environ['ALPACA_API_KEY'] = 'test_key'
 os.environ['ALPACA_SECRET_KEY'] = 'test_secret'
-os.environ['ALPACA_BASE_URL'] = 'https://paper-api.alpaca.markets'
+os.environ['ALPACA_TRADING_BASE_URL'] = 'https://paper-api.alpaca.markets'
 os.environ['WEBHOOK_SECRET'] = 'test_webhook'
 os.environ['FLASK_PORT'] = '9000'
 

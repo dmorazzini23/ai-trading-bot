@@ -13,9 +13,12 @@ def _engine_stub() -> lt.ExecutionEngine:
     engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine.stats = {}
     engine._cycle_submitted_orders = 0
+    engine._cycle_new_orders_submitted = 0
+    engine._cycle_maintenance_actions = 0
     engine._cycle_order_outcomes = []
     engine._recent_order_intents = {}
     engine._pending_new_actions_this_cycle = 0
+    engine._pending_new_policy_last_cycle_index = None
     engine.marketable_limit_slippage_bps = 10
     engine._capacity_broker = lambda client: client
     engine._open_order_qty_index = {}
@@ -50,7 +53,41 @@ def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
 
     assert canceled == ["ord-1"]
     assert engine._pending_new_actions_this_cycle == 1
+    assert engine._cycle_maintenance_actions == 1
+    assert engine._cycle_new_orders_submitted == 0
     assert any(record.message == "PENDING_NEW_TIMEOUT_ACTION" for record in caplog.records)
+
+
+def test_pending_new_timeout_policy_idempotent_per_cycle(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-1",
+        symbol="AAPL",
+        side="buy",
+        qty="1",
+        status="pending_new",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine._engine_cycle_index = 9
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._replace_limit_order_with_marketable = lambda **_: None
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+
+    engine._apply_pending_new_timeout_policy()
+    engine._apply_pending_new_timeout_policy()
+
+    assert canceled == ["ord-1"]
+
+    engine._reset_pending_new_policy_state_for_tests()
+    engine._apply_pending_new_timeout_policy()
+
+    assert canceled == ["ord-1", "ord-1"]
 
 
 def test_duplicate_intent_window(monkeypatch):

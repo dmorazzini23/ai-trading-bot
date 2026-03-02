@@ -8,10 +8,10 @@ logger = get_logger(__name__)
 REQUIRED_KEYS: tuple[str, ...] = (
     'ALPACA_API_KEY',
     'ALPACA_SECRET_KEY',
-    'ALPACA_BASE_URL',
+    'ALPACA_TRADING_BASE_URL',
 )
 
-INTERCHANGEABLE_URL_KEYS: tuple[str, ...] = (
+DEPRECATED_URL_KEYS: tuple[str, ...] = (
     'ALPACA_BASE_URL',
     'ALPACA_API_URL',
 )
@@ -21,11 +21,12 @@ def validate_env(env: Mapping[str, str] | None=None) -> list[str]:
     """Return list of missing required environment keys or packages."""
     env = env or os.environ
     missing: list[str] = []
+    for key in DEPRECATED_URL_KEYS:
+        if env.get(key):
+            missing.append(
+                f"{key} is deprecated; set ALPACA_TRADING_BASE_URL instead"
+            )
     for key in REQUIRED_KEYS:
-        if key == 'ALPACA_BASE_URL':
-            if not any(env.get(url_key) for url_key in INTERCHANGEABLE_URL_KEYS):
-                missing.append(key)
-            continue
         if not env.get(key):
             missing.append(key)
     for pkg in REQUIRED_PACKAGES:

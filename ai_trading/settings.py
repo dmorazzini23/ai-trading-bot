@@ -168,8 +168,8 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     )
     alpaca_base_url: str = Field(
         default="https://paper-api.alpaca.markets",
-        alias="ALPACA_API_URL",
-        validation_alias=AliasChoices("ALPACA_API_URL", "ALPACA_BASE_URL"),
+        alias="ALPACA_TRADING_BASE_URL",
+        validation_alias=AliasChoices("ALPACA_TRADING_BASE_URL"),
     )
     trading_mode: str = Field(default="balanced", alias="TRADING_MODE")
     WEBHOOK_SECRET: str | None = Field(
@@ -490,7 +490,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     daily_loss_limit: float = Field(default=0.05, env="AI_TRADING_DAILY_LOSS_LIMIT")
     max_drawdown_threshold: float = Field(
         default=0.08,
-        env=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD", "MAX_DRAWDOWN_THRESHOLD"),
+        env=("MAX_DRAWDOWN_THRESHOLD",),
     )
     portfolio_drift_threshold: float = Field(default=0.15, env="AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD")
     capital_cap: float = Field(
@@ -538,7 +538,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     sentiment_api_key: str | None = Field(
         default=None,
         alias="SENTIMENT_API_KEY",
-        validation_alias=AliasChoices("SENTIMENT_API_KEY", "NEWS_API_KEY"),
+        validation_alias=AliasChoices("SENTIMENT_API_KEY"),
     )
     sentiment_api_url: str | None = Field(default=None, alias="SENTIMENT_API_URL")
     sentiment_max_retries: int = Field(5, alias="SENTIMENT_MAX_RETRIES")
@@ -720,7 +720,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
 
         from ai_trading.config import management as config_management
 
-        env_key = "ALPACA_API_URL" if os.getenv("ALPACA_API_URL") else "ALPACA_BASE_URL"
+        env_key = "ALPACA_TRADING_BASE_URL"
         normalized, message = config_management._normalize_alpaca_base_url(value, source_key=env_key)
         if normalized:
             return normalized
@@ -804,7 +804,7 @@ def get_news_api_key() -> str | None:
         return val
     import os
 
-    return os.getenv("NEWS_API_KEY") or os.getenv("AI_TRADING_NEWS_API_KEY")
+    return os.getenv("SENTIMENT_API_KEY")
 
 
 def get_rebalance_interval_min() -> int:
@@ -863,7 +863,7 @@ def get_portfolio_drift_threshold() -> float:
 
 
 def get_max_drawdown_threshold() -> float:
-    raw = os.getenv("MAX_DRAWDOWN_THRESHOLD") or os.getenv("AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+    raw = os.getenv("MAX_DRAWDOWN_THRESHOLD")
     if raw not in (None, ""):
         try:
             return float(raw)

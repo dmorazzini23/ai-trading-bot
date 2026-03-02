@@ -28,7 +28,8 @@ _SENSITIVE_ENV = {
 }
 
 _ALIAS_MAP = {
-    "ALPACA_BASE_URL": "ALPACA_API_URL",
+    "ALPACA_API_URL": "ALPACA_TRADING_BASE_URL",
+    "ALPACA_BASE_URL": "ALPACA_TRADING_BASE_URL",
 }
 
 
@@ -98,4 +99,3 @@ def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, An
 
 
 __all__ = ["redact", "redact_env", "normalize_aliases"]
-

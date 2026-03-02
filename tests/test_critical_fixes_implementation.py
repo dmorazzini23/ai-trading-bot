@@ -15,7 +15,7 @@ pd = pytest.importorskip("pandas")
 os.environ.update({
     "ALPACA_API_KEY": "test_key_123456789012345",
     "ALPACA_SECRET_KEY": "test_secret_123456789012345",
-    "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+    "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
     "WEBHOOK_SECRET": "test_webhook_secret",
     "FLASK_PORT": "5000",
 })

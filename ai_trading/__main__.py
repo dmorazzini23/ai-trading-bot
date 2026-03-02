@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from collections.abc import Callable
@@ -29,6 +30,11 @@ def _build_parser(description: str, *, symbols: bool = False) -> argparse.Argume
 
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="Exit before heavy imports")
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="Print resolved configuration (sanitized) and exit",
+    )
     parser.add_argument("--once", action="store_true", help="Run a single iteration and exit")
     parser.add_argument(
         "--max-runtime-seconds",
@@ -187,7 +193,7 @@ except Exception:  # pragma: no cover - defensive
 def _validate_startup_config() -> _StartupConfig:
     """Validate runtime config and exit fast on errors."""
 
-    from ai_trading.config.management import get_env
+    from ai_trading.config.management import get_env, validate_no_deprecated_env
     from ai_trading.settings import get_settings
 
     import os
@@ -208,6 +214,7 @@ def _validate_startup_config() -> _StartupConfig:
 
     timeframe_env = os.getenv("TIMEFRAME")
     try:
+        validate_no_deprecated_env()
         _validate_env_alias_consistency()
         if feed_env is not None:
             feed_value = feed_env
@@ -237,11 +244,49 @@ def _validate_startup_config() -> _StartupConfig:
         raise SystemExit(f"Invalid configuration: {e}") from e
 
 
+def _print_resolved_config() -> int:
+    """Print sanitized, canonical resolved configuration and exit code."""
+
+    try:
+        from ai_trading.config.management import canonical_env_map, get_trading_config, validate_no_deprecated_env
+        from ai_trading.config.runtime import CONFIG_SPECS
+    except Exception as exc:
+        logger.error("PRINT_CONFIG_IMPORT_FAILED", extra={"error": str(exc)})
+        return 1
+
+    try:
+        validate_no_deprecated_env()
+    except RuntimeError as exc:
+        print(str(exc))
+        return 2
+
+    cfg = get_trading_config()
+    payload: dict[str, Any] = {}
+    for spec in CONFIG_SPECS:
+        canonical_env = spec.env[0] if spec.env else spec.field.upper()
+        value = getattr(cfg, spec.field, None)
+        if spec.mask and value not in (None, ""):
+            payload[canonical_env] = "***"
+        else:
+            payload[canonical_env] = value
+
+    payload["ENV_CANONICALIZATION_MAP"] = {
+        key: list(value) for key, value in canonical_env_map().items()
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return 0
+
+
 def run_trade() -> None:
     """Entrypoint for live trading loop."""
 
     parser = _build_parser("AI Trading Bot", symbols=True)
     args = parser.parse_args()
+    if getattr(args, "print_config", False):
+        from ai_trading.env import ensure_dotenv_loaded
+
+        ensure_dotenv_loaded()
+        raise SystemExit(_print_resolved_config())
     register_signal_handlers()
     stop_event.clear()
     timer = None
@@ -285,6 +330,11 @@ def run_backtest() -> None:
 
     parser = _build_parser("AI Trading Bot Backtesting", symbols=True)
     args = parser.parse_args()
+    if getattr(args, "print_config", False):
+        from ai_trading.env import ensure_dotenv_loaded
+
+        ensure_dotenv_loaded()
+        raise SystemExit(_print_resolved_config())
     register_signal_handlers()
     stop_event.clear()
     timer = None
@@ -328,6 +378,11 @@ def run_healthcheck() -> None:
 
     parser = _build_parser("AI Trading Bot Health Check")
     args = parser.parse_args()
+    if getattr(args, "print_config", False):
+        from ai_trading.env import ensure_dotenv_loaded
+
+        ensure_dotenv_loaded()
+        raise SystemExit(_print_resolved_config())
     register_signal_handlers()
     stop_event.clear()
     timer = None
@@ -375,6 +430,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         parser = _build_parser("AI Trading Bot", symbols=True)
         args = parser.parse_args(argv if argv is not None else None)
+        if getattr(args, "print_config", False):
+            from ai_trading.env import ensure_dotenv_loaded
+
+            ensure_dotenv_loaded()
+            return _print_resolved_config()
         pytest_running = os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
         if pytest_running and not getattr(args, "dry_run", False):
             try:

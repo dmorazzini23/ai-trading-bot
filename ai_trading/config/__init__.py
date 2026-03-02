@@ -265,7 +265,7 @@ DOLLAR_RISK_LIMIT = _cfg_float("dollar_risk_limit", 0.05)
 
 ALPACA_API_KEY = _env_value("ALPACA_API_KEY") or ""
 ALPACA_SECRET_KEY = _env_value("ALPACA_SECRET_KEY") or ""
-ALPACA_BASE_URL = _env_value("ALPACA_API_URL", "ALPACA_BASE_URL") or ""
+ALPACA_BASE_URL = _env_value("ALPACA_TRADING_BASE_URL") or ""
 
 
 def derive_cap_from_settings(
@@ -342,7 +342,7 @@ def validate_environment() -> None:
     with _validation_lock():
         logger.debug("CONFIG_ENV_VALIDATION_START")
         reload_trading_config(allow_missing_drawdown=False)
-        if _env_value("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD") is None:
+        if _env_value("MAX_DRAWDOWN_THRESHOLD") is None:
             logger.error("CONFIG_ENV_MISSING_DRAWDOWN")
             raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
         snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
@@ -365,7 +365,7 @@ def validate_env_vars(*names: str) -> None:
 
 
 def get_max_drawdown_threshold() -> float:
-    raw = _env_value("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+    raw = _env_value("MAX_DRAWDOWN_THRESHOLD")
     if raw is None:
         raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
     try:

@@ -33,9 +33,7 @@ def _get_env_str(name: str, default: str = "") -> str:
 
 
 def _resolve_trading_base_url() -> str:
-    base_url = _get_env_str("ALPACA_BASE_URL", "")
-    if not base_url:
-        base_url = _get_env_str("ALPACA_API_URL", "")
+    base_url = _get_env_str("ALPACA_TRADING_BASE_URL", "")
     if not base_url:
         base_url = "https://paper-api.alpaca.markets"
     return base_url

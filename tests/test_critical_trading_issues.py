@@ -16,7 +16,7 @@ pd = pytest.importorskip("pandas")
 # Set up minimal environment for imports
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'test_secret')
-os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+os.environ.setdefault('ALPACA_TRADING_BASE_URL', 'https://paper-api.alpaca.markets')
 os.environ.setdefault('WEBHOOK_SECRET', 'test_webhook')
 os.environ.setdefault('FLASK_PORT', '5000')
 os.environ.setdefault('PYTEST_RUNNING', '1')

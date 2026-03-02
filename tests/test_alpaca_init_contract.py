@@ -68,7 +68,7 @@ def test_ctx_api_attached_after_initialization(monkeypatch):
     eng = pytest.importorskip("ai_trading.core.bot_engine")
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://example.com")
     monkeypatch.setenv("PYTEST_RUNNING", "true")
 
     class DummyTradingClient:
@@ -103,7 +103,7 @@ def test_safe_get_account_attaches_client(monkeypatch):
     eng = pytest.importorskip("ai_trading.core.bot_engine")
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://example.com")
     monkeypatch.setenv("PYTEST_RUNNING", "true")
 
     class DummyTradingClient:

@@ -134,7 +134,12 @@ def get_alpaca_data_base_url() -> str:
             normalized = f"{normalized}{path}"
         return normalized.rstrip("/") or _DEFAULT_DATA_BASE_URL
 
-    override = os.getenv("ALPACA_DATA_BASE_URL") or os.getenv("ALPACA_DATA_URL")
+    legacy_data_url = os.getenv("ALPACA_DATA_URL")
+    if legacy_data_url not in (None, ""):
+        raise RuntimeError(
+            "ALPACA_DATA_URL is deprecated. Set ALPACA_DATA_BASE_URL instead."
+        )
+    override = os.getenv("ALPACA_DATA_BASE_URL")
     return _sanitize(override)
 
 

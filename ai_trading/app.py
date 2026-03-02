@@ -615,6 +615,14 @@ def create_app():
                 quote_state = runtime_state.observe_quote_status()
             except Exception:
                 quote_state = {}
+            try:
+                from ai_trading.monitoring.model_liveness import (
+                    get_model_liveness_snapshot,
+                )
+
+                model_liveness = get_model_liveness_snapshot()
+            except Exception:
+                model_liveness = {}
 
             raw_provider_status = provider_state.get("status")
             provider_status = raw_provider_status or (
@@ -706,6 +714,7 @@ def create_app():
                 "provider_state": provider_state,
                 "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
                 "data_status": data_status,
+                "model_liveness": model_liveness,
             }
 
             if service_reason:

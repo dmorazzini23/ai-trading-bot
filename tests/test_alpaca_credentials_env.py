@@ -16,7 +16,7 @@ class TestAlpacaCredentials:
         env_vars = {
             "ALPACA_API_KEY": "fake_alpaca_key_not_real",
             "ALPACA_SECRET_KEY": "fake_alpaca_secret_not_real",
-            "ALPACA_BASE_URL": "https://custom.alpaca.markets",
+            "ALPACA_TRADING_BASE_URL": "https://custom.alpaca.markets",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             api_key, secret_key, base_url = _resolve_alpaca_env()
@@ -31,10 +31,8 @@ class TestAlpacaCredentials:
             "ALPACA_API_URL": "https://alias-api.alpaca.markets",
         }
         with patch.dict(os.environ, env_vars, clear=True):
-            api_key, secret_key, base_url = _resolve_alpaca_env()
-            assert api_key == "alias_key"
-            assert secret_key == "alias_secret"
-            assert base_url == "https://alias-api.alpaca.markets"
+            with pytest.raises(RuntimeError, match="ALPACA_API_URL is deprecated"):
+                _resolve_alpaca_env()
 
     def test_resolve_legacy_apca_env_ignored(self) -> None:
         env_vars = {
@@ -97,14 +95,15 @@ class TestAlpacaCredentials:
         env_vars = {
             "ALPACA_API_KEY": "key",
             "ALPACA_SECRET_KEY": "secret",
-            "ALPACA_BASE_URL": "${ALPACA_BASE_URL}",
+            "ALPACA_TRADING_BASE_URL": "${ALPACA_TRADING_BASE_URL}",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             with caplog.at_level(logging.ERROR):
                 _, _, base_url = _resolve_alpaca_env()
         assert base_url == "https://paper-api.alpaca.markets"
         assert any(
-            "Set ALPACA_API_URL or ALPACA_BASE_URL" in record.message
+            "ALPACA_TRADING_BASE_URL looks like an unresolved placeholder"
+            in record.message
             for record in caplog.records
         )
 
@@ -125,7 +124,7 @@ class TestAlpacaCredentials:
         env_vars = {
             "ALPACA_API_KEY": "valid_key_123",
             "ALPACA_SECRET_KEY": "valid_secret_456",
-            "ALPACA_API_URL": "https://api.alpaca.markets",
+            "ALPACA_TRADING_BASE_URL": "https://api.alpaca.markets",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             validate_alpaca_credentials()  # Should not raise
@@ -149,19 +148,21 @@ class TestAlpacaCredentials:
         env_vars = {
             "ALPACA_API_KEY": "valid_key",
             "ALPACA_SECRET_KEY": "valid_secret",
-            "ALPACA_BASE_URL": "${ALPACA_BASE_URL}",
+            "ALPACA_TRADING_BASE_URL": "${ALPACA_TRADING_BASE_URL}",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             with pytest.raises(RuntimeError) as exc_info:
                 validate_alpaca_credentials()
-        assert "Set ALPACA_API_URL or ALPACA_BASE_URL" in str(exc_info.value)
+        assert "ALPACA_TRADING_BASE_URL looks like an unresolved placeholder" in str(
+            exc_info.value
+        )
 
     @patch("ai_trading.config.management.TESTING", False)
     def test_validate_base_url_missing_scheme(self) -> None:
         env_vars = {
             "ALPACA_API_KEY": "valid_key",
             "ALPACA_SECRET_KEY": "valid_secret",
-            "ALPACA_API_URL": "paper-api.alpaca.markets",
+            "ALPACA_TRADING_BASE_URL": "paper-api.alpaca.markets",
         }
         with patch.dict(os.environ, env_vars, clear=True):
             with pytest.raises(RuntimeError) as exc_info:
