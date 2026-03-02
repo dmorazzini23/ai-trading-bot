@@ -6,8 +6,10 @@ trains calibrated baseline ML models, and optionally trains an RL overlay.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dt_time, timedelta
@@ -18,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+from ai_trading import paths
 from ai_trading.config.management import get_env
 from ai_trading.data.fetch import get_daily_df
 from ai_trading.data.splits import PurgedGroupTimeSeriesSplit
@@ -56,6 +59,116 @@ _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "fill_ts",
 )
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_after_hours_output_path(path_value: str, *, default_relative: str) -> Path:
+    """Resolve output paths relative to writable runtime roots when possible."""
+
+    configured = str(path_value or "").strip() or default_relative
+    target = Path(configured).expanduser()
+    if target.is_absolute():
+        return target
+
+    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
+    if data_root_raw:
+        data_root = Path(data_root_raw.split(":")[0]).expanduser()
+        if data_root.is_absolute():
+            return (data_root / target).resolve()
+
+    state_root_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
+    if state_root_raw:
+        state_root = Path(state_root_raw.split(":")[0]).expanduser()
+        if state_root.is_absolute():
+            return (state_root / target).resolve()
+
+    return (_PROJECT_ROOT / target).resolve()
+
+
+def _resolve_writable_output_dir(
+    *,
+    requested: Path,
+    fallback: Path | None = None,
+    event_name: str,
+) -> Path:
+    candidates: list[Path] = [requested]
+    if fallback is not None and fallback != requested:
+        candidates.append(fallback)
+
+    last_error: Exception | None = None
+    for idx, candidate in enumerate(candidates):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            last_error = exc
+            if idx + 1 < len(candidates):
+                logger.warning(
+                    event_name,
+                    extra={
+                        "requested": str(requested),
+                        "fallback": str(candidates[idx + 1]),
+                        "reason": "mkdir_failed",
+                        "error": str(exc),
+                    },
+                )
+                continue
+            break
+        if os.access(candidate, os.W_OK):
+            if candidate != requested:
+                logger.warning(
+                    event_name,
+                    extra={
+                        "requested": str(requested),
+                        "fallback": str(candidate),
+                        "reason": "requested_not_writable",
+                    },
+                )
+            return candidate
+        last_error = PermissionError(f"Directory is not writable: {candidate}")
+        if idx + 1 < len(candidates):
+            logger.warning(
+                event_name,
+                extra={
+                    "requested": str(requested),
+                    "fallback": str(candidates[idx + 1]),
+                    "reason": "requested_not_writable",
+                },
+            )
+            continue
+        break
+
+    detail = str(last_error) if last_error is not None else "unknown_error"
+    raise RuntimeError(f"No writable directory available for {requested}: {detail}")
+
+
+def _dump_model_with_fallback(
+    model: Any,
+    model_path: Path,
+    *,
+    fallback_dir: Path | None,
+) -> Path:
+    import joblib
+
+    try:
+        joblib.dump(model, model_path)
+        return model_path
+    except OSError as exc:
+        is_perm_error = exc.errno in {errno.EROFS, errno.EACCES, errno.EPERM}
+        if not is_perm_error or fallback_dir is None:
+            raise
+        fallback_path = fallback_dir / model_path.name
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        if not os.access(fallback_dir, os.W_OK):
+            raise RuntimeError(f"Fallback model directory is not writable: {fallback_dir}") from exc
+        logger.warning(
+            "AFTER_HOURS_MODEL_WRITE_FALLBACK",
+            extra={
+                "requested_path": str(model_path),
+                "fallback_path": str(fallback_path),
+                "error": str(exc),
+            },
+        )
+        joblib.dump(model, fallback_path)
+        return fallback_path
 
 
 @dataclass(slots=True)
@@ -1252,17 +1365,30 @@ def _maybe_promote_to_runtime_model_path(
         ).strip()
     if not runtime_model_path_raw:
         return None, None
-    runtime_model_path = Path(runtime_model_path_raw)
-    if not runtime_model_path.is_absolute():
-        runtime_model_path = (_PROJECT_ROOT / runtime_model_path).resolve()
-    runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
-    runtime_model_path.write_bytes(model_path.read_bytes())
-    manifest_path = write_artifact_manifest(
-        model_path=str(runtime_model_path),
-        model_version=f"edge_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
-        training_data_range=None,
-        metadata=manifest_metadata,
+    runtime_model_path = _resolve_after_hours_output_path(
+        runtime_model_path_raw,
+        default_relative="models/runtime/ml_latest.joblib",
     )
+    try:
+        runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_model_path.write_bytes(model_path.read_bytes())
+        manifest_path = write_artifact_manifest(
+            model_path=str(runtime_model_path),
+            model_version=f"edge_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",
+            training_data_range=None,
+            metadata=manifest_metadata,
+        )
+    except OSError as exc:
+        logger.error(
+            "AFTER_HOURS_RUNTIME_PROMOTION_FAILED",
+            extra={
+                "source_path": str(model_path),
+                "target_path": str(runtime_model_path),
+                "exc_type": exc.__class__.__name__,
+                "error": str(exc),
+            },
+        )
+        return None, None
     return str(runtime_model_path), str(manifest_path)
 
 
@@ -1288,9 +1414,10 @@ def _maybe_promote_rl_overlay_to_runtime_path(
         ).strip()
     if not runtime_model_path_raw:
         return None
-    runtime_model_path = Path(runtime_model_path_raw)
-    if not runtime_model_path.is_absolute():
-        runtime_model_path = (_PROJECT_ROOT / runtime_model_path).resolve()
+    runtime_model_path = _resolve_after_hours_output_path(
+        runtime_model_path_raw,
+        default_relative="models/runtime/rl_agent.zip",
+    )
     try:
         runtime_model_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(trained_model_path, runtime_model_path)
@@ -1344,7 +1471,28 @@ def _maybe_train_rl_overlay(
         }
     timesteps = int(get_env("AI_TRADING_AFTER_HOURS_RL_TIMESTEPS", 15000, cast=int))
     algorithm = str(get_env("AI_TRADING_AFTER_HOURS_RL_ALGO", "PPO") or "PPO").upper()
-    out_dir = Path(str(get_env("AI_TRADING_AFTER_HOURS_RL_DIR", "models/after_hours_rl")))
+    requested_out_dir = _resolve_after_hours_output_path(
+        str(get_env("AI_TRADING_AFTER_HOURS_RL_DIR", "models/after_hours_rl", cast=str) or ""),
+        default_relative="models/after_hours_rl",
+    )
+    try:
+        out_dir = _resolve_writable_output_dir(
+            requested=requested_out_dir,
+            fallback=(paths.MODELS_DIR / "after_hours_rl").resolve(),
+            event_name="AFTER_HOURS_RL_DIR_FALLBACK",
+        )
+    except RuntimeError as exc:
+        logger.error(
+            "AFTER_HOURS_RL_DIR_UNWRITABLE",
+            extra={"requested": str(requested_out_dir), "error": str(exc)},
+        )
+        return {
+            "enabled": True,
+            "trained": False,
+            "recommend_use_rl_agent": False,
+            "reason": "rl_dir_unwritable",
+            "error": str(exc),
+        }
     run_dir = out_dir / now_utc.strftime("%Y%m%d_%H%M%S")
     tags = ["after_hours", "rl_overlay", "cost_aware", "walk_forward"]
     multi_seed_summary: dict[str, Any] | None = None
@@ -1440,7 +1588,6 @@ def _maybe_train_rl_overlay(
 
 def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     """Run after-hours ML training and optional RL overlay training."""
-    import joblib
     import pandas as pd
 
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
@@ -1552,8 +1699,14 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         candidate_results,
         best_name=best.name,
     )
-    report_dir = Path(
-        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports"))
+    requested_report_dir = _resolve_after_hours_output_path(
+        str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports", cast=str) or ""),
+        default_relative="runtime/research_reports",
+    )
+    report_dir = _resolve_writable_output_dir(
+        requested=requested_report_dir,
+        fallback=(paths.DATA_DIR / "runtime/research_reports").resolve(),
+        event_name="AFTER_HOURS_REPORT_DIR_FALLBACK",
     )
     prior_model_metrics = _load_prior_model_metrics(report_dir=report_dir)
     thresholds_by_regime = _threshold_by_regime(
@@ -1604,11 +1757,23 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     final_model = _fit_final_model(best.name, dataset, seed=seed)
     setattr(final_model, "edge_thresholds_by_regime_", thresholds_by_regime)
     setattr(final_model, "edge_global_threshold_", float(default_threshold))
-    model_dir = Path(str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours")))
-    model_dir.mkdir(parents=True, exist_ok=True)
+    requested_model_dir = _resolve_after_hours_output_path(
+        str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
+        default_relative="models/after_hours",
+    )
+    fallback_model_dir = (paths.MODELS_DIR / "after_hours").resolve()
+    model_dir = _resolve_writable_output_dir(
+        requested=requested_model_dir,
+        fallback=fallback_model_dir,
+        event_name="AFTER_HOURS_MODEL_DIR_FALLBACK",
+    )
     model_version = f"{best.name}_{now_utc.strftime('%Y%m%d_%H%M%S')}"
     model_path = model_dir / f"ml_edge_{model_version}.joblib"
-    joblib.dump(final_model, model_path)
+    model_path = _dump_model_with_fallback(
+        final_model,
+        model_path,
+        fallback_dir=(fallback_model_dir if fallback_model_dir != model_dir else None),
+    )
     manifest_path = write_artifact_manifest(
         model_path=str(model_path),
         model_version=model_version,

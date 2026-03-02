@@ -145,6 +145,67 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert manifest_payload["metadata"]["strategy"] == "after_hours_ml_edge"
 
 
+def test_after_hours_training_falls_back_when_model_dir_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+
+    requested_model_dir = tmp_path / "readonly_models"
+    requested_model_dir.mkdir(parents=True, exist_ok=True)
+    requested_model_dir.chmod(0o555)
+    fallback_models_root = tmp_path / "fallback_models_root"
+    monkeypatch.setattr(after_hours.paths, "MODELS_DIR", fallback_models_root)
+    original_access = after_hours.os.access
+    monkeypatch.setattr(
+        after_hours.os,
+        "access",
+        lambda candidate, mode: (
+            False
+            if Path(candidate).resolve() == requested_model_dir.resolve()
+            else original_access(candidate, mode)
+        ),
+    )
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(requested_model_dir))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+    caplog.set_level("WARNING")
+
+    try:
+        result = after_hours.run_after_hours_training(
+            now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),  # 16:10 New York
+        )
+    finally:
+        requested_model_dir.chmod(0o755)
+
+    assert result["status"] == "trained"
+    resolved_model_path = Path(result["model_path"])
+    assert resolved_model_path.exists()
+    assert resolved_model_path.parent == (fallback_models_root / "after_hours")
+    assert any(
+        record.message == "AFTER_HOURS_MODEL_DIR_FALLBACK"
+        for record in caplog.records
+    )
+
+
 def test_after_hours_sensitivity_gate_can_block_promotion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
