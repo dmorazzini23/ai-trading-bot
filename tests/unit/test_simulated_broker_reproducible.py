@@ -43,3 +43,31 @@ def test_simulated_broker_varies_for_different_seed() -> None:
     first = _run(seed=123)
     second = _run(seed=124)
     assert first != second
+
+
+def test_simulated_broker_cancel_reject_probability() -> None:
+    broker = SimulatedBroker(
+        seed=321,
+        fill_probability=1.0,
+        partial_fill_probability=0.0,
+        cancel_reject_probability=1.0,
+    )
+    submitted_at = datetime(2026, 2, 18, 15, 0, tzinfo=UTC)
+    order = broker.submit_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 1,
+            "type": "limit",
+            "limit_price": 190.0,
+            "client_order_id": "cancel-reject",
+        },
+        timestamp=submitted_at,
+    )
+    cancelled = broker.cancel_order(order["id"], timestamp=submitted_at)
+    assert cancelled is False
+    events = broker.process_until(
+        now=submitted_at + timedelta(seconds=1),
+        market_price_by_symbol={"AAPL": 190.0},
+    )
+    assert any(event.get("event_type") == "cancel_rejected" for event in events)

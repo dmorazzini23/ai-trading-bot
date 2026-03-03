@@ -32743,6 +32743,36 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 },
             )
 
+    if bool(get_env("AI_TRADING_DAILY_RISK_HARD_STOP_ENABLED", True, cast=bool)) and check_daily_loss(runtime, state):
+        state.halt_trading = True
+        state.halt_reason = "DAILY_RISK_BUDGET_HARD_STOP"
+    if (
+        not state.halt_trading
+        and bool(get_env("AI_TRADING_WEEKLY_RISK_HARD_STOP_ENABLED", False, cast=bool))
+        and check_weekly_loss(runtime, state)
+    ):
+        state.halt_trading = True
+        state.halt_reason = "WEEKLY_RISK_BUDGET_HARD_STOP"
+    if state.halt_trading:
+        reason = state.halt_reason or "HALT_TRADING"
+        base_snapshot = _decision_record_config_snapshot(
+            cfg=cfg,
+            state=state,
+            allocation_weights=allocation_weights,
+            learned_overrides=learned_overrides,
+            sleeve_configs=sleeve_snapshot,
+        )
+        record = DecisionRecord(
+            symbol="ALL",
+            bar_ts=now,
+            sleeves=[],
+            net_target=NettedTarget(symbol="ALL", bar_ts=now, target_dollars=0.0, target_shares=0.0),
+            gates=[reason],
+            config_snapshot=base_snapshot,
+        )
+        _write_decision_record(record, decision_path)
+        return
+
     sleeves = [s for s in build_sleeve_configs(cfg) if s.enabled]
     if not sleeves:
         logger.warning("HORIZONS_EMPTY")
@@ -33421,7 +33451,95 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
         return
 
+    slo_derisk_scale = 1.0
+    slo_derisk_details: dict[str, Any] = {}
+    if bool(get_env("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", True, cast=bool)):
+        mode = str(get_env("AI_TRADING_DERISK_SLO_MODE", "block", cast=str) or "block").strip().lower()
+        if mode not in {"block", "scale"}:
+            mode = "block"
+        min_samples = max(1, int(get_env("AI_TRADING_DERISK_SLO_MIN_SAMPLES", 5, cast=int)))
+        max_reject_rate_pct = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_REJECT_RATE_PCT", 5.0, cast=float)
+        )
+        max_execution_drift_bps = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_EXEC_DRIFT_BPS", 35.0, cast=float)
+        )
+        reject_rate_pct = 0.0
+        execution_drift_bps = 0.0
+        reject_samples = 0
+        drift_samples = 0
+        try:
+            from ai_trading.monitoring.slo import get_slo_monitor
+
+            monitor = get_slo_monitor()
+            reject_status = monitor.get_slo_status("order_reject_rate_pct")
+            drift_status = monitor.get_slo_status("execution_drift_bps")
+            if isinstance(reject_status, MappingABC):
+                reject_rate_pct = float(reject_status.get("current_value") or 0.0)
+                reject_samples = int(reject_status.get("sample_count") or 0)
+            if isinstance(drift_status, MappingABC):
+                execution_drift_bps = float(drift_status.get("current_value") or 0.0)
+                drift_samples = int(drift_status.get("sample_count") or 0)
+        except Exception:
+            logger.debug("SLO_DERISK_SNAPSHOT_FAILED", exc_info=True)
+        reject_breached = reject_samples >= min_samples and reject_rate_pct >= max_reject_rate_pct
+        drift_breached = drift_samples >= min_samples and execution_drift_bps >= max_execution_drift_bps
+        breached = bool(reject_breached or drift_breached)
+        slo_derisk_details = {
+            "mode": mode,
+            "reject_rate_pct": reject_rate_pct,
+            "execution_drift_bps": execution_drift_bps,
+            "reject_samples": reject_samples,
+            "drift_samples": drift_samples,
+            "max_reject_rate_pct": max_reject_rate_pct,
+            "max_execution_drift_bps": max_execution_drift_bps,
+            "reject_breached": reject_breached,
+            "drift_breached": drift_breached,
+            "breached": breached,
+        }
+        if breached:
+            if mode == "block":
+                state.halt_trading = True
+                state.halt_reason = "DERISK_SLO_BREACH_BLOCK"
+            else:
+                configured_scale = float(
+                    get_env("AI_TRADING_DERISK_SLO_SCALE_MULT", 0.5, cast=float)
+                )
+                configured_scale = max(0.05, min(configured_scale, 1.0))
+                slo_derisk_scale = min(slo_derisk_scale, configured_scale)
+                slo_derisk_details["scale_mult"] = configured_scale
+            logger.warning("DERISK_SLO_BREACH", extra=slo_derisk_details)
+
     liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
+    event_blackout_enabled = bool(get_env("AI_TRADING_EVENT_RISK_BLACKOUT_ENABLED", True, cast=bool))
+    event_blackout_days = max(0, int(get_env("AI_TRADING_EVENT_BLACKOUT_DAYS", 3, cast=int)))
+    event_blackout_cache: dict[str, bool] = {}
+    alpha_decay_deweight_enabled = bool(
+        get_env("AI_TRADING_ALPHA_DECAY_DEWEIGHT_ENABLED", True, cast=bool)
+    )
+    alpha_decay_qty_step = float(get_env("AI_TRADING_ALPHA_DECAY_QTY_STEP", 0.15, cast=float))
+    alpha_decay_qty_max_deweight = float(
+        get_env("AI_TRADING_ALPHA_DECAY_QTY_MAX_DEWEIGHT", 0.75, cast=float)
+    )
+    alpha_decay_qty_step = max(0.0, min(alpha_decay_qty_step, 1.0))
+    alpha_decay_qty_max_deweight = max(0.0, min(alpha_decay_qty_max_deweight, 0.95))
+    capacity_throttle_enabled = bool(
+        get_env("AI_TRADING_CAPACITY_AWARE_THROTTLE_ENABLED", True, cast=bool)
+    )
+    capacity_spread_soft_bps = float(
+        get_env("AI_TRADING_CAPACITY_SPREAD_SOFT_BPS", 12.0, cast=float)
+    )
+    capacity_spread_hard_bps = float(
+        get_env("AI_TRADING_CAPACITY_SPREAD_HARD_BPS", 30.0, cast=float)
+    )
+    capacity_volume_soft_participation = float(
+        get_env("AI_TRADING_CAPACITY_SOFT_PARTICIPATION", 0.05, cast=float)
+    )
+    capacity_volume_hard_participation = float(
+        get_env("AI_TRADING_CAPACITY_HARD_PARTICIPATION", 0.20, cast=float)
+    )
+    capacity_min_scale = float(get_env("AI_TRADING_CAPACITY_MIN_SCALE", 0.25, cast=float))
+    capacity_min_scale = max(0.05, min(capacity_min_scale, 1.0))
     thin_spread_bps = float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float))
     thin_vol_mult = float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float))
     for symbol, net_target in targets.items():
@@ -33582,6 +33700,35 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
 
+        event_risk_near = False
+        if event_blackout_enabled:
+            cached_event_risk = event_blackout_cache.get(symbol)
+            if cached_event_risk is None:
+                try:
+                    cached_event_risk = bool(is_near_event(symbol, days=event_blackout_days))
+                except Exception:
+                    cached_event_risk = False
+                    logger.debug(
+                        "EVENT_BLACKOUT_CHECK_FAILED",
+                        extra={"symbol": symbol, "days": event_blackout_days},
+                        exc_info=True,
+                    )
+                event_blackout_cache[symbol] = cached_event_risk
+            event_risk_near = bool(cached_event_risk)
+            symbol_snapshot["event_risk_near"] = event_risk_near
+            if event_risk_near:
+                gates.append("EVENT_RISK_BLACKOUT_BLOCK")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
+
         if state.last_order_bar_ts.get(symbol) == net_target.bar_ts:
             gates.append("BAR_DEDUP")
             record = DecisionRecord(
@@ -33652,6 +33799,113 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 _write_decision_record(record, decision_path)
                 continue
 
+        if current_shares == 0 and alpha_decay_deweight_enabled:
+            alpha_guard = _alpha_decay_entry_guard(state, symbol, now)
+            if alpha_guard.get("blocked"):
+                gates.append("ALPHA_DECAY_BLOCK")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    metrics={"alpha_decay": alpha_guard},
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
+            trades_in_window = int(alpha_guard.get("trades_in_window", 0) or 0)
+            start_trades = int(alpha_guard.get("start_trades", 0) or 0)
+            over_start = max(0, trades_in_window - max(0, start_trades) + 1)
+            if over_start > 0 and alpha_decay_qty_step > 0:
+                deweight = min(alpha_decay_qty_max_deweight, over_start * alpha_decay_qty_step)
+                multiplier = max(0.05, 1.0 - deweight)
+                scaled_qty = int(round(float(delta_shares) * multiplier))
+                if scaled_qty == 0:
+                    gates.append("ALPHA_DECAY_ZERO_QTY_BLOCK")
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        metrics={"alpha_decay": alpha_guard | {"multiplier": multiplier}},
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                if scaled_qty != delta_shares:
+                    delta_shares = scaled_qty
+                    net_target.target_shares = current_shares + delta_shares
+                    net_target.target_dollars = net_target.target_shares * price
+                    gates.append("ALPHA_DECAY_DEWEIGHT")
+                    symbol_snapshot["alpha_decay"] = {
+                        "trades_in_window": trades_in_window,
+                        "start_trades": start_trades,
+                        "multiplier": multiplier,
+                    }
+
+        if capacity_throttle_enabled and delta_shares != 0:
+            capacity_scale = 1.0
+            spread_bps_now = max(float(liq_features.spread_bps), 0.0)
+            if capacity_spread_hard_bps > capacity_spread_soft_bps and spread_bps_now > capacity_spread_soft_bps:
+                if spread_bps_now >= capacity_spread_hard_bps:
+                    spread_scale = capacity_min_scale
+                else:
+                    spread_progress = (spread_bps_now - capacity_spread_soft_bps) / (
+                        capacity_spread_hard_bps - capacity_spread_soft_bps
+                    )
+                    spread_scale = 1.0 - spread_progress * (1.0 - capacity_min_scale)
+                capacity_scale = min(capacity_scale, max(capacity_min_scale, spread_scale))
+            rolling_volume = max(float(liq_features.rolling_volume), 0.0)
+            if (
+                rolling_volume > 0
+                and capacity_volume_hard_participation > capacity_volume_soft_participation
+            ):
+                participation = abs(float(delta_shares)) / rolling_volume
+                if participation > capacity_volume_soft_participation:
+                    if participation >= capacity_volume_hard_participation:
+                        volume_scale = capacity_min_scale
+                    else:
+                        participation_progress = (
+                            participation - capacity_volume_soft_participation
+                        ) / (capacity_volume_hard_participation - capacity_volume_soft_participation)
+                        volume_scale = 1.0 - participation_progress * (1.0 - capacity_min_scale)
+                    capacity_scale = min(capacity_scale, max(capacity_min_scale, volume_scale))
+            if slo_derisk_scale < 1.0:
+                capacity_scale = min(capacity_scale, slo_derisk_scale)
+            if capacity_scale < 1.0:
+                throttled_qty = int(round(float(delta_shares) * capacity_scale))
+                if throttled_qty == 0:
+                    gates.append("CAPACITY_THROTTLE_BLOCK")
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        metrics={
+                            "capacity_scale": capacity_scale,
+                            "spread_bps": spread_bps_now,
+                            "rolling_volume": rolling_volume,
+                            "slo_derisk": slo_derisk_details,
+                        },
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                if throttled_qty != delta_shares:
+                    delta_shares = throttled_qty
+                    net_target.target_shares = current_shares + delta_shares
+                    net_target.target_dollars = net_target.target_shares * price
+                    gates.append("CAPACITY_THROTTLE_SCALE")
+                    symbol_snapshot["capacity_throttle"] = {
+                        "scale": capacity_scale,
+                        "spread_bps": spread_bps_now,
+                        "rolling_volume": rolling_volume,
+                        "slo_derisk": slo_derisk_details,
+                    }
+
         min_qty = int(getattr(cfg, "execution_min_qty", 1))
         min_notional = float(getattr(cfg, "execution_min_notional", 1.0))
         if abs(delta_shares) < min_qty or abs(delta_shares) * price < min_notional:
@@ -33713,7 +33967,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             client_order_id=client_order_id,
             last_price=price,
             mid=price,
-            spread=None,
+            spread=(float(liq_features.spread_bps) / 10_000.0) * float(price),
+            avg_daily_volume=max(float(liq_features.rolling_volume) * 390.0, 0.0),
+            minute_volume=max(float(liq_features.rolling_volume), 0.0),
+            liquidity_bucket=liq_regime.value.upper(),
+            quote_quality_ok=not bool(state.halt_trading),
+            sector=get_sector(symbol),
+            event_risk=event_risk_near,
+            event_type="earnings" if event_risk_near else None,
+            execution_drift_bps=float(slo_derisk_details.get("execution_drift_bps", 0.0) or 0.0),
+            reject_rate_pct=float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0),
         )
         pretrade_cfg: Any = cfg
         effective_collar_pct: float | None = None

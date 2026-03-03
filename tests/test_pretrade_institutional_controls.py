@@ -24,6 +24,10 @@ class _ExposureLedger:
         intraday_var: float = 0.0,
         intraday_cvar: float = 0.0,
         current_drawdown: float = 0.0,
+        daily_loss_pct: float = 0.0,
+        daily_loss_abs: float = 0.0,
+        reject_rate_pct: float = 0.0,
+        execution_drift_bps: float = 0.0,
     ) -> None:
         self._symbol_qty = {str(k).upper(): float(v) for k, v in (symbol_qty or {}).items()}
         self._gross_notional = float(gross_notional)
@@ -32,6 +36,10 @@ class _ExposureLedger:
         self._intraday_var = float(intraday_var)
         self._intraday_cvar = float(intraday_cvar)
         self._current_drawdown = float(current_drawdown)
+        self._daily_loss_pct = float(daily_loss_pct)
+        self._daily_loss_abs = float(daily_loss_abs)
+        self._reject_rate_pct = float(reject_rate_pct)
+        self._execution_drift_bps = float(execution_drift_bps)
 
     @staticmethod
     def seen_client_order_id(_value: str) -> bool:
@@ -57,6 +65,18 @@ class _ExposureLedger:
 
     def current_drawdown(self) -> float:
         return float(self._current_drawdown)
+
+    def daily_loss_pct(self) -> float:
+        return float(self._daily_loss_pct)
+
+    def daily_loss_abs(self) -> float:
+        return float(self._daily_loss_abs)
+
+    def reject_rate_pct(self) -> float:
+        return float(self._reject_rate_pct)
+
+    def execution_drift_bps(self) -> float:
+        return float(self._execution_drift_bps)
 
 
 def _intent(
@@ -235,3 +255,55 @@ def test_pretrade_derisk_blocks_on_data_degraded(monkeypatch: pytest.MonkeyPatch
     assert allowed is False
     assert reason == "DERISK_DATA_QUALITY_BLOCK"
     assert details["data_degraded"] is True
+
+
+def test_pretrade_blocks_daily_risk_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_DAILY_RISK_BUDGET_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DAILY_LOSS_LIMIT_PCT", "0.02")
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger(daily_loss_pct=0.03)
+    intent = _intent(symbol="SPY", side="buy", qty=1, price=100.0)
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "DAILY_RISK_BUDGET_BLOCK"
+    assert details["daily_loss_pct"] == pytest.approx(0.03)
+
+
+def test_pretrade_blocks_event_risk_blackout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_EVENT_RISK_BLACKOUT_ENABLED", "1")
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger()
+    intent = _intent(
+        symbol="NVDA",
+        side="buy",
+        qty=2,
+        price=100.0,
+        event_risk=True,
+        event_type="earnings",
+    )
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "EVENT_RISK_BLACKOUT_BLOCK"
+    assert details["event_type"] == "earnings"
+
+
+def test_pretrade_blocks_on_slo_derisk_breach(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_MODE", "block")
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_MAX_EXEC_DRIFT_BPS", "20")
+    cfg = SimpleNamespace(max_order_dollars=0.0, max_order_shares=0, price_collar_pct=0.10)
+    ledger = _ExposureLedger(execution_drift_bps=25.0)
+    intent = _intent(symbol="AAPL", side="buy", qty=1, price=100.0)
+    limiter = SlidingWindowRateLimiter(global_orders_per_min=100, per_symbol_orders_per_min=100)
+
+    allowed, reason, details = validate_pretrade(intent, cfg=cfg, ledger=ledger, rate_limiter=limiter)
+
+    assert allowed is False
+    assert reason == "DERISK_SLO_BREACH_BLOCK"
+    assert details["execution_drift_bps"] == pytest.approx(25.0)

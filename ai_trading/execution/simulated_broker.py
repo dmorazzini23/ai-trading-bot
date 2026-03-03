@@ -42,12 +42,20 @@ class SimulatedBroker:
         seed: int = 42,
         fill_probability: float = 0.95,
         partial_fill_probability: float = 0.35,
+        min_fill_delay_ms: int = 150,
+        max_fill_delay_ms: int = 2500,
+        cancel_reject_probability: float = 0.0,
     ) -> None:
         self._rng = random.Random(int(seed))
         self._fill_probability = max(0.0, min(1.0, float(fill_probability)))
         self._partial_fill_probability = max(
             0.0, min(1.0, float(partial_fill_probability))
         )
+        parsed_min_delay = max(0, int(min_fill_delay_ms))
+        parsed_max_delay = max(parsed_min_delay, int(max_fill_delay_ms))
+        self._min_fill_delay_ms = parsed_min_delay
+        self._max_fill_delay_ms = parsed_max_delay
+        self._cancel_reject_probability = max(0.0, min(1.0, float(cancel_reject_probability)))
         self._counter = 0
         self._orders: dict[str, dict[str, Any]] = {}
         self._events: deque[dict[str, Any]] = deque()
@@ -95,6 +103,7 @@ class SimulatedBroker:
         vol_delay_ms = int(max(0.0, volatility_pct) * 10_000)
         jitter_ms = self._rng.randint(0, 750)
         delay_ms = base_delay_ms + vol_delay_ms + jitter_ms
+        delay_ms = max(self._min_fill_delay_ms, min(self._max_fill_delay_ms, delay_ms))
         due_at = now + timedelta(milliseconds=delay_ms)
 
         if self._rng.random() > self._fill_probability:
@@ -120,6 +129,17 @@ class SimulatedBroker:
         if status in {"filled", "canceled", "rejected"}:
             return False
         now = _to_utc(timestamp)
+        if self._rng.random() < self._cancel_reject_probability:
+            self._events.append(
+                {
+                    "event_type": "cancel_rejected",
+                    "order_id": order_id,
+                    "symbol": model_order.get("symbol"),
+                    "ts": now.isoformat(),
+                    "status": str(model_order.get("status", "open")),
+                }
+            )
+            return False
         model_order["status"] = "canceled"
         model_order["updated_at"] = now.isoformat()
         self._scheduled = [item for item in self._scheduled if item.order_id != order_id]
@@ -251,4 +271,3 @@ class SimulatedBroker:
         if side == "buy":
             return float(base + spread_component * 0.5 + vol_component + jitter)
         return float(base - spread_component * 0.5 - vol_component + jitter)
-

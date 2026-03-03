@@ -41,7 +41,31 @@ class ReplayEventLoop:
     ) -> None:
         replay_seed = int(seed if seed is not None else get_env("REPLAY_SEED", "42", cast=int))
         self.strategy = strategy
-        self.broker = broker or SimulatedBroker(seed=replay_seed)
+        if broker is None:
+            fill_probability = float(
+                get_env("AI_TRADING_REPLAY_FILL_PROBABILITY", 0.95, cast=float)
+            )
+            partial_fill_probability = float(
+                get_env("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", 0.35, cast=float)
+            )
+            min_fill_delay_ms = int(
+                get_env("AI_TRADING_REPLAY_FILL_MIN_DELAY_MS", 150, cast=int)
+            )
+            max_fill_delay_ms = int(
+                get_env("AI_TRADING_REPLAY_FILL_MAX_DELAY_MS", 2500, cast=int)
+            )
+            cancel_reject_probability = float(
+                get_env("AI_TRADING_REPLAY_CANCEL_REJECT_PROBABILITY", 0.0, cast=float)
+            )
+            broker = SimulatedBroker(
+                seed=replay_seed,
+                fill_probability=fill_probability,
+                partial_fill_probability=partial_fill_probability,
+                min_fill_delay_ms=min_fill_delay_ms,
+                max_fill_delay_ms=max_fill_delay_ms,
+                cancel_reject_probability=cancel_reject_probability,
+            )
+        self.broker = broker
         self.seed = replay_seed
         self.max_symbol_notional = float(
             max_symbol_notional

@@ -41,3 +41,23 @@ def test_replay_event_loop_emits_async_fill_events_deterministically() -> None:
     second_bar = _parse_utc(bars[1]["ts"])
     assert any(first_bar < _parse_utc(str(event["ts"])) < second_bar for event in fills)
 
+
+def test_replay_event_loop_respects_fill_probability_env(monkeypatch) -> None:
+    bars = [
+        {"symbol": "AAPL", "ts": "2026-02-18T15:00:00Z", "close": 190.0},
+        {"symbol": "AAPL", "ts": "2026-02-18T15:01:00Z", "close": 190.5},
+    ]
+
+    def strategy(bar):
+        return {
+            "symbol": bar["symbol"],
+            "side": "buy",
+            "qty": 2,
+            "price": bar["close"],
+            "intent_key": f"{bar['symbol']}|{bar['ts']}",
+        }
+
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "0.0")
+    result = ReplayEventLoop(strategy=strategy, seed=123).run(bars)
+    fills = [event for event in result["events"] if event.get("event_type") == "fill"]
+    assert fills == []

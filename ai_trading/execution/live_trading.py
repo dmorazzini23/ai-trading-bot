@@ -1910,6 +1910,8 @@ class ExecutionEngine:
             "last_reset": datetime.now(UTC),
             "capacity_skips": 0,
             "skipped_orders": 0,
+            "failover_submits": 0,
+            "failover_failures": 0,
         }
         self.order_manager = OrderManager()
         self.base_url = get_alpaca_base_url()
@@ -3534,6 +3536,195 @@ class ExecutionEngine:
         if detail:
             extra["detail"] = detail
         logger.error("BROKER_UNAUTHORIZED", extra=extra)
+
+    def _is_failover_eligible_error(self, error: Exception) -> bool:
+        if isinstance(error, (TimeoutError, ConnectionError, ConnectionResetError)):
+            return True
+        if not isinstance(error, APIError):
+            return False
+        try:
+            status = int(getattr(error, "status_code", None))
+        except (TypeError, ValueError):
+            status = None
+        if status in {429, 500, 502, 503, 504}:
+            return True
+        detail = str(getattr(error, "message", "") or error).strip().lower()
+        if not detail:
+            return False
+        transient_tokens = (
+            "timeout",
+            "temporar",
+            "service unavailable",
+            "connection reset",
+            "internal server error",
+            "gateway",
+            "rate limit",
+        )
+        return any(token in detail for token in transient_tokens)
+
+    def _record_broker_resilience_playbook(
+        self,
+        *,
+        action: str,
+        provider: str,
+        reason: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        default_path = "runtime/broker_resilience_playbook.jsonl"
+        configured = str(os.getenv("AI_TRADING_BROKER_RESILIENCE_PLAYBOOK_PATH", default_path) or default_path)
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            path = (Path(__file__).resolve().parents[2] / path).resolve()
+        payload: dict[str, Any] = {
+            "ts": datetime.now(UTC).isoformat(),
+            "action": action,
+            "provider": provider,
+            "reason": reason,
+        }
+        if details:
+            payload["details"] = dict(details)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, sort_keys=True))
+                handle.write("\n")
+        except OSError as exc:
+            logger.debug(
+                "BROKER_RESILIENCE_PLAYBOOK_WRITE_FAILED",
+                extra={"path": str(path), "error": str(exc)},
+            )
+
+    def _attempt_failover_submit(
+        self,
+        order_data: Mapping[str, Any],
+        *,
+        primary_error: Exception,
+    ) -> dict[str, Any] | None:
+        enabled = _resolve_bool_env("AI_TRADING_BROKER_FAILOVER_ENABLED")
+        if enabled is None:
+            enabled = False
+        if not bool(enabled):
+            return None
+        if not self._is_failover_eligible_error(primary_error):
+            return None
+        provider_raw: Any = None
+        if _config_get_env is not None:
+            try:
+                provider_raw = _config_get_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", None)
+            except Exception:
+                provider_raw = None
+        if provider_raw in (None, ""):
+            provider_raw = os.getenv("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
+        provider = str(provider_raw or "paper").strip().lower()
+        if not provider:
+            return None
+        try:
+            adapter = build_broker_adapter(provider=provider, client=None, paper_buying_power="100000")
+        except Exception as exc:
+            self.stats.setdefault("failover_failures", 0)
+            self.stats["failover_failures"] += 1
+            self._record_broker_resilience_playbook(
+                action="failover_adapter_error",
+                provider=provider,
+                reason="adapter_build_failed",
+                details={"error": str(exc)},
+            )
+            return None
+        if adapter is None:
+            self.stats.setdefault("failover_failures", 0)
+            self.stats["failover_failures"] += 1
+            self._record_broker_resilience_playbook(
+                action="failover_adapter_missing",
+                provider=provider,
+                reason="adapter_unavailable",
+                details={"primary_error": str(primary_error)},
+            )
+            return None
+
+        quantity = order_data.get("quantity", order_data.get("qty"))
+        payload: dict[str, Any] = {
+            "symbol": order_data.get("symbol"),
+            "side": order_data.get("side"),
+            "quantity": quantity,
+            "qty": quantity,
+            "type": order_data.get("type", order_data.get("order_type", "limit")),
+            "limit_price": order_data.get("limit_price", order_data.get("price")),
+            "price": order_data.get("price", order_data.get("limit_price")),
+            "time_in_force": order_data.get("time_in_force", "day"),
+            "client_order_id": order_data.get("client_order_id"),
+        }
+        submit = getattr(adapter, "submit_order", None)
+        if not callable(submit):
+            self.stats.setdefault("failover_failures", 0)
+            self.stats["failover_failures"] += 1
+            self._record_broker_resilience_playbook(
+                action="failover_submit_missing",
+                provider=provider,
+                reason="submit_order_missing",
+                details={},
+            )
+            return None
+        try:
+            response = submit(payload)
+        except Exception as exc:
+            self.stats.setdefault("failover_failures", 0)
+            self.stats["failover_failures"] += 1
+            self._record_broker_resilience_playbook(
+                action="failover_submit_failed",
+                provider=provider,
+                reason="submit_failed",
+                details={
+                    "primary_error": str(primary_error),
+                    "error": str(exc),
+                    "symbol": str(order_data.get("symbol") or ""),
+                },
+            )
+            logger.error(
+                "BROKER_FAILOVER_SUBMIT_FAILED",
+                extra={
+                    "provider": provider,
+                    "symbol": order_data.get("symbol"),
+                    "error": str(exc),
+                },
+            )
+            return None
+
+        order_id = _extract_value(response, "id", "order_id")
+        status = _extract_value(response, "status")
+        failover_response = {
+            "id": order_id or f"{provider}-fallback",
+            "status": str(status or "accepted"),
+            "symbol": order_data.get("symbol"),
+            "side": order_data.get("side"),
+            "qty": quantity,
+            "client_order_id": _extract_value(response, "client_order_id")
+            or order_data.get("client_order_id"),
+            "provider": provider,
+            "failover": True,
+            "raw": response,
+        }
+        self.stats.setdefault("failover_submits", 0)
+        self.stats["failover_submits"] += 1
+        self._record_broker_resilience_playbook(
+            action="failover_submit_success",
+            provider=provider,
+            reason="primary_submit_failed",
+            details={
+                "primary_error": str(primary_error),
+                "symbol": str(order_data.get("symbol") or ""),
+                "status": str(failover_response.get("status")),
+            },
+        )
+        logger.warning(
+            "BROKER_FAILOVER_SUBMIT_SUCCESS",
+            extra={
+                "provider": provider,
+                "symbol": order_data.get("symbol"),
+                "order_id": failover_response["id"],
+                "status": failover_response["status"],
+            },
+        )
+        return failover_response
 
     def _submit_rate_limit_config(self) -> dict[str, Any]:
         """Resolve submit rate limiting configuration."""
@@ -8471,6 +8662,9 @@ class ExecutionEngine:
                     "time_in_force": tif_token,
                 },
             )
+            failover_response = self._attempt_failover_submit(order_data, primary_error=e)
+            if failover_response is not None:
+                return failover_response
             raise
 
     def _replace_limit_order_with_marketable(
