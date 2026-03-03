@@ -175,6 +175,30 @@ else:
 success = promotion.promote_to_production(model_id, force=True)
 ```
 
+### Champion/Challenger Rollback
+```python
+# Roll back to the prior production model for a strategy.
+rolled_back = promotion.rollback_to_previous_production(
+    strategy="momentum",
+    reason="live_degradation",
+)
+```
+
+### Challenger Evaluation Logging
+```python
+# Persist challenger-vs-champion comparisons for governance review.
+promotion.record_challenger_evaluation(
+    strategy="momentum",
+    champion_model_id="prod_abc",
+    challenger_model_id="shadow_xyz",
+    metrics={
+        "is_bps": 4.2,
+        "reject_rate": 0.01,
+        "partial_fill_rate": 0.07,
+    },
+)
+```
+
 ### Active Model Management
 ```python
 # Get current production model

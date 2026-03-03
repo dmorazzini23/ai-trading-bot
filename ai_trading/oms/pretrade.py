@@ -157,6 +157,57 @@ def _ledger_fingerprints(ledger: Any) -> set[tuple[str, str, int, str]]:
     return seen
 
 
+def _ledger_position_qty(ledger: Any, symbol: str) -> float | None:
+    if ledger is None:
+        return None
+    symbol_norm = str(symbol).upper()
+    method_names = ("position_qty", "get_position_qty", "current_position_qty")
+    for method_name in method_names:
+        method = getattr(ledger, method_name, None)
+        if callable(method):
+            try:
+                return float(method(symbol_norm))
+            except (TypeError, ValueError):
+                continue
+    positions = getattr(ledger, "positions", None)
+    if isinstance(positions, dict):
+        raw_position = positions.get(symbol_norm)
+        if raw_position is None:
+            return 0.0
+        if isinstance(raw_position, (int, float)):
+            return float(raw_position)
+        raw_qty = getattr(raw_position, "qty", None)
+        if raw_qty is not None:
+            try:
+                return float(raw_qty)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _ledger_gross_notional(ledger: Any) -> float | None:
+    if ledger is None:
+        return None
+    method_names = (
+        "gross_notional",
+        "get_gross_notional",
+        "current_gross_notional",
+    )
+    for method_name in method_names:
+        method = getattr(ledger, method_name, None)
+        if callable(method):
+            try:
+                return float(method())
+            except (TypeError, ValueError):
+                continue
+    attr_names = ("gross_notional", "gross_exposure_notional")
+    for attr_name in attr_names:
+        value = getattr(ledger, attr_name, None)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
 def validate_pretrade(
     intent: OrderIntent,
     *,
@@ -193,6 +244,24 @@ def validate_pretrade(
             cast=float,
         )
     )
+    max_symbol_notional = float(
+        _cfg_value(
+            cfg,
+            field="max_symbol_notional",
+            env_keys=("MAX_SYMBOL_NOTIONAL", "AI_TRADING_MAX_SYMBOL_NOTIONAL"),
+            default=0.0,
+            cast=float,
+        )
+    )
+    max_gross_notional = float(
+        _cfg_value(
+            cfg,
+            field="max_gross_notional",
+            env_keys=("MAX_GROSS_NOTIONAL", "AI_TRADING_MAX_GROSS_NOTIONAL"),
+            default=0.0,
+            cast=float,
+        )
+    )
 
     qty_abs = abs(int(intent.qty))
     notional_abs = abs(float(intent.notional))
@@ -202,6 +271,39 @@ def validate_pretrade(
         return False, "ORDER_SIZE_BLOCK", {"qty": qty_abs, "notional": notional_abs}
 
     reference = intent.mid if intent.mid and intent.mid > 0 else intent.last_price
+    if reference is not None and reference > 0:
+        signed_qty = qty_abs if str(intent.side).strip().lower() == "buy" else -qty_abs
+        current_symbol_qty = _ledger_position_qty(ledger, intent.symbol)
+        if current_symbol_qty is not None:
+            projected_symbol_notional = abs((current_symbol_qty + signed_qty) * float(reference))
+            if max_symbol_notional > 0 and projected_symbol_notional > max_symbol_notional:
+                return (
+                    False,
+                    "SYMBOL_NOTIONAL_BLOCK",
+                    {
+                        "symbol": str(intent.symbol).upper(),
+                        "projected_symbol_notional": projected_symbol_notional,
+                        "max_symbol_notional": max_symbol_notional,
+                    },
+                )
+            current_gross_notional = _ledger_gross_notional(ledger)
+            if current_gross_notional is not None and max_gross_notional > 0:
+                current_symbol_notional = abs(current_symbol_qty * float(reference))
+                projected_gross_notional = max(
+                    0.0,
+                    float(current_gross_notional) - current_symbol_notional + projected_symbol_notional,
+                )
+                if projected_gross_notional > max_gross_notional:
+                    return (
+                        False,
+                        "GROSS_NOTIONAL_BLOCK",
+                        {
+                            "projected_gross_notional": projected_gross_notional,
+                            "max_gross_notional": max_gross_notional,
+                            "symbol": str(intent.symbol).upper(),
+                        },
+                    )
+
     if intent.limit_price is not None and reference and reference > 0:
         deviation = abs(float(intent.limit_price) - float(reference)) / float(reference)
         if deviation > max(0.0, collar_pct):
@@ -232,3 +334,32 @@ def validate_pretrade(
     if ledger is not None:
         fingerprints.add(fingerprint)
     return True, "OK", {}
+
+
+def safe_validate_pretrade(
+    intent: OrderIntent,
+    *,
+    cfg: Any,
+    ledger: Any,
+    rate_limiter: SlidingWindowRateLimiter,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Validate pre-trade controls with fail-closed handling on unexpected errors."""
+
+    fail_closed = bool(get_env("AI_TRADING_PRETRADE_FAIL_CLOSED", True, cast=bool))
+    try:
+        return validate_pretrade(
+            intent,
+            cfg=cfg,
+            ledger=ledger,
+            rate_limiter=rate_limiter,
+        )
+    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+        details = {
+            "error": str(exc),
+            "symbol": str(intent.symbol).upper(),
+            "client_order_id": intent.client_order_id,
+            "fail_closed": fail_closed,
+        }
+        if fail_closed:
+            return False, "PRETRADE_VALIDATION_ERROR", details
+        return True, "PRETRADE_VALIDATION_FAIL_OPEN", details

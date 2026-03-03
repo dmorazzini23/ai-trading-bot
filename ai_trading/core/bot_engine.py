@@ -140,7 +140,7 @@ from ai_trading.oms.cancel_all import (
 from ai_trading.oms.pretrade import (
     OrderIntent as PretradeOrderIntent,
     SlidingWindowRateLimiter,
-    validate_pretrade,
+    safe_validate_pretrade,
 )
 from ai_trading.oms.orders import validate_order_type_support
 from ai_trading.analytics.post_trade_learning import (
@@ -33735,7 +33735,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 )
                 symbol_snapshot["liquidity_collar_multiplier"] = collar_mult
                 symbol_snapshot["price_collar_pct_effective"] = effective_collar_pct
-        allowed, pretrade_reason, pretrade_details = validate_pretrade(
+        allowed, pretrade_reason, pretrade_details = safe_validate_pretrade(
             intent,
             cfg=pretrade_cfg,
             ledger=ledger,

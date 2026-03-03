@@ -177,18 +177,138 @@ class ModelPromotion:
                 raise ValueError(f'Model {model_id} not found')
             strategy = model_info['strategy']
             current_production = self.registry.get_production_model(strategy)
+            promoted_at = datetime.now(UTC).isoformat()
+            previous_model_id: str | None = None
             if current_production:
                 old_model_id, _ = current_production
-                self.registry.update_governance_status(old_model_id, 'registered')
-                self._remove_active_symlink(strategy)
-                self.logger.info(f'Demoted previous production model {old_model_id} for strategy {strategy}')
-            self.registry.update_governance_status(model_id, 'production')
+                previous_model_id = old_model_id
+                if old_model_id != model_id:
+                    self.registry.update_governance_status(
+                        old_model_id,
+                        'challenger',
+                        {
+                            'demoted_at': promoted_at,
+                            'replaced_by': model_id,
+                        },
+                    )
+                    self._remove_active_symlink(strategy)
+                    self.logger.info(f'Demoted previous production model {old_model_id} for strategy {strategy}')
+            self.registry.update_governance_status(
+                model_id,
+                'production',
+                {
+                    'promoted_at': promoted_at,
+                    'previous_production_model_id': previous_model_id,
+                },
+            )
             self._create_active_symlink(strategy, model_id)
             self.logger.info(f'Promoted model {model_id} to production for strategy {strategy}')
             return True
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error promoting model {model_id}: {e}')
             return False
+
+    def record_challenger_evaluation(
+        self,
+        *,
+        strategy: str,
+        champion_model_id: str,
+        challenger_model_id: str,
+        metrics: dict[str, Any],
+    ) -> str | None:
+        """Append a challenger-vs-champion evaluation record for governance review."""
+
+        eval_path = self.base_path / "challenger_evaluations.jsonl"
+        payload = {
+            "ts": datetime.now(UTC).isoformat(),
+            "strategy": str(strategy),
+            "champion_model_id": str(champion_model_id),
+            "challenger_model_id": str(challenger_model_id),
+            "metrics": dict(metrics),
+        }
+        try:
+            eval_path.parent.mkdir(parents=True, exist_ok=True)
+            with eval_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, sort_keys=True))
+                handle.write("\n")
+            return str(eval_path)
+        except OSError as exc:
+            self.logger.error(
+                "CHALLENGER_EVALUATION_WRITE_FAILED",
+                extra={"path": str(eval_path), "error": str(exc)},
+            )
+            return None
+
+    def rollback_to_previous_production(
+        self,
+        *,
+        strategy: str,
+        reason: str,
+        force: bool = True,
+    ) -> bool:
+        """Rollback strategy production model to the previous production model."""
+
+        current = self.registry.get_production_model(strategy)
+        if current is None:
+            self.logger.warning("ROLLBACK_SKIPPED_NO_PRODUCTION_MODEL", extra={"strategy": strategy})
+            return False
+        current_model_id, _current_meta = current
+        governance = dict(_current_meta.get("governance", {}))
+        previous_model_id = str(
+            governance.get("previous_production_model_id")
+            or governance.get("previous_champion_model_id")
+            or ""
+        ).strip()
+        if not previous_model_id:
+            self.logger.warning(
+                "ROLLBACK_SKIPPED_NO_PREVIOUS_MODEL",
+                extra={"strategy": strategy, "current_model_id": current_model_id},
+            )
+            return False
+        if previous_model_id not in self.registry.model_index:
+            self.logger.warning(
+                "ROLLBACK_SKIPPED_PREVIOUS_MODEL_MISSING",
+                extra={
+                    "strategy": strategy,
+                    "current_model_id": current_model_id,
+                    "previous_model_id": previous_model_id,
+                },
+            )
+            return False
+
+        promoted = self.promote_to_production(previous_model_id, force=force)
+        if not promoted:
+            return False
+
+        rolled_back_at = datetime.now(UTC).isoformat()
+        self.registry.update_governance_status(
+            previous_model_id,
+            "production",
+            {
+                "rollback_from_model_id": current_model_id,
+                "rollback_reason": reason,
+                "rollback_at": rolled_back_at,
+            },
+        )
+        self.registry.update_governance_status(
+            current_model_id,
+            "challenger",
+            {
+                "rolled_back_to_model_id": previous_model_id,
+                "rollback_reason": reason,
+                "rollback_at": rolled_back_at,
+            },
+        )
+        self.logger.warning(
+            "MODEL_ROLLBACK_COMPLETED",
+            extra={
+                "strategy": strategy,
+                "from_model_id": current_model_id,
+                "to_model_id": previous_model_id,
+                "reason": reason,
+            },
+        )
+        return True
 
     def _save_shadow_metrics(self, model_id: str, metrics: PromotionMetrics) -> None:
         """Save shadow metrics to disk."""
