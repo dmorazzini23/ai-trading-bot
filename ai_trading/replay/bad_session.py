@@ -11,6 +11,49 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _coerce_timestamp(payload: dict[str, Any]) -> str:
+    direct_fields = (
+        payload.get("timestamp"),
+        payload.get("ts"),
+        payload.get("decision_ts"),
+        payload.get("submit_ts"),
+        payload.get("first_fill_ts"),
+    )
+    for value in direct_fields:
+        text = str(value or "").strip()
+        if text:
+            return text
+    benchmark = payload.get("benchmark")
+    if isinstance(benchmark, dict):
+        for key in ("decision_ts", "submit_ts", "first_fill_ts"):
+            text = str(benchmark.get(key) or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _coerce_price(payload: dict[str, Any]) -> float | None:
+    for key in (
+        "price",
+        "fill_price",
+        "fill_vwap",
+        "arrival_price",
+        "decision_price",
+        "submit_price_reference",
+        "close",
+    ):
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
 def _parse_log_line(line: str) -> dict[str, Any] | None:
     text = line.strip()
     if not text:
@@ -22,21 +65,24 @@ def _parse_log_line(line: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     symbol = str(payload.get("symbol") or "").strip().upper()
-    timestamp = str(payload.get("timestamp") or payload.get("ts") or "").strip()
-    price_raw = payload.get("price")
+    timestamp = _coerce_timestamp(payload)
+    price = _coerce_price(payload)
     if not symbol or not timestamp:
         return None
+    if price is None:
+        return None
+    volume_raw = payload.get("volume")
+    if volume_raw in (None, ""):
+        volume_raw = payload.get("qty")
     try:
-        price = float(price_raw)
+        volume = float(volume_raw or 0.0)
     except (TypeError, ValueError):
-        return None
-    if price <= 0:
-        return None
+        volume = 0.0
     return {
         "timestamp": timestamp,
         "symbol": symbol,
         "price": price,
-        "volume": float(payload.get("volume") or 0.0),
+        "volume": volume,
     }
 
 

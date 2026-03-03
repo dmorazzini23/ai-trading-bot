@@ -44,3 +44,20 @@ def test_build_replay_dataset_from_bad_session(tmp_path: Path) -> None:
     events = canonical_bad_session_events(log_path)
     assert len(events) == 3
     assert (tmp_path / "replay_out" / "AAPL.csv").exists()
+
+
+def test_bad_session_parser_accepts_tca_style_rows(tmp_path: Path) -> None:
+    log_path = tmp_path / "tca_like.jsonl"
+    row = {
+        "ts": "2026-03-02T23:40:00Z",
+        "symbol": "AAPL",
+        "fill_price": 191.42,
+        "qty": 25,
+    }
+    log_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    events = canonical_bad_session_events(log_path)
+
+    assert len(events) == 1
+    assert events[0]["symbol"] == "AAPL"
+    assert events[0]["price"] == 191.42

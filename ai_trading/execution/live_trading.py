@@ -2709,6 +2709,7 @@ class ExecutionEngine:
         submit_started_at: float | None = None,
         duration_s: float | None = None,
         ack_timed_out: bool = False,
+        execution_drift_bps: float | None = None,
     ) -> None:
         """Append a normalized order outcome entry for cycle-level KPI reporting."""
 
@@ -2742,6 +2743,13 @@ class ExecutionEngine:
             payload["side"] = str(side)
         if reason:
             payload["reason"] = str(reason)
+        if execution_drift_bps is not None:
+            try:
+                parsed_drift = float(execution_drift_bps)
+            except (TypeError, ValueError):
+                parsed_drift = None
+            if parsed_drift is not None and math.isfinite(parsed_drift):
+                payload["execution_drift_bps"] = parsed_drift
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
 
@@ -2955,6 +2963,28 @@ class ExecutionEngine:
         )
         fill_ratio = (float(filled) / float(submitted)) if submitted > 0 else 0.0
         cancel_ratio = (float(cancelled) / float(submitted)) if submitted > 0 else 0.0
+        attempted = submitted + failed
+        reject_rate_pct = (float(failed) / float(attempted) * 100.0) if attempted > 0 else 0.0
+        drift_values = [
+            abs(float(item.get("execution_drift_bps", 0.0)))
+            for item, _status in normalized_outcomes
+            if item.get("execution_drift_bps") is not None
+        ]
+        cycle_execution_drift_bps = (
+            float(statistics.mean(drift_values)) if drift_values else 0.0
+        )
+        try:
+            from ai_trading.monitoring.slo import (
+                record_execution_drift,
+                record_order_reject_rate,
+            )
+
+            if attempted > 0:
+                record_order_reject_rate(reject_rate_pct)
+            if drift_values:
+                record_execution_drift(cycle_execution_drift_bps)
+        except Exception:
+            logger.debug("EXECUTION_KPI_SLO_RECORD_FAILED", exc_info=True)
 
         now_dt = datetime.now(UTC)
         pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
@@ -2988,6 +3018,8 @@ class ExecutionEngine:
                 "skip_reason_counts": skip_reason_counts,
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
+                "reject_rate_pct": round(reject_rate_pct, 4),
+                "execution_drift_bps": round(cycle_execution_drift_bps, 4),
                 "median_pending_s": round(median_pending_s, 3),
                 "open_pending_count": len(pending_open_ages),
                 "oldest_pending_s": round(oldest_pending_s, 3),
@@ -6894,12 +6926,49 @@ class ExecutionEngine:
             or str(status or execution_result.status or "").strip().lower()
             or "unknown"
         )
+        resolved_fill_price = _safe_float(
+            _extract_value(
+                final_order,
+                "filled_avg_price",
+                "fill_price",
+                "average_fill_price",
+            )
+        )
+        if resolved_fill_price is None:
+            resolved_fill_price = _safe_float(getattr(execution_result, "fill_price", None))
+        benchmark_price = (
+            _safe_float(resolved_limit_price)
+            or _safe_float(price_for_limit)
+            or _safe_float(limit_price)
+        )
+        execution_drift_bps: float | None = None
+        if (
+            order_status_lower in {"filled", "partially_filled"}
+            and resolved_fill_price is not None
+            and benchmark_price is not None
+            and benchmark_price > 0.0
+        ):
+            try:
+                execution_drift_bps = abs(
+                    (float(resolved_fill_price) - float(benchmark_price))
+                    / float(benchmark_price)
+                    * 10000.0
+                )
+            except (TypeError, ValueError, ZeroDivisionError):
+                execution_drift_bps = None
+        outcome_reason: str | None = None
+        if order_status_lower == "rejected":
+            outcome_reason = parsed_rejection or "rejected"
+        elif ack_timed_out:
+            outcome_reason = "ack_timeout"
         self._record_cycle_order_outcome(
             symbol=symbol,
             side=mapped_side,
             status=outcome_status,
+            reason=outcome_reason,
             submit_started_at=submit_started_at,
             ack_timed_out=bool(ack_timed_out),
+            execution_drift_bps=execution_drift_bps,
         )
         self._last_submit_outcome = {
             "status": outcome_status,

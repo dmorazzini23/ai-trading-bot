@@ -100,6 +100,10 @@ _LAST_MARKET_CLOSE_TRAINING_DATE: str | None = None
 _LAST_EXECUTION_PHASE: str | None = None
 _INFO_LOG_TTL_LOCK = threading.Lock()
 _INFO_LOG_TTL_TRACKER: dict[str, float] = {}
+_PROMOTION_KPI_GUARD_LOCK = threading.Lock()
+_LAST_PROMOTION_KPI_GUARD_TS = 0.0
+_BAD_SESSION_REPLAY_LOCK = threading.Lock()
+_LAST_BAD_SESSION_REPLAY_TS = 0.0
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -577,6 +581,263 @@ def _emit_cycle_slo_alerts(
                 "provider_status": provider_state.get("status"),
             },
         )
+
+
+def _resolve_runtime_artifact_path(path_value: str, *, default_relative: str) -> Path:
+    raw_value = str(path_value or "").strip() or str(default_relative)
+    target = Path(raw_value).expanduser()
+    if target.is_absolute():
+        return target
+
+    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
+    if data_root_raw:
+        data_root = Path(data_root_raw.split(":")[0]).expanduser()
+        if data_root.is_absolute():
+            return (data_root / target).resolve()
+
+    state_dir_raw = str(_raw_env("STATE_DIRECTORY", "") or "").strip()
+    if state_dir_raw:
+        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
+        if state_root.is_absolute():
+            return (state_root / target).resolve()
+
+    repo_root = Path(__file__).resolve().parents[1]
+    return (repo_root / target).resolve()
+
+
+def _maybe_build_bad_session_replay_dataset(
+    *,
+    trigger: str,
+    detail: Mapping[str, Any] | None = None,
+) -> None:
+    enabled = bool(get_env("AI_TRADING_BAD_SESSION_REPLAY_ON_CRITICAL_ENABLED", True, cast=bool))
+    if not enabled:
+        return
+
+    cooldown_s = max(
+        0.0,
+        float(get_env("AI_TRADING_BAD_SESSION_REPLAY_COOLDOWN_SEC", 300.0, cast=float)),
+    )
+    now_mono = float(time.monotonic())
+    global _LAST_BAD_SESSION_REPLAY_TS
+    with _BAD_SESSION_REPLAY_LOCK:
+        if cooldown_s > 0.0 and (now_mono - _LAST_BAD_SESSION_REPLAY_TS) < cooldown_s:
+            return
+        _LAST_BAD_SESSION_REPLAY_TS = now_mono
+
+    source_default = str(get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl", cast=str))
+    source_raw = str(
+        get_env("AI_TRADING_BAD_SESSION_REPLAY_SOURCE_PATH", source_default, cast=str)
+        or source_default
+    )
+    output_raw = str(
+        get_env(
+            "AI_TRADING_BAD_SESSION_REPLAY_OUTPUT_DIR",
+            "runtime/replay_bad_session",
+            cast=str,
+        )
+        or "runtime/replay_bad_session"
+    )
+    source_path = _resolve_runtime_artifact_path(
+        source_raw,
+        default_relative=source_default or "runtime/tca_records.jsonl",
+    )
+    output_dir = _resolve_runtime_artifact_path(
+        output_raw,
+        default_relative="runtime/replay_bad_session",
+    )
+    if not source_path.exists():
+        logger.info(
+            "BAD_SESSION_REPLAY_SOURCE_MISSING",
+            extra={"trigger": trigger, "source_path": str(source_path)},
+        )
+        return
+
+    try:
+        from ai_trading.replay.bad_session import build_replay_dataset_from_bad_session
+    except Exception:
+        logger.debug("BAD_SESSION_REPLAY_IMPORT_FAILED", exc_info=True)
+        return
+
+    seed = int(get_env("AI_TRADING_BAD_SESSION_REPLAY_SEED", 42, cast=int))
+    try:
+        report = build_replay_dataset_from_bad_session(
+            source_path,
+            output_dir=output_dir,
+            seed=seed,
+        )
+    except Exception as exc:
+        logger.warning(
+            "BAD_SESSION_REPLAY_BUILD_FAILED",
+            extra={
+                "trigger": trigger,
+                "source_path": str(source_path),
+                "output_dir": str(output_dir),
+                "error": str(exc),
+            },
+        )
+        return
+
+    files = report.get("files", {}) if isinstance(report, Mapping) else {}
+    file_count = len(files) if isinstance(files, Mapping) else 0
+    payload: dict[str, Any] = {
+        "trigger": trigger,
+        "source_path": str(source_path),
+        "output_dir": str(output_dir),
+        "manifest": report.get("manifest") if isinstance(report, Mapping) else None,
+        "fingerprint": report.get("fingerprint") if isinstance(report, Mapping) else None,
+        "file_count": file_count,
+    }
+    if detail:
+        payload["detail"] = dict(detail)
+    if file_count <= 0:
+        logger.warning("BAD_SESSION_REPLAY_DATASET_EMPTY", extra=payload)
+        return
+    logger.info("BAD_SESSION_REPLAY_DATASET_BUILT", extra=payload)
+
+
+def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
+    drawdown = 0.0
+    reject_rate_pct = 0.0
+    execution_drift_bps = 0.0
+    reject_samples = 0
+    drift_samples = 0
+
+    try:
+        from ai_trading.monitoring.slo import get_slo_monitor
+
+        monitor = get_slo_monitor()
+        reject_status = monitor.get_slo_status("order_reject_rate_pct")
+        drift_status = monitor.get_slo_status("execution_drift_bps")
+        if isinstance(reject_status, Mapping):
+            reject_rate_pct = float(reject_status.get("current_value") or 0.0)
+            reject_samples = int(reject_status.get("sample_count") or 0)
+        if isinstance(drift_status, Mapping):
+            execution_drift_bps = float(drift_status.get("current_value") or 0.0)
+            drift_samples = int(drift_status.get("sample_count") or 0)
+    except Exception:
+        logger.debug("LIVE_KPI_SLO_SNAPSHOT_FAILED", exc_info=True)
+
+    try:
+        bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
+        current_drawdown = getattr(bot_engine_module, "_current_drawdown", None)
+        if callable(current_drawdown):
+            drawdown = float(current_drawdown() or 0.0)
+    except Exception:
+        logger.debug("LIVE_KPI_DRAWDOWN_SNAPSHOT_FAILED", exc_info=True)
+
+    live_kpis = {
+        "max_drawdown": max(0.0, drawdown),
+        "reject_rate": max(0.0, reject_rate_pct) / 100.0,
+        "execution_drift_bps": max(0.0, execution_drift_bps),
+    }
+    diagnostics = {
+        "reject_rate_pct": reject_rate_pct,
+        "execution_drift_bps": execution_drift_bps,
+        "reject_samples": reject_samples,
+        "drift_samples": drift_samples,
+    }
+    return live_kpis, diagnostics
+
+
+def _resolve_runtime_promotion_strategies(promotion_manager: Any) -> list[str]:
+    raw = str(get_env("AI_TRADING_PROMOTION_RUNTIME_STRATEGIES", "", cast=str) or "").strip()
+    if not raw:
+        raw = str(get_env("AI_TRADING_PROMOTION_RUNTIME_STRATEGY", "", cast=str) or "").strip()
+
+    tokens = [token.strip() for token in raw.split(",") if token and token.strip()]
+    if tokens:
+        return sorted(set(tokens))
+
+    strategies: set[str] = set()
+    try:
+        registry = getattr(promotion_manager, "registry", None)
+        model_index = getattr(registry, "model_index", {})
+        if isinstance(model_index, Mapping):
+            for info in model_index.values():
+                if not isinstance(info, Mapping):
+                    continue
+                governance = info.get("governance", {})
+                if not isinstance(governance, Mapping):
+                    continue
+                if str(governance.get("status") or "").strip().lower() != "production":
+                    continue
+                strategy = str(info.get("strategy") or "").strip()
+                if strategy:
+                    strategies.add(strategy)
+    except Exception:
+        logger.debug("PROMOTION_RUNTIME_STRATEGY_DISCOVERY_FAILED", exc_info=True)
+
+    if not strategies:
+        strategies.add("ml_edge")
+    return sorted(strategies)
+
+
+def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None:
+    enabled = bool(get_env("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_ENABLED", True, cast=bool))
+    if not enabled:
+        return
+
+    interval_s = max(
+        0.0,
+        float(get_env("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_INTERVAL_SEC", 60.0, cast=float)),
+    )
+    now_mono = float(time.monotonic())
+    global _LAST_PROMOTION_KPI_GUARD_TS
+    with _PROMOTION_KPI_GUARD_LOCK:
+        if interval_s > 0.0 and (now_mono - _LAST_PROMOTION_KPI_GUARD_TS) < interval_s:
+            return
+        _LAST_PROMOTION_KPI_GUARD_TS = now_mono
+
+    try:
+        from ai_trading.governance.promotion import get_promotion_manager
+    except Exception:
+        logger.debug("LIVE_KPI_PROMOTION_IMPORT_FAILED", exc_info=True)
+        return
+
+    promotion_manager = get_promotion_manager()
+    strategies = _resolve_runtime_promotion_strategies(promotion_manager)
+    if not strategies:
+        return
+    live_kpis, diagnostics = _collect_live_kpi_snapshot()
+
+    triggered: list[dict[str, Any]] = []
+    for strategy in strategies:
+        try:
+            result = promotion_manager.evaluate_live_kpis_and_maybe_rollback(
+                strategy=str(strategy),
+                live_kpis=live_kpis,
+                force=True,
+            )
+        except Exception:
+            logger.debug(
+                "LIVE_KPI_CONTROL_BAND_EVAL_FAILED",
+                extra={"strategy": strategy},
+                exc_info=True,
+            )
+            continue
+        if bool(result.get("triggered")):
+            payload = dict(result)
+            payload["strategy"] = strategy
+            triggered.append(payload)
+            emit_runtime_alert(
+                "ALERT_PROMOTION_CONTROL_BAND_ROLLBACK_TRIGGERED",
+                severity="error",
+                details=payload,
+            )
+        elif bool(result.get("breached")):
+            logger.warning("LIVE_KPI_CONTROL_BAND_BREACH", extra=result)
+
+    logger.info(
+        "LIVE_KPI_CONTROL_BAND_EVALUATED",
+        extra={
+            "cycle_index": int(max(cycle_index, 0)),
+            "strategies": strategies,
+            "live_kpis": live_kpis,
+            "diagnostics": diagnostics,
+            "rollbacks_triggered": len(triggered),
+        },
+    )
 
 
 def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
@@ -2330,6 +2591,10 @@ def main(argv: list[str] | None = None) -> None:
         try:
             run_cycle()
         except (TypeError, ValueError) as e:
+            _maybe_build_bad_session_replay_dataset(
+                trigger="warmup_run_cycle_failure",
+                detail={"error": str(e), "exc_type": e.__class__.__name__},
+            )
             logger.critical(
                 "Warm-up run_cycle failed during trading initialization; shutting down",
                 exc_info=e,
@@ -2348,6 +2613,10 @@ def main(argv: list[str] | None = None) -> None:
                 extra={"error": str(e), "exc_type": e.__class__.__name__},
             )
         except Exception as e:  # noqa: BLE001
+            _maybe_build_bad_session_replay_dataset(
+                trigger="warmup_run_cycle_unexpected_failure",
+                detail={"error": str(e), "exc_type": e.__class__.__name__},
+            )
             logger.exception(
                 "Warm-up run_cycle failed unexpectedly; shutting down",
                 exc_info=e,
@@ -2671,6 +2940,10 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                             elif str(rollback_result.get("status") or "") == "cooldown":
                                 logger.info("CANARY_AUTO_ROLLBACK_COOLDOWN", extra=rollback_result)
+                        try:
+                            _maybe_evaluate_live_kpi_control_band_rollbacks(cycle_index=count)
+                        except Exception:
+                            logger.debug("LIVE_KPI_CONTROL_BAND_EVALUATION_FAILED", exc_info=True)
                     except Exception:
                         logger.debug("MODEL_LIVENESS_EVALUATION_FAILED", exc_info=True)
                     execute_seconds = execution_timing.cycle_seconds()
@@ -2717,11 +2990,19 @@ def main(argv: list[str] | None = None) -> None:
                                 )
                 except (ValueError, TypeError):
                     logger.exception("run_cycle failed")
-            except Exception:
+            except Exception as exc:
                 logger.error(
                     "SCHEDULER_RUN_CYCLE_EXCEPTION",
                     extra={"iteration": count},
                     exc_info=True,
+                )
+                _maybe_build_bad_session_replay_dataset(
+                    trigger="scheduler_run_cycle_exception",
+                    detail={
+                        "iteration": int(count),
+                        "error": str(exc),
+                        "exc_type": exc.__class__.__name__,
+                    },
                 )
                 count += 1
                 try:
@@ -2820,7 +3101,11 @@ if __name__ == "__main__":
         if code != 0:
             logger.error("SERVICE_EXIT", extra={"code": code})
         raise
-    except BaseException:  # noqa: BLE001
+    except BaseException as exc:  # noqa: BLE001
+        _maybe_build_bad_session_replay_dataset(
+            trigger="service_crash",
+            detail={"error": str(exc), "exc_type": exc.__class__.__name__},
+        )
         logger.exception("SERVICE_CRASH")
         sys.exit(1)
     else:

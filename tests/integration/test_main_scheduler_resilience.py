@@ -80,6 +80,7 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
     monkeypatch.setattr(main, "Thread", _InlineThread)
 
     calls = {"count": 0}
+    replay_triggers: list[dict[str, object]] = []
 
     def _run_cycle_stub():
         calls["count"] += 1
@@ -87,6 +88,11 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(main, "run_cycle", _run_cycle_stub)
+    monkeypatch.setattr(
+        main,
+        "_maybe_build_bad_session_replay_dataset",
+        lambda **kwargs: replay_triggers.append(dict(kwargs)),
+    )
 
     with caplog.at_level(logging.ERROR, logger=main.logger.name):
         main.main(["--iterations", "2", "--interval", "1"])
@@ -94,4 +100,8 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
     assert calls["count"] == 3  # warm-up + two scheduler iterations
     assert any(
         "SCHEDULER_RUN_CYCLE_EXCEPTION" in record.getMessage() for record in caplog.records
+    )
+    assert any(
+        str(payload.get("trigger")) == "scheduler_run_cycle_exception"
+        for payload in replay_triggers
     )

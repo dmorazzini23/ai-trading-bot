@@ -379,3 +379,37 @@ def test_execution_kpi_snapshot_includes_lockout_and_skip_reasons(monkeypatch, c
     assert record.broker_lock_active is True
     assert record.broker_lock_reason == "unauthorized"
     assert record.broker_lock_ttl_s == pytest.approx(60.0, abs=0.1)
+
+
+def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
+    engine = _engine_stub()
+    engine._cycle_order_outcomes = [
+        {
+            "status": "filled",
+            "duration_s": 0.3,
+            "ack_timed_out": False,
+            "execution_drift_bps": 7.5,
+        },
+        {"status": "failed", "duration_s": 0.2, "ack_timed_out": False},
+    ]
+    engine._list_open_orders_snapshot = lambda: []
+
+    import ai_trading.monitoring.slo as slo_mod
+
+    reject_rate_samples: list[float] = []
+    drift_samples: list[float] = []
+    monkeypatch.setattr(
+        slo_mod,
+        "record_order_reject_rate",
+        lambda value: reject_rate_samples.append(float(value)),
+    )
+    monkeypatch.setattr(
+        slo_mod,
+        "record_execution_drift",
+        lambda value: drift_samples.append(float(value)),
+    )
+
+    engine._emit_cycle_execution_kpis()
+
+    assert reject_rate_samples == pytest.approx([50.0])
+    assert drift_samples == pytest.approx([7.5])

@@ -17,7 +17,10 @@ from ai_trading.config.management import get_env
 from ai_trading.research.institutional_validation import (
     compute_risk_adjusted_scorecard,
     run_monte_carlo_trade_sequence_stress,
+    run_purged_walk_forward_validation,
+    run_regime_split_validation,
 )
+from ai_trading.utils.lazy_imports import load_pandas
 logger = get_logger(__name__)
 
 @dataclass
@@ -96,6 +99,188 @@ class ModelPromotion:
         self.active_dir = self.base_path / 'active'
         self.active_dir.mkdir(exist_ok=True)
 
+    @staticmethod
+    def _coerce_returns(values: Any) -> list[float]:
+        if not isinstance(values, list | tuple):
+            return []
+        cleaned: list[float] = []
+        for raw in values:
+            try:
+                parsed = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed):
+                cleaned.append(parsed)
+        return cleaned
+
+    def _derive_institutional_validation_metrics(
+        self,
+        session_stats: dict[str, Any],
+    ) -> dict[str, Any]:
+        auto_validation_enabled = bool(
+            get_env("AI_TRADING_MODEL_GOVERNANCE_AUTO_VALIDATION_ENABLED", True, cast=bool)
+        )
+        if not auto_validation_enabled:
+            return {}
+
+        needs_pwf = "purged_walk_forward_pass_ratio" not in session_stats
+        needs_regime = "regime_pass_ratio" not in session_stats
+        if not (needs_pwf or needs_regime):
+            return {}
+
+        returns = self._coerce_returns(session_stats.get("returns"))
+        if not returns:
+            return {}
+
+        pd = load_pandas()
+        frame_source = session_stats.get("validation_frame")
+        frame = None
+        if hasattr(frame_source, "columns") and hasattr(frame_source, "copy"):
+            try:
+                frame = frame_source.copy()
+            except Exception:
+                frame = None
+        elif isinstance(frame_source, list | tuple):
+            try:
+                frame = pd.DataFrame(list(frame_source))
+            except Exception:
+                frame = None
+        elif isinstance(frame_source, dict):
+            try:
+                frame = pd.DataFrame(frame_source)
+            except Exception:
+                frame = None
+
+        if frame is None or frame.empty:
+            regimes_raw = session_stats.get("regimes")
+            regimes: list[str]
+            if isinstance(regimes_raw, list):
+                regimes = []
+                for idx in range(len(returns)):
+                    token = ""
+                    if idx < len(regimes_raw):
+                        token = str(regimes_raw[idx] or "").strip()
+                    regimes.append(token or "unknown")
+            else:
+                regimes = ["unknown"] * len(returns)
+            frame = pd.DataFrame(
+                {
+                    "timestamp": pd.date_range(
+                        end=datetime.now(UTC),
+                        periods=len(returns),
+                        freq="min",
+                    ),
+                    "ret": returns,
+                    "regime": regimes,
+                }
+            )
+        else:
+            if "ret" not in frame.columns:
+                for candidate_col in ("return", "returns", "post_cost_return", "pnl"):
+                    if candidate_col in frame.columns:
+                        frame["ret"] = frame[candidate_col]
+                        break
+            if "ret" not in frame.columns:
+                sized_returns = returns[: len(frame)]
+                if len(sized_returns) < len(frame):
+                    sized_returns = sized_returns + ([0.0] * (len(frame) - len(sized_returns)))
+                frame["ret"] = sized_returns
+            if "timestamp" not in frame.columns:
+                frame["timestamp"] = pd.date_range(
+                    end=datetime.now(UTC),
+                    periods=len(frame),
+                    freq="min",
+                )
+            if "regime" not in frame.columns:
+                frame["regime"] = "unknown"
+
+        derived: dict[str, Any] = {}
+        if needs_pwf:
+            try:
+                pwf_report = run_purged_walk_forward_validation(
+                    frame,
+                    return_col="ret",
+                    timestamp_col="timestamp",
+                    n_splits=max(
+                        1,
+                        int(get_env("AI_TRADING_MODEL_GOVERNANCE_PWF_SPLITS", 5, cast=int)),
+                    ),
+                    embargo_pct=max(
+                        0.0,
+                        float(
+                            get_env(
+                                "AI_TRADING_MODEL_GOVERNANCE_PWF_EMBARGO_PCT",
+                                0.01,
+                                cast=float,
+                            )
+                        ),
+                    ),
+                    purge_pct=max(
+                        0.0,
+                        float(
+                            get_env(
+                                "AI_TRADING_MODEL_GOVERNANCE_PWF_PURGE_PCT",
+                                0.02,
+                                cast=float,
+                            )
+                        ),
+                    ),
+                    min_fold_samples=max(
+                        5,
+                        int(
+                            get_env(
+                                "AI_TRADING_MODEL_GOVERNANCE_PWF_MIN_FOLD_SAMPLES",
+                                20,
+                                cast=int,
+                            )
+                        ),
+                    ),
+                )
+                derived["purged_walk_forward_pass_ratio"] = float(
+                    pwf_report.get("pass_ratio", 0.0) or 0.0
+                )
+                derived["purged_walk_forward_report"] = pwf_report
+            except Exception:
+                self.logger.debug("PROMOTION_PWF_AUTOVALIDATION_FAILED", exc_info=True)
+
+        if needs_regime:
+            try:
+                regime_report = run_regime_split_validation(
+                    frame,
+                    regime_col="regime",
+                    return_col="ret",
+                    min_samples=max(
+                        5,
+                        int(
+                            get_env(
+                                "AI_TRADING_MODEL_GOVERNANCE_REGIME_MIN_SAMPLES",
+                                30,
+                                cast=int,
+                            )
+                        ),
+                    ),
+                    min_expectancy_bps=float(
+                        get_env(
+                            "AI_TRADING_MODEL_GOVERNANCE_REGIME_MIN_EXPECTANCY_BPS",
+                            0.0,
+                            cast=float,
+                        )
+                    ),
+                    min_hit_rate=float(
+                        get_env(
+                            "AI_TRADING_MODEL_GOVERNANCE_REGIME_MIN_HIT_RATE",
+                            0.45,
+                            cast=float,
+                        )
+                    ),
+                )
+                derived["regime_pass_ratio"] = float(regime_report.get("pass_ratio", 0.0) or 0.0)
+                derived["regime_split_report"] = regime_report
+            except Exception:
+                self.logger.debug("PROMOTION_REGIME_AUTOVALIDATION_FAILED", exc_info=True)
+
+        return derived
+
     def start_shadow_testing(self, model_id: str, benchmark_model_id: str | None=None) -> bool:
         """
         Start shadow testing for a model.
@@ -133,27 +318,31 @@ class ModelPromotion:
             session_stats: Statistics from latest trading session
         """
         try:
+            session_payload = dict(session_stats or {})
+            session_payload.update(
+                self._derive_institutional_validation_metrics(session_payload)
+            )
             current_metrics = self._load_shadow_metrics(model_id)
             if current_metrics is None:
                 current_metrics = PromotionMetrics()
             current_metrics.sessions_completed += 1
-            current_metrics.total_trades += int(session_stats.get('trade_count', 0) or 0)
+            current_metrics.total_trades += int(session_payload.get('trade_count', 0) or 0)
             current_metrics.last_updated = datetime.now(UTC)
             alpha = 0.1
-            new_turnover = float(session_stats.get('turnover_ratio', 0.0) or 0.0)
+            new_turnover = float(session_payload.get('turnover_ratio', 0.0) or 0.0)
             current_metrics.turnover_ratio = alpha * new_turnover + (1 - alpha) * current_metrics.turnover_ratio
-            new_sharpe = float(session_stats.get('sharpe_ratio', 0.0) or 0.0)
+            new_sharpe = float(session_payload.get('sharpe_ratio', 0.0) or 0.0)
             current_metrics.live_sharpe_ratio = alpha * new_sharpe + (1 - alpha) * current_metrics.live_sharpe_ratio
-            new_drawdown = float(session_stats.get('max_drawdown', 0.0) or 0.0)
+            new_drawdown = float(session_payload.get('max_drawdown', 0.0) or 0.0)
             current_metrics.max_drawdown = max(current_metrics.max_drawdown, new_drawdown)
-            new_psi = float(session_stats.get('drift_psi', 0.0) or 0.0)
+            new_psi = float(session_payload.get('drift_psi', 0.0) or 0.0)
             current_metrics.drift_psi = alpha * new_psi + (1 - alpha) * current_metrics.drift_psi
-            new_latency = float(session_stats.get('avg_latency_ms', 0.0) or 0.0)
+            new_latency = float(session_payload.get('avg_latency_ms', 0.0) or 0.0)
             current_metrics.avg_latency_ms = alpha * new_latency + (1 - alpha) * current_metrics.avg_latency_ms
-            new_error_rate = float(session_stats.get('error_rate', 0.0) or 0.0)
+            new_error_rate = float(session_payload.get('error_rate', 0.0) or 0.0)
             current_metrics.error_rate = alpha * new_error_rate + (1 - alpha) * current_metrics.error_rate
 
-            returns = session_stats.get("returns")
+            returns = session_payload.get("returns")
             if isinstance(returns, list) and returns:
                 scorecard = compute_risk_adjusted_scorecard(returns)
                 current_metrics.live_sharpe_ratio = alpha * float(scorecard["sharpe_ratio"]) + (
@@ -181,42 +370,42 @@ class ModelPromotion:
                 ) * current_metrics.monte_carlo_p05_bps
 
             current_metrics.live_sortino_ratio = alpha * float(
-                session_stats.get("sortino_ratio", current_metrics.live_sortino_ratio) or 0.0
+                session_payload.get("sortino_ratio", current_metrics.live_sortino_ratio) or 0.0
             ) + (1 - alpha) * current_metrics.live_sortino_ratio
             current_metrics.live_calmar_ratio = alpha * float(
-                session_stats.get("calmar_ratio", current_metrics.live_calmar_ratio) or 0.0
+                session_payload.get("calmar_ratio", current_metrics.live_calmar_ratio) or 0.0
             ) + (1 - alpha) * current_metrics.live_calmar_ratio
             current_metrics.tail_loss_95 = alpha * float(
-                session_stats.get("tail_loss_95", current_metrics.tail_loss_95) or 0.0
+                session_payload.get("tail_loss_95", current_metrics.tail_loss_95) or 0.0
             ) + (1 - alpha) * current_metrics.tail_loss_95
             current_metrics.risk_of_ruin = alpha * float(
-                session_stats.get("risk_of_ruin", current_metrics.risk_of_ruin) or 0.0
+                session_payload.get("risk_of_ruin", current_metrics.risk_of_ruin) or 0.0
             ) + (1 - alpha) * current_metrics.risk_of_ruin
             current_metrics.purged_walk_forward_pass_ratio = alpha * float(
-                session_stats.get(
+                session_payload.get(
                     "purged_walk_forward_pass_ratio",
                     current_metrics.purged_walk_forward_pass_ratio,
                 )
                 or 0.0
             ) + (1 - alpha) * current_metrics.purged_walk_forward_pass_ratio
             current_metrics.regime_pass_ratio = alpha * float(
-                session_stats.get("regime_pass_ratio", current_metrics.regime_pass_ratio) or 0.0
+                session_payload.get("regime_pass_ratio", current_metrics.regime_pass_ratio) or 0.0
             ) + (1 - alpha) * current_metrics.regime_pass_ratio
             current_metrics.monte_carlo_p05_bps = alpha * float(
-                session_stats.get("monte_carlo_p05_bps", current_metrics.monte_carlo_p05_bps) or 0.0
+                session_payload.get("monte_carlo_p05_bps", current_metrics.monte_carlo_p05_bps) or 0.0
             ) + (1 - alpha) * current_metrics.monte_carlo_p05_bps
             current_metrics.tca_gate_passed = bool(
-                session_stats.get("tca_gate_passed", current_metrics.tca_gate_passed)
+                session_payload.get("tca_gate_passed", current_metrics.tca_gate_passed)
             )
             current_metrics.reject_rate = alpha * float(
-                session_stats.get("reject_rate", current_metrics.reject_rate) or 0.0
+                session_payload.get("reject_rate", current_metrics.reject_rate) or 0.0
             ) + (1 - alpha) * current_metrics.reject_rate
             current_metrics.execution_drift_bps = alpha * float(
-                session_stats.get("execution_drift_bps", current_metrics.execution_drift_bps) or 0.0
+                session_payload.get("execution_drift_bps", current_metrics.execution_drift_bps) or 0.0
             ) + (1 - alpha) * current_metrics.execution_drift_bps
 
-            challenger_returns = session_stats.get("challenger_returns")
-            champion_returns = session_stats.get("champion_returns")
+            challenger_returns = session_payload.get("challenger_returns")
+            champion_returns = session_payload.get("champion_returns")
             if isinstance(challenger_returns, list) and isinstance(champion_returns, list):
                 stat_sig = self.evaluate_challenger_significance(
                     challenger_returns,

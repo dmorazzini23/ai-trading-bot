@@ -125,3 +125,28 @@ def test_live_kpi_control_band_triggers_rollback(tmp_path: Path) -> None:
     production = registry.get_production_model(strategy)
     assert production is not None
     assert production[0] == champion
+
+
+def test_update_shadow_metrics_autoderives_validation_ratios(tmp_path: Path) -> None:
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "ml_edge"
+    model_id = _register_test_model(registry, strategy=strategy, marker="candidate")
+    assert promotion.start_shadow_testing(model_id) is True
+
+    returns = [0.0025 if idx % 3 else -0.001 for idx in range(240)]
+    regimes = ["trend", "chop", "high_vol"] * 80
+    promotion.update_shadow_metrics(
+        model_id,
+        {
+            "trade_count": 240,
+            "turnover_ratio": 0.8,
+            "returns": returns,
+            "regimes": regimes,
+        },
+    )
+
+    metrics = promotion._load_shadow_metrics(model_id)  # noqa: SLF001 - test-only inspection
+    assert metrics is not None
+    assert metrics.purged_walk_forward_pass_ratio > 0.0
+    assert metrics.regime_pass_ratio > 0.0
