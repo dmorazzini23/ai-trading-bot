@@ -7,6 +7,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -347,8 +348,15 @@ def _simulate_symbol(symbol: str, df: pd.DataFrame, cfg: ReplayConfig) -> dict[s
 
 def _resolve_inputs(args: argparse.Namespace) -> dict[str, Path]:
     if args.csv is not None:
+        csv_path = Path(args.csv)
+        if str(csv_path).strip() in {"", "."}:
+            raise ValueError("--csv must point to an OHLCV CSV file, got empty path")
+        if not csv_path.exists():
+            raise ValueError(f"CSV file not found: {csv_path}")
+        if not csv_path.is_file():
+            raise ValueError(f"--csv must be a file, got: {csv_path}")
         symbol = args.symbol.strip().upper() if args.symbol else args.csv.stem.upper()
-        return {symbol: args.csv}
+        return {symbol: csv_path}
 
     assert args.data_dir is not None
     chosen = {item.strip().upper() for item in args.symbols.split(",") if item.strip()}
@@ -494,14 +502,25 @@ def _persist_replay_to_oms(
     """Persist replay intents and fill events to durable OMS storage."""
 
     from ai_trading.oms.intent_store import IntentStore
+    from ai_trading.oms.statuses import is_terminal_intent_status
 
     now_iso = datetime.now(UTC).isoformat()
+    started = perf_counter()
     intent_items = replay.get("intents")
     order_items = replay.get("orders")
     event_items = replay.get("events")
     intents = intent_items if isinstance(intent_items, list) else []
     orders = order_items if isinstance(order_items, list) else []
     events = event_items if isinstance(event_items, list) else []
+    logger.info(
+        "OFFLINE_REPLAY_OMS_PERSIST_START",
+        extra={
+            "intents": len(intents),
+            "orders": len(orders),
+            "events": len(events),
+            "prefix": prefix,
+        },
+    )
 
     store = IntentStore()
     order_by_client_id: dict[str, dict[str, Any]] = {}
@@ -513,8 +532,10 @@ def _persist_replay_to_oms(
             order_by_client_id[client_order_id] = order
 
     intent_id_by_client_id: dict[str, str] = {}
+    terminal_existing_ids: set[str] = set()
     created_count = 0
     existing_count = 0
+    existing_terminal_skipped = 0
     skipped_count = 0
     for intent in intents:
         if not isinstance(intent, dict):
@@ -535,30 +556,40 @@ def _persist_replay_to_oms(
             f"{prefix}|{client_order_id}".encode("utf-8")
         ).hexdigest()[:24]
         intent_id = f"{prefix}-{digest}"
-        record, created = store.create_intent(
-            intent_id=intent_id,
-            idempotency_key=f"{prefix}|{client_order_id}",
-            symbol=symbol,
-            side=side,
-            quantity=qty,
-            decision_ts=decision_ts,
-            metadata={
-                "source": "offline_replay",
-                "client_order_id": client_order_id,
-                "persisted_at": now_iso,
-            },
-            status="PENDING_SUBMIT",
-        )
-        if created:
-            created_count += 1
-        else:
+        idempotency_key = f"{prefix}|{client_order_id}"
+        existing_record = store.get_intent_by_key(idempotency_key)
+        if existing_record is not None:
+            record = existing_record
             existing_count += 1
+            if is_terminal_intent_status(existing_record.status):
+                existing_terminal_skipped += 1
+                terminal_existing_ids.add(existing_record.intent_id)
+        else:
+            record, created = store.create_intent(
+                intent_id=intent_id,
+                idempotency_key=idempotency_key,
+                symbol=symbol,
+                side=side,
+                quantity=qty,
+                decision_ts=decision_ts,
+                metadata={
+                    "source": "offline_replay",
+                    "client_order_id": client_order_id,
+                    "persisted_at": now_iso,
+                },
+                status="PENDING_SUBMIT",
+            )
+            if created:
+                created_count += 1
+            else:
+                existing_count += 1
         intent_id_by_client_id[client_order_id] = record.intent_id
-        order = order_by_client_id.get(client_order_id, {})
-        broker_order_id = str(order.get("id", "")).strip() if isinstance(order, dict) else ""
-        if not broker_order_id:
-            broker_order_id = f"{prefix}-no-order-{digest}"
-        store.mark_submitted(record.intent_id, broker_order_id)
+        if existing_record is None:
+            order = order_by_client_id.get(client_order_id, {})
+            broker_order_id = str(order.get("id", "")).strip() if isinstance(order, dict) else ""
+            if not broker_order_id:
+                broker_order_id = f"{prefix}-no-order-{digest}"
+            store.mark_submitted(record.intent_id, broker_order_id)
 
     fill_events = 0
     partially_filled = 0
@@ -572,6 +603,8 @@ def _persist_replay_to_oms(
         client_order_id = str(event.get("client_order_id", "")).strip()
         intent_id = intent_id_by_client_id.get(client_order_id)
         if not intent_id:
+            continue
+        if intent_id in terminal_existing_ids:
             continue
         fill_events += 1
         try:
@@ -602,6 +635,8 @@ def _persist_replay_to_oms(
     for client_order_id, intent_id in intent_id_by_client_id.items():
         if intent_id in fill_intent_ids:
             continue
+        if intent_id in terminal_existing_ids:
+            continue
         order = order_by_client_id.get(client_order_id, {})
         order_status = str(order.get("status", "")).strip().lower() if isinstance(order, dict) else ""
         final_status = "CANCELLED" if order_status in {"accepted", "new", "open"} else "CLOSED"
@@ -612,17 +647,21 @@ def _persist_replay_to_oms(
         )
         closed_without_fill += 1
 
-    return {
+    summary = {
         "persisted": True,
         "database_url_configured": bool(getattr(store, "database_url", "")),
         "created_intents": created_count,
         "existing_intents": existing_count,
+        "existing_terminal_intents_skipped": existing_terminal_skipped,
         "skipped_intents": skipped_count,
         "fill_events": fill_events,
         "partially_filled_events": partially_filled,
         "filled_terminal_events": filled_terminal,
         "closed_without_fill": closed_without_fill,
     }
+    summary["elapsed_seconds"] = round(perf_counter() - started, 3)
+    logger.info("OFFLINE_REPLAY_OMS_PERSIST_COMPLETE", extra=summary)
+    return summary
 
 
 def _run_replay(args: argparse.Namespace) -> dict[str, Any]:

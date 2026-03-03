@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from ai_trading.tools.live_cutover_drill import main
+
+pytest.importorskip("sqlalchemy")
 
 
 def test_live_cutover_drill_paper_mode_writes_durable_intent(

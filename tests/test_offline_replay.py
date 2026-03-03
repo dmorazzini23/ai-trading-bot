@@ -6,6 +6,7 @@ import sqlite3
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from ai_trading.tools.offline_replay import main
 
@@ -141,6 +142,7 @@ def test_offline_replay_simulation_mode_persists_intents_to_oms(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    pytest.importorskip("sqlalchemy")
     csv_path = tmp_path / "IWM.csv"
     out_path = tmp_path / "persist.json"
     oms_path = tmp_path / "oms_replay.db"
@@ -181,3 +183,68 @@ def test_offline_replay_simulation_mode_persists_intents_to_oms(
         fill_count = int(conn.execute("SELECT COUNT(*) FROM intent_fills").fetchone()[0])
     assert intent_count >= int(summary["created_intents"])
     assert fill_count >= int(summary["fill_events"])
+
+
+def test_offline_replay_persist_rerun_skips_terminal_existing_intents(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    pytest.importorskip("sqlalchemy")
+    csv_path = tmp_path / "SPY.csv"
+    first_out = tmp_path / "persist_first.json"
+    second_out = tmp_path / "persist_second.json"
+    oms_path = tmp_path / "oms_replay.db"
+    _write_synthetic_bars(csv_path, periods=180)
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(oms_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+
+    args = [
+        "--csv",
+        str(csv_path),
+        "--simulation-mode",
+        "--persist-intents",
+        "--replay-seed",
+        "77",
+        "--confidence-threshold",
+        "0.05",
+        "--entry-score-threshold",
+        "0.03",
+    ]
+
+    assert main(args + ["--output-json", str(first_out)]) == 0
+    with sqlite3.connect(oms_path) as conn:
+        first_intents = int(conn.execute("SELECT COUNT(*) FROM intents").fetchone()[0])
+        first_fills = int(conn.execute("SELECT COUNT(*) FROM intent_fills").fetchone()[0])
+
+    assert main(args + ["--output-json", str(second_out)]) == 0
+    second_payload = _load_json(second_out)
+    second_summary = second_payload["aggregate"]["oms_persist_summary"]
+    assert int(second_summary["created_intents"]) == 0
+    assert int(second_summary["existing_intents"]) > 0
+    assert int(second_summary["existing_terminal_intents_skipped"]) > 0
+    assert int(second_summary["fill_events"]) == 0
+
+    with sqlite3.connect(oms_path) as conn:
+        second_intents = int(conn.execute("SELECT COUNT(*) FROM intents").fetchone()[0])
+        second_fills = int(conn.execute("SELECT COUNT(*) FROM intent_fills").fetchone()[0])
+
+    assert second_intents == first_intents
+    assert second_fills == first_fills
+
+
+def test_offline_replay_rejects_directory_csv_input(tmp_path: Path) -> None:
+    out_path = tmp_path / "bad.json"
+    rc = main(
+        [
+            "--csv",
+            str(tmp_path),
+            "--simulation-mode",
+            "--output-json",
+            str(out_path),
+        ]
+    )
+    assert rc == 1
+    assert not out_path.exists()
