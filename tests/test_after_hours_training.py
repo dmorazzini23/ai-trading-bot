@@ -638,6 +638,66 @@ def test_on_market_close_writes_after_hours_training_marker(
     assert payload["model_name"] == "logreg"
 
 
+def test_marker_path_resolution_prefers_data_dir_for_relative_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    data_dir = tmp_path / "state_root"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH", "runtime/custom.marker.json")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("STATE_DIRECTORY", raising=False)
+
+    resolved = bot_engine._resolve_after_hours_training_marker_path()
+    assert resolved == (data_dir / "runtime/custom.marker.json").resolve()
+
+
+def test_marker_write_falls_back_when_requested_path_unwritable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_trading.core import bot_engine
+
+    requested_marker = tmp_path / "readonly_root" / "after_hours.marker.json"
+    fallback_data_dir = tmp_path / "fallback_data"
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_TRAINING_MARKER_PATH",
+        str(requested_marker),
+    )
+    monkeypatch.setattr(bot_engine.paths, "DATA_DIR", fallback_data_dir)
+
+    original_writer = bot_engine._write_after_hours_training_marker_file
+
+    def _writer_with_primary_failure(path: Path, payload) -> None:
+        if path == requested_marker:
+            raise PermissionError("read-only marker path")
+        original_writer(path, payload)
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_write_after_hours_training_marker_file",
+        _writer_with_primary_failure,
+    )
+
+    bot_engine._write_after_hours_training_marker(
+        "2026-01-06",
+        {
+            "status": "trained",
+            "model_id": "m-1",
+            "model_name": "logreg",
+            "governance_status": "production",
+        },
+    )
+
+    fallback_marker = (fallback_data_dir / "runtime/after_hours_training.marker.json").resolve()
+    assert fallback_marker.exists()
+    payload = json.loads(fallback_marker.read_text(encoding="utf-8"))
+    assert payload["date"] == "2026-01-06"
+    assert payload["status"] == "trained"
+    assert bot_engine._after_hours_training_completed_for_date("2026-01-06")
+
+
 def test_on_market_close_overnight_catchup_writes_previous_business_marker_date(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

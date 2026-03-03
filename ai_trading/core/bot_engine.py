@@ -25981,9 +25981,34 @@ def _resolve_after_hours_training_marker_path() -> Path:
         or ""
     ).strip()
     marker_path = Path(raw_marker_path or "runtime/after_hours_training.marker.json").expanduser()
-    if not marker_path.is_absolute():
-        marker_path = (Path(__file__).resolve().parents[2] / marker_path).resolve()
-    return marker_path
+    if marker_path.is_absolute():
+        return marker_path
+
+    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
+    if data_root_raw:
+        data_root = Path(data_root_raw.split(":")[0]).expanduser()
+        if data_root.is_absolute():
+            return (data_root / marker_path).resolve()
+
+    state_dir_raw = str(get_env("STATE_DIRECTORY", "", cast=str) or "").strip()
+    if state_dir_raw:
+        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
+        if state_root.is_absolute():
+            return (state_root / marker_path).resolve()
+
+    return (Path(__file__).resolve().parents[2] / marker_path).resolve()
+
+
+def _resolve_after_hours_training_marker_fallback_path() -> Path:
+    return (paths.DATA_DIR / "runtime/after_hours_training.marker.json").resolve()
+
+
+def _resolve_after_hours_training_marker_paths() -> tuple[Path, ...]:
+    marker_path = _resolve_after_hours_training_marker_path()
+    fallback_path = _resolve_after_hours_training_marker_fallback_path()
+    if fallback_path == marker_path:
+        return (marker_path,)
+    return marker_path, fallback_path
 
 
 def _load_after_hours_training_marker(path: Path) -> dict[str, Any]:
@@ -26015,16 +26040,33 @@ def _load_after_hours_training_marker(path: Path) -> dict[str, Any]:
 
 
 def _after_hours_training_completed_for_date(date_key: str) -> bool:
-    marker_path = _resolve_after_hours_training_marker_path()
-    marker = _load_after_hours_training_marker(marker_path)
-    marker_date = str(marker.get("date") or "").strip()
-    marker_status = str(marker.get("status") or "").strip().lower()
-    return marker_date == date_key and marker_status == "trained"
+    for marker_path in _resolve_after_hours_training_marker_paths():
+        marker = _load_after_hours_training_marker(marker_path)
+        marker_date = str(marker.get("date") or "").strip()
+        marker_status = str(marker.get("status") or "").strip().lower()
+        if marker_date == date_key and marker_status == "trained":
+            return True
+    return False
+
+
+def _write_after_hours_training_marker_file(path: Path, payload: Mapping[str, Any]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _write_after_hours_training_marker(date_key: str, outcome: Mapping[str, Any]) -> None:
-    marker_path = _resolve_after_hours_training_marker_path()
-    tmp_path = marker_path.with_suffix(marker_path.suffix + ".tmp")
+    marker_paths = _resolve_after_hours_training_marker_paths()
+    marker_path = marker_paths[0]
     payload = {
         "date": date_key,
         "status": str(outcome.get("status") or "").strip().lower(),
@@ -26033,28 +26075,39 @@ def _write_after_hours_training_marker(date_key: str, outcome: Mapping[str, Any]
         "governance_status": str(outcome.get("governance_status") or "").strip(),
         "updated_at": datetime.now(UTC).isoformat(),
     }
-    try:
-        marker_path.parent.mkdir(parents=True, exist_ok=True)
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True)
-            handle.write("\n")
-        os.replace(tmp_path, marker_path)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        ValueError,
-        TypeError,
-        OSError,
-    ) as exc:
-        logger.warning(
-            "AFTER_HOURS_TRAINING_MARKER_WRITE_FAILED",
-            extra={"path": str(marker_path), "error": str(exc)},
-        )
+    last_error: Exception | None = None
+    for index, target_path in enumerate(marker_paths):
         try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            _write_after_hours_training_marker_file(target_path, payload)
+            if target_path != marker_path:
+                logger.warning(
+                    "AFTER_HOURS_TRAINING_MARKER_PATH_FALLBACK",
+                    extra={
+                        "requested_path": str(marker_path),
+                        "fallback_path": str(target_path),
+                        "error": str(last_error) if last_error is not None else None,
+                    },
+                )
+            return
+        except (
+            FileNotFoundError,
+            PermissionError,
+            IsADirectoryError,
+            ValueError,
+            TypeError,
+            OSError,
+        ) as exc:
+            last_error = exc
+            if index + 1 < len(marker_paths):
+                continue
+            logger.warning(
+                "AFTER_HOURS_TRAINING_MARKER_WRITE_FAILED",
+                extra={
+                    "path": str(target_path),
+                    "requested_path": str(marker_path),
+                    "error": str(exc),
+                },
+            )
 
 
 def _resolve_after_hours_training_date_key(now_est: datetime) -> str | None:
