@@ -15,7 +15,7 @@ SKIP_INSTALL ?= 0
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
 
-.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy lint tests-self lint-core institutional-gates secret-scan
+.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy test-after-hours-pipeline lint tests-self lint-core institutional-gates secret-scan
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
@@ -96,6 +96,10 @@ test-all: ensure-runtime
 test-all-heavy:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 	$(PYTHON) tools/run_pytest.py tests
+
+test-after-hours-pipeline: ensure-runtime
+	@echo "== after-hours pipeline =="
+	@PYTHON_BIN="$(PYTHON)" VERBOSE="$(VERBOSE)" bash scripts/test_after_hours_pipeline.sh
 
 lint:
 	@command -v ruff >/dev/null 2>&1 && ruff check . || \

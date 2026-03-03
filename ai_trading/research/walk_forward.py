@@ -15,6 +15,7 @@ class WalkForwardConfig:
     test_days: int = 30
     step_days: int = 30
     embargo_days: int = 5
+    purge_days: int = 0
 
 
 @dataclass(slots=True)
@@ -33,10 +34,13 @@ def rolling_folds(timeline: pd.DatetimeIndex, config: WalkForwardConfig) -> list
     cursor = sorted_index.min() + timedelta(days=config.train_days)
     last = sorted_index.max()
     while cursor + timedelta(days=config.test_days) <= last:
-        train_end = cursor - timedelta(days=config.embargo_days)
+        train_end = cursor - timedelta(days=config.embargo_days + config.purge_days)
         train_start = train_end - timedelta(days=config.train_days)
         test_start = cursor
         test_end = cursor + timedelta(days=config.test_days)
+        if train_end <= train_start:
+            cursor += timedelta(days=config.step_days)
+            continue
         folds.append(
             WalkForwardFold(
                 train_start=pd.Timestamp(train_start),

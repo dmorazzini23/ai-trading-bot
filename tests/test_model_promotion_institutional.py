@@ -83,3 +83,45 @@ def test_record_challenger_evaluation_writes_jsonl(tmp_path: Path) -> None:
     assert payload["strategy"] == "swing"
     assert payload["champion_model_id"] == "champ-1"
     assert payload["challenger_model_id"] == "challenger-2"
+
+
+def test_record_challenger_evaluation_adds_significance(tmp_path: Path) -> None:
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+
+    eval_path = promotion.record_challenger_evaluation(
+        strategy="swing",
+        champion_model_id="champ",
+        challenger_model_id="chall",
+        metrics={
+            "challenger_returns": [0.003, 0.002, 0.004, 0.003],
+            "champion_returns": [0.001, 0.001, 0.001, 0.001],
+        },
+    )
+
+    assert eval_path is not None
+    payload = json.loads((tmp_path / "governance" / "challenger_evaluations.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert "significance" in payload
+    assert float(payload["significance"]["uplift_bps"]) > 0.0
+
+
+def test_live_kpi_control_band_triggers_rollback(tmp_path: Path) -> None:
+    registry = ModelRegistry(tmp_path / "registry")
+    promotion = ModelPromotion(model_registry=registry, base_path=str(tmp_path / "governance"))
+    strategy = "momentum"
+
+    champion = _register_test_model(registry, strategy=strategy, marker="champion")
+    challenger = _register_test_model(registry, strategy=strategy, marker="challenger")
+    registry.update_governance_status(champion, "production")
+    assert promotion.promote_to_production(challenger, force=True) is True
+
+    result = promotion.evaluate_live_kpis_and_maybe_rollback(
+        strategy=strategy,
+        live_kpis={"max_drawdown": 0.20, "reject_rate": 0.01, "execution_drift_bps": 10.0},
+    )
+
+    assert result["breached"] is True
+    assert result["triggered"] is True
+    production = registry.get_production_model(strategy)
+    assert production is not None
+    assert production[0] == champion

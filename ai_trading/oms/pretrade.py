@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 from typing import Any
 
 from ai_trading.config.management import get_env
@@ -22,6 +23,16 @@ class OrderIntent:
     mid: float | None = None
     spread: float | None = None
     sleeve: str | None = None
+    liquidity_bucket: str | None = None
+    avg_daily_volume: float | None = None
+    minute_volume: float | None = None
+    expected_slippage_bps: float | None = None
+    expected_tca_bps: float | None = None
+    fill_quality_score: float | None = None
+    quote_quality_ok: bool | None = None
+    sector: str | None = None
+    factor_name: str | None = None
+    factor_exposure: float | None = None
 
 
 class SlidingWindowRateLimiter:
@@ -208,6 +219,108 @@ def _ledger_gross_notional(ledger: Any) -> float | None:
     return None
 
 
+def _json_env_dict(name: str, default: dict[str, float]) -> dict[str, float]:
+    raw = get_env(name, None)
+    if raw is None:
+        return dict(default)
+    parsed: Any = raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return dict(default)
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return dict(default)
+    if not isinstance(parsed, dict):
+        return dict(default)
+    out: dict[str, float] = {}
+    for key, value in parsed.items():
+        try:
+            out[str(key).upper()] = float(value)
+        except (TypeError, ValueError):
+            continue
+    if not out:
+        return dict(default)
+    return out
+
+
+def _ledger_sector_notional(ledger: Any, sector: str | None) -> float | None:
+    if ledger is None or not sector:
+        return None
+    method_names = (
+        "sector_notional",
+        "get_sector_notional",
+        "current_sector_notional",
+    )
+    for method_name in method_names:
+        method = getattr(ledger, method_name, None)
+        if callable(method):
+            try:
+                return float(method(str(sector)))
+            except (TypeError, ValueError):
+                continue
+    sector_map = getattr(ledger, "sector_notional_map", None)
+    if isinstance(sector_map, dict):
+        try:
+            return float(sector_map.get(str(sector), 0.0))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _ledger_factor_exposure(ledger: Any, factor_name: str | None) -> float | None:
+    if ledger is None or not factor_name:
+        return None
+    method_names = (
+        "factor_exposure",
+        "get_factor_exposure",
+        "current_factor_exposure",
+    )
+    for method_name in method_names:
+        method = getattr(ledger, method_name, None)
+        if callable(method):
+            try:
+                return float(method(str(factor_name)))
+            except (TypeError, ValueError):
+                continue
+    factor_map = getattr(ledger, "factor_exposure_map", None)
+    if isinstance(factor_map, dict):
+        try:
+            return float(factor_map.get(str(factor_name), 0.0))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _ledger_metric_value(ledger: Any, metric: str) -> float | None:
+    if ledger is None:
+        return None
+    metric_key = str(metric).strip().lower()
+    metric_method_names: dict[str, tuple[str, ...]] = {
+        "var": ("intraday_var", "var_95", "get_intraday_var"),
+        "cvar": ("intraday_cvar", "cvar_95", "get_intraday_cvar"),
+        "drawdown": ("current_drawdown", "intraday_drawdown", "get_current_drawdown"),
+    }
+    for method_name in metric_method_names.get(metric_key, ()):
+        method = getattr(ledger, method_name, None)
+        if callable(method):
+            try:
+                return float(method())
+            except (TypeError, ValueError):
+                continue
+    attr_names: dict[str, tuple[str, ...]] = {
+        "var": ("intraday_var", "var_95"),
+        "cvar": ("intraday_cvar", "cvar_95"),
+        "drawdown": ("current_drawdown", "intraday_drawdown"),
+    }
+    for attr_name in attr_names.get(metric_key, ()):
+        value = getattr(ledger, attr_name, None)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
 def validate_pretrade(
     intent: OrderIntent,
     *,
@@ -262,6 +375,51 @@ def validate_pretrade(
             cast=float,
         )
     )
+    max_sector_notional = float(
+        _cfg_value(
+            cfg,
+            field="max_sector_notional",
+            env_keys=("AI_TRADING_MAX_SECTOR_NOTIONAL",),
+            default=0.0,
+            cast=float,
+        )
+    )
+    max_factor_exposure = float(
+        _cfg_value(
+            cfg,
+            field="max_factor_exposure",
+            env_keys=("AI_TRADING_MAX_FACTOR_EXPOSURE",),
+            default=0.0,
+            cast=float,
+        )
+    )
+    intraday_var_limit = float(
+        _cfg_value(
+            cfg,
+            field="intraday_var_limit",
+            env_keys=("AI_TRADING_INTRADAY_VAR_LIMIT",),
+            default=0.0,
+            cast=float,
+        )
+    )
+    intraday_cvar_limit = float(
+        _cfg_value(
+            cfg,
+            field="intraday_cvar_limit",
+            env_keys=("AI_TRADING_INTRADAY_CVAR_LIMIT",),
+            default=0.0,
+            cast=float,
+        )
+    )
+    intraday_drawdown_limit = float(
+        _cfg_value(
+            cfg,
+            field="intraday_drawdown_limit",
+            env_keys=("AI_TRADING_INTRADAY_DRAWDOWN_LIMIT",),
+            default=0.0,
+            cast=float,
+        )
+    )
 
     qty_abs = abs(int(intent.qty))
     notional_abs = abs(float(intent.notional))
@@ -303,6 +461,160 @@ def validate_pretrade(
                             "symbol": str(intent.symbol).upper(),
                         },
                     )
+
+    if max_sector_notional > 0 and reference and reference > 0 and intent.sector:
+        sector_notional = _ledger_sector_notional(ledger, intent.sector)
+        if sector_notional is not None:
+            projected_sector_notional = float(sector_notional) + notional_abs
+            if projected_sector_notional > max_sector_notional:
+                return (
+                    False,
+                    "SECTOR_CONCENTRATION_BLOCK",
+                    {
+                        "sector": str(intent.sector),
+                        "projected_sector_notional": projected_sector_notional,
+                        "max_sector_notional": max_sector_notional,
+                    },
+                )
+
+    if max_factor_exposure > 0 and intent.factor_name and intent.factor_exposure is not None:
+        current_factor = _ledger_factor_exposure(ledger, intent.factor_name)
+        projected_factor = float(intent.factor_exposure)
+        if current_factor is not None:
+            projected_factor += float(current_factor)
+        if abs(projected_factor) > max_factor_exposure:
+            return (
+                False,
+                "FACTOR_CONCENTRATION_BLOCK",
+                {
+                    "factor": str(intent.factor_name),
+                    "projected_factor_exposure": projected_factor,
+                    "max_factor_exposure": max_factor_exposure,
+                },
+            )
+
+    if intraday_var_limit > 0:
+        current_var = _ledger_metric_value(ledger, "var")
+        if current_var is not None and current_var > intraday_var_limit:
+            return (
+                False,
+                "INTRADAY_VAR_BLOCK",
+                {"intraday_var": current_var, "max_intraday_var": intraday_var_limit},
+            )
+
+    if intraday_cvar_limit > 0:
+        current_cvar = _ledger_metric_value(ledger, "cvar")
+        if current_cvar is not None and current_cvar > intraday_cvar_limit:
+            return (
+                False,
+                "INTRADAY_CVAR_BLOCK",
+                {"intraday_cvar": current_cvar, "max_intraday_cvar": intraday_cvar_limit},
+            )
+
+    if intraday_drawdown_limit > 0:
+        current_drawdown = _ledger_metric_value(ledger, "drawdown")
+        if current_drawdown is not None and current_drawdown > intraday_drawdown_limit:
+            return (
+                False,
+                "INTRADAY_DRAWDOWN_BLOCK",
+                {
+                    "intraday_drawdown": current_drawdown,
+                    "max_intraday_drawdown": intraday_drawdown_limit,
+                },
+            )
+
+    derisk_enabled = bool(get_env("AI_TRADING_DERISK_ON_DATA_DEGRADED", True, cast=bool))
+    derisk_mode = str(get_env("AI_TRADING_DERISK_MODE", "block", cast=str) or "block").strip().lower()
+    data_degraded = bool(get_env("AI_TRADING_DATA_DEGRADED", False, cast=bool))
+    quote_quality_bad = intent.quote_quality_ok is False
+    if derisk_enabled and (data_degraded or quote_quality_bad) and derisk_mode == "block":
+        return (
+            False,
+            "DERISK_DATA_QUALITY_BLOCK",
+            {
+                "data_degraded": data_degraded,
+                "quote_quality_ok": intent.quote_quality_ok,
+                "mode": derisk_mode,
+            },
+        )
+
+    bucket_default = {"THIN": 45.0, "NORMAL": 30.0, "THICK": 20.0}
+    bucket_map = _json_env_dict("AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_BUCKET", bucket_default)
+    symbol_map = _json_env_dict("AI_TRADING_EXEC_SLIPPAGE_CEILING_BPS_BY_SYMBOL", {})
+    liquidity_bucket = str(intent.liquidity_bucket or "NORMAL").upper()
+    symbol_ceiling = symbol_map.get(str(intent.symbol).upper())
+    bucket_ceiling = bucket_map.get(liquidity_bucket, bucket_map.get("NORMAL", 30.0))
+    slippage_ceiling_bps = symbol_ceiling if symbol_ceiling is not None else bucket_ceiling
+    if (
+        intent.expected_slippage_bps is not None
+        and slippage_ceiling_bps is not None
+        and float(intent.expected_slippage_bps) > float(slippage_ceiling_bps)
+    ):
+        return (
+            False,
+            "SLIPPAGE_CEILING_BLOCK",
+            {
+                "symbol": str(intent.symbol).upper(),
+                "bucket": liquidity_bucket,
+                "expected_slippage_bps": float(intent.expected_slippage_bps),
+                "ceiling_bps": float(slippage_ceiling_bps),
+            },
+        )
+
+    max_adv_participation = float(get_env("AI_TRADING_EXEC_MAX_PARTICIPATION_PCT_ADV", 0.05, cast=float))
+    max_minute_participation = float(
+        get_env("AI_TRADING_EXEC_MAX_PARTICIPATION_PCT_MINUTE", 0.20, cast=float)
+    )
+    if intent.avg_daily_volume is not None and intent.avg_daily_volume > 0 and max_adv_participation > 0:
+        adv_limit = float(intent.avg_daily_volume) * max_adv_participation
+        if qty_abs > adv_limit:
+            return (
+                False,
+                "PARTICIPATION_CAP_BLOCK",
+                {
+                    "scope": "adv",
+                    "qty": qty_abs,
+                    "adv_limit_qty": adv_limit,
+                    "max_participation_pct_adv": max_adv_participation,
+                },
+            )
+    if intent.minute_volume is not None and intent.minute_volume > 0 and max_minute_participation > 0:
+        minute_limit = float(intent.minute_volume) * max_minute_participation
+        if qty_abs > minute_limit:
+            return (
+                False,
+                "PARTICIPATION_CAP_BLOCK",
+                {
+                    "scope": "minute",
+                    "qty": qty_abs,
+                    "minute_limit_qty": minute_limit,
+                    "max_participation_pct_minute": max_minute_participation,
+                },
+            )
+
+    tca_gate_enabled = bool(get_env("AI_TRADING_EXEC_TCA_GATE_ENABLED", True, cast=bool))
+    max_expected_tca_bps = float(get_env("AI_TRADING_EXEC_TCA_MAX_EXPECTED_BPS", 35.0, cast=float))
+    min_fill_quality = float(get_env("AI_TRADING_EXEC_MIN_FILL_QUALITY_SCORE", 0.50, cast=float))
+    if tca_gate_enabled and intent.expected_tca_bps is not None:
+        if float(intent.expected_tca_bps) > max_expected_tca_bps:
+            return (
+                False,
+                "TCA_GATE_BLOCK",
+                {
+                    "expected_tca_bps": float(intent.expected_tca_bps),
+                    "max_expected_tca_bps": max_expected_tca_bps,
+                },
+            )
+    if tca_gate_enabled and intent.fill_quality_score is not None:
+        if float(intent.fill_quality_score) < min_fill_quality:
+            return (
+                False,
+                "FILL_QUALITY_GATE_BLOCK",
+                {
+                    "fill_quality_score": float(intent.fill_quality_score),
+                    "min_fill_quality_score": min_fill_quality,
+                },
+            )
 
     if intent.limit_price is not None and reference and reference > 0:
         deviation = abs(float(intent.limit_price) - float(reference)) / float(reference)

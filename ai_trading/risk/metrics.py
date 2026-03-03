@@ -107,6 +107,100 @@ class RiskMetricsCalculator:
             logger.error(f'Error calculating Sortino ratio: {e}')
             return 0.0
 
+    def calculate_max_drawdown(self, returns: list[float]) -> float:
+        """Calculate max drawdown from periodic returns."""
+        try:
+            if not returns:
+                return 0.0
+            cumulative = []
+            equity = 1.0
+            for value in returns:
+                if not isinstance(value, int | float):
+                    continue
+                equity *= 1.0 + float(value)
+                cumulative.append(equity)
+            if not cumulative:
+                return 0.0
+            peak = cumulative[0]
+            max_dd = 0.0
+            for equity_value in cumulative:
+                peak = max(peak, equity_value)
+                if peak <= 0:
+                    continue
+                drawdown = (peak - equity_value) / peak
+                max_dd = max(max_dd, drawdown)
+            return float(max_dd)
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, statistics.StatisticsError) as e:
+            logger.error(f'Error calculating max drawdown: {e}')
+            return 0.0
+
+    def calculate_calmar_ratio(self, returns: list[float], risk_free_rate: float=0.02) -> float:
+        """Calculate Calmar ratio using annualized excess return / max drawdown."""
+        try:
+            if len(returns) < 2:
+                return 0.0
+            clean = [float(r) for r in returns if isinstance(r, int | float) and math.isfinite(float(r))]
+            if len(clean) < 2:
+                return 0.0
+            avg_daily = statistics.mean(clean) - risk_free_rate / 252.0
+            annualized_return = avg_daily * 252.0
+            max_drawdown = self.calculate_max_drawdown(clean)
+            if max_drawdown <= 0:
+                return 0.0
+            return float(annualized_return / max_drawdown)
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, statistics.StatisticsError) as e:
+            logger.error(f'Error calculating Calmar ratio: {e}')
+            return 0.0
+
+    def calculate_tail_loss(self, returns: list[float], confidence_level: float=0.95) -> float:
+        """Calculate average loss in the worst tail (tail loss / expected shortfall)."""
+        return self.calculate_expected_shortfall(returns, confidence_level=confidence_level)
+
+    def calculate_risk_of_ruin(
+        self,
+        returns: list[float],
+        *,
+        ruin_threshold: float = 0.5,
+    ) -> float:
+        """
+        Estimate risk of ruin using drift/variance approximation.
+
+        The result is a bounded probability in [0, 1] where 1 indicates high
+        likelihood of breaching the ruin threshold.
+        """
+        try:
+            if len(returns) < 2:
+                return 0.0
+            clean = [float(r) for r in returns if isinstance(r, int | float) and math.isfinite(float(r))]
+            if len(clean) < 2:
+                return 0.0
+            mu = statistics.mean(clean)
+            sigma = statistics.stdev(clean)
+            if sigma <= 0:
+                return 1.0 if mu < 0 else 0.0
+            threshold = max(0.01, min(0.99, float(ruin_threshold)))
+            capital_buffer = max(1e-9, 1.0 - threshold)
+            variance = sigma * sigma
+            if mu <= 0:
+                return 1.0
+            score = math.exp(-2.0 * mu * capital_buffer / variance)
+            return float(max(0.0, min(1.0, score)))
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, statistics.StatisticsError) as e:
+            logger.error(f'Error calculating risk of ruin: {e}')
+            return 0.0
+
+    def calculate_scorecard(self, returns: list[float], risk_free_rate: float=0.02) -> dict[str, float]:
+        """Return institutional risk-adjusted performance scorecard."""
+        clean = [float(r) for r in returns if isinstance(r, int | float) and math.isfinite(float(r))]
+        return {
+            "sharpe": float(self.calculate_sharpe_ratio(clean, risk_free_rate=risk_free_rate)),
+            "sortino": float(self.calculate_sortino_ratio(clean, risk_free_rate=risk_free_rate)),
+            "max_drawdown": float(self.calculate_max_drawdown(clean)),
+            "calmar": float(self.calculate_calmar_ratio(clean, risk_free_rate=risk_free_rate)),
+            "tail_loss_95": float(self.calculate_tail_loss(clean, confidence_level=0.95)),
+            "risk_of_ruin": float(self.calculate_risk_of_ruin(clean)),
+        }
+
 class DrawdownAnalyzer:
     """
     Drawdown analysis and monitoring.

@@ -31,10 +31,20 @@ def test_walk_forward_and_no_leakage() -> None:
     result = run_walk_forward(
         df,
         score_fn=_score,
-        config=WalkForwardConfig(train_days=180, test_days=30, step_days=30, embargo_days=5),
+        config=WalkForwardConfig(
+            train_days=180,
+            test_days=30,
+            step_days=30,
+            embargo_days=5,
+            purge_days=2,
+        ),
     )
     assert result["fold_count"] > 0
     assert "post_cost_return" in result["distribution"]
+    first_fold = result["folds"][0]
+    train_end = pd.Timestamp(first_fold["train_end"])
+    test_start = pd.Timestamp(first_fold["test_start"])
+    assert test_start - train_end >= timedelta(days=7)
 
     run_leakage_guards(
         feature_timestamps=ts[:-1],

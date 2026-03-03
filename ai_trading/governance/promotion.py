@@ -5,12 +5,19 @@ Manages the promotion process from shadow testing to production deployment
 with performance validation and safety checks.
 """
 import json
+import math
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import mean, pstdev
 from typing import Any
 from ..model_registry import ModelRegistry
+from ai_trading.config.management import get_env
+from ai_trading.research.institutional_validation import (
+    compute_risk_adjusted_scorecard,
+    run_monte_carlo_trade_sequence_stress,
+)
 logger = get_logger(__name__)
 
 @dataclass
@@ -23,6 +30,21 @@ class PromotionCriteria:
     min_shadow_days: int = 3
     max_drawdown_threshold: float = 0.05
     min_trade_count: int = 10
+    min_live_sortino: float = 0.5
+    min_live_calmar: float = 0.4
+    max_tail_loss_95: float = 0.03
+    max_risk_of_ruin: float = 0.20
+    min_purged_walk_forward_pass_ratio: float = 0.60
+    min_monte_carlo_p05_bps: float = -20.0
+    min_regime_pass_ratio: float = 0.60
+    require_tca_gate: bool = True
+    max_reject_rate: float = 0.03
+    max_execution_drift_bps: float = 25.0
+    challenger_significance_alpha: float = 0.05
+    min_challenger_uplift_bps: float = 0.5
+    control_band_drawdown: float = 0.08
+    control_band_reject_rate: float = 0.05
+    control_band_execution_drift_bps: float = 35.0
 
 @dataclass
 class PromotionMetrics:
@@ -35,6 +57,18 @@ class PromotionMetrics:
     drift_psi: float = 0.0
     avg_latency_ms: float = 0.0
     error_rate: float = 0.0
+    live_sortino_ratio: float = 0.0
+    live_calmar_ratio: float = 0.0
+    tail_loss_95: float = 0.0
+    risk_of_ruin: float = 0.0
+    purged_walk_forward_pass_ratio: float = 0.0
+    monte_carlo_p05_bps: float = 0.0
+    regime_pass_ratio: float = 0.0
+    tca_gate_passed: bool = True
+    reject_rate: float = 0.0
+    execution_drift_bps: float = 0.0
+    challenger_uplift_bps: float = 0.0
+    challenger_p_value: float = 1.0
     last_updated: datetime | None = None
 
 class ModelPromotion:
@@ -103,27 +137,151 @@ class ModelPromotion:
             if current_metrics is None:
                 current_metrics = PromotionMetrics()
             current_metrics.sessions_completed += 1
-            current_metrics.total_trades += session_stats.get('trade_count', 0)
+            current_metrics.total_trades += int(session_stats.get('trade_count', 0) or 0)
             current_metrics.last_updated = datetime.now(UTC)
             alpha = 0.1
-            new_turnover = session_stats.get('turnover_ratio', 0.0)
+            new_turnover = float(session_stats.get('turnover_ratio', 0.0) or 0.0)
             current_metrics.turnover_ratio = alpha * new_turnover + (1 - alpha) * current_metrics.turnover_ratio
-            new_sharpe = session_stats.get('sharpe_ratio', 0.0)
+            new_sharpe = float(session_stats.get('sharpe_ratio', 0.0) or 0.0)
             current_metrics.live_sharpe_ratio = alpha * new_sharpe + (1 - alpha) * current_metrics.live_sharpe_ratio
-            new_drawdown = session_stats.get('max_drawdown', 0.0)
+            new_drawdown = float(session_stats.get('max_drawdown', 0.0) or 0.0)
             current_metrics.max_drawdown = max(current_metrics.max_drawdown, new_drawdown)
-            new_psi = session_stats.get('drift_psi', 0.0)
+            new_psi = float(session_stats.get('drift_psi', 0.0) or 0.0)
             current_metrics.drift_psi = alpha * new_psi + (1 - alpha) * current_metrics.drift_psi
-            new_latency = session_stats.get('avg_latency_ms', 0.0)
+            new_latency = float(session_stats.get('avg_latency_ms', 0.0) or 0.0)
             current_metrics.avg_latency_ms = alpha * new_latency + (1 - alpha) * current_metrics.avg_latency_ms
-            new_error_rate = session_stats.get('error_rate', 0.0)
+            new_error_rate = float(session_stats.get('error_rate', 0.0) or 0.0)
             current_metrics.error_rate = alpha * new_error_rate + (1 - alpha) * current_metrics.error_rate
+
+            returns = session_stats.get("returns")
+            if isinstance(returns, list) and returns:
+                scorecard = compute_risk_adjusted_scorecard(returns)
+                current_metrics.live_sharpe_ratio = alpha * float(scorecard["sharpe_ratio"]) + (
+                    1 - alpha
+                ) * current_metrics.live_sharpe_ratio
+                current_metrics.live_sortino_ratio = alpha * float(scorecard["sortino_ratio"]) + (
+                    1 - alpha
+                ) * current_metrics.live_sortino_ratio
+                current_metrics.live_calmar_ratio = alpha * float(scorecard["calmar_ratio"]) + (
+                    1 - alpha
+                ) * current_metrics.live_calmar_ratio
+                current_metrics.tail_loss_95 = alpha * float(scorecard["tail_loss_95"]) + (
+                    1 - alpha
+                ) * current_metrics.tail_loss_95
+                current_metrics.risk_of_ruin = alpha * float(scorecard["risk_of_ruin"]) + (
+                    1 - alpha
+                ) * current_metrics.risk_of_ruin
+                current_metrics.max_drawdown = max(
+                    current_metrics.max_drawdown,
+                    float(scorecard["max_drawdown"]),
+                )
+                monte = run_monte_carlo_trade_sequence_stress(returns, trials=300, seed=42)
+                current_metrics.monte_carlo_p05_bps = alpha * float(monte["p05_return_bps"]) + (
+                    1 - alpha
+                ) * current_metrics.monte_carlo_p05_bps
+
+            current_metrics.live_sortino_ratio = alpha * float(
+                session_stats.get("sortino_ratio", current_metrics.live_sortino_ratio) or 0.0
+            ) + (1 - alpha) * current_metrics.live_sortino_ratio
+            current_metrics.live_calmar_ratio = alpha * float(
+                session_stats.get("calmar_ratio", current_metrics.live_calmar_ratio) or 0.0
+            ) + (1 - alpha) * current_metrics.live_calmar_ratio
+            current_metrics.tail_loss_95 = alpha * float(
+                session_stats.get("tail_loss_95", current_metrics.tail_loss_95) or 0.0
+            ) + (1 - alpha) * current_metrics.tail_loss_95
+            current_metrics.risk_of_ruin = alpha * float(
+                session_stats.get("risk_of_ruin", current_metrics.risk_of_ruin) or 0.0
+            ) + (1 - alpha) * current_metrics.risk_of_ruin
+            current_metrics.purged_walk_forward_pass_ratio = alpha * float(
+                session_stats.get(
+                    "purged_walk_forward_pass_ratio",
+                    current_metrics.purged_walk_forward_pass_ratio,
+                )
+                or 0.0
+            ) + (1 - alpha) * current_metrics.purged_walk_forward_pass_ratio
+            current_metrics.regime_pass_ratio = alpha * float(
+                session_stats.get("regime_pass_ratio", current_metrics.regime_pass_ratio) or 0.0
+            ) + (1 - alpha) * current_metrics.regime_pass_ratio
+            current_metrics.monte_carlo_p05_bps = alpha * float(
+                session_stats.get("monte_carlo_p05_bps", current_metrics.monte_carlo_p05_bps) or 0.0
+            ) + (1 - alpha) * current_metrics.monte_carlo_p05_bps
+            current_metrics.tca_gate_passed = bool(
+                session_stats.get("tca_gate_passed", current_metrics.tca_gate_passed)
+            )
+            current_metrics.reject_rate = alpha * float(
+                session_stats.get("reject_rate", current_metrics.reject_rate) or 0.0
+            ) + (1 - alpha) * current_metrics.reject_rate
+            current_metrics.execution_drift_bps = alpha * float(
+                session_stats.get("execution_drift_bps", current_metrics.execution_drift_bps) or 0.0
+            ) + (1 - alpha) * current_metrics.execution_drift_bps
+
+            challenger_returns = session_stats.get("challenger_returns")
+            champion_returns = session_stats.get("champion_returns")
+            if isinstance(challenger_returns, list) and isinstance(champion_returns, list):
+                stat_sig = self.evaluate_challenger_significance(
+                    challenger_returns,
+                    champion_returns,
+                    alpha=self.criteria.challenger_significance_alpha,
+                )
+                current_metrics.challenger_uplift_bps = float(stat_sig["uplift_bps"])
+                current_metrics.challenger_p_value = float(stat_sig["p_value"])
+
             self._save_shadow_metrics(model_id, current_metrics)
-            metrics_dict = {'sessions_completed': current_metrics.sessions_completed, 'total_trades': current_metrics.total_trades, 'turnover_ratio': current_metrics.turnover_ratio, 'live_sharpe_ratio': current_metrics.live_sharpe_ratio, 'max_drawdown': current_metrics.max_drawdown, 'drift_psi': current_metrics.drift_psi, 'last_updated': current_metrics.last_updated.isoformat() if current_metrics.last_updated else None}
+            metrics_dict = {
+                'sessions_completed': current_metrics.sessions_completed,
+                'total_trades': current_metrics.total_trades,
+                'turnover_ratio': current_metrics.turnover_ratio,
+                'live_sharpe_ratio': current_metrics.live_sharpe_ratio,
+                'live_sortino_ratio': current_metrics.live_sortino_ratio,
+                'live_calmar_ratio': current_metrics.live_calmar_ratio,
+                'max_drawdown': current_metrics.max_drawdown,
+                'tail_loss_95': current_metrics.tail_loss_95,
+                'risk_of_ruin': current_metrics.risk_of_ruin,
+                'drift_psi': current_metrics.drift_psi,
+                'purged_walk_forward_pass_ratio': current_metrics.purged_walk_forward_pass_ratio,
+                'monte_carlo_p05_bps': current_metrics.monte_carlo_p05_bps,
+                'regime_pass_ratio': current_metrics.regime_pass_ratio,
+                'tca_gate_passed': current_metrics.tca_gate_passed,
+                'reject_rate': current_metrics.reject_rate,
+                'execution_drift_bps': current_metrics.execution_drift_bps,
+                'challenger_uplift_bps': current_metrics.challenger_uplift_bps,
+                'challenger_p_value': current_metrics.challenger_p_value,
+                'last_updated': current_metrics.last_updated.isoformat() if current_metrics.last_updated else None,
+            }
             self.registry.update_governance_status(model_id, 'shadow', metrics_dict)
             self.logger.debug(f'Updated shadow metrics for model {model_id}: {current_metrics.sessions_completed} sessions')
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error updating shadow metrics for {model_id}: {e}')
+
+    @staticmethod
+    def evaluate_challenger_significance(
+        challenger_returns: list[float],
+        champion_returns: list[float],
+        *,
+        alpha: float = 0.05,
+    ) -> dict[str, float | bool]:
+        """Estimate challenger uplift significance using normal approximation."""
+
+        challenger = [float(x) for x in challenger_returns if isinstance(x, int | float)]
+        champion = [float(x) for x in champion_returns if isinstance(x, int | float)]
+        if len(challenger) < 2 or len(champion) < 2:
+            return {"uplift_bps": 0.0, "p_value": 1.0, "significant": False}
+
+        mean_diff = mean(challenger) - mean(champion)
+        var_ch = pstdev(challenger) ** 2 if len(challenger) > 1 else 0.0
+        var_cp = pstdev(champion) ** 2 if len(champion) > 1 else 0.0
+        denom = math.sqrt((var_ch / len(challenger)) + (var_cp / len(champion)))
+        if denom <= 0:
+            p_value = 0.0 if mean_diff > 0 else 1.0
+        else:
+            z = mean_diff / denom
+            p_value = math.erfc(abs(z) / math.sqrt(2.0))
+        uplift_bps = float(mean_diff * 10000.0)
+        return {
+            "uplift_bps": uplift_bps,
+            "p_value": float(max(0.0, min(1.0, p_value))),
+            "significant": bool(p_value <= max(0.0, min(1.0, alpha))),
+        }
 
     def check_promotion_eligibility(self, model_id: str) -> tuple[bool, dict[str, Any]]:
         """
@@ -147,9 +305,79 @@ class ModelPromotion:
                 days_in_shadow = (datetime.now(UTC) - shadow_start_dt).days
             else:
                 days_in_shadow = 0
-            checks = {'min_sessions': metrics.sessions_completed >= self.criteria.min_shadow_sessions, 'min_days': days_in_shadow >= self.criteria.min_shadow_days, 'min_trades': metrics.total_trades >= self.criteria.min_trade_count, 'turnover_check': metrics.turnover_ratio <= self.criteria.max_turnover_ratio, 'sharpe_check': metrics.live_sharpe_ratio >= self.criteria.min_live_sharpe, 'drawdown_check': metrics.max_drawdown <= self.criteria.max_drawdown_threshold, 'drift_check': metrics.drift_psi <= self.criteria.max_drift_psi}
+            checks = {
+                'min_sessions': metrics.sessions_completed >= self.criteria.min_shadow_sessions,
+                'min_days': days_in_shadow >= self.criteria.min_shadow_days,
+                'min_trades': metrics.total_trades >= self.criteria.min_trade_count,
+                'turnover_check': metrics.turnover_ratio <= self.criteria.max_turnover_ratio,
+                'sharpe_check': metrics.live_sharpe_ratio >= self.criteria.min_live_sharpe,
+                'sortino_check': metrics.live_sortino_ratio >= self.criteria.min_live_sortino,
+                'calmar_check': metrics.live_calmar_ratio >= self.criteria.min_live_calmar,
+                'drawdown_check': metrics.max_drawdown <= self.criteria.max_drawdown_threshold,
+                'tail_loss_check': metrics.tail_loss_95 <= self.criteria.max_tail_loss_95,
+                'risk_of_ruin_check': metrics.risk_of_ruin <= self.criteria.max_risk_of_ruin,
+                'drift_check': metrics.drift_psi <= self.criteria.max_drift_psi,
+                'purged_walk_forward_check': (
+                    metrics.purged_walk_forward_pass_ratio >= self.criteria.min_purged_walk_forward_pass_ratio
+                ),
+                'monte_carlo_check': metrics.monte_carlo_p05_bps >= self.criteria.min_monte_carlo_p05_bps,
+                'regime_split_check': metrics.regime_pass_ratio >= self.criteria.min_regime_pass_ratio,
+                'tca_gate_check': (not self.criteria.require_tca_gate) or metrics.tca_gate_passed,
+                'reject_rate_check': metrics.reject_rate <= self.criteria.max_reject_rate,
+                'execution_drift_check': (
+                    metrics.execution_drift_bps <= self.criteria.max_execution_drift_bps
+                ),
+                'challenger_significance_check': (
+                    metrics.challenger_uplift_bps >= self.criteria.min_challenger_uplift_bps
+                    and metrics.challenger_p_value <= self.criteria.challenger_significance_alpha
+                ),
+            }
             eligible = all(checks.values())
-            evaluation = {'eligible': eligible, 'checks': checks, 'metrics': {'sessions_completed': metrics.sessions_completed, 'days_in_shadow': days_in_shadow, 'total_trades': metrics.total_trades, 'turnover_ratio': metrics.turnover_ratio, 'live_sharpe_ratio': metrics.live_sharpe_ratio, 'max_drawdown': metrics.max_drawdown, 'drift_psi': metrics.drift_psi}, 'criteria': {'min_sessions': self.criteria.min_shadow_sessions, 'min_days': self.criteria.min_shadow_days, 'min_trades': self.criteria.min_trade_count, 'max_turnover': self.criteria.max_turnover_ratio, 'min_sharpe': self.criteria.min_live_sharpe, 'max_drawdown': self.criteria.max_drawdown_threshold, 'max_drift': self.criteria.max_drift_psi}}
+            evaluation = {
+                'eligible': eligible,
+                'checks': checks,
+                'metrics': {
+                    'sessions_completed': metrics.sessions_completed,
+                    'days_in_shadow': days_in_shadow,
+                    'total_trades': metrics.total_trades,
+                    'turnover_ratio': metrics.turnover_ratio,
+                    'live_sharpe_ratio': metrics.live_sharpe_ratio,
+                    'live_sortino_ratio': metrics.live_sortino_ratio,
+                    'live_calmar_ratio': metrics.live_calmar_ratio,
+                    'max_drawdown': metrics.max_drawdown,
+                    'tail_loss_95': metrics.tail_loss_95,
+                    'risk_of_ruin': metrics.risk_of_ruin,
+                    'drift_psi': metrics.drift_psi,
+                    'purged_walk_forward_pass_ratio': metrics.purged_walk_forward_pass_ratio,
+                    'monte_carlo_p05_bps': metrics.monte_carlo_p05_bps,
+                    'regime_pass_ratio': metrics.regime_pass_ratio,
+                    'tca_gate_passed': metrics.tca_gate_passed,
+                    'reject_rate': metrics.reject_rate,
+                    'execution_drift_bps': metrics.execution_drift_bps,
+                    'challenger_uplift_bps': metrics.challenger_uplift_bps,
+                    'challenger_p_value': metrics.challenger_p_value,
+                },
+                'criteria': {
+                    'min_sessions': self.criteria.min_shadow_sessions,
+                    'min_days': self.criteria.min_shadow_days,
+                    'min_trades': self.criteria.min_trade_count,
+                    'max_turnover': self.criteria.max_turnover_ratio,
+                    'min_sharpe': self.criteria.min_live_sharpe,
+                    'min_sortino': self.criteria.min_live_sortino,
+                    'min_calmar': self.criteria.min_live_calmar,
+                    'max_drawdown': self.criteria.max_drawdown_threshold,
+                    'max_tail_loss_95': self.criteria.max_tail_loss_95,
+                    'max_risk_of_ruin': self.criteria.max_risk_of_ruin,
+                    'max_drift': self.criteria.max_drift_psi,
+                    'min_purged_walk_forward_pass_ratio': self.criteria.min_purged_walk_forward_pass_ratio,
+                    'min_monte_carlo_p05_bps': self.criteria.min_monte_carlo_p05_bps,
+                    'min_regime_pass_ratio': self.criteria.min_regime_pass_ratio,
+                    'max_reject_rate': self.criteria.max_reject_rate,
+                    'max_execution_drift_bps': self.criteria.max_execution_drift_bps,
+                    'challenger_significance_alpha': self.criteria.challenger_significance_alpha,
+                    'min_challenger_uplift_bps': self.criteria.min_challenger_uplift_bps,
+                },
+            }
             return (eligible, evaluation)
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error checking promotion eligibility for {model_id}: {e}')
@@ -226,6 +454,14 @@ class ModelPromotion:
             "challenger_model_id": str(challenger_model_id),
             "metrics": dict(metrics),
         }
+        challenger_returns = metrics.get("challenger_returns")
+        champion_returns = metrics.get("champion_returns")
+        if isinstance(challenger_returns, list) and isinstance(champion_returns, list):
+            payload["significance"] = self.evaluate_challenger_significance(
+                challenger_returns,
+                champion_returns,
+                alpha=self.criteria.challenger_significance_alpha,
+            )
         try:
             eval_path.parent.mkdir(parents=True, exist_ok=True)
             with eval_path.open("a", encoding="utf-8") as handle:
@@ -310,10 +546,82 @@ class ModelPromotion:
         )
         return True
 
+    def evaluate_live_kpis_and_maybe_rollback(
+        self,
+        *,
+        strategy: str,
+        live_kpis: dict[str, Any],
+        force: bool = True,
+    ) -> dict[str, Any]:
+        """Rollback production when live KPI control bands are breached."""
+
+        breaches: dict[str, Any] = {}
+        drawdown = float(live_kpis.get("max_drawdown", 0.0) or 0.0)
+        reject_rate = float(live_kpis.get("reject_rate", 0.0) or 0.0)
+        execution_drift_bps = float(live_kpis.get("execution_drift_bps", 0.0) or 0.0)
+
+        if drawdown > float(self.criteria.control_band_drawdown):
+            breaches["max_drawdown"] = drawdown
+        if reject_rate > float(self.criteria.control_band_reject_rate):
+            breaches["reject_rate"] = reject_rate
+        if execution_drift_bps > float(self.criteria.control_band_execution_drift_bps):
+            breaches["execution_drift_bps"] = execution_drift_bps
+
+        result: dict[str, Any] = {
+            "strategy": strategy,
+            "breached": bool(breaches),
+            "breaches": breaches,
+            "triggered": False,
+        }
+        if not breaches:
+            return result
+
+        rollback_enabled = True
+        try:
+            rollback_enabled = bool(
+                get_env("AI_TRADING_PROMOTION_AUTO_ROLLBACK_ON_CONTROL_BAND", True, cast=bool)
+            )
+        except Exception:
+            rollback_enabled = True
+        if not rollback_enabled:
+            result["status"] = "disabled"
+            return result
+
+        rolled_back = self.rollback_to_previous_production(
+            strategy=strategy,
+            reason="live_kpi_control_band_breach",
+            force=force,
+        )
+        result["triggered"] = bool(rolled_back)
+        result["status"] = "rolled_back" if rolled_back else "rollback_failed"
+        return result
+
     def _save_shadow_metrics(self, model_id: str, metrics: PromotionMetrics) -> None:
         """Save shadow metrics to disk."""
         metrics_file = self.base_path / f'{model_id}_shadow_metrics.json'
-        metrics_dict = {'sessions_completed': metrics.sessions_completed, 'total_trades': metrics.total_trades, 'turnover_ratio': metrics.turnover_ratio, 'live_sharpe_ratio': metrics.live_sharpe_ratio, 'max_drawdown': metrics.max_drawdown, 'drift_psi': metrics.drift_psi, 'avg_latency_ms': metrics.avg_latency_ms, 'error_rate': metrics.error_rate, 'last_updated': metrics.last_updated.isoformat() if metrics.last_updated else None}
+        metrics_dict = {
+            'sessions_completed': metrics.sessions_completed,
+            'total_trades': metrics.total_trades,
+            'turnover_ratio': metrics.turnover_ratio,
+            'live_sharpe_ratio': metrics.live_sharpe_ratio,
+            'live_sortino_ratio': metrics.live_sortino_ratio,
+            'live_calmar_ratio': metrics.live_calmar_ratio,
+            'max_drawdown': metrics.max_drawdown,
+            'tail_loss_95': metrics.tail_loss_95,
+            'risk_of_ruin': metrics.risk_of_ruin,
+            'drift_psi': metrics.drift_psi,
+            'avg_latency_ms': metrics.avg_latency_ms,
+            'error_rate': metrics.error_rate,
+            'purged_walk_forward_pass_ratio': metrics.purged_walk_forward_pass_ratio,
+            'monte_carlo_p05_bps': metrics.monte_carlo_p05_bps,
+            'regime_pass_ratio': metrics.regime_pass_ratio,
+            'tca_gate_passed': metrics.tca_gate_passed,
+            'reject_rate': metrics.reject_rate,
+            'execution_drift_bps': metrics.execution_drift_bps,
+            'challenger_uplift_bps': metrics.challenger_uplift_bps,
+            'challenger_p_value': metrics.challenger_p_value,
+            'last_updated': metrics.last_updated.isoformat() if metrics.last_updated else None,
+        }
         with open(metrics_file, 'w') as f:
             json.dump(metrics_dict, f, indent=2)
 
@@ -328,7 +636,29 @@ class ModelPromotion:
             last_updated = None
             if data.get('last_updated'):
                 last_updated = datetime.fromisoformat(data['last_updated'].replace('Z', '+00:00'))
-            return PromotionMetrics(sessions_completed=data.get('sessions_completed', 0), total_trades=data.get('total_trades', 0), turnover_ratio=data.get('turnover_ratio', 0.0), live_sharpe_ratio=data.get('live_sharpe_ratio', 0.0), max_drawdown=data.get('max_drawdown', 0.0), drift_psi=data.get('drift_psi', 0.0), avg_latency_ms=data.get('avg_latency_ms', 0.0), error_rate=data.get('error_rate', 0.0), last_updated=last_updated)
+            return PromotionMetrics(
+                sessions_completed=data.get('sessions_completed', 0),
+                total_trades=data.get('total_trades', 0),
+                turnover_ratio=data.get('turnover_ratio', 0.0),
+                live_sharpe_ratio=data.get('live_sharpe_ratio', 0.0),
+                max_drawdown=data.get('max_drawdown', 0.0),
+                drift_psi=data.get('drift_psi', 0.0),
+                avg_latency_ms=data.get('avg_latency_ms', 0.0),
+                error_rate=data.get('error_rate', 0.0),
+                live_sortino_ratio=data.get('live_sortino_ratio', 0.0),
+                live_calmar_ratio=data.get('live_calmar_ratio', 0.0),
+                tail_loss_95=data.get('tail_loss_95', 0.0),
+                risk_of_ruin=data.get('risk_of_ruin', 0.0),
+                purged_walk_forward_pass_ratio=data.get('purged_walk_forward_pass_ratio', 0.0),
+                monte_carlo_p05_bps=data.get('monte_carlo_p05_bps', 0.0),
+                regime_pass_ratio=data.get('regime_pass_ratio', 0.0),
+                tca_gate_passed=bool(data.get('tca_gate_passed', True)),
+                reject_rate=data.get('reject_rate', 0.0),
+                execution_drift_bps=data.get('execution_drift_bps', 0.0),
+                challenger_uplift_bps=data.get('challenger_uplift_bps', 0.0),
+                challenger_p_value=data.get('challenger_p_value', 1.0),
+                last_updated=last_updated,
+            )
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error loading shadow metrics for {model_id}: {e}')
             return None

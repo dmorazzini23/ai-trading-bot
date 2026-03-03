@@ -76,7 +76,17 @@ class SLOMonitor:
 
     def _setup_default_slos(self) -> None:
         """Setup default SLO thresholds."""
-        default_slos = {'order_latency_ms': SLOThreshold(name='order_latency_ms', warning_threshold=100.0, critical_threshold=500.0, breach_threshold=1000.0, window_minutes=5, min_samples=5, description='Order execution latency'), 'position_skew_pct': SLOThreshold(name='position_skew_pct', warning_threshold=2.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=1, min_samples=3, description='Position skew from target'), 'turnover_ratio': SLOThreshold(name='turnover_ratio', warning_threshold=1.5, critical_threshold=2.0, breach_threshold=3.0, window_minutes=10, min_samples=3, description='Trading turnover ratio'), 'live_sharpe_ratio': SLOThreshold(name='live_sharpe_ratio', warning_threshold=0.3, critical_threshold=0.0, breach_threshold=-0.5, window_minutes=60, min_samples=10, description='Live trading Sharpe ratio'), 'error_rate_pct': SLOThreshold(name='error_rate_pct', warning_threshold=1.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=5, min_samples=10, description='System error rate'), 'data_staleness_minutes': SLOThreshold(name='data_staleness_minutes', warning_threshold=2.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=1, min_samples=1, description='Market data staleness'), 'pnl_drift_bps': SLOThreshold(name='pnl_drift_bps', warning_threshold=10.0, critical_threshold=25.0, breach_threshold=50.0, window_minutes=15, min_samples=5, description='P&L attribution drift')}
+        default_slos = {
+            'order_latency_ms': SLOThreshold(name='order_latency_ms', warning_threshold=100.0, critical_threshold=500.0, breach_threshold=1000.0, window_minutes=5, min_samples=5, description='Order execution latency'),
+            'position_skew_pct': SLOThreshold(name='position_skew_pct', warning_threshold=2.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=1, min_samples=3, description='Position skew from target'),
+            'turnover_ratio': SLOThreshold(name='turnover_ratio', warning_threshold=1.5, critical_threshold=2.0, breach_threshold=3.0, window_minutes=10, min_samples=3, description='Trading turnover ratio'),
+            'live_sharpe_ratio': SLOThreshold(name='live_sharpe_ratio', warning_threshold=0.3, critical_threshold=0.0, breach_threshold=-0.5, window_minutes=60, min_samples=10, description='Live trading Sharpe ratio'),
+            'error_rate_pct': SLOThreshold(name='error_rate_pct', warning_threshold=1.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=5, min_samples=10, description='System error rate'),
+            'order_reject_rate_pct': SLOThreshold(name='order_reject_rate_pct', warning_threshold=1.0, critical_threshold=3.0, breach_threshold=5.0, window_minutes=10, min_samples=5, description='Order reject rate'),
+            'execution_drift_bps': SLOThreshold(name='execution_drift_bps', warning_threshold=8.0, critical_threshold=20.0, breach_threshold=35.0, window_minutes=15, min_samples=5, description='Execution quality drift versus benchmark'),
+            'data_staleness_minutes': SLOThreshold(name='data_staleness_minutes', warning_threshold=2.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=1, min_samples=1, description='Market data staleness'),
+            'pnl_drift_bps': SLOThreshold(name='pnl_drift_bps', warning_threshold=10.0, critical_threshold=25.0, breach_threshold=50.0, window_minutes=15, min_samples=5, description='P&L attribution drift'),
+        }
         for slo in default_slos.values():
             self.add_slo_threshold(slo)
 
@@ -279,5 +289,19 @@ def setup_default_circuit_breakers() -> None:
     monitor = get_slo_monitor()
     monitor.register_circuit_breaker('order_latency_ms', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('error_rate_pct', pause_trading_circuit_breaker)
+    monitor.register_circuit_breaker('order_reject_rate_pct', pause_trading_circuit_breaker)
+    monitor.register_circuit_breaker('execution_drift_bps', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('live_sharpe_ratio', reduce_position_size_circuit_breaker)
     monitor.register_circuit_breaker('position_skew_pct', reduce_position_size_circuit_breaker)
+
+
+def record_order_reject_rate(reject_rate_pct: float) -> None:
+    """Record order reject rate percentage."""
+    monitor = get_slo_monitor()
+    monitor.record_metric("order_reject_rate_pct", float(reject_rate_pct))
+
+
+def record_execution_drift(execution_drift_bps: float) -> None:
+    """Record execution drift in basis points."""
+    monitor = get_slo_monitor()
+    monitor.record_metric("execution_drift_bps", float(execution_drift_bps))
