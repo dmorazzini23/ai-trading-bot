@@ -101,3 +101,5 @@ def test_bad_session_replay_auto_builds_from_tca_source(
 
     assert (output_dir / "replay_manifest.json").exists()
     assert (output_dir / "AAPL.csv").exists()
+    assert (output_dir / "incident_intents.jsonl").exists()
+    assert (output_dir / "incident_broker.jsonl").exists()

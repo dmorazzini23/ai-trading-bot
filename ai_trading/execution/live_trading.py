@@ -2554,10 +2554,20 @@ class ExecutionEngine:
         if adaptive_age_hard_s is None:
             adaptive_age_hard_s = 600.0
         adaptive_age_hard_s = max(adaptive_age_soft_s, float(adaptive_age_hard_s))
+        hard_block_count = _config_int("AI_TRADING_PENDING_BACKLOG_HARD_BLOCK_COUNT", 0)
+        if hard_block_count is None:
+            hard_block_count = 0
+        hard_block_count = max(0, int(hard_block_count))
+        hard_block_age_s = _config_float("AI_TRADING_PENDING_BACKLOG_HARD_BLOCK_AGE_SEC", 0.0)
+        if hard_block_age_s is None:
+            hard_block_age_s = 0.0
+        hard_block_age_s = max(0.0, float(hard_block_age_s))
 
         oldest_pending_age_s = max(local_oldest_pending_age_s, broker_oldest_pending_age_s)
         selected_cap: int | None = None
         adaptive_cap: int | None = None
+        hard_block_triggered = False
+        hard_block_reasons: list[str] = []
         if backlog >= threshold:
             selected_cap = cap_value
             if adaptive_enabled:
@@ -2582,6 +2592,14 @@ class ExecutionEngine:
                         age_based_cap = max(adaptive_min_cap, min(age_based_cap, adaptive_max_cap))
                 adaptive_cap = max(adaptive_min_cap, min(backlog_based_cap, age_based_cap))
                 selected_cap = adaptive_cap
+        if hard_block_count > 0 and backlog >= hard_block_count:
+            hard_block_triggered = True
+            hard_block_reasons.append("count")
+        if hard_block_age_s > 0.0 and oldest_pending_age_s >= hard_block_age_s:
+            hard_block_triggered = True
+            hard_block_reasons.append("age")
+        if hard_block_triggered:
+            selected_cap = 0
         self._pending_backlog_last_context = {
             "threshold": int(threshold),
             "cap_value": int(cap_value),
@@ -2599,8 +2617,14 @@ class ExecutionEngine:
             "adaptive_step_orders": int(adaptive_step_orders),
             "adaptive_age_soft_s": round(float(adaptive_age_soft_s), 3),
             "adaptive_age_hard_s": round(float(adaptive_age_hard_s), 3),
+            "hard_block_count": int(hard_block_count),
+            "hard_block_age_s": round(float(hard_block_age_s), 3),
+            "hard_block_triggered": bool(hard_block_triggered),
+            "hard_block_reasons": tuple(sorted(set(hard_block_reasons))),
             "selected_cap": int(selected_cap) if selected_cap is not None else None,
         }
+        if hard_block_triggered:
+            return 0
         if backlog < threshold:
             return None
         return selected_cap
@@ -2827,6 +2851,7 @@ class ExecutionEngine:
         duration_s: float | None = None,
         ack_timed_out: bool = False,
         execution_drift_bps: float | None = None,
+        realized_slippage_bps: float | None = None,
     ) -> None:
         """Append a normalized order outcome entry for cycle-level KPI reporting."""
 
@@ -2867,6 +2892,13 @@ class ExecutionEngine:
                 parsed_drift = None
             if parsed_drift is not None and math.isfinite(parsed_drift):
                 payload["execution_drift_bps"] = parsed_drift
+        if realized_slippage_bps is not None:
+            try:
+                parsed_slippage = float(realized_slippage_bps)
+            except (TypeError, ValueError):
+                parsed_slippage = None
+            if parsed_slippage is not None and math.isfinite(parsed_slippage):
+                payload["realized_slippage_bps"] = abs(parsed_slippage)
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
 
@@ -3094,20 +3126,31 @@ class ExecutionEngine:
             for item, _status in normalized_outcomes
             if item.get("execution_drift_bps") is not None
         ]
+        slippage_values = [
+            abs(float(item.get("realized_slippage_bps", 0.0)))
+            for item, _status in normalized_outcomes
+            if item.get("realized_slippage_bps") is not None
+        ]
         cycle_execution_drift_bps = (
             float(statistics.mean(drift_values)) if drift_values else 0.0
+        )
+        cycle_realized_slippage_bps = (
+            float(statistics.mean(slippage_values)) if slippage_values else 0.0
         )
         try:
             from ai_trading.monitoring.slo import (
                 record_execution_drift,
                 record_order_pacing_cap_hit_rate,
                 record_order_reject_rate,
+                record_realized_slippage,
             )
 
             if attempted > 0:
                 record_order_reject_rate(reject_rate_pct)
             if drift_values:
                 record_execution_drift(cycle_execution_drift_bps)
+            if slippage_values:
+                record_realized_slippage(cycle_realized_slippage_bps)
             if decision_count > 0:
                 record_order_pacing_cap_hit_rate(pacing_cap_hit_rate_pct)
         except Exception:
@@ -3148,6 +3191,7 @@ class ExecutionEngine:
                 "cancel_ratio": round(cancel_ratio, 4),
                 "reject_rate_pct": round(reject_rate_pct, 4),
                 "execution_drift_bps": round(cycle_execution_drift_bps, 4),
+                "realized_slippage_bps": round(cycle_realized_slippage_bps, 4),
                 "median_pending_s": round(median_pending_s, 3),
                 "open_pending_count": len(pending_open_ages),
                 "oldest_pending_s": round(oldest_pending_s, 3),
@@ -7259,6 +7303,7 @@ class ExecutionEngine:
             or _safe_float(limit_price)
         )
         execution_drift_bps: float | None = None
+        realized_slippage_bps: float | None = None
         if (
             order_status_lower in {"filled", "partially_filled"}
             and resolved_fill_price is not None
@@ -7273,6 +7318,8 @@ class ExecutionEngine:
                 )
             except (TypeError, ValueError, ZeroDivisionError):
                 execution_drift_bps = None
+        if execution_drift_bps is not None:
+            realized_slippage_bps = float(abs(execution_drift_bps))
         outcome_reason: str | None = None
         if order_status_lower == "rejected":
             outcome_reason = parsed_rejection or "rejected"
@@ -7286,6 +7333,7 @@ class ExecutionEngine:
             submit_started_at=submit_started_at,
             ack_timed_out=bool(ack_timed_out),
             execution_drift_bps=execution_drift_bps,
+            realized_slippage_bps=realized_slippage_bps,
         )
         self._last_submit_outcome = {
             "status": outcome_status,

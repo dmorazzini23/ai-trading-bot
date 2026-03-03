@@ -39,3 +39,25 @@ def test_calibrate_cost_model_uses_slippage_bootstrap(
     assert int(after.get("sample_count", 0)) >= 2
     persisted = json.loads(model_path.read_text(encoding="utf-8"))
     assert int(persisted.get("sample_count", 0)) >= 2
+
+
+def test_calibrate_cost_model_skips_write_when_not_calibrated(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "execution_cost_model.json"
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_COST_FLOOR_MIN_SAMPLES", "100")
+    monkeypatch.setenv("AI_TRADING_EXEC_COST_MODEL_BOOTSTRAP_FROM_SLIPPAGE_ENABLED", "0")
+    monkeypatch.delenv("AI_TRADING_EXEC_COST_MODEL_ALLOW_UNCALIBRATED_WRITE", raising=False)
+
+    result = calibrate_cost_model_from_tca(
+        tca_path=tmp_path / "missing_tca.jsonl",
+        model_path=model_path,
+        lookback_days=30,
+    )
+
+    assert result["calibrated"] is False
+    assert result["persisted"] is False
+    assert result["skipped_write_reason"] == "insufficient_calibration_samples"
+    assert model_path.exists() is False

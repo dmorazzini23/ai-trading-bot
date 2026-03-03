@@ -156,7 +156,6 @@ from ai_trading.analytics.tca import (
     build_tca_record,
     write_tca_record,
 )
-from ai_trading.tca.rollups import calibrate_cost_model_from_tca
 from ai_trading.portfolio.allocation import (
     SleevePerfState,
     load_allocation_state,
@@ -184,6 +183,20 @@ from ai_trading.models.artifacts import verify_artifact
 
 class CycleAbortSafeMode(RuntimeError):
     """Raised when provider safe mode requires aborting the active cycle."""
+
+
+def calibrate_cost_model_from_tca(**kwargs: Any) -> dict[str, Any]:
+    """
+    Lazily resolve TCA cost calibration helper.
+
+    Keeping this import local avoids import-cycle failures when execution package
+    startup paths load ``bot_engine`` while ``ai_trading.tca.rollups`` is still
+    initializing.
+    """
+
+    from ai_trading.tca.rollups import calibrate_cost_model_from_tca as _calibrate_impl
+
+    return _calibrate_impl(**kwargs)
 
 
 _BOOTSTRAP_GET_ENV_READY = False
@@ -28244,7 +28257,11 @@ def _reason_implies_fatal(reason: str | None) -> bool:
     return any(token in reason_lower for token in fatal_tokens)
 
 
-def _minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
+def _fallback_active_for_timeframes(
+    provider_state: Mapping[str, Any] | None,
+    *,
+    include_daily: bool,
+) -> bool:
     if not isinstance(provider_state, MappingABC):
         return False
     tf_state = provider_state.get("timeframes")
@@ -28257,13 +28274,24 @@ def _minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
             normalized = str(tf_key)
         if not normalized:
             continue
-        if normalized.endswith("min") or normalized in {"1m", "1min", "intraday", "minute"}:
+        is_minute = normalized.endswith("min") or normalized in {
+            "1m",
+            "1min",
+            "intraday",
+            "minute",
+        }
+        is_daily = normalized.endswith("day") or normalized in {"1d", "1day", "daily"}
+        if is_minute or (include_daily and is_daily):
             try:
                 if bool(flag):
                     return True
             except Exception:
                 continue
     return False
+
+
+def _minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
+    return _fallback_active_for_timeframes(provider_state, include_daily=False)
 
 
 def _quote_age_limit_ms() -> float:
@@ -28348,6 +28376,13 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
     scale_mult = max(0.05, min(scale_mult, 1.0))
 
     try:
+        include_daily_fallback = bool(
+            get_env("AI_TRADING_PRIMARY_FEED_DERISK_INCLUDE_DAILY", False, cast=bool)
+        )
+    except Exception:
+        include_daily_fallback = False
+
+    try:
         provider_state = runtime_state.observe_data_provider_state()
     except Exception:
         provider_state = {}
@@ -28356,7 +28391,10 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
     except Exception:
         quote_state = {}
 
-    fallback_active = _minute_fallback_active(provider_state)
+    fallback_active = _fallback_active_for_timeframes(
+        provider_state,
+        include_daily=include_daily_fallback,
+    )
     quote_age_ms = _quote_age_ms_from_state(quote_state)
     quote_age_limit_ms = _quote_age_limit_ms()
     quote_synthetic = bool(quote_state.get("synthetic"))
@@ -28417,6 +28455,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         if isinstance(provider_state, MappingABC)
         else None,
         "reason": reason,
+        "include_daily_fallback": bool(include_daily_fallback),
     }
 
 
@@ -30193,14 +30232,14 @@ def _pending_stale_sweep_age_seconds() -> float:
         value = float(
             get_env(
                 "AI_TRADING_PENDING_STALE_SWEEP_SEC",
-                90.0,
+                60.0,
                 cast=float,
             )
         )
     except COMMON_EXC:
-        value = 90.0
+        value = 60.0
     if not math.isfinite(value):
-        value = 90.0
+        value = 60.0
     return max(10.0, min(value, 7200.0))
 
 
@@ -30211,12 +30250,12 @@ def _pending_stale_sweep_max_cancels() -> int:
         value = int(
             get_env(
                 "AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS",
-                2,
+                1,
                 cast=int,
             )
         )
     except COMMON_EXC:
-        value = 2
+        value = 1
     return max(0, min(value, 100))
 
 
@@ -33730,37 +33769,106 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         max_execution_drift_bps = float(
             get_env("AI_TRADING_DERISK_SLO_MAX_EXEC_DRIFT_BPS", 35.0, cast=float)
         )
+        max_slippage_bps = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_SLIPPAGE_BPS", 25.0, cast=float)
+        )
+        max_pacing_cap_hit_rate_pct = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_PACING_CAP_HIT_RATE_PCT", 40.0, cast=float)
+        )
+        max_pending_oldest_age_sec = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_PENDING_OLDEST_AGE_SEC", 300.0, cast=float)
+        )
+        pending_min_samples = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_DERISK_SLO_PENDING_MIN_SAMPLES",
+                    1,
+                    cast=int,
+                )
+            ),
+        )
         reject_rate_pct = 0.0
         execution_drift_bps = 0.0
+        slippage_bps = 0.0
+        pacing_cap_hit_rate_pct = 0.0
+        pending_oldest_age_sec = 0.0
         reject_samples = 0
         drift_samples = 0
+        slippage_samples = 0
+        pacing_samples = 0
+        pending_samples = 0
         try:
             from ai_trading.monitoring.slo import get_slo_monitor
 
             monitor = get_slo_monitor()
             reject_status = monitor.get_slo_status("order_reject_rate_pct")
             drift_status = monitor.get_slo_status("execution_drift_bps")
-            if isinstance(reject_status, MappingABC):
-                reject_rate_pct = float(reject_status.get("current_value") or 0.0)
-                reject_samples = int(reject_status.get("sample_count") or 0)
-            if isinstance(drift_status, MappingABC):
-                execution_drift_bps = float(drift_status.get("current_value") or 0.0)
-                drift_samples = int(drift_status.get("sample_count") or 0)
+            slippage_status = monitor.get_slo_status("realized_slippage_bps")
+            pacing_status = monitor.get_slo_status("order_pacing_cap_hit_rate_pct")
+            pending_status = monitor.get_slo_status("pending_oldest_age_sec")
+
+            def _extract_metric(status: Any) -> tuple[float, int]:
+                if not isinstance(status, MappingABC):
+                    return (0.0, 0)
+                try:
+                    value = float(status.get("current_value") or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                try:
+                    samples = int(status.get("sample_count") or 0)
+                except (TypeError, ValueError):
+                    samples = 0
+                return (value, max(samples, 0))
+
+            reject_rate_pct, reject_samples = _extract_metric(reject_status)
+            execution_drift_bps, drift_samples = _extract_metric(drift_status)
+            slippage_bps, slippage_samples = _extract_metric(slippage_status)
+            pacing_cap_hit_rate_pct, pacing_samples = _extract_metric(pacing_status)
+            pending_oldest_age_sec, pending_samples = _extract_metric(pending_status)
         except Exception:
             logger.debug("SLO_DERISK_SNAPSHOT_FAILED", exc_info=True)
         reject_breached = reject_samples >= min_samples and reject_rate_pct >= max_reject_rate_pct
         drift_breached = drift_samples >= min_samples and execution_drift_bps >= max_execution_drift_bps
-        breached = bool(reject_breached or drift_breached)
+        slippage_breached = slippage_samples >= min_samples and slippage_bps >= max_slippage_bps
+        pacing_breached = (
+            pacing_samples >= min_samples
+            and pacing_cap_hit_rate_pct >= max_pacing_cap_hit_rate_pct
+        )
+        pending_breached = (
+            pending_samples >= pending_min_samples
+            and pending_oldest_age_sec >= max_pending_oldest_age_sec
+        )
+        breached = bool(
+            reject_breached
+            or drift_breached
+            or slippage_breached
+            or pacing_breached
+            or pending_breached
+        )
         slo_derisk_details = {
             "mode": mode,
             "reject_rate_pct": reject_rate_pct,
             "execution_drift_bps": execution_drift_bps,
+            "slippage_bps": slippage_bps,
+            "order_pacing_cap_hit_rate_pct": pacing_cap_hit_rate_pct,
+            "pending_oldest_age_sec": pending_oldest_age_sec,
             "reject_samples": reject_samples,
             "drift_samples": drift_samples,
+            "slippage_samples": slippage_samples,
+            "pacing_samples": pacing_samples,
+            "pending_samples": pending_samples,
             "max_reject_rate_pct": max_reject_rate_pct,
             "max_execution_drift_bps": max_execution_drift_bps,
+            "max_slippage_bps": max_slippage_bps,
+            "max_pacing_cap_hit_rate_pct": max_pacing_cap_hit_rate_pct,
+            "max_pending_oldest_age_sec": max_pending_oldest_age_sec,
+            "pending_min_samples": pending_min_samples,
             "reject_breached": reject_breached,
             "drift_breached": drift_breached,
+            "slippage_breached": slippage_breached,
+            "pacing_breached": pacing_breached,
+            "pending_breached": pending_breached,
             "breached": breached,
         }
         if breached:

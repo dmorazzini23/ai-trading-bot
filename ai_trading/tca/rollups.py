@@ -244,7 +244,19 @@ def calibrate_cost_model_from_tca(
         quantile=quantile,
         outlier_bps=outlier_bps,
     )
-    model.save(model_target)
+    before_version = str(before.get("version", ""))
+    after_preview = model.to_dict()
+    calibrated = str(after_preview.get("version", "")) != before_version
+    allow_uncalibrated_write = _as_bool(
+        get_env("AI_TRADING_EXEC_COST_MODEL_ALLOW_UNCALIBRATED_WRITE", False)
+    )
+    persisted = False
+    skipped_write_reason: str | None = None
+    if calibrated or allow_uncalibrated_write:
+        model.save(model_target)
+        persisted = True
+    else:
+        skipped_write_reason = "insufficient_calibration_samples"
     after = model.to_dict()
 
     result = {
@@ -256,16 +268,33 @@ def calibrate_cost_model_from_tca(
         "summary": summary,
         "before": before,
         "after": after,
-        "calibrated": after.get("version") == updated.version,
+        "calibrated": bool(calibrated and after.get("version") == updated.version),
+        "persisted": bool(persisted),
+        "skipped_write_reason": skipped_write_reason,
     }
-    logger.info(
-        "TCA_COST_MODEL_CALIBRATED",
-        extra={
-            "records": len(records),
-            "tca_records": len(records) - len(slippage_records),
-            "slippage_records": len(slippage_records),
-            "model_path": str(model_target),
-            "version": after.get("version"),
-        },
-    )
+    if calibrated:
+        logger.info(
+            "TCA_COST_MODEL_CALIBRATED",
+            extra={
+                "records": len(records),
+                "tca_records": len(records) - len(slippage_records),
+                "slippage_records": len(slippage_records),
+                "model_path": str(model_target),
+                "version": after.get("version"),
+                "persisted": bool(persisted),
+            },
+        )
+    else:
+        logger.warning(
+            "TCA_COST_MODEL_CALIBRATION_SKIPPED",
+            extra={
+                "records": len(records),
+                "tca_records": len(records) - len(slippage_records),
+                "slippage_records": len(slippage_records),
+                "model_path": str(model_target),
+                "persisted": bool(persisted),
+                "reason": skipped_write_reason,
+                "min_samples": int(min_samples),
+            },
+        )
     return result

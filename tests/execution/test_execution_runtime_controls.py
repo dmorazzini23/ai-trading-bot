@@ -287,6 +287,38 @@ def test_pending_backlog_cap_ignores_stale_local_pending(monkeypatch):
     assert context.get("local_pending_count") == 0
 
 
+def test_pending_backlog_hard_block_by_count(monkeypatch):
+    engine = _engine_stub()
+    engine._pending_orders = {
+        "ord-1": {"status": "pending_new"},
+        "ord-2": {"status": "pending_new"},
+    }
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "10")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_HARD_BLOCK_COUNT", "2")
+
+    cap = engine._pending_backlog_order_cap()
+
+    assert cap == 0
+    context = getattr(engine, "_pending_backlog_last_context", {})
+    assert context.get("hard_block_triggered") is True
+    assert "count" in tuple(context.get("hard_block_reasons", ()))
+
+
+def test_pending_backlog_hard_block_by_age(monkeypatch):
+    engine = _engine_stub()
+    stale_ts = (datetime.now(UTC) - timedelta(seconds=600)).isoformat()
+    engine._pending_orders = {"ord-1": {"status": "pending_new", "updated_at": stale_ts}}
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "10")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_HARD_BLOCK_AGE_SEC", "300")
+
+    cap = engine._pending_backlog_order_cap()
+
+    assert cap == 0
+    context = getattr(engine, "_pending_backlog_last_context", {})
+    assert context.get("hard_block_triggered") is True
+    assert "age" in tuple(context.get("hard_block_reasons", ()))
+
+
 def test_ensure_initialized_uses_existing_client_validation(monkeypatch):
     engine = _engine_stub()
     engine.trading_client = object()
@@ -427,6 +459,7 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
             "duration_s": 0.3,
             "ack_timed_out": False,
             "execution_drift_bps": 7.5,
+            "realized_slippage_bps": 6.25,
         },
         {"status": "failed", "duration_s": 0.2, "ack_timed_out": False},
     ]
@@ -436,6 +469,7 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
 
     reject_rate_samples: list[float] = []
     drift_samples: list[float] = []
+    slippage_samples: list[float] = []
     pacing_cap_hit_rate_samples: list[float] = []
     monkeypatch.setattr(
         slo_mod,
@@ -449,6 +483,11 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
     )
     monkeypatch.setattr(
         slo_mod,
+        "record_realized_slippage",
+        lambda value: slippage_samples.append(float(value)),
+    )
+    monkeypatch.setattr(
+        slo_mod,
         "record_order_pacing_cap_hit_rate",
         lambda value: pacing_cap_hit_rate_samples.append(float(value)),
     )
@@ -457,4 +496,5 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
 
     assert reject_rate_samples == pytest.approx([50.0])
     assert drift_samples == pytest.approx([7.5])
+    assert slippage_samples == pytest.approx([6.25])
     assert pacing_cap_hit_rate_samples == pytest.approx([0.0])

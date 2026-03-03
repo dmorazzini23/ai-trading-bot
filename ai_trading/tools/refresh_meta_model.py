@@ -7,7 +7,11 @@ from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
-from ai_trading.meta_learning.core import load_model_checkpoint, retrain_meta_learner
+from ai_trading.meta_learning.core import (
+    load_model_checkpoint,
+    retrain_meta_learner,
+    validate_trade_data_quality,
+)
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
@@ -71,6 +75,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         args.trade_log_path,
         default_relative="trades.csv",
     )
+    quality_report = validate_trade_data_quality(str(trade_log_path))
 
     ok = retrain_meta_learner(
         trade_log_path=str(trade_log_path),
@@ -87,6 +92,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "min_samples": max(1, int(args.min_samples)),
         "retrain_succeeded": bool(ok),
         "model_load_verified": bool(model_loaded),
+        "strict_schema_enabled": bool(
+            get_env("AI_TRADING_META_STRICT_SCHEMA_ENABLED", False, cast=bool)
+        ),
+        "quality_report": {
+            "file_exists": bool(quality_report.get("file_exists", False)),
+            "row_count": int(quality_report.get("row_count", 0) or 0),
+            "valid_price_rows": int(quality_report.get("valid_price_rows", 0) or 0),
+            "data_quality_score": float(quality_report.get("data_quality_score", 0.0) or 0.0),
+            "issue_count": len(list(quality_report.get("issues", []) or [])),
+        },
         "status": "ok" if ok and model_loaded else "failed",
     }
     return payload

@@ -84,6 +84,7 @@ class SLOMonitor:
             'error_rate_pct': SLOThreshold(name='error_rate_pct', warning_threshold=1.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=5, min_samples=10, description='System error rate'),
             'order_reject_rate_pct': SLOThreshold(name='order_reject_rate_pct', warning_threshold=1.0, critical_threshold=3.0, breach_threshold=5.0, window_minutes=10, min_samples=5, description='Order reject rate'),
             'execution_drift_bps': SLOThreshold(name='execution_drift_bps', warning_threshold=8.0, critical_threshold=20.0, breach_threshold=35.0, window_minutes=15, min_samples=5, description='Execution quality drift versus benchmark'),
+            'realized_slippage_bps': SLOThreshold(name='realized_slippage_bps', warning_threshold=8.0, critical_threshold=20.0, breach_threshold=35.0, window_minutes=15, min_samples=5, description='Absolute realized slippage versus submit benchmark'),
             'data_staleness_minutes': SLOThreshold(name='data_staleness_minutes', warning_threshold=2.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=1, min_samples=1, description='Market data staleness'),
             'pnl_drift_bps': SLOThreshold(name='pnl_drift_bps', warning_threshold=10.0, critical_threshold=25.0, breach_threshold=50.0, window_minutes=15, min_samples=5, description='P&L attribution drift'),
             'pending_orders_count': SLOThreshold(name='pending_orders_count', warning_threshold=3.0, critical_threshold=8.0, breach_threshold=15.0, window_minutes=5, min_samples=1, description='Open pending order backlog size'),
@@ -294,6 +295,7 @@ def setup_default_circuit_breakers() -> None:
     monitor.register_circuit_breaker('error_rate_pct', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('order_reject_rate_pct', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('execution_drift_bps', pause_trading_circuit_breaker)
+    monitor.register_circuit_breaker('realized_slippage_bps', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('pending_oldest_age_sec', reduce_position_size_circuit_breaker)
     monitor.register_circuit_breaker('live_sharpe_ratio', reduce_position_size_circuit_breaker)
     monitor.register_circuit_breaker('position_skew_pct', reduce_position_size_circuit_breaker)
@@ -309,6 +311,13 @@ def record_execution_drift(execution_drift_bps: float) -> None:
     """Record execution drift in basis points."""
     monitor = get_slo_monitor()
     monitor.record_metric("execution_drift_bps", float(execution_drift_bps))
+
+
+def record_realized_slippage(realized_slippage_bps: float) -> None:
+    """Record absolute realized slippage in basis points."""
+
+    monitor = get_slo_monitor()
+    monitor.record_metric("realized_slippage_bps", float(realized_slippage_bps))
 
 
 def record_pending_orders_count(pending_orders_count: float) -> None:

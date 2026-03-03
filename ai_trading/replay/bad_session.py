@@ -54,14 +54,7 @@ def _coerce_price(payload: dict[str, Any]) -> float | None:
     return None
 
 
-def _parse_log_line(line: str) -> dict[str, Any] | None:
-    text = line.strip()
-    if not text:
-        return None
-    try:
-        payload = json.loads(text)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
+def _parse_event_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     symbol = str(payload.get("symbol") or "").strip().upper()
@@ -86,20 +79,45 @@ def _parse_log_line(line: str) -> dict[str, Any] | None:
     }
 
 
-def canonical_bad_session_events(log_path: str | Path) -> list[dict[str, Any]]:
-    """Load and normalize bad-session events from JSONL logs."""
+def _load_jsonl_payload_rows(log_path: str | Path) -> list[dict[str, Any]]:
+    """Load JSONL rows as ``{'line_no': int, 'payload': dict}`` entries."""
+
     path = Path(log_path)
     if not path.exists():
         return []
-    events: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     try:
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
-            parsed = _parse_log_line(raw_line)
-            if parsed is not None:
-                events.append(parsed)
+        for line_no, raw_line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            text = raw_line.strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            rows.append({"line_no": int(line_no), "payload": payload})
     except OSError as exc:
         logger.error("BAD_SESSION_LOG_READ_FAILED", extra={"path": str(path), "error": str(exc)})
         return []
+    return rows
+
+
+def canonical_bad_session_events(log_path: str | Path) -> list[dict[str, Any]]:
+    """Load and normalize bad-session events from JSONL logs."""
+    payload_rows = _load_jsonl_payload_rows(log_path)
+    events: list[dict[str, Any]] = []
+    for row in payload_rows:
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        parsed = _parse_event_payload(payload)
+        if parsed is not None:
+            events.append(parsed)
     events.sort(key=lambda item: (str(item["timestamp"]), str(item["symbol"])))
     return events
 
@@ -110,6 +128,90 @@ def deterministic_replay_fingerprint(log_path: str | Path, *, seed: int = 42) ->
     payload = {"seed": int(seed), "events": events}
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _build_incident_bundle(
+    payload_rows: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Write deterministic incident artifacts for replay diagnostics."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    decision_rows: list[dict[str, Any]] = []
+    intent_rows: list[dict[str, Any]] = []
+    broker_rows: list[dict[str, Any]] = []
+
+    for row in payload_rows:
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        line_no = int(row.get("line_no", 0) or 0)
+        ts = _coerce_timestamp(payload)
+        symbol_raw = str(payload.get("symbol") or "").strip().upper()
+        symbol = symbol_raw if symbol_raw else None
+        msg = str(payload.get("msg") or payload.get("event") or "").strip()
+        msg_upper = msg.upper()
+        normalized = {
+            "line_no": line_no,
+            "timestamp": ts or None,
+            "symbol": symbol,
+            "msg": msg or None,
+            "payload": payload,
+        }
+
+        if msg_upper == "DECISION_RECORD" or "decision" in payload:
+            decision_rows.append(normalized)
+
+        if (
+            "intent_id" in payload
+            or "client_order_id" in payload
+            or "idempotency_key" in payload
+            or "ORDER_SUBMIT" in msg_upper
+            or "INTENT" in msg_upper
+        ):
+            intent_rows.append(normalized)
+
+        if (
+            msg_upper.startswith("BROKER_")
+            or msg_upper.startswith("ALPACA_ORDER")
+            or "ORDER_ACK" in msg_upper
+            or msg_upper.startswith("API_GET_ORDER")
+            or msg_upper.startswith("API_CANCEL_ORDER")
+            or "BROKER_STATE" in msg_upper
+        ):
+            broker_rows.append(normalized)
+
+    def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            rows,
+            key=lambda item: (
+                str(item.get("timestamp") or ""),
+                int(item.get("line_no") or 0),
+                str(item.get("msg") or ""),
+            ),
+        )
+
+    decision_rows = _sort_rows(decision_rows)
+    intent_rows = _sort_rows(intent_rows)
+    broker_rows = _sort_rows(broker_rows)
+
+    def _write_jsonl(filename: str, rows: list[dict[str, Any]]) -> str:
+        target = output_dir / filename
+        lines = [json.dumps(item, sort_keys=True) for item in rows]
+        target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        return str(target)
+
+    return {
+        "decisions": _write_jsonl("incident_decisions.jsonl", decision_rows),
+        "intents": _write_jsonl("incident_intents.jsonl", intent_rows),
+        "broker": _write_jsonl("incident_broker.jsonl", broker_rows),
+        "counts": {
+            "decisions": int(len(decision_rows)),
+            "intents": int(len(intent_rows)),
+            "broker": int(len(broker_rows)),
+        },
+    }
 
 
 def build_replay_dataset_from_bad_session(
@@ -123,6 +225,7 @@ def build_replay_dataset_from_bad_session(
 
     The output format is compatible with ``ai_trading.tools.offline_replay``.
     """
+    payload_rows = _load_jsonl_payload_rows(log_path)
     events = canonical_bad_session_events(log_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +247,7 @@ def build_replay_dataset_from_bad_session(
         written[symbol] = str(target)
 
     fingerprint = deterministic_replay_fingerprint(log_path, seed=seed)
+    bundle = _build_incident_bundle(payload_rows, output_dir=out_dir)
     meta_path = out_dir / "replay_manifest.json"
     manifest = {
         "source_log": str(log_path),
@@ -151,9 +255,15 @@ def build_replay_dataset_from_bad_session(
         "fingerprint": fingerprint,
         "symbols": sorted(written),
         "files": written,
+        "incident_bundle": bundle,
     }
     meta_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return {"fingerprint": fingerprint, "manifest": str(meta_path), "files": written}
+    return {
+        "fingerprint": fingerprint,
+        "manifest": str(meta_path),
+        "files": written,
+        "bundle": bundle,
+    }
 
 
 __all__ = [

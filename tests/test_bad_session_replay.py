@@ -12,9 +12,29 @@ from ai_trading.replay.bad_session import (
 
 def _write_bad_session(path: Path) -> None:
     rows = [
-        {"timestamp": "2026-01-02T14:31:00Z", "symbol": "AAPL", "price": 190.1, "volume": 1000},
-        {"timestamp": "2026-01-02T14:32:00Z", "symbol": "AAPL", "price": 190.2, "volume": 900},
-        {"timestamp": "2026-01-02T14:31:00Z", "symbol": "MSFT", "price": 410.4, "volume": 800},
+        {
+            "timestamp": "2026-01-02T14:31:00Z",
+            "symbol": "AAPL",
+            "price": 190.1,
+            "volume": 1000,
+            "msg": "DECISION_RECORD",
+            "gates": ["RISK_OK"],
+        },
+        {
+            "timestamp": "2026-01-02T14:32:00Z",
+            "symbol": "AAPL",
+            "price": 190.2,
+            "volume": 900,
+            "msg": "ALPACA_ORDER_SUBMIT_ATTEMPT",
+            "client_order_id": "abc-123",
+        },
+        {
+            "timestamp": "2026-01-02T14:31:00Z",
+            "symbol": "MSFT",
+            "price": 410.4,
+            "volume": 800,
+            "msg": "BROKER_RECONCILE_SUMMARY",
+        },
     ]
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
@@ -44,6 +64,15 @@ def test_build_replay_dataset_from_bad_session(tmp_path: Path) -> None:
     events = canonical_bad_session_events(log_path)
     assert len(events) == 3
     assert (tmp_path / "replay_out" / "AAPL.csv").exists()
+    assert (tmp_path / "replay_out" / "incident_decisions.jsonl").exists()
+    assert (tmp_path / "replay_out" / "incident_intents.jsonl").exists()
+    assert (tmp_path / "replay_out" / "incident_broker.jsonl").exists()
+
+    bundle = report.get("bundle", {})
+    counts = bundle.get("counts", {}) if isinstance(bundle, dict) else {}
+    assert int(counts.get("decisions", 0)) >= 1
+    assert int(counts.get("intents", 0)) >= 1
+    assert int(counts.get("broker", 0)) >= 1
 
 
 def test_bad_session_parser_accepts_tca_style_rows(tmp_path: Path) -> None:

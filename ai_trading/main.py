@@ -459,8 +459,12 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
     return max(age, 0.0)
 
 
-def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
-    """Return ``True`` when provider telemetry indicates minute-data fallback."""
+def _provider_fallback_active_for_timeframes(
+    provider_state: Mapping[str, Any] | None,
+    *,
+    include_daily: bool,
+) -> bool:
+    """Return ``True`` when provider telemetry indicates fallback for selected frames."""
 
     if not isinstance(provider_state, Mapping):
         return False
@@ -473,11 +477,13 @@ def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -
                 tf_token = str(tf_key)
             if not tf_token:
                 continue
-            if (
+            is_minute = (
                 tf_token.endswith("min")
                 or "minute" in tf_token
                 or tf_token in {"1m", "1min", "intraday"}
-            ):
+            )
+            is_daily = tf_token.endswith("day") or tf_token in {"1d", "1day", "daily"}
+            if is_minute or (include_daily and is_daily):
                 try:
                     if bool(tf_active):
                         return True
@@ -485,6 +491,15 @@ def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -
                     continue
         return False
     return bool(provider_state.get("using_backup"))
+
+
+def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
+    """Return ``True`` when provider telemetry indicates minute-data fallback."""
+
+    return _provider_fallback_active_for_timeframes(
+        provider_state,
+        include_daily=False,
+    )
 
 
 def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: int) -> None:
@@ -618,7 +633,13 @@ def _emit_cycle_slo_alerts(
     if not fallback_alerts_enabled:
         return
 
-    fallback_active = _provider_minute_fallback_active(provider_state)
+    include_daily_fallback = bool(
+        get_env("AI_TRADING_SLO_PRIMARY_FALLBACK_INCLUDE_DAILY", False, cast=bool)
+    )
+    fallback_active = _provider_fallback_active_for_timeframes(
+        provider_state,
+        include_daily=include_daily_fallback,
+    )
     now_wall_ts = float(time.time())
     global _PRIMARY_FALLBACK_STREAK_SINCE_TS, _PRIMARY_FALLBACK_LAST_ALERT_TS
     if not fallback_active:
@@ -667,6 +688,7 @@ def _emit_cycle_slo_alerts(
             "provider_active": provider_state.get("active"),
             "provider_status": provider_state.get("status"),
             "provider_reason": provider_state.get("reason"),
+            "include_daily_fallback": bool(include_daily_fallback),
         },
     )
     _PRIMARY_FALLBACK_LAST_ALERT_TS = now_wall_ts
@@ -769,6 +791,15 @@ def _maybe_build_bad_session_replay_dataset(
 
     files = report.get("files", {}) if isinstance(report, Mapping) else {}
     file_count = len(files) if isinstance(files, Mapping) else 0
+    bundle = report.get("bundle", {}) if isinstance(report, Mapping) else {}
+    bundle_counts = bundle.get("counts", {}) if isinstance(bundle, Mapping) else {}
+    bundle_event_count = 0
+    if isinstance(bundle_counts, Mapping):
+        for value in bundle_counts.values():
+            try:
+                bundle_event_count += max(int(value), 0)
+            except (TypeError, ValueError):
+                continue
     payload: dict[str, Any] = {
         "trigger": trigger,
         "source_path": str(source_path),
@@ -776,10 +807,11 @@ def _maybe_build_bad_session_replay_dataset(
         "manifest": report.get("manifest") if isinstance(report, Mapping) else None,
         "fingerprint": report.get("fingerprint") if isinstance(report, Mapping) else None,
         "file_count": file_count,
+        "bundle_event_count": int(bundle_event_count),
     }
     if detail:
         payload["detail"] = dict(detail)
-    if file_count <= 0:
+    if file_count <= 0 and bundle_event_count <= 0:
         logger.warning("BAD_SESSION_REPLAY_DATASET_EMPTY", extra=payload)
         return
     logger.info("BAD_SESSION_REPLAY_DATASET_BUILT", extra=payload)
@@ -789,8 +821,14 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
     drawdown = 0.0
     reject_rate_pct = 0.0
     execution_drift_bps = 0.0
+    realized_slippage_bps = 0.0
+    order_pacing_cap_hit_rate_pct = 0.0
+    pending_oldest_age_sec = 0.0
     reject_samples = 0
     drift_samples = 0
+    slippage_samples = 0
+    pacing_samples = 0
+    pending_samples = 0
 
     try:
         from ai_trading.monitoring.slo import get_slo_monitor
@@ -798,12 +836,28 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         monitor = get_slo_monitor()
         reject_status = monitor.get_slo_status("order_reject_rate_pct")
         drift_status = monitor.get_slo_status("execution_drift_bps")
-        if isinstance(reject_status, Mapping):
-            reject_rate_pct = float(reject_status.get("current_value") or 0.0)
-            reject_samples = int(reject_status.get("sample_count") or 0)
-        if isinstance(drift_status, Mapping):
-            execution_drift_bps = float(drift_status.get("current_value") or 0.0)
-            drift_samples = int(drift_status.get("sample_count") or 0)
+        slippage_status = monitor.get_slo_status("realized_slippage_bps")
+        pacing_status = monitor.get_slo_status("order_pacing_cap_hit_rate_pct")
+        pending_status = monitor.get_slo_status("pending_oldest_age_sec")
+
+        def _extract_metric(status: Any) -> tuple[float, int]:
+            if not isinstance(status, Mapping):
+                return (0.0, 0)
+            try:
+                value = float(status.get("current_value") or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            try:
+                samples = int(status.get("sample_count") or 0)
+            except (TypeError, ValueError):
+                samples = 0
+            return (value, max(samples, 0))
+
+        reject_rate_pct, reject_samples = _extract_metric(reject_status)
+        execution_drift_bps, drift_samples = _extract_metric(drift_status)
+        realized_slippage_bps, slippage_samples = _extract_metric(slippage_status)
+        order_pacing_cap_hit_rate_pct, pacing_samples = _extract_metric(pacing_status)
+        pending_oldest_age_sec, pending_samples = _extract_metric(pending_status)
     except Exception:
         logger.debug("LIVE_KPI_SLO_SNAPSHOT_FAILED", exc_info=True)
 
@@ -819,12 +873,21 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         "max_drawdown": max(0.0, drawdown),
         "reject_rate": max(0.0, reject_rate_pct) / 100.0,
         "execution_drift_bps": max(0.0, execution_drift_bps),
+        "realized_slippage_bps": max(0.0, realized_slippage_bps),
+        "order_pacing_cap_hit_rate_pct": max(0.0, order_pacing_cap_hit_rate_pct),
+        "pending_oldest_age_sec": max(0.0, pending_oldest_age_sec),
     }
     diagnostics = {
         "reject_rate_pct": reject_rate_pct,
         "execution_drift_bps": execution_drift_bps,
+        "realized_slippage_bps": realized_slippage_bps,
+        "order_pacing_cap_hit_rate_pct": order_pacing_cap_hit_rate_pct,
+        "pending_oldest_age_sec": pending_oldest_age_sec,
         "reject_samples": reject_samples,
         "drift_samples": drift_samples,
+        "slippage_samples": slippage_samples,
+        "pacing_samples": pacing_samples,
+        "pending_samples": pending_samples,
     }
     return live_kpis, diagnostics
 

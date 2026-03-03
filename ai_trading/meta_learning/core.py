@@ -116,6 +116,31 @@ _STRICT_DECIMAL_PATTERN = re.compile(r"^\d+(?:\.\d+)?$")
 _SIGNED_DECIMAL_PATTERN = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 
 
+def _meta_strict_schema_enabled() -> bool:
+    """Return ``True`` when runtime enforces strict meta retrain schema."""
+
+    try:
+        return bool(get_env("AI_TRADING_META_STRICT_SCHEMA_ENABLED", False, cast=bool))
+    except COMMON_EXC:
+        return False
+
+
+def _emit_meta_retrain_alert(
+    event: str,
+    *,
+    severity: str,
+    details: dict[str, Any],
+) -> None:
+    """Emit a runtime alert for meta-retraining issues without raising."""
+
+    try:
+        from ai_trading.monitoring.alerts import emit_runtime_alert
+
+        emit_runtime_alert(event, severity=severity, details=details)
+    except Exception:
+        logger.debug("META_RETRAIN_ALERT_EMIT_FAILED", exc_info=True)
+
+
 class _FallbackRidgeModel:
     """Minimal pickle-safe fallback model used when sklearn stubs are incomplete."""
 
@@ -888,7 +913,10 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     except (OSError, AttributeError) as exc:
         logger.error('Failed reading trade log: %s', exc, exc_info=True)
         return False
+    strict_schema = _meta_strict_schema_enabled()
     required_cols = {'entry_price', 'exit_price', 'side'}
+    if strict_schema:
+        required_cols = required_cols | {'signal_tags'}
     total_rows = len(df)
     cols_obj = getattr(df, "columns", None)
     try:
@@ -896,7 +924,27 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     except TypeError:
         cols_list = []
     cols = set(cols_list)
-    if not required_cols.issubset(cols):
+    missing_required = sorted(required_cols - cols)
+    if missing_required:
+        if strict_schema:
+            logger.error(
+                "META_RETRAIN_STRICT_SCHEMA_MISSING",
+                extra={
+                    "trade_log_path": trade_log_path,
+                    "missing_columns": missing_required,
+                    "required_columns": sorted(required_cols),
+                },
+            )
+            _emit_meta_retrain_alert(
+                "ALERT_META_RETRAIN_SCHEMA_INVALID",
+                severity="warning",
+                details={
+                    "trade_log_path": trade_log_path,
+                    "missing_columns": missing_required,
+                    "required_columns": sorted(required_cols),
+                },
+            )
+            return False
         logger.info('META_LEARNING_AUDIT_CONVERSION: Attempting pre-validation conversion')
         try:
             df = _convert_audit_to_meta_format(df)
@@ -953,7 +1001,23 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         logger.error('META_LEARNING_CRITICAL_ISSUES: Missing required columns')
         return False
     if valid.sum() < int(min_samples):
-        logger.info('META_LEARNING_INSUFFICIENT_VALID_ROWS', extra={'valid_rows': int(valid.sum()), 'min_samples': int(min_samples)})
+        logger.warning(
+            'META_LEARNING_INSUFFICIENT_VALID_ROWS',
+            extra={
+                'valid_rows': int(valid.sum()),
+                'min_samples': int(min_samples),
+                'trade_log_path': trade_log_path,
+            },
+        )
+        _emit_meta_retrain_alert(
+            "ALERT_META_RETRAIN_INSUFFICIENT_VALID_ROWS",
+            severity="warning",
+            details={
+                "trade_log_path": trade_log_path,
+                "valid_rows": int(valid.sum()),
+                "min_samples": int(min_samples),
+            },
+        )
         return False
     original_rows = len(df)
     logger.debug(f'META_LEARNING_RAW_DATA: {original_rows} total rows loaded from {trade_log_path}')
@@ -1052,7 +1116,19 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         )
         return False
     if len(df) < min_samples:
-        logger.warning('META_RETRAIN_INSUFFICIENT_DATA', extra={'rows': len(df)})
+        logger.warning(
+            'META_RETRAIN_INSUFFICIENT_DATA',
+            extra={'rows': len(df), 'min_samples': int(min_samples), 'trade_log_path': trade_log_path},
+        )
+        _emit_meta_retrain_alert(
+            "ALERT_META_RETRAIN_INSUFFICIENT_SAMPLES",
+            severity="warning",
+            details={
+                "trade_log_path": trade_log_path,
+                "rows": int(len(df)),
+                "min_samples": int(min_samples),
+            },
+        )
         return False
     direction = np.where(df['side'] == 'buy', 1, -1)
     df['pnl'] = np.where(pd.notna(df['exit_price']), (df['exit_price'] - df['entry_price']) * direction, 0.0)
