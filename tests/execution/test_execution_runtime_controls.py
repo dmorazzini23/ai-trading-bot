@@ -339,16 +339,36 @@ def test_resolve_midpoint_offset_bps_honors_annotation_and_clamp(monkeypatch):
     monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_HARD_CAP_BPS", "20")
 
     resolved = engine._resolve_midpoint_offset_bps(
+        symbol="AAPL",
         annotations={"execution_aggressiveness_bps": 15},
         metadata=None,
     )
     clamped = engine._resolve_midpoint_offset_bps(
+        symbol="AAPL",
         annotations={"execution_aggressiveness_bps": 50},
         metadata=None,
     )
 
     assert resolved == 15
     assert clamped == 20
+
+
+def test_resolve_midpoint_offset_bps_applies_symbol_adaptive_ewma(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MAX_OFFSET_BPS", "12")
+    monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_MIN_OFFSET_BPS", "2")
+    monkeypatch.setenv("AI_TRADING_MIDPOINT_LIMIT_HARD_CAP_BPS", "25")
+    monkeypatch.setenv("AI_TRADING_ADAPTIVE_LIMIT_OFFSET_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ADAPTIVE_LIMIT_OFFSET_WEIGHT", "1.0")
+    monkeypatch.setattr("ai_trading.execution.slippage_log.get_ewma_cost_bps", lambda _symbol, default=2.0: 18.0)
+
+    resolved = engine._resolve_midpoint_offset_bps(
+        symbol="AAPL",
+        annotations=None,
+        metadata=None,
+    )
+
+    assert resolved == 18.0
 
 
 def test_warmup_data_only_mode_defaults_to_block_orders(monkeypatch):

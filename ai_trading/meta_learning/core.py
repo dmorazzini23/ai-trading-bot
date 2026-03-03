@@ -1133,8 +1133,22 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     direction = np.where(df['side'] == 'buy', 1, -1)
     df['pnl'] = np.where(pd.notna(df['exit_price']), (df['exit_price'] - df['entry_price']) * direction, 0.0)
     df['outcome'] = (df['pnl'] > 0).astype(int)
-    tags = sorted({t for row in df['signal_tags'] for t in str(row).split('+')})
-    X = np.array([[int(t in str(row).split('+')) for t in tags] for row in df['signal_tags']])
+    tags = sorted(
+        {
+            str(tag).strip()
+            for row in df['signal_tags']
+            for tag in str(row).split('+')
+            if str(tag).strip()
+        }
+    )
+    if not tags:
+        logger.warning('META_RETRAIN_NO_TAGS')
+        return False
+    X = pd.DataFrame(
+        [[int(t in str(row).split('+')) for t in tags] for row in df['signal_tags']],
+        columns=tags,
+        dtype=float,
+    )
     y = df['outcome'].values
     sample_w = df['pnl'].abs() + 0.001
     if not SKLEARN_AVAILABLE:

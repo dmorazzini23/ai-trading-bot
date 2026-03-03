@@ -822,11 +822,21 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
     reject_rate_pct = 0.0
     execution_drift_bps = 0.0
     realized_slippage_bps = 0.0
+    live_calibration_ece = 0.0
+    live_calibration_brier = 0.0
+    drift_psi = 0.0
+    label_drift_psi = 0.0
+    residual_drift_psi = 0.0
     order_pacing_cap_hit_rate_pct = 0.0
     pending_oldest_age_sec = 0.0
     reject_samples = 0
     drift_samples = 0
     slippage_samples = 0
+    calibration_ece_samples = 0
+    calibration_brier_samples = 0
+    drift_psi_samples = 0
+    label_drift_samples = 0
+    residual_drift_samples = 0
     pacing_samples = 0
     pending_samples = 0
 
@@ -837,6 +847,11 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         reject_status = monitor.get_slo_status("order_reject_rate_pct")
         drift_status = monitor.get_slo_status("execution_drift_bps")
         slippage_status = monitor.get_slo_status("realized_slippage_bps")
+        calibration_ece_status = monitor.get_slo_status("live_calibration_ece")
+        calibration_brier_status = monitor.get_slo_status("live_calibration_brier")
+        drift_psi_status = monitor.get_slo_status("drift_psi")
+        label_drift_status = monitor.get_slo_status("label_drift_psi")
+        residual_drift_status = monitor.get_slo_status("residual_drift_psi")
         pacing_status = monitor.get_slo_status("order_pacing_cap_hit_rate_pct")
         pending_status = monitor.get_slo_status("pending_oldest_age_sec")
 
@@ -856,6 +871,11 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         reject_rate_pct, reject_samples = _extract_metric(reject_status)
         execution_drift_bps, drift_samples = _extract_metric(drift_status)
         realized_slippage_bps, slippage_samples = _extract_metric(slippage_status)
+        live_calibration_ece, calibration_ece_samples = _extract_metric(calibration_ece_status)
+        live_calibration_brier, calibration_brier_samples = _extract_metric(calibration_brier_status)
+        drift_psi, drift_psi_samples = _extract_metric(drift_psi_status)
+        label_drift_psi, label_drift_samples = _extract_metric(label_drift_status)
+        residual_drift_psi, residual_drift_samples = _extract_metric(residual_drift_status)
         order_pacing_cap_hit_rate_pct, pacing_samples = _extract_metric(pacing_status)
         pending_oldest_age_sec, pending_samples = _extract_metric(pending_status)
     except Exception:
@@ -874,6 +894,11 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         "reject_rate": max(0.0, reject_rate_pct) / 100.0,
         "execution_drift_bps": max(0.0, execution_drift_bps),
         "realized_slippage_bps": max(0.0, realized_slippage_bps),
+        "live_calibration_ece": max(0.0, live_calibration_ece),
+        "live_calibration_brier": max(0.0, live_calibration_brier),
+        "drift_psi": max(0.0, drift_psi),
+        "label_drift_psi": max(0.0, label_drift_psi),
+        "residual_drift_psi": max(0.0, residual_drift_psi),
         "order_pacing_cap_hit_rate_pct": max(0.0, order_pacing_cap_hit_rate_pct),
         "pending_oldest_age_sec": max(0.0, pending_oldest_age_sec),
     }
@@ -881,11 +906,21 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         "reject_rate_pct": reject_rate_pct,
         "execution_drift_bps": execution_drift_bps,
         "realized_slippage_bps": realized_slippage_bps,
+        "live_calibration_ece": live_calibration_ece,
+        "live_calibration_brier": live_calibration_brier,
+        "drift_psi": drift_psi,
+        "label_drift_psi": label_drift_psi,
+        "residual_drift_psi": residual_drift_psi,
         "order_pacing_cap_hit_rate_pct": order_pacing_cap_hit_rate_pct,
         "pending_oldest_age_sec": pending_oldest_age_sec,
         "reject_samples": reject_samples,
         "drift_samples": drift_samples,
         "slippage_samples": slippage_samples,
+        "calibration_ece_samples": calibration_ece_samples,
+        "calibration_brier_samples": calibration_brier_samples,
+        "drift_psi_samples": drift_psi_samples,
+        "label_drift_samples": label_drift_samples,
+        "residual_drift_samples": residual_drift_samples,
         "pacing_samples": pacing_samples,
         "pending_samples": pending_samples,
     }

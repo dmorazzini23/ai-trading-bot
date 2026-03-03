@@ -2716,6 +2716,7 @@ class ExecutionEngine:
     def _resolve_midpoint_offset_bps(
         self,
         *,
+        symbol: str | None,
         annotations: Mapping[str, Any] | None,
         metadata: Mapping[str, Any] | None,
     ) -> float:
@@ -2749,6 +2750,27 @@ class ExecutionEngine:
             if math.isfinite(parsed) and parsed > 0:
                 base_bps = parsed
                 break
+
+        adaptive_enabled = _resolve_bool_env("AI_TRADING_ADAPTIVE_LIMIT_OFFSET_ENABLED")
+        if adaptive_enabled is None:
+            adaptive_enabled = True
+        adaptive_weight = _config_float("AI_TRADING_ADAPTIVE_LIMIT_OFFSET_WEIGHT", 0.5)
+        if adaptive_weight is None:
+            adaptive_weight = 0.5
+        adaptive_weight = max(0.0, min(float(adaptive_weight), 1.0))
+
+        if adaptive_enabled and symbol:
+            try:
+                from ai_trading.execution.slippage_log import get_ewma_cost_bps
+
+                ewma_cost_bps = float(get_ewma_cost_bps(str(symbol).upper(), default=float(base_bps)))
+            except Exception:
+                ewma_cost_bps = float(base_bps)
+            if math.isfinite(ewma_cost_bps) and ewma_cost_bps > 0:
+                blended = ((1.0 - adaptive_weight) * float(base_bps)) + (
+                    adaptive_weight * ewma_cost_bps
+                )
+                base_bps = blended
 
         lower = max(0.0, float(min_bps))
         upper = max(lower, float(hard_cap_bps))
@@ -5752,6 +5774,7 @@ class ExecutionEngine:
             direction = 1.0 if mapped_side in {"buy", "cover"} else -1.0
             # Cap aggressiveness using configurable bps with optional per-order override.
             max_offset_bps = self._resolve_midpoint_offset_bps(
+                symbol=symbol,
                 annotations=annotations,
                 metadata=metadata_raw if isinstance(metadata_raw, Mapping) else None,
             )

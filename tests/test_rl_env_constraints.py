@@ -130,3 +130,39 @@ def test_env_exposes_episode_returns_for_callback_compat(monkeypatch):
     returns = env.episode_returns
 
     assert isinstance(returns, list)
+
+
+def test_env_action_mask_blocks_discrete_buy_without_cash(monkeypatch):
+    _stub_gym_stack(monkeypatch)
+    data = _ohlcv_rows(80)
+    env = env_mod.TradingEnv(
+        data,
+        window=10,
+        transaction_cost=1e10,
+        action_config=env_mod.ActionSpaceConfig(action_type="discrete"),
+        constraint_config=env_mod.ConstraintConfig(initial_cash=1.0),
+    )
+    env.reset()
+    _, _, _, _, info = env.step(1)
+
+    assert info["action_mask"] is not None
+    assert info["action_mask"][1] == 0.0
+    assert info["action_was_masked"] is True
+    assert info["position"] == 0.0
+
+
+def test_env_inventory_penalty_is_reported(monkeypatch):
+    _stub_gym_stack(monkeypatch)
+    data = _ohlcv_rows(120)
+    env = env_mod.TradingEnv(
+        data,
+        window=10,
+        action_config=env_mod.ActionSpaceConfig(action_type="continuous"),
+        reward_config=env_mod.RewardConfig(inventory_penalty=0.2),
+        constraint_config=env_mod.ConstraintConfig(initial_cash=20_000.0),
+    )
+    env.reset()
+    _, _, _, _, info = env.step(1.0)
+
+    assert "inventory_penalty" in info
+    assert float(info["inventory_penalty"]) > 0.0

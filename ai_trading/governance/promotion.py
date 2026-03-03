@@ -45,9 +45,18 @@ class PromotionCriteria:
     max_execution_drift_bps: float = 25.0
     challenger_significance_alpha: float = 0.05
     min_challenger_uplift_bps: float = 0.5
+    min_net_expectancy_bps: float = 0.0
+    max_live_calibration_ece: float = 0.10
+    max_live_calibration_brier: float = 0.30
+    min_calibration_samples: int = 50
+    challenger_sequential_min_samples: int = 20
+    challenger_sequential_required_passes: int = 3
     control_band_drawdown: float = 0.08
     control_band_reject_rate: float = 0.05
     control_band_execution_drift_bps: float = 35.0
+    control_band_drift_psi: float = 0.30
+    control_band_live_calibration_ece: float = 0.15
+    control_band_live_calibration_brier: float = 0.35
 
 @dataclass
 class PromotionMetrics:
@@ -72,6 +81,14 @@ class PromotionMetrics:
     execution_drift_bps: float = 0.0
     challenger_uplift_bps: float = 0.0
     challenger_p_value: float = 1.0
+    gross_expectancy_bps: float = 0.0
+    avg_cost_bps: float = 0.0
+    net_expectancy_bps: float = 0.0
+    live_calibration_ece: float = 1.0
+    live_calibration_brier: float = 1.0
+    calibration_samples: int = 0
+    challenger_eval_samples: int = 0
+    challenger_sequential_passes: int = 0
     last_updated: datetime | None = None
 
 class ModelPromotion:
@@ -125,7 +142,12 @@ class ModelPromotion:
 
         needs_pwf = "purged_walk_forward_pass_ratio" not in session_stats
         needs_regime = "regime_pass_ratio" not in session_stats
-        if not (needs_pwf or needs_regime):
+        needs_calibration = (
+            "live_calibration_ece" not in session_stats
+            or "live_calibration_brier" not in session_stats
+            or "calibration_samples" not in session_stats
+        )
+        if not (needs_pwf or needs_regime or needs_calibration):
             return {}
 
         returns = self._coerce_returns(session_stats.get("returns"))
@@ -279,6 +301,79 @@ class ModelPromotion:
             except Exception:
                 self.logger.debug("PROMOTION_REGIME_AUTOVALIDATION_FAILED", exc_info=True)
 
+        if needs_calibration:
+            try:
+                probability_col: str | None = None
+                label_col: str | None = None
+                for candidate in (
+                    "predicted_prob",
+                    "prediction_probability",
+                    "probability",
+                    "prob",
+                    "p_up",
+                    "confidence",
+                ):
+                    if candidate in frame.columns:
+                        probability_col = candidate
+                        break
+                for candidate in ("label", "target", "outcome", "y", "realized_label"):
+                    if candidate in frame.columns:
+                        label_col = candidate
+                        break
+
+                if probability_col is not None and label_col is not None:
+                    probs: list[float] = []
+                    labels: list[float] = []
+                    for prob_raw, label_raw in zip(
+                        frame[probability_col].tolist(),
+                        frame[label_col].tolist(),
+                        strict=False,
+                    ):
+                        try:
+                            prob_val = float(prob_raw)
+                            label_val = float(label_raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if not math.isfinite(prob_val) or not math.isfinite(label_val):
+                            continue
+                        prob_val = max(0.0, min(1.0, prob_val))
+                        label_val = 1.0 if label_val > 0.5 else 0.0
+                        probs.append(prob_val)
+                        labels.append(label_val)
+                    if probs and labels:
+                        sample_count = len(probs)
+                        brier = sum((p - y) ** 2 for p, y in zip(probs, labels, strict=False)) / float(
+                            sample_count
+                        )
+                        bins = 10
+                        ece = 0.0
+                        for idx in range(bins):
+                            lo = idx / float(bins)
+                            hi = (idx + 1) / float(bins)
+                            if idx == bins - 1:
+                                members = [
+                                    (p, y)
+                                    for p, y in zip(probs, labels, strict=False)
+                                    if lo <= p <= hi
+                                ]
+                            else:
+                                members = [
+                                    (p, y)
+                                    for p, y in zip(probs, labels, strict=False)
+                                    if lo <= p < hi
+                                ]
+                            if not members:
+                                continue
+                            prob_mean = sum(p for p, _ in members) / float(len(members))
+                            acc_mean = sum(y for _, y in members) / float(len(members))
+                            ece += (len(members) / float(sample_count)) * abs(prob_mean - acc_mean)
+
+                        derived["live_calibration_ece"] = float(max(0.0, ece))
+                        derived["live_calibration_brier"] = float(max(0.0, brier))
+                        derived["calibration_samples"] = int(sample_count)
+            except Exception:
+                self.logger.debug("PROMOTION_CALIBRATION_AUTOVALIDATION_FAILED", exc_info=True)
+
         return derived
 
     def start_shadow_testing(self, model_id: str, benchmark_model_id: str | None=None) -> bool:
@@ -368,6 +463,32 @@ class ModelPromotion:
                 current_metrics.monte_carlo_p05_bps = alpha * float(monte["p05_return_bps"]) + (
                     1 - alpha
                 ) * current_metrics.monte_carlo_p05_bps
+                coerced_returns = self._coerce_returns(returns)
+                gross_expectancy_bps = (
+                    float(mean(coerced_returns) * 10000.0) if coerced_returns else 0.0
+                )
+                avg_cost_bps = float(
+                    session_payload.get(
+                        "avg_cost_bps",
+                        session_payload.get(
+                            "realized_slippage_bps",
+                            session_payload.get("expected_cost_bps", current_metrics.avg_cost_bps),
+                        ),
+                    )
+                    or 0.0
+                )
+                if not math.isfinite(avg_cost_bps):
+                    avg_cost_bps = 0.0
+                net_expectancy_bps = gross_expectancy_bps - avg_cost_bps
+                current_metrics.gross_expectancy_bps = alpha * gross_expectancy_bps + (
+                    1 - alpha
+                ) * current_metrics.gross_expectancy_bps
+                current_metrics.avg_cost_bps = alpha * max(0.0, avg_cost_bps) + (
+                    1 - alpha
+                ) * current_metrics.avg_cost_bps
+                current_metrics.net_expectancy_bps = alpha * net_expectancy_bps + (
+                    1 - alpha
+                ) * current_metrics.net_expectancy_bps
 
             current_metrics.live_sortino_ratio = alpha * float(
                 session_payload.get("sortino_ratio", current_metrics.live_sortino_ratio) or 0.0
@@ -403,6 +524,27 @@ class ModelPromotion:
             current_metrics.execution_drift_bps = alpha * float(
                 session_payload.get("execution_drift_bps", current_metrics.execution_drift_bps) or 0.0
             ) + (1 - alpha) * current_metrics.execution_drift_bps
+            calibration_ece = float(
+                session_payload.get("live_calibration_ece", current_metrics.live_calibration_ece)
+                or current_metrics.live_calibration_ece
+            )
+            calibration_brier = float(
+                session_payload.get("live_calibration_brier", current_metrics.live_calibration_brier)
+                or current_metrics.live_calibration_brier
+            )
+            calibration_samples = int(
+                session_payload.get("calibration_samples", current_metrics.calibration_samples)
+                or current_metrics.calibration_samples
+            )
+            if math.isfinite(calibration_ece):
+                current_metrics.live_calibration_ece = alpha * max(0.0, calibration_ece) + (
+                    1 - alpha
+                ) * current_metrics.live_calibration_ece
+            if math.isfinite(calibration_brier):
+                current_metrics.live_calibration_brier = alpha * max(0.0, calibration_brier) + (
+                    1 - alpha
+                ) * current_metrics.live_calibration_brier
+            current_metrics.calibration_samples = max(0, calibration_samples)
 
             challenger_returns = session_payload.get("challenger_returns")
             champion_returns = session_payload.get("champion_returns")
@@ -414,6 +556,19 @@ class ModelPromotion:
                 )
                 current_metrics.challenger_uplift_bps = float(stat_sig["uplift_bps"])
                 current_metrics.challenger_p_value = float(stat_sig["p_value"])
+                challenger_sample_count = min(len(challenger_returns), len(champion_returns))
+                current_metrics.challenger_eval_samples = int(max(challenger_sample_count, 0))
+                sequential_pass = (
+                    challenger_sample_count >= int(self.criteria.challenger_sequential_min_samples)
+                    and float(stat_sig["uplift_bps"]) >= float(self.criteria.min_challenger_uplift_bps)
+                    and float(stat_sig["p_value"]) <= float(self.criteria.challenger_significance_alpha)
+                )
+                if sequential_pass:
+                    current_metrics.challenger_sequential_passes = int(
+                        current_metrics.challenger_sequential_passes + 1
+                    )
+                else:
+                    current_metrics.challenger_sequential_passes = 0
 
             self._save_shadow_metrics(model_id, current_metrics)
             metrics_dict = {
@@ -433,8 +588,16 @@ class ModelPromotion:
                 'tca_gate_passed': current_metrics.tca_gate_passed,
                 'reject_rate': current_metrics.reject_rate,
                 'execution_drift_bps': current_metrics.execution_drift_bps,
+                'gross_expectancy_bps': current_metrics.gross_expectancy_bps,
+                'avg_cost_bps': current_metrics.avg_cost_bps,
+                'net_expectancy_bps': current_metrics.net_expectancy_bps,
+                'live_calibration_ece': current_metrics.live_calibration_ece,
+                'live_calibration_brier': current_metrics.live_calibration_brier,
+                'calibration_samples': current_metrics.calibration_samples,
                 'challenger_uplift_bps': current_metrics.challenger_uplift_bps,
                 'challenger_p_value': current_metrics.challenger_p_value,
+                'challenger_eval_samples': current_metrics.challenger_eval_samples,
+                'challenger_sequential_passes': current_metrics.challenger_sequential_passes,
                 'last_updated': current_metrics.last_updated.isoformat() if current_metrics.last_updated else None,
             }
             self.registry.update_governance_status(model_id, 'shadow', metrics_dict)
@@ -516,9 +679,24 @@ class ModelPromotion:
                 'execution_drift_check': (
                     metrics.execution_drift_bps <= self.criteria.max_execution_drift_bps
                 ),
+                'net_expectancy_check': (
+                    metrics.net_expectancy_bps >= self.criteria.min_net_expectancy_bps
+                ),
+                'calibration_ece_check': (
+                    metrics.calibration_samples >= self.criteria.min_calibration_samples
+                    and metrics.live_calibration_ece <= self.criteria.max_live_calibration_ece
+                ),
+                'calibration_brier_check': (
+                    metrics.calibration_samples >= self.criteria.min_calibration_samples
+                    and metrics.live_calibration_brier <= self.criteria.max_live_calibration_brier
+                ),
                 'challenger_significance_check': (
                     metrics.challenger_uplift_bps >= self.criteria.min_challenger_uplift_bps
                     and metrics.challenger_p_value <= self.criteria.challenger_significance_alpha
+                ),
+                'challenger_sequential_check': (
+                    metrics.challenger_sequential_passes
+                    >= self.criteria.challenger_sequential_required_passes
                 ),
             }
             eligible = all(checks.values())
@@ -543,8 +721,16 @@ class ModelPromotion:
                     'tca_gate_passed': metrics.tca_gate_passed,
                     'reject_rate': metrics.reject_rate,
                     'execution_drift_bps': metrics.execution_drift_bps,
+                    'gross_expectancy_bps': metrics.gross_expectancy_bps,
+                    'avg_cost_bps': metrics.avg_cost_bps,
+                    'net_expectancy_bps': metrics.net_expectancy_bps,
+                    'live_calibration_ece': metrics.live_calibration_ece,
+                    'live_calibration_brier': metrics.live_calibration_brier,
+                    'calibration_samples': metrics.calibration_samples,
                     'challenger_uplift_bps': metrics.challenger_uplift_bps,
                     'challenger_p_value': metrics.challenger_p_value,
+                    'challenger_eval_samples': metrics.challenger_eval_samples,
+                    'challenger_sequential_passes': metrics.challenger_sequential_passes,
                 },
                 'criteria': {
                     'min_sessions': self.criteria.min_shadow_sessions,
@@ -563,8 +749,14 @@ class ModelPromotion:
                     'min_regime_pass_ratio': self.criteria.min_regime_pass_ratio,
                     'max_reject_rate': self.criteria.max_reject_rate,
                     'max_execution_drift_bps': self.criteria.max_execution_drift_bps,
+                    'min_net_expectancy_bps': self.criteria.min_net_expectancy_bps,
+                    'max_live_calibration_ece': self.criteria.max_live_calibration_ece,
+                    'max_live_calibration_brier': self.criteria.max_live_calibration_brier,
+                    'min_calibration_samples': self.criteria.min_calibration_samples,
                     'challenger_significance_alpha': self.criteria.challenger_significance_alpha,
                     'min_challenger_uplift_bps': self.criteria.min_challenger_uplift_bps,
+                    'challenger_sequential_min_samples': self.criteria.challenger_sequential_min_samples,
+                    'challenger_sequential_required_passes': self.criteria.challenger_sequential_required_passes,
                 },
             }
             return (eligible, evaluation)
@@ -646,11 +838,24 @@ class ModelPromotion:
         challenger_returns = metrics.get("challenger_returns")
         champion_returns = metrics.get("champion_returns")
         if isinstance(challenger_returns, list) and isinstance(champion_returns, list):
-            payload["significance"] = self.evaluate_challenger_significance(
+            significance = self.evaluate_challenger_significance(
                 challenger_returns,
                 champion_returns,
                 alpha=self.criteria.challenger_significance_alpha,
             )
+            sample_count = min(len(challenger_returns), len(champion_returns))
+            sequential_pass = (
+                sample_count >= int(self.criteria.challenger_sequential_min_samples)
+                and float(significance.get("uplift_bps", 0.0)) >= float(self.criteria.min_challenger_uplift_bps)
+                and float(significance.get("p_value", 1.0)) <= float(self.criteria.challenger_significance_alpha)
+            )
+            payload["significance"] = significance
+            payload["sequential_gate"] = {
+                "sample_count": int(max(sample_count, 0)),
+                "min_samples": int(self.criteria.challenger_sequential_min_samples),
+                "required_consecutive_passes": int(self.criteria.challenger_sequential_required_passes),
+                "session_pass": bool(sequential_pass),
+            }
         try:
             eval_path.parent.mkdir(parents=True, exist_ok=True)
             with eval_path.open("a", encoding="utf-8") as handle:
@@ -748,6 +953,9 @@ class ModelPromotion:
         drawdown = float(live_kpis.get("max_drawdown", 0.0) or 0.0)
         reject_rate = float(live_kpis.get("reject_rate", 0.0) or 0.0)
         execution_drift_bps = float(live_kpis.get("execution_drift_bps", 0.0) or 0.0)
+        drift_psi = float(live_kpis.get("drift_psi", 0.0) or 0.0)
+        live_calibration_ece = float(live_kpis.get("live_calibration_ece", 0.0) or 0.0)
+        live_calibration_brier = float(live_kpis.get("live_calibration_brier", 0.0) or 0.0)
 
         if drawdown > float(self.criteria.control_band_drawdown):
             breaches["max_drawdown"] = drawdown
@@ -755,6 +963,12 @@ class ModelPromotion:
             breaches["reject_rate"] = reject_rate
         if execution_drift_bps > float(self.criteria.control_band_execution_drift_bps):
             breaches["execution_drift_bps"] = execution_drift_bps
+        if drift_psi > float(self.criteria.control_band_drift_psi):
+            breaches["drift_psi"] = drift_psi
+        if live_calibration_ece > float(self.criteria.control_band_live_calibration_ece):
+            breaches["live_calibration_ece"] = live_calibration_ece
+        if live_calibration_brier > float(self.criteria.control_band_live_calibration_brier):
+            breaches["live_calibration_brier"] = live_calibration_brier
 
         result: dict[str, Any] = {
             "strategy": strategy,
@@ -807,8 +1021,16 @@ class ModelPromotion:
             'tca_gate_passed': metrics.tca_gate_passed,
             'reject_rate': metrics.reject_rate,
             'execution_drift_bps': metrics.execution_drift_bps,
+            'gross_expectancy_bps': metrics.gross_expectancy_bps,
+            'avg_cost_bps': metrics.avg_cost_bps,
+            'net_expectancy_bps': metrics.net_expectancy_bps,
+            'live_calibration_ece': metrics.live_calibration_ece,
+            'live_calibration_brier': metrics.live_calibration_brier,
+            'calibration_samples': metrics.calibration_samples,
             'challenger_uplift_bps': metrics.challenger_uplift_bps,
             'challenger_p_value': metrics.challenger_p_value,
+            'challenger_eval_samples': metrics.challenger_eval_samples,
+            'challenger_sequential_passes': metrics.challenger_sequential_passes,
             'last_updated': metrics.last_updated.isoformat() if metrics.last_updated else None,
         }
         with open(metrics_file, 'w') as f:
@@ -844,8 +1066,16 @@ class ModelPromotion:
                 tca_gate_passed=bool(data.get('tca_gate_passed', True)),
                 reject_rate=data.get('reject_rate', 0.0),
                 execution_drift_bps=data.get('execution_drift_bps', 0.0),
+                gross_expectancy_bps=data.get('gross_expectancy_bps', 0.0),
+                avg_cost_bps=data.get('avg_cost_bps', 0.0),
+                net_expectancy_bps=data.get('net_expectancy_bps', 0.0),
+                live_calibration_ece=data.get('live_calibration_ece', 1.0),
+                live_calibration_brier=data.get('live_calibration_brier', 1.0),
+                calibration_samples=data.get('calibration_samples', 0),
                 challenger_uplift_bps=data.get('challenger_uplift_bps', 0.0),
                 challenger_p_value=data.get('challenger_p_value', 1.0),
+                challenger_eval_samples=data.get('challenger_eval_samples', 0),
+                challenger_sequential_passes=data.get('challenger_sequential_passes', 0),
                 last_updated=last_updated,
             )
         except (ValueError, TypeError) as e:

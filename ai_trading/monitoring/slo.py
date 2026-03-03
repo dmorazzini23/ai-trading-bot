@@ -85,6 +85,11 @@ class SLOMonitor:
             'order_reject_rate_pct': SLOThreshold(name='order_reject_rate_pct', warning_threshold=1.0, critical_threshold=3.0, breach_threshold=5.0, window_minutes=10, min_samples=5, description='Order reject rate'),
             'execution_drift_bps': SLOThreshold(name='execution_drift_bps', warning_threshold=8.0, critical_threshold=20.0, breach_threshold=35.0, window_minutes=15, min_samples=5, description='Execution quality drift versus benchmark'),
             'realized_slippage_bps': SLOThreshold(name='realized_slippage_bps', warning_threshold=8.0, critical_threshold=20.0, breach_threshold=35.0, window_minutes=15, min_samples=5, description='Absolute realized slippage versus submit benchmark'),
+            'live_calibration_ece': SLOThreshold(name='live_calibration_ece', warning_threshold=0.05, critical_threshold=0.10, breach_threshold=0.15, window_minutes=30, min_samples=10, description='Model calibration expected calibration error'),
+            'live_calibration_brier': SLOThreshold(name='live_calibration_brier', warning_threshold=0.22, critical_threshold=0.30, breach_threshold=0.38, window_minutes=30, min_samples=10, description='Model calibration Brier score'),
+            'drift_psi': SLOThreshold(name='drift_psi', warning_threshold=0.10, critical_threshold=0.20, breach_threshold=0.30, window_minutes=60, min_samples=5, description='Feature drift PSI'),
+            'label_drift_psi': SLOThreshold(name='label_drift_psi', warning_threshold=0.10, critical_threshold=0.20, breach_threshold=0.30, window_minutes=60, min_samples=5, description='Label drift PSI'),
+            'residual_drift_psi': SLOThreshold(name='residual_drift_psi', warning_threshold=0.10, critical_threshold=0.20, breach_threshold=0.30, window_minutes=60, min_samples=5, description='Residual drift PSI'),
             'data_staleness_minutes': SLOThreshold(name='data_staleness_minutes', warning_threshold=2.0, critical_threshold=5.0, breach_threshold=10.0, window_minutes=1, min_samples=1, description='Market data staleness'),
             'pnl_drift_bps': SLOThreshold(name='pnl_drift_bps', warning_threshold=10.0, critical_threshold=25.0, breach_threshold=50.0, window_minutes=15, min_samples=5, description='P&L attribution drift'),
             'pending_orders_count': SLOThreshold(name='pending_orders_count', warning_threshold=3.0, critical_threshold=8.0, breach_threshold=15.0, window_minutes=5, min_samples=1, description='Open pending order backlog size'),
@@ -296,6 +301,11 @@ def setup_default_circuit_breakers() -> None:
     monitor.register_circuit_breaker('order_reject_rate_pct', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('execution_drift_bps', pause_trading_circuit_breaker)
     monitor.register_circuit_breaker('realized_slippage_bps', pause_trading_circuit_breaker)
+    monitor.register_circuit_breaker('live_calibration_ece', reduce_position_size_circuit_breaker)
+    monitor.register_circuit_breaker('live_calibration_brier', reduce_position_size_circuit_breaker)
+    monitor.register_circuit_breaker('drift_psi', reduce_position_size_circuit_breaker)
+    monitor.register_circuit_breaker('label_drift_psi', reduce_position_size_circuit_breaker)
+    monitor.register_circuit_breaker('residual_drift_psi', reduce_position_size_circuit_breaker)
     monitor.register_circuit_breaker('pending_oldest_age_sec', reduce_position_size_circuit_breaker)
     monitor.register_circuit_breaker('live_sharpe_ratio', reduce_position_size_circuit_breaker)
     monitor.register_circuit_breaker('position_skew_pct', reduce_position_size_circuit_breaker)
@@ -318,6 +328,41 @@ def record_realized_slippage(realized_slippage_bps: float) -> None:
 
     monitor = get_slo_monitor()
     monitor.record_metric("realized_slippage_bps", float(realized_slippage_bps))
+
+
+def record_live_calibration_ece(live_calibration_ece: float) -> None:
+    """Record live expected calibration error."""
+
+    monitor = get_slo_monitor()
+    monitor.record_metric("live_calibration_ece", float(live_calibration_ece))
+
+
+def record_live_calibration_brier(live_calibration_brier: float) -> None:
+    """Record live Brier score."""
+
+    monitor = get_slo_monitor()
+    monitor.record_metric("live_calibration_brier", float(live_calibration_brier))
+
+
+def record_feature_drift_psi(drift_psi: float) -> None:
+    """Record feature drift PSI."""
+
+    monitor = get_slo_monitor()
+    monitor.record_metric("drift_psi", float(drift_psi))
+
+
+def record_label_drift_psi(label_drift_psi: float) -> None:
+    """Record label drift PSI."""
+
+    monitor = get_slo_monitor()
+    monitor.record_metric("label_drift_psi", float(label_drift_psi))
+
+
+def record_residual_drift_psi(residual_drift_psi: float) -> None:
+    """Record residual drift PSI."""
+
+    monitor = get_slo_monitor()
+    monitor.record_metric("residual_drift_psi", float(residual_drift_psi))
 
 
 def record_pending_orders_count(pending_orders_count: float) -> None:

@@ -93,7 +93,13 @@ class UnifiedRLInference:
             obs = np.vstack([padding, obs])
         return obs
 
-    def postprocess_action(self, raw_action: int | float | np.ndarray, observation: np.ndarray) -> dict[str, Any]:
+    def postprocess_action(
+        self,
+        raw_action: int | float | np.ndarray,
+        observation: np.ndarray,
+        *,
+        action_mask: np.ndarray | list[float] | tuple[float, ...] | None = None,
+    ) -> dict[str, Any]:
         """
         Postprocess model action to trading signal (same as training).
 
@@ -106,6 +112,24 @@ class UnifiedRLInference:
         """
         if self.config.action_config.action_type == 'discrete':
             action_int = int(raw_action)
+            mask_array: np.ndarray | None = None
+            if action_mask is not None:
+                try:
+                    mask_array = np.asarray(action_mask, dtype=np.float32).reshape(-1)
+                except Exception:
+                    mask_array = None
+            action_masked = False
+            if (
+                mask_array is not None
+                and mask_array.size > action_int
+                and float(mask_array[action_int]) <= 0.0
+            ):
+                action_masked = True
+                if mask_array.size > 0 and float(mask_array[0]) > 0.0:
+                    action_int = 0
+                else:
+                    valid_actions = [idx for idx, enabled in enumerate(mask_array.tolist()) if float(enabled) > 0.0]
+                    action_int = int(valid_actions[0]) if valid_actions else 0
             action_map = {0: 'hold', 1: 'buy', 2: 'sell'}
             action_name = action_map.get(action_int, 'hold')
             confidence = 0.8 if action_int != 0 else 0.2
@@ -120,9 +144,16 @@ class UnifiedRLInference:
             else:
                 action_name = 'hold'
                 confidence = 1.0 - abs(action_float)
-        return {'action': action_name, 'confidence': confidence, 'raw_action': raw_action, 'action_type': self.config.action_config.action_type}
+            action_masked = False
+        return {'action': action_name, 'confidence': confidence, 'raw_action': raw_action, 'action_type': self.config.action_config.action_type, 'action_masked': bool(action_masked)}
 
-    def predict(self, observation: np.ndarray, symbol: str='RL') -> TradeSignal | None:
+    def predict(
+        self,
+        observation: np.ndarray,
+        symbol: str='RL',
+        *,
+        action_mask: np.ndarray | list[float] | tuple[float, ...] | None = None,
+    ) -> TradeSignal | None:
         """
         Predict trading signal from observation.
 
@@ -147,9 +178,13 @@ class UnifiedRLInference:
         try:
             processed_obs = self.preprocess_observation(observation)
             raw_action, _ = self.agent.model.predict(processed_obs, deterministic=self.config.deterministic)
-            action_details = self.postprocess_action(raw_action, processed_obs)
+            action_details = self.postprocess_action(
+                raw_action,
+                processed_obs,
+                action_mask=action_mask,
+            )
             self._update_stats(action_details)
-            signal = TradeSignal(symbol=symbol, side=action_details['action'], confidence=action_details['confidence'], strategy='rl_unified', metadata={'action_type': action_details['action_type'], 'raw_action': str(action_details['raw_action']), 'model_path': self.config.model_path})
+            signal = TradeSignal(symbol=symbol, side=action_details['action'], confidence=action_details['confidence'], strategy='rl_unified', metadata={'action_type': action_details['action_type'], 'raw_action': str(action_details['raw_action']), 'model_path': self.config.model_path, 'action_masked': bool(action_details.get('action_masked', False))})
             self._last_prediction = signal
             self._prediction_confidence = action_details['confidence']
             return signal

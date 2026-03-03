@@ -42,6 +42,7 @@ class RewardConfig:
     drawdown_penalty: float = 2.0
     variance_penalty: float = 0.5
     sharpe_bonus: float = 0.1
+    inventory_penalty: float = 0.05
 
 
 @dataclass
@@ -246,6 +247,37 @@ class TradingEnv:
             )
         )
 
+    def _discrete_action_mask(self, price: float) -> np.ndarray:
+        """Return [hold, buy, sell] mask enforcing immediate risk/cash constraints."""
+
+        mask = np.ones(self.action_config.discrete_actions, dtype=np.float32)
+        if self.action_config.discrete_actions <= 0:
+            return mask
+        if self.action_config.discrete_actions < 3:
+            return np.ones(self.action_config.discrete_actions, dtype=np.float32)
+
+        current_exposure = self._current_exposure(price)
+        lower, upper = self._exposure_bounds()
+        step = max(float(self.action_config.discrete_step), 0.0)
+
+        # Buy action.
+        if current_exposure + step > upper + 1e-06:
+            mask[1] = 0.0
+        else:
+            exec_price = price * (1.0 + self.half_spread + self.slippage)
+            notional = max(exec_price, 1e-06) * (1.0 + self.transaction_cost)
+            max_affordable = self.cash / max(notional, 1e-06)
+            if max_affordable <= 1e-09:
+                mask[1] = 0.0
+
+        # Sell action.
+        if current_exposure - step < lower - 1e-06:
+            mask[2] = 0.0
+
+        # Always allow hold to keep the MDP feasible.
+        mask[0] = 1.0
+        return mask
+
     def _execute_target_exposure(
         self,
         target_exposure: float,
@@ -298,12 +330,24 @@ class TradingEnv:
     def step(self, action: int | float | np.ndarray):
         """Execute one step in the environment with enhanced reward calculation."""
         price = float(self.prices[self.current])
+        action_mask: np.ndarray | None = None
+        action_was_masked = False
         if self.action_config.action_type == "discrete":
             action_int = int(action)
+            action_int = int(np.clip(action_int, 0, max(self.action_config.discrete_actions - 1, 0)))
+            action_mask = self._discrete_action_mask(price)
+            if (
+                action_mask.size > action_int
+                and float(action_mask[action_int]) <= 0.0
+            ):
+                action_int = 0
+                action_was_masked = True
             target_exposure = self._target_exposure_from_discrete(action_int, price)
             trade_size, trade_units, constraint_adjusted = (
                 self._execute_target_exposure(target_exposure, price)
             )
+            if action_was_masked:
+                constraint_adjusted = True
             action_probs = np.zeros(self.action_config.discrete_actions)
             action_probs[action_int] = 1.0
             entropy = -np.sum(action_probs * np.log(action_probs + 1e-08))
@@ -327,6 +371,9 @@ class TradingEnv:
             else 0
         )
         drawdown_penalty = self.reward_config.drawdown_penalty * current_drawdown
+        inventory_penalty = self.reward_config.inventory_penalty * abs(
+            self._current_exposure(price)
+        )
         returns = (
             net_worth / self._last_net_worth - 1 if self._last_net_worth > 0 else 0
         )
@@ -348,6 +395,7 @@ class TradingEnv:
             base_reward
             - turnover_penalty
             - drawdown_penalty
+            - inventory_penalty
             - variance_penalty
             + sharpe_bonus
         )
@@ -403,6 +451,7 @@ class TradingEnv:
             "base_reward": base_reward,
             "turnover_penalty": turnover_penalty,
             "drawdown_penalty": drawdown_penalty,
+            "inventory_penalty": inventory_penalty,
             "variance_penalty": variance_penalty,
             "sharpe_bonus": sharpe_bonus,
             "position": self.position,
@@ -414,6 +463,8 @@ class TradingEnv:
             "constraint_adjusted": constraint_adjusted,
             "constraint_violations": tuple(violations),
             "constraint_terminated": constraint_terminated,
+            "action_mask": action_mask.tolist() if action_mask is not None else None,
+            "action_was_masked": bool(action_was_masked),
             "action_entropy": entropy,
             "avg_entropy": np.mean(self._action_entropy_history)
             if self._action_entropy_history

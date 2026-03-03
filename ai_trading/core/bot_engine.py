@@ -13118,6 +13118,10 @@ class SignalManager:
         self._cycle_trade_log_source: str | None = None
         self._cycle_trade_log_cycle_id: int | None = None
         self.meta_confidence_capped = False
+        self._signal_weights_cache: dict[str, float] = {}
+        self._signal_weights_cache_path: str = ""
+        self._signal_weights_cache_mtime: float | None = None
+        self._signal_weights_cache_loaded_at: float = 0.0
 
     def begin_cycle(self) -> None:
         """Cache the trade log once per active trading cycle."""
@@ -13538,11 +13542,40 @@ class SignalManager:
         return s, 1.0, "regime"
 
     def load_signal_weights(self) -> dict[str, float]:
-        if not os.path.exists(SIGNAL_WEIGHTS_FILE):
+        path = SIGNAL_WEIGHTS_FILE
+        if not os.path.exists(path):
+            self._signal_weights_cache = {}
+            self._signal_weights_cache_path = path
+            self._signal_weights_cache_mtime = None
+            self._signal_weights_cache_loaded_at = pytime.time()
             return {}
         try:
+            cache_ttl = int(
+                get_env("AI_TRADING_META_SIGNAL_WEIGHT_CACHE_TTL_SECONDS", 30, cast=int)
+            )
+        except Exception:
+            cache_ttl = 30
+        cache_ttl = max(cache_ttl, 0)
+        try:
+            path_mtime = os.path.getmtime(path)
+        except OSError:
+            path_mtime = None
+        cache_fresh = (
+            bool(self._signal_weights_cache_path)
+            and self._signal_weights_cache_path == path
+            and self._signal_weights_cache_mtime is not None
+            and path_mtime is not None
+            and self._signal_weights_cache_mtime == path_mtime
+            and (
+                cache_ttl == 0
+                or (pytime.time() - self._signal_weights_cache_loaded_at) < cache_ttl
+            )
+        )
+        if cache_fresh:
+            return dict(self._signal_weights_cache)
+        try:
             df = pd.read_csv(
-                SIGNAL_WEIGHTS_FILE,
+                path,
                 on_bad_lines="skip",
                 engine="python",
                 usecols=["signal_name", "weight"],
@@ -13550,10 +13583,28 @@ class SignalManager:
             if df.empty:
                 logger.warning(
                     "Loaded DataFrame from %s is empty after parsing/fallback",
-                    SIGNAL_WEIGHTS_FILE,
+                    path,
                 )
+                self._signal_weights_cache = {}
+                self._signal_weights_cache_path = path
+                self._signal_weights_cache_mtime = path_mtime
+                self._signal_weights_cache_loaded_at = pytime.time()
                 return {}
-            return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
+            parsed: dict[str, float] = {}
+            for _, row in df.iterrows():
+                try:
+                    key = str(row["signal_name"]).strip().lower()
+                    weight = float(row["weight"])
+                except (TypeError, ValueError):
+                    continue
+                if not key or not math.isfinite(weight):
+                    continue
+                parsed[key] = max(0.0, min(weight, 2.0))
+            self._signal_weights_cache = parsed
+            self._signal_weights_cache_path = path
+            self._signal_weights_cache_mtime = path_mtime
+            self._signal_weights_cache_loaded_at = pytime.time()
+            return dict(parsed)
         except ValueError as e:
             if "usecols" in str(e).lower():
                 logger.warning(
@@ -13562,16 +13613,14 @@ class SignalManager:
                 try:
                     # Fallback: read all columns and try to map
                     df = pd.read_csv(
-                        SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python"
+                        path, on_bad_lines="skip", engine="python"
                     )
                     if "signal" in df.columns:
                         # Old format with 'signal' column
-                        return {
-                            row["signal"]: row["weight"] for _, row in df.iterrows()
-                        }
+                        raw = {row["signal"]: row["weight"] for _, row in df.iterrows()}
                     elif "signal_name" in df.columns:
                         # New format with 'signal_name' column
-                        return {
+                        raw = {
                             row["signal_name"]: row["weight"]
                             for _, row in df.iterrows()
                         }
@@ -13580,7 +13629,22 @@ class SignalManager:
                             "Signal weights CSV has unexpected format: %s",
                             df.columns.tolist(),
                         )
-                        return {}
+                        raw = {}
+                    parsed: dict[str, float] = {}
+                    for key, weight in raw.items():
+                        try:
+                            name = str(key).strip().lower()
+                            numeric = float(weight)
+                        except (TypeError, ValueError):
+                            continue
+                        if not name or not math.isfinite(numeric):
+                            continue
+                        parsed[name] = max(0.0, min(numeric, 2.0))
+                    self._signal_weights_cache = parsed
+                    self._signal_weights_cache_path = path
+                    self._signal_weights_cache_mtime = path_mtime
+                    self._signal_weights_cache_loaded_at = pytime.time()
+                    return dict(parsed)
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -13636,8 +13700,8 @@ class SignalManager:
                 logger.warning(
                     "METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals"
                 )
-                # Use a basic set of reliable signal types as fallback
-                allowed_tags = {"sma_cross", "bb_squeeze", "rsi_oversold", "momentum"}
+                # Use component names emitted by SignalManager so gating stays coherent.
+                allowed_tags = {"momentum", "mean_reversion", "ml", "regime"}
             elif symbol_upper and not symbol_has_history:
                 if symbol_upper not in _METALEARN_FALLBACK_SYMBOL_LOGGED:
                     logger.info(
@@ -13648,7 +13712,7 @@ class SignalManager:
                 self.meta_confidence_capped = True
                 _seed_symbol_history_from_bars(symbol_upper, df)
 
-        self.load_signal_weights()
+        signal_weights = self.load_signal_weights()
 
         # Track total signals evaluated
         if signals_evaluated:
@@ -13731,9 +13795,121 @@ class SignalManager:
             self.last_components = []
             return 0.0, 0.0, "no_data"
 
-        self.last_components = signals
-        score = sum(s * w for s, w, _ in signals)
-        conf_map = {label: w for _, w, label in signals}
+        performance_map: dict[str, float] = {}
+        for raw_tag, raw_score in performance_data.items():
+            try:
+                tag = str(raw_tag).strip().lower()
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+            if not tag or not math.isfinite(score):
+                continue
+            performance_map[tag] = max(0.0, min(score, 1.0))
+        allowed_tags_norm = (
+            {str(tag).strip().lower() for tag in allowed_tags}
+            if allowed_tags
+            else None
+        )
+
+        def _meta_bool(name: str, default: bool) -> bool:
+            try:
+                return bool(get_env(name, default, cast=bool))
+            except Exception:
+                return default
+
+        def _meta_float(name: str, default: float, *, floor: float = 0.0) -> float:
+            try:
+                value = float(get_env(name, default, cast=float))
+            except Exception:
+                value = default
+            if not math.isfinite(value):
+                return default
+            return max(value, floor)
+
+        weighting_enabled = _meta_bool("AI_TRADING_META_COMPONENT_WEIGHTING_ENABLED", True)
+        gate_enabled = _meta_bool("AI_TRADING_META_COMPONENT_GATE_ENABLED", True)
+        weight_strength = _meta_float("AI_TRADING_META_WEIGHT_STRENGTH", 1.0)
+        perf_strength = _meta_float("AI_TRADING_META_PERFORMANCE_STRENGTH", 1.0)
+        unseen_multiplier = _meta_float("AI_TRADING_META_UNSEEN_TAG_MULTIPLIER", 0.9)
+        out_of_set_multiplier = _meta_float(
+            "AI_TRADING_META_COMPONENT_OUT_OF_SET_MULTIPLIER",
+            0.35,
+        )
+        component_min_weight = _meta_float("AI_TRADING_META_COMPONENT_MIN_WEIGHT", 0.0)
+        component_max_weight = max(
+            _meta_float("AI_TRADING_META_COMPONENT_MAX_WEIGHT", 1.5),
+            component_min_weight,
+        )
+        adjusted_signals: list[tuple[int, float, str]] = []
+        changed_components: list[dict[str, float | str]] = []
+        for direction, base_weight, label in signals:
+            label_key = str(label).strip().lower()
+            try:
+                weight = float(base_weight)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(weight):
+                continue
+            multiplier = 1.0
+            perf_score = performance_map.get(label_key)
+            if perf_score is not None:
+                perf_multiplier = 1.0 + ((perf_score - 0.5) * 2.0 * perf_strength)
+                multiplier *= max(perf_multiplier, 0.1)
+            elif performance_map:
+                multiplier *= unseen_multiplier
+            learned_weight = signal_weights.get(label_key)
+            if learned_weight is not None:
+                learned_multiplier = 1.0 + (
+                    (max(0.0, min(learned_weight, 1.0)) - 0.5)
+                    * 2.0
+                    * weight_strength
+                )
+                multiplier *= max(learned_multiplier, 0.1)
+            if (
+                weighting_enabled
+                and gate_enabled
+                and allowed_tags_norm
+                and label_key not in allowed_tags_norm
+            ):
+                multiplier *= out_of_set_multiplier
+            if weighting_enabled:
+                adjusted_weight = max(
+                    component_min_weight,
+                    min(component_max_weight, weight * multiplier),
+                )
+            else:
+                adjusted_weight = max(
+                    component_min_weight,
+                    min(component_max_weight, weight),
+                )
+            if abs(adjusted_weight - weight) > 1e-9:
+                changed_components.append(
+                    {
+                        "label": label,
+                        "weight_before": round(weight, 6),
+                        "weight_after": round(adjusted_weight, 6),
+                    }
+                )
+            adjusted_signals.append((int(direction), float(adjusted_weight), label))
+        if not adjusted_signals:
+            self.last_components = []
+            return 0.0, 0.0, "no_data"
+        if changed_components:
+            log_throttled_event(
+                logger,
+                f"METALEARN_COMPONENT_ADJUSTMENTS::{symbol_upper}",
+                level=logging.INFO,
+                message="METALEARN_COMPONENT_ADJUSTMENTS",
+                extra={
+                    "symbol": symbol_upper,
+                    "changed_components": changed_components,
+                    "component_count": len(adjusted_signals),
+                },
+            )
+
+        self.last_components = adjusted_signals
+        score = sum(s * w for s, w, _ in adjusted_signals)
+        conf_map = {label: w for _, w, label in adjusted_signals}
         confidence = composite_signal_confidence(conf_map)
         labels = "+".join(conf_map.keys())
         return math.copysign(1, score), confidence, labels
@@ -23602,9 +23778,21 @@ def run_meta_learning_weight_optimizer(
         df["reward"] = df["pnl"] * df["confidence"]
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
-        tags = sorted({tag for row in df["signal_tags"] for tag in row.split("+")})
-        X = np.array(
-            [[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]]
+        tags = sorted(
+            {
+                str(tag).strip()
+                for row in df["signal_tags"]
+                for tag in str(row).split("+")
+                if str(tag).strip()
+            }
+        )
+        if not tags:
+            logger.warning("METALEARN_NO_TAGS")
+            return
+        X = pd.DataFrame(
+            [[int(tag in str(row).split("+")) for tag in tags] for row in df["signal_tags"]],
+            columns=tags,
+            dtype=float,
         )
         y = df["outcome"].values
 
@@ -23671,9 +23859,21 @@ def run_bayesian_meta_learning_optimizer(
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
-        tags = sorted({tag for row in df["signal_tags"] for tag in row.split("+")})
-        X = np.array(
-            [[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]]
+        tags = sorted(
+            {
+                str(tag).strip()
+                for row in df["signal_tags"]
+                for tag in str(row).split("+")
+                if str(tag).strip()
+            }
+        )
+        if not tags:
+            logger.warning("METALEARN_NO_TAGS")
+            return
+        X = pd.DataFrame(
+            [[int(tag in str(row).split("+")) for tag in tags] for row in df["signal_tags"]],
+            columns=tags,
+            dtype=float,
         )
         y = df["outcome"].values
 
@@ -23682,7 +23882,7 @@ def run_bayesian_meta_learning_optimizer(
             return
 
         model = _bayesian_ridge()(fit_intercept=True, normalize=True)
-        if X.size == 0:
+        if X.empty:
             logger.warning("BAYES_MODEL_TRAIN_SKIPPED_EMPTY")
             return
         model.fit(X, y)
@@ -33772,6 +33972,21 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         max_slippage_bps = float(
             get_env("AI_TRADING_DERISK_SLO_MAX_SLIPPAGE_BPS", 25.0, cast=float)
         )
+        max_calibration_ece = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_ECE", 0.15, cast=float)
+        )
+        max_calibration_brier = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_CALIB_BRIER", 0.35, cast=float)
+        )
+        max_feature_drift_psi = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_FEATURE_DRIFT_PSI", 0.30, cast=float)
+        )
+        max_label_drift_psi = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_LABEL_DRIFT_PSI", 0.30, cast=float)
+        )
+        max_residual_drift_psi = float(
+            get_env("AI_TRADING_DERISK_SLO_MAX_RESIDUAL_DRIFT_PSI", 0.30, cast=float)
+        )
         max_pacing_cap_hit_rate_pct = float(
             get_env("AI_TRADING_DERISK_SLO_MAX_PACING_CAP_HIT_RATE_PCT", 40.0, cast=float)
         )
@@ -33791,11 +34006,21 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         reject_rate_pct = 0.0
         execution_drift_bps = 0.0
         slippage_bps = 0.0
+        calibration_ece = 0.0
+        calibration_brier = 0.0
+        feature_drift_psi = 0.0
+        label_drift_psi = 0.0
+        residual_drift_psi = 0.0
         pacing_cap_hit_rate_pct = 0.0
         pending_oldest_age_sec = 0.0
         reject_samples = 0
         drift_samples = 0
         slippage_samples = 0
+        calibration_ece_samples = 0
+        calibration_brier_samples = 0
+        feature_drift_samples = 0
+        label_drift_samples = 0
+        residual_drift_samples = 0
         pacing_samples = 0
         pending_samples = 0
         try:
@@ -33805,6 +34030,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             reject_status = monitor.get_slo_status("order_reject_rate_pct")
             drift_status = monitor.get_slo_status("execution_drift_bps")
             slippage_status = monitor.get_slo_status("realized_slippage_bps")
+            calibration_ece_status = monitor.get_slo_status("live_calibration_ece")
+            calibration_brier_status = monitor.get_slo_status("live_calibration_brier")
+            feature_drift_status = monitor.get_slo_status("drift_psi")
+            label_drift_status = monitor.get_slo_status("label_drift_psi")
+            residual_drift_status = monitor.get_slo_status("residual_drift_psi")
             pacing_status = monitor.get_slo_status("order_pacing_cap_hit_rate_pct")
             pending_status = monitor.get_slo_status("pending_oldest_age_sec")
 
@@ -33824,6 +34054,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             reject_rate_pct, reject_samples = _extract_metric(reject_status)
             execution_drift_bps, drift_samples = _extract_metric(drift_status)
             slippage_bps, slippage_samples = _extract_metric(slippage_status)
+            calibration_ece, calibration_ece_samples = _extract_metric(calibration_ece_status)
+            calibration_brier, calibration_brier_samples = _extract_metric(calibration_brier_status)
+            feature_drift_psi, feature_drift_samples = _extract_metric(feature_drift_status)
+            label_drift_psi, label_drift_samples = _extract_metric(label_drift_status)
+            residual_drift_psi, residual_drift_samples = _extract_metric(residual_drift_status)
             pacing_cap_hit_rate_pct, pacing_samples = _extract_metric(pacing_status)
             pending_oldest_age_sec, pending_samples = _extract_metric(pending_status)
         except Exception:
@@ -33831,6 +34066,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         reject_breached = reject_samples >= min_samples and reject_rate_pct >= max_reject_rate_pct
         drift_breached = drift_samples >= min_samples and execution_drift_bps >= max_execution_drift_bps
         slippage_breached = slippage_samples >= min_samples and slippage_bps >= max_slippage_bps
+        calibration_ece_breached = (
+            calibration_ece_samples >= min_samples and calibration_ece >= max_calibration_ece
+        )
+        calibration_brier_breached = (
+            calibration_brier_samples >= min_samples
+            and calibration_brier >= max_calibration_brier
+        )
+        feature_drift_breached = (
+            feature_drift_samples >= min_samples and feature_drift_psi >= max_feature_drift_psi
+        )
+        label_drift_breached = (
+            label_drift_samples >= min_samples and label_drift_psi >= max_label_drift_psi
+        )
+        residual_drift_breached = (
+            residual_drift_samples >= min_samples
+            and residual_drift_psi >= max_residual_drift_psi
+        )
         pacing_breached = (
             pacing_samples >= min_samples
             and pacing_cap_hit_rate_pct >= max_pacing_cap_hit_rate_pct
@@ -33843,6 +34095,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             reject_breached
             or drift_breached
             or slippage_breached
+            or calibration_ece_breached
+            or calibration_brier_breached
+            or feature_drift_breached
+            or label_drift_breached
+            or residual_drift_breached
             or pacing_breached
             or pending_breached
         )
@@ -33851,22 +34108,42 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "reject_rate_pct": reject_rate_pct,
             "execution_drift_bps": execution_drift_bps,
             "slippage_bps": slippage_bps,
+            "calibration_ece": calibration_ece,
+            "calibration_brier": calibration_brier,
+            "drift_psi": feature_drift_psi,
+            "label_drift_psi": label_drift_psi,
+            "residual_drift_psi": residual_drift_psi,
             "order_pacing_cap_hit_rate_pct": pacing_cap_hit_rate_pct,
             "pending_oldest_age_sec": pending_oldest_age_sec,
             "reject_samples": reject_samples,
             "drift_samples": drift_samples,
             "slippage_samples": slippage_samples,
+            "calibration_ece_samples": calibration_ece_samples,
+            "calibration_brier_samples": calibration_brier_samples,
+            "feature_drift_samples": feature_drift_samples,
+            "label_drift_samples": label_drift_samples,
+            "residual_drift_samples": residual_drift_samples,
             "pacing_samples": pacing_samples,
             "pending_samples": pending_samples,
             "max_reject_rate_pct": max_reject_rate_pct,
             "max_execution_drift_bps": max_execution_drift_bps,
             "max_slippage_bps": max_slippage_bps,
+            "max_calibration_ece": max_calibration_ece,
+            "max_calibration_brier": max_calibration_brier,
+            "max_feature_drift_psi": max_feature_drift_psi,
+            "max_label_drift_psi": max_label_drift_psi,
+            "max_residual_drift_psi": max_residual_drift_psi,
             "max_pacing_cap_hit_rate_pct": max_pacing_cap_hit_rate_pct,
             "max_pending_oldest_age_sec": max_pending_oldest_age_sec,
             "pending_min_samples": pending_min_samples,
             "reject_breached": reject_breached,
             "drift_breached": drift_breached,
             "slippage_breached": slippage_breached,
+            "calibration_ece_breached": calibration_ece_breached,
+            "calibration_brier_breached": calibration_brier_breached,
+            "feature_drift_breached": feature_drift_breached,
+            "label_drift_breached": label_drift_breached,
+            "residual_drift_breached": residual_drift_breached,
             "pacing_breached": pacing_breached,
             "pending_breached": pending_breached,
             "breached": breached,
