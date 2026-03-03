@@ -2466,23 +2466,122 @@ class ExecutionEngine:
         backlog = 0
         local_pending_count = 0
         stale_ignored_count = 0
+        local_oldest_pending_age_s = 0.0
+        broker_oldest_pending_age_s = 0.0
         try:
             local_pending_count, stale_ignored_count = self._effective_pending_order_cache_count()
             backlog = max(backlog, local_pending_count)
+            store_raw = getattr(self, "_pending_orders", None)
+            if isinstance(store_raw, Mapping):
+                now_dt = datetime.now(UTC)
+                pending_statuses = {
+                    "new",
+                    "pending_new",
+                    "accepted",
+                    "acknowledged",
+                    "submitted",
+                    "pending_replace",
+                    "pending_cancel",
+                    "pending_cancelled",
+                    "pending_cancelled_all",
+                }
+                for entry in store_raw.values():
+                    if not isinstance(entry, Mapping):
+                        continue
+                    status = _normalize_status(entry.get("status"))
+                    if status not in pending_statuses:
+                        continue
+                    age_s = self._order_age_seconds(entry, now_dt)
+                    if age_s is None:
+                        continue
+                    local_oldest_pending_age_s = max(local_oldest_pending_age_s, float(age_s))
         except Exception:
             local_pending_count = 0
             stale_ignored_count = 0
+            local_oldest_pending_age_s = 0.0
             backlog = max(backlog, 0)
 
         broker_open_count = 0
         broker_sync = getattr(self, "_broker_sync", None)
         if broker_sync is not None:
             try:
-                broker_open_count = len(getattr(broker_sync, "open_orders", ()) or ())
+                open_orders = list(getattr(broker_sync, "open_orders", ()) or ())
+                broker_open_count = len(open_orders)
                 backlog = max(backlog, broker_open_count)
+                now_dt = datetime.now(UTC)
+                for order in open_orders:
+                    status = _normalize_status(_extract_value(order, "status")) or ""
+                    if status in _TERMINAL_ORDER_STATUSES:
+                        continue
+                    age_s = self._order_age_seconds(order, now_dt)
+                    if age_s is None:
+                        continue
+                    broker_oldest_pending_age_s = max(
+                        broker_oldest_pending_age_s,
+                        float(age_s),
+                    )
             except Exception:
                 broker_open_count = 0
+                broker_oldest_pending_age_s = 0.0
                 backlog = max(backlog, 0)
+
+        adaptive_enabled = _resolve_bool_env("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_CAP_ENABLED")
+        if adaptive_enabled is None:
+            adaptive_enabled = False
+        adaptive_min_cap = _config_int("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_MIN_CAP", cap_value)
+        if adaptive_min_cap is None:
+            adaptive_min_cap = cap_value
+        adaptive_min_cap = max(1, int(adaptive_min_cap))
+        adaptive_max_cap = _config_int("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_MAX_CAP", cap_value)
+        if adaptive_max_cap is None:
+            adaptive_max_cap = cap_value
+        adaptive_max_cap = max(adaptive_min_cap, int(adaptive_max_cap))
+        adaptive_step_orders = _config_int("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_STEP_ORDERS", threshold)
+        if adaptive_step_orders is None:
+            adaptive_step_orders = threshold
+        adaptive_step_orders = max(1, int(adaptive_step_orders))
+        adaptive_age_soft_s = _config_float(
+            "AI_TRADING_PENDING_BACKLOG_ADAPTIVE_AGE_SOFT_SEC",
+            120.0,
+        )
+        if adaptive_age_soft_s is None:
+            adaptive_age_soft_s = 120.0
+        adaptive_age_soft_s = max(0.0, float(adaptive_age_soft_s))
+        adaptive_age_hard_s = _config_float(
+            "AI_TRADING_PENDING_BACKLOG_ADAPTIVE_AGE_HARD_SEC",
+            600.0,
+        )
+        if adaptive_age_hard_s is None:
+            adaptive_age_hard_s = 600.0
+        adaptive_age_hard_s = max(adaptive_age_soft_s, float(adaptive_age_hard_s))
+
+        oldest_pending_age_s = max(local_oldest_pending_age_s, broker_oldest_pending_age_s)
+        selected_cap: int | None = None
+        adaptive_cap: int | None = None
+        if backlog >= threshold:
+            selected_cap = cap_value
+            if adaptive_enabled:
+                backlog_overflow = max(backlog - threshold, 0)
+                backlog_steps = math.ceil(backlog_overflow / adaptive_step_orders)
+                backlog_based_cap = adaptive_max_cap - backlog_steps
+                backlog_based_cap = max(adaptive_min_cap, min(backlog_based_cap, adaptive_max_cap))
+                age_based_cap = adaptive_max_cap
+                if adaptive_age_hard_s > adaptive_age_soft_s and oldest_pending_age_s > adaptive_age_soft_s:
+                    if oldest_pending_age_s >= adaptive_age_hard_s:
+                        age_based_cap = adaptive_min_cap
+                    else:
+                        age_progress = (
+                            oldest_pending_age_s - adaptive_age_soft_s
+                        ) / (adaptive_age_hard_s - adaptive_age_soft_s)
+                        age_based_cap = int(
+                            round(
+                                adaptive_max_cap
+                                - age_progress * (adaptive_max_cap - adaptive_min_cap)
+                            )
+                        )
+                        age_based_cap = max(adaptive_min_cap, min(age_based_cap, adaptive_max_cap))
+                adaptive_cap = max(adaptive_min_cap, min(backlog_based_cap, age_based_cap))
+                selected_cap = adaptive_cap
         self._pending_backlog_last_context = {
             "threshold": int(threshold),
             "cap_value": int(cap_value),
@@ -2490,10 +2589,21 @@ class ExecutionEngine:
             "broker_open_count": int(broker_open_count),
             "stale_ignored_count": int(stale_ignored_count),
             "effective_backlog": int(backlog),
+            "oldest_pending_age_s": round(float(oldest_pending_age_s), 3),
+            "local_oldest_pending_age_s": round(float(local_oldest_pending_age_s), 3),
+            "broker_oldest_pending_age_s": round(float(broker_oldest_pending_age_s), 3),
+            "adaptive_enabled": bool(adaptive_enabled),
+            "adaptive_cap": int(adaptive_cap) if adaptive_cap is not None else None,
+            "adaptive_min_cap": int(adaptive_min_cap),
+            "adaptive_max_cap": int(adaptive_max_cap),
+            "adaptive_step_orders": int(adaptive_step_orders),
+            "adaptive_age_soft_s": round(float(adaptive_age_soft_s), 3),
+            "adaptive_age_hard_s": round(float(adaptive_age_hard_s), 3),
+            "selected_cap": int(selected_cap) if selected_cap is not None else None,
         }
         if backlog < threshold:
             return None
-        return cap_value
+        return selected_cap
 
     def _resolve_order_submit_cap(self) -> tuple[int | None, str]:
         configured_cap = _config_int_alias(
@@ -2572,7 +2682,12 @@ class ExecutionEngine:
         if not bool(warmup_mode):
             return False
         allow_orders = _resolve_bool_env("AI_TRADING_WARMUP_ALLOW_ORDERS")
-        return not bool(allow_orders)
+        if bool(allow_orders):
+            return False
+        phase = self._service_phase()
+        if phase == "unknown":
+            return True
+        return phase in {"bootstrap", "warmup", "reconcile"}
 
     def _resolve_midpoint_offset_bps(
         self,
@@ -2953,6 +3068,13 @@ class ExecutionEngine:
                 reason = "unspecified"
             skip_reason_counts[reason] = skip_reason_counts.get(reason, 0) + 1
         skip_reason_counts = {key: skip_reason_counts[key] for key in sorted(skip_reason_counts)}
+        decision_count = len(normalized_outcomes)
+        pacing_cap_hits = int(skip_reason_counts.get("order_pacing_cap", 0))
+        pacing_cap_hit_rate_pct = (
+            (float(pacing_cap_hits) / float(decision_count) * 100.0)
+            if decision_count > 0
+            else 0.0
+        )
         pending_durations = [
             float(item.get("duration_s", 0.0))
             for item, status in normalized_outcomes
@@ -2978,6 +3100,7 @@ class ExecutionEngine:
         try:
             from ai_trading.monitoring.slo import (
                 record_execution_drift,
+                record_order_pacing_cap_hit_rate,
                 record_order_reject_rate,
             )
 
@@ -2985,6 +3108,8 @@ class ExecutionEngine:
                 record_order_reject_rate(reject_rate_pct)
             if drift_values:
                 record_execution_drift(cycle_execution_drift_bps)
+            if decision_count > 0:
+                record_order_pacing_cap_hit_rate(pacing_cap_hit_rate_pct)
         except Exception:
             logger.debug("EXECUTION_KPI_SLO_RECORD_FAILED", exc_info=True)
 
@@ -3018,6 +3143,7 @@ class ExecutionEngine:
                 "failed": failed,
                 "skipped": skipped,
                 "skip_reason_counts": skip_reason_counts,
+                "order_pacing_cap_hit_rate_pct": round(pacing_cap_hit_rate_pct, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
                 "reject_rate_pct": round(reject_rate_pct, 4),

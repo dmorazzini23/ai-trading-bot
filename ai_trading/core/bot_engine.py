@@ -365,8 +365,10 @@ _PENDING_BACKLOG_WARN_AFTER_SEC_DEFAULT = 120.0
 _PENDING_BACKLOG_WARN_EVERY_SEC_DEFAULT = 300.0
 _PENDING_BACKLOG_ACTIVE_KEY = "_pending_backlog_active"
 _PENDING_BACKLOG_LAST_WARN_TS_KEY = "_pending_backlog_last_warn_ts"
+_PENDING_STALE_SWEEP_LAST_TS_KEY = "_pending_stale_sweep_last_ts"
 _NETTING_CYCLE_SLO_LOG_TTL_SEC_DEFAULT = 180.0
 _STARTUP_CLEANUP_STALE_SEC_DEFAULT = 120.0
+_PRIMARY_FEED_DERISK_SINCE_TS_KEY = "_primary_feed_derisk_since_ts"
 
 _EASTERN_TZ = ZoneInfo("America/New_York")
 
@@ -28292,6 +28294,132 @@ def _quote_age_ms_from_state(state: Mapping[str, Any] | None) -> float | None:
     return value if value >= 0.0 and math.isfinite(value) else None
 
 
+def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
+    """Resolve derisk policy state for prolonged fallback/quote-quality failures."""
+
+    try:
+        enabled = bool(
+            get_env("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", True, cast=bool)
+        )
+    except Exception:
+        enabled = True
+
+    try:
+        mode_raw = str(
+            get_env(
+                "AI_TRADING_PRIMARY_FEED_DERISK_MODE",
+                "scale",
+                cast=str,
+            )
+            or "scale"
+        )
+    except Exception:
+        mode_raw = "scale"
+    mode = mode_raw.strip().lower()
+    if mode not in {"scale", "block"}:
+        mode = "scale"
+
+    try:
+        trigger_after_s = float(
+            get_env(
+                "AI_TRADING_PRIMARY_FEED_DERISK_AFTER_SEC",
+                180.0,
+                cast=float,
+            )
+        )
+    except Exception:
+        trigger_after_s = 180.0
+    if not math.isfinite(trigger_after_s):
+        trigger_after_s = 180.0
+    trigger_after_s = max(0.0, min(trigger_after_s, 86400.0))
+
+    try:
+        scale_mult = float(
+            get_env(
+                "AI_TRADING_PRIMARY_FEED_DERISK_SCALE_MULT",
+                0.5,
+                cast=float,
+            )
+        )
+    except Exception:
+        scale_mult = 0.5
+    if not math.isfinite(scale_mult):
+        scale_mult = 0.5
+    scale_mult = max(0.05, min(scale_mult, 1.0))
+
+    try:
+        provider_state = runtime_state.observe_data_provider_state()
+    except Exception:
+        provider_state = {}
+    try:
+        quote_state = runtime_state.observe_quote_status()
+    except Exception:
+        quote_state = {}
+
+    fallback_active = _minute_fallback_active(provider_state)
+    quote_age_ms = _quote_age_ms_from_state(quote_state)
+    quote_age_limit_ms = _quote_age_limit_ms()
+    quote_synthetic = bool(quote_state.get("synthetic"))
+    quote_stale = quote_age_ms is not None and quote_age_ms > quote_age_limit_ms
+    quote_quality_failed = bool(quote_synthetic or quote_stale)
+
+    reasons: list[str] = []
+    provider_reason = provider_state.get("reason") if isinstance(provider_state, MappingABC) else None
+    if fallback_active:
+        reasons.append(
+            str(provider_reason or "minute_fallback_active")
+        )
+    if quote_synthetic:
+        reasons.append("synthetic_quote")
+    if quote_stale:
+        reasons.append("stale_quote")
+    reason = ",".join(dict.fromkeys(reasons)) if reasons else None
+
+    now_ts = float(time.time())
+    state_map = _ensure_runtime_state(runtime)
+    degraded_active = bool(enabled and (fallback_active or quote_quality_failed))
+    since_raw = state_map.get(_PRIMARY_FEED_DERISK_SINCE_TS_KEY)
+    try:
+        since_ts = float(since_raw) if since_raw not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        since_ts = 0.0
+
+    duration_s = 0.0
+    if degraded_active:
+        if since_ts <= 0.0:
+            since_ts = now_ts
+            state_map[_PRIMARY_FEED_DERISK_SINCE_TS_KEY] = since_ts
+        duration_s = max(now_ts - since_ts, 0.0)
+    else:
+        state_map[_PRIMARY_FEED_DERISK_SINCE_TS_KEY] = None
+
+    triggered = bool(degraded_active and duration_s >= trigger_after_s)
+    block = bool(triggered and mode == "block")
+    scale = float(scale_mult if triggered and mode == "scale" else 1.0)
+    return {
+        "enabled": bool(enabled),
+        "mode": mode,
+        "trigger_after_s": float(trigger_after_s),
+        "duration_s": float(duration_s),
+        "triggered": bool(triggered),
+        "block": bool(block),
+        "scale": float(scale),
+        "fallback_active": bool(fallback_active),
+        "quote_quality_failed": bool(quote_quality_failed),
+        "quote_synthetic": bool(quote_synthetic),
+        "quote_stale": bool(quote_stale),
+        "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
+        "quote_age_limit_ms": float(quote_age_limit_ms),
+        "provider_active": provider_state.get("active")
+        if isinstance(provider_state, MappingABC)
+        else None,
+        "provider_status": provider_state.get("status")
+        if isinstance(provider_state, MappingABC)
+        else None,
+        "reason": reason,
+    }
+
+
 def _pre_trade_gate() -> bool:
     """Return True when execution should be blocked before strategy evaluation."""
 
@@ -30049,6 +30177,149 @@ def _pending_orders_warn_every_seconds() -> float:
     return max(0.0, min(float(value), 86400.0))
 
 
+def _pending_stale_sweep_enabled() -> bool:
+    """Return ``True`` when stale pending-order sweep policy is enabled."""
+
+    try:
+        return bool(get_env("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", True, cast=bool))
+    except COMMON_EXC:
+        return True
+
+
+def _pending_stale_sweep_age_seconds() -> float:
+    """Return minimum broker age required for stale-sweep cancellation."""
+
+    try:
+        value = float(
+            get_env(
+                "AI_TRADING_PENDING_STALE_SWEEP_SEC",
+                90.0,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        value = 90.0
+    if not math.isfinite(value):
+        value = 90.0
+    return max(10.0, min(value, 7200.0))
+
+
+def _pending_stale_sweep_max_cancels() -> int:
+    """Return max stale pending orders to cancel per sweep invocation."""
+
+    try:
+        value = int(
+            get_env(
+                "AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS",
+                2,
+                cast=int,
+            )
+        )
+    except COMMON_EXC:
+        value = 2
+    return max(0, min(value, 100))
+
+
+def _pending_stale_sweep_cooldown_seconds() -> float:
+    """Return cooldown between stale-sweep cancellation attempts."""
+
+    try:
+        value = float(
+            get_env(
+                "AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC",
+                30.0,
+                cast=float,
+            )
+        )
+    except COMMON_EXC:
+        value = 30.0
+    if not math.isfinite(value):
+        value = 30.0
+    return max(0.0, min(value, 3600.0))
+
+
+def _record_pending_order_slo_metrics(
+    *,
+    pending_count: int,
+    oldest_pending_age_s: float | None,
+) -> None:
+    """Record pending backlog SLO metrics without raising."""
+
+    try:
+        from ai_trading.monitoring.slo import get_slo_monitor
+
+        monitor = get_slo_monitor()
+        monitor.record_metric("pending_orders_count", float(max(int(pending_count), 0)))
+        monitor.record_metric(
+            "pending_oldest_age_sec",
+            float(max(float(oldest_pending_age_s or 0.0), 0.0)),
+        )
+    except Exception:
+        logger.debug("PENDING_ORDER_SLO_RECORD_FAILED", exc_info=True)
+
+
+def _maybe_apply_pending_stale_sweep(
+    *,
+    runtime: Any,
+    pending_orders: Iterable[Any],
+    now_dt: datetime,
+    now_ts: float,
+) -> dict[str, Any] | None:
+    """Attempt bounded cancellation of stale pending orders."""
+
+    if not _pending_stale_sweep_enabled():
+        return None
+    max_cancels = _pending_stale_sweep_max_cancels()
+    if max_cancels <= 0:
+        return None
+
+    runtime_state_map = _ensure_runtime_state(runtime)
+    cooldown_s = _pending_stale_sweep_cooldown_seconds()
+    last_run_raw = runtime_state_map.get(_PENDING_STALE_SWEEP_LAST_TS_KEY)
+    try:
+        last_run_ts = float(last_run_raw) if last_run_raw not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        last_run_ts = 0.0
+    if cooldown_s > 0.0 and last_run_ts > 0.0 and (now_ts - last_run_ts) < cooldown_s:
+        return None
+
+    stale_after_s = _pending_stale_sweep_age_seconds()
+    stale_candidates: list[tuple[float, Any]] = []
+    for order in pending_orders:
+        status = _normalize_broker_order_status(getattr(order, "status", None))
+        if status not in _PENDING_ORDER_STUCK_STATUSES:
+            continue
+        age_s = _pending_order_broker_age_seconds(order, now_dt)
+        if age_s is None or age_s < stale_after_s:
+            continue
+        stale_candidates.append((float(age_s), order))
+    if not stale_candidates:
+        return None
+
+    stale_candidates.sort(key=lambda item: item[0], reverse=True)
+    selected_orders = [order for _age, order in stale_candidates[:max_cancels]]
+    cancel_result = _cancel_open_orders_subset(
+        runtime,
+        orders=selected_orders,
+        reason_code="PENDING_STALE_SWEEP",
+    )
+    runtime_state_map[_PENDING_STALE_SWEEP_LAST_TS_KEY] = float(now_ts)
+    selected_ids: list[str] = []
+    for order in selected_orders:
+        order_id = _extract_order_identifier(order)
+        if order_id:
+            selected_ids.append(order_id)
+    return {
+        "stale_after_s": int(stale_after_s),
+        "attempted": int(len(selected_orders)),
+        "cancelled": int(cancel_result.cancelled),
+        "failed": int(cancel_result.failed),
+        "selected_ids": selected_ids[:_PENDING_ORDER_SAMPLE_LIMIT],
+        "oldest_candidate_age_s": int(max(stale_candidates[0][0], 0.0)),
+        "errors": list(cancel_result.errors or []),
+    }
+
+
 def _extract_pending_order_symbol(order: Any) -> str | None:
     """Extract normalized symbol from a broker order payload."""
 
@@ -30662,6 +30933,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         last_warn_ts = None
 
     if not pending_ids:
+        _record_pending_order_slo_metrics(pending_count=0, oldest_pending_age_s=0.0)
         _set_pending_blocked_symbols(runtime, ())
         if backlog_active or first_seen is not None:
             resolved_age = 0.0
@@ -30806,6 +31078,10 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         "open_count_definition": "broker-active non-terminal orders",
         "pending_count_definition": "confirmed pending-ack/stuck orders under policy tracking",
     }
+    _record_pending_order_slo_metrics(
+        pending_count=len(pending_ids),
+        oldest_pending_age_s=oldest_pending_age_s,
+    )
 
     if first_seen is None:
         first_seen_ts = now
@@ -30879,6 +31155,25 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                     "age_s": int(max(age, 0)),
                 },
             )
+            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
+
+    stale_sweep_result = _maybe_apply_pending_stale_sweep(
+        runtime=runtime,
+        pending_orders=confirmed_pending,
+        now_dt=now_dt,
+        now_ts=now,
+    )
+    if stale_sweep_result is not None:
+        stale_sweep_payload = payload_base | {
+            "age_s": int(max(age, 0)),
+            "stale_sweep": stale_sweep_result,
+        }
+        if stale_sweep_result.get("cancelled", 0) > 0:
+            logger.warning("PENDING_STALE_SWEEP_APPLIED", extra=stale_sweep_payload)
+            tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
+            return True
+        if stale_sweep_result.get("failed", 0) > 0:
+            logger.warning("PENDING_STALE_SWEEP_FAILED", extra=stale_sweep_payload)
             tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
     if age < cleanup_after and not stale_stuck_detected:
@@ -33513,6 +33808,23 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     capacity_min_scale = max(0.05, min(capacity_min_scale, 1.0))
     thin_spread_bps = float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float))
     thin_vol_mult = float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float))
+    primary_feed_derisk = _resolve_primary_feed_derisk_state(runtime)
+    if primary_feed_derisk.get("triggered"):
+        derisk_log_ttl_s = _resolve_runtime_info_log_ttl_seconds(
+            "AI_TRADING_PRIMARY_FEED_DERISK_LOG_TTL_SEC",
+            120.0,
+        )
+        derisk_signature = (
+            f"{primary_feed_derisk.get('mode')}:{int(primary_feed_derisk.get('duration_s', 0.0) // 30)}:"
+            f"{int(bool(primary_feed_derisk.get('fallback_active')))}:"
+            f"{int(bool(primary_feed_derisk.get('quote_quality_failed')))}"
+        )
+        if _should_emit_runtime_info_log(
+            runtime,
+            f"PRIMARY_FEED_DERISK_ACTIVE:{derisk_signature}",
+            ttl_seconds=derisk_log_ttl_s,
+        ):
+            logger.warning("PRIMARY_FEED_DERISK_ACTIVE", extra=dict(primary_feed_derisk))
     for symbol, net_target in targets.items():
         liq_features = latest_liquidity.get(
             symbol,
@@ -33585,6 +33897,29 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             }
             for proposal in net_target.proposals
         }
+        feed_derisk_scale = 1.0
+        if delta_shares != 0 and bool(primary_feed_derisk.get("triggered", False)):
+            post_trade_shares = current_shares + delta_shares
+            reducing_exposure = abs(post_trade_shares) < abs(current_shares)
+            if bool(primary_feed_derisk.get("block", False)) and not reducing_exposure:
+                gates.append("DERISK_PRIMARY_FEED_BLOCK")
+                symbol_snapshot["primary_feed_derisk"] = dict(primary_feed_derisk)
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
+            if not reducing_exposure:
+                feed_derisk_scale = float(primary_feed_derisk.get("scale", 1.0) or 1.0)
+                feed_derisk_scale = max(0.05, min(feed_derisk_scale, 1.0))
+                if feed_derisk_scale < 1.0:
+                    gates.append("DERISK_PRIMARY_FEED_SCALE")
+                    symbol_snapshot["primary_feed_derisk"] = dict(primary_feed_derisk)
         if quarantine_enabled and quarantine_manager is not None:
             reason_sleeve = None
             if quarantine_apply_sleeve:
@@ -33845,6 +34180,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     capacity_scale = min(capacity_scale, max(capacity_min_scale, volume_scale))
             if slo_derisk_scale < 1.0:
                 capacity_scale = min(capacity_scale, slo_derisk_scale)
+            if feed_derisk_scale < 1.0:
+                capacity_scale = min(capacity_scale, feed_derisk_scale)
             if capacity_scale < 1.0:
                 throttled_qty = int(round(float(delta_shares) * capacity_scale))
                 if throttled_qty == 0:
@@ -33860,6 +34197,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             "spread_bps": spread_bps_now,
                             "rolling_volume": rolling_volume,
                             "slo_derisk": slo_derisk_details,
+                            "primary_feed_derisk": primary_feed_derisk,
                         },
                         config_snapshot=symbol_snapshot,
                     )
@@ -33875,6 +34213,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "spread_bps": spread_bps_now,
                         "rolling_volume": rolling_volume,
                         "slo_derisk": slo_derisk_details,
+                        "primary_feed_derisk": primary_feed_derisk,
                     }
 
         min_qty = int(getattr(cfg, "execution_min_qty", 1))

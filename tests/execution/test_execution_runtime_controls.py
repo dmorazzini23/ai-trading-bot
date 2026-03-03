@@ -234,11 +234,40 @@ def test_resolve_order_submit_cap_includes_pending_backlog(monkeypatch):
     monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "1")
     monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_VALUE", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_CAP_ENABLED", "0")
 
     cap, source = engine._resolve_order_submit_cap()
 
     assert cap == 1
     assert source == "configured+pending_backlog"
+
+
+def test_pending_backlog_cap_supports_adaptive_scaling(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    engine._pending_orders = {
+        f"ord-{idx}": {
+            "status": "pending_new",
+            "updated_at": (now_dt - timedelta(seconds=40 + idx)).isoformat(),
+        }
+        for idx in range(6)
+    }
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "3")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_VALUE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_CAP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_MIN_CAP", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_MAX_CAP", "4")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_STEP_ORDERS", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_AGE_SOFT_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_ADAPTIVE_AGE_HARD_SEC", "1200")
+
+    cap = engine._pending_backlog_order_cap()
+
+    assert cap == 1
+    context = getattr(engine, "_pending_backlog_last_context", {})
+    assert context.get("adaptive_enabled") is True
+    assert context.get("adaptive_cap") == 1
+    assert context.get("selected_cap") == 1
 
 
 def test_pending_backlog_cap_ignores_stale_local_pending(monkeypatch):
@@ -301,6 +330,15 @@ def test_warmup_data_only_mode_can_allow_orders(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")
     monkeypatch.setenv("AI_TRADING_WARMUP_ALLOW_ORDERS", "1")
+    assert engine._warmup_data_only_mode_active() is False
+
+
+def test_warmup_data_only_mode_does_not_block_after_active_phase(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "1")
+    monkeypatch.delenv("AI_TRADING_WARMUP_ALLOW_ORDERS", raising=False)
+
     assert engine._warmup_data_only_mode_active() is False
 
 
@@ -398,6 +436,7 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
 
     reject_rate_samples: list[float] = []
     drift_samples: list[float] = []
+    pacing_cap_hit_rate_samples: list[float] = []
     monkeypatch.setattr(
         slo_mod,
         "record_order_reject_rate",
@@ -408,8 +447,14 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
         "record_execution_drift",
         lambda value: drift_samples.append(float(value)),
     )
+    monkeypatch.setattr(
+        slo_mod,
+        "record_order_pacing_cap_hit_rate",
+        lambda value: pacing_cap_hit_rate_samples.append(float(value)),
+    )
 
     engine._emit_cycle_execution_kpis()
 
     assert reject_rate_samples == pytest.approx([50.0])
     assert drift_samples == pytest.approx([7.5])
+    assert pacing_cap_hit_rate_samples == pytest.approx([0.0])

@@ -136,6 +136,69 @@ def test_resolve_data_provider_degraded_ignores_daily_fallback(monkeypatch):
     assert fatal is False
 
 
+def test_primary_feed_derisk_state_triggers_after_contiguous_fallback(monkeypatch):
+    runtime = SimpleNamespace(state={})
+    clock = {"value": 100.0}
+    monkeypatch.setattr(bot_engine.time, "time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_MODE", "scale")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_AFTER_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_SCALE_MULT", "0.4")
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "using_backup": True,
+            "reason": "upstream_unavailable",
+            "timeframes": {"1Min": True},
+            "status": "degraded",
+        },
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_quote_status",
+        lambda: {"synthetic": False, "quote_age_ms": 100.0},
+    )
+
+    first = bot_engine._resolve_primary_feed_derisk_state(runtime)
+    assert first["triggered"] is False
+    assert first["duration_s"] == pytest.approx(0.0)
+
+    clock["value"] = 132.0
+    second = bot_engine._resolve_primary_feed_derisk_state(runtime)
+    assert second["triggered"] is True
+    assert second["scale"] == pytest.approx(0.4)
+    assert second["duration_s"] == pytest.approx(32.0)
+
+
+def test_primary_feed_derisk_state_resets_when_fallback_clears(monkeypatch):
+    runtime = SimpleNamespace(state={})
+    clock = {"value": 200.0}
+    monkeypatch.setattr(bot_engine.time, "time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_AFTER_SEC", "10")
+    provider_state = {"value": {"timeframes": {"1Min": True}, "using_backup": True}}
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: provider_state["value"],
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_quote_status",
+        lambda: {"synthetic": False, "quote_age_ms": 10.0},
+    )
+
+    bot_engine._resolve_primary_feed_derisk_state(runtime)
+    clock["value"] = 220.0
+    provider_state["value"] = {"timeframes": {"1Min": False}, "using_backup": False}
+    healthy = bot_engine._resolve_primary_feed_derisk_state(runtime)
+
+    assert healthy["triggered"] is False
+    assert healthy["duration_s"] == pytest.approx(0.0)
+    assert runtime.state.get(bot_engine._PRIMARY_FEED_DERISK_SINCE_TS_KEY) is None
+
+
 def test_process_symbols_skips_when_degraded(symbol_processing_env, caplog):
     runtime, _state = symbol_processing_env
     runtime._data_degraded = True

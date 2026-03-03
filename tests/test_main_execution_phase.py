@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import logging
 
 from ai_trading import main
@@ -146,3 +147,43 @@ def test_emit_cycle_slo_alerts_uses_closed_thresholds(monkeypatch) -> None:
     main._emit_cycle_slo_alerts(cycle_index=4, compute_ms=2500.0, closed=True)
 
     assert not any(name.startswith("ALERT_CYCLE_COMPUTE_") for name, _ in events)
+
+
+def test_emit_cycle_slo_alerts_emits_prolonged_primary_fallback_alert(monkeypatch) -> None:
+    main._PRIMARY_FALLBACK_STREAK_SINCE_TS = None
+    main._PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
+    monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", "999999")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_WARN_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_CRIT_SEC", "10")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_COOLDOWN_SEC", "0")
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "updated": datetime.now(UTC).isoformat(),
+            "active": "yahoo",
+            "reason": "upstream_unavailable",
+            "status": "degraded",
+            "timeframes": {"1Min": True},
+        },
+    )
+    clock = {"value": 100.0}
+    monkeypatch.setattr(main.time, "time", lambda: clock["value"])
+
+    events: list[tuple[str, str]] = []
+
+    def _capture_alert(name: str, **kwargs):
+        events.append((name, str(kwargs.get("severity", ""))))
+
+    monkeypatch.setattr(main, "emit_runtime_alert", _capture_alert)
+
+    main._emit_cycle_slo_alerts(cycle_index=1, compute_ms=50.0, closed=False)
+    clock["value"] = 108.0
+    main._emit_cycle_slo_alerts(cycle_index=2, compute_ms=50.0, closed=False)
+    clock["value"] = 112.0
+    main._emit_cycle_slo_alerts(cycle_index=3, compute_ms=50.0, closed=False)
+
+    assert ("ALERT_PRIMARY_FEED_FALLBACK_PROLONGED", "warning") in events
+    assert ("ALERT_PRIMARY_FEED_FALLBACK_PROLONGED", "critical") in events

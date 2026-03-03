@@ -104,6 +104,8 @@ _PROMOTION_KPI_GUARD_LOCK = threading.Lock()
 _LAST_PROMOTION_KPI_GUARD_TS = 0.0
 _BAD_SESSION_REPLAY_LOCK = threading.Lock()
 _LAST_BAD_SESSION_REPLAY_TS = 0.0
+_PRIMARY_FALLBACK_STREAK_SINCE_TS: float | None = None
+_PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -457,6 +459,34 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
     return max(age, 0.0)
 
 
+def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -> bool:
+    """Return ``True`` when provider telemetry indicates minute-data fallback."""
+
+    if not isinstance(provider_state, Mapping):
+        return False
+    timeframe_state = provider_state.get("timeframes")
+    if isinstance(timeframe_state, Mapping):
+        for tf_key, tf_active in timeframe_state.items():
+            try:
+                tf_token = str(tf_key).strip().lower()
+            except Exception:
+                tf_token = str(tf_key)
+            if not tf_token:
+                continue
+            if (
+                tf_token.endswith("min")
+                or "minute" in tf_token
+                or tf_token in {"1m", "1min", "intraday"}
+            ):
+                try:
+                    if bool(tf_active):
+                        return True
+                except Exception:
+                    continue
+        return False
+    return bool(provider_state.get("using_backup"))
+
+
 def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: int) -> None:
     cadence_open = int(get_env("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES", 1, cast=int))
     cadence_open = max(1, cadence_open)
@@ -581,6 +611,65 @@ def _emit_cycle_slo_alerts(
                 "provider_status": provider_state.get("status"),
             },
         )
+
+    fallback_alerts_enabled = bool(
+        get_env("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", True, cast=bool)
+    )
+    if not fallback_alerts_enabled:
+        return
+
+    fallback_active = _provider_minute_fallback_active(provider_state)
+    now_wall_ts = float(time.time())
+    global _PRIMARY_FALLBACK_STREAK_SINCE_TS, _PRIMARY_FALLBACK_LAST_ALERT_TS
+    if not fallback_active:
+        _PRIMARY_FALLBACK_STREAK_SINCE_TS = None
+        _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
+        return
+
+    if _PRIMARY_FALLBACK_STREAK_SINCE_TS is None:
+        _PRIMARY_FALLBACK_STREAK_SINCE_TS = now_wall_ts
+        _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
+
+    fallback_duration_s = max(now_wall_ts - float(_PRIMARY_FALLBACK_STREAK_SINCE_TS), 0.0)
+    fallback_warn_s = float(get_env("AI_TRADING_SLO_PRIMARY_FALLBACK_WARN_SEC", 300, cast=float))
+    fallback_warn_s = max(0.0, fallback_warn_s)
+    fallback_crit_s = float(
+        get_env(
+            "AI_TRADING_SLO_PRIMARY_FALLBACK_CRIT_SEC",
+            max(fallback_warn_s * 2.0, 600.0),
+            cast=float,
+        )
+    )
+    fallback_crit_s = max(fallback_warn_s, fallback_crit_s)
+    fallback_alert_cooldown_s = float(
+        get_env("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_COOLDOWN_SEC", 120, cast=float)
+    )
+    fallback_alert_cooldown_s = max(0.0, fallback_alert_cooldown_s)
+
+    if fallback_warn_s <= 0.0 or fallback_duration_s < fallback_warn_s:
+        return
+    if (
+        fallback_alert_cooldown_s > 0.0
+        and _PRIMARY_FALLBACK_LAST_ALERT_TS > 0.0
+        and (now_wall_ts - float(_PRIMARY_FALLBACK_LAST_ALERT_TS)) < fallback_alert_cooldown_s
+    ):
+        return
+
+    severity = "critical" if fallback_duration_s >= fallback_crit_s else "warning"
+    emit_runtime_alert(
+        "ALERT_PRIMARY_FEED_FALLBACK_PROLONGED",
+        severity=severity,
+        details={
+            "cycle_index": cycle_index,
+            "fallback_duration_s": round(float(fallback_duration_s), 3),
+            "warn_threshold_s": round(float(fallback_warn_s), 3),
+            "critical_threshold_s": round(float(fallback_crit_s), 3),
+            "provider_active": provider_state.get("active"),
+            "provider_status": provider_state.get("status"),
+            "provider_reason": provider_state.get("reason"),
+        },
+    )
+    _PRIMARY_FALLBACK_LAST_ALERT_TS = now_wall_ts
 
 
 def _resolve_runtime_artifact_path(path_value: str, *, default_relative: str) -> Path:

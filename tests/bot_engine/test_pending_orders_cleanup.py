@@ -96,7 +96,7 @@ def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
     orders = [_order("pending_new", "o-1")]
 
     assert be._handle_pending_orders(orders, runtime) is True
-    first_record = caplog.records[0]
+    first_record = next(record for record in caplog.records if record.message == "PENDING_ORDERS_DETECTED")
     assert first_record.message == "PENDING_ORDERS_DETECTED"
     assert first_record.pending_ids == ["o-1"]
     assert first_record.cleanup_after_s == 12
@@ -174,6 +174,46 @@ def test_handle_pending_orders_force_cleanup_for_stuck_pending(monkeypatch):
     clock.value = 131.0
     assert be._handle_pending_orders(orders, runtime) is False
     cancel_mock.assert_called_once_with(runtime)
+
+
+def test_handle_pending_orders_applies_stale_sweep_before_full_cleanup(monkeypatch, caplog):
+    runtime = types.SimpleNamespace(state={})
+    cancel_all_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_all_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=300),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_MAX_CANCELS", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_COOLDOWN_SEC", "0")
+
+    now_dt = datetime(2026, 3, 1, 15, 0, 0, tzinfo=UTC)
+    now_epoch = now_dt.timestamp()
+    monkeypatch.setattr(be.time, "time", lambda: now_epoch)
+    monkeypatch.setattr(
+        be,
+        "_cancel_open_orders_subset",
+        lambda *_a, **_k: be.CancelAllResult(
+            total_open=1,
+            cancelled=1,
+            failed=0,
+            reason_code="PENDING_STALE_SWEEP",
+            errors=[],
+        ),
+    )
+    stale_order = _order(
+        "pending_new",
+        "o-sweep",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+
+    caplog.set_level(logging.INFO)
+    assert be._handle_pending_orders([stale_order], runtime) is True
+    cancel_all_mock.assert_not_called()
+    assert any(record.message == "PENDING_STALE_SWEEP_APPLIED" for record in caplog.records)
 
 
 def test_handle_pending_orders_symbol_scope_applies_policy(monkeypatch, caplog):
