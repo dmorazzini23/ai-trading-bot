@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from datetime import UTC, datetime
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,6 +101,18 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Optional replay gross notional cap for invariant checks.",
+    )
+    parser.add_argument(
+        "--persist-intents",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Persist replay intents/fills to the configured OMS intent store.",
+    )
+    parser.add_argument(
+        "--intent-prefix",
+        type=str,
+        default="replay",
+        help="Prefix used for persisted replay intent IDs and idempotency keys.",
     )
     parser.add_argument("--output-json", type=Path, default=None)
     return parser
@@ -472,6 +486,145 @@ def _run_parity_simulation(
     }
 
 
+def _persist_replay_to_oms(
+    *,
+    replay: dict[str, Any],
+    prefix: str,
+) -> dict[str, Any]:
+    """Persist replay intents and fill events to durable OMS storage."""
+
+    from ai_trading.oms.intent_store import IntentStore
+
+    now_iso = datetime.now(UTC).isoformat()
+    intent_items = replay.get("intents")
+    order_items = replay.get("orders")
+    event_items = replay.get("events")
+    intents = intent_items if isinstance(intent_items, list) else []
+    orders = order_items if isinstance(order_items, list) else []
+    events = event_items if isinstance(event_items, list) else []
+
+    store = IntentStore()
+    order_by_client_id: dict[str, dict[str, Any]] = {}
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        client_order_id = str(order.get("client_order_id", "")).strip()
+        if client_order_id:
+            order_by_client_id[client_order_id] = order
+
+    intent_id_by_client_id: dict[str, str] = {}
+    created_count = 0
+    existing_count = 0
+    skipped_count = 0
+    for intent in intents:
+        if not isinstance(intent, dict):
+            skipped_count += 1
+            continue
+        client_order_id = str(intent.get("intent_key", "")).strip()
+        symbol = str(intent.get("symbol", "")).strip().upper()
+        side = str(intent.get("side", "buy")).strip().lower()
+        try:
+            qty = float(intent.get("qty", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        decision_ts = str(intent.get("ts", "")).strip() or now_iso
+        if not client_order_id or not symbol or qty <= 0.0:
+            skipped_count += 1
+            continue
+        digest = hashlib.sha256(
+            f"{prefix}|{client_order_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        intent_id = f"{prefix}-{digest}"
+        record, created = store.create_intent(
+            intent_id=intent_id,
+            idempotency_key=f"{prefix}|{client_order_id}",
+            symbol=symbol,
+            side=side,
+            quantity=qty,
+            decision_ts=decision_ts,
+            metadata={
+                "source": "offline_replay",
+                "client_order_id": client_order_id,
+                "persisted_at": now_iso,
+            },
+            status="PENDING_SUBMIT",
+        )
+        if created:
+            created_count += 1
+        else:
+            existing_count += 1
+        intent_id_by_client_id[client_order_id] = record.intent_id
+        order = order_by_client_id.get(client_order_id, {})
+        broker_order_id = str(order.get("id", "")).strip() if isinstance(order, dict) else ""
+        if not broker_order_id:
+            broker_order_id = f"{prefix}-no-order-{digest}"
+        store.mark_submitted(record.intent_id, broker_order_id)
+
+    fill_events = 0
+    partially_filled = 0
+    filled_terminal = 0
+    fill_intent_ids: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("event_type", "")).strip().lower() != "fill":
+            continue
+        client_order_id = str(event.get("client_order_id", "")).strip()
+        intent_id = intent_id_by_client_id.get(client_order_id)
+        if not intent_id:
+            continue
+        fill_events += 1
+        try:
+            fill_qty = float(event.get("fill_qty", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            fill_qty = 0.0
+        try:
+            fill_price = float(event.get("fill_price")) if event.get("fill_price") is not None else None
+        except (TypeError, ValueError):
+            fill_price = None
+        fill_ts = str(event.get("ts", "")).strip() or None
+        if fill_qty > 0.0:
+            store.record_fill(
+                intent_id,
+                fill_qty=fill_qty,
+                fill_price=fill_price,
+                fill_ts=fill_ts,
+            )
+            fill_intent_ids.add(intent_id)
+        status = str(event.get("status", "")).strip().lower()
+        if status == "filled":
+            store.close_intent(intent_id, final_status="FILLED")
+            filled_terminal += 1
+        elif status in {"partially_filled", "partial_fill"}:
+            partially_filled += 1
+
+    closed_without_fill = 0
+    for client_order_id, intent_id in intent_id_by_client_id.items():
+        if intent_id in fill_intent_ids:
+            continue
+        order = order_by_client_id.get(client_order_id, {})
+        order_status = str(order.get("status", "")).strip().lower() if isinstance(order, dict) else ""
+        final_status = "CANCELLED" if order_status in {"accepted", "new", "open"} else "CLOSED"
+        store.close_intent(
+            intent_id,
+            final_status=final_status,
+            last_error="offline_replay_unfilled",
+        )
+        closed_without_fill += 1
+
+    return {
+        "persisted": True,
+        "database_url_configured": bool(getattr(store, "database_url", "")),
+        "created_intents": created_count,
+        "existing_intents": existing_count,
+        "skipped_intents": skipped_count,
+        "fill_events": fill_events,
+        "partially_filled_events": partially_filled,
+        "filled_terminal_events": filled_terminal,
+        "closed_without_fill": closed_without_fill,
+    }
+
+
 def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
     cfg = ReplayConfig(
         confidence_threshold=float(args.confidence_threshold),
@@ -490,7 +643,16 @@ def _run_replay(args: argparse.Namespace) -> dict[str, Any]:
 
     symbol_paths = _resolve_inputs(args)
     if bool(args.simulation_mode):
-        return _run_parity_simulation(args=args, cfg=cfg, symbol_paths=symbol_paths)
+        payload = _run_parity_simulation(args=args, cfg=cfg, symbol_paths=symbol_paths)
+        if bool(args.persist_intents):
+            persist_summary = _persist_replay_to_oms(
+                replay=payload.get("replay", {}),
+                prefix=str(args.intent_prefix or "replay").strip() or "replay",
+            )
+            payload["aggregate"]["oms_persist_summary"] = persist_summary
+        return payload
+    if bool(args.persist_intents):
+        raise ValueError("--persist-intents requires --simulation-mode")
 
     per_symbol: list[dict[str, Any]] = []
     for symbol, csv_path in symbol_paths.items():

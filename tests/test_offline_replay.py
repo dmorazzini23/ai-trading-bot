@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -134,3 +135,49 @@ def test_offline_replay_simulation_mode_is_deterministic(tmp_path: Path) -> None
     assert first["aggregate"]["replay_seed"] == 123
     assert second["aggregate"]["replay_seed"] == 123
     assert first["replay"]["events"] == second["replay"]["events"]
+
+
+def test_offline_replay_simulation_mode_persists_intents_to_oms(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    csv_path = tmp_path / "IWM.csv"
+    out_path = tmp_path / "persist.json"
+    oms_path = tmp_path / "oms_replay.db"
+    _write_synthetic_bars(csv_path, periods=180)
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_PATH", str(oms_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_FILL_PROBABILITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_PARTIAL_FILL_PROBABILITY", "0.0")
+
+    rc = main(
+        [
+            "--csv",
+            str(csv_path),
+            "--simulation-mode",
+            "--persist-intents",
+            "--replay-seed",
+            "77",
+            "--confidence-threshold",
+            "0.05",
+            "--entry-score-threshold",
+            "0.03",
+            "--output-json",
+            str(out_path),
+        ]
+    )
+    assert rc == 0
+
+    payload = _load_json(out_path)
+    summary = payload["aggregate"]["oms_persist_summary"]
+    assert summary["persisted"] is True
+    assert int(summary["created_intents"]) > 0
+    assert int(summary["fill_events"]) > 0
+    assert oms_path.exists()
+
+    with sqlite3.connect(oms_path) as conn:
+        intent_count = int(conn.execute("SELECT COUNT(*) FROM intents").fetchone()[0])
+        fill_count = int(conn.execute("SELECT COUNT(*) FROM intent_fills").fetchone()[0])
+    assert intent_count >= int(summary["created_intents"])
+    assert fill_count >= int(summary["fill_events"])

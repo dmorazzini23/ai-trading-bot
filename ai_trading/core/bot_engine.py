@@ -177,6 +177,7 @@ from ai_trading.runtime.quarantine import (
     load_quarantine_state,
     save_quarantine_state,
 )
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import verify_artifact
 
@@ -25980,23 +25981,10 @@ def _resolve_after_hours_training_marker_path() -> Path:
         )
         or ""
     ).strip()
-    marker_path = Path(raw_marker_path or "runtime/after_hours_training.marker.json").expanduser()
-    if marker_path.is_absolute():
-        return marker_path
-
-    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
-    if data_root_raw:
-        data_root = Path(data_root_raw.split(":")[0]).expanduser()
-        if data_root.is_absolute():
-            return (data_root / marker_path).resolve()
-
-    state_dir_raw = str(get_env("STATE_DIRECTORY", "", cast=str) or "").strip()
-    if state_dir_raw:
-        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
-        if state_root.is_absolute():
-            return (state_root / marker_path).resolve()
-
-    return (Path(__file__).resolve().parents[2] / marker_path).resolve()
+    return resolve_runtime_artifact_path(
+        raw_marker_path,
+        default_relative="runtime/after_hours_training.marker.json",
+    )
 
 
 def _resolve_after_hours_training_marker_fallback_path() -> Path:
@@ -31399,24 +31387,7 @@ def _redact_snapshot_payload(payload: Any) -> Any:
 
 
 def _resolve_runtime_artifact_path(path_value: str) -> Path:
-    target = Path(str(path_value)).expanduser()
-    if target.is_absolute():
-        return target
-
-    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "") or "").strip()
-    if data_root_raw:
-        data_root = Path(data_root_raw.split(":")[0]).expanduser()
-        if data_root.is_absolute():
-            return (data_root / target).resolve()
-
-    state_dir_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
-    if state_dir_raw:
-        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
-        if state_root.is_absolute():
-            return (state_root / target).resolve()
-
-    repo_root = Path(__file__).resolve().parents[2]
-    return (repo_root / target).resolve()
+    return resolve_runtime_artifact_path(path_value, default_relative=str(path_value))
 
 
 def _resolved_tca_path() -> Path:

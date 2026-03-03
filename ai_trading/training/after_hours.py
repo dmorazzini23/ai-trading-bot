@@ -37,6 +37,7 @@ from ai_trading.models.artifacts import write_artifact_manifest
 from ai_trading.monitoring.model_liveness import note_after_hours_training_complete
 from ai_trading.registry.manifest import validate_manifest_metadata
 from ai_trading.research.leakage_tests import run_leakage_guards
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
@@ -58,30 +59,12 @@ _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "decision_ts",
     "fill_ts",
 )
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
 def _resolve_after_hours_output_path(path_value: str, *, default_relative: str) -> Path:
     """Resolve output paths relative to writable runtime roots when possible."""
-
-    configured = str(path_value or "").strip() or default_relative
-    target = Path(configured).expanduser()
-    if target.is_absolute():
-        return target
-
-    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
-    if data_root_raw:
-        data_root = Path(data_root_raw.split(":")[0]).expanduser()
-        if data_root.is_absolute():
-            return (data_root / target).resolve()
-
-    state_root_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
-    if state_root_raw:
-        state_root = Path(state_root_raw.split(":")[0]).expanduser()
-        if state_root.is_absolute():
-            return (state_root / target).resolve()
-
-    return (_PROJECT_ROOT / target).resolve()
+    return resolve_runtime_artifact_path(
+        path_value,
+        default_relative=default_relative,
+    )
 
 
 def _resolve_writable_output_dir(

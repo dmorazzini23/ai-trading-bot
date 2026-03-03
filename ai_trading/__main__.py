@@ -6,6 +6,7 @@ import sys
 import time
 from collections.abc import Callable
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 sys.dont_write_bytecode = True
 
@@ -198,6 +199,78 @@ def _validate_startup_config() -> _StartupConfig:
 
     import os
 
+    def _is_truthy(raw: str | None) -> bool:
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _validate_live_intent_store_config() -> None:
+        execution_mode = str(os.getenv("EXECUTION_MODE", "") or "").strip().lower()
+        if execution_mode != "live":
+            return
+
+        oms_enabled = _is_truthy(os.getenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1"))
+        if not oms_enabled:
+            message = (
+                "Invalid configuration: live mode requires AI_TRADING_OMS_INTENT_STORE_ENABLED=1."
+            )
+            logger.error(
+                "OMS_INTENT_STORE_STARTUP_REQUIRED",
+                extra={
+                    "execution_mode": execution_mode,
+                    "oms_intent_store_enabled": oms_enabled,
+                },
+            )
+            raise SystemExit(message)
+
+        database_url = str(os.getenv("DATABASE_URL", "") or "").strip()
+        if not database_url:
+            message = (
+                "Invalid configuration: live mode requires DATABASE_URL to a non-sqlite "
+                "database (for example postgresql+psycopg://...)."
+            )
+            logger.error(
+                "OMS_INTENT_STORE_DATABASE_URL_REQUIRED",
+                extra={
+                    "execution_mode": execution_mode,
+                    "database_url_configured": False,
+                },
+            )
+            raise SystemExit(message)
+
+        normalized_url = database_url
+        if normalized_url.startswith("postgres://"):
+            normalized_url = f"postgresql+psycopg://{normalized_url[len('postgres://') :]}"
+        elif normalized_url.startswith("postgresql://") and "+" not in normalized_url.split(
+            "://", 1
+        )[0]:
+            normalized_url = f"postgresql+psycopg://{normalized_url[len('postgresql://') :]}"
+        parsed = urlparse(normalized_url)
+        if parsed.scheme == "sqlite":
+            message = (
+                "Invalid configuration: live mode requires DATABASE_URL to a non-sqlite "
+                "database (for example postgresql+psycopg://...)."
+            )
+            logger.error(
+                "OMS_INTENT_STORE_DATABASE_URL_SQLITE_FORBIDDEN",
+                extra={
+                    "execution_mode": execution_mode,
+                    "database_url_configured": True,
+                },
+            )
+            raise SystemExit(message)
+        if not parsed.scheme:
+            message = (
+                "Invalid configuration: DATABASE_URL must include a URL scheme "
+                "(for example postgresql+psycopg://...)."
+            )
+            logger.error(
+                "OMS_INTENT_STORE_DATABASE_URL_INVALID",
+                extra={
+                    "execution_mode": execution_mode,
+                    "database_url_configured": True,
+                },
+            )
+            raise SystemExit(message)
+
     # Capture an explicit feed override from the environment before consulting
     # the settings defaults. ``get_env`` would otherwise coerce invalid feeds to
     # a default, preventing ``_StartupConfig`` from surfacing configuration
@@ -216,6 +289,7 @@ def _validate_startup_config() -> _StartupConfig:
     try:
         validate_no_deprecated_env()
         _validate_env_alias_consistency()
+        _validate_live_intent_store_config()
         if feed_env is not None:
             feed_value = feed_env
         else:

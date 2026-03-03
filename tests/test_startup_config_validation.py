@@ -30,6 +30,13 @@ def _clear_alias_env(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _startup_env_defaults(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+
 def test_invalid_timeframe_raises(monkeypatch):
     _clear_alias_env(monkeypatch)
     monkeypatch.setenv("TIMEFRAME", "10Min")
@@ -66,6 +73,52 @@ def test_env_alias_matching_values_pass(monkeypatch):
     monkeypatch.setenv("DATA_FEED", "iex")
     monkeypatch.setenv("MAX_ORDERS_PER_MINUTE_GLOBAL", "020")
     monkeypatch.setenv("AI_TRADING_ORDERS_PER_MIN_GLOBAL", "20")
+    _clear_settings_cache()
+
+    cfg = _validate_startup_config()
+    assert cfg.timeframe == "1Min"
+    assert cfg.data_feed == "iex"
+
+
+def test_live_mode_requires_oms_intent_store_enabled(monkeypatch):
+    _clear_alias_env(monkeypatch)
+    monkeypatch.setenv("TIMEFRAME", "1Min")
+    monkeypatch.setenv("DATA_FEED", "iex")
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "0")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://user:pass@db.example.com:5432/postgres",
+    )
+    _clear_settings_cache()
+
+    with pytest.raises(SystemExit, match="AI_TRADING_OMS_INTENT_STORE_ENABLED=1"):
+        _validate_startup_config()
+
+
+def test_live_mode_requires_non_sqlite_database_url(monkeypatch):
+    _clear_alias_env(monkeypatch)
+    monkeypatch.setenv("TIMEFRAME", "1Min")
+    monkeypatch.setenv("DATA_FEED", "iex")
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///runtime/oms_intents.db")
+    _clear_settings_cache()
+
+    with pytest.raises(SystemExit, match="requires DATABASE_URL to a non-sqlite database"):
+        _validate_startup_config()
+
+
+def test_live_mode_accepts_postgres_database_url(monkeypatch):
+    _clear_alias_env(monkeypatch)
+    monkeypatch.setenv("TIMEFRAME", "1Min")
+    monkeypatch.setenv("DATA_FEED", "iex")
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+    monkeypatch.setenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgres://user:pass@db.example.com:5432/postgres",
+    )
     _clear_settings_cache()
 
     cfg = _validate_startup_config()

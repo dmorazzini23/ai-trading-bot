@@ -3,9 +3,17 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from ai_trading.config.runtime import TradingConfig
 from ai_trading.core import bot_engine
+
+
+@pytest.fixture(autouse=True)
+def _disable_slo_derisk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep stop-lock tests deterministic regardless of global SLO monitor state."""
+
+    monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "0")
 
 
 def test_stop_lock_blocks_reentry(monkeypatch):

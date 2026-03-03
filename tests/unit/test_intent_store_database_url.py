@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from ai_trading.execution.engine import OrderManager
+from ai_trading.oms import intent_store as intent_store_mod
 from ai_trading.oms.intent_store import IntentStore
 
 
@@ -30,6 +31,55 @@ def test_intent_store_uses_database_url(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert record.intent_id == "intent-db-url-1"
     assert store.database_url.startswith("sqlite:///")
     assert db_path.exists()
+
+
+def test_intent_store_postgres_pool_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pass@db.example.com:5432/postgres")
+    monkeypatch.setenv("AI_TRADING_OMS_DB_POOL_SIZE", "7")
+    monkeypatch.setenv("AI_TRADING_OMS_DB_MAX_OVERFLOW", "13")
+    monkeypatch.setenv("AI_TRADING_OMS_DB_POOL_TIMEOUT_SEC", "12")
+    monkeypatch.setenv("AI_TRADING_OMS_DB_POOL_RECYCLE_SEC", "900")
+    monkeypatch.setenv("AI_TRADING_OMS_DB_CONNECT_TIMEOUT_SEC", "4")
+    monkeypatch.setenv("AI_TRADING_OMS_DB_APP_NAME", "oms-test")
+
+    captured: dict[str, object] = {}
+
+    class _BeginCtx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Engine:
+        def begin(self):
+            return _BeginCtx()
+
+        def dispose(self):
+            return None
+
+    def _fake_create_engine(url: str, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return _Engine()
+
+    monkeypatch.setattr(intent_store_mod, "create_engine", _fake_create_engine)
+    monkeypatch.setattr(intent_store_mod, "sessionmaker", lambda **_kwargs: object())
+    assert intent_store_mod._METADATA is not None
+    monkeypatch.setattr(intent_store_mod._METADATA, "create_all", lambda _conn: None)
+
+    store = IntentStore()
+    assert store.database_url.startswith("postgresql+psycopg://")
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["pool_size"] == 7
+    assert kwargs["max_overflow"] == 13
+    assert kwargs["pool_timeout"] == 12.0
+    assert kwargs["pool_recycle"] == 900
+    connect_args = kwargs["connect_args"]
+    assert isinstance(connect_args, dict)
+    assert connect_args["connect_timeout"] == 4
+    assert connect_args["application_name"] == "oms-test"
 
 
 def test_order_manager_live_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -191,13 +191,43 @@ class IntentStore:
         if database_url.startswith("sqlite:///"):
             self._path.parent.mkdir(parents=True, exist_ok=True)
         connect_args: dict[str, Any] = {}
+        engine_kwargs: dict[str, Any] = {
+            "future": True,
+            "pool_pre_ping": True,
+        }
         if database_url.startswith("sqlite:"):
             connect_args["check_same_thread"] = False
+        else:
+            pool_size = max(1, int(get_env("AI_TRADING_OMS_DB_POOL_SIZE", 5, cast=int)))
+            max_overflow = max(0, int(get_env("AI_TRADING_OMS_DB_MAX_OVERFLOW", 10, cast=int)))
+            pool_timeout = max(
+                1.0,
+                float(get_env("AI_TRADING_OMS_DB_POOL_TIMEOUT_SEC", 30, cast=float)),
+            )
+            pool_recycle = max(
+                30,
+                int(get_env("AI_TRADING_OMS_DB_POOL_RECYCLE_SEC", 1800, cast=int)),
+            )
+            connect_timeout = max(
+                1,
+                int(get_env("AI_TRADING_OMS_DB_CONNECT_TIMEOUT_SEC", 10, cast=int)),
+            )
+            app_name = str(get_env("AI_TRADING_OMS_DB_APP_NAME", "ai_trading_oms") or "").strip()
+            connect_args["connect_timeout"] = connect_timeout
+            if app_name:
+                connect_args["application_name"] = app_name
+            engine_kwargs.update(
+                {
+                    "pool_size": pool_size,
+                    "max_overflow": max_overflow,
+                    "pool_timeout": pool_timeout,
+                    "pool_recycle": pool_recycle,
+                }
+            )
         self._engine: Engine = create_engine(
             database_url,
-            future=True,
-            pool_pre_ping=True,
             connect_args=connect_args,
+            **engine_kwargs,
         )
         self._session_factory = sessionmaker(
             bind=self._engine,

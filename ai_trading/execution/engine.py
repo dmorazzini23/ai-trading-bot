@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, TYPE_CHECKING
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 try:  # pragma: no cover - Alpaca SDK optional in tests
     from alpaca.common.exceptions import APIError
@@ -34,6 +35,7 @@ from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, reg
 from ai_trading.config.management import get_env
 from ai_trading.oms.intent_store import IntentStore
 from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.utils.time import monotonic_time, safe_utcnow
 from ai_trading.meta_learning.persistence import record_trade_fill
 
@@ -626,11 +628,19 @@ class OrderManager:
                 path=str(path),
                 url=(database_url or None),
             )
+            resolved_url = str(getattr(self._intent_store, "database_url", "") or "")
+            parsed = urlparse(resolved_url) if resolved_url else None
+            backend = "sqlite" if resolved_url.startswith("sqlite:") else "postgres"
+            database_host = parsed.hostname if parsed else None
+            database_name = parsed.path.lstrip("/") if parsed and parsed.path else None
             logger.info(
                 "OMS_INTENT_STORE_ENABLED",
                 extra={
                     "path": str(self._intent_store.path),
                     "database_url_configured": bool(database_url),
+                    "backend": backend,
+                    "database_host": database_host,
+                    "database_name": database_name,
                 },
             )
         except Exception as exc:  # pragma: no cover - defensive
@@ -1351,9 +1361,12 @@ class ExecutionEngine:
             False,
         )
         self._cost_model_path = str(
-            get_env(
-                "AI_TRADING_EXEC_COST_MODEL_PATH",
-                "runtime/execution_cost_model.json",
+            resolve_runtime_artifact_path(
+                get_env(
+                    "AI_TRADING_EXEC_COST_MODEL_PATH",
+                    "runtime/execution_cost_model.json",
+                ),
+                default_relative="runtime/execution_cost_model.json",
             )
         )
         self._execution_cost_model: Any | None = None
@@ -1373,10 +1386,69 @@ class ExecutionEngine:
             from ai_trading.execution.cost_model import CostModel
 
             self._execution_cost_model = CostModel.load(self._cost_model_path)
+            sample_count = int(
+                getattr(getattr(self._execution_cost_model, "params", None), "sample_count", 0)
+                or 0
+            )
             self.logger.info(
                 "EXEC_COST_MODEL_LOADED",
-                extra={"path": self._cost_model_path},
+                extra={"path": self._cost_model_path, "sample_count": sample_count},
             )
+            bootstrap_enabled = _env_bool(
+                "AI_TRADING_EXEC_COST_MODEL_BOOTSTRAP_ENABLED",
+                True,
+            )
+            if not bootstrap_enabled:
+                return
+            min_samples = max(
+                1,
+                int(get_env("AI_TRADING_EXEC_COST_MODEL_BOOTSTRAP_MIN_SAMPLES", 20, cast=int)),
+            )
+            calibrated_at = getattr(
+                getattr(self._execution_cost_model, "params", None),
+                "calibrated_at",
+                None,
+            )
+            if sample_count >= min_samples and calibrated_at:
+                return
+            lookback_days = max(
+                1,
+                int(get_env("AI_TRADING_EXEC_COST_MODEL_BOOTSTRAP_LOOKBACK_DAYS", 90, cast=int)),
+            )
+            from ai_trading.tca.rollups import calibrate_cost_model_from_tca
+
+            result = calibrate_cost_model_from_tca(
+                model_path=self._cost_model_path,
+                lookback_days=lookback_days,
+            )
+            after = result.get("after", {}) if isinstance(result, Mapping) else {}
+            after_sample_count = int(
+                after.get("sample_count", 0) if isinstance(after, Mapping) else 0
+            )
+            if after_sample_count > sample_count:
+                self._execution_cost_model = CostModel.load(self._cost_model_path)
+                self.logger.info(
+                    "EXEC_COST_MODEL_BOOTSTRAP_CALIBRATED",
+                    extra={
+                        "path": self._cost_model_path,
+                        "sample_count_before": sample_count,
+                        "sample_count_after": after_sample_count,
+                        "records": int(result.get("records", 0) or 0)
+                        if isinstance(result, Mapping)
+                        else 0,
+                        "lookback_days": lookback_days,
+                    },
+                )
+            else:
+                self.logger.info(
+                    "EXEC_COST_MODEL_BOOTSTRAP_SKIPPED",
+                    extra={
+                        "path": self._cost_model_path,
+                        "sample_count_before": sample_count,
+                        "sample_count_after": after_sample_count,
+                        "lookback_days": lookback_days,
+                    },
+                )
         except Exception:
             self.logger.debug("EXEC_COST_MODEL_LOAD_FAILED", exc_info=True)
             self._execution_cost_model = None

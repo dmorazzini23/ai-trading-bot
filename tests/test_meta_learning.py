@@ -1,4 +1,6 @@
 import types
+import pickle
+import warnings
 
 import pytest
 np = pytest.importorskip("numpy")
@@ -8,6 +10,19 @@ np.random.seed(0)
 from ai_trading import meta_learning
 from ai_trading.meta_learning import MetaLearning
 from ai_trading.meta import checkpoint
+
+
+class _WarnOnUnpickle:
+    def __getstate__(self):
+        return {"ok": True}
+
+    def __setstate__(self, state):
+        warnings.warn(
+            "InconsistentVersionWarning: trained with a different sklearn version",
+            UserWarning,
+            stacklevel=1,
+        )
+        self.__dict__.update(state)
 
 
 def _stub_portfolio_rl_torch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,6 +199,18 @@ def test_update_weights_success(tmp_path):
 def test_load_model_checkpoint_missing(tmp_path):
     path = tmp_path / "x.pkl"
     assert meta_learning.load_model_checkpoint(str(path)) is None
+
+
+def test_load_model_checkpoint_rejects_inconsistent_version_warning(
+    tmp_path, caplog
+):
+    path = tmp_path / "x.pkl"
+    with path.open("wb") as handle:
+        pickle.dump(_WarnOnUnpickle(), handle)
+    caplog.set_level("ERROR")
+
+    assert meta_learning.load_model_checkpoint(str(path)) is None
+    assert "MODEL_CHECKPOINT_SKLEARN_VERSION_MISMATCH" in caplog.text
 
 
 def test_update_signal_weights_zero(caplog):

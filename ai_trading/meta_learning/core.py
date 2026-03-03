@@ -35,6 +35,7 @@ import random
 import re
 import sys
 import math
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,9 +44,23 @@ from tempfile import gettempdir
 
 from ai_trading.utils.pickle_safe import safe_pickle_load
 
+try:  # pragma: no cover - optional sklearn import
+    from sklearn.exceptions import InconsistentVersionWarning as _InconsistentVersionWarning
+except Exception:  # pragma: no cover - fallback when sklearn missing
+    _InconsistentVersionWarning = None
+
 # Base directory for path validation
 BASE_DIR = Path(__file__).resolve().parents[1]
-ALLOWED_DIRS = [BASE_DIR, Path(gettempdir()).resolve()]
+ALLOWED_DIRS = [
+    BASE_DIR,
+    BASE_DIR.parent,
+    Path(gettempdir()).resolve(),
+]
+_META_DATA_DIR_RAW = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
+if _META_DATA_DIR_RAW:
+    _META_DATA_DIR = Path(_META_DATA_DIR_RAW.split(":")[0]).expanduser()
+    if _META_DATA_DIR.is_absolute():
+        ALLOWED_DIRS.append(_META_DATA_DIR.resolve())
 
 # Optional heavy dependencies
 np = None  # type: ignore[var-annotated]
@@ -776,7 +791,32 @@ def load_model_checkpoint(filepath: str) -> Any | None:
         logger.warning('Checkpoint file missing: %s', p)
         return None
     try:
-        model = safe_pickle_load(p, ALLOWED_DIRS)
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
+            model = safe_pickle_load(p, ALLOWED_DIRS)
+        for warning_record in caught_warnings:
+            warning_message = str(warning_record.message)
+            warning_category = warning_record.category
+            category_match = (
+                _InconsistentVersionWarning is not None
+                and isinstance(warning_category, type)
+                and issubclass(warning_category, _InconsistentVersionWarning)
+            )
+            message_match = "InconsistentVersionWarning" in warning_message
+            if category_match or message_match:
+                logger.error(
+                    "MODEL_CHECKPOINT_SKLEARN_VERSION_MISMATCH",
+                    extra={
+                        "path": str(p),
+                        "warning_category": getattr(
+                            warning_category,
+                            "__name__",
+                            str(warning_category),
+                        ),
+                        "warning_message": warning_message,
+                    },
+                )
+                return None
         logger.info('MODEL_CHECKPOINT_LOADED', extra={'path': str(p)})
         return model
     except RuntimeError as exc:

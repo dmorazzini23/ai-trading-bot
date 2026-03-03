@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from datetime import UTC, datetime, timedelta
 import json
 import math
@@ -12,6 +13,8 @@ from typing import Any
 from ai_trading.config.management import get_env
 from ai_trading.execution.cost_model import CostModel
 from ai_trading.logging import get_logger
+from ai_trading.paths import SLIPPAGE_LOG_PATH
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
@@ -74,6 +77,47 @@ def load_tca_records(
                 if status not in {"filled", "partially_filled", "partial_fill"}:
                     continue
             rows.append(data)
+    return rows
+
+
+def load_slippage_records(
+    path: str | Path,
+    *,
+    lookback_days: int | None = None,
+) -> list[dict[str, Any]]:
+    """Load slippage CSV rows and convert to TCA-like records."""
+
+    target = Path(path)
+    if not target.exists():
+        return []
+    cutoff: datetime | None = None
+    if lookback_days is not None and lookback_days > 0:
+        cutoff = datetime.now(UTC) - timedelta(days=int(lookback_days))
+
+    rows: list[dict[str, Any]] = []
+    with target.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if not row or len(row) < 7:
+                continue
+            ts = _parse_ts(row[0])
+            if cutoff is not None and (ts is None or ts < cutoff):
+                continue
+            try:
+                is_bps = abs(float(row[6]))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(is_bps) or is_bps <= 0:
+                continue
+            rows.append(
+                {
+                    "ts": ts.isoformat() if ts is not None else None,
+                    "symbol": str(row[1]).strip().upper(),
+                    "side": str(row[2]).strip().lower(),
+                    "status": "filled",
+                    "is_bps": float(is_bps),
+                }
+            )
     return rows
 
 
@@ -142,20 +186,17 @@ def calibrate_cost_model_from_tca(
 ) -> dict[str, Any]:
     """Load TCA data, calibrate bounded cost model, and persist params."""
 
-    tca_target = Path(
-        str(
-            tca_path
-            or get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
-        )
+    tca_target = resolve_runtime_artifact_path(
+        tca_path or get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl"),
+        default_relative="runtime/tca_records.jsonl",
     )
-    model_target = Path(
-        str(
-            model_path
-            or get_env(
-                "AI_TRADING_EXEC_COST_MODEL_PATH",
-                "runtime/execution_cost_model.json",
-            )
-        )
+    model_target = resolve_runtime_artifact_path(
+        model_path
+        or get_env(
+            "AI_TRADING_EXEC_COST_MODEL_PATH",
+            "runtime/execution_cost_model.json",
+        ),
+        default_relative="runtime/execution_cost_model.json",
     )
     lookback = (
         int(lookback_days)
@@ -180,6 +221,20 @@ def calibrate_cost_model_from_tca(
         lookback_days=lookback,
         require_filled=require_filled,
     )
+    slippage_records: list[dict[str, Any]] = []
+    if len(records) < min_samples and _as_bool(
+        get_env("AI_TRADING_EXEC_COST_MODEL_BOOTSTRAP_FROM_SLIPPAGE_ENABLED", True)
+    ):
+        slippage_target = resolve_runtime_artifact_path(
+            get_env("AI_TRADING_EXEC_SLIPPAGE_LOG_PATH", str(SLIPPAGE_LOG_PATH), cast=str),
+            default_relative="runtime/slippage.csv",
+        )
+        slippage_records = load_slippage_records(
+            slippage_target,
+            lookback_days=lookback,
+        )
+        if slippage_records:
+            records.extend(slippage_records)
     summary = summarize_tca_records(records)
     model = CostModel.load(model_target)
     before = model.to_dict()
@@ -196,6 +251,8 @@ def calibrate_cost_model_from_tca(
         "tca_path": str(tca_target),
         "model_path": str(model_target),
         "records": len(records),
+        "tca_records": len(records) - len(slippage_records),
+        "slippage_records": len(slippage_records),
         "summary": summary,
         "before": before,
         "after": after,
@@ -205,6 +262,8 @@ def calibrate_cost_model_from_tca(
         "TCA_COST_MODEL_CALIBRATED",
         extra={
             "records": len(records),
+            "tca_records": len(records) - len(slippage_records),
+            "slippage_records": len(slippage_records),
             "model_path": str(model_target),
             "version": after.get("version"),
         },
