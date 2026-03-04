@@ -68,7 +68,18 @@ train = [
 all = [
   "ai-trading-bot[pandas,plot,ml,ta,train,nlp]"
 ]
-test = ["pytest>=7.4", "pytest-cov>=4.1", "alpaca-py>=0.42.1,<1"]
+test = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "pytest-asyncio>=0.23",
+  "hypothesis>=6.92",
+  "freezegun>=1.5",
+  "alpaca-py>=0.42.1,<1",
+  "psutil>=5.9,<6",
+  "tenacity>=8",
+  "hmmlearn==0.3.2",
+  "SQLAlchemy>=2.0,<3",
+]
 
 [project.scripts]
 validate-env = "ai_trading.tools.env_validate:main"

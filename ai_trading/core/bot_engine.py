@@ -192,6 +192,13 @@ from ai_trading.policy.compiler import (
     resolve_operational_safety_tier,
     startup_policy_diff,
 )
+from ai_trading.governance.rollout import (
+    apply_rollout_policies,
+    build_burn_in_policy,
+    build_capital_ramp_policy,
+    load_rollout_state,
+    save_rollout_state,
+)
 
 
 class CycleAbortSafeMode(RuntimeError):
@@ -8750,6 +8757,10 @@ class BotState:
     effective_policy_hash: str = ""
     operational_safety_tier: str = SafetyTier.NORMAL.value
     effective_policy_snapshot_path: str | None = None
+    rollout_state_path: str | None = None
+    capital_ramp_multiplier: float = 1.0
+    burn_in_ready: bool = True
+    burn_in_block_reason: str = ""
     dependency_breakers: DependencyBreakers | None = None
     pretrade_rate_limiter: SlidingWindowRateLimiter | None = None
     run_manifest_written: bool = False
@@ -33349,6 +33360,147 @@ def _persist_effective_policy_snapshot(
     state.effective_policy_snapshot_path = str(target)
 
 
+def _resolve_rollout_state_path() -> Path:
+    configured = str(
+        get_env("AI_TRADING_ROLLOUT_STATE_PATH", "runtime/rollout_state.json")
+        or ""
+    ).strip()
+    return resolve_runtime_artifact_path(
+        configured or "runtime/rollout_state.json",
+        default_relative="runtime/rollout_state.json",
+    )
+
+
+def _rollout_env_snapshot() -> dict[str, Any]:
+    keys = (
+        "AI_TRADING_BURN_IN_ENABLED",
+        "AI_TRADING_BURN_IN_MIN_PAPER_CYCLES",
+        "AI_TRADING_BURN_IN_MIN_PAPER_DAYS",
+        "AI_TRADING_BURN_IN_REQUIRE_POLICY_HASH",
+        "AI_TRADING_BURN_IN_REQUIRE_CONFIG_HASH",
+        "AI_TRADING_CAPITAL_RAMP_ENABLED",
+        "AI_TRADING_CAPITAL_RAMP_PHASES",
+        "AI_TRADING_CAPITAL_RAMP_MIN_CYCLES_PER_PHASE",
+        "AI_TRADING_CAPITAL_RAMP_MAX_PACING_HIT_RATE_PCT",
+        "AI_TRADING_CAPITAL_RAMP_MAX_PENDING_OLDEST_AGE_SEC",
+        "AI_TRADING_CAPITAL_RAMP_MAX_CALIBRATION_ECE",
+        "AI_TRADING_CAPITAL_RAMP_MAX_CALIBRATION_BRIER",
+        "AI_TRADING_CAPITAL_RAMP_DOWNGRADE_ON_BREACH",
+    )
+    snapshot: dict[str, Any] = {}
+    for key in keys:
+        snapshot[key] = get_env(key, None)
+    return snapshot
+
+
+def _update_rollout_governance_state(
+    *,
+    state: BotState,
+    cfg: TradingConfig,
+    effective_policy: EffectivePolicy,
+    slo_derisk_details: Mapping[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "burn_in_ready": True,
+        "burn_in_reason": "",
+        "capital_ramp": {
+            "enabled": False,
+            "phase_index": 0,
+            "phase_value": 1.0,
+            "phase_cycles": 0,
+            "multiplier": 1.0,
+            "breached": False,
+            "transition": "",
+        },
+    }
+    try:
+        env_snapshot = _rollout_env_snapshot()
+        burn_in_policy = build_burn_in_policy(env_snapshot)
+        ramp_policy = build_capital_ramp_policy(env_snapshot)
+        path = _resolve_rollout_state_path()
+        current_rollout_state = load_rollout_state(path)
+        execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+        telemetry = {
+            "order_pacing_cap_hit_rate_pct": float(
+                slo_derisk_details.get("order_pacing_cap_hit_rate_pct", 0.0) or 0.0
+            ),
+            "pending_oldest_age_sec": float(
+                slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0
+            ),
+            "live_calibration_ece": float(
+                slo_derisk_details.get("calibration_ece", 0.0) or 0.0
+            ),
+            "live_calibration_brier": float(
+                slo_derisk_details.get("calibration_brier", 0.0) or 0.0
+            ),
+        }
+        updated_state, summary = apply_rollout_policies(
+            state=current_rollout_state,
+            burn_in=burn_in_policy,
+            ramp=ramp_policy,
+            execution_mode=execution_mode,
+            policy_hash=str(getattr(effective_policy, "policy_hash", "") or ""),
+            config_hash=str(config_snapshot_hash(cfg)),
+            today=now.date(),
+            telemetry=telemetry,
+        )
+        save_rollout_state(path, updated_state)
+        state.rollout_state_path = str(path)
+    except Exception as exc:
+        logger.warning("ROLLOUT_GOVERNANCE_UPDATE_FAILED", extra={"error": str(exc)})
+        state.capital_ramp_multiplier = 1.0
+        state.burn_in_ready = True
+        state.burn_in_block_reason = ""
+        return summary
+
+    previous_multiplier = float(getattr(state, "capital_ramp_multiplier", 1.0) or 1.0)
+    previous_burn_in_ready = bool(getattr(state, "burn_in_ready", True))
+    previous_burn_in_reason = str(getattr(state, "burn_in_block_reason", "") or "")
+
+    ramp_summary = summary.get("capital_ramp", {})
+    ramp_multiplier = 1.0
+    if isinstance(ramp_summary, Mapping):
+        try:
+            ramp_multiplier = float(ramp_summary.get("multiplier", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            ramp_multiplier = 1.0
+    state.capital_ramp_multiplier = max(0.05, min(ramp_multiplier, 1.0))
+    state.burn_in_ready = bool(summary.get("burn_in_ready", True))
+    state.burn_in_block_reason = str(summary.get("burn_in_reason", "") or "")
+
+    transition = str(ramp_summary.get("transition", "") or "") if isinstance(ramp_summary, Mapping) else ""
+    if abs(state.capital_ramp_multiplier - previous_multiplier) > 1e-9 or transition:
+        logger.info(
+            "CAPITAL_RAMP_UPDATED",
+            extra={
+                "previous_multiplier": previous_multiplier,
+                "current_multiplier": state.capital_ramp_multiplier,
+                "transition": transition,
+                "phase_index": ramp_summary.get("phase_index") if isinstance(ramp_summary, Mapping) else None,
+                "phase_cycles": ramp_summary.get("phase_cycles") if isinstance(ramp_summary, Mapping) else None,
+                "breached": ramp_summary.get("breached") if isinstance(ramp_summary, Mapping) else None,
+            },
+        )
+    if (
+        state.burn_in_ready != previous_burn_in_ready
+        or state.burn_in_block_reason != previous_burn_in_reason
+    ):
+        level = logging.INFO if state.burn_in_ready else logging.WARNING
+        logger.log(
+            level,
+            "PAPER_BURN_IN_STATUS",
+            extra={
+                "ready": state.burn_in_ready,
+                "reason": state.burn_in_block_reason,
+                "paper_cycles": summary.get("burn_in_paper_cycles"),
+                "paper_days": summary.get("burn_in_paper_days"),
+                "state_path": state.rollout_state_path,
+            },
+        )
+    return summary
+
+
 def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now: datetime) -> bool:
     if not bool(getattr(cfg, "recon_enabled", False)):
         return True
@@ -34610,6 +34762,22 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             },
         )
 
+    rollout_summary = _update_rollout_governance_state(
+        state=state,
+        cfg=cfg,
+        effective_policy=effective_policy,
+        slo_derisk_details=slo_derisk_details,
+        now=now,
+    )
+    ramp_summary = rollout_summary.get("capital_ramp", {})
+    if not isinstance(ramp_summary, MappingABC):
+        ramp_summary = {}
+    ramp_live_multiplier = float(getattr(state, "capital_ramp_multiplier", 1.0) or 1.0)
+    burn_in_live_ready = bool(getattr(state, "burn_in_ready", True))
+    burn_in_live_reason = str(getattr(state, "burn_in_block_reason", "") or "")
+    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+    live_execution_mode = execution_mode == "live"
+
     liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
     event_blackout_enabled = bool(get_env("AI_TRADING_EVENT_RISK_BLACKOUT_ENABLED", True, cast=bool))
     event_blackout_days = max(0, int(get_env("AI_TRADING_EVENT_BLACKOUT_DAYS", 3, cast=int)))
@@ -34745,6 +34913,43 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             }
             for proposal in net_target.proposals
         }
+        post_trade_shares = current_shares + delta_shares
+        expanding_exposure = abs(post_trade_shares) > abs(current_shares)
+        if live_execution_mode and not burn_in_live_ready and expanding_exposure:
+            gates.append(burn_in_live_reason or "PAPER_BURN_IN_BLOCK")
+            symbol_snapshot["rollout"] = {
+                "burn_in_ready": burn_in_live_ready,
+                "burn_in_reason": burn_in_live_reason,
+                "capital_ramp": dict(ramp_summary),
+            }
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+        if live_execution_mode and expanding_exposure and ramp_live_multiplier < 0.999:
+            scaled_qty = int(round(float(delta_shares) * ramp_live_multiplier))
+            if scaled_qty == 0:
+                scaled_qty = 1 if delta_shares > 0 else -1
+            if abs(scaled_qty) > abs(delta_shares):
+                scaled_qty = int(delta_shares)
+            if scaled_qty != int(delta_shares):
+                delta_shares = int(scaled_qty)
+                net_target.target_shares = current_shares + delta_shares
+                net_target.target_dollars = net_target.target_shares * price
+                gates.append("CAPITAL_RAMP_SCALE")
+                symbol_snapshot["capital_ramp"] = {
+                    "multiplier": ramp_live_multiplier,
+                    "phase_index": ramp_summary.get("phase_index"),
+                    "phase_cycles": ramp_summary.get("phase_cycles"),
+                    "breached": ramp_summary.get("breached"),
+                    "transition": ramp_summary.get("transition"),
+                }
         feed_derisk_scale = 1.0
         if delta_shares != 0 and bool(primary_feed_derisk.get("triggered", False)):
             post_trade_shares = current_shares + delta_shares

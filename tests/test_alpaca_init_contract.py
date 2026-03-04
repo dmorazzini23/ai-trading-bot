@@ -6,7 +6,6 @@ import pytest
 def test_no_import_time_initialization(monkeypatch):
     """Test that importing bot_engine does not initialize Alpaca clients."""
     monkeypatch.setenv("SHADOW_MODE", "true")
-    monkeypatch.setenv("TRADING_MODE", "DRY_RUN")
     monkeypatch.setenv("PYTEST_RUNNING", "true")
 
     # Test that we can import the module without triggering initialization

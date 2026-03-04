@@ -9,7 +9,7 @@ from ai_trading import __main__ as cli
 
 
 def test_cli_paper_sets_execution_mode_only(monkeypatch) -> None:
-    monkeypatch.setenv("TRADING_MODE", "balanced")
+    monkeypatch.setenv("AI_TRADING_TRADING_MODE", "balanced")
     monkeypatch.setenv("EXECUTION_MODE", "live")
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
 
@@ -28,5 +28,5 @@ def test_cli_paper_sets_execution_mode_only(monkeypatch) -> None:
 
     rc = cli.main(["--paper", "--once", "--interval", "0"])
     assert rc == 0
-    assert os.environ["TRADING_MODE"] == "balanced"
+    assert os.environ["AI_TRADING_TRADING_MODE"] == "balanced"
     assert os.environ["EXECUTION_MODE"] == "paper"
