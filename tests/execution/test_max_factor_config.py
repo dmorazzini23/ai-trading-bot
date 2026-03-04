@@ -23,7 +23,7 @@ def test_execute_entry_uses_config_max_factor(monkeypatch):
         return (entry - 1, entry + 1)
     monkeypatch.setattr(bot_engine, "scaled_atr_stop", fake_scaled_atr_stop)
     monkeypatch.setattr(bot_engine, "targets_lock", threading.Lock())
-    monkeypatch.setenv("TAKE_PROFIT_FACTOR", "3.0")
+    monkeypatch.setenv("AI_TRADING_TAKE_PROFIT_FACTOR", "3.0")
 
     ctx = SimpleNamespace(
         api=SimpleNamespace(get_account=lambda: SimpleNamespace(buying_power="10000")),
@@ -39,6 +39,6 @@ def test_execute_entry_uses_config_max_factor(monkeypatch):
 
 
 def test_get_take_profit_factor_invalid(monkeypatch):
-    monkeypatch.setenv("TAKE_PROFIT_FACTOR", "not-a-number")
+    monkeypatch.setenv("AI_TRADING_TAKE_PROFIT_FACTOR", "not-a-number")
     with pytest.raises(ValueError):
         bot_engine.get_take_profit_factor()

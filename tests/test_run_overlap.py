@@ -9,6 +9,7 @@ def test_run_all_trades_overlap(monkeypatch, caplog):
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(bot_engine, "_MODEL_CACHE", None, raising=False)
     monkeypatch.setattr(bot_engine, "_global_ctx", None, raising=False)
     monkeypatch.setattr(bot_engine, "_ctx", None, raising=False)
@@ -22,10 +23,12 @@ def test_run_all_trades_overlap(monkeypatch, caplog):
 
     state = bot_engine.BotState()
     runtime = bot_engine.get_ctx()
+    runtime.cfg = types.SimpleNamespace(netting_enabled=False)
     caplog.set_level("INFO")
 
     monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
     monkeypatch.setattr(bot_engine, "check_pdt_rule", lambda ctx: False)
+    monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda runtime: False)
     monkeypatch.setattr(bot_engine, "_prepare_run", lambda ctx, st: (0.0, True, []))
     monkeypatch.setattr(bot_engine, "_process_symbols", lambda *a, **k: ([], {}, 0))
     monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: None)
@@ -60,6 +63,7 @@ def test_run_all_trades_missing_get_account(monkeypatch, caplog):
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
     monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_NETTING_ENABLED", "0")
     monkeypatch.setattr(bot_engine, "_MODEL_CACHE", None, raising=False)
     monkeypatch.setattr(bot_engine, "_global_ctx", None, raising=False)
     monkeypatch.setattr(bot_engine, "_ctx", None, raising=False)
@@ -72,6 +76,7 @@ def test_run_all_trades_missing_get_account(monkeypatch, caplog):
     )
 
     runtime = bot_engine.get_ctx()
+    runtime.cfg = types.SimpleNamespace(netting_enabled=False)
     runtime.api = types.SimpleNamespace(list_positions=lambda: [])
     assert not hasattr(runtime.api, "get_account")
     runtime.drawdown_circuit_breaker = types.SimpleNamespace(
@@ -98,6 +103,7 @@ def test_run_all_trades_missing_get_account(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "get_strategies", lambda: [])
     monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
     monkeypatch.setattr(bot_engine, "check_pdt_rule", lambda ctx: False)
+    monkeypatch.setattr(bot_engine, "_netting_pipeline_enabled", lambda runtime: False)
     monkeypatch.setattr(bot_engine, "get_verbose_logging", lambda: False)
     monkeypatch.setattr(bot_engine, "utc_now_iso", lambda: "now")
     monkeypatch.setattr(bot_engine, "_ensure_execution_engine", lambda ctx: None)
@@ -111,4 +117,7 @@ def test_run_all_trades_missing_get_account(monkeypatch, caplog):
 
     bot_engine.run_all_trades_worker(state, runtime)
 
-    assert any("HALT_SKIP_NEW_TRADES" in r.message for r in caplog.records)
+    assert any(
+        ("HALT_SKIP_NEW_TRADES" in r.message) or ("CYCLE_GATES" in r.message)
+        for r in caplog.records
+    )

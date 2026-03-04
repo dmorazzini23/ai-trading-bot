@@ -18,7 +18,7 @@ def test_startup_logs_drop_secrets(caplog, monkeypatch):
     monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.setenv("WEBHOOK_SECRET", "HOOK-SECRET")
-    monkeypatch.setenv("CAPITAL_CAP", "0.5")
+    monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.5")
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.5")
 
     caplog.set_level(logging.INFO)
@@ -69,7 +69,7 @@ def test_validate_required_env_handles_feed(monkeypatch):
         "ALPACA_DATA_FEED": "iex",
         "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
         "WEBHOOK_SECRET": "hook",
-        "CAPITAL_CAP": "1.0",
+        "AI_TRADING_CAPITAL_CAP": "1.0",
         "DOLLAR_RISK_LIMIT": "0.5",
     }
     redacted = validate_required_env(
@@ -90,7 +90,7 @@ def test_base_url_alias_logged(caplog, monkeypatch):
     monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://alias-api.alpaca.markets")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.setenv("WEBHOOK_SECRET", "HOOK-SECRET")
-    monkeypatch.setenv("CAPITAL_CAP", "0.5")
+    monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.5")
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.5")
 
     caplog.set_level(logging.INFO)

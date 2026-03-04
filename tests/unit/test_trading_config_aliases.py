@@ -10,26 +10,32 @@ from ai_trading.main import _fail_fast_env
     ("env_updates", "expected_limit"),
     [
         pytest.param(
-            {"DOLLAR_RISK_LIMIT": "0.06", "DAILY_LOSS_LIMIT": "0.02"},
+            {
+                "DOLLAR_RISK_LIMIT": "0.06",
+                "AI_TRADING_DAILY_LOSS_LIMIT": "0.02",
+            },
             0.06,
             id="canonical_only",
         ),
         pytest.param(
-            {"DOLLAR_RISK_LIMIT": "", "DAILY_LOSS_LIMIT": "0.07"},
+            {
+                "DOLLAR_RISK_LIMIT": "",
+                "AI_TRADING_DAILY_LOSS_LIMIT": "0.07",
+            },
             0.07,
-            id="alias_only",
+            id="daily_limit_backfill",
         ),
     ],
 )
 def test_trading_config_env_aliases(env_updates, expected_limit):
     env = {
-        "CAPITAL_CAP": "0.05",
+        "AI_TRADING_CAPITAL_CAP": "0.05",
         "MAX_POSITION_MODE": "STATIC",
-        "DATA_FEED": "iex",
+        "ALPACA_DATA_FEED": "iex",
         "DATA_PROVIDER": "alpaca",
         "PAPER": "true",
         "MAX_DRAWDOWN_THRESHOLD": "0.15",
-        "KELLY_FRACTION_MAX": "0.2",
+        "AI_TRADING_KELLY_FRACTION_MAX": "0.2",
         "MIN_SAMPLE_SIZE": "50",
         "CONFIDENCE_LEVEL": "0.9",
     }
@@ -43,9 +49,9 @@ def test_trading_config_env_aliases(env_updates, expected_limit):
     assert cfg.kelly_fraction_max == 0.2
     assert cfg.min_sample_size == 50
     assert cfg.confidence_level == 0.9
-    if "DAILY_LOSS_LIMIT" in env_updates:
+    if "AI_TRADING_DAILY_LOSS_LIMIT" in env_updates:
         assert cfg.daily_loss_limit == pytest.approx(
-            float(env_updates["DAILY_LOSS_LIMIT"])
+            float(env_updates["AI_TRADING_DAILY_LOSS_LIMIT"])
         )
     snap = cfg.snapshot_sanitized()
     assert snap["data"]["feed"] == "iex"
@@ -78,12 +84,12 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
         "ALPACA_SECRET_KEY": "secret",
         "ALPACA_DATA_FEED": "iex",
         "WEBHOOK_SECRET": "hook",
-        "CAPITAL_CAP": "0.25",
+        "AI_TRADING_CAPITAL_CAP": "0.25",
         "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
     }
     for key, value in base_env.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("DAILY_LOSS_LIMIT", "0.02")
+    monkeypatch.setenv("AI_TRADING_DAILY_LOSS_LIMIT", "0.02")
 
     def _alias_override_records():
         return [
@@ -109,52 +115,49 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
     assert getattr(record, "trading_config_value", None) == 0.02
 
 
-def test_max_position_size_canonical_value_wins_over_alias(caplog):
+def test_max_position_size_legacy_alias_rejected():
     env = {
-        "CAPITAL_CAP": "0.05",
+        "AI_TRADING_CAPITAL_CAP": "0.05",
         "MAX_POSITION_MODE": "STATIC",
-        "DATA_FEED": "iex",
+        "ALPACA_DATA_FEED": "iex",
         "DATA_PROVIDER": "alpaca",
         "PAPER": "true",
         "MAX_DRAWDOWN_THRESHOLD": "0.15",
-        "KELLY_FRACTION_MAX": "0.2",
+        "AI_TRADING_KELLY_FRACTION_MAX": "0.2",
         "MIN_SAMPLE_SIZE": "50",
         "CONFIDENCE_LEVEL": "0.9",
-        "MAX_POSITION_SIZE": "7000",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": "7000",
     }
-
-    caplog.set_level(logging.WARNING, logger="ai_trading.config.runtime")
-    env["AI_TRADING_MAX_POSITION_SIZE"] = "9000"
-    cfg = TradingConfig.from_env(env)
-    assert cfg.max_position_size == pytest.approx(7000)
-    conflict_records = [
-        record
-        for record in caplog.records
-        if record.name == "ai_trading.config.runtime"
-        and record.message == "CONFIG_ENV_ALIAS_CONFLICT"
-        and getattr(record, "field", None) == "max_position_size"
-    ]
-    assert conflict_records, "Expected CONFIG_ENV_ALIAS_CONFLICT for max_position_size"
+    env["MAX_POSITION_SIZE"] = "9000"
+    with pytest.raises(RuntimeError, match="MAX_POSITION_SIZE is deprecated"):
+        TradingConfig.from_env(env)
 
 
 def test_explicit_mode_argument_overrides_trading_mode_env(monkeypatch):
     for key in (
         "TRADING_MODE",
-        "bot_mode",
         "CAPITAL_CAP",
+        "AI_TRADING_CAPITAL_CAP",
         "DAILY_LOSS_LIMIT",
+        "AI_TRADING_DAILY_LOSS_LIMIT",
         "DOLLAR_RISK_LIMIT",
         "KELLY_FRACTION",
+        "AI_TRADING_KELLY_FRACTION",
         "CONF_THRESHOLD",
+        "AI_TRADING_CONF_THRESHOLD",
         "SIGNAL_CONFIRMATION_BARS",
+        "AI_TRADING_SIGNAL_CONFIRMATION_BARS",
         "TAKE_PROFIT_FACTOR",
+        "AI_TRADING_TAKE_PROFIT_FACTOR",
         "MAX_POSITION_SIZE",
         "AI_TRADING_MAX_POSITION_SIZE",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
+        "AI_TRADING_TRADING_MODE",
     ):
         monkeypatch.delenv(key, raising=False)
 
     monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.12")
-    monkeypatch.setenv("TRADING_MODE", "aggressive")
+    monkeypatch.setenv("AI_TRADING_TRADING_MODE", "aggressive")
 
     cfg = TradingConfig.from_env("conservative")
 
@@ -170,7 +173,7 @@ def test_fail_fast_env_health_port_conflict(monkeypatch):
         "ALPACA_SECRET_KEY": "secret",
         "ALPACA_DATA_FEED": "iex",
         "WEBHOOK_SECRET": "hook",
-        "CAPITAL_CAP": "0.25",
+        "AI_TRADING_CAPITAL_CAP": "0.25",
         "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
     }
     for key, value in base_env.items():

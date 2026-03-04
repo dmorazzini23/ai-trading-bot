@@ -171,7 +171,11 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         alias="ALPACA_TRADING_BASE_URL",
         validation_alias=AliasChoices("ALPACA_TRADING_BASE_URL"),
     )
-    trading_mode: str = Field(default="balanced", alias="TRADING_MODE")
+    trading_mode: str = Field(
+        default="balanced",
+        env="AI_TRADING_TRADING_MODE",
+        validation_alias=AliasChoices("AI_TRADING_TRADING_MODE", "trading_mode"),
+    )
     WEBHOOK_SECRET: str | None = Field(
         default=None,
         validation_alias=AliasChoices("WEBHOOK_SECRET", "AI_TRADING_WEBHOOK_SECRET"),
@@ -495,7 +499,8 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     portfolio_drift_threshold: float = Field(default=0.15, env="AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD")
     capital_cap: float = Field(
         0.25,
-        validation_alias=AliasChoices("capital_cap", "CAPITAL_CAP", "AI_TRADING_CAPITAL_CAP"),
+        env="AI_TRADING_CAPITAL_CAP",
+        validation_alias=AliasChoices("AI_TRADING_CAPITAL_CAP", "capital_cap"),
     )
     dollar_risk_limit: float = Field(
         0.05,
@@ -503,11 +508,15 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     )
     max_position_size: float | None = Field(
         8000.0,
+        env="AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
         description=(
             "Absolute max dollars per position. If None, derive from equity * "
             "capital_cap; if equity unknown, use static fallback."
         ),
-        alias="MAX_POSITION_SIZE",
+        validation_alias=AliasChoices(
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
+            "max_position_size",
+        ),
     )
     max_position_equity_fallback: float = Field(
         200000.0,

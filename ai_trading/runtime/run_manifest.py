@@ -117,6 +117,8 @@ def build_run_manifest(
     cfg: Any,
     *,
     runtime_contract: Mapping[str, Any] | None = None,
+    effective_policy_hash: str | None = None,
+    effective_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg_payload = _redacted_cfg(cfg)
     mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
@@ -129,6 +131,10 @@ def build_run_manifest(
         "git_commit_hash": _git_commit_hash(),
         "runtime_contract": dict(runtime_contract or {"stubs_enabled": False}),
     }
+    if effective_policy_hash:
+        manifest["effective_policy_hash"] = str(effective_policy_hash)
+    if isinstance(effective_policy, Mapping):
+        manifest["effective_policy"] = dict(effective_policy)
     return manifest
 
 
@@ -137,8 +143,15 @@ def write_run_manifest(
     *,
     runtime_contract: Mapping[str, Any] | None = None,
     path: str | None = None,
+    effective_policy_hash: str | None = None,
+    effective_policy: Mapping[str, Any] | None = None,
 ) -> Path:
-    manifest = build_run_manifest(cfg, runtime_contract=runtime_contract)
+    manifest = build_run_manifest(
+        cfg,
+        runtime_contract=runtime_contract,
+        effective_policy_hash=effective_policy_hash,
+        effective_policy=effective_policy,
+    )
     target = _resolve_manifest_path(cfg, path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")

@@ -364,7 +364,7 @@ _cap_mod.volatility_parity_position = lambda *a, **k: 0.01
 
 
 def test_bot_main_normal(monkeypatch):
-    monkeypatch.setenv("TRADING_MODE", "shadow")
+    monkeypatch.setenv("AI_TRADING_TRADING_MODE", "balanced")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")

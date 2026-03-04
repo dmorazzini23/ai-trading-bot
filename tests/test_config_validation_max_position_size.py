@@ -21,7 +21,7 @@ def _temp_env(k, v):  # AI-AGENT-REF: helper to toggle env vars
 
 
 def test_env_override_precedence(monkeypatch):  # AI-AGENT-REF: env override respected
-    with _temp_env("MAX_POSITION_SIZE", "1234.5"):
+    with _temp_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", "1234.5"):
         ps = importlib.import_module("ai_trading.position_sizing")
         val, src = ps._resolve_max_position_size(0.0, 0.1, None)
         assert val == 1234.5
@@ -42,26 +42,27 @@ def test_no_mutation_of_settings(monkeypatch):  # AI-AGENT-REF: ensure env fallb
         alpaca_base_url = "paper"
         paper = True
 
-    with _temp_env("MAX_POSITION_SIZE", None):
+    with _temp_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", None):
         d = Dummy()
         m._validate_runtime_config(cfg=CfgDummy(), tcfg=d)
         assert not hasattr(d, "max_position_size")
-        assert os.environ.get("MAX_POSITION_SIZE") is not None
+        assert os.environ.get("AI_TRADING_SIGNAL_MAX_POSITION_SIZE") is not None
 
 
 def test_negative_max_position_size_rejected():  # AI-AGENT-REF: reject nonpositive
-    with _temp_env("MAX_POSITION_SIZE", "-1"):
+    with _temp_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", "-1"):
         from ai_trading.config.management import TradingConfig
 
-        with pytest.raises(ValueError, match="MAX_POSITION_SIZE must be positive"):
+        with pytest.raises(
+            ValueError,
+            match="AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be positive",
+        ):
             TradingConfig.from_env()
 
 
 def test_deprecated_env_override_rejected():  # AI-AGENT-REF: reject deprecated alias
     with _temp_env("AI_TRADING_MAX_POSITION_SIZE", "-5"):
-        ps = importlib.import_module("ai_trading.position_sizing")
-        with pytest.raises(
-            ValueError,
-            match="AI_TRADING_MAX_POSITION_SIZE is deprecated\\. Set MAX_POSITION_SIZE instead\\.",
-        ):
-            ps._resolve_max_position_size(0.0, 0.1, None)
+        from ai_trading.config.management import TradingConfig
+
+        with pytest.raises(RuntimeError, match="AI_TRADING_MAX_POSITION_SIZE is deprecated"):
+            TradingConfig.from_env()

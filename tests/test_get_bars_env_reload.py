@@ -21,9 +21,9 @@ def test_get_bars_recovers_after_env_reload(monkeypatch, tmp_path):
         """
 ALPACA_API_KEY=key
 ALPACA_SECRET_KEY=secret
-ALPACA_API_URL=https://paper-api.alpaca.markets
+ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
 WEBHOOK_SECRET=wh
-CAPITAL_CAP=0.04
+AI_TRADING_CAPITAL_CAP=0.04
 DOLLAR_RISK_LIMIT=0.05
 """.strip()
     )
@@ -31,9 +31,9 @@ DOLLAR_RISK_LIMIT=0.05
     for key in [
         "ALPACA_API_KEY",
         "ALPACA_SECRET_KEY",
-        "ALPACA_API_URL",
+        "ALPACA_TRADING_BASE_URL",
         "WEBHOOK_SECRET",
-        "CAPITAL_CAP",
+        "AI_TRADING_CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
     ]:
         monkeypatch.delenv(key, raising=False)
@@ -58,4 +58,3 @@ DOLLAR_RISK_LIMIT=0.05
     df = fetch.get_bars("AAPL", "1Min", start, end)
     assert isinstance(df, pd.DataFrame)
     assert calls["n"] == 2
-

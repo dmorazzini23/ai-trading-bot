@@ -11,7 +11,7 @@ def test_config_snapshot_hash_is_stable_for_identical_config() -> None:
         "MAX_DRAWDOWN_THRESHOLD": "0.15",
         "APP_ENV": "test",
         "EXECUTION_MODE": "sim",
-        "CAPITAL_CAP": "0.25",
+        "AI_TRADING_CAPITAL_CAP": "0.25",
     }
     first = TradingConfig.from_env(env)
     second = TradingConfig.from_env(dict(reversed(list(env.items()))))
@@ -26,13 +26,13 @@ def test_config_snapshot_hash_changes_when_effective_config_changes() -> None:
     baseline = TradingConfig.from_env(
         {
             "MAX_DRAWDOWN_THRESHOLD": "0.15",
-            "CAPITAL_CAP": "0.25",
+            "AI_TRADING_CAPITAL_CAP": "0.25",
         }
     )
     changed = TradingConfig.from_env(
         {
             "MAX_DRAWDOWN_THRESHOLD": "0.15",
-            "CAPITAL_CAP": "0.30",
+            "AI_TRADING_CAPITAL_CAP": "0.30",
         }
     )
 
@@ -44,7 +44,7 @@ def test_log_config_effective_summary_emits_hash(caplog) -> None:
     cfg = TradingConfig.from_env(
         {
             "MAX_DRAWDOWN_THRESHOLD": "0.15",
-            "CAPITAL_CAP": "0.25",
+            "AI_TRADING_CAPITAL_CAP": "0.25",
         }
     )
 

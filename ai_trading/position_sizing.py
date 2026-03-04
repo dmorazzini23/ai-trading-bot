@@ -73,17 +73,21 @@ def _clamp(val: float, vmin: float | None, vmax: float | None) -> float:
 
 def _parse_env_max_position_size(*, strict: bool) -> float | None:
     deprecated_val = get_env(
-        "AI_TRADING_MAX_POSITION_SIZE",
+        "MAX_POSITION_SIZE",
         None,
         resolve_aliases=False,
     )
     if deprecated_val not in (None, ""):
         raise ValueError(
-            "AI_TRADING_MAX_POSITION_SIZE is deprecated. "
-            "Set MAX_POSITION_SIZE instead.",
+            "MAX_POSITION_SIZE is deprecated. "
+            "Set AI_TRADING_SIGNAL_MAX_POSITION_SIZE instead.",
         )
 
-    env_val = get_env("MAX_POSITION_SIZE", None, resolve_aliases=False)
+    env_val = get_env(
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
+        None,
+        resolve_aliases=False,
+    )
     if env_val in (None, ""):
         return None
     try:
@@ -91,13 +95,13 @@ def _parse_env_max_position_size(*, strict: bool) -> float | None:
     except ValueError as exc:
         if strict:
             raise ValueError(
-                f"MAX_POSITION_SIZE must be numeric, got {env_val!r}",
+                f"AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be numeric, got {env_val!r}",
             ) from exc
         _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
         return None
     if value <= 0:
         if strict:
-            raise ValueError("MAX_POSITION_SIZE must be positive")
+            raise ValueError("AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be positive")
         _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
         return None
     return value

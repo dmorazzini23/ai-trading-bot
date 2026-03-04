@@ -657,6 +657,23 @@ class ModelPromotion:
                 days_in_shadow = (datetime.now(UTC) - shadow_start_dt).days
             else:
                 days_in_shadow = 0
+            policy_min_oos_samples = max(
+                1,
+                int(
+                    get_env(
+                        "AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES",
+                        self.criteria.challenger_sequential_min_samples,
+                        cast=int,
+                    )
+                ),
+            )
+            policy_min_oos_net_bps = float(
+                get_env(
+                    "AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS",
+                    self.criteria.min_net_expectancy_bps,
+                    cast=float,
+                )
+            )
             checks = {
                 'min_sessions': metrics.sessions_completed >= self.criteria.min_shadow_sessions,
                 'min_days': days_in_shadow >= self.criteria.min_shadow_days,
@@ -698,6 +715,12 @@ class ModelPromotion:
                     metrics.challenger_sequential_passes
                     >= self.criteria.challenger_sequential_required_passes
                 ),
+                'policy_oos_samples_check': (
+                    metrics.challenger_eval_samples >= policy_min_oos_samples
+                ),
+                'policy_oos_net_check': (
+                    metrics.net_expectancy_bps >= policy_min_oos_net_bps
+                ),
             }
             eligible = all(checks.values())
             evaluation = {
@@ -731,6 +754,8 @@ class ModelPromotion:
                     'challenger_p_value': metrics.challenger_p_value,
                     'challenger_eval_samples': metrics.challenger_eval_samples,
                     'challenger_sequential_passes': metrics.challenger_sequential_passes,
+                    'policy_min_oos_samples': policy_min_oos_samples,
+                    'policy_min_oos_net_bps': policy_min_oos_net_bps,
                 },
                 'criteria': {
                     'min_sessions': self.criteria.min_shadow_sessions,
@@ -757,6 +782,8 @@ class ModelPromotion:
                     'min_challenger_uplift_bps': self.criteria.min_challenger_uplift_bps,
                     'challenger_sequential_min_samples': self.criteria.challenger_sequential_min_samples,
                     'challenger_sequential_required_passes': self.criteria.challenger_sequential_required_passes,
+                    'policy_min_oos_samples': policy_min_oos_samples,
+                    'policy_min_oos_net_bps': policy_min_oos_net_bps,
                 },
             }
             return (eligible, evaluation)

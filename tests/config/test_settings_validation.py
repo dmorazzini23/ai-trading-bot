@@ -20,8 +20,8 @@ def test_risk_parameters_validated():
 
 def test_max_position_size_positive():
     with pytest.raises(ValueError, match="max_position_size must be positive"):
-        Settings(MAX_POSITION_SIZE=-10)
-    s = Settings(MAX_POSITION_SIZE=1000)
+        Settings(AI_TRADING_SIGNAL_MAX_POSITION_SIZE=-10)
+    s = Settings(AI_TRADING_SIGNAL_MAX_POSITION_SIZE=1000)
     assert s.max_position_size == 1000
 
 

@@ -21,7 +21,7 @@ def get_max_position_size(cfg: TradingConfig) -> float:
         return float(val)
 
     try:
-        env_val = get_env("MAX_POSITION_SIZE", cast=float)
+        env_val = get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", cast=float)
     except (ImportError, RuntimeError):
         env_val = None
     if env_val is not None:
@@ -31,4 +31,3 @@ def get_max_position_size(cfg: TradingConfig) -> float:
 
 
 __all__ = ["get_max_position_size"]
-

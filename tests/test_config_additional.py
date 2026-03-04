@@ -48,11 +48,11 @@ def test_validate_alpaca_credentials_reads_runtime_env(monkeypatch):
 
 def test_reload_env_clears_cached_settings(monkeypatch):
     """reload_env should invalidate cached config settings objects."""
-    monkeypatch.setenv("CAPITAL_CAP", "0.31")
+    monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.31")
     config._reset_cached_settings()
     first = config.get_settings()
 
-    monkeypatch.setenv("CAPITAL_CAP", "0.44")
+    monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.44")
     config.reload_env(path=None)
     second = config.get_settings()
 

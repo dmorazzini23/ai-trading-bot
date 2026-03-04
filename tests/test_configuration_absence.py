@@ -37,6 +37,7 @@ def test_fail_fast_env_backfills_positive_risk_defaults(monkeypatch):
         "ALPACA_SECRET_KEY",
         "ALPACA_DATA_FEED",
         "WEBHOOK_SECRET",
+        "AI_TRADING_CAPITAL_CAP",
         "CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
         "ALPACA_API_URL",
@@ -66,5 +67,5 @@ def test_fail_fast_env_backfills_positive_risk_defaults(monkeypatch):
 
     m._fail_fast_env()
 
-    assert os.getenv("CAPITAL_CAP") == "0.25"
+    assert os.getenv("AI_TRADING_CAPITAL_CAP") == "0.25"
     assert os.getenv("DOLLAR_RISK_LIMIT") == "0.05"

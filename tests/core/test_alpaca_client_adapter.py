@@ -139,7 +139,7 @@ def test_initialize_production_config_avoids_adapter_warning(
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("ALPACA_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("ALPACA_API_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
     monkeypatch.setenv("EXECUTION_MODE", "live")
 
     reload_trading_config()
@@ -177,7 +177,7 @@ def test_initialize_production_config_avoids_adapter_warning(
         monkeypatch.delenv("APP_ENV", raising=False)
         monkeypatch.delenv("ALPACA_API_KEY", raising=False)
         monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-        monkeypatch.delenv("ALPACA_API_URL", raising=False)
+        monkeypatch.delenv("ALPACA_TRADING_BASE_URL", raising=False)
         monkeypatch.delenv("EXECUTION_MODE", raising=False)
         reload_trading_config()
         stub_be.trading_client = None
@@ -207,7 +207,7 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("ALPACA_API_KEY", "stub-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "stub-secret")
-    monkeypatch.setenv("ALPACA_API_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
     monkeypatch.setenv("EXECUTION_MODE", "live")
 
     reload_trading_config()
@@ -261,7 +261,7 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
         monkeypatch.delenv("APP_ENV", raising=False)
         monkeypatch.delenv("ALPACA_API_KEY", raising=False)
         monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-        monkeypatch.delenv("ALPACA_API_URL", raising=False)
+        monkeypatch.delenv("ALPACA_TRADING_BASE_URL", raising=False)
         monkeypatch.delenv("EXECUTION_MODE", raising=False)
         reload_trading_config()
         if original_bot_engine is None:

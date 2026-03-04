@@ -20,10 +20,10 @@ def test_env_overrides_and_defaults(monkeypatch):
     monkeypatch.setenv('AI_TRADING_KELLY_FRACTION_MAX', '0.20')
     monkeypatch.setenv('AI_TRADING_MIN_SAMPLE_SIZE', '12')
     monkeypatch.setenv('AI_TRADING_CONFIDENCE_LEVEL', '0.85')
-    monkeypatch.setenv('SIGNAL_CONFIRMATION_BARS', '3')
+    monkeypatch.setenv('AI_TRADING_SIGNAL_CONFIRMATION_BARS', '3')
     monkeypatch.setenv('DELTA_THRESHOLD', '0.05')
-    monkeypatch.setenv('MIN_CONFIDENCE', '0.75')
-    monkeypatch.setenv('POSITION_SIZE_MIN_USD', '50')
+    monkeypatch.setenv('AI_TRADING_MIN_CONFIDENCE', '0.75')
+    monkeypatch.setenv('AI_TRADING_POSITION_SIZE_MIN_USD', '50')
     cfg = TradingConfig.from_env()
     assert cfg.kelly_fraction_max == 0.20
     assert cfg.min_sample_size == 12

@@ -6,7 +6,7 @@ def test_fetch_summary_emitted(monkeypatch, caplog):
 
     monkeypatch.setenv("ALPACA_API_KEY", "x")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "y")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
 
     engine = be.BotEngine()
     bars = fake_fetch_bars()

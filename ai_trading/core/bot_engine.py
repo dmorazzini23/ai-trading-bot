@@ -179,6 +179,19 @@ from ai_trading.runtime.quarantine import (
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.run_manifest import write_run_manifest
 from ai_trading.models.artifacts import verify_artifact
+from ai_trading.policy.compiler import (
+    EffectivePolicy,
+    ExecutionCandidate,
+    PolicyConfigError,
+    SafetyTier,
+    approve_execution_candidate,
+    compile_effective_policy,
+    compute_expected_net_edge_bps,
+    decompose_tca_components,
+    evaluate_counterfactual_non_regression,
+    resolve_operational_safety_tier,
+    startup_policy_diff,
+)
 
 
 class CycleAbortSafeMode(RuntimeError):
@@ -4091,11 +4104,7 @@ def _resolve_runtime_trading_mode() -> str:
             getattr(cfg, "trading_mode", DEFAULT_TRADING_MODE)
         )
     except COMMON_EXC:
-        env_mode = (
-            os.getenv("TRADING_MODE")
-            or os.getenv("AI_TRADING_TRADING_MODE")
-            or DEFAULT_TRADING_MODE
-        )
+        env_mode = os.getenv("AI_TRADING_TRADING_MODE") or DEFAULT_TRADING_MODE
         return _normalize_runtime_trading_mode(env_mode)
 
 
@@ -8738,6 +8747,9 @@ class BotState:
     last_recon_ts: datetime | None = None
     halt_trading: bool = False
     halt_reason: str | None = None
+    effective_policy_hash: str = ""
+    operational_safety_tier: str = SafetyTier.NORMAL.value
+    effective_policy_snapshot_path: str | None = None
     dependency_breakers: DependencyBreakers | None = None
     pretrade_rate_limiter: SlidingWindowRateLimiter | None = None
     run_manifest_written: bool = False
@@ -14748,6 +14760,8 @@ class LazyBotContext:
                 logger.warning("Failed to subscribe to trade updates: %s", e)
 
         fetcher = data_fetcher_module.build_fetcher()
+        # Some test and fallback settings objects may not carry drawdown fields.
+        max_drawdown_threshold = float(getattr(CFG, "max_drawdown_threshold", 0.0) or 0.0)
         self._context = BotContext(
             api=trading_client,
             data_client=data_client,
@@ -14780,7 +14794,7 @@ class LazyBotContext:
             # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
             drawdown_circuit_breaker=(
                 DrawdownCircuitBreaker(
-                    max_drawdown=CFG.max_drawdown_threshold, recovery_threshold=0.8
+                    max_drawdown=max_drawdown_threshold, recovery_threshold=0.8
                 )
                 if DrawdownCircuitBreaker
                 else None
@@ -25951,7 +25965,7 @@ def _adaptive_mode_switch_enabled(cfg: TradingConfig) -> tuple[bool, str]:
         return False, "adaptive_disabled"
     precedence_policy = str(getattr(cfg, "trading_mode_precedence", "strict_mode") or "strict_mode").strip().lower()
     if precedence_policy == "env_wins":
-        if os.getenv("TRADING_MODE") not in (None, "") or os.getenv("AI_TRADING_TRADING_MODE") not in (None, ""):
+        if os.getenv("AI_TRADING_TRADING_MODE") not in (None, ""):
             return False, "env_wins_locked"
     return True, "enabled"
 
@@ -32340,6 +32354,47 @@ def _run_tca_cost_calibration(
     lookback_days = int(
         get_env("AI_TRADING_TCA_COST_CALIBRATION_LOOKBACK_DAYS", 45, cast=int)
     )
+    recent_records = _read_recent_tca_records(
+        str(_resolved_tca_path()),
+        max_records=max(50, int(get_env("AI_TRADING_TCA_FEEDBACK_MAX_RECORDS", 1500, cast=int))),
+    )
+    feedback = decompose_tca_components(recent_records)
+    target_total_bps = float(
+        get_env("AI_TRADING_TCA_FEEDBACK_TARGET_TOTAL_BPS", 12.0, cast=float)
+    )
+    target_ratio = float(
+        get_env("AI_TRADING_TCA_FEEDBACK_TARGET_EDGE_COST_RATIO", 1.25, cast=float)
+    )
+    feedback_total = float(feedback.get("total_bps", 0.0) or 0.0)
+    floor_adjust = max(0.0, feedback_total - target_total_bps)
+    ratio_adjust = 0.0
+    if target_total_bps > 0:
+        ratio_adjust = max(0.0, (feedback_total / target_total_bps) - 1.0)
+    feedback_payload = {
+        **feedback,
+        "target_total_bps": target_total_bps,
+        "target_edge_cost_ratio": target_ratio,
+        "edge_floor_adjust_bps": float(floor_adjust),
+        "edge_ratio_adjust": float(ratio_adjust),
+        "updated_at": now.isoformat(),
+    }
+    setattr(state, "_tca_feedback_components", feedback_payload)
+    feedback_path = resolve_runtime_artifact_path(
+        str(get_env("AI_TRADING_TCA_FEEDBACK_PATH", "runtime/tca_feedback.json")),
+        default_relative="runtime/tca_feedback.json",
+    )
+    try:
+        feedback_path.parent.mkdir(parents=True, exist_ok=True)
+        feedback_path.write_text(
+            json.dumps(feedback_payload, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "TCA_FEEDBACK_WRITE_FAILED",
+            extra={"error": str(exc), "path": str(feedback_path)},
+        )
+
     try:
         result = calibrate_cost_model_from_tca(
             tca_path=str(_resolved_tca_path()),
@@ -32363,6 +32418,23 @@ def _run_tca_cost_calibration(
                     else None
                 ),
                 "lookback_days": lookback_days,
+            },
+        )
+        logger.info(
+            "TCA_FEEDBACK_UPDATED",
+            extra={
+                "path": str(feedback_path),
+                "sample_count": int(float(feedback_payload.get("sample_count", 0.0) or 0.0)),
+                "total_bps": float(feedback_payload.get("total_bps", 0.0) or 0.0),
+                "spread_bps": float(feedback_payload.get("spread_bps", 0.0) or 0.0),
+                "impact_bps": float(feedback_payload.get("impact_bps", 0.0) or 0.0),
+                "timing_bps": float(feedback_payload.get("timing_bps", 0.0) or 0.0),
+                "edge_floor_adjust_bps": float(
+                    feedback_payload.get("edge_floor_adjust_bps", 0.0) or 0.0
+                ),
+                "edge_ratio_adjust": float(
+                    feedback_payload.get("edge_ratio_adjust", 0.0) or 0.0
+                ),
             },
         )
     finally:
@@ -32663,6 +32735,85 @@ def _load_replay_bars(
     return filtered
 
 
+def _replay_summary_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Build replay quality metrics for counterfactual non-regression checks."""
+
+    orders = result.get("orders", [])
+    events = result.get("events", [])
+    order_map: dict[str, Mapping[str, Any]] = {}
+    if isinstance(orders, list):
+        for order in orders:
+            if not isinstance(order, Mapping):
+                continue
+            order_id = str(order.get("id", "")).strip()
+            if order_id:
+                order_map[order_id] = order
+    fill_bps: list[float] = []
+    if isinstance(events, list):
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            if str(event.get("event_type", "")).strip().lower() != "fill":
+                continue
+            order_id = str(event.get("order_id", "")).strip()
+            order = order_map.get(order_id, {})
+            side = str(event.get("side", order.get("side", "buy"))).strip().lower()
+            try:
+                fill_price = float(event.get("fill_price"))
+            except (TypeError, ValueError):
+                continue
+            if fill_price <= 0:
+                continue
+            try:
+                ref_price = float(order.get("limit_price", order.get("price", fill_price)))
+            except (TypeError, ValueError):
+                ref_price = fill_price
+            if ref_price <= 0:
+                continue
+            if side == "sell":
+                bps = ((fill_price - ref_price) / ref_price) * 10_000.0
+            else:
+                bps = ((ref_price - fill_price) / ref_price) * 10_000.0
+            if math.isfinite(bps):
+                fill_bps.append(float(bps))
+    if not fill_bps:
+        return {"sample_count": 0, "net_edge_bps": 0.0, "max_drawdown_pct": 0.0}
+
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for value in fill_bps:
+        cumulative += value / 10_000.0
+        peak = max(peak, cumulative)
+        max_drawdown = max(max_drawdown, peak - cumulative)
+    return {
+        "sample_count": len(fill_bps),
+        "net_edge_bps": float(sum(fill_bps) / len(fill_bps)),
+        "max_drawdown_pct": float(max_drawdown),
+    }
+
+
+def _load_latest_replay_summary(output_dir: Path, *, before_path: Path) -> dict[str, Any] | None:
+    """Return latest replay summary payload for baseline non-regression comparison."""
+
+    candidates = sorted(output_dir.glob("replay_hash_*.json"))
+    for candidate in reversed(candidates):
+        if candidate.resolve() == before_path.resolve():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        summary = payload.get("replay_summary")
+        if isinstance(summary, Mapping):
+            return {
+                "sample_count": int(summary.get("sample_count", 0) or 0),
+                "net_edge_bps": float(summary.get("net_edge_bps", 0.0) or 0.0),
+                "max_drawdown_pct": float(summary.get("max_drawdown_pct", 0.0) or 0.0),
+            }
+    return None
+
+
 def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: bool) -> None:
     if not _replay_schedule_due(state, now=now, market_open_now=market_open_now):
         return
@@ -32793,6 +32944,46 @@ def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: b
     output_dir = Path(str(get_env("AI_TRADING_REPLAY_OUTPUT_DIR", "runtime/replay_outputs")))
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
+    replay_summary = _replay_summary_metrics(first)
+    baseline_summary = _load_latest_replay_summary(output_dir, before_path=out_path)
+    governance = getattr(getattr(state, "_effective_policy", None), "governance", None)
+    min_samples = int(get_env("AI_TRADING_POLICY_REPLAY_MIN_SAMPLES", 100, cast=int))
+    net_tolerance_bps = float(
+        get_env("AI_TRADING_POLICY_REPLAY_NET_TOLERANCE_BPS", 2.0, cast=float)
+    )
+    drawdown_tolerance_pct = float(
+        get_env("AI_TRADING_POLICY_REPLAY_DRAWDOWN_TOLERANCE_PCT", 0.01, cast=float)
+    )
+    if governance is not None:
+        try:
+            min_samples = int(getattr(governance, "replay_min_samples"))
+            net_tolerance_bps = float(getattr(governance, "replay_net_tolerance_bps"))
+            drawdown_tolerance_pct = float(
+                getattr(governance, "replay_drawdown_tolerance_pct")
+            )
+        except (TypeError, ValueError):
+            pass
+    counterfactual: dict[str, Any] | None = None
+    require_non_regression = bool(
+        get_env("AI_TRADING_REPLAY_REQUIRE_NON_REGRESSION", True, cast=bool)
+    )
+    if baseline_summary is not None:
+        passed, details = evaluate_counterfactual_non_regression(
+            baseline=baseline_summary,
+            candidate=replay_summary,
+            min_samples=min_samples,
+            net_tolerance_bps=net_tolerance_bps,
+            drawdown_tolerance_pct=drawdown_tolerance_pct,
+        )
+        counterfactual = {"passed": bool(passed), **details}
+        if require_non_regression and not passed:
+            raise RuntimeError("REPLAY_POLICY_NON_REGRESSION_FAILED")
+    else:
+        counterfactual = {
+            "passed": True,
+            "reason": "no_baseline_summary",
+            "candidate": replay_summary,
+        }
     out_path.write_text(
         json.dumps(
             {
@@ -32815,6 +33006,8 @@ def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: b
                     )
                 ),
                 "violations": first.get("violations", []),
+                "replay_summary": replay_summary,
+                "counterfactual": counterfactual,
             },
             sort_keys=True,
         ),
@@ -32829,6 +33022,8 @@ def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: b
             "rows": len(normalized_bars),
             "path": str(out_path),
             "violations": len(first.get("violations", [])),
+            "replay_summary": replay_summary,
+            "counterfactual_passed": bool((counterfactual or {}).get("passed", True)),
         },
     )
     state.last_replay_run_date = now.date()
@@ -33086,7 +33281,72 @@ def _decision_record_config_snapshot(
         get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_INCLUDE_LIQ_REGIME", True, cast=bool)
     ):
         snapshot["liquidity_regime"] = liquidity_regime
+    snapshot["effective_policy_hash"] = str(getattr(state, "effective_policy_hash", "") or "")
+    snapshot["operational_safety_tier"] = str(
+        getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value)
+    )
     return snapshot
+
+
+def _compile_effective_policy_runtime(cfg: TradingConfig, state: BotState) -> EffectivePolicy:
+    """Compile and cache immutable effective policy for the active runtime."""
+
+    policy = compile_effective_policy(cfg)
+    previous_hash = str(getattr(state, "effective_policy_hash", "") or "")
+    setattr(state, "_effective_policy", policy)
+    state.effective_policy_hash = str(policy.policy_hash)
+    if previous_hash != policy.policy_hash:
+        logger.info(
+            "EFFECTIVE_POLICY_COMPILED",
+            extra={
+                "policy_hash": policy.policy_hash,
+                "trading_mode": policy.trading_mode,
+                "objective": policy.objective.objective_name,
+            },
+        )
+    if not bool(getattr(state, "_effective_policy_diff_logged", False)):
+        diffs = startup_policy_diff(policy)
+        logger.info(
+            "EFFECTIVE_POLICY_STARTUP_DIFF",
+            extra={"diff_count": len(diffs), "diffs": diffs[:20]},
+        )
+        setattr(state, "_effective_policy_diff_logged", True)
+    return policy
+
+
+def _active_effective_policy(state: BotState, cfg: TradingConfig) -> EffectivePolicy:
+    """Return cached effective policy, compiling if absent."""
+
+    cached = getattr(state, "_effective_policy", None)
+    if isinstance(cached, EffectivePolicy):
+        return cached
+    return _compile_effective_policy_runtime(cfg, state)
+
+
+def _persist_effective_policy_snapshot(
+    state: BotState,
+    policy: EffectivePolicy,
+    *,
+    loop_id: str | None = None,
+) -> None:
+    """Persist the effective policy snapshot for cycle-by-cycle auditability."""
+
+    target = resolve_runtime_artifact_path(
+        "runtime/effective_policy.json",
+        default_relative="runtime/effective_policy.json",
+    )
+    payload = {
+        "ts": datetime.now(UTC).isoformat(),
+        "loop_id": str(loop_id or ""),
+        "policy_hash": policy.policy_hash,
+        "operational_safety_tier": str(
+            getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value)
+        ),
+        "effective_policy": policy.to_dict(),
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
+    state.effective_policy_snapshot_path = str(target)
 
 
 def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now: datetime) -> bool:
@@ -33181,6 +33441,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     from ai_trading.oms.ledger import LedgerEntry, OrderLedger, deterministic_client_order_id
 
     cfg = _resolve_trading_config(runtime)
+    try:
+        effective_policy = _active_effective_policy(state, cfg)
+    except PolicyConfigError as exc:
+        state.halt_trading = True
+        state.halt_reason = "EFFECTIVE_POLICY_INVALID"
+        logger.error("EFFECTIVE_POLICY_INVALID", extra={"error": str(exc)})
+        return
     now = datetime.now(UTC)
     market_open_now = market_is_open(now)
     _run_post_trade_learning_update(state, now=now, market_open_now=market_open_now)
@@ -33802,21 +34069,52 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     proposal.blocked = True
                     proposal.reason_code = "COST_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
+            net_edge_bps = compute_expected_net_edge_bps(
+                float(proposal.expected_edge_bps),
+                float(proposal.expected_cost_bps),
+                fee_bps=float(effective_policy.objective.fee_bps),
+                borrow_bps=float(effective_policy.objective.borrow_bps),
+            )
+            proposal.debug["expected_net_edge_bps"] = net_edge_bps
+            if (
+                not proposal.blocked
+                and net_edge_bps < float(effective_policy.objective.min_expected_net_edge_bps)
+            ):
+                proposal.blocked = True
+                proposal.reason_code = "NET_EDGE_FLOOR_GATE"
+                proposal.target_dollars = positions.get(symbol, 0.0) * price
             if strict_edge_gate_enabled and not proposal.blocked:
+                tca_feedback = getattr(state, "_tca_feedback_components", {})
+                edge_floor_adjust = 0.0
+                edge_ratio_adjust = 0.0
+                if isinstance(tca_feedback, Mapping):
+                    try:
+                        edge_floor_adjust = float(tca_feedback.get("edge_floor_adjust_bps", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        edge_floor_adjust = 0.0
+                    try:
+                        edge_ratio_adjust = float(tca_feedback.get("edge_ratio_adjust", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        edge_ratio_adjust = 0.0
                 edge_bps = max(float(proposal.expected_edge_bps), 0.0)
                 cost_bps = max(float(proposal.expected_cost_bps), 1e-6)
                 edge_ratio = edge_bps / cost_bps
-                if edge_bps < edge_min_expected_bps:
+                effective_edge_floor = max(
+                    edge_min_expected_bps + max(edge_floor_adjust, 0.0),
+                    float(effective_policy.objective.min_expected_net_edge_bps),
+                )
+                effective_edge_ratio = edge_cost_min_ratio + max(edge_ratio_adjust, 0.0)
+                if edge_bps < effective_edge_floor:
                     proposal.blocked = True
                     proposal.reason_code = "EDGE_FLOOR_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
-                elif edge_ratio < edge_cost_min_ratio:
+                elif edge_ratio < effective_edge_ratio:
                     proposal.blocked = True
                     proposal.reason_code = "EDGE_COST_RATIO_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
                 proposal.debug["edge_to_cost_ratio"] = edge_ratio
-                proposal.debug["edge_cost_min_ratio"] = edge_cost_min_ratio
-                proposal.debug["edge_min_expected_bps"] = edge_min_expected_bps
+                proposal.debug["edge_cost_min_ratio"] = effective_edge_ratio
+                proposal.debug["edge_min_expected_bps"] = effective_edge_floor
             if proposal.blocked:
                 proposals_blocked += 1
 
@@ -33979,14 +34277,21 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     candidate_rank: dict[str, float] = {}
     for symbol, target in targets.items():
-        edge_total = sum(max(float(proposal.expected_edge_bps), 0.0) for proposal in target.proposals)
-        cost_total = sum(max(float(proposal.expected_cost_bps), 0.0) for proposal in target.proposals)
+        net_edge_total = sum(
+            compute_expected_net_edge_bps(
+                float(proposal.expected_edge_bps),
+                float(proposal.expected_cost_bps),
+                fee_bps=float(effective_policy.objective.fee_bps),
+                borrow_bps=float(effective_policy.objective.borrow_bps),
+            )
+            for proposal in target.proposals
+        )
         max_conf = max((float(proposal.confidence) for proposal in target.proposals), default=0.0)
         disagreement = float(target.disagreement_ratio) if target.disagreement_ratio is not None else 1.0
         if not math.isfinite(disagreement):
             disagreement = 1.0
         disagreement = max(0.05, min(disagreement, 1.0))
-        rank_score = (edge_total - cost_total) * max(max_conf, 0.05) * disagreement
+        rank_score = max(net_edge_total, -1000.0) * max(max_conf, 0.05) * disagreement
         candidate_rank[symbol] = rank_score
     setattr(runtime, "execution_candidate_rank", candidate_rank)
 
@@ -34265,6 +34570,46 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 slo_derisk_details["scale_mult"] = configured_scale
             logger.warning("DERISK_SLO_BREACH", extra=slo_derisk_details)
 
+    expected_net_edge_cycle = 0.0
+    if candidate_rank:
+        try:
+            expected_net_edge_cycle = float(max(candidate_rank.values()))
+        except Exception:
+            expected_net_edge_cycle = 0.0
+    pending_symbol_count = len(blocked_symbols)
+    previous_tier_raw = str(getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value) or SafetyTier.NORMAL.value)
+    try:
+        previous_tier = SafetyTier(previous_tier_raw)
+    except ValueError:
+        previous_tier = SafetyTier.NORMAL
+    operational_tier, tier_reasons = resolve_operational_safety_tier(
+        effective_policy,
+        {
+            "pending_oldest_age_sec": float(slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0),
+            "order_pacing_cap_hit_rate_pct": float(
+                slo_derisk_details.get("order_pacing_cap_hit_rate_pct", 0.0) or 0.0
+            ),
+            "live_calibration_ece": float(slo_derisk_details.get("calibration_ece", 0.0) or 0.0),
+            "live_calibration_brier": float(slo_derisk_details.get("calibration_brier", 0.0) or 0.0),
+            "pending_orders_count": int(max(pending_symbol_count, 0)),
+            "expected_net_edge_bps": float(expected_net_edge_cycle),
+            "kill_switch": bool(kill_switch),
+        },
+        previous=previous_tier,
+    )
+    state.operational_safety_tier = operational_tier.value
+    if operational_tier != previous_tier:
+        log_level = logging.WARNING if operational_tier is SafetyTier.SAFE else logging.INFO
+        logger.log(
+            log_level,
+            "OPERATIONAL_SAFETY_TIER_CHANGED",
+            extra={
+                "previous": previous_tier.value,
+                "current": operational_tier.value,
+                "reasons": list(tier_reasons),
+            },
+        )
+
     liq_regime_enabled = bool(get_env("AI_TRADING_LIQ_REGIME_ENABLED", True, cast=bool))
     event_blackout_enabled = bool(get_env("AI_TRADING_EVENT_RISK_BLACKOUT_ENABLED", True, cast=bool))
     event_blackout_days = max(0, int(get_env("AI_TRADING_EVENT_BLACKOUT_DAYS", 3, cast=int)))
@@ -34314,6 +34659,20 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             ttl_seconds=derisk_log_ttl_s,
         ):
             logger.warning("PRIMARY_FEED_DERISK_ACTIVE", extra=dict(primary_feed_derisk))
+
+    portfolio_current_gross = 0.0
+    sector_gross: dict[str, float] = {}
+    symbols_for_exposure = set(positions.keys()) | set(latest_price.keys())
+    for exposure_symbol in symbols_for_exposure:
+        px = float(latest_price.get(exposure_symbol, 0.0) or 0.0)
+        qty = float(positions.get(exposure_symbol, 0.0) or 0.0)
+        notional = abs(qty * px)
+        if notional <= 0.0:
+            continue
+        portfolio_current_gross += notional
+        sector = str(get_sector(exposure_symbol) or "UNKNOWN").upper()
+        sector_gross[sector] = sector_gross.get(sector, 0.0) + notional
+
     for symbol, net_target in targets.items():
         liq_features = latest_liquidity.get(
             symbol,
@@ -34720,6 +35079,97 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
 
+        side = "buy" if delta_shares > 0 else "sell"
+        expected_edge_total = sum(
+            max(float(proposal.expected_edge_bps), 0.0) for proposal in net_target.proposals
+        )
+        expected_cost_total = sum(
+            max(float(proposal.expected_cost_bps), 0.0) for proposal in net_target.proposals
+        )
+        calibration_samples = int(
+            max(
+                float(slo_derisk_details.get("calibration_ece_samples", 0) or 0.0),
+                float(slo_derisk_details.get("calibration_brier_samples", 0) or 0.0),
+            )
+        )
+        ece_value = float(slo_derisk_details.get("calibration_ece", 0.0) or 0.0)
+        brier_value = float(slo_derisk_details.get("calibration_brier", 0.0) or 0.0)
+        if liq_regime is LiquidityRegime.THIN:
+            ece_limit = float(effective_policy.calibration.max_ece_stress)
+            brier_limit = float(effective_policy.calibration.max_brier_stress)
+        else:
+            ece_limit = float(effective_policy.calibration.max_ece_normal)
+            brier_limit = float(effective_policy.calibration.max_brier_normal)
+        calibration_ok = (
+            calibration_samples < int(effective_policy.calibration.min_samples)
+            or (ece_value <= ece_limit and brier_value <= brier_limit)
+        )
+        pacing_headroom = 999999
+        if max_new_orders_per_cycle is not None:
+            pacing_headroom = max(0, int(max_new_orders_per_cycle) - int(orders_attempted))
+        stale_orders_present = bool(
+            float(slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0) > 0.0
+        )
+        current_notional = abs(float(current_shares) * float(price))
+        post_notional = abs(float(current_shares + delta_shares) * float(price))
+        portfolio_post_gross = max(0.0, portfolio_current_gross - current_notional + post_notional)
+        sector_name = str(get_sector(symbol) or "UNKNOWN").upper()
+        sector_current_gross = float(sector_gross.get(sector_name, 0.0) or 0.0)
+        sector_post_gross = max(0.0, sector_current_gross - current_notional + post_notional)
+        factor_post_ratio = sector_post_gross / max(portfolio_post_gross, 1.0)
+        safety_tier_raw = str(getattr(state, "operational_safety_tier", SafetyTier.NORMAL.value) or SafetyTier.NORMAL.value)
+        try:
+            safety_tier = SafetyTier(safety_tier_raw)
+        except ValueError:
+            safety_tier = SafetyTier.NORMAL
+        approval = approve_execution_candidate(
+            effective_policy,
+            ExecutionCandidate(
+                symbol=symbol,
+                side=side,
+                proposed_delta_shares=int(delta_shares),
+                current_shares=int(current_shares),
+                price=float(price),
+                expected_edge_bps=float(expected_edge_total),
+                expected_cost_bps=float(expected_cost_total),
+                confidence=max((float(p.confidence) for p in net_target.proposals), default=0.0),
+                spread_bps=float(liq_features.spread_bps),
+                rolling_volume=float(liq_features.rolling_volume),
+                pending_oldest_age_sec=float(
+                    slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0
+                ),
+                pacing_headroom=int(pacing_headroom),
+                stale_orders_present=stale_orders_present,
+                calibration_ok=calibration_ok,
+                portfolio_post_gross_dollars=float(portfolio_post_gross),
+                sleeve_post_notional_dollars=max(
+                    (abs(float(p.target_dollars)) for p in net_target.proposals),
+                    default=0.0,
+                ),
+                factor_post_ratio=float(factor_post_ratio),
+                safety_tier=safety_tier,
+            ),
+        )
+        if approval.reasons:
+            for reason in approval.reasons:
+                if reason not in gates:
+                    gates.append(reason)
+        if not approval.allowed:
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                metrics={"expected_net_edge_bps": approval.expected_net_edge_bps},
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+            continue
+        if int(approval.adjusted_delta_shares) != int(delta_shares):
+            delta_shares = int(approval.adjusted_delta_shares)
+            net_target.target_shares = current_shares + delta_shares
+            net_target.target_dollars = net_target.target_shares * price
         side = "buy" if delta_shares > 0 else "sell"
         client_order_id = deterministic_client_order_id(
             salt=str(getattr(cfg, "seed", "seed")),
@@ -35235,11 +35685,23 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         _ensure_execution_engine(runtime)
         _enforce_dependency_preflight(runtime)
         cfg_runtime = _resolve_trading_config(runtime)
+        try:
+            effective_policy = _compile_effective_policy_runtime(cfg_runtime, state)
+        except PolicyConfigError as exc:
+            logger.error("EFFECTIVE_POLICY_INVALID", extra={"error": str(exc)})
+            state.halt_trading = True
+            state.halt_reason = "EFFECTIVE_POLICY_INVALID"
+            return
         if not state.run_manifest_written:
             try:
                 write_run_manifest(
                     cfg_runtime,
                     runtime_contract={"stubs_enabled": False},
+                    effective_policy_hash=str(getattr(state, "effective_policy_hash", "") or ""),
+                    effective_policy={
+                        "trading_mode": effective_policy.trading_mode,
+                        "objective": effective_policy.objective.objective_name,
+                    },
                 )
             except Exception as exc:
                 logger.warning(
@@ -35288,6 +35750,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
             return  # skip work when market closed
         loop_start = monotonic_time()
+        _persist_effective_policy_snapshot(state, effective_policy, loop_id=loop_id)
         state.execution_metrics = ExecutionCycleMetrics()
         api = getattr(runtime, "api", None)
         if api is None and os.getenv("PYTEST_RUNNING"):
@@ -35522,7 +35985,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
 
             # Log standardized market fetch heartbeat (configurable)
-            if CFG.log_market_fetch:
+            if bool(getattr(CFG, "log_market_fetch", True)):
                 logger.info("MARKET_FETCH")
             else:
                 logger.debug("MARKET_FETCH")

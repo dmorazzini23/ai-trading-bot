@@ -243,6 +243,25 @@ def _block_network(monkeypatch):
 def _env_defaults(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "dummy")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+    # Enforce canonical env contract in tests; legacy aliases must not leak
+    # from developer shells or prior tests.
+    for key in (
+        "TRADING_MODE",
+        "TRADING_MODE_PRECEDENCE",
+        "TRADING_MODE_ADAPTIVE_ENABLED",
+        "CAPITAL_CAP",
+        "DAILY_LOSS_LIMIT",
+        "MAX_POSITION_SIZE",
+        "AI_TRADING_MAX_POSITION_SIZE",
+        "TAKE_PROFIT_FACTOR",
+        "BUY_THRESHOLD",
+        "MIN_CONFIDENCE",
+        "CONF_THRESHOLD",
+        "KELLY_FRACTION",
+        "KELLY_FRACTION_MAX",
+        "SIGNAL_CONFIRMATION_BARS",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture(autouse=True)

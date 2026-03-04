@@ -45,9 +45,9 @@ def test_nested_validation_calls_no_deadlock():
         'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
         'WEBHOOK_SECRET': 'test_webhook_secret',
         'SCHEDULER_SLEEP_SECONDS': '30',
-        'CAPITAL_CAP': '0.04',
+        'AI_TRADING_CAPITAL_CAP': '0.04',
         'DOLLAR_RISK_LIMIT': '0.05',
-        'MAX_POSITION_SIZE': '1000',
+        'AI_TRADING_SIGNAL_MAX_POSITION_SIZE': '1000',
     }
 
     with patch.dict(os.environ, env_vars):
@@ -118,9 +118,9 @@ def test_validation_with_proper_env_vars():
         'ALPACA_TRADING_BASE_URL': 'https://paper-api.alpaca.markets',
         'WEBHOOK_SECRET': 'test_webhook_secret',
         'SCHEDULER_SLEEP_SECONDS': '30',
-        'CAPITAL_CAP': '0.04',
+        'AI_TRADING_CAPITAL_CAP': '0.04',
         'DOLLAR_RISK_LIMIT': '0.05',
-        'MAX_POSITION_SIZE': '1000',
+        'AI_TRADING_SIGNAL_MAX_POSITION_SIZE': '1000',
     }
 
     with patch.dict(os.environ, env_vars):

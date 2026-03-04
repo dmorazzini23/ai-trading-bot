@@ -13,6 +13,8 @@ import pytest
 os.environ["TESTING"] = "1"
 os.environ["MAX_DRAWDOWN_THRESHOLD"] = "0.2"
 os.environ.pop("MAX_POSITION_SIZE", None)
+os.environ.pop("AI_TRADING_MAX_POSITION_SIZE", None)
+os.environ.pop("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", None)
 
 from ai_trading.config import TradingConfig
 from ai_trading.config.management import get_env, reload_trading_config
@@ -25,6 +27,8 @@ class TestCentralizedConfig:
     def test_trading_config_initialization(self, monkeypatch):
         """Test that TradingConfig initializes correctly from environment."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
         # Guard against developer shells exporting these knobs (e.g. sourced .env).
         monkeypatch.delenv("CAPITAL_CAP", raising=False)
         monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
@@ -38,12 +42,12 @@ class TestCentralizedConfig:
 
     def test_trading_config_from_env(self):
         """Test loading configuration from environment with type casting."""
-        os.environ["BUY_THRESHOLD"] = "0.5"
+        os.environ["AI_TRADING_BUY_THRESHOLD"] = "0.5"
         os.environ["SIGNAL_PERIOD"] = "10"
         try:
             config = TradingConfig.from_env()
         finally:
-            del os.environ["BUY_THRESHOLD"]
+            del os.environ["AI_TRADING_BUY_THRESHOLD"]
             del os.environ["SIGNAL_PERIOD"]
 
         # Should load successfully with proper defaults and casting
@@ -118,10 +122,13 @@ class TestCentralizedConfig:
         for key in (
             "MAX_POSITION_SIZE",
             "AI_TRADING_MAX_POSITION_SIZE",
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
             "KELLY_FRACTION",
+            "AI_TRADING_KELLY_FRACTION",
             "CONF_THRESHOLD",
             "AI_TRADING_CONF_THRESHOLD",
             "DAILY_LOSS_LIMIT",
+            "AI_TRADING_DAILY_LOSS_LIMIT",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -186,21 +193,23 @@ class TestCentralizedConfig:
             "AI_TRADING_DAILY_LOSS_LIMIT",
             "MAX_POSITION_SIZE",
             "AI_TRADING_MAX_POSITION_SIZE",
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
             "CAPITAL_CAP",
             "AI_TRADING_CAPITAL_CAP",
             "TAKE_PROFIT_FACTOR",
+            "AI_TRADING_TAKE_PROFIT_FACTOR",
         ):
             monkeypatch.delenv(key, raising=False)
 
-        monkeypatch.setenv("TRADING_MODE", mode)
+        monkeypatch.setenv("AI_TRADING_TRADING_MODE", mode)
         reload_trading_config()
 
-        assert get_env("KELLY_FRACTION", cast=float) == pytest.approx(expected["kelly_fraction"])
-        assert get_env("CONF_THRESHOLD", cast=float) == pytest.approx(expected["conf_threshold"])
-        assert get_env("DAILY_LOSS_LIMIT", cast=float) == pytest.approx(expected["daily_loss_limit"])
-        assert get_env("MAX_POSITION_SIZE", cast=float) == pytest.approx(expected["max_position_size"])
-        assert get_env("CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
-        assert get_env("TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(expected["take_profit_factor"])
+        assert get_env("AI_TRADING_KELLY_FRACTION", cast=float) == pytest.approx(expected["kelly_fraction"])
+        assert get_env("AI_TRADING_CONF_THRESHOLD", cast=float) == pytest.approx(expected["conf_threshold"])
+        assert get_env("AI_TRADING_DAILY_LOSS_LIMIT", cast=float) == pytest.approx(expected["daily_loss_limit"])
+        assert get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", cast=float) == pytest.approx(expected["max_position_size"])
+        assert get_env("AI_TRADING_CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
+        assert get_env("AI_TRADING_TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(expected["take_profit_factor"])
 
     def test_mode_overlays_respect_explicit_env(self, monkeypatch):
         """Explicit env vars must take precedence over presets."""
@@ -209,32 +218,35 @@ class TestCentralizedConfig:
             "TRADING_MODE",
             "MAX_POSITION_SIZE",
             "AI_TRADING_MAX_POSITION_SIZE",
+            "AI_TRADING_TRADING_MODE",
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
         ):
             monkeypatch.delenv(key, raising=False)
 
-        monkeypatch.setenv("TRADING_MODE", "conservative")
-        monkeypatch.setenv("MAX_POSITION_SIZE", "9100")
+        monkeypatch.setenv("AI_TRADING_TRADING_MODE", "conservative")
+        monkeypatch.setenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", "9100")
 
         reload_trading_config()
 
-        assert get_env("MAX_POSITION_SIZE", cast=float) == pytest.approx(9100.0)
+        assert get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", cast=float) == pytest.approx(9100.0)
 
-    def test_mode_overlays_respect_deprecated_alias(self, monkeypatch):
-        """Deprecated aliases should still override presets."""
+    def test_mode_overlays_respect_canonical_override(self, monkeypatch):
+        """Canonical knobs should override mode presets."""
 
         for key in (
             "TRADING_MODE",
             "CONF_THRESHOLD",
             "AI_TRADING_CONF_THRESHOLD",
+            "AI_TRADING_TRADING_MODE",
         ):
             monkeypatch.delenv(key, raising=False)
 
-        monkeypatch.setenv("TRADING_MODE", "aggressive")
+        monkeypatch.setenv("AI_TRADING_TRADING_MODE", "aggressive")
         monkeypatch.setenv("AI_TRADING_CONF_THRESHOLD", "0.91")
 
         reload_trading_config()
 
-        assert get_env("CONF_THRESHOLD", cast=float) == pytest.approx(0.91)
+        assert get_env("AI_TRADING_CONF_THRESHOLD", cast=float) == pytest.approx(0.91)
 
     @pytest.mark.parametrize(
         ("mode", "expected"),
@@ -289,33 +301,35 @@ class TestCentralizedConfig:
             "AI_TRADING_DAILY_LOSS_LIMIT",
             "MAX_POSITION_SIZE",
             "AI_TRADING_MAX_POSITION_SIZE",
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
             "CAPITAL_CAP",
             "AI_TRADING_CAPITAL_CAP",
             "TAKE_PROFIT_FACTOR",
+            "AI_TRADING_TAKE_PROFIT_FACTOR",
         ):
             monkeypatch.delenv(key, raising=False)
 
         monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
-        monkeypatch.setenv("TRADING_MODE", "aggressive")
+        monkeypatch.setenv("AI_TRADING_TRADING_MODE", "aggressive")
         reload_trading_config()
 
-        monkeypatch.setenv("TRADING_MODE", mode)
+        monkeypatch.setenv("AI_TRADING_TRADING_MODE", mode)
         reload_trading_config()
 
-        assert get_env("KELLY_FRACTION", cast=float) == pytest.approx(
+        assert get_env("AI_TRADING_KELLY_FRACTION", cast=float) == pytest.approx(
             expected["kelly_fraction"]
         )
-        assert get_env("CONF_THRESHOLD", cast=float) == pytest.approx(
+        assert get_env("AI_TRADING_CONF_THRESHOLD", cast=float) == pytest.approx(
             expected["conf_threshold"]
         )
-        assert get_env("DAILY_LOSS_LIMIT", cast=float) == pytest.approx(
+        assert get_env("AI_TRADING_DAILY_LOSS_LIMIT", cast=float) == pytest.approx(
             expected["daily_loss_limit"]
         )
-        assert get_env("MAX_POSITION_SIZE", cast=float) == pytest.approx(
+        assert get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", cast=float) == pytest.approx(
             expected["max_position_size"]
         )
-        assert get_env("CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
-        assert get_env("TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(
+        assert get_env("AI_TRADING_CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
+        assert get_env("AI_TRADING_TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(
             expected["take_profit_factor"]
         )
 
@@ -324,6 +338,8 @@ class TestCentralizedConfig:
     def test_conservative_mode_parameters(self, monkeypatch):
         """Test conservative mode specific values."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
         monkeypatch.delenv("CAPITAL_CAP", raising=False)
         monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env("conservative")
@@ -338,6 +354,8 @@ class TestCentralizedConfig:
     def test_balanced_mode_parameters(self, monkeypatch):
         """Test balanced mode specific values."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
         monkeypatch.delenv("CAPITAL_CAP", raising=False)
         monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env("balanced")
@@ -352,6 +370,8 @@ class TestCentralizedConfig:
     def test_aggressive_mode_parameters(self, monkeypatch):
         """Test aggressive mode specific values."""
         monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
+        monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
         monkeypatch.delenv("CAPITAL_CAP", raising=False)
         monkeypatch.delenv("AI_TRADING_CAPITAL_CAP", raising=False)
         config = TradingConfig.from_env("aggressive")
@@ -366,9 +386,9 @@ class TestCentralizedConfig:
     def test_modern_parameter_access(self):
         """TradingConfig exposes modern field names."""
         env = {
-            "CAPITAL_CAP": "0.5",
+            "AI_TRADING_CAPITAL_CAP": "0.5",
             "DOLLAR_RISK_LIMIT": "0.2",
-            "MAX_POSITION_SIZE": "1000",
+            "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": "1000",
             "MAX_DRAWDOWN_THRESHOLD": "0.2",
         }
         config = TradingConfig.from_env(env)
@@ -449,8 +469,8 @@ class TestCentralizedConfig:
     def test_environment_variable_override(self):
         """Test that environment variables can override default values."""
         # Set environment variable
-        os.environ["KELLY_FRACTION"] = "0.35"
-        os.environ["CONF_THRESHOLD"] = "0.72"
+        os.environ["AI_TRADING_KELLY_FRACTION"] = "0.35"
+        os.environ["AI_TRADING_CONF_THRESHOLD"] = "0.72"
 
         try:
             config = TradingConfig.from_env("balanced")
@@ -461,10 +481,10 @@ class TestCentralizedConfig:
 
         finally:
             # Clean up environment variables
-            if "KELLY_FRACTION" in os.environ:
-                del os.environ["KELLY_FRACTION"]
-            if "CONF_THRESHOLD" in os.environ:
-                del os.environ["CONF_THRESHOLD"]
+            if "AI_TRADING_KELLY_FRACTION" in os.environ:
+                del os.environ["AI_TRADING_KELLY_FRACTION"]
+            if "AI_TRADING_CONF_THRESHOLD" in os.environ:
+                del os.environ["AI_TRADING_CONF_THRESHOLD"]
 
     def test_parameter_ranges(self):
         """Test that parameters are within reasonable ranges."""

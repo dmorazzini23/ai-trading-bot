@@ -10,16 +10,17 @@ def test_startup_without_max_position_size(monkeypatch, caplog):
         "ALPACA_SECRET_KEY": "dummy",
         "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
         "WEBHOOK_SECRET": "secret",
-        "CAPITAL_CAP": "0.04",
+        "AI_TRADING_CAPITAL_CAP": "0.04",
         "DOLLAR_RISK_LIMIT": "0.05",
     }
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+    monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
     monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
 
     snapshot = validate_required_env()
-    assert "MAX_POSITION_SIZE" not in snapshot
+    assert "AI_TRADING_SIGNAL_MAX_POSITION_SIZE" not in snapshot
     assert snapshot["ALPACA_API_KEY"] == "***"
     assert snapshot["ALPACA_SECRET_KEY"] == "***"
 

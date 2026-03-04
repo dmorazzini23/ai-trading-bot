@@ -12,13 +12,14 @@ def test_max_position_size_consistency(monkeypatch, caplog):
     # Minimal env so TradingConfig.from_env works
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
-    monkeypatch.setenv("ALPACA_API_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
     monkeypatch.setenv("WEBHOOK_SECRET", "wh")
-    monkeypatch.setenv("CAPITAL_CAP", "0.04")
+    monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", "0.04")
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")
     monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
     monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+    monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
     monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
 
     # Avoid external side effects
@@ -72,9 +73,9 @@ def test_auto_max_position_mode_overrides_provided_size(monkeypatch, caplog):
     equity = 125_432.78
     expected_size = float(floor(equity * capital_cap))
 
-    monkeypatch.setenv("CAPITAL_CAP", str(capital_cap))
+    monkeypatch.setenv("AI_TRADING_CAPITAL_CAP", str(capital_cap))
     monkeypatch.setenv("MAX_POSITION_MODE", "auto")
-    monkeypatch.setenv("MAX_POSITION_SIZE", "99999")
+    monkeypatch.setenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", "99999")
     monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.15")
 
     monkeypatch.setattr(

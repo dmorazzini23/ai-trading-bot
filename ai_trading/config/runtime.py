@@ -242,7 +242,7 @@ def _validate_bounds(spec: ConfigSpec, value: Any) -> Any:
     if isinstance(value, (int, float)):
         if spec.min_value is not None and value < spec.min_value:
             if spec.field == "max_position_size":
-                raise ValueError("MAX_POSITION_SIZE must be positive")
+                raise ValueError("AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be positive")
             raise ValueError(
                 f"{spec.field} must be >= {spec.min_value}, got {value}"
             )
@@ -263,8 +263,20 @@ _FAIL_FAST_DEPRECATED_FIELDS: frozenset[str] = frozenset(
     {
         "alpaca_base_url",
         "alpaca_data_base_url",
+        "capital_cap",
+        "daily_loss_limit",
         "max_position_size",
+        "take_profit_factor",
+        "buy_threshold",
+        "kelly_fraction",
+        "kelly_fraction_max",
+        "min_confidence",
+        "conf_threshold",
+        "signal_confirmation_bars",
         "max_drawdown_threshold",
+        "trading_mode",
+        "trading_mode_precedence",
+        "trading_mode_adaptive_enabled",
     }
 )
 
@@ -421,13 +433,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="capital_cap",
-        env=("CAPITAL_CAP", "AI_TRADING_CAPITAL_CAP"),
+        env=("AI_TRADING_CAPITAL_CAP",),
         cast="float",
         default=0.25,
         description="Maximum fraction of account equity allocated to a single position.",
         min_value=0.0,
         max_value=1.0,
-        deprecated_env={"AI_TRADING_CAPITAL_CAP": "Use CAPITAL_CAP instead."},
+        deprecated_env={"CAPITAL_CAP": "Use AI_TRADING_CAPITAL_CAP instead."},
     ),
     ConfigSpec(
         field="dollar_risk_limit",
@@ -441,13 +453,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="daily_loss_limit",
-        env=("DAILY_LOSS_LIMIT", "AI_TRADING_DAILY_LOSS_LIMIT"),
+        env=("AI_TRADING_DAILY_LOSS_LIMIT",),
         cast="float",
         default=0.05,
         description="Maximum tolerated realised drawdown over a single trading day.",
         min_value=0.0,
         max_value=1.0,
-        deprecated_env={"AI_TRADING_DAILY_LOSS_LIMIT": "Use DAILY_LOSS_LIMIT instead."},
+        deprecated_env={"DAILY_LOSS_LIMIT": "Use AI_TRADING_DAILY_LOSS_LIMIT instead."},
     ),
     ConfigSpec(
         field="disaster_dd_limit",
@@ -478,12 +490,15 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="max_position_size",
-        env=("MAX_POSITION_SIZE",),
+        env=("AI_TRADING_SIGNAL_MAX_POSITION_SIZE",),
         cast="float",
         default=8000.0,
         description="Absolute maximum position notional in USD.",
         min_value=0.0,
-        deprecated_env={"AI_TRADING_MAX_POSITION_SIZE": "Use MAX_POSITION_SIZE instead."},
+        deprecated_env={
+            "MAX_POSITION_SIZE": "Use AI_TRADING_SIGNAL_MAX_POSITION_SIZE instead.",
+            "AI_TRADING_MAX_POSITION_SIZE": "Use AI_TRADING_SIGNAL_MAX_POSITION_SIZE instead.",
+        },
     ),
     ConfigSpec(
         field="max_position_equity_fallback",
@@ -725,20 +740,21 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="take_profit_factor",
-        env=("TAKE_PROFIT_FACTOR",),
+        env=("AI_TRADING_TAKE_PROFIT_FACTOR",),
         cast="float",
         default=None,
         description="Custom take-profit multiplier overriding mode defaults.",
+        deprecated_env={"TAKE_PROFIT_FACTOR": "Use AI_TRADING_TAKE_PROFIT_FACTOR instead."},
     ),
     ConfigSpec(
         field="buy_threshold",
-        env=("BUY_THRESHOLD", "AI_TRADING_BUY_THRESHOLD"),
+        env=("AI_TRADING_BUY_THRESHOLD",),
         cast="float",
         default=0.4,
         description="Signal confidence threshold required to enter long positions.",
         min_value=0.0,
         max_value=1.0,
-        deprecated_env={"AI_TRADING_BUY_THRESHOLD": "Use BUY_THRESHOLD instead."},
+        deprecated_env={"BUY_THRESHOLD": "Use AI_TRADING_BUY_THRESHOLD instead."},
     ),
     ConfigSpec(
         field="trailing_factor",
@@ -749,42 +765,43 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="kelly_fraction",
-        env=("KELLY_FRACTION", "AI_TRADING_KELLY_FRACTION"),
+        env=("AI_TRADING_KELLY_FRACTION",),
         cast="float",
         default=None,
         description="Kelly criterion fraction for position sizing (0-1).",
         min_value=0.0,
         max_value=1.0,
-        deprecated_env={"AI_TRADING_KELLY_FRACTION": "Use KELLY_FRACTION instead."},
+        deprecated_env={"KELLY_FRACTION": "Use AI_TRADING_KELLY_FRACTION instead."},
     ),
     ConfigSpec(
         field="kelly_fraction_max",
-        env=("KELLY_FRACTION_MAX", "AI_TRADING_KELLY_FRACTION_MAX"),
+        env=("AI_TRADING_KELLY_FRACTION_MAX",),
         cast="float",
         default=0.25,
         description="Upper bound applied to Kelly-derived sizes.",
         min_value=0.0,
         max_value=1.0,
-        deprecated_env={"AI_TRADING_KELLY_FRACTION_MAX": "Use KELLY_FRACTION_MAX instead."},
+        deprecated_env={"KELLY_FRACTION_MAX": "Use AI_TRADING_KELLY_FRACTION_MAX instead."},
     ),
     ConfigSpec(
         field="min_confidence",
-        env=("MIN_CONFIDENCE",),
+        env=("AI_TRADING_MIN_CONFIDENCE",),
         cast="float",
         default=0.6,
         description="Minimum model confidence required before entering trades.",
         min_value=0.0,
         max_value=1.0,
+        deprecated_env={"MIN_CONFIDENCE": "Use AI_TRADING_MIN_CONFIDENCE instead."},
     ),
     ConfigSpec(
         field="conf_threshold",
-        env=("CONF_THRESHOLD", "AI_TRADING_CONF_THRESHOLD"),
+        env=("AI_TRADING_CONF_THRESHOLD",),
         cast="float",
         default=0.75,
         description="Primary confidence threshold used for scoring trades.",
         min_value=0.0,
         max_value=1.0,
-        deprecated_env={"AI_TRADING_CONF_THRESHOLD": "Use CONF_THRESHOLD instead."},
+        deprecated_env={"CONF_THRESHOLD": "Use AI_TRADING_CONF_THRESHOLD instead."},
     ),
     ConfigSpec(
         field="min_sample_size",
@@ -807,11 +824,12 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="signal_confirmation_bars",
-        env=("SIGNAL_CONFIRMATION_BARS",),
+        env=("AI_TRADING_SIGNAL_CONFIRMATION_BARS",),
         cast="int",
         default=2,
         description="Number of confirming bars required before executing signals.",
         min_value=1,
+        deprecated_env={"SIGNAL_CONFIRMATION_BARS": "Use AI_TRADING_SIGNAL_CONFIRMATION_BARS instead."},
     ),
     ConfigSpec(
         field="delta_threshold",
@@ -1541,14 +1559,15 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="trading_mode",
-        env=("TRADING_MODE", "AI_TRADING_TRADING_MODE"),
+        env=("AI_TRADING_TRADING_MODE",),
         cast="str",
         default="balanced",
         description="High-level preset controlling trading risk posture.",
+        deprecated_env={"TRADING_MODE": "Use AI_TRADING_TRADING_MODE instead."},
     ),
     ConfigSpec(
         field="trading_mode_precedence",
-        env=("TRADING_MODE_PRECEDENCE", "AI_TRADING_TRADING_MODE_PRECEDENCE"),
+        env=("AI_TRADING_TRADING_MODE_PRECEDENCE",),
         cast="str",
         default="strict_mode",
         description=(
@@ -1556,13 +1575,15 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
             "'strict_mode' honors explicit overrides; 'env_wins' prefers process env."
         ),
         choices=("strict_mode", "env_wins"),
+        deprecated_env={"TRADING_MODE_PRECEDENCE": "Use AI_TRADING_TRADING_MODE_PRECEDENCE instead."},
     ),
     ConfigSpec(
         field="trading_mode_adaptive_enabled",
-        env=("TRADING_MODE_ADAPTIVE_ENABLED", "AI_TRADING_TRADING_MODE_ADAPTIVE_ENABLED"),
+        env=("AI_TRADING_TRADING_MODE_ADAPTIVE_ENABLED",),
         cast="bool",
         default=False,
         description="Enable adaptive runtime switching between conservative/balanced/aggressive modes.",
+        deprecated_env={"TRADING_MODE_ADAPTIVE_ENABLED": "Use AI_TRADING_TRADING_MODE_ADAPTIVE_ENABLED instead."},
     ),
     ConfigSpec(
         field="cpu_only",
@@ -2063,7 +2084,7 @@ def _normalize_mode_name(raw: Any) -> str | None:
 def _resolve_mode_precedence(env_map: Mapping[str, Any] | None = None) -> str:
     """Resolve mode precedence policy from env snapshot or process env."""
 
-    candidates = ("TRADING_MODE_PRECEDENCE", "AI_TRADING_TRADING_MODE_PRECEDENCE")
+    candidates = ("AI_TRADING_TRADING_MODE_PRECEDENCE",)
     if env_map:
         for key in candidates:
             raw = env_map.get(key)
@@ -2088,7 +2109,7 @@ def _resolve_mode_selection(
     """Return ``(mode, source, precedence_policy)`` for trading mode resolution."""
 
     precedence = _resolve_mode_precedence(env_map)
-    mode_candidates = ("TRADING_MODE", "AI_TRADING_TRADING_MODE")
+    mode_candidates = ("AI_TRADING_TRADING_MODE",)
 
     env_mode: str | None = None
     env_source: str | None = None
@@ -2111,13 +2132,17 @@ def _resolve_mode_selection(
     override_source = str(env_map.get(_MODE_OVERRIDE_SOURCE_KEY) or "override") if env_map else "override"
 
     base_mode = _normalize_mode_name(env_map.get(_MODE_BASE_KEY) if env_map else None)
-    base_source = str(env_map.get(_MODE_BASE_SOURCE_KEY) or "TRADING_MODE") if env_map else "TRADING_MODE"
+    base_source = (
+        str(env_map.get(_MODE_BASE_SOURCE_KEY) or "AI_TRADING_TRADING_MODE")
+        if env_map
+        else "AI_TRADING_TRADING_MODE"
+    )
 
     if precedence == "env_wins":
         if base_mode is not None:
             return base_mode, base_source, precedence
         if env_mode is not None:
-            return env_mode, str(env_source or "TRADING_MODE"), precedence
+            return env_mode, str(env_source or "AI_TRADING_TRADING_MODE"), precedence
         if override_mode is not None:
             return override_mode, override_source, precedence
         return "balanced", "default", precedence
@@ -2126,7 +2151,7 @@ def _resolve_mode_selection(
     if override_mode is not None:
         return override_mode, override_source, precedence
     if env_mode is not None:
-        return env_mode, str(env_source or "TRADING_MODE"), precedence
+        return env_mode, str(env_source or "AI_TRADING_TRADING_MODE"), precedence
     if base_mode is not None:
         return base_mode, base_source, precedence
     return "balanced", "default", precedence
@@ -2206,7 +2231,7 @@ def _get_sensitive_env_keys() -> tuple[str, ...]:
     if _SENSITIVE_ENV_KEYS is not None:
         return _SENSITIVE_ENV_KEYS
 
-    keys: set[str] = {"TRADING_MODE", "AI_TRADING_TRADING_MODE"}
+    keys: set[str] = {"AI_TRADING_TRADING_MODE"}
     for spec in CONFIG_SPECS:
         keys.update(spec.env)
         keys.update(spec.deprecated_env.keys())
@@ -2424,6 +2449,15 @@ def _detect_env_alias_conflict(spec: ConfigSpec, env_map: Mapping[str, str]) -> 
         alias_raw = env_map.get(alias)
         if alias_raw in (None, ""):
             continue
+        if spec.field in _FAIL_FAST_DEPRECATED_FIELDS:
+            canonical = canonical_key or (spec.env[0] if spec.env else spec.field)
+            message = spec.deprecated_env.get(
+                alias, f"Use {canonical} instead."
+            )
+            raise RuntimeError(
+                f"{alias} is deprecated and no longer supported. "
+                f"{message} Set {canonical} and remove {alias}."
+            )
         alias_explicit = alias in explicit_override_keys
         if explicit_override_keys and not (canonical_explicit and alias_explicit):
             continue
@@ -2633,12 +2667,10 @@ class TradingConfig:
             values["cycle_compute_budget_factor"] = values["cycle_budget_fraction"]
 
         if (env_map.get("DOLLAR_RISK_LIMIT") in (None, "")) and values["dollar_risk_limit"] == SPEC_BY_FIELD["dollar_risk_limit"].default:
-            for legacy_key in ("DAILY_LOSS_LIMIT", "AI_TRADING_DAILY_LOSS_LIMIT"):
-                raw_alias = env_map.get(legacy_key)
-                if raw_alias not in (None, ""):
-                    spec = SPEC_BY_FIELD["dollar_risk_limit"]
-                    values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
-                    break
+            raw_alias = env_map.get("AI_TRADING_DAILY_LOSS_LIMIT")
+            if raw_alias not in (None, ""):
+                spec = SPEC_BY_FIELD["dollar_risk_limit"]
+                values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
 
         mode_effective = _apply_mode_overlays(values, env_map, explicit_fields=provided_fields)
 
@@ -2741,7 +2773,7 @@ def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str,
     )
     base_mode_value: str | None = None
     base_mode_source: str | None = None
-    for mode_key in ("TRADING_MODE", "AI_TRADING_TRADING_MODE"):
+    for mode_key in ("AI_TRADING_TRADING_MODE",):
         raw_base_mode = snap.get(mode_key)
         if raw_base_mode not in (None, ""):
             base_mode_value = str(raw_base_mode)
@@ -2755,8 +2787,8 @@ def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str,
         if isinstance(overrides, str):
             override_mode_value = str(overrides)
             override_mode_source = "from_env_argument"
-            snap["TRADING_MODE"] = override_mode_value
-            override_keys.add("TRADING_MODE")
+            snap["AI_TRADING_TRADING_MODE"] = override_mode_value
+            override_keys.add("AI_TRADING_TRADING_MODE")
         else:
             if getattr(overrides, "is_snapshot", False):
                 snap.update(overrides)
@@ -2773,7 +2805,7 @@ def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str,
                 normalized = {k.upper(): str(v) for k, v in overrides.items()}
                 snap.update(normalized)
                 override_keys.update(normalized.keys())
-                for mode_key in ("TRADING_MODE", "AI_TRADING_TRADING_MODE"):
+                for mode_key in ("AI_TRADING_TRADING_MODE",):
                     raw_override_mode = normalized.get(mode_key)
                     if raw_override_mode not in (None, ""):
                         override_mode_value = str(raw_override_mode)
@@ -2803,7 +2835,7 @@ def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str,
 
     if base_mode_value not in (None, ""):
         snap[_MODE_BASE_KEY] = str(base_mode_value)
-        snap[_MODE_BASE_SOURCE_KEY] = str(base_mode_source or "TRADING_MODE")
+        snap[_MODE_BASE_SOURCE_KEY] = str(base_mode_source or "AI_TRADING_TRADING_MODE")
     if override_mode_value not in (None, ""):
         snap[_MODE_OVERRIDE_KEY] = str(override_mode_value)
         snap[_MODE_OVERRIDE_SOURCE_KEY] = str(override_mode_source or "override")

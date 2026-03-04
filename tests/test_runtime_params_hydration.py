@@ -35,10 +35,10 @@ def test_trading_config_from_env_loads_parameters():
 
     # Test with environment variables
     env_vars = {
-        'CAPITAL_CAP': '0.06',
+        'AI_TRADING_CAPITAL_CAP': '0.06',
         'DOLLAR_RISK_LIMIT': '0.08',
-        'MAX_POSITION_SIZE': '2.0',
-        'POSITION_SIZE_MIN_USD': '25',
+        'AI_TRADING_SIGNAL_MAX_POSITION_SIZE': '2.0',
+        'AI_TRADING_POSITION_SIZE_MIN_USD': '25',
     }
 
     with patch.dict(os.environ, env_vars):
@@ -51,15 +51,14 @@ def test_trading_config_from_env_loads_parameters():
 
 
 def test_alias_does_not_override_direct_max_position_size(monkeypatch):
-    """MAX_POSITION_SIZE should win over AI_TRADING_MAX_POSITION_SIZE."""
+    """Deprecated max position aliases should fail fast."""
     from ai_trading.config.management import TradingConfig
 
-    monkeypatch.setenv("MAX_POSITION_SIZE", "1234")
+    monkeypatch.setenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", "1234")
     monkeypatch.setenv("AI_TRADING_MAX_POSITION_SIZE", "5678")
 
-    cfg = TradingConfig.from_env()
-
-    assert cfg.max_position_size == 1234.0
+    with pytest.raises(RuntimeError, match="AI_TRADING_MAX_POSITION_SIZE"):
+        TradingConfig.from_env()
 
 
 def test_trading_config_from_env_market_calendar(monkeypatch):
@@ -76,7 +75,7 @@ def test_build_runtime_hydrates_all_parameters(monkeypatch):
     from ai_trading.config.management import TradingConfig
     from ai_trading.core.runtime import REQUIRED_PARAM_DEFAULTS, build_runtime
 
-    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+    monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
     cfg = TradingConfig()
     runtime = build_runtime(cfg)
 
@@ -123,12 +122,11 @@ def test_build_runtime_respects_mode_presets(monkeypatch):
 
     monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
     for key in (
-        "MAX_POSITION_SIZE",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
         "AI_TRADING_MAX_POSITION_SIZE",
-        "KELLY_FRACTION",
-        "CONF_THRESHOLD",
+        "AI_TRADING_KELLY_FRACTION",
         "AI_TRADING_CONF_THRESHOLD",
-        "DAILY_LOSS_LIMIT",
+        "AI_TRADING_DAILY_LOSS_LIMIT",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -171,7 +169,7 @@ def test_build_runtime_enforces_daytrade_for_live_mode(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_TRADING_BASE_URL", "https://api.alpaca.markets")
 
     cfg = TradingConfig(execution_mode="live")
     runtime = build_runtime(cfg)
@@ -243,7 +241,7 @@ def test_build_runtime_ignores_none_values(monkeypatch):
     from ai_trading.config.management import TradingConfig
     from ai_trading.core.runtime import REQUIRED_PARAM_DEFAULTS, build_runtime
 
-    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+    monkeypatch.delenv("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", raising=False)
     cfg = TradingConfig(
         capital_cap=None,
         dollar_risk_limit=None,

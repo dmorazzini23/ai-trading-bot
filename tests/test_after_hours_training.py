@@ -315,6 +315,8 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES", "1")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS", "-9999")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_EXPECTANCY_BPS", "-9999")
     monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", "999999")

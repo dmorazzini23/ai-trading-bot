@@ -18,10 +18,10 @@ def _reload_config(monkeypatch, **env):
     for key in [
         "MAX_DRAWDOWN_THRESHOLD",
         "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",
-        "TRADING_MODE",
-        "KELLY_FRACTION",
-        "CONF_THRESHOLD",
-        "MAX_POSITION_SIZE",
+        "AI_TRADING_TRADING_MODE",
+        "AI_TRADING_KELLY_FRACTION",
+        "AI_TRADING_CONF_THRESHOLD",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
     ]:
         monkeypatch.delenv(key, raising=False)
     for k, v in env.items():
@@ -43,23 +43,23 @@ def test_comment_stripped_from_float_env(monkeypatch):
 
 def test_inline_comments_ignored_for_all_numeric_fields(monkeypatch):
     numeric_env = {
-        "CAPITAL_CAP": "0.33  # comment",
+        "AI_TRADING_CAPITAL_CAP": "0.33  # comment",
         "DOLLAR_RISK_LIMIT": "0.07  # comment",
-        "DAILY_LOSS_LIMIT": "0.05  # comment",
-        "MAX_POSITION_SIZE": "9000  # comment",
+        "AI_TRADING_DAILY_LOSS_LIMIT": "0.05  # comment",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": "9000  # comment",
         "MAX_POSITION_EQUITY_FALLBACK": "210000  # comment",
         "AI_TRADING_POSITION_SIZE_MIN_USD": "125  # comment",
         "AI_TRADING_SECTOR_EXPOSURE_CAP": "0.4  # comment",
         "MAX_DRAWDOWN_THRESHOLD": "0.11  # comment",
         "TRAILING_FACTOR": "0.25  # comment",
-        "TAKE_PROFIT_FACTOR": "1.9  # comment",
-        "KELLY_FRACTION": "0.65  # comment",
-        "KELLY_FRACTION_MAX": "0.3  # comment",
-        "MIN_CONFIDENCE": "0.7  # comment",
-        "CONF_THRESHOLD": "0.77  # comment",
+        "AI_TRADING_TAKE_PROFIT_FACTOR": "1.9  # comment",
+        "AI_TRADING_KELLY_FRACTION": "0.65  # comment",
+        "AI_TRADING_KELLY_FRACTION_MAX": "0.3  # comment",
+        "AI_TRADING_MIN_CONFIDENCE": "0.7  # comment",
+        "AI_TRADING_CONF_THRESHOLD": "0.77  # comment",
         "MIN_SAMPLE_SIZE": "12  # comment",
         "CONFIDENCE_LEVEL": "0.91  # comment",
-        "SIGNAL_CONFIRMATION_BARS": "4  # comment",
+        "AI_TRADING_SIGNAL_CONFIRMATION_BARS": "4  # comment",
         "DELTA_THRESHOLD": "0.03  # comment",
         "AI_TRADING_VOLUME_THRESHOLD": "1200  # comment",
         "MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS": "600  # comment",
@@ -82,7 +82,7 @@ def test_inline_comments_ignored_for_all_numeric_fields(monkeypatch):
     }
     for key in numeric_env:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.delenv("TRADING_MODE", raising=False)
+    monkeypatch.delenv("AI_TRADING_TRADING_MODE", raising=False)
 
     cfg = TradingConfig.from_env(numeric_env)
 
@@ -160,4 +160,3 @@ def test_bool_cast_handles_inline_comments(monkeypatch):
     })
 
     assert cfg.allow_after_hours is True
-

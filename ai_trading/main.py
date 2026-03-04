@@ -1735,7 +1735,7 @@ def _fail_fast_env() -> None:
             "ALPACA_SECRET_KEY": "test-secret",
             "ALPACA_DATA_FEED": "iex",
             "WEBHOOK_SECRET": "test-webhook",
-            "CAPITAL_CAP": "0.25",
+            "AI_TRADING_CAPITAL_CAP": "0.25",
             "DOLLAR_RISK_LIMIT": "0.05",
             "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
             "ALPACA_DATA_BASE_URL": "https://data.alpaca.markets",
@@ -1749,7 +1749,7 @@ def _fail_fast_env() -> None:
                     alpaca_backfilled_during_failfast = True
 
     alias_backfilled = False
-    alias_risk_limit = str(_raw_env("DAILY_LOSS_LIMIT", "") or "").strip()
+    alias_risk_limit = str(_raw_env("AI_TRADING_DAILY_LOSS_LIMIT", "") or "").strip()
     canonical_risk_limit = str(_raw_env("DOLLAR_RISK_LIMIT", "") or "").strip()
     if canonical_risk_limit == "" and alias_risk_limit != "":
         os.environ["DOLLAR_RISK_LIMIT"] = alias_risk_limit
@@ -1763,7 +1763,7 @@ def _fail_fast_env() -> None:
         "ALPACA_SECRET_KEY",
         "ALPACA_DATA_FEED",
         "WEBHOOK_SECRET",
-        "CAPITAL_CAP",
+        "AI_TRADING_CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
     ]
     loaded = reload_env(override=False)
@@ -1849,7 +1849,7 @@ def _fail_fast_env() -> None:
 
     raw_risk_limit = get_env("DOLLAR_RISK_LIMIT")
     cfg_risk_limit = getattr(trading_cfg, "dollar_risk_limit", None)
-    alias_raw = get_env("DAILY_LOSS_LIMIT")
+    alias_raw = get_env("AI_TRADING_DAILY_LOSS_LIMIT")
     canonical_env_value = _raw_env("DOLLAR_RISK_LIMIT")
     if alias_backfilled:
         logger.warning(
@@ -1891,11 +1891,11 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     errors = []
     mode = getattr(cfg, "trading_mode", "balanced")
     if mode not in {"aggressive", "balanced", "conservative"}:
-        errors.append(f"TRADING_MODE invalid: {mode}")
+        errors.append(f"AI_TRADING_TRADING_MODE invalid: {mode}")
     cap = _as_float(getattr(tcfg, "capital_cap", 0.0), 0.0)
     risk = _as_float(getattr(tcfg, "dollar_risk_limit", 0.0), 0.0)
     if not 0.0 < cap <= 1.0:
-        errors.append(f"CAPITAL_CAP out of range: {cap}")
+        errors.append(f"AI_TRADING_CAPITAL_CAP out of range: {cap}")
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
     prev_eq = _CACHE.equity
@@ -1940,7 +1940,7 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
-            os.environ["MAX_POSITION_SIZE"] = str(float(resolved))
+            os.environ["AI_TRADING_SIGNAL_MAX_POSITION_SIZE"] = str(float(resolved))
     except ValueError as e:
         errors.append(str(e))
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
@@ -1995,7 +1995,7 @@ def validate_environment() -> None:
     if not webhook_secret:
         missing.append("WEBHOOK_SECRET")
 
-    for var in ("CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
+    for var in ("AI_TRADING_CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
         if not get_env(var):
             missing.append(var)
 
@@ -2695,9 +2695,9 @@ def main(argv: list[str] | None = None) -> None:
                     _interruptible_sleep(sleep_for)
     except Exception:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
-    # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
+    # Align Settings.capital_cap with canonical env when provided.
     if not _is_test_mode():
-        _cap_env = _raw_env("CAPITAL_CAP")
+        _cap_env = _raw_env("AI_TRADING_CAPITAL_CAP")
         if _cap_env:
             try:
                 _cap_val = float(_cap_env)
@@ -2716,7 +2716,7 @@ def main(argv: list[str] | None = None) -> None:
                     except Exception:
                         logger.debug("CONFIG_CAPITAL_CAP_ASSIGN_FAILED", exc_info=True)
             except Exception:
-                logger.debug("CAPITAL_CAP_ENV_PARSE_FAILED", extra={"raw_value": _cap_env}, exc_info=True)
+                logger.debug("AI_TRADING_CAPITAL_CAP_ENV_PARSE_FAILED", extra={"raw_value": _cap_env}, exc_info=True)
     if config is None:
         logger.critical(
             "SETTINGS_UNAVAILABLE",  # AI-AGENT-REF: clearer startup failure

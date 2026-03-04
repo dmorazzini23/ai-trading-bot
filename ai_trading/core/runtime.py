@@ -161,7 +161,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             try:
                 from ai_trading.config.management import get_env
 
-                env_val = get_env("MAX_POSITION_SIZE", cast=float)
+                env_val = get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", cast=float)
             except (ImportError, RuntimeError):
                 env_val = None
             if env_val is not None:
@@ -201,7 +201,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             except Exception:
                 logger.debug("MAX_POSITION_SIZE_ASSIGN_FAILED", exc_info=True)
     if resolved <= 0:
-        raise ValueError("MAX_POSITION_SIZE must be positive")
+        raise ValueError("AI_TRADING_SIGNAL_MAX_POSITION_SIZE must be positive")
     params["MAX_POSITION_SIZE"] = float(resolved)
     _POSITION_SIZING_CACHE.value = float(resolved)
     _POSITION_SIZING_CACHE.ts = _position_sizing_now()

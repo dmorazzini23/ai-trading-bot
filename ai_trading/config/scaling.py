@@ -7,8 +7,13 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 # Default maximum factor applied to ATR-based scaling.  Deployments may
-# override via the ``TAKE_PROFIT_FACTOR`` environment variable.
+# override via the ``AI_TRADING_TAKE_PROFIT_FACTOR`` environment variable.
 DEFAULT_MAX_FACTOR: float = 2.0
+
+_LEGACY_KEY_MAP: dict[str, str] = {
+    "CAPITAL_CAP": "AI_TRADING_CAPITAL_CAP",
+    "TAKE_PROFIT_FACTOR": "AI_TRADING_TAKE_PROFIT_FACTOR",
+}
 
 
 @dataclass
@@ -47,8 +52,21 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
     """
     env_map = {k.upper(): v for k, v in (env or os.environ).items()}
 
-    capital_cap = float(env_map.get("CAPITAL_CAP", "0.25"))
-    max_factor = float(env_map.get("TAKE_PROFIT_FACTOR", str(DEFAULT_MAX_FACTOR)))
+    legacy_used = [
+        f"{legacy}->{canonical}"
+        for legacy, canonical in _LEGACY_KEY_MAP.items()
+        if env_map.get(legacy) not in (None, "")
+    ]
+    if legacy_used:
+        raise ValueError(
+            "Deprecated scaling env keys are not supported. "
+            f"Use canonical keys only: {', '.join(sorted(legacy_used))}"
+        )
+
+    capital_cap = float(env_map.get("AI_TRADING_CAPITAL_CAP", "0.25"))
+    max_factor = float(
+        env_map.get("AI_TRADING_TAKE_PROFIT_FACTOR", str(DEFAULT_MAX_FACTOR))
+    )
 
     extras: dict[str, Any] = {}
     extras_raw = env_map.get("TRADING_CONFIG_EXTRAS")
@@ -60,7 +78,11 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
         if isinstance(parsed, dict):
             extras.update(parsed)
 
-    known = {"CAPITAL_CAP", "TRADING_CONFIG_EXTRAS", "TAKE_PROFIT_FACTOR"}
+    known = {
+        "AI_TRADING_CAPITAL_CAP",
+        "AI_TRADING_TAKE_PROFIT_FACTOR",
+        "TRADING_CONFIG_EXTRAS",
+    }
     for k, v in env_map.items():
         if k not in known:
             extras[k] = _coerce(v)

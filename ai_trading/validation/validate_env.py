@@ -21,7 +21,9 @@ class Settings(BaseModel):
     ALPACA_DATA_BASE_URL: str = Field(
         default_factory=lambda: os.environ.get("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
     )
-    TRADING_MODE: str = Field(default_factory=lambda: os.environ.get("TRADING_MODE", "testing"))
+    AI_TRADING_TRADING_MODE: str = Field(
+        default_factory=lambda: os.environ.get("AI_TRADING_TRADING_MODE", "balanced")
+    )
     FORCE_TRADES: bool = Field(default_factory=lambda: os.environ.get("FORCE_TRADES", False))
 
     @field_validator('ALPACA_API_KEY')
@@ -52,11 +54,13 @@ class Settings(BaseModel):
             raise ValueError('ALPACA_DATA_BASE_URL must use HTTPS')
         return v
 
-    @field_validator('TRADING_MODE')
+    @field_validator('AI_TRADING_TRADING_MODE')
     @classmethod
     def _trading_mode(cls, v: str) -> str:
-        if v not in {'testing', 'production'}:
-            raise ValueError("TRADING_MODE must be one of ['testing', 'production']")
+        if v not in {"conservative", "balanced", "aggressive"}:
+            raise ValueError(
+                "AI_TRADING_TRADING_MODE must be one of ['conservative', 'balanced', 'aggressive']"
+            )
         return v
 
     @field_validator('FORCE_TRADES')

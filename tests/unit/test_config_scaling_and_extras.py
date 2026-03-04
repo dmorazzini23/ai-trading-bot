@@ -3,7 +3,7 @@ from ai_trading.config import scaling
 
 def test_from_env_accepts_extras_and_scales():
     env = {
-        "CAPITAL_CAP": "0.05",
+        "AI_TRADING_CAPITAL_CAP": "0.05",
         "DATA_FEED": "iex",
         "DATA_PROVIDER": "alpaca",
         "UNRELATED": "OK",
@@ -17,5 +17,5 @@ def test_from_env_accepts_extras_and_scales():
 
 
 def test_from_env_initializes_empty_extras():
-    cfg = scaling.from_env({"CAPITAL_CAP": "0.04"})
+    cfg = scaling.from_env({"AI_TRADING_CAPITAL_CAP": "0.04"})
     assert cfg.extras == {}

@@ -1127,6 +1127,23 @@ def _promotion_gate_bundle(
         min_score_margin = float(
             get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SCORE_MARGIN", 0.1, cast=float)
         )
+        policy_min_oos_samples = max(
+            1,
+            int(
+                get_env(
+                    "AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES",
+                    min_support,
+                    cast=int,
+                )
+            ),
+        )
+        policy_min_oos_net_bps = float(
+            get_env(
+                "AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS",
+                0.0,
+                cast=float,
+            )
+        )
         candidate_score = _promotion_score(
             expectancy_bps=best.mean_expectancy_bps,
             max_drawdown_bps=best.max_drawdown_bps,
@@ -1175,6 +1192,8 @@ def _promotion_gate_bundle(
             "profitable_fold_ratio": (
                 float(best.profitable_fold_ratio) >= min_profitable_fold_ratio
             ),
+            "policy_oos_samples": int(best.support) >= policy_min_oos_samples,
+            "policy_oos_net": float(best.mean_expectancy_bps) >= policy_min_oos_net_bps,
             "prior_model_improvement": bool(prior_gate),
         }
     combined_gates: dict[str, bool] = {str(k): bool(v) for k, v in dict(edge_gates).items()}

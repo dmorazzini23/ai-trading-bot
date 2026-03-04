@@ -190,7 +190,7 @@ class TestSystemdStartupCompatibility:
             for key in ["MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD"]:
                 os.environ.pop(key, None)
 
-            os.environ["CAPITAL_CAP"] = "1"
+            os.environ["AI_TRADING_CAPITAL_CAP"] = "1"
             os.environ["DOLLAR_RISK_LIMIT"] = "0.1"
 
             try:

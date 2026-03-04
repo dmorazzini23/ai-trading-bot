@@ -39,7 +39,17 @@ ALPACA_URL_GUIDANCE = (
 _CANONICAL_ENV_MAP: dict[str, tuple[str, ...]] = {
     "ALPACA_TRADING_BASE_URL": ("ALPACA_API_URL", "ALPACA_BASE_URL"),
     "ALPACA_DATA_BASE_URL": ("ALPACA_DATA_URL",),
-    "MAX_POSITION_SIZE": ("AI_TRADING_MAX_POSITION_SIZE",),
+    "AI_TRADING_TRADING_MODE": ("TRADING_MODE",),
+    "AI_TRADING_CAPITAL_CAP": ("CAPITAL_CAP",),
+    "AI_TRADING_DAILY_LOSS_LIMIT": ("DAILY_LOSS_LIMIT",),
+    "AI_TRADING_SIGNAL_MAX_POSITION_SIZE": ("MAX_POSITION_SIZE", "AI_TRADING_MAX_POSITION_SIZE"),
+    "AI_TRADING_TAKE_PROFIT_FACTOR": ("TAKE_PROFIT_FACTOR",),
+    "AI_TRADING_BUY_THRESHOLD": ("BUY_THRESHOLD",),
+    "AI_TRADING_CONF_THRESHOLD": ("CONF_THRESHOLD",),
+    "AI_TRADING_MIN_CONFIDENCE": ("MIN_CONFIDENCE",),
+    "AI_TRADING_KELLY_FRACTION": ("KELLY_FRACTION",),
+    "AI_TRADING_KELLY_FRACTION_MAX": ("KELLY_FRACTION_MAX",),
+    "AI_TRADING_SIGNAL_CONFIRMATION_BARS": ("SIGNAL_CONFIRMATION_BARS",),
     "MAX_DRAWDOWN_THRESHOLD": ("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
     "TRADING__ALLOW_SHORTS": ("AI_TRADING_ALLOW_SHORT",),
     "EXECUTION_ALLOW_FALLBACK_WITHOUT_NBBO": ("AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO",),
@@ -271,9 +281,7 @@ def get_env(
             (
                 *tuple(spec.env),
                 *tuple(spec.deprecated_env.keys()),
-                "TRADING_MODE",
                 "AI_TRADING_TRADING_MODE",
-                "TRADING_MODE_PRECEDENCE",
                 "AI_TRADING_TRADING_MODE_PRECEDENCE",
             )
         )
@@ -331,7 +339,7 @@ def validate_required_env(
         "ALPACA_DATA_FEED": cfg.alpaca_data_feed,
         "ALPACA_TRADING_BASE_URL": cfg.alpaca_base_url,
         "WEBHOOK_SECRET": cfg.webhook_secret,
-        "CAPITAL_CAP": cfg.capital_cap,
+        "AI_TRADING_CAPITAL_CAP": cfg.capital_cap,
         "DOLLAR_RISK_LIMIT": cfg.dollar_risk_limit,
     }
     if keys is not None:
@@ -376,10 +384,11 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     base_url: str | None
     source: str | None
     base_url, _source, errors = _select_alpaca_base_url()
-    try:
-        validate_no_deprecated_env()
-    except RuntimeError as exc:
-        raise RuntimeError(str(exc)) from exc
+    for env_key, _raw, _message in errors:
+        if env_key in {"ALPACA_API_URL", "ALPACA_BASE_URL"}:
+            raise RuntimeError(
+                f"{env_key} is deprecated. Set ALPACA_TRADING_BASE_URL instead."
+            )
 
     cfg: TradingConfig | None
     try:
