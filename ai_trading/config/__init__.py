@@ -234,11 +234,7 @@ def _env_value(*names: str) -> str | None:
     return None
 
 
-TRADING_MODE = (
-    os.getenv("TRADING_MODE")
-    or os.getenv("AI_TRADING_TRADING_MODE")
-    or "balanced"
-).lower()
+TRADING_MODE = str(getattr(_CFG, "trading_mode", "balanced") or "balanced").lower()
 if TRADING_MODE not in MODE_PARAMETERS:
     TRADING_MODE = "balanced"
 

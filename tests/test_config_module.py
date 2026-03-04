@@ -76,7 +76,6 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
         "AI_TRADING_MAX_POSITION_SIZE",
         "CAPITAL_CAP",
         "AI_TRADING_CAPITAL_CAP",
-        "CONFIRMATION_COUNT",
         "TAKE_PROFIT_FACTOR",
         "AI_TRADING_TRADING_MODE",
     ):
@@ -91,7 +90,6 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
             "daily_loss_limit": 0.03,
             "max_position_size": 5000.0,
             "capital_cap": 0.20,
-            "confirmation_count": 3,
             "take_profit_factor": 1.5,
         },
         "balanced": {
@@ -100,7 +98,6 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
             "daily_loss_limit": 0.05,
             "max_position_size": 8000.0,
             "capital_cap": 0.25,
-            "confirmation_count": 2,
             "take_profit_factor": 1.8,
         },
         "aggressive": {
@@ -109,7 +106,6 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
             "daily_loss_limit": 0.08,
             "max_position_size": 12000.0,
             "capital_cap": 0.30,
-            "confirmation_count": 1,
             "take_profit_factor": 2.5,
         },
     }
@@ -126,5 +122,44 @@ def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
         assert cfg.daily_loss_limit == pytest.approx(values["daily_loss_limit"])
         assert cfg.max_position_size == pytest.approx(values["max_position_size"])
         assert cfg.capital_cap == pytest.approx(values["capital_cap"])
-        assert cfg.confirmation_count == values["confirmation_count"]
         assert cfg.take_profit_factor == pytest.approx(values["take_profit_factor"])
+
+
+def test_mode_precedence_env_wins(monkeypatch):
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+    monkeypatch.setenv("TRADING_MODE", "aggressive")
+    monkeypatch.setenv("TRADING_MODE_PRECEDENCE", "env_wins")
+
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env("conservative")
+    assert cfg.trading_mode == "aggressive"
+    assert cfg.kelly_fraction == pytest.approx(0.75)
+
+
+def test_mode_effective_snapshot_has_sources(monkeypatch):
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+    monkeypatch.delenv("TRADING_MODE_PRECEDENCE", raising=False)
+
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env(
+        {
+            "TRADING_MODE": "balanced",
+            "KELLY_FRACTION": "0.44",
+            "MAX_DRAWDOWN_THRESHOLD": "0.2",
+        }
+    )
+    snapshot = cfg.mode_effective_snapshot()
+    assert snapshot["mode"] == "balanced"
+    assert snapshot["precedence_policy"] == "strict_mode"
+    assert snapshot["managed_fields"]["kelly_fraction"]["source"] == "KELLY_FRACTION"
+    assert snapshot["managed_fields"]["take_profit_factor"]["source"].startswith("mode_default:")
+
+
+def test_confirmation_count_mode_knob_removed(monkeypatch):
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env("balanced")
+    assert not hasattr(cfg, "confirmation_count")

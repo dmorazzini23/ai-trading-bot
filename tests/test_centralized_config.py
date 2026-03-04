@@ -76,12 +76,10 @@ class TestCentralizedConfig:
         # Conservative mode should have lower risk parameters
         assert conservative.kelly_fraction < balanced.kelly_fraction
         assert conservative.conf_threshold > balanced.conf_threshold
-        assert conservative.confirmation_count > balanced.confirmation_count
 
         # Aggressive mode should have higher risk parameters
         assert aggressive.kelly_fraction > balanced.kelly_fraction
         assert aggressive.conf_threshold < balanced.conf_threshold
-        assert aggressive.confirmation_count < balanced.confirmation_count
 
     @pytest.mark.parametrize(
         ("mode", "expected"),
@@ -147,7 +145,6 @@ class TestCentralizedConfig:
                     "daily_loss_limit": 0.03,
                     "max_position_size": 5000.0,
                     "capital_cap": 0.20,
-                    "confirmation_count": 3,
                     "take_profit_factor": 1.5,
                 },
             ),
@@ -159,7 +156,6 @@ class TestCentralizedConfig:
                     "daily_loss_limit": 0.05,
                     "max_position_size": 8000.0,
                     "capital_cap": 0.25,
-                    "confirmation_count": 2,
                     "take_profit_factor": 1.8,
                 },
             ),
@@ -171,7 +167,6 @@ class TestCentralizedConfig:
                     "daily_loss_limit": 0.08,
                     "max_position_size": 12000.0,
                     "capital_cap": 0.30,
-                    "confirmation_count": 1,
                     "take_profit_factor": 2.5,
                 },
             ),
@@ -193,7 +188,6 @@ class TestCentralizedConfig:
             "AI_TRADING_MAX_POSITION_SIZE",
             "CAPITAL_CAP",
             "AI_TRADING_CAPITAL_CAP",
-            "CONFIRMATION_COUNT",
             "TAKE_PROFIT_FACTOR",
         ):
             monkeypatch.delenv(key, raising=False)
@@ -206,7 +200,6 @@ class TestCentralizedConfig:
         assert get_env("DAILY_LOSS_LIMIT", cast=float) == pytest.approx(expected["daily_loss_limit"])
         assert get_env("MAX_POSITION_SIZE", cast=float) == pytest.approx(expected["max_position_size"])
         assert get_env("CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
-        assert get_env("CONFIRMATION_COUNT", cast=int) == expected["confirmation_count"]
         assert get_env("TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(expected["take_profit_factor"])
 
     def test_mode_overlays_respect_explicit_env(self, monkeypatch):
@@ -254,7 +247,6 @@ class TestCentralizedConfig:
                     "daily_loss_limit": 0.03,
                     "max_position_size": 5000.0,
                     "capital_cap": 0.20,
-                    "confirmation_count": 3,
                     "take_profit_factor": 1.5,
                 },
             ),
@@ -266,7 +258,6 @@ class TestCentralizedConfig:
                     "daily_loss_limit": 0.05,
                     "max_position_size": 8000.0,
                     "capital_cap": 0.25,
-                    "confirmation_count": 2,
                     "take_profit_factor": 1.8,
                 },
             ),
@@ -278,7 +269,6 @@ class TestCentralizedConfig:
                     "daily_loss_limit": 0.08,
                     "max_position_size": 12000.0,
                     "capital_cap": 0.30,
-                    "confirmation_count": 1,
                     "take_profit_factor": 2.5,
                 },
             ),
@@ -301,7 +291,6 @@ class TestCentralizedConfig:
             "AI_TRADING_MAX_POSITION_SIZE",
             "CAPITAL_CAP",
             "AI_TRADING_CAPITAL_CAP",
-            "CONFIRMATION_COUNT",
             "TAKE_PROFIT_FACTOR",
         ):
             monkeypatch.delenv(key, raising=False)
@@ -326,7 +315,6 @@ class TestCentralizedConfig:
             expected["max_position_size"]
         )
         assert get_env("CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
-        assert get_env("CONFIRMATION_COUNT", cast=int) == expected["confirmation_count"]
         assert get_env("TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(
             expected["take_profit_factor"]
         )
@@ -344,7 +332,6 @@ class TestCentralizedConfig:
         assert config.conf_threshold == 0.85
         assert config.daily_loss_limit == 0.03
         assert config.capital_cap == 0.20
-        assert config.confirmation_count == 3
         assert config.take_profit_factor == 1.5
         assert config.max_position_size == 5000
 
@@ -359,7 +346,6 @@ class TestCentralizedConfig:
         assert config.conf_threshold == 0.75
         assert config.daily_loss_limit == 0.05
         assert config.capital_cap == 0.25
-        assert config.confirmation_count == 2
         assert config.take_profit_factor == 1.8
         assert config.max_position_size == 8000
 
@@ -374,7 +360,6 @@ class TestCentralizedConfig:
         assert config.conf_threshold == 0.65
         assert config.daily_loss_limit == 0.08
         assert config.capital_cap == 0.30
-        assert config.confirmation_count == 1
         assert config.take_profit_factor == 2.5
         assert config.max_position_size == 12000
 
@@ -414,7 +399,6 @@ class TestCentralizedConfig:
         # Trading mode parameters
         assert hasattr(config, 'conf_threshold')
         assert hasattr(config, 'buy_threshold')
-        assert hasattr(config, 'confirmation_count')
         assert hasattr(config, 'take_profit_factor')
         assert hasattr(config, 'trailing_factor')
 
@@ -498,9 +482,6 @@ class TestCentralizedConfig:
 
             # Capital cap should be between 0 and 1
             assert 0 <= config.capital_cap <= 1
-
-            # Confirmation count should be positive
-            assert config.confirmation_count > 0
 
             # Position size should be positive
             assert config.max_position_size > 0

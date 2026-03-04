@@ -1387,14 +1387,6 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Default Alpaca timeframe used when one is not specified explicitly.",
     ),
     ConfigSpec(
-        field="confirmation_count",
-        env=("CONFIRMATION_COUNT",),
-        cast="int",
-        default=2,
-        description="Number of consecutive confirmations required before executing trades.",
-        min_value=0,
-    ),
-    ConfigSpec(
         field="signal_period",
         env=("SIGNAL_PERIOD",),
         cast="int",
@@ -1553,6 +1545,24 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="str",
         default="balanced",
         description="High-level preset controlling trading risk posture.",
+    ),
+    ConfigSpec(
+        field="trading_mode_precedence",
+        env=("TRADING_MODE_PRECEDENCE", "AI_TRADING_TRADING_MODE_PRECEDENCE"),
+        cast="str",
+        default="strict_mode",
+        description=(
+            "Conflict policy for mode resolution. "
+            "'strict_mode' honors explicit overrides; 'env_wins' prefers process env."
+        ),
+        choices=("strict_mode", "env_wins"),
+    ),
+    ConfigSpec(
+        field="trading_mode_adaptive_enabled",
+        env=("TRADING_MODE_ADAPTIVE_ENABLED", "AI_TRADING_TRADING_MODE_ADAPTIVE_ENABLED"),
+        cast="bool",
+        default=False,
+        description="Enable adaptive runtime switching between conservative/balanced/aggressive modes.",
     ),
     ConfigSpec(
         field="cpu_only",
@@ -1994,6 +2004,21 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
 )
 
 
+_MODE_OVERRIDE_KEY = "__TRADING_MODE_OVERRIDE__"
+_MODE_OVERRIDE_SOURCE_KEY = "__TRADING_MODE_OVERRIDE_SOURCE__"
+_MODE_BASE_KEY = "__TRADING_MODE_BASE__"
+_MODE_BASE_SOURCE_KEY = "__TRADING_MODE_BASE_SOURCE__"
+_MODE_PRECEDENCE_DEFAULT = "strict_mode"
+_MODE_MANAGED_FIELDS: tuple[str, ...] = (
+    "kelly_fraction",
+    "conf_threshold",
+    "daily_loss_limit",
+    "max_position_size",
+    "capital_cap",
+    "take_profit_factor",
+)
+
+
 MODE_PARAMETERS: dict[str, dict[str, float]] = {
     "conservative": {
         "kelly_fraction": 0.25,
@@ -2001,7 +2026,6 @@ MODE_PARAMETERS: dict[str, dict[str, float]] = {
         "daily_loss_limit": 0.03,
         "max_position_size": 5000.0,
         "capital_cap": 0.20,
-        "confirmation_count": 3,
         "take_profit_factor": 1.5,
     },
     "balanced": {
@@ -2010,7 +2034,6 @@ MODE_PARAMETERS: dict[str, dict[str, float]] = {
         "daily_loss_limit": 0.05,
         "max_position_size": 8000.0,
         "capital_cap": 0.25,
-        "confirmation_count": 2,
         "take_profit_factor": 1.8,
     },
     "aggressive": {
@@ -2019,26 +2042,101 @@ MODE_PARAMETERS: dict[str, dict[str, float]] = {
         "daily_loss_limit": 0.08,
         "max_position_size": 12000.0,
         "capital_cap": 0.30,
-        "confirmation_count": 1,
         "take_profit_factor": 2.5,
     },
 }
 
 
-def _selected_mode(env_map: Mapping[str, Any] | None = None) -> str:
-    """Return the trading mode name derived from an env snapshot."""
+def _normalize_mode_name(raw: Any) -> str | None:
+    """Return canonical trading mode name when ``raw`` is valid."""
 
-    candidates = ("TRADING_MODE", "AI_TRADING_TRADING_MODE")
+    if raw in (None, ""):
+        return None
+    normalized = str(raw).strip().lower()
+    if not normalized:
+        return None
+    if normalized in MODE_PARAMETERS:
+        return normalized
+    return None
+
+
+def _resolve_mode_precedence(env_map: Mapping[str, Any] | None = None) -> str:
+    """Resolve mode precedence policy from env snapshot or process env."""
+
+    candidates = ("TRADING_MODE_PRECEDENCE", "AI_TRADING_TRADING_MODE_PRECEDENCE")
     if env_map:
         for key in candidates:
             raw = env_map.get(key)
-            if raw not in (None, ""):
-                return str(raw).strip().lower()
+            if raw in (None, ""):
+                continue
+            normalized = str(raw).strip().lower()
+            if normalized in {"strict_mode", "env_wins"}:
+                return normalized
     for key in candidates:
         raw = os.environ.get(key)
-        if raw not in (None, ""):
-            return str(raw).strip().lower()
-    return "balanced"
+        if raw in (None, ""):
+            continue
+        normalized = str(raw).strip().lower()
+        if normalized in {"strict_mode", "env_wins"}:
+            return normalized
+    return _MODE_PRECEDENCE_DEFAULT
+
+
+def _resolve_mode_selection(
+    env_map: Mapping[str, Any] | None = None,
+) -> tuple[str, str, str]:
+    """Return ``(mode, source, precedence_policy)`` for trading mode resolution."""
+
+    precedence = _resolve_mode_precedence(env_map)
+    mode_candidates = ("TRADING_MODE", "AI_TRADING_TRADING_MODE")
+
+    env_mode: str | None = None
+    env_source: str | None = None
+    if env_map:
+        for key in mode_candidates:
+            normalized = _normalize_mode_name(env_map.get(key))
+            if normalized is not None:
+                env_mode = normalized
+                env_source = key
+                break
+    else:
+        for key in mode_candidates:
+            normalized = _normalize_mode_name(os.environ.get(key))
+            if normalized is not None:
+                env_mode = normalized
+                env_source = key
+                break
+
+    override_mode = _normalize_mode_name(env_map.get(_MODE_OVERRIDE_KEY) if env_map else None)
+    override_source = str(env_map.get(_MODE_OVERRIDE_SOURCE_KEY) or "override") if env_map else "override"
+
+    base_mode = _normalize_mode_name(env_map.get(_MODE_BASE_KEY) if env_map else None)
+    base_source = str(env_map.get(_MODE_BASE_SOURCE_KEY) or "TRADING_MODE") if env_map else "TRADING_MODE"
+
+    if precedence == "env_wins":
+        if base_mode is not None:
+            return base_mode, base_source, precedence
+        if env_mode is not None:
+            return env_mode, str(env_source or "TRADING_MODE"), precedence
+        if override_mode is not None:
+            return override_mode, override_source, precedence
+        return "balanced", "default", precedence
+
+    # strict_mode: explicit overrides are authoritative
+    if override_mode is not None:
+        return override_mode, override_source, precedence
+    if env_mode is not None:
+        return env_mode, str(env_source or "TRADING_MODE"), precedence
+    if base_mode is not None:
+        return base_mode, base_source, precedence
+    return "balanced", "default", precedence
+
+
+def _selected_mode(env_map: Mapping[str, Any] | None = None) -> str:
+    """Return the trading mode name derived from env snapshot and precedence."""
+
+    mode_name, _, _ = _resolve_mode_selection(env_map)
+    return mode_name
 
 
 def _apply_mode_overlays(
@@ -2046,33 +2144,53 @@ def _apply_mode_overlays(
     env_map: Mapping[str, Any] | None,
     *,
     explicit_fields: Iterable[str] | None = None,
-) -> None:
-    """Overlay mode defaults onto ``values`` when env does not supply them."""
+) -> dict[str, Any]:
+    """Overlay mode defaults onto ``values`` and return source metadata."""
 
-    mode_name = _selected_mode(env_map)
-    mode_defaults = MODE_PARAMETERS.get(mode_name)
-    if not mode_defaults:
-        return
+    mode_name, mode_source, precedence = _resolve_mode_selection(env_map)
+    mode_defaults = MODE_PARAMETERS.get(mode_name, MODE_PARAMETERS["balanced"])
+    values["trading_mode"] = mode_name
 
     protected = {field for field in (explicit_fields or ())}
-    for field, preset_value in mode_defaults.items():
-        if field in protected:
-            continue
+    field_sources: dict[str, dict[str, Any]] = {}
+    for field in _MODE_MANAGED_FIELDS:
         spec = SPEC_BY_FIELD.get(field)
         if spec is None:
             continue
 
-        provided = False
+        provided_key: str | None = None
         if env_map:
-            provided = any(env_map.get(env_key) not in (None, "") for env_key in spec.env)
-            if not provided and spec.deprecated_env:
-                provided = any(
-                    env_map.get(alias) not in (None, "") for alias in spec.deprecated_env
-                )
-        if provided:
-            continue
+            for env_key in spec.env:
+                if env_map.get(env_key) not in (None, ""):
+                    provided_key = env_key
+                    break
+            if provided_key is None and spec.deprecated_env:
+                for alias in spec.deprecated_env:
+                    if env_map.get(alias) not in (None, ""):
+                        provided_key = alias
+                        break
 
-        values[field] = _validate_bounds(spec, preset_value)
+        source: str
+        if provided_key is not None:
+            source = provided_key
+        elif field in protected:
+            source = "explicit_override"
+        else:
+            source = f"mode_default:{mode_name}"
+            if field in mode_defaults:
+                values[field] = _validate_bounds(spec, mode_defaults[field])
+
+        field_sources[field] = {
+            "value": values.get(field),
+            "source": source,
+        }
+
+    return {
+        "mode": mode_name,
+        "mode_source": mode_source,
+        "precedence_policy": precedence,
+        "managed_fields": field_sources,
+    }
 
 _CACHE_LOCK = threading.Lock()
 _CACHED_CONFIG: TradingConfig | None = None
@@ -2339,12 +2457,13 @@ def _detect_env_alias_conflict(spec: ConfigSpec, env_map: Mapping[str, str]) -> 
 class TradingConfig:
     """Immutable container mapping config specifications to resolved values."""
 
-    __slots__ = ("_values",)
+    __slots__ = ("_values", "_mode_effective")
 
     def __init__(
         self,
         _explicit_fields: Iterable[str] | None = None,
         _env_map: Mapping[str, Any] | None = None,
+        _mode_effective: Mapping[str, Any] | None = None,
         **values: Any,
     ) -> None:
         normalized: dict[str, Any] = {}
@@ -2361,9 +2480,14 @@ class TradingConfig:
         normalized["alpaca_base_url"] = _normalize_base_url(normalized.get("alpaca_base_url"))
         normalized["app_env"] = _normalize_env_label(normalized.get("app_env"), default="test")
 
-        _apply_mode_overlays(normalized, env_snapshot, explicit_fields=explicit_fields)
+        resolved_mode_effective = _apply_mode_overlays(
+            normalized, env_snapshot, explicit_fields=explicit_fields
+        )
+        if _mode_effective is not None:
+            resolved_mode_effective = copy.deepcopy(dict(_mode_effective))
 
         object.__setattr__(self, "_values", normalized)
+        object.__setattr__(self, "_mode_effective", resolved_mode_effective)
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - attribute passthrough
         try:
@@ -2376,6 +2500,14 @@ class TradingConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self._values)
+
+    def mode_effective_snapshot(self) -> dict[str, Any]:
+        """Return source attribution for mode-managed runtime fields."""
+
+        mode_effective = self._mode_effective
+        if not isinstance(mode_effective, Mapping):
+            return {}
+        return copy.deepcopy(dict(mode_effective))
 
     def update(self, **updates: Any) -> "TradingConfig":
         """Merge ``updates`` into the configuration and return ``self``.
@@ -2411,6 +2543,8 @@ class TradingConfig:
         return self
 
     def snapshot_sanitized(self) -> dict[str, Any]:
+        mode_snapshot = self.mode_effective_snapshot()
+        mode_snapshot["adaptive_enabled"] = bool(getattr(self, "trading_mode_adaptive_enabled", False))
         data = {
             "risk": {
                 "capital_cap": self.capital_cap,
@@ -2418,6 +2552,7 @@ class TradingConfig:
                 "daily_loss_limit": self.daily_loss_limit,
                 "max_drawdown_threshold": self.max_drawdown_threshold,
             },
+            "mode": mode_snapshot,
             "data": {
                 "feed": getattr(self, "alpaca_data_feed", None),
                 "provider": (
@@ -2453,7 +2588,8 @@ class TradingConfig:
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "TradingConfig":
         copied_values = copy.deepcopy(self._values, memo)
-        return TradingConfig(**copied_values)
+        copied_mode_effective = copy.deepcopy(self._mode_effective, memo)
+        return TradingConfig(_mode_effective=copied_mode_effective, **copied_values)
 
     @classmethod
     def from_env(
@@ -2463,7 +2599,10 @@ class TradingConfig:
         allow_missing_drawdown: bool = False,
     ) -> "TradingConfig":
         if isinstance(env_overrides, Mapping) and getattr(env_overrides, "is_snapshot", False):
-            env_map = dict(env_overrides)
+            env_map = _EnvSnapshotDict(dict(env_overrides))
+            env_map.override_keys = frozenset(
+                getattr(env_overrides, "override_keys", frozenset())
+            )
         else:
             env_map = _env_snapshot(env_overrides)
         if not allow_missing_drawdown:
@@ -2501,7 +2640,7 @@ class TradingConfig:
                     values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
                     break
 
-        _apply_mode_overlays(values, env_map, explicit_fields=provided_fields)
+        mode_effective = _apply_mode_overlays(values, env_map, explicit_fields=provided_fields)
 
         provider_override = env_map.get("DATA_PROVIDER")
         if provider_override:
@@ -2544,7 +2683,12 @@ class TradingConfig:
         values.setdefault("paper", _infer_paper_mode(values))
         values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
 
-        return cls(_explicit_fields=provided_fields, _env_map=env_map, **values)
+        return cls(
+            _explicit_fields=provided_fields,
+            _env_map=env_map,
+            _mode_effective=mode_effective,
+            **values,
+        )
 
 
 def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
@@ -2591,23 +2735,50 @@ def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
     return _validate_bounds(spec, value)
 
 
-def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
+def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str, str]:
     snap: _EnvSnapshotDict = _EnvSnapshotDict(
         {k: v for k, v in os.environ.items() if isinstance(v, str)}
     )
+    base_mode_value: str | None = None
+    base_mode_source: str | None = None
+    for mode_key in ("TRADING_MODE", "AI_TRADING_TRADING_MODE"):
+        raw_base_mode = snap.get(mode_key)
+        if raw_base_mode not in (None, ""):
+            base_mode_value = str(raw_base_mode)
+            base_mode_source = mode_key
+            break
+
     override_keys: set[str] = set()
+    override_mode_value: str | None = None
+    override_mode_source: str | None = None
     if overrides:
         if isinstance(overrides, str):
-            snap["TRADING_MODE"] = overrides
+            override_mode_value = str(overrides)
+            override_mode_source = "from_env_argument"
+            snap["TRADING_MODE"] = override_mode_value
             override_keys.add("TRADING_MODE")
         else:
             if getattr(overrides, "is_snapshot", False):
                 snap.update(overrides)
+                override_keys.update(
+                    set(getattr(overrides, "override_keys", frozenset()))
+                )
+                if overrides.get(_MODE_OVERRIDE_KEY) not in (None, ""):
+                    override_mode_value = str(overrides.get(_MODE_OVERRIDE_KEY))
+                    override_mode_source = str(
+                        overrides.get(_MODE_OVERRIDE_SOURCE_KEY) or "snapshot_override"
+                    )
             else:
                 _validate_override_keys(overrides)
                 normalized = {k.upper(): str(v) for k, v in overrides.items()}
                 snap.update(normalized)
                 override_keys.update(normalized.keys())
+                for mode_key in ("TRADING_MODE", "AI_TRADING_TRADING_MODE"):
+                    raw_override_mode = normalized.get(mode_key)
+                    if raw_override_mode not in (None, ""):
+                        override_mode_value = str(raw_override_mode)
+                        override_mode_source = mode_key
+                        break
     for alias_key, canonical_key in _ENV_ALIAS_MAP.items():
         raw_value = snap.get(alias_key)
         if raw_value in (None, ""):
@@ -2629,6 +2800,13 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
                 snap[canonical_key] = str(raw_value)
             else:
                 snap.setdefault(canonical_key, str(raw_value))
+
+    if base_mode_value not in (None, ""):
+        snap[_MODE_BASE_KEY] = str(base_mode_value)
+        snap[_MODE_BASE_SOURCE_KEY] = str(base_mode_source or "TRADING_MODE")
+    if override_mode_value not in (None, ""):
+        snap[_MODE_OVERRIDE_KEY] = str(override_mode_value)
+        snap[_MODE_OVERRIDE_SOURCE_KEY] = str(override_mode_source or "override")
     snap.override_keys = frozenset(override_keys)
     return snap
 

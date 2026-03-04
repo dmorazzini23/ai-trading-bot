@@ -328,6 +328,7 @@ except (ImportError, ModuleNotFoundError, AttributeError):
         return None
 
 from ai_trading.config import (
+    MODE_PARAMETERS as CONFIG_MODE_PARAMETERS,
     PRICE_PROVIDER_ORDER,
     DATA_FEED_INTRADAY,
 )
@@ -4072,6 +4073,32 @@ def _reload_env(path: str | None = None, *, override: bool = True) -> str | None
     return result
 
 
+def _normalize_runtime_trading_mode(raw: Any) -> str:
+    """Normalize mode labels and fall back to balanced when invalid."""
+
+    normalized = str(raw or "").strip().lower()
+    if normalized in {"conservative", "balanced", "aggressive"}:
+        return normalized
+    return DEFAULT_TRADING_MODE
+
+
+def _resolve_runtime_trading_mode() -> str:
+    """Resolve trading mode from TradingConfig as the single source of truth."""
+
+    try:
+        cfg = _get_trading_config()
+        return _normalize_runtime_trading_mode(
+            getattr(cfg, "trading_mode", DEFAULT_TRADING_MODE)
+        )
+    except COMMON_EXC:
+        env_mode = (
+            os.getenv("TRADING_MODE")
+            or os.getenv("AI_TRADING_TRADING_MODE")
+            or DEFAULT_TRADING_MODE
+        )
+        return _normalize_runtime_trading_mode(env_mode)
+
+
 def _resolve_orders_threshold(cfg: TradingConfig, key: str, default: float) -> float:
     """Return float threshold from TradingConfig orders section with fallbacks."""
 
@@ -4526,16 +4553,15 @@ warnings.filterwarnings(
 import os
 
 
-# TRADING_MODE must be defined before any classes that reference it
-# Define BotMode and a safe default at import time. Runtime may override later.
+# Define BotMode and an import-safe default. Runtime config resolves the active mode.
 class BotMode(str, Enum):
     AGGRESSIVE = "aggressive"
     BALANCED = "balanced"
     CONSERVATIVE = "conservative"
 
 
-# Import-time safe default; runtime code may overwrite this
-TRADING_MODE = BotMode.BALANCED
+# Import-time safe default used only as last-resort fallback.
+DEFAULT_TRADING_MODE = BotMode.BALANCED.value
 
 import csv
 import json
@@ -5347,7 +5373,7 @@ from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate
 # ai_trading/core/bot_engine.py:670 - Move retrain_meta_learner import to lazy location
 
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
-TRADING_MODE_ENV = getattr(config, "TRADING_MODE", TRADING_MODE)
+TRADING_MODE_ENV = _resolve_runtime_trading_mode()
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
 
@@ -5435,7 +5461,9 @@ def init_runtime_config():
         ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
         ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "")
 
-    TRADING_MODE_ENV = _require_cfg(getattr(cfg, "TRADING_MODE", None), "TRADING_MODE")
+    TRADING_MODE_ENV = _normalize_runtime_trading_mode(
+        getattr(cfg, "trading_mode", getattr(cfg, "TRADING_MODE", None))
+    )
 
     if not callable(validate_alpaca_credentials):
         raise RuntimeError("validate_alpaca_credentials not found in config")
@@ -5453,7 +5481,7 @@ def init_runtime_config():
 # Set module-level defaults that won't crash on import
 ALPACA_API_KEY = None
 ALPACA_SECRET_KEY = None
-TRADING_MODE_ENV = "development"
+TRADING_MODE_ENV = DEFAULT_TRADING_MODE
 
 # AI-AGENT-REF: optional pybreaker dependency
 try:  # pragma: no cover - optional dependency
@@ -8547,22 +8575,49 @@ META_MODEL_PATH = abspath_safe("meta_model.pkl")
 # Strategy mode
 class BotMode:
     def __init__(self, mode: str = "balanced") -> None:
-        self.mode = mode.lower()
-        # AI-AGENT-REF: canonical TradingConfig build
+        self.mode = _normalize_runtime_trading_mode(mode)
         self.config = _get_trading_config()
+        self.params = self._build_parameters()
+
+    def _build_parameters(self) -> dict[str, float]:
+        """Build mode parameters from TradingConfig or explicit mode defaults."""
+
+        resolved_cfg_mode = _normalize_runtime_trading_mode(
+            getattr(self.config, "trading_mode", DEFAULT_TRADING_MODE)
+        )
+        use_cfg_values = self.mode == resolved_cfg_mode
+        mode_defaults = CONFIG_MODE_PARAMETERS.get(
+            self.mode,
+            CONFIG_MODE_PARAMETERS.get(DEFAULT_TRADING_MODE, {}),
+        )
+
+        if use_cfg_values:
+            source_values: dict[str, Any] = {
+                "conf_threshold": getattr(self.config, "conf_threshold", mode_defaults.get("conf_threshold", 0.75)),
+                "kelly_fraction": getattr(self.config, "kelly_fraction", mode_defaults.get("kelly_fraction", 0.6)),
+                "daily_loss_limit": getattr(self.config, "daily_loss_limit", mode_defaults.get("daily_loss_limit", 0.05)),
+                "max_position_size": getattr(self.config, "max_position_size", mode_defaults.get("max_position_size", 8000.0)),
+                "capital_cap": getattr(self.config, "capital_cap", mode_defaults.get("capital_cap", 0.25)),
+                "take_profit_factor": getattr(self.config, "take_profit_factor", mode_defaults.get("take_profit_factor", 1.8)),
+            }
+        else:
+            source_values = dict(mode_defaults)
+
         params: dict[str, float] = {}
-        from ai_trading import settings as S
-        try:
-            params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
-        except (ValueError, TypeError):
-            pass
-        kf = getattr(S, "get_kelly_fraction", None)
-        if callable(kf):
+        mapping = {
+            "CONF_THRESHOLD": source_values.get("conf_threshold"),
+            "KELLY_FRACTION": source_values.get("kelly_fraction"),
+            "DAILY_LOSS_LIMIT": source_values.get("daily_loss_limit"),
+            "MAX_POSITION_SIZE": source_values.get("max_position_size"),
+            "CAPITAL_CAP": source_values.get("capital_cap"),
+            "TAKE_PROFIT_FACTOR": source_values.get("take_profit_factor"),
+        }
+        for key, value in mapping.items():
             try:
-                params["KELLY_FRACTION"] = float(kf())
-            except (ValueError, TypeError):
-                pass
-        self.params = params
+                params[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return params
 
     def set_parameters(self) -> dict[str, float]:
         """Return trading parameters for the current mode.
@@ -8570,23 +8625,12 @@ class BotMode:
         This method now delegates to the centralized configuration system
         for consistency and maintainability.
         """
-        return self.params
+        return dict(self.params)
 
     def get_config(self) -> dict[str, float]:
-        cfg = _trading_config_from_env()
-        params = dict(self.params)
-        from ai_trading import settings as S  # AI-AGENT-REF: authoritative getters
-        try:
-            params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
-        except (ValueError, TypeError):
-            pass
-        kf = getattr(S, "get_kelly_fraction", None)
-        if callable(kf):
-            try:
-                params["KELLY_FRACTION"] = float(kf())
-            except (ValueError, TypeError):
-                pass
-        return params
+        self.config = _trading_config_from_env(allow_missing_drawdown=True)
+        self.params = self._build_parameters()
+        return dict(self.params)
 
 
 @dataclass(slots=True)
@@ -8657,7 +8701,7 @@ class BotState:
     running: bool = False
     current_regime: str = "sideways"
     rolling_losses: list[float] = field(default_factory=list)
-    mode_obj: BotMode = field(default_factory=lambda: BotMode(TRADING_MODE))
+    mode_obj: BotMode = field(default_factory=lambda: BotMode(_resolve_runtime_trading_mode()))
 
     # Signal & Indicator State
     no_signal_events: int = 0
@@ -8750,6 +8794,25 @@ class _LazyState:
 
 
 state = _LazyState()
+_mode_effective_snapshot: dict[str, Any] = {}
+try:
+    _mode_cfg = _get_trading_config()
+    snapshot_fn = getattr(_mode_cfg, "mode_effective_snapshot", None)
+    if callable(snapshot_fn):
+        snapshot_payload = snapshot_fn()
+        if isinstance(snapshot_payload, Mapping):
+            _mode_effective_snapshot = dict(snapshot_payload)
+except COMMON_EXC:
+    _mode_effective_snapshot = {}
+logger.info(
+    "TRADING_MODE_EFFECTIVE",
+    extra={
+        "mode": state.mode_obj.mode,
+        "mode_source": _mode_effective_snapshot.get("mode_source"),
+        "precedence_policy": _mode_effective_snapshot.get("precedence_policy"),
+        "managed_fields": _mode_effective_snapshot.get("managed_fields", {}),
+    },
+)
 logger.info(f"Trading mode is set to '{state.mode_obj.mode}'")
 params = state.mode_obj.get_config()
 params.update(load_hyperparams())
@@ -8764,11 +8827,21 @@ SECONDARY_TRAIL_FACTOR = 1.0
 
 
 def get_take_profit_factor() -> float:
-    """Return configured take-profit factor for ATR stop calculations."""
-    from ai_trading.config.scaling import from_env as scaling_from_env
+    """Return TradingConfig-backed take-profit factor for ATR stop calculations."""
 
-    cfg = scaling_from_env()
-    val = cfg.max_factor
+    try:
+        cfg = _trading_config_from_env(allow_missing_drawdown=True)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from exc
+    val = getattr(cfg, "take_profit_factor", None)
+    if val in (None, ""):
+        mode_name = _resolve_runtime_trading_mode()
+        mode_defaults = {
+            "conservative": 1.5,
+            "balanced": 1.8,
+            "aggressive": 2.5,
+        }
+        val = mode_defaults.get(mode_name, 1.8)
     if not isinstance(val, (int, float)) or val <= 0:
         raise RuntimeError("TAKE_PROFIT_FACTOR must be a positive number")
     return float(val)
@@ -8804,7 +8877,7 @@ try:
 except (TypeError, ValueError):
     POV_SLICE_PCT = 0.05
 DAILY_LOSS_LIMIT = params.get(
-    "get_daily_loss_limit()",
+    "DAILY_LOSS_LIMIT",
     getattr(
         state.mode_obj.config, "daily_loss_limit", getattr(S, "daily_loss_limit", 0.05)
     ),
@@ -8877,7 +8950,6 @@ CONF_THRESHOLD = float(
         getattr(state.mode_obj.config, "confidence_level", 0.75),
     )
 )
-CONFIRMATION_COUNT = int(params.get("CONFIRMATION_COUNT", 2))
 
 
 def _minute_frame_attrs(frame: Any) -> dict[str, str]:
@@ -9079,7 +9151,7 @@ def initialize_runtime_config() -> None:
         f"DOLLAR_RISK_LIMIT resolved to {resolved_drl:.3f}",
     )
 BUY_THRESHOLD = params.get(
-    "get_buy_threshold()",
+    "BUY_THRESHOLD",
     getattr(state.mode_obj.config, "buy_threshold", get_buy_threshold()),
 )
 
@@ -15793,7 +15865,10 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
         return False
     equity = float(acct.equity)
     today_date = date.today()
-    limit = params.get("get_daily_loss_limit()", 0.07)
+    try:
+        limit = float(getattr(_get_trading_config(), "daily_loss_limit", DAILY_LOSS_LIMIT))
+    except (TypeError, ValueError):
+        limit = float(DAILY_LOSS_LIMIT)
 
     if state.day_start_equity is None or state.day_start_equity[0] != today_date:
         if state.last_drawdown >= 0.05:
@@ -25869,8 +25944,26 @@ def _current_drawdown() -> float:
     return max(0.0, (peak - eq) / peak)
 
 
+def _adaptive_mode_switch_enabled(cfg: TradingConfig) -> tuple[bool, str]:
+    """Return whether adaptive mode switching is enabled and why."""
+
+    if not bool(getattr(cfg, "trading_mode_adaptive_enabled", False)):
+        return False, "adaptive_disabled"
+    precedence_policy = str(getattr(cfg, "trading_mode_precedence", "strict_mode") or "strict_mode").strip().lower()
+    if precedence_policy == "env_wins":
+        if os.getenv("TRADING_MODE") not in (None, "") or os.getenv("AI_TRADING_TRADING_MODE") not in (None, ""):
+            return False, "env_wins_locked"
+    return True, "enabled"
+
+
 def update_bot_mode(state: BotState) -> None:
     try:
+        cfg = _get_trading_config()
+        enabled, gate_reason = _adaptive_mode_switch_enabled(cfg)
+        if not enabled:
+            logger.debug("MODE_SWITCH_SKIPPED", extra={"reason": gate_reason})
+            return
+
         avg_r = _average_reward()
         dd = _current_drawdown()
         regime = state.current_regime
@@ -25880,19 +25973,30 @@ def update_bot_mode(state: BotState) -> None:
             new_mode = "aggressive"
         else:
             new_mode = "balanced"
-        if new_mode != state.mode_obj.mode:
-            state.mode_obj = BotMode(new_mode)
-            state.params.update(state.mode_obj.get_config())
-            state.kelly_fraction = state.params.get("KELLY_FRACTION", 0.6)
-            logger.info(
-                "MODE_SWITCH",
-                extra={
-                    "new_mode": new_mode,
-                    "avg_reward": avg_r,
-                    "drawdown": dd,
-                    "regime": regime,
-                },
-            )
+
+        current_mode = str(getattr(state.mode_obj, "mode", DEFAULT_TRADING_MODE)).lower()
+        if new_mode == current_mode:
+            return
+
+        state.mode_obj = BotMode(new_mode)
+        params.update(state.mode_obj.get_config())
+        runtime_ctx = globals().get("ctx")
+        if runtime_ctx is not None and hasattr(runtime_ctx, "kelly_fraction"):
+            try:
+                runtime_ctx.kelly_fraction = float(params.get("KELLY_FRACTION", runtime_ctx.kelly_fraction))
+            except (TypeError, ValueError):
+                pass
+        logger.info(
+            "MODE_SWITCH",
+            extra={
+                "previous_mode": current_mode,
+                "new_mode": new_mode,
+                "avg_reward": avg_r,
+                "drawdown": dd,
+                "regime": regime,
+                "precedence_policy": str(getattr(cfg, "trading_mode_precedence", "strict_mode")),
+            },
+        )
     except (
         FileNotFoundError,
         PermissionError,
@@ -32939,7 +33043,7 @@ def _decision_record_config_snapshot(
     profile = get_regime_signal_profile()
     regime_components = _REGIME_SIGNAL_COMPONENTS.get(profile, _REGIME_SIGNAL_COMPONENTS["balanced"])
     snapshot = {
-        "trading_mode": str(getattr(cfg, "trading_mode", TRADING_MODE)),
+        "trading_mode": str(getattr(cfg, "trading_mode", DEFAULT_TRADING_MODE)),
         "execution_mode": str(getattr(cfg, "execution_mode", "sim")),
         "config_snapshot_hash": config_snapshot_hash(cfg),
         "regime_signal_profile": profile,

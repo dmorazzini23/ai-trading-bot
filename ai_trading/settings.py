@@ -993,7 +993,7 @@ def get_regime_signal_routing_enabled() -> bool:
 def get_regime_signal_profile() -> str:
     profile = str(getattr(get_settings(), "regime_signal_profile", "balanced") or "balanced")
     normalized = profile.strip().lower()
-    if normalized in {"balanced", "conservative"}:
+    if normalized in {"balanced", "conservative", "aggressive"}:
         return normalized
     return "balanced"
 

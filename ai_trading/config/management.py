@@ -273,6 +273,8 @@ def get_env(
                 *tuple(spec.deprecated_env.keys()),
                 "TRADING_MODE",
                 "AI_TRADING_TRADING_MODE",
+                "TRADING_MODE_PRECEDENCE",
+                "AI_TRADING_TRADING_MODE_PRECEDENCE",
             )
         )
     )
