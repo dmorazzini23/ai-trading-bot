@@ -189,6 +189,22 @@ def inc_backup_provider_used(provider: str, symbol: str, *, increment: bool | No
     return prom_value or local_value
 
 
+def backup_provider_used_total(provider: str | None = None) -> int:
+    """Return in-memory backup-provider usage total for ``provider`` or all providers."""
+
+    provider_filter = str(provider).strip() if provider not in (None, "") else ""
+    with _BACKUP_PROVIDER_LOCK:
+        if provider_filter:
+            return int(
+                sum(
+                    count
+                    for (source_provider, _symbol), count in _BACKUP_PROVIDER_USED_COUNTS.items()
+                    if source_provider == provider_filter
+                )
+            )
+        return int(sum(_BACKUP_PROVIDER_USED_COUNTS.values()))
+
+
 def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
 
@@ -267,6 +283,7 @@ __all__ = [
     "inc_empty_payload",
     "inc_provider_fallback",
     "inc_backup_provider_used",
+    "backup_provider_used_total",
     "inc_provider_disable_total",
     "provider_disabled",
     "snapshot",

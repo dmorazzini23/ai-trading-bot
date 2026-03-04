@@ -18,7 +18,7 @@ import tempfile
 import sys
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, cast
 from types import SimpleNamespace
-from collections import OrderedDict, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
@@ -75,6 +75,7 @@ from ai_trading.data.fetch import (
     should_skip_symbol,
     fetch_daily_backup,
 )
+from ai_trading.data.fetch.metrics import backup_provider_used_total
 from ai_trading.data import price_quote_feed
 from ai_trading.data._alpaca_guard import should_import_alpaca_sdk
 from ai_trading.runtime.shutdown import should_stop
@@ -4191,6 +4192,92 @@ _TRADE_LOG_CACHE: Any | None = None
 _TRADE_LOG_CACHE_LOADED = False
 
 
+def _startup_prefetch_daily_data(ctx: Any, symbols: Sequence[str]) -> dict[str, Any]:
+    """Warm a small daily-data slice at startup with bounded retries."""
+
+    summary: dict[str, Any] = {
+        "enabled": bool(get_env("AI_TRADING_STARTUP_PREFETCH_ENABLED", True, cast=bool)),
+        "attempts": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "symbols": [],
+        "failed_symbols": [],
+    }
+    if not summary["enabled"]:
+        return summary
+    if not hasattr(ctx, "data_fetcher"):
+        summary["reason"] = "missing_data_fetcher"
+        return summary
+
+    symbol_limit = max(
+        0,
+        int(get_env("AI_TRADING_STARTUP_PREFETCH_SYMBOL_LIMIT", 6, cast=int)),
+    )
+    selected_symbols = [
+        str(symbol).strip().upper()
+        for symbol in symbols
+        if str(symbol).strip()
+    ]
+    selected_symbols = list(dict.fromkeys(selected_symbols))
+    if symbol_limit > 0:
+        selected_symbols = selected_symbols[:symbol_limit]
+    summary["symbols"] = selected_symbols
+    if not selected_symbols:
+        summary["reason"] = "no_symbols"
+        return summary
+
+    retries = max(
+        1,
+        int(get_env("AI_TRADING_STARTUP_PREFETCH_RETRIES", 2, cast=int)),
+    )
+    retry_delay_sec = max(
+        0.0,
+        float(get_env("AI_TRADING_STARTUP_PREFETCH_RETRY_DELAY_SEC", 0.75, cast=float)),
+    )
+    min_success_ratio = min(
+        1.0,
+        max(
+            0.0,
+            float(get_env("AI_TRADING_STARTUP_PREFETCH_MIN_SUCCESS_RATIO", 0.5, cast=float)),
+        ),
+    )
+    min_success_count = max(1, math.ceil(len(selected_symbols) * min_success_ratio))
+
+    success_symbols: set[str] = set()
+    failures: dict[str, str] = {}
+    end_dt = datetime.now(UTC)
+    start_dt = end_dt - timedelta(days=10)
+    for attempt in range(1, retries + 1):
+        summary["attempts"] = attempt
+        for symbol in selected_symbols:
+            if symbol in success_symbols:
+                continue
+            try:
+                frame = data_fetcher_module.get_daily_df(symbol, start=start_dt, end=end_dt)
+            except Exception as exc:
+                failures[symbol] = str(exc)
+                continue
+            if frame is None or bool(getattr(frame, "empty", False)):
+                failures[symbol] = "empty"
+                continue
+            success_symbols.add(symbol)
+            failures.pop(symbol, None)
+        if len(success_symbols) >= min_success_count:
+            break
+        if attempt < retries and failures:
+            time.sleep(retry_delay_sec * attempt)
+
+    summary["success_count"] = len(success_symbols)
+    summary["failure_count"] = len(failures)
+    summary["failed_symbols"] = sorted(failures.keys())
+    if failures:
+        summary["failed_reasons"] = {
+            symbol: failures[symbol]
+            for symbol in sorted(failures.keys())[:5]
+        }
+    return summary
+
+
 def _initialize_bot_context_post_setup(ctx: Any) -> None:
     """
     Optional, non-fatal finishing steps after LazyBotContext builds its services.
@@ -4211,6 +4298,15 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                     return
         except (AttributeError, KeyError, TypeError):
             pass
+        backup_provider_name = str(get_env("BACKUP_PROVIDER", "yahoo", cast=str) or "yahoo").strip() or "yahoo"
+        backup_before = backup_provider_used_total(backup_provider_name)
+        startup_symbols = list(globals().get("REGIME_SYMBOLS", []))
+        prefetch_summary = _startup_prefetch_daily_data(ctx, startup_symbols)
+        if prefetch_summary.get("enabled"):
+            prefetch_level = logging.INFO
+            if int(prefetch_summary.get("failure_count", 0) or 0) > 0:
+                prefetch_level = logging.WARNING
+            logger.log(prefetch_level, "STARTUP_PREFETCH_SUMMARY", extra=prefetch_summary)
         if "data_source_health_check" in globals() and "REGIME_SYMBOLS" in globals():
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
@@ -4251,6 +4347,22 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                         extra={"cause": "ImportError", "detail": str(e)},
                     )
                     break
+            backup_after = backup_provider_used_total(backup_provider_name)
+            backup_delta = max(0, int(backup_after - backup_before))
+            backup_alert_threshold = max(
+                1,
+                int(get_env("AI_TRADING_STARTUP_BACKUP_ALERT_THRESHOLD", 1, cast=int)),
+            )
+            if backup_delta >= backup_alert_threshold:
+                logger.warning(
+                    "STARTUP_BACKUP_PROVIDER_USAGE_HIGH",
+                    extra={
+                        "provider": backup_provider_name,
+                        "delta": backup_delta,
+                        "total": backup_after,
+                        "threshold": backup_alert_threshold,
+                    },
+                )
         else:
             logger.debug("Post-setup health check not available; skipping.")
     except (
@@ -8755,7 +8867,11 @@ class BotState:
     halt_trading: bool = False
     halt_reason: str | None = None
     effective_policy_hash: str = ""
+    effective_policy_config_hash: str = ""
     operational_safety_tier: str = SafetyTier.NORMAL.value
+    operational_tier_last_change_ts: datetime | None = None
+    operational_tier_candidate: str = SafetyTier.NORMAL.value
+    operational_tier_candidate_streak: int = 0
     effective_policy_snapshot_path: str | None = None
     rollout_state_path: str | None = None
     capital_ramp_multiplier: float = 1.0
@@ -33299,29 +33415,38 @@ def _decision_record_config_snapshot(
     return snapshot
 
 
-def _compile_effective_policy_runtime(cfg: TradingConfig, state: BotState) -> EffectivePolicy:
+def _compile_effective_policy_runtime(
+    cfg: TradingConfig,
+    state: BotState,
+    *,
+    config_hash: str | None = None,
+) -> EffectivePolicy:
     """Compile and cache immutable effective policy for the active runtime."""
 
+    resolved_config_hash = str(config_hash or config_snapshot_hash(cfg))
     policy = compile_effective_policy(cfg)
     previous_hash = str(getattr(state, "effective_policy_hash", "") or "")
     setattr(state, "_effective_policy", policy)
     state.effective_policy_hash = str(policy.policy_hash)
+    state.effective_policy_config_hash = resolved_config_hash
     if previous_hash != policy.policy_hash:
         logger.info(
             "EFFECTIVE_POLICY_COMPILED",
             extra={
                 "policy_hash": policy.policy_hash,
+                "config_hash": resolved_config_hash,
                 "trading_mode": policy.trading_mode,
                 "objective": policy.objective.objective_name,
             },
         )
-    if not bool(getattr(state, "_effective_policy_diff_logged", False)):
+    diff_logged_hash = str(getattr(state, "_effective_policy_diff_logged_hash", "") or "")
+    if diff_logged_hash != policy.policy_hash:
         diffs = startup_policy_diff(policy)
         logger.info(
             "EFFECTIVE_POLICY_STARTUP_DIFF",
             extra={"diff_count": len(diffs), "diffs": diffs[:20]},
         )
-        setattr(state, "_effective_policy_diff_logged", True)
+        setattr(state, "_effective_policy_diff_logged_hash", policy.policy_hash)
     return policy
 
 
@@ -33329,9 +33454,19 @@ def _active_effective_policy(state: BotState, cfg: TradingConfig) -> EffectivePo
     """Return cached effective policy, compiling if absent."""
 
     cached = getattr(state, "_effective_policy", None)
-    if isinstance(cached, EffectivePolicy):
+    current_config_hash = str(config_snapshot_hash(cfg))
+    cached_config_hash = str(getattr(state, "effective_policy_config_hash", "") or "")
+    if isinstance(cached, EffectivePolicy) and cached_config_hash == current_config_hash:
         return cached
-    return _compile_effective_policy_runtime(cfg, state)
+    if isinstance(cached, EffectivePolicy) and cached_config_hash != current_config_hash:
+        logger.info(
+            "EFFECTIVE_POLICY_RECOMPILE_REQUIRED",
+            extra={
+                "previous_config_hash": cached_config_hash,
+                "current_config_hash": current_config_hash,
+            },
+        )
+    return _compile_effective_policy_runtime(cfg, state, config_hash=current_config_hash)
 
 
 def _persist_effective_policy_snapshot(
@@ -33501,6 +33636,81 @@ def _update_rollout_governance_state(
     return summary
 
 
+def _apply_operational_safety_hysteresis(
+    *,
+    state: BotState,
+    previous_tier: SafetyTier,
+    candidate_tier: SafetyTier,
+    candidate_reasons: Sequence[str],
+    now: datetime,
+) -> tuple[SafetyTier, tuple[str, ...]]:
+    """Stabilize operational safety-tier transitions with dwell and streak checks."""
+
+    min_dwell_sec = max(
+        0.0,
+        float(get_env("AI_TRADING_SAFETY_TIER_MIN_DWELL_SEC", 90.0, cast=float)),
+    )
+    safe_enter_confirm = max(
+        1,
+        int(get_env("AI_TRADING_SAFETY_TIER_SAFE_ENTER_CONFIRM_CYCLES", 1, cast=int)),
+    )
+    safe_exit_confirm = max(
+        1,
+        int(get_env("AI_TRADING_SAFETY_TIER_SAFE_EXIT_CONFIRM_CYCLES", 2, cast=int)),
+    )
+    attack_enter_confirm = max(
+        1,
+        int(get_env("AI_TRADING_SAFETY_TIER_ATTACK_ENTER_CONFIRM_CYCLES", 2, cast=int)),
+    )
+    normal_confirm = max(
+        1,
+        int(get_env("AI_TRADING_SAFETY_TIER_NORMAL_CONFIRM_CYCLES", 1, cast=int)),
+    )
+
+    if candidate_tier == previous_tier:
+        state.operational_tier_candidate = candidate_tier.value
+        state.operational_tier_candidate_streak = 0
+        if not isinstance(state.operational_tier_last_change_ts, datetime):
+            state.operational_tier_last_change_ts = now
+        return candidate_tier, tuple(candidate_reasons)
+
+    previous_candidate = str(getattr(state, "operational_tier_candidate", "") or "")
+    if previous_candidate == candidate_tier.value:
+        state.operational_tier_candidate_streak = int(
+            getattr(state, "operational_tier_candidate_streak", 0) or 0
+        ) + 1
+    else:
+        state.operational_tier_candidate = candidate_tier.value
+        state.operational_tier_candidate_streak = 1
+
+    required_confirm = normal_confirm
+    if candidate_tier is SafetyTier.SAFE and previous_tier is not SafetyTier.SAFE:
+        required_confirm = safe_enter_confirm
+    elif previous_tier is SafetyTier.SAFE and candidate_tier is not SafetyTier.SAFE:
+        required_confirm = safe_exit_confirm
+    elif candidate_tier is SafetyTier.ATTACK:
+        required_confirm = attack_enter_confirm
+
+    confirm_ready = int(getattr(state, "operational_tier_candidate_streak", 0) or 0) >= required_confirm
+    last_change = getattr(state, "operational_tier_last_change_ts", None)
+    if candidate_tier is SafetyTier.SAFE and previous_tier is not SafetyTier.SAFE:
+        dwell_ready = True
+    elif isinstance(last_change, datetime):
+        dwell_ready = (now - last_change).total_seconds() >= min_dwell_sec
+    else:
+        dwell_ready = True
+
+    if confirm_ready and dwell_ready:
+        state.operational_tier_last_change_ts = now
+        state.operational_tier_candidate = candidate_tier.value
+        state.operational_tier_candidate_streak = 0
+        return candidate_tier, tuple(candidate_reasons)
+
+    hold_reasons = list(candidate_reasons)
+    hold_reasons.append("SAFETY_TIER_HYSTERESIS_HOLD")
+    return previous_tier, tuple(hold_reasons)
+
+
 def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now: datetime) -> bool:
     if not bool(getattr(cfg, "recon_enabled", False)):
         return True
@@ -33611,6 +33821,22 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         state.halt_trading = True
         state.halt_reason = str(exc) or "GOVERNANCE_GUARD_FAILED"
     decision_path = getattr(cfg, "decision_log_path", None)
+    decision_gate_counts: Counter[str] = Counter()
+    decision_records_total = 0
+    write_decision_record_impl = cast(Any, globals().get("_write_decision_record"))
+
+    def _write_decision_record(record: DecisionRecord, path: str | None) -> None:  # type: ignore[no-redef]
+        nonlocal decision_records_total
+
+        decision_records_total += 1
+        gates_raw = getattr(record, "gates", None)
+        if isinstance(gates_raw, Sequence):
+            for gate in gates_raw:
+                gate_text = str(gate or "").strip()
+                if gate_text:
+                    decision_gate_counts[gate_text] += 1
+        write_decision_record_impl(record, path)
+
     allocation_weights: dict[str, float] = {}
     learned_overrides: dict[str, Any] = {}
     sleeve_snapshot: dict[str, Any] = {}
@@ -34749,6 +34975,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         },
         previous=previous_tier,
     )
+    operational_tier, tier_reasons = _apply_operational_safety_hysteresis(
+        state=state,
+        previous_tier=previous_tier,
+        candidate_tier=operational_tier,
+        candidate_reasons=tier_reasons,
+        now=now,
+    )
     state.operational_safety_tier = operational_tier.value
     if operational_tier != previous_tier:
         log_level = logging.WARNING if operational_tier is SafetyTier.SAFE else logging.INFO
@@ -35698,6 +35931,35 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             tca=tca_record,
         )
         _write_decision_record(record, decision_path)
+    accepted_decisions = int(decision_gate_counts.get("OK_TRADE", 0))
+    reject_gate_counts = {
+        gate: int(count)
+        for gate, count in decision_gate_counts.items()
+        if gate != "OK_TRADE" and int(count) > 0
+    }
+    if reject_gate_counts:
+        top_reasons = sorted(
+            reject_gate_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        summary_payload = {
+            "records_total": int(decision_records_total),
+            "accepted_records": accepted_decisions,
+            "rejected_records": max(int(decision_records_total) - accepted_decisions, 0),
+            "top_reasons": [{"reason": reason, "count": count} for reason, count in top_reasons],
+            "unique_reasons": len(reject_gate_counts),
+        }
+        reject_ttl_s = _resolve_runtime_info_log_ttl_seconds(
+            "AI_TRADING_DECISION_REJECT_SUMMARY_LOG_TTL_SEC",
+            60.0,
+        )
+        reject_signature = "|".join(f"{reason}:{count}" for reason, count in top_reasons) or "none"
+        if _should_emit_runtime_info_log(
+            runtime,
+            f"DECISION_REJECT_REASON_SUMMARY:{reject_signature}",
+            ttl_seconds=reject_ttl_s,
+        ):
+            logger.info("DECISION_REJECT_REASON_SUMMARY", extra=summary_payload)
     cycle_elapsed_ms = int(max((monotonic_time() - float(loop_start)) * 1000.0, 0.0))
     slo_payload = {
         "symbols_requested": len(symbols),
@@ -35891,7 +36153,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         _enforce_dependency_preflight(runtime)
         cfg_runtime = _resolve_trading_config(runtime)
         try:
-            effective_policy = _compile_effective_policy_runtime(cfg_runtime, state)
+            effective_policy = _active_effective_policy(state, cfg_runtime)
         except PolicyConfigError as exc:
             logger.error("EFFECTIVE_POLICY_INVALID", extra={"error": str(exc)})
             state.halt_trading = True
