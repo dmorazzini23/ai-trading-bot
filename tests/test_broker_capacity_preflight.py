@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from ai_trading.execution import live_trading as lt
@@ -99,6 +101,34 @@ def test_preflight_capacity_fails_closed_in_pytest_when_account_endpoint_unavail
     assert check.can_submit is False
     assert check.suggested_qty == 0
     assert check.reason == "account_unavailable"
+
+
+def test_preflight_capacity_allows_plain_sell_without_account_or_buying_power(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "paper")
+    broker = NoAccountBroker(buying_power="0", orders=[])
+
+    check = preflight_capacity("AAPL", "sell", 100, 5, broker)
+
+    assert check.can_submit is True
+    assert check.suggested_qty == 5
+    assert check.reason is None
+    assert broker.get_account_calls == 0
+
+
+def test_preflight_capacity_ignores_negative_maintenance_margin_candidate():
+    broker = SimpleNamespace(list_orders=lambda status="open": [])
+    account = SimpleNamespace(
+        buying_power="54384.87",
+        daytrading_buying_power="54384.87",
+        maintenance_margin="65697.98",
+        non_marginable_buying_power="0",
+    )
+
+    check = preflight_capacity("ABBV", "buy", 229.87, 33, broker, account=account)
+
+    assert check.can_submit is True
+    assert check.suggested_qty == 33
+    assert check.reason is None
 
 
 def test_submit_limit_order_skips_when_capacity_fails(monkeypatch):

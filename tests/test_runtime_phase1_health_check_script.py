@@ -62,6 +62,7 @@ def _seed_runtime(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, 
             "RATE_ALERT_MIN_ROWS": "100",
             "DECISION_STALE_MAX_AGE_MINUTES": "90",
             "AUTH_HALT_MAX_RATE": "0.35",
+            "AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE": "0.35",
             "OK_TRADE_MIN_RATE": "0.005",
             "CYCLE_DUPLICATE_INTENT_MAX_RATE": "0.70",
         }
@@ -69,11 +70,19 @@ def _seed_runtime(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, 
     return decision_file, env
 
 
-def _rows_for_duplicate_rate(*, total: int, duplicate_rows: int, ok_rows: int) -> list[dict[str, object]]:
+def _rows_for_gate_rates(
+    *,
+    total: int,
+    duplicate_rows: int,
+    auth_forbidden_rows: int = 0,
+    ok_rows: int,
+) -> list[dict[str, object]]:
     now_iso = _now_utc_iso()
     rows: list[dict[str, object]] = []
     for idx in range(total):
         gates: list[str] = ["VOL_TARGET_SCALE"]
+        if idx < auth_forbidden_rows:
+            gates.append("AUTH_BROKER_HALT_FORBIDDEN")
         if idx < duplicate_rows:
             gates.append("CYCLE_DUPLICATE_INTENT")
         if idx < ok_rows:
@@ -85,7 +94,7 @@ def _rows_for_duplicate_rate(*, total: int, duplicate_rows: int, ok_rows: int) -
 def test_runtime_health_check_fails_on_duplicate_intent_spike(tmp_path: Path) -> None:
     _, env = _seed_runtime(
         tmp_path,
-        _rows_for_duplicate_rate(total=160, duplicate_rows=130, ok_rows=12),
+        _rows_for_gate_rates(total=160, duplicate_rows=130, ok_rows=12),
     )
 
     proc = subprocess.run(
@@ -105,7 +114,7 @@ def test_runtime_health_check_fails_on_duplicate_intent_spike(tmp_path: Path) ->
 def test_runtime_health_check_passes_when_duplicate_intent_rate_is_healthy(tmp_path: Path) -> None:
     _, env = _seed_runtime(
         tmp_path,
-        _rows_for_duplicate_rate(total=160, duplicate_rows=20, ok_rows=16),
+        _rows_for_gate_rates(total=160, duplicate_rows=20, ok_rows=16),
     )
 
     proc = subprocess.run(
@@ -119,3 +128,23 @@ def test_runtime_health_check_passes_when_duplicate_intent_rate_is_healthy(tmp_p
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "cycle_duplicate_intent_rate=" in proc.stdout
     assert "OK: CYCLE_DUPLICATE_INTENT rate within threshold" in proc.stdout
+
+
+def test_runtime_health_check_fails_on_auth_broker_halt_forbidden_spike(tmp_path: Path) -> None:
+    _, env = _seed_runtime(
+        tmp_path,
+        _rows_for_gate_rates(total=160, duplicate_rows=20, auth_forbidden_rows=90, ok_rows=12),
+    )
+
+    proc = subprocess.run(
+        ["bash", str(_health_check_script())],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    combined = f"{proc.stdout}\n{proc.stderr}"
+    assert "auth_broker_halt_forbidden_rate=" in combined
+    assert "AUTH_BROKER_HALT_FORBIDDEN spike detected" in combined

@@ -11,6 +11,7 @@ SHADOW_PREDICTIONS_FILE="${SHADOW_PREDICTIONS_FILE:-${RUNTIME_DIR}/ml_shadow_pre
 ENV_RUNTIME_FILE="${ENV_RUNTIME_FILE:-/home/aiuser/ai-trading-bot/.env.runtime}"
 
 AUTH_HALT_MAX_RATE="${AUTH_HALT_MAX_RATE:-0.35}"
+AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE="${AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE:-0.35}"
 OK_TRADE_MIN_RATE="${OK_TRADE_MIN_RATE:-0.01}"
 CYCLE_DUPLICATE_INTENT_MAX_RATE="${CYCLE_DUPLICATE_INTENT_MAX_RATE:-0.70}"
 RATE_ALERT_MIN_ROWS="${RATE_ALERT_MIN_ROWS:-100}"
@@ -180,7 +181,7 @@ echo "runtime_dir=${RUNTIME_DIR}"
 echo "decision_file=${DECISION_FILE}"
 echo "report_dir=${REPORT_DIR}"
 echo "window_rows=${N}"
-echo "thresholds: auth_halt_max_rate=${AUTH_HALT_MAX_RATE}, ok_trade_min_rate=${OK_TRADE_MIN_RATE}, cycle_duplicate_intent_max_rate=${CYCLE_DUPLICATE_INTENT_MAX_RATE}"
+echo "thresholds: auth_halt_max_rate=${AUTH_HALT_MAX_RATE}, auth_broker_halt_forbidden_max_rate=${AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE}, ok_trade_min_rate=${OK_TRADE_MIN_RATE}, cycle_duplicate_intent_max_rate=${CYCLE_DUPLICATE_INTENT_MAX_RATE}"
 echo "decision_window: min_rows_for_rate_alerts=${RATE_ALERT_MIN_ROWS}, stale_max_age_minutes=${DECISION_STALE_MAX_AGE_MINUTES}"
 
 skip_decision_derived_artifact_checks=0
@@ -219,6 +220,7 @@ else
           rows: length,
           ok_trade_rows: (map(select((.gates // []) | index("OK_TRADE"))) | length),
           auth_halt_rows: (map(select((.gates // []) | index("AUTH_HALT"))) | length),
+          auth_broker_halt_forbidden_rows: (map(select((.gates // []) | index("AUTH_BROKER_HALT_FORBIDDEN"))) | length),
           cycle_duplicate_intent_rows: (map(select((.gates // []) | index("CYCLE_DUPLICATE_INTENT"))) | length),
           order_pacing_cap_rows: (map(select((.gates // []) | index("ORDER_PACING_CAP_BLOCK"))) | length)
         }'
@@ -226,6 +228,7 @@ else
   rows="$(jq -r '.rows' <<<"${stats_json}")"
   ok_rows="$(jq -r '.ok_trade_rows' <<<"${stats_json}")"
   auth_rows="$(jq -r '.auth_halt_rows' <<<"${stats_json}")"
+  auth_forbidden_rows="$(jq -r '.auth_broker_halt_forbidden_rows' <<<"${stats_json}")"
   duplicate_rows="$(jq -r '.cycle_duplicate_intent_rows' <<<"${stats_json}")"
   pacing_rows="$(jq -r '.order_pacing_cap_rows' <<<"${stats_json}")"
 
@@ -257,21 +260,29 @@ else
     fi
 
     auth_rate="$(awk -v n="${auth_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
+    auth_forbidden_rate="$(awk -v n="${auth_forbidden_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
     ok_rate="$(awk -v n="${ok_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
     duplicate_rate="$(awk -v n="${duplicate_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
     auth_pct="$(awk -v r="${auth_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
+    auth_forbidden_pct="$(awk -v r="${auth_forbidden_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
     ok_pct="$(awk -v r="${ok_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
     duplicate_pct="$(awk -v r="${duplicate_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
-    echo "window_stats: rows=${rows} auth_halt_rows=${auth_rows} ok_trade_rows=${ok_rows} cycle_duplicate_intent_rows=${duplicate_rows} order_pacing_cap_rows=${pacing_rows} decision_age_minutes=${decision_age_m}"
-    echo "window_rates: auth_halt_rate=${auth_rate} (${auth_pct}%), ok_trade_rate=${ok_rate} (${ok_pct}%), cycle_duplicate_intent_rate=${duplicate_rate} (${duplicate_pct}%)"
+    echo "window_stats: rows=${rows} auth_halt_rows=${auth_rows} auth_broker_halt_forbidden_rows=${auth_forbidden_rows} ok_trade_rows=${ok_rows} cycle_duplicate_intent_rows=${duplicate_rows} order_pacing_cap_rows=${pacing_rows} decision_age_minutes=${decision_age_m}"
+    echo "window_rates: auth_halt_rate=${auth_rate} (${auth_pct}%), auth_broker_halt_forbidden_rate=${auth_forbidden_rate} (${auth_forbidden_pct}%), ok_trade_rate=${ok_rate} (${ok_pct}%), cycle_duplicate_intent_rate=${duplicate_rate} (${duplicate_pct}%)"
 
     if [[ "${skip_rate_alerts}" -eq 1 ]]; then
-      echo "INFO: AUTH_HALT/OK_TRADE/CYCLE_DUPLICATE_INTENT threshold checks skipped for this decision window"
+      echo "INFO: AUTH_HALT/AUTH_BROKER_HALT_FORBIDDEN/OK_TRADE/CYCLE_DUPLICATE_INTENT threshold checks skipped for this decision window"
     else
       if rate_gt "${auth_rate}" "${AUTH_HALT_MAX_RATE}"; then
         fail "AUTH_HALT spike detected: ${auth_rate} > ${AUTH_HALT_MAX_RATE}"
       else
         ok "AUTH_HALT rate within threshold"
+      fi
+
+      if rate_gt "${auth_forbidden_rate}" "${AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE}"; then
+        fail "AUTH_BROKER_HALT_FORBIDDEN spike detected: ${auth_forbidden_rate} > ${AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE}"
+      else
+        ok "AUTH_BROKER_HALT_FORBIDDEN rate within threshold"
       fi
 
       if rate_lt "${ok_rate}" "${OK_TRADE_MIN_RATE}"; then

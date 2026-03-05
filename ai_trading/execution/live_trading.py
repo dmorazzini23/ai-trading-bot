@@ -1411,6 +1411,18 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     if price_decimal is not None and price_decimal <= 0:
         price_decimal = None
 
+    if not _order_consumes_capacity(side):
+        logger.info(
+            "BROKER_CAPACITY_OK | symbol=%s side=%s qty=%s notional=%s",
+            symbol,
+            side,
+            qty_int,
+            "unknown"
+            if price_decimal is None
+            else _format_money((price_decimal * Decimal(qty_int)).copy_abs()),
+        )
+        return CapacityCheck(True, qty_int, None)
+
     min_qty_default = 1
     min_qty = _config_int("EXECUTION_MIN_QTY", min_qty_default) or min_qty_default
     min_notional = _config_decimal("EXECUTION_MIN_NOTIONAL", Decimal("0"))
@@ -1587,7 +1599,9 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         if candidate > 0:
             capacity_candidates.append(candidate - open_notional)
     if buying_power > 0 and maintenance_margin > 0:
-        capacity_candidates.append(buying_power - maintenance_margin - open_notional)
+        maintenance_available = buying_power - maintenance_margin - open_notional
+        if maintenance_available > 0:
+            capacity_candidates.append(maintenance_available)
 
     available = min(capacity_candidates) if capacity_candidates else buying_power - open_notional
     if available < 0:

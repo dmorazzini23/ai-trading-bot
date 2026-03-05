@@ -9141,6 +9141,8 @@ class BotState:
     skipped_cycles: int = 0
     auth_skipped_symbols: set[str] = field(default_factory=set)
     cycle_order_intents: dict[str, str] = field(default_factory=dict)
+    cycle_submit_compaction: set[tuple[str, str]] = field(default_factory=set)
+    auth_forbidden_cooldowns: dict[tuple[str, str], datetime] = field(default_factory=dict)
     last_eval_bar_ts: dict[tuple[str, str], datetime] = field(default_factory=dict)
     last_order_bar_ts: dict[str, datetime] = field(default_factory=dict)
     last_order_client_id: dict[str, str] = field(default_factory=dict)
@@ -18171,6 +18173,28 @@ def submit_order(
             core_side = CoreOrderSide.SELL
         else:
             core_side = CoreOrderSide.BUY
+
+        cycle_intent_compaction_enabled = bool(
+            get_env("AI_TRADING_CYCLE_INTENT_COMPACTION_ENABLED", True, cast=bool)
+        )
+        if cycle_intent_compaction_enabled and bool(getattr(state, "running", False)):
+            if not _reserve_cycle_submit_intent(
+                state,
+                symbol=symbol,
+                side=side_norm,
+            ):
+                skip_handler = getattr(_exec_engine, "_skip_submit", None)
+                normalized_side = _normalize_submit_side(side_norm) or side_norm
+                if callable(skip_handler):
+                    try:
+                        skip_handler(
+                            symbol=symbol,
+                            side=normalized_side,
+                            reason="cycle_duplicate_intent",
+                        )
+                    except Exception:
+                        logger.debug("CYCLE_INTENT_PRECHECK_SKIP_HANDLER_FAILED", exc_info=True)
+                return None
 
         # If caller didn't supply a price, fetch the most recent quote.
         if price is None:
@@ -32545,6 +32569,105 @@ def _resolve_submit_none_reason(runtime: Any) -> str:
     return default_reason
 
 
+def _normalize_submit_side(side: Any) -> str | None:
+    """Normalize mixed side labels into buy/sell buckets."""
+
+    text = str(side or "").strip().lower()
+    if text in {"buy", "buy_to_cover", "cover"}:
+        return "buy"
+    if text in {"sell", "exit", "sell_short", "short"}:
+        return "sell"
+    return None
+
+
+def _reserve_cycle_submit_intent(state_obj: Any, *, symbol: str, side: Any) -> bool:
+    """Reserve symbol/side intent for the active cycle; False for duplicates."""
+
+    symbol_key = str(symbol or "").strip().upper()
+    side_key = _normalize_submit_side(side)
+    if not symbol_key or side_key is None:
+        return True
+    intents = getattr(state_obj, "cycle_submit_compaction", None)
+    if not isinstance(intents, set):
+        intents = set()
+        setattr(state_obj, "cycle_submit_compaction", intents)
+    key = (symbol_key, side_key)
+    if key in intents:
+        return False
+    intents.add(key)
+    return True
+
+
+def _auth_forbidden_cooldown_seconds() -> float:
+    try:
+        cooldown = float(
+            get_env(
+                "AI_TRADING_AUTH_FORBIDDEN_COOLDOWN_SECONDS",
+                180.0,
+                cast=float,
+            )
+        )
+    except (TypeError, ValueError):
+        cooldown = 180.0
+    return max(cooldown, 0.0)
+
+
+def _is_auth_forbidden_reason(reason: Any) -> bool:
+    token = str(reason or "").strip().upper()
+    return token.startswith("AUTH_BROKER_HALT_FORBIDDEN")
+
+
+def _record_auth_forbidden_cooldown(
+    state_obj: Any,
+    *,
+    symbol: str,
+    side: Any,
+    reason: Any,
+    now: datetime,
+) -> None:
+    """Start a per-symbol side cooldown when broker returns forbidden auth halt."""
+
+    if not _is_auth_forbidden_reason(reason):
+        return
+    cooldown = _auth_forbidden_cooldown_seconds()
+    if cooldown <= 0.0:
+        return
+    symbol_key = str(symbol or "").strip().upper()
+    side_key = _normalize_submit_side(side)
+    if not symbol_key or side_key is None:
+        return
+    cooldowns = getattr(state_obj, "auth_forbidden_cooldowns", None)
+    if not isinstance(cooldowns, dict):
+        cooldowns = {}
+        setattr(state_obj, "auth_forbidden_cooldowns", cooldowns)
+    cooldowns[(symbol_key, side_key)] = now + timedelta(seconds=cooldown)
+
+
+def _auth_forbidden_cooldown_remaining_seconds(
+    state_obj: Any,
+    *,
+    symbol: str,
+    side: Any,
+    now: datetime,
+) -> float:
+    """Return remaining cooldown for symbol/side after forbidden auth halts."""
+
+    symbol_key = str(symbol or "").strip().upper()
+    side_key = _normalize_submit_side(side)
+    if not symbol_key or side_key is None:
+        return 0.0
+    cooldowns = getattr(state_obj, "auth_forbidden_cooldowns", None)
+    if not isinstance(cooldowns, dict) or not cooldowns:
+        return 0.0
+    expiry = cooldowns.get((symbol_key, side_key))
+    if not isinstance(expiry, datetime):
+        return 0.0
+    if expiry <= now:
+        cooldowns.pop((symbol_key, side_key), None)
+        return 0.0
+    return max((expiry - now).total_seconds(), 0.0)
+
+
 def _redact_snapshot_payload(payload: Any) -> Any:
     if isinstance(payload, dict):
         redacted: dict[str, Any] = {}
@@ -36492,6 +36615,25 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price
         side = "buy" if delta_shares > 0 else "sell"
+        auth_forbidden_retry_after = _auth_forbidden_cooldown_remaining_seconds(
+            state,
+            symbol=symbol,
+            side=side,
+            now=now,
+        )
+        if auth_forbidden_retry_after > 0.0:
+            gates.append("AUTH_BROKER_HALT_FORBIDDEN_COOLDOWN")
+            record = DecisionRecord(
+                symbol=symbol,
+                bar_ts=net_target.bar_ts,
+                sleeves=net_target.proposals,
+                net_target=net_target,
+                gates=gates,
+                metrics={"auth_forbidden_retry_after_sec": round(auth_forbidden_retry_after, 3)},
+                config_snapshot=symbol_snapshot,
+            )
+            _write_decision_record(record, decision_path)
+            continue
         client_order_id = deterministic_client_order_id(
             salt=str(getattr(cfg, "seed", "seed")),
             symbol=symbol,
@@ -36664,6 +36806,13 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     },
                 )
             gates.append(error_info.reason_code)
+            _record_auth_forbidden_cooldown(
+                state,
+                symbol=symbol,
+                side=side,
+                reason=error_info.reason_code,
+                now=now,
+            )
             record = DecisionRecord(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
@@ -36675,7 +36824,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
         if order is None:
-            gates.append(_resolve_submit_none_reason(runtime))
+            submit_none_reason = _resolve_submit_none_reason(runtime)
+            gates.append(submit_none_reason)
+            _record_auth_forbidden_cooldown(
+                state,
+                symbol=symbol,
+                side=side,
+                reason=submit_none_reason,
+                now=now,
+            )
             record = DecisionRecord(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
@@ -37290,6 +37447,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             intents.clear()
         else:
             state.cycle_order_intents = {}
+        submit_compaction = getattr(state, "cycle_submit_compaction", None)
+        if isinstance(submit_compaction, set):
+            submit_compaction.clear()
+        else:
+            state.cycle_submit_compaction = set()
 
         def _restore_last_run_timestamp() -> None:
             """Revert ``state.last_run_at`` to its pre-cycle value."""

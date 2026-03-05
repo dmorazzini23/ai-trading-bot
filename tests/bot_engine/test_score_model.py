@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -62,3 +63,55 @@ def test_resolve_submit_none_reason_prefers_engine_reason():
     reason = bot_engine._resolve_submit_none_reason(runtime)
 
     assert reason == "ORDER_PACING_CAP"
+
+
+def test_auth_forbidden_cooldown_records_and_expires(monkeypatch):
+    state = bot_engine.BotState()
+    now = datetime(2026, 3, 5, 18, 0, tzinfo=UTC)
+    monkeypatch.setenv("AI_TRADING_AUTH_FORBIDDEN_COOLDOWN_SECONDS", "120")
+
+    bot_engine._record_auth_forbidden_cooldown(
+        state,
+        symbol="aapl",
+        side="buy",
+        reason="AUTH_BROKER_HALT_FORBIDDEN",
+        now=now,
+    )
+
+    remaining = bot_engine._auth_forbidden_cooldown_remaining_seconds(
+        state,
+        symbol="AAPL",
+        side="buy",
+        now=now + timedelta(seconds=30),
+    )
+    assert 89.0 <= remaining <= 91.0
+
+    expired = bot_engine._auth_forbidden_cooldown_remaining_seconds(
+        state,
+        symbol="AAPL",
+        side="buy",
+        now=now + timedelta(seconds=121),
+    )
+    assert expired == 0.0
+
+
+def test_auth_forbidden_cooldown_ignores_other_reasons(monkeypatch):
+    state = bot_engine.BotState()
+    now = datetime(2026, 3, 5, 18, 0, tzinfo=UTC)
+    monkeypatch.setenv("AI_TRADING_AUTH_FORBIDDEN_COOLDOWN_SECONDS", "300")
+
+    bot_engine._record_auth_forbidden_cooldown(
+        state,
+        symbol="AAPL",
+        side="buy",
+        reason="ORDER_SUBMIT_SKIPPED",
+        now=now,
+    )
+
+    remaining = bot_engine._auth_forbidden_cooldown_remaining_seconds(
+        state,
+        symbol="AAPL",
+        side="buy",
+        now=now,
+    )
+    assert remaining == 0.0
