@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Trading Runtime Health Check
+After=network-online.target ai-trading.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aiuser
+Group=aiuser
+WorkingDirectory=/home/aiuser/ai-trading-bot
+Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
+ExecStart=/bin/bash -lc 'bash /home/aiuser/ai-trading-bot/scripts/runtime_phase1_health_check_runner.sh'
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

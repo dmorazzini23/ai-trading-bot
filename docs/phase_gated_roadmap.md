@@ -82,3 +82,13 @@ This checks:
 - required gate-effectiveness artifacts exist and are fresh.
 - latest after-hours report freshness.
 - shadow predictions artifact freshness when `AI_TRADING_ML_SHADOW_ENABLED=1`.
+
+To reduce false alarms off-hours, the checker automatically suppresses
+`AUTH_HALT`/`OK_TRADE` threshold alerts when:
+- decision window sample size is below `RATE_ALERT_MIN_ROWS` (default `100`), or
+- decision window is stale beyond `DECISION_STALE_MAX_AGE_MINUTES` (default `90`)
+  outside regular US hours (`RTH_TZ`, `RTH_START_HHMM`, `RTH_END_HHMM`).
+
+It also suppresses empty-decision-window failures off-hours by default:
+- `SUPPRESS_OFFHOURS_EMPTY_DECISION_ALERTS=1`
+- `FAIL_ON_EMPTY_DECISION_WINDOW_DURING_RTH=1`

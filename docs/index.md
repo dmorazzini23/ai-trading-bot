@@ -75,3 +75,27 @@ Ensure `RUN_HEALTHCHECK=1` is set in the environment to expose these endpoints.
 
 The service writes to `logs/scheduler.log` (or `$BOT_LOG_FILE`). View logs with
 `tail -F logs/scheduler.log` or via the systemd journal.
+
+### Runtime Healthcheck Timer
+
+The repository includes a periodic runtime guardrail check that runs the
+Phase-1 health script every 30 minutes and writes results to journald.
+
+Install and enable:
+
+```bash
+sudo cp packaging/systemd/ai-trading-healthcheck.service /etc/systemd/system/
+sudo cp packaging/systemd/ai-trading-healthcheck.timer /etc/systemd/system/
+sudo chmod +x /home/aiuser/ai-trading-bot/scripts/runtime_phase1_health_check.sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-trading-healthcheck.timer
+sudo systemctl start ai-trading-healthcheck.service
+```
+
+Inspect status/logs:
+
+```bash
+systemctl status ai-trading-healthcheck.timer --no-pager
+systemctl list-timers ai-trading-healthcheck.timer --all --no-pager
+journalctl -u ai-trading-healthcheck.service -n 200 --no-pager
+```

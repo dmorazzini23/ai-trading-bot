@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Trading Runtime Health Check every 30 minutes
+
+[Timer]
+OnCalendar=*:0/30
+AccuracySec=1min
+Persistent=true
+Unit=ai-trading-healthcheck.service
+
+[Install]
+WantedBy=timers.target
