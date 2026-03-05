@@ -24,6 +24,9 @@ RTH_END_HHMM="${RTH_END_HHMM:-1600}"
 REPORT_MAX_AGE_MINUTES="${REPORT_MAX_AGE_MINUTES:-2160}" # 36h
 GATE_FILES_MAX_AGE_MINUTES="${GATE_FILES_MAX_AGE_MINUTES:-180}" # 3h
 SHADOW_FILE_MAX_AGE_MINUTES="${SHADOW_FILE_MAX_AGE_MINUTES:-180}" # 3h
+SHADOW_ACTIVITY_LOG_UNIT="${SHADOW_ACTIVITY_LOG_UNIT:-ai-trading.service}"
+SHADOW_ACTIVITY_LOOKBACK_MINUTES="${SHADOW_ACTIVITY_LOOKBACK_MINUTES:-90}"
+SHADOW_REQUIRE_ACTIVITY_FOR_ARTIFACT="${SHADOW_REQUIRE_ACTIVITY_FOR_ARTIFACT:-1}"
 
 failures=0
 
@@ -142,6 +145,23 @@ is_regular_trading_hours_now() {
     return 1
   fi
   return 0
+}
+
+recent_ml_activity_count() {
+  local unit="$1"
+  local lookback_minutes="$2"
+  if ! command -v journalctl >/dev/null 2>&1; then
+    return 1
+  fi
+  local output=""
+  if ! output="$(journalctl -u "${unit}" --since "${lookback_minutes} min ago" --no-pager 2>/dev/null)"; then
+    return 1
+  fi
+  # Count both successful ML signal evaluations and explicit ML-path failures.
+  printf "%s\n" "${output}" \
+    | grep -E 'ML_SIGNAL|ML_SIGNAL_BELOW_CONFIDENCE|ML_SIGNAL_MISSING_FEATURES|ML_SHADOW_PREDICT_FAILED|ML_SHADOW_DIVERGENCE|ML predictions disabled|MODEL_FILE_MISSING|MODEL_LOAD_ERROR|MODEL_INTERFACE_MISSING' \
+    | wc -l \
+    | awk '{print $1}'
 }
 
 require_cmd jq
@@ -305,14 +325,24 @@ if is_truthy "${shadow_enabled}"; then
   if [[ "${skip_decision_derived_artifact_checks}" -eq 1 ]]; then
     echo "INFO: shadow artifact check skipped (no recent decision window)"
   else
-    if [[ ! -s "${SHADOW_PREDICTIONS_FILE}" ]]; then
-      fail "shadow enabled but predictions artifact missing: ${SHADOW_PREDICTIONS_FILE}"
-    else
-      shadow_age_m="$(file_age_minutes "${SHADOW_PREDICTIONS_FILE}")"
-      if [[ "${shadow_age_m}" -gt "${SHADOW_FILE_MAX_AGE_MINUTES}" ]]; then
-        fail "shadow predictions stale (${shadow_age_m}m): ${SHADOW_PREDICTIONS_FILE}"
+    skip_shadow_artifact_check=0
+    if is_truthy "${SHADOW_REQUIRE_ACTIVITY_FOR_ARTIFACT}"; then
+      ml_activity_count="$(recent_ml_activity_count "${SHADOW_ACTIVITY_LOG_UNIT}" "${SHADOW_ACTIVITY_LOOKBACK_MINUTES}" || true)"
+      if [[ -n "${ml_activity_count}" && "${ml_activity_count}" -eq 0 ]]; then
+        echo "INFO: shadow artifact check skipped (no recent ML signal activity in ${SHADOW_ACTIVITY_LOG_UNIT})"
+        skip_shadow_artifact_check=1
+      fi
+    fi
+    if [[ "${skip_shadow_artifact_check}" -eq 0 ]]; then
+      if [[ ! -s "${SHADOW_PREDICTIONS_FILE}" ]]; then
+        fail "shadow enabled but predictions artifact missing: ${SHADOW_PREDICTIONS_FILE}"
       else
-        ok "shadow predictions present and fresh (${shadow_age_m}m): ${SHADOW_PREDICTIONS_FILE}"
+        shadow_age_m="$(file_age_minutes "${SHADOW_PREDICTIONS_FILE}")"
+        if [[ "${shadow_age_m}" -gt "${SHADOW_FILE_MAX_AGE_MINUTES}" ]]; then
+          fail "shadow predictions stale (${shadow_age_m}m): ${SHADOW_PREDICTIONS_FILE}"
+        else
+          ok "shadow predictions present and fresh (${shadow_age_m}m): ${SHADOW_PREDICTIONS_FILE}"
+        fi
       fi
     fi
   fi

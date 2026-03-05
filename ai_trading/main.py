@@ -1099,6 +1099,18 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
     if note_msg:
         log_extra["note"] = note_msg
     logger.info(log_message, extra=log_extra)
+    # Seed provider runtime telemetry at startup so health surfaces have a
+    # concrete freshness timestamp even before the first fetch cycle.
+    runtime_provider = provider_normalized or "unknown"
+    if runtime_provider.startswith("alpaca"):
+        runtime_provider = "alpaca"
+    runtime_state.update_data_provider_state(
+        primary=runtime_provider,
+        active=runtime_provider,
+        using_backup=False,
+        timeframe="1Min",
+        reason="startup_config_resolved",
+    )
 
 
 def _log_config_effective_summary(cfg: Any) -> None:

@@ -1241,6 +1241,72 @@ def _resolve_prepare_symbol_limit() -> int | None:
     return max(1, min(limit, 500))
 
 
+def _record_prerank_shadow_snapshot(
+    *,
+    ranked_symbols: Sequence[str],
+    selected_symbols: Sequence[str],
+    rank_source: str,
+    top_n: int | None,
+    runtime: Any | None,
+) -> None:
+    """Emit a lightweight shadow snapshot from the active prerank path.
+
+    This path is exercised even when legacy ``signal_ml`` hooks are bypassed.
+    Recording here guarantees shadow artifacts reflect the real execution flow.
+    """
+
+    def _flag(name: str, default: bool) -> bool:
+        try:
+            value = get_env(name, default, cast=bool)
+        except TypeError:
+            value = get_env(name, default)
+        except Exception:
+            return bool(default)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    if not _flag("AI_TRADING_ML_SHADOW_ENABLED", False):
+        return
+    if not _flag("AI_TRADING_ML_SHADOW_PRERANK_ENABLED", True):
+        return
+
+    runtime_rank: Mapping[str, Any] | None = None
+    if runtime is not None:
+        rank_candidate = getattr(runtime, "execution_candidate_rank", None)
+        if isinstance(rank_candidate, Mapping):
+            runtime_rank = rank_candidate
+
+    ranked_payload: list[dict[str, Any]] = []
+    for symbol in list(selected_symbols)[:20]:
+        rank_score: float | None = None
+        if runtime_rank:
+            raw_score = runtime_rank.get(symbol, runtime_rank.get(symbol.lower(), 0.0))
+            try:
+                numeric_score = float(raw_score)
+            except (TypeError, ValueError):
+                numeric_score = 0.0
+            if math.isfinite(numeric_score):
+                rank_score = numeric_score
+        ranked_payload.append(
+            {
+                "symbol": symbol,
+                "rank_score": rank_score,
+            }
+        )
+
+    payload = {
+        "ts": datetime.now(UTC).isoformat(),
+        "mode": "execution_candidate_prerank",
+        "rank_source": str(rank_source),
+        "requested": int(len(ranked_symbols)),
+        "selected": int(len(selected_symbols)),
+        "top_n": int(top_n) if top_n is not None else None,
+        "ranked": ranked_payload,
+    }
+    _record_shadow_prediction(payload)
+
+
 def _pre_rank_execution_candidates(
     symbols: Sequence[str],
     *,
@@ -1304,6 +1370,13 @@ def _pre_rank_execution_candidates(
     else:
         ranked = list(deduped)
     if top_n is None or len(ranked) <= top_n:
+        _record_prerank_shadow_snapshot(
+            ranked_symbols=ranked,
+            selected_symbols=ranked,
+            rank_source=rank_source,
+            top_n=top_n,
+            runtime=runtime,
+        )
         return ranked
 
     selected = ranked[:top_n]
@@ -1318,6 +1391,13 @@ def _pre_rank_execution_candidates(
             "selected_sample": selected[:10],
             "dropped_sample": dropped[:10],
         },
+    )
+    _record_prerank_shadow_snapshot(
+        ranked_symbols=ranked,
+        selected_symbols=selected,
+        rank_source=rank_source,
+        top_n=top_n,
+        runtime=runtime,
     )
     return selected
 

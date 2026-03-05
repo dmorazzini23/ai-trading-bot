@@ -224,6 +224,9 @@ class HealthCheck:
                     and consecutive_failures <= 0
                     and not provider_section.get("last_error_at")
                 )
+                if provider_unknown and provider_primary_steady:
+                    provider_status = "healthy"
+                    provider_section["status"] = "healthy"
                 degraded = provider_disabled or using_backup
                 if not degraded:
                     if provider_status in {"healthy", "ready"}:

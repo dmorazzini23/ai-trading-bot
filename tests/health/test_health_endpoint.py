@@ -65,3 +65,4 @@ def test_health_endpoint_allows_unknown_provider_when_primary_is_steady() -> Non
     payload = response.get_json()
     assert payload["status"] == "healthy"
     assert payload["ok"] is True
+    assert payload["primary_data_provider"]["status"] == "healthy"

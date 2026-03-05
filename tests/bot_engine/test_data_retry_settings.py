@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from ai_trading.core import bot_engine
+
+
+@pytest.fixture(autouse=True)
+def _disable_shadow_snapshot_by_default(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_ENABLED", "1")
 
 
 def test_data_retry_settings_clamped_and_logged(monkeypatch, caplog):
@@ -96,3 +104,37 @@ def test_pre_rank_execution_candidates_prefers_runtime_rank(monkeypatch):
     )
 
     assert ranked == ["AAPL", "GOOG"]
+
+
+def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "2")
+    payloads: list[dict] = []
+    monkeypatch.setattr(
+        bot_engine,
+        "_record_shadow_prediction",
+        lambda payload: payloads.append(dict(payload)),
+    )
+    runtime = type(
+        "_Runtime",
+        (),
+        {
+            "portfolio_weights": {"MSFT": 0.8, "AAPL": 0.1, "GOOG": 0.2},
+            "execution_candidate_rank": {"MSFT": -5.0, "AAPL": 3.2, "GOOG": 2.1},
+        },
+    )()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "GOOG"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["AAPL", "GOOG"]
+    assert payloads, "expected prerank shadow snapshot"
+    latest = payloads[-1]
+    assert latest["mode"] == "execution_candidate_prerank"
+    assert latest["rank_source"] == "runtime_rank"
+    assert latest["requested"] == 3
+    assert latest["selected"] == 2
+    assert latest["top_n"] == 2
+    assert [entry["symbol"] for entry in latest["ranked"]] == ["AAPL", "GOOG"]
