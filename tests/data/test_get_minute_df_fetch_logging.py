@@ -338,3 +338,47 @@ def test_no_session_intraday_fallback_reenabled_with_toggle(monkeypatch, caplog)
     backup_logs = [record.message for record in caplog.records if record.message.startswith("USING_BACKUP_PROVIDER")]
     assert backup_logs, "expected backup provider log message"
     assert any("reason=" in message for message in backup_logs)
+
+
+def test_primary_minute_fetch_refreshes_provider_runtime_state(monkeypatch):
+    start, end = _dt_range()
+    timestamps = pd.date_range(start=start, periods=3, freq="1min", tz=UTC)
+    primary_df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [100.0, 100.1, 100.2],
+            "high": [100.2, 100.3, 100.4],
+            "low": [99.8, 99.9, 100.0],
+            "close": [100.05, 100.15, 100.25],
+            "volume": [1000, 1100, 1200],
+        }
+    )
+
+    runtime_state.update_data_provider_state(
+        primary="alpaca",
+        active="alpaca",
+        status="unknown",
+        using_backup=False,
+    )
+
+    monkeypatch.setattr(data_fetcher, "provider_monitor", _DummyProviderMonitor())
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *_a, **_k: primary_df.copy(), raising=False)
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *_a, **_k: True)
+    monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
+    monkeypatch.setattr(data_fetcher, "_sip_configured", lambda: False)
+    monkeypatch.setattr(data_fetcher, "_IEX_EMPTY_COUNTS", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_EMPTY_BAR_COUNTS", {}, raising=False)
+    monkeypatch.setattr(data_fetcher, "_SKIPPED_SYMBOLS", set(), raising=False)
+    monkeypatch.setattr(data_fetcher, "_BACKUP_SKIP_UNTIL", {}, raising=False)
+    monkeypatch.setenv("ENABLE_FINNHUB", "0")
+
+    result = data_fetcher.get_minute_df("AAPL", start, end, feed="iex")
+
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    provider_state = runtime_state.observe_data_provider_state()
+    assert provider_state.get("status") == "healthy"
+    assert provider_state.get("using_backup") is False
+    assert provider_state.get("active") == provider_state.get("primary")
+    assert str(provider_state.get("active", "")).startswith("alpaca")
+    assert provider_state.get("updated")

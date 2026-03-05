@@ -207,11 +207,31 @@ class HealthCheck:
                     "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
                 }
 
-                provider_status = provider_section.get("status")
+                provider_status_raw = provider_section.get("status")
+                provider_status = str(provider_status_raw or "").strip().lower()
                 provider_disabled = provider_status in {"down", "disabled"}
-                degraded = provider_disabled or provider_section.get("using_backup") or (
-                    provider_status not in {None, "healthy"}
+                using_backup = bool(provider_section.get("using_backup"))
+                primary_name = str(provider_section.get("primary") or "").strip().lower()
+                active_name = str(provider_section.get("active") or "").strip().lower()
+                try:
+                    consecutive_failures = int(provider_section.get("consecutive_failures") or 0)
+                except (TypeError, ValueError):
+                    consecutive_failures = 0
+                provider_unknown = provider_status in {"", "unknown"}
+                provider_primary_steady = (
+                    not using_backup
+                    and (not primary_name or not active_name or primary_name == active_name)
+                    and consecutive_failures <= 0
+                    and not provider_section.get("last_error_at")
                 )
+                degraded = provider_disabled or using_backup
+                if not degraded:
+                    if provider_status in {"healthy", "ready"}:
+                        degraded = False
+                    elif provider_unknown and provider_primary_steady:
+                        degraded = False
+                    else:
+                        degraded = True
                 if broker_section["status"] == "unreachable":
                     degraded = True
 

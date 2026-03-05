@@ -13029,6 +13029,27 @@ def get_minute_df(
             primary_label=primary_label,
             backup_label=backup_label,
         )
+    if not used_backup:
+        try:
+            primary_canon = canonical_provider(primary_label or "alpaca")
+        except Exception:
+            primary_canon = str(primary_label or "alpaca")
+        backup_canon: str | None = None
+        if backup_label:
+            try:
+                backup_canon = canonical_provider(backup_label)
+            except Exception:
+                backup_canon = str(backup_label)
+        runtime_state.update_data_provider_state(
+            primary=primary_canon,
+            active=primary_canon,
+            backup=backup_canon,
+            using_backup=False,
+            timeframe="1Min",
+            status="healthy",
+            consecutive_failures=0,
+            safe_mode=is_safe_mode_active(),
+        )
     source_label = (
         resolved_backup_provider
         if used_backup

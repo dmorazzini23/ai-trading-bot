@@ -220,3 +220,65 @@ def test_emit_cycle_slo_alerts_can_include_daily_fallback(monkeypatch) -> None:
     main._emit_cycle_slo_alerts(cycle_index=2, compute_ms=10.0, closed=False)
 
     assert "ALERT_PRIMARY_FEED_FALLBACK_PROLONGED" in emitted
+
+
+def test_emit_cycle_slo_alerts_suppresses_fallback_alert_when_provider_telemetry_stale(
+    monkeypatch,
+) -> None:
+    main._PRIMARY_FALLBACK_STREAK_SINCE_TS = None
+    main._PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
+    main._PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = 0.0
+    monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_WARN_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_CRIT_SEC", "2")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_COOLDOWN_SEC", "0")
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "updated": "2000-01-01T00:00:00+00:00",
+            "active": "yahoo",
+            "reason": "upstream_unavailable",
+            "status": "degraded",
+            "timeframes": {"1Min": True},
+        },
+    )
+    monkeypatch.setattr(main.time, "time", lambda: 100.0)
+    emitted: list[str] = []
+    monkeypatch.setattr(main, "emit_runtime_alert", lambda name, **_kwargs: emitted.append(name))
+
+    main._emit_cycle_slo_alerts(cycle_index=1, compute_ms=10.0, closed=False)
+
+    assert "ALERT_PROVIDER_TELEMETRY_STALE" in emitted
+    assert "ALERT_PRIMARY_FEED_FALLBACK_PROLONGED" not in emitted
+
+
+def test_emit_cycle_slo_alerts_applies_provider_telemetry_stale_alert_cooldown(
+    monkeypatch,
+) -> None:
+    main._PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = 0.0
+    monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", "5")
+    monkeypatch.setenv("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_ALERT_COOLDOWN_SEC", "300")
+    monkeypatch.setenv("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", "0")
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "updated": "2000-01-01T00:00:00+00:00",
+            "active": "yahoo",
+            "status": "degraded",
+        },
+    )
+    clock = {"value": 100.0}
+    monkeypatch.setattr(main.time, "time", lambda: clock["value"])
+    emitted: list[str] = []
+    monkeypatch.setattr(main, "emit_runtime_alert", lambda name, **_kwargs: emitted.append(name))
+
+    main._emit_cycle_slo_alerts(cycle_index=1, compute_ms=10.0, closed=False)
+    clock["value"] = 120.0
+    main._emit_cycle_slo_alerts(cycle_index=2, compute_ms=10.0, closed=False)
+
+    assert emitted.count("ALERT_PROVIDER_TELEMETRY_STALE") == 1

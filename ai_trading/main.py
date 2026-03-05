@@ -106,6 +106,7 @@ _BAD_SESSION_REPLAY_LOCK = threading.Lock()
 _LAST_BAD_SESSION_REPLAY_TS = 0.0
 _PRIMARY_FALLBACK_STREAK_SINCE_TS: float | None = None
 _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
+_PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = 0.0
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -561,6 +562,8 @@ def _emit_cycle_slo_alerts(
     compute_ms: float,
     closed: bool,
 ) -> None:
+    global _PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS
+    global _PRIMARY_FALLBACK_STREAK_SINCE_TS, _PRIMARY_FALLBACK_LAST_ALERT_TS
     enabled = bool(get_env("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", True, cast=bool))
     if not enabled:
         return
@@ -613,24 +616,44 @@ def _emit_cycle_slo_alerts(
     provider_age_s = _timestamp_age_seconds(provider_state.get("updated"))
     stale_warn_s = float(get_env("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", 300, cast=float))
     stale_warn_s = max(0.0, stale_warn_s)
-    if provider_age_s is not None and stale_warn_s > 0.0 and provider_age_s >= stale_warn_s:
-        severity = "critical" if provider_age_s >= (stale_warn_s * 2.0) else "warning"
-        emit_runtime_alert(
-            "ALERT_PROVIDER_TELEMETRY_STALE",
-            severity=severity,
-            details={
-                "cycle_index": cycle_index,
-                "provider_age_s": round(float(provider_age_s), 3),
-                "threshold_s": round(float(stale_warn_s), 3),
-                "provider_active": provider_state.get("active"),
-                "provider_status": provider_state.get("status"),
-            },
+    provider_state_stale = bool(
+        provider_age_s is not None and stale_warn_s > 0.0 and provider_age_s >= stale_warn_s
+    )
+    if provider_state_stale:
+        stale_alert_cooldown_s = float(
+            get_env("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_ALERT_COOLDOWN_SEC", 120, cast=float)
         )
+        stale_alert_cooldown_s = max(0.0, stale_alert_cooldown_s)
+        now_wall_ts = float(time.time())
+        should_emit_stale = (
+            stale_alert_cooldown_s <= 0.0
+            or _PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS <= 0.0
+            or (now_wall_ts - float(_PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS)) >= stale_alert_cooldown_s
+        )
+        if should_emit_stale:
+            severity = "critical" if provider_age_s >= (stale_warn_s * 2.0) else "warning"
+            emit_runtime_alert(
+                "ALERT_PROVIDER_TELEMETRY_STALE",
+                severity=severity,
+                details={
+                    "cycle_index": cycle_index,
+                    "provider_age_s": round(float(provider_age_s), 3),
+                    "threshold_s": round(float(stale_warn_s), 3),
+                    "provider_active": provider_state.get("active"),
+                    "provider_status": provider_state.get("status"),
+                },
+            )
+            _PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = now_wall_ts
 
     fallback_alerts_enabled = bool(
         get_env("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", True, cast=bool)
     )
     if not fallback_alerts_enabled:
+        return
+    # Fallback severity should only be evaluated when provider telemetry is fresh.
+    if provider_state_stale:
+        _PRIMARY_FALLBACK_STREAK_SINCE_TS = None
+        _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
         return
 
     include_daily_fallback = bool(
@@ -641,7 +664,6 @@ def _emit_cycle_slo_alerts(
         include_daily=include_daily_fallback,
     )
     now_wall_ts = float(time.time())
-    global _PRIMARY_FALLBACK_STREAK_SINCE_TS, _PRIMARY_FALLBACK_LAST_ALERT_TS
     if not fallback_active:
         _PRIMARY_FALLBACK_STREAK_SINCE_TS = None
         _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0

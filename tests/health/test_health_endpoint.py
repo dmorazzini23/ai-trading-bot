@@ -42,3 +42,26 @@ def test_health_endpoint_reports_degraded_provider_state():
     provider_section = payload["primary_data_provider"]
     assert provider_section["status"] == "degraded"
     assert payload["fallback_active"] is True
+
+
+def test_health_endpoint_allows_unknown_provider_when_primary_is_steady() -> None:
+    runtime_state.update_data_provider_state(
+        primary="alpaca",
+        active="alpaca",
+        using_backup=False,
+        status="unknown",
+        consecutive_failures=0,
+        last_error_at=None,
+    )
+    runtime_state.update_broker_status(connected=True, status="reachable")
+
+    ctx = SimpleNamespace(service="ai-trading")
+    hc = HealthCheck(ctx=ctx)
+    client = hc.app.test_client()
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "healthy"
+    assert payload["ok"] is True

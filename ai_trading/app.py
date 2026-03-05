@@ -655,6 +655,23 @@ def create_app():
                 "safe_mode": bool(provider_state.get("safe_mode")),
                 "data_status": data_status,
             }
+            primary_name = str(provider_payload.get("primary") or "").strip().lower()
+            active_name = str(provider_payload.get("active") or "").strip().lower()
+            try:
+                consecutive_failures = int(provider_payload.get("consecutive_failures") or 0)
+            except (TypeError, ValueError):
+                consecutive_failures = 0
+            provider_unknown = provider_status_normalized in {"", "unknown"}
+            provider_primary_steady = (
+                not provider_payload.get("using_backup")
+                and (not primary_name or not active_name or primary_name == active_name)
+                and consecutive_failures <= 0
+                and not provider_payload.get("last_error_at")
+            )
+            if provider_unknown and provider_primary_steady:
+                provider_status = "healthy"
+                provider_status_normalized = "healthy"
+                provider_payload["status"] = "healthy"
 
             broker_connected_raw = broker_state.get("connected")
             broker_status = broker_state.get("status")
