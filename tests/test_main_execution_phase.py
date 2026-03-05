@@ -34,7 +34,9 @@ def test_set_execution_phase_updates_runtime_state() -> None:
     assert updated.get("cycle_index") == 1
 
 
-def test_emit_cycle_slo_alerts_emits_compute_and_stale_provider(monkeypatch) -> None:
+def test_emit_cycle_slo_alerts_emits_compute_and_skips_stale_provider_when_primary_steady(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_SLO_CYCLE_COMPUTE_WARN_MS", "1000")
     monkeypatch.setenv("AI_TRADING_SLO_CYCLE_COMPUTE_CRIT_MS", "2000")
@@ -45,6 +47,7 @@ def test_emit_cycle_slo_alerts_emits_compute_and_stale_provider(monkeypatch) -> 
         lambda: {
             "updated": "2000-01-01T00:00:00+00:00",
             "active": "alpaca",
+            "primary": "alpaca-iex",
             "status": "healthy",
         },
     )
@@ -59,7 +62,7 @@ def test_emit_cycle_slo_alerts_emits_compute_and_stale_provider(monkeypatch) -> 
     main._emit_cycle_slo_alerts(cycle_index=3, compute_ms=2500.0, closed=False)
 
     assert ("ALERT_CYCLE_COMPUTE_CRITICAL", "critical") in events
-    assert any(name == "ALERT_PROVIDER_TELEMETRY_STALE" for name, _ in events)
+    assert not any(name == "ALERT_PROVIDER_TELEMETRY_STALE" for name, _ in events)
 
 
 def test_emit_cycle_market_snapshot_respects_cadence(monkeypatch, caplog) -> None:

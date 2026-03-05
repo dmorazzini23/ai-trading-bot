@@ -503,6 +503,19 @@ def _provider_minute_fallback_active(provider_state: Mapping[str, Any] | None) -
     )
 
 
+def _provider_family_token(raw_name: Any) -> str:
+    """Collapse provider aliases into a stable family token for comparisons."""
+
+    token = str(raw_name or "").strip().lower().replace("_", "-")
+    if not token:
+        return ""
+    if token.startswith("alpaca"):
+        return "alpaca"
+    if token == "yfinance":
+        return "yahoo"
+    return token
+
+
 def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: int) -> None:
     cadence_open = int(get_env("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES", 1, cast=int))
     cadence_open = max(1, cadence_open)
@@ -616,8 +629,20 @@ def _emit_cycle_slo_alerts(
     provider_age_s = _timestamp_age_seconds(provider_state.get("updated"))
     stale_warn_s = float(get_env("AI_TRADING_SLO_PROVIDER_TELEMETRY_STALE_WARN_SEC", 300, cast=float))
     stale_warn_s = max(0.0, stale_warn_s)
+    provider_status = str(provider_state.get("status") or "").strip().lower()
+    primary_name = _provider_family_token(provider_state.get("primary"))
+    active_name = _provider_family_token(provider_state.get("active"))
+    using_backup = bool(provider_state.get("using_backup"))
+    provider_primary_steady = (
+        not using_backup
+        and (not primary_name or not active_name or primary_name == active_name)
+        and provider_status in {"", "unknown", "healthy", "ready"}
+    )
     provider_state_stale = bool(
-        provider_age_s is not None and stale_warn_s > 0.0 and provider_age_s >= stale_warn_s
+        provider_age_s is not None
+        and stale_warn_s > 0.0
+        and provider_age_s >= stale_warn_s
+        and not provider_primary_steady
     )
     if provider_state_stale:
         stale_alert_cooldown_s = float(
