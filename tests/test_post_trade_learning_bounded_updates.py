@@ -65,3 +65,29 @@ def test_post_trade_learning_runtime_schedule_writes_overrides(
     assert state.last_learning_run_date == run_ts.date()
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["overrides"]["per_symbol_cost_buffer_bps"]["AAPL"] > 0
+
+
+def test_post_trade_learning_safety_envelope_clamps_and_filters(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_LEARNING_MAX_SYMBOL_OVERRIDES_PER_RUN", "1")
+    monkeypatch.setenv("AI_TRADING_LEARNING_MAX_COST_BUFFER_BPS", "2.0")
+    monkeypatch.setenv("AI_TRADING_LEARNING_MAX_DEADBAND_DELTA", "0.03")
+    monkeypatch.setenv("AI_TRADING_LEARNING_MIN_SYMBOL_TRADES", "3")
+    overrides, envelope = bot_engine._apply_learning_overrides_safety_envelope(
+        overrides={
+            "per_symbol_cost_buffer_bps": {
+                "AAPL": 8.0,
+                "MSFT": 1.0,
+            },
+            "global_deadband_frac_delta": 0.25,
+        },
+        symbol_metrics={
+            "AAPL": {"trades": 4.0},
+            "MSFT": {"trades": 2.0},
+        },
+    )
+    assert list(overrides["per_symbol_cost_buffer_bps"]) == ["AAPL"]
+    assert overrides["per_symbol_cost_buffer_bps"]["AAPL"] == 2.0
+    assert overrides["global_deadband_frac_delta"] == 0.03
+    assert envelope["dropped_symbols"]["MSFT"] == "insufficient_trades"

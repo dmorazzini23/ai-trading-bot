@@ -261,7 +261,10 @@ def build_replay_dataset_from_bad_session(
     return {
         "fingerprint": fingerprint,
         "manifest": str(meta_path),
+        "manifest_path": str(meta_path),
         "files": written,
+        "symbols": sorted(written),
+        "events": int(len(events)),
         "bundle": bundle,
     }
 

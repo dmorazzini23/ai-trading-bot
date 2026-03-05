@@ -12,7 +12,7 @@ import json
 import math
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from statistics import mean, pstdev
@@ -236,6 +236,7 @@ class CandidateMetrics:
     regime_metrics: dict[str, dict[str, float]]
     oof_probabilities: np.ndarray
     brier_score: float = 1.0
+    regime_calibration: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -759,6 +760,63 @@ def _regime_summary(
     return out
 
 
+def _expected_calibration_error(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    bins: int = 10,
+) -> float:
+    labels_arr = np.asarray(labels, dtype=float)
+    probs_arr = np.asarray(probabilities, dtype=float)
+    if labels_arr.size == 0 or probs_arr.size == 0 or labels_arr.size != probs_arr.size:
+        return 1.0
+    clipped = np.clip(probs_arr, 1e-6, 1.0 - 1e-6)
+    bucket_ids = np.minimum((clipped * bins).astype(int), bins - 1)
+    total = float(clipped.size)
+    ece = 0.0
+    for bucket in range(max(1, int(bins))):
+        mask = bucket_ids == bucket
+        if not np.any(mask):
+            continue
+        conf = float(np.mean(clipped[mask]))
+        acc = float(np.mean(labels_arr[mask]))
+        weight = float(np.sum(mask)) / total
+        ece += weight * abs(acc - conf)
+    return float(max(0.0, min(1.0, ece)))
+
+
+def _regime_calibration_summary(
+    regimes: np.ndarray,
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+    *,
+    min_support: int,
+) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    regimes_arr = np.asarray(regimes).astype(str)
+    labels_arr = np.asarray(labels, dtype=float)
+    probs_arr = np.asarray(probabilities, dtype=float)
+    valid_mask = np.isfinite(probs_arr)
+    if regimes_arr.size == 0 or labels_arr.size == 0 or probs_arr.size == 0:
+        return out
+    for regime in sorted({str(value) for value in regimes_arr}):
+        regime_mask = regimes_arr == regime
+        chosen = regime_mask & valid_mask
+        support = int(np.sum(chosen))
+        if support < max(1, int(min_support)):
+            continue
+        regime_labels = labels_arr[chosen]
+        regime_probs = np.clip(probs_arr[chosen], 1e-6, 1.0 - 1e-6)
+        brier = float(np.mean((regime_probs - regime_labels) ** 2))
+        ece = _expected_calibration_error(regime_labels, regime_probs)
+        out[regime] = {
+            "support": float(support),
+            "brier_score": brier,
+            "ece": ece,
+        }
+    return out
+
+
 def _evaluate_candidate(
     name: str,
     dataset: Any,
@@ -871,11 +929,21 @@ def _evaluate_candidate(
     selected_all = valid_probs_mask & (oof_probs >= threshold)
     regime_metrics = _regime_summary(regimes, selected_all, edge)
     brier_score = 1.0
+    y_values_all = y.to_numpy(dtype=float)
+    regime_calibration: dict[str, dict[str, float]] = {}
     if np.any(valid_probs_mask):
-        y_values = y.to_numpy(dtype=float)[valid_probs_mask]
+        y_values = y_values_all[valid_probs_mask]
         probs_values = np.clip(oof_probs[valid_probs_mask], 1e-6, 1.0 - 1e-6)
         if y_values.size and probs_values.size == y_values.size:
             brier_score = float(np.mean((probs_values - y_values) ** 2))
+        regime_calibration = _regime_calibration_summary(
+            regimes,
+            y_values_all,
+            oof_probs,
+            min_support=int(
+                get_env("AI_TRADING_AFTER_HOURS_REGIME_CALIBRATION_MIN_SUPPORT", 25, cast=int)
+            ),
+        )
     hit_stability = 1.0
     if len(fold_hits) > 1:
         hit_stability = max(0.0, 1.0 - float(pstdev(fold_hits)))
@@ -895,6 +963,7 @@ def _evaluate_candidate(
         regime_metrics=regime_metrics,
         oof_probabilities=oof_probs,
         brier_score=float(brier_score),
+        regime_calibration=regime_calibration,
     )
 
 
@@ -1461,6 +1530,94 @@ def _write_model_selection_overrides(
     return _write_json(target_path, payload)
 
 
+def _load_existing_selection_overrides_payload() -> Mapping[str, Any] | None:
+    path = _model_selection_overrides_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
+def _retune_cooldown_allows(*, now_utc: datetime) -> dict[str, Any]:
+    min_hours = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_RETUNE_MIN_HOURS_BETWEEN_UPDATES",
+                24.0,
+                cast=float,
+            )
+        ),
+    )
+    payload = _load_existing_selection_overrides_payload()
+    if payload is None:
+        return {"allowed": True, "min_hours": float(min_hours), "hours_since_last": None}
+    updated_raw = payload.get("updated_at")
+    updated_at = _parse_ts(updated_raw)
+    if updated_at is None:
+        return {"allowed": True, "min_hours": float(min_hours), "hours_since_last": None}
+    elapsed_hours = max(0.0, (now_utc - updated_at).total_seconds() / 3600.0)
+    return {
+        "allowed": bool(elapsed_hours >= min_hours),
+        "min_hours": float(min_hours),
+        "hours_since_last": float(elapsed_hours),
+        "updated_at": updated_at.isoformat(),
+    }
+
+
+def _apply_selection_weight_safety_envelope(
+    *,
+    current_weights: Mapping[str, float],
+    candidate_weights: Mapping[str, float],
+) -> dict[str, Any]:
+    normalized_current = _normalize_model_selection_weights(current_weights)
+    normalized_candidate = _normalize_model_selection_weights(candidate_weights)
+    max_abs_delta = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_MAX_ABS_WEIGHT_DELTA", 0.5, cast=float)),
+        low=0.0,
+        high=5.0,
+    )
+    max_rel_delta = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_MAX_RELATIVE_WEIGHT_DELTA", 0.6, cast=float)),
+        low=0.0,
+        high=10.0,
+    )
+    bounded: dict[str, float] = {}
+    clamps: dict[str, dict[str, float]] = {}
+    for key, current_value in normalized_current.items():
+        candidate_value = float(normalized_candidate.get(key, current_value))
+        abs_low = float(current_value) - max_abs_delta
+        abs_high = float(current_value) + max_abs_delta
+        rel_span = max(abs(float(current_value)) * max_rel_delta, 1e-9)
+        rel_low = float(current_value) - rel_span
+        rel_high = float(current_value) + rel_span
+        bounded_low = max(abs_low, rel_low)
+        bounded_high = min(abs_high, rel_high)
+        safe_value = _clamp(candidate_value, low=bounded_low, high=bounded_high)
+        bounded[key] = float(safe_value)
+        if abs(safe_value - candidate_value) > 1e-12:
+            clamps[key] = {
+                "from": float(candidate_value),
+                "to": float(safe_value),
+                "low": float(bounded_low),
+                "high": float(bounded_high),
+            }
+    return {
+        "weights": _normalize_model_selection_weights(bounded, defaults=normalized_current),
+        "clamped": bool(clamps),
+        "clamps": clamps,
+        "limits": {
+            "max_abs_delta": float(max_abs_delta),
+            "max_relative_delta": float(max_rel_delta),
+        },
+    }
+
+
 def _maybe_retune_model_selection_weights(
     *,
     now_utc: datetime,
@@ -1503,9 +1660,19 @@ def _maybe_retune_model_selection_weights(
     if not bool(tuning.get("retuned", False)):
         summary["reason"] = "no_material_improvement"
         return summary
+    cooldown = _retune_cooldown_allows(now_utc=now_utc)
+    summary["cooldown"] = cooldown
+    if not bool(cooldown.get("allowed", True)):
+        summary["reason"] = "cooldown_active"
+        return summary
+    safety = _apply_selection_weight_safety_envelope(
+        current_weights=current_weights,
+        candidate_weights=dict(tuning["weights"]),
+    )
+    summary["safety_envelope"] = safety
     override_path = _write_model_selection_overrides(
         now_utc=now_utc,
-        weights=tuning["weights"],
+        weights=safety["weights"],
         drift_summary=drift_summary,
     )
     summary.update(
@@ -1513,7 +1680,7 @@ def _maybe_retune_model_selection_weights(
             "retuned": True,
             "reason": "drift_breach",
             "override_path": str(override_path),
-            "weights": dict(tuning["weights"]),
+            "weights": dict(safety["weights"]),
         }
     )
     return summary
@@ -1571,6 +1738,70 @@ def _threshold_by_regime(
                 best_threshold = float(threshold)
         out[regime] = best_threshold
     return out
+
+
+def _apply_regime_calibration_threshold_adjustment(
+    *,
+    thresholds_by_regime: Mapping[str, float],
+    regime_calibration: Mapping[str, Mapping[str, float]],
+) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    adjusted = {str(key): float(value) for key, value in thresholds_by_regime.items()}
+    adjustments: dict[str, dict[str, float]] = {}
+    if not bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_REGIME_CALIBRATION_THRESHOLD_ADJUST_ENABLED",
+            True,
+            cast=bool,
+        )
+    ):
+        return adjusted, adjustments
+    ece_warn = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_REGIME_ECE_WARN", 0.08, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+    ece_critical = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_REGIME_ECE_CRITICAL", 0.14, cast=float)),
+        low=ece_warn,
+        high=1.0,
+    )
+    max_bump = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_REGIME_THRESHOLD_MAX_BUMP", 0.08, cast=float)),
+        low=0.0,
+        high=0.4,
+    )
+    base_step = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_REGIME_THRESHOLD_BUMP_STEP", 0.02, cast=float)),
+        low=0.0,
+        high=max_bump if max_bump > 0.0 else 0.0,
+    )
+    if base_step <= 0.0 or max_bump <= 0.0:
+        return adjusted, adjustments
+    for regime, metrics in regime_calibration.items():
+        base_threshold = adjusted.get(str(regime))
+        if base_threshold is None:
+            continue
+        try:
+            ece = float(metrics.get("ece", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(ece) or ece <= ece_warn:
+            continue
+        if ece_critical > ece_warn:
+            severity = (ece - ece_warn) / (ece_critical - ece_warn)
+        else:
+            severity = 1.0
+        severity = _clamp(float(severity), low=0.0, high=3.0)
+        bump = min(max_bump, base_step * (1.0 + severity))
+        new_threshold = _clamp(float(base_threshold) + float(bump), low=0.05, high=0.95)
+        adjusted[str(regime)] = float(new_threshold)
+        adjustments[str(regime)] = {
+            "ece": float(ece),
+            "threshold_before": float(base_threshold),
+            "threshold_after": float(new_threshold),
+            "threshold_bump": float(new_threshold - float(base_threshold)),
+        }
+    return adjusted, adjustments
 
 
 def _parse_float_grid(raw: str, *, fallback: tuple[float, ...]) -> list[float]:
@@ -2020,9 +2251,30 @@ def _serialize_candidate_metrics(
                 "brier_score": item.brier_score,
                 "selection_score": _candidate_selection_score(item, weights=selection_weights),
                 "regime_metrics": item.regime_metrics,
+                "regime_calibration": item.regime_calibration,
             }
         )
     return payload
+
+
+def _training_feature_stats(dataset: Any) -> dict[str, dict[str, float]]:
+    stats: dict[str, dict[str, float]] = {}
+    for feature in FEATURE_COLUMNS:
+        if feature not in dataset.columns:
+            continue
+        values = np.asarray(dataset[feature], dtype=float)
+        finite = values[np.isfinite(values)]
+        if finite.size <= 0:
+            continue
+        std = float(np.std(finite))
+        stats[str(feature)] = {
+            "support": float(finite.size),
+            "mean": float(np.mean(finite)),
+            "std": std if std > 0.0 else 0.0,
+            "p05": float(np.quantile(finite, 0.05)),
+            "p95": float(np.quantile(finite, 0.95)),
+        }
+    return stats
 
 
 def _fit_final_model(name: str, dataset: Any, *, seed: int):
@@ -2030,6 +2282,8 @@ def _fit_final_model(name: str, dataset: Any, *, seed: int):
     X = dataset.loc[:, FEATURE_COLUMNS]
     y = dataset["label"].astype(int)
     model.fit(X, y)
+    setattr(model, "training_feature_stats_", _training_feature_stats(dataset))
+    setattr(model, "training_feature_stats_version_", "1")
     return model
 
 
@@ -2474,10 +2728,14 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         event_name="AFTER_HOURS_REPORT_DIR_FALLBACK",
     )
     prior_model_metrics = _load_prior_model_metrics(report_dir=report_dir)
-    thresholds_by_regime = _threshold_by_regime(
+    raw_thresholds_by_regime = _threshold_by_regime(
         dataset,
         best.oof_probabilities,
         default_threshold=default_threshold,
+    )
+    thresholds_by_regime, regime_threshold_adjustments = _apply_regime_calibration_threshold_adjustment(
+        thresholds_by_regime=raw_thresholds_by_regime,
+        regime_calibration=best.regime_calibration,
     )
     targets = _edge_targets()
     sensitivity_sweep = _run_sensitivity_sweep(
@@ -2522,6 +2780,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     final_model = _fit_final_model(best.name, dataset, seed=seed)
     setattr(final_model, "edge_thresholds_by_regime_", thresholds_by_regime)
     setattr(final_model, "edge_global_threshold_", float(default_threshold))
+    setattr(final_model, "regime_calibration_", best.regime_calibration)
     requested_model_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_MODEL_DIR", "models/after_hours", cast=str) or ""),
         default_relative="models/after_hours",
@@ -2563,6 +2822,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "model_path": str(model_path),
             "fill_quality": fill_quality,
             "sensitivity_sweep": sensitivity_sweep,
+            "regime_calibration": best.regime_calibration,
+            "regime_threshold_adjustments": regime_threshold_adjustments,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "manifest_metadata": manifest_metadata,
         },
@@ -2640,7 +2901,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "fill_quality": fill_quality,
         "candidate_metrics": candidate_metrics_payload,
         "regime_metrics": best.regime_metrics,
+        "regime_calibration": best.regime_calibration,
         "thresholds_by_regime": thresholds_by_regime,
+        "thresholds_by_regime_raw": raw_thresholds_by_regime,
+        "regime_threshold_adjustments": regime_threshold_adjustments,
         "sensitivity_sweep": sensitivity_sweep,
         "edge_gates": gate_map,
         "promotion": promotion,

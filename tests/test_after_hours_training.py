@@ -341,6 +341,123 @@ def test_model_selection_retune_writes_overrides_on_drift_breach(
     assert payload["weights"] != after_hours._model_selection_default_weights()
 
 
+def test_model_selection_retune_respects_cooldown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime(2026, 1, 10, 21, 15, tzinfo=UTC)
+    for idx in range(9):
+        ts = now - timedelta(days=9 - idx)
+        degraded = idx >= 6
+        _write_after_hours_report(
+            report_dir / f"after_hours_training_202603{idx + 1:02d}.json",
+            ts=ts,
+            model_name="logreg",
+            mean_expectancy_bps=(8.0 if degraded else 20.0),
+            hit_rate_stability=(0.62 if degraded else 0.82),
+            brier_score=(0.34 if degraded else 0.11),
+            candidates=[
+                {
+                    "name": "logreg",
+                    "selected": True,
+                    "mean_expectancy_bps": 20.0,
+                    "max_drawdown_bps": 450.0,
+                    "turnover_ratio": 0.25,
+                    "hit_rate_stability": 0.4,
+                    "brier_score": 0.5,
+                    "support": 120,
+                    "profitable_fold_ratio": 0.4,
+                },
+                {
+                    "name": "xgboost",
+                    "selected": False,
+                    "mean_expectancy_bps": 14.0,
+                    "max_drawdown_bps": 150.0,
+                    "turnover_ratio": 0.1,
+                    "hit_rate_stability": 0.8,
+                    "brier_score": 0.05,
+                    "support": 120,
+                    "profitable_fold_ratio": 0.8,
+                },
+            ],
+        )
+    override_path = tmp_path / "runtime" / "model_selection_overrides.json"
+    override_path.parent.mkdir(parents=True, exist_ok=True)
+    override_path.write_text(
+        json.dumps(
+            {
+                "updated_at": (now - timedelta(hours=1)).isoformat(),
+                "weights": after_hours._model_selection_default_weights(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_REPORTS", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_BASELINE_WINDOW", "5")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_RECENT_WINDOW", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_BRIER_DRIFT_PCT", "0.1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EXPECTANCY_DROP_BPS", "4.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_STABILITY_DROP", "0.05")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_DRAWDOWN_PENALTY", "0.02")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_BRIER_PENALTY", "30.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_WEIGHT_REGULARIZATION", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_UTILITY_IMPROVEMENT", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_WEIGHT_CHANGE_PCT", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_SEARCH_FACTORS", "0.5,1.0,1.5,2.0,3.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_HOURS_BETWEEN_UPDATES", "24")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_PATH",
+        str(override_path),
+    )
+    summary = after_hours._maybe_retune_model_selection_weights(
+        now_utc=now,
+        report_dir=report_dir,
+        pending_report=None,
+        current_weights=after_hours._resolved_model_selection_weights(),
+    )
+    assert summary["retuned"] is False
+    assert summary["reason"] == "cooldown_active"
+
+
+def test_selection_weight_safety_envelope_clamps_aggressive_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = after_hours._model_selection_default_weights()
+    candidate = {key: value * 10.0 for key, value in current.items()}
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MAX_ABS_WEIGHT_DELTA", "0.1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MAX_RELATIVE_WEIGHT_DELTA", "0.1")
+    result = after_hours._apply_selection_weight_safety_envelope(
+        current_weights=current,
+        candidate_weights=candidate,
+    )
+    assert result["clamped"] is True
+    for key, new_value in result["weights"].items():
+        assert abs(float(new_value) - float(current[key])) <= 0.1 + 1e-9
+
+
+def test_regime_calibration_threshold_adjustment_applies_bump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REGIME_CALIBRATION_THRESHOLD_ADJUST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REGIME_ECE_WARN", "0.08")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REGIME_ECE_CRITICAL", "0.12")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REGIME_THRESHOLD_BUMP_STEP", "0.02")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REGIME_THRESHOLD_MAX_BUMP", "0.08")
+    adjusted, adjustments = after_hours._apply_regime_calibration_threshold_adjustment(
+        thresholds_by_regime={"uptrend": 0.5, "sideways": 0.4},
+        regime_calibration={
+            "uptrend": {"ece": 0.16},
+            "sideways": {"ece": 0.04},
+        },
+    )
+    assert adjusted["uptrend"] > 0.5
+    assert adjusted["sideways"] == pytest.approx(0.4)
+    assert "uptrend" in adjustments
+
+
 def test_after_hours_training_skips_before_close() -> None:
     result = after_hours.run_after_hours_training(
         now=datetime(2026, 1, 6, 19, 0, tzinfo=UTC),  # 14:00 New York

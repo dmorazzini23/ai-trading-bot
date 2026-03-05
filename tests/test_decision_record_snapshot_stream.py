@@ -46,6 +46,7 @@ def test_write_decision_record_writes_secondary_snapshot_and_redacts(
 
     primary_payload = _read_single_json(primary)
     snapshot_payload = _read_single_json(snapshot)
+    assert primary_payload["schema_version"] == "2.0.0"
     assert primary_payload["config_snapshot"]["api_key"] == "***"
     assert primary_payload["config_snapshot"]["nested"]["token"] == "***"
     assert snapshot_payload["config_snapshot"]["api_key"] == "***"
@@ -69,6 +70,7 @@ def test_write_decision_record_relative_path_uses_data_dir(
     assert expected.exists()
     payload = _read_single_json(expected)
     assert payload["symbol"] == "AAPL"
+    assert payload["schema_version"] == "2.0.0"
     assert payload["config_snapshot"]["api_key"] == "***"
 
 
@@ -84,6 +86,7 @@ def test_write_decision_record_serializes_timestamp_like_values(
 
     payload = _read_single_json(primary)
     assert payload["symbol"] == "AAPL"
+    assert payload["schema_version"] == "2.0.0"
     assert isinstance(payload["bar_ts"], str)
     assert not any(record.getMessage() == "DECISION_RECORD_WRITE_FAILED" for record in caplog.records)
 

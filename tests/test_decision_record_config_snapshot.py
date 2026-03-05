@@ -50,6 +50,7 @@ def test_decision_record_config_snapshot_included() -> None:
         config_snapshot=snapshot,
     )
     payload = record.to_dict()
+    assert payload["schema_version"] == "2.0.0"
     assert "config_snapshot" in payload
     assert isinstance(payload["config_snapshot"]["config_snapshot_hash"], str)
     assert len(payload["config_snapshot"]["config_snapshot_hash"]) == 64

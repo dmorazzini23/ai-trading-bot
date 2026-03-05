@@ -8,6 +8,9 @@ import math
 from typing import Any, Iterable
 
 
+DECISION_RECORD_SCHEMA_VERSION = "2.0.0"
+
+
 @dataclass(slots=True)
 class SleeveConfig:
     name: str
@@ -65,6 +68,7 @@ class DecisionRecord:
     metrics: dict[str, Any] = field(default_factory=dict)
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     tca: dict[str, Any] | None = None
+    schema_version: str = DECISION_RECORD_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         sleeves = [asdict(s) for s in self.sleeves]
@@ -76,6 +80,7 @@ class DecisionRecord:
         if isinstance(net_target.get("bar_ts"), datetime):
             net_target["bar_ts"] = net_target["bar_ts"].isoformat()
         return {
+            "schema_version": str(self.schema_version or DECISION_RECORD_SCHEMA_VERSION),
             "symbol": self.symbol,
             "bar_ts": self.bar_ts.isoformat(),
             "sleeves": sleeves,

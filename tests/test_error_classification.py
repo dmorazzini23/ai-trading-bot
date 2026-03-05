@@ -17,14 +17,23 @@ def test_classify_auth_halts() -> None:
     info = classify_exception(_HttpError(401, "unauthorized"), dependency="broker_submit")
     assert info.category is ErrorCategory.AUTH
     assert info.action is ErrorAction.HALT_TRADING
-    assert info.reason_code == "AUTH_HALT"
+    assert info.reason_code.startswith("AUTH_BROKER_HALT")
 
 
 def test_classify_data_auth_disables_provider() -> None:
     info = classify_exception(_HttpError(403, "forbidden"), dependency="data_primary")
     assert info.category is ErrorCategory.AUTH
     assert info.action is ErrorAction.DISABLE_PROVIDER
-    assert info.reason_code == "AUTH_PROVIDER_DISABLE"
+    assert info.reason_code.startswith("AUTH_PROVIDER_DISABLE")
+
+
+def test_classify_auth_credentials_missing_reason() -> None:
+    info = classify_exception(
+        RuntimeError("missing credentials for broker"),
+        dependency="broker_submit",
+    )
+    assert info.category is ErrorCategory.AUTH
+    assert info.reason_code.endswith("CREDENTIALS_MISSING")
 
 
 def test_classify_rate_limit_retries() -> None:

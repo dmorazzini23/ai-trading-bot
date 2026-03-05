@@ -321,6 +321,11 @@ def emit_runtime_alert(
             pass
 
 
+def _is_auth_halt_reason(halt_reason: str) -> bool:
+    normalized = str(halt_reason or "").strip().upper()
+    return normalized.startswith("AUTH_")
+
+
 def evaluate_runtime_alert_thresholds(
     *,
     breaker_open: str | None = None,
@@ -372,3 +377,11 @@ def evaluate_runtime_alert_thresholds(
             state=state,
             halt_reason=halt_reason,
         )
+        if _is_auth_halt_reason(halt_reason):
+            emit_runtime_alert(
+                "ALERT_AUTH_HALT",
+                severity="critical",
+                details={"halt_reason": halt_reason},
+                state=state,
+                halt_reason=halt_reason,
+            )

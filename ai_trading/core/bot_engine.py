@@ -4031,6 +4031,210 @@ def _refresh_required_model_cache_from_path(
     return True
 
 
+_SHADOW_MODEL_CACHE: Any | None = None
+_SHADOW_MODEL_CACHE_META: dict[str, Any] | None = None
+
+
+def _shadow_model_cache_matches(path: str, modname: str) -> bool:
+    if _SHADOW_MODEL_CACHE is None:
+        return False
+    meta = _SHADOW_MODEL_CACHE_META or {}
+    kind = str(meta.get("kind") or "")
+    if path:
+        if kind != "file":
+            return False
+        if str(meta.get("path") or "") != path:
+            return False
+        return meta.get("signature") == _model_file_signature(path)
+    if modname:
+        return kind == "module" and str(meta.get("module") or "") == modname
+    return False
+
+
+def _set_shadow_model_cache(
+    model: Any,
+    *,
+    kind: str,
+    path: str | None = None,
+    module: str | None = None,
+) -> Any:
+    global _SHADOW_MODEL_CACHE, _SHADOW_MODEL_CACHE_META
+    _SHADOW_MODEL_CACHE = model
+    meta: dict[str, Any] = {"kind": kind}
+    if path:
+        meta["path"] = path
+        meta["signature"] = _model_file_signature(path)
+    if module:
+        meta["module"] = module
+    _SHADOW_MODEL_CACHE_META = meta
+    return model
+
+
+def _load_shadow_model() -> Any | None:
+    if not bool(get_env("AI_TRADING_ML_SHADOW_ENABLED", False, cast=bool)):
+        return None
+    shadow_path = str(get_env("AI_TRADING_ML_SHADOW_MODEL_PATH", "") or "").strip()
+    shadow_mod = str(get_env("AI_TRADING_ML_SHADOW_MODEL_MODULE", "") or "").strip()
+    if not shadow_path and not shadow_mod:
+        return None
+    if _shadow_model_cache_matches(shadow_path, shadow_mod):
+        return _SHADOW_MODEL_CACHE
+    if shadow_path:
+        if not os.path.isfile(shadow_path):
+            logger.warning(
+                "ML_SHADOW_MODEL_MISSING",
+                extra={"model_path": shadow_path},
+            )
+            return None
+        try:
+            model = joblib.load(shadow_path)
+        except COMMON_EXC as exc:  # noqa: BLE001
+            logger.warning(
+                "ML_SHADOW_MODEL_LOAD_FAILED",
+                extra={"model_path": shadow_path, "error": str(exc)},
+            )
+            return None
+        return _set_shadow_model_cache(model, kind="file", path=shadow_path)
+    try:
+        module = importlib.import_module(shadow_mod)
+    except COMMON_EXC as exc:  # noqa: BLE001
+        logger.warning(
+            "ML_SHADOW_MODEL_IMPORT_FAILED",
+            extra={"model_module": shadow_mod, "error": str(exc)},
+        )
+        return None
+    factory = getattr(module, "get_model", None) or getattr(module, "Model", None)
+    if not callable(factory):
+        logger.warning(
+            "ML_SHADOW_MODEL_FACTORY_MISSING",
+            extra={"model_module": shadow_mod},
+        )
+        return None
+    try:
+        model = factory()
+    except COMMON_EXC as exc:  # noqa: BLE001
+        logger.warning(
+            "ML_SHADOW_MODEL_FACTORY_FAILED",
+            extra={"model_module": shadow_mod, "error": str(exc)},
+        )
+        return None
+    return _set_shadow_model_cache(model, kind="module", module=shadow_mod)
+
+
+def _predict_class_and_probability(model: Any, X: np.ndarray) -> tuple[Any, float]:
+    pred = model.predict(X)[0]
+    proba_row = model.predict_proba(X)[0]
+    pred_index: int | None = None
+    classes = getattr(model, "classes_", None)
+    if classes is not None:
+        try:
+            classes_list = list(classes)
+        except TypeError:
+            classes_list = []
+        if classes_list:
+            try:
+                pred_index = classes_list.index(pred)
+            except ValueError:
+                pred_index = None
+    if pred_index is None:
+        pred_index = int(pred)
+    if pred_index < 0 or pred_index >= len(proba_row):
+        pred_index = max(0, min(len(proba_row) - 1, pred_index))
+    return pred, float(proba_row[pred_index])
+
+
+def _ml_shadow_log_path() -> Path:
+    path_value = str(
+        get_env("AI_TRADING_ML_SHADOW_LOG_PATH", "runtime/ml_shadow_predictions.jsonl", cast=str)
+        or ""
+    ).strip()
+    if not path_value:
+        path_value = "runtime/ml_shadow_predictions.jsonl"
+    return resolve_runtime_artifact_path(
+        path_value,
+        default_relative="runtime/ml_shadow_predictions.jsonl",
+    )
+
+
+def _record_shadow_prediction(payload: Mapping[str, Any]) -> None:
+    path = _ml_shadow_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(dict(payload), sort_keys=True, default=_json_dump_default))
+            handle.write("\n")
+    except Exception as exc:
+        logger.warning(
+            "ML_SHADOW_LOG_WRITE_FAILED",
+            extra={"path": str(path), "error": str(exc)},
+        )
+
+
+def _evaluate_training_serving_skew(
+    *,
+    model: Any,
+    feature_names: Sequence[str],
+    feature_values: Sequence[float],
+    symbol: str | None,
+) -> dict[str, Any] | None:
+    if not bool(get_env("AI_TRADING_ML_SKEW_MONITOR_ENABLED", True, cast=bool)):
+        return None
+    stats = getattr(model, "training_feature_stats_", None)
+    if not isinstance(stats, Mapping):
+        return None
+    z_scores: list[float] = []
+    outlier_count = 0
+    observed = 0
+    max_abs_z = 0.0
+    for feature, raw_value in zip(feature_names, feature_values):
+        feature_stats = stats.get(str(feature))
+        if not isinstance(feature_stats, Mapping):
+            continue
+        try:
+            value = float(raw_value)
+            mean_value = float(feature_stats.get("mean", 0.0))
+            std_value = float(feature_stats.get("std", 0.0))
+            p05_value = float(feature_stats.get("p05", mean_value))
+            p95_value = float(feature_stats.get("p95", mean_value))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value):
+            continue
+        observed += 1
+        if std_value > 1e-9 and math.isfinite(std_value):
+            abs_z = abs((value - mean_value) / std_value)
+            z_scores.append(float(abs_z))
+            max_abs_z = max(max_abs_z, float(abs_z))
+        if value < min(p05_value, p95_value) or value > max(p05_value, p95_value):
+            outlier_count += 1
+    if observed <= 0:
+        return None
+    mean_abs_z = float(np.mean(z_scores)) if z_scores else 0.0
+    outlier_ratio = float(outlier_count) / float(observed)
+    breach_mean_abs_z = float(
+        get_env("AI_TRADING_ML_SKEW_MEAN_ABS_Z_THRESHOLD", 2.5, cast=float)
+    )
+    breach_outlier_ratio = float(
+        get_env("AI_TRADING_ML_SKEW_OUTLIER_RATIO_THRESHOLD", 0.35, cast=float)
+    )
+    breached = bool(mean_abs_z >= breach_mean_abs_z or outlier_ratio >= breach_outlier_ratio)
+    payload = {
+        "symbol": symbol,
+        "mean_abs_z": float(mean_abs_z),
+        "max_abs_z": float(max_abs_z),
+        "outlier_ratio": float(outlier_ratio),
+        "observed_features": int(observed),
+        "thresholds": {
+            "mean_abs_z": float(breach_mean_abs_z),
+            "outlier_ratio": float(breach_outlier_ratio),
+        },
+        "breached": breached,
+    }
+    if breached:
+        logger.warning("ML_TRAINING_SERVING_SKEW", extra=payload)
+    return payload
+
+
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
 _EMITTED_KEYS: set[str] = set()
 
@@ -13559,25 +13763,7 @@ class SignalManager:
                 return None
             X = df[feat].iloc[-1].values.reshape(1, -1)
             try:
-                pred = model.predict(X)[0]
-                proba_row = model.predict_proba(X)[0]
-                pred_index: int | None = None
-                classes = getattr(model, "classes_", None)
-                if classes is not None:
-                    try:
-                        classes_list = list(classes)
-                    except TypeError:
-                        classes_list = []
-                    if classes_list:
-                        try:
-                            pred_index = classes_list.index(pred)
-                        except ValueError:
-                            pred_index = None
-                if pred_index is None:
-                    pred_index = int(pred)
-                if pred_index < 0 or pred_index >= len(proba_row):
-                    pred_index = max(0, min(len(proba_row) - 1, pred_index))
-                proba = float(proba_row[pred_index])
+                pred, proba = _predict_class_and_probability(model, X)
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -13590,6 +13776,62 @@ class SignalManager:
             ) as e:  # AI-AGENT-REF: narrow exception
                 logger.error("signal_ml predict failed: %s", e)
                 return None
+            skew_payload = _evaluate_training_serving_skew(
+                model=model,
+                feature_names=feat,
+                feature_values=X[0],
+                symbol=symbol,
+            )
+            shadow_payload: dict[str, Any] | None = None
+            if bool(get_env("AI_TRADING_ML_SHADOW_ENABLED", False, cast=bool)):
+                shadow_model = _load_shadow_model()
+                if shadow_model is not None and hasattr(shadow_model, "predict") and hasattr(
+                    shadow_model, "predict_proba"
+                ):
+                    try:
+                        shadow_pred, shadow_proba = _predict_class_and_probability(shadow_model, X)
+                        shadow_payload = {
+                            "ts": datetime.now(UTC).isoformat(),
+                            "symbol": symbol,
+                            "champion_prediction": str(pred),
+                            "champion_probability": float(proba),
+                            "challenger_prediction": str(shadow_pred),
+                            "challenger_probability": float(shadow_proba),
+                            "probability_delta": float(abs(float(shadow_proba) - float(proba))),
+                        }
+                        if isinstance(skew_payload, Mapping):
+                            shadow_payload["skew"] = dict(skew_payload)
+                        _record_shadow_prediction(shadow_payload)
+                        divergence_threshold = max(
+                            0.0,
+                            float(
+                                get_env(
+                                    "AI_TRADING_ML_SHADOW_DIVERGENCE_THRESHOLD",
+                                    0.20,
+                                    cast=float,
+                                )
+                            ),
+                        )
+                        if float(shadow_payload["probability_delta"]) >= divergence_threshold:
+                            logger.info("ML_SHADOW_DIVERGENCE", extra=shadow_payload)
+                    except (
+                        FileNotFoundError,
+                        PermissionError,
+                        IsADirectoryError,
+                        JSONDecodeError,
+                        ValueError,
+                        KeyError,
+                        TypeError,
+                        OSError,
+                    ) as exc:
+                        logger.warning(
+                            "ML_SHADOW_PREDICT_FAILED",
+                            extra={"symbol": symbol, "error": str(exc)},
+                        )
+            try:
+                prediction_for_log: int | str = int(pred)
+            except (TypeError, ValueError):
+                prediction_for_log = str(pred)
             min_confidence = float(get_env("AI_TRADING_ML_MIN_CONFIDENCE", 0.0, cast=float))
             effective_threshold = float(min_confidence)
             regime_threshold: float | None = None
@@ -13663,19 +13905,26 @@ class SignalManager:
                     "ML_SIGNAL_BELOW_CONFIDENCE",
                     extra={
                         "symbol": symbol,
-                        "prediction": int(pred),
+                        "prediction": prediction_for_log,
                         "probability": proba,
                         "min_confidence": min_confidence,
                         "effective_threshold": effective_threshold,
                         "regime_threshold": regime_threshold,
                         "regime": regime_label,
                         "threshold_source": threshold_source,
+                        "shadow_enabled": bool(shadow_payload),
                     },
                 )
                 return None
             s = 1 if pred == 1 else -1
             logger.info(
-                "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
+                "ML_SIGNAL",
+                extra={
+                    "prediction": prediction_for_log,
+                    "probability": proba,
+                    "shadow_enabled": bool(shadow_payload),
+                    "skew_breached": bool(skew_payload and skew_payload.get("breached")),
+                },
             )
             return s, proba, "ml"
         except (
@@ -32264,11 +32513,17 @@ def _json_dump_default(value: Any) -> Any:
     return str(value)
 
 
+_DECISION_RECORD_SCHEMA_VERSION = "2.0.0"
+
+
 def _write_decision_record(record: Any, path: str | None) -> None:
     try:
         payload = record.to_dict() if hasattr(record, "to_dict") else dict(record)
     except Exception:
         payload = {"record": repr(record)}
+    if isinstance(payload, dict):
+        schema_version = str(payload.get("schema_version") or "").strip()
+        payload["schema_version"] = schema_version or _DECISION_RECORD_SCHEMA_VERSION
     if bool(get_env("AI_TRADING_DECISION_RECORD_SNAPSHOT_REDACT_SECRETS", True, cast=bool)):
         payload = _redact_snapshot_payload(payload)
     logger.info("DECISION_RECORD", extra={"decision": payload})
@@ -32295,6 +32550,126 @@ def _write_decision_record(record: Any, path: str | None) -> None:
                 str(exc),
                 extra={"error": str(exc), "path": resolved_path},
             )
+
+
+def _gate_effectiveness_analytics_enabled() -> bool:
+    return bool(get_env("AI_TRADING_GATE_EFFECTIVENESS_ANALYTICS_ENABLED", True, cast=bool))
+
+
+def _gate_effectiveness_log_path() -> Path:
+    return resolve_runtime_artifact_path(
+        str(
+            get_env(
+                "AI_TRADING_GATE_EFFECTIVENESS_LOG_PATH",
+                "runtime/gate_effectiveness.jsonl",
+                cast=str,
+            )
+            or ""
+        ),
+        default_relative="runtime/gate_effectiveness.jsonl",
+    )
+
+
+def _gate_effectiveness_summary_path() -> Path:
+    return resolve_runtime_artifact_path(
+        str(
+            get_env(
+                "AI_TRADING_GATE_EFFECTIVENESS_SUMMARY_PATH",
+                "runtime/gate_effectiveness_summary.json",
+                cast=str,
+            )
+            or ""
+        ),
+        default_relative="runtime/gate_effectiveness_summary.json",
+    )
+
+
+def _update_gate_effectiveness_analytics(
+    *,
+    decision_gate_counts: Mapping[str, int],
+    decision_records_total: int,
+    accepted_decisions: int,
+) -> None:
+    if not _gate_effectiveness_analytics_enabled():
+        return
+    log_path = _gate_effectiveness_log_path()
+    summary_path = _gate_effectiveness_summary_path()
+    cycle_payload = {
+        "ts": datetime.now(UTC).isoformat(),
+        "records_total": int(max(0, decision_records_total)),
+        "accepted_records": int(max(0, accepted_decisions)),
+        "rejected_records": int(max(0, decision_records_total - accepted_decisions)),
+        "gate_counts": {
+            str(gate): int(count)
+            for gate, count in decision_gate_counts.items()
+            if str(gate).strip() and int(count) > 0
+        },
+    }
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(cycle_payload, sort_keys=True, default=_json_dump_default))
+            handle.write("\n")
+    except Exception as exc:
+        logger.warning(
+            "GATE_EFFECTIVENESS_LOG_WRITE_FAILED",
+            extra={"path": str(log_path), "error": str(exc)},
+        )
+
+    summary: dict[str, Any] = {
+        "total_records": 0,
+        "total_accepted_records": 0,
+        "total_rejected_records": 0,
+        "gate_totals": {},
+    }
+    try:
+        if summary_path.exists():
+            loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                summary.update(loaded)
+    except Exception:
+        logger.debug("GATE_EFFECTIVENESS_SUMMARY_READ_FAILED", exc_info=True)
+    gate_totals_raw = summary.get("gate_totals")
+    gate_totals: dict[str, int] = {}
+    if isinstance(gate_totals_raw, Mapping):
+        for key, value in gate_totals_raw.items():
+            try:
+                gate_totals[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+    summary["total_records"] = int(summary.get("total_records", 0) or 0) + int(
+        cycle_payload["records_total"]
+    )
+    summary["total_accepted_records"] = int(
+        summary.get("total_accepted_records", 0) or 0
+    ) + int(cycle_payload["accepted_records"])
+    summary["total_rejected_records"] = int(
+        summary.get("total_rejected_records", 0) or 0
+    ) + int(cycle_payload["rejected_records"])
+    for gate, count in cycle_payload["gate_counts"].items():
+        gate_totals[str(gate)] = int(gate_totals.get(str(gate), 0)) + int(count)
+    summary["gate_totals"] = gate_totals
+    total_records = max(1, int(summary["total_records"]))
+    gate_effectiveness = {
+        gate: {
+            "count": int(count),
+            "per_record_rate": float(count) / float(total_records),
+        }
+        for gate, count in sorted(gate_totals.items(), key=lambda item: (-item[1], item[0]))
+    }
+    summary["gate_effectiveness"] = gate_effectiveness
+    summary["updated_at"] = cycle_payload["ts"]
+    try:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(
+            json.dumps(summary, sort_keys=True, default=_json_dump_default) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning(
+            "GATE_EFFECTIVENESS_SUMMARY_WRITE_FAILED",
+            extra={"path": str(summary_path), "error": str(exc)},
+        )
 
 
 def _allocation_base_weights() -> dict[str, float]:
@@ -32445,8 +32820,84 @@ def _build_symbol_learning_metrics(
         is_count = int(row.get("is_count", 0))
         is_mean = float(row.get("is_sum", 0.0)) / is_count if is_count > 0 else 0.0
         flip_rate = float(row.get("flip_count", 0)) / max(1, trades)
-        metrics[symbol] = {"is_bps": is_mean, "flip_rate": flip_rate}
+        metrics[symbol] = {"is_bps": is_mean, "flip_rate": flip_rate, "trades": float(trades)}
     return metrics
+
+
+def _apply_learning_overrides_safety_envelope(
+    *,
+    overrides: Mapping[str, Any],
+    symbol_metrics: Mapping[str, Mapping[str, float]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    max_symbols = max(
+        1,
+        int(get_env("AI_TRADING_LEARNING_MAX_SYMBOL_OVERRIDES_PER_RUN", 25, cast=int)),
+    )
+    max_cost_buffer_bps = max(
+        0.0,
+        float(get_env("AI_TRADING_LEARNING_MAX_COST_BUFFER_BPS", 6.0, cast=float)),
+    )
+    max_deadband_delta = max(
+        0.0,
+        float(get_env("AI_TRADING_LEARNING_MAX_DEADBAND_DELTA", 0.10, cast=float)),
+    )
+    min_symbol_trades = max(
+        1,
+        int(get_env("AI_TRADING_LEARNING_MIN_SYMBOL_TRADES", 1, cast=int)),
+    )
+    raw_symbol_overrides = overrides.get("per_symbol_cost_buffer_bps")
+    if not isinstance(raw_symbol_overrides, Mapping):
+        raw_symbol_overrides = {}
+    clamped_symbols: dict[str, float] = {}
+    dropped_symbols: dict[str, str] = {}
+    for symbol, raw_value in raw_symbol_overrides.items():
+        symbol_text = str(symbol or "").strip().upper()
+        if not symbol_text:
+            continue
+        trades = float(symbol_metrics.get(symbol_text, {}).get("trades", 0.0) or 0.0)
+        if trades < float(min_symbol_trades):
+            dropped_symbols[symbol_text] = "insufficient_trades"
+            continue
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            dropped_symbols[symbol_text] = "invalid_value"
+            continue
+        if not math.isfinite(parsed):
+            dropped_symbols[symbol_text] = "non_finite_value"
+            continue
+        clamped = max(-max_cost_buffer_bps, min(max_cost_buffer_bps, parsed))
+        clamped_symbols[symbol_text] = float(clamped)
+    if len(clamped_symbols) > max_symbols:
+        ranked = sorted(clamped_symbols.items(), key=lambda item: abs(item[1]), reverse=True)
+        retained = dict(ranked[:max_symbols])
+        for symbol, _value in ranked[max_symbols:]:
+            dropped_symbols[symbol] = "symbol_cap"
+        clamped_symbols = retained
+    raw_deadband = overrides.get("global_deadband_frac_delta", 0.0)
+    try:
+        parsed_deadband = float(raw_deadband)
+    except (TypeError, ValueError):
+        parsed_deadband = 0.0
+    if not math.isfinite(parsed_deadband):
+        parsed_deadband = 0.0
+    clamped_deadband = max(-max_deadband_delta, min(max_deadband_delta, parsed_deadband))
+    sanitized = {
+        "per_symbol_cost_buffer_bps": clamped_symbols,
+        "global_deadband_frac_delta": float(clamped_deadband),
+    }
+    envelope = {
+        "max_symbols": int(max_symbols),
+        "max_cost_buffer_bps": float(max_cost_buffer_bps),
+        "max_deadband_delta": float(max_deadband_delta),
+        "min_symbol_trades": int(min_symbol_trades),
+        "dropped_symbols": dropped_symbols,
+        "input_symbol_overrides": int(len(raw_symbol_overrides)),
+        "output_symbol_overrides": int(len(clamped_symbols)),
+        "deadband_input": float(parsed_deadband),
+        "deadband_output": float(clamped_deadband),
+    }
+    return sanitized, envelope
 
 
 def _run_post_trade_learning_update(
@@ -32494,6 +32945,11 @@ def _run_post_trade_learning_update(
         overrides["per_symbol_cost_buffer_bps"] = {}
     if not bool(get_env("AI_TRADING_LEARNING_ADJUST_DEADBANDS", "1", cast=bool)):
         overrides["global_deadband_frac_delta"] = 0.0
+    safe_overrides, safety_envelope = _apply_learning_overrides_safety_envelope(
+        overrides=overrides,
+        symbol_metrics=symbol_metrics,
+    )
+    updates["overrides"] = safe_overrides
     try:
         write_learning_overrides(output_path, updates)
     except Exception as exc:
@@ -32504,7 +32960,11 @@ def _run_post_trade_learning_update(
     else:
         logger.info(
             "POST_TRADE_LEARNING_UPDATED",
-            extra={"path": output_path, "symbols": sorted(symbol_metrics)},
+            extra={
+                "path": output_path,
+                "symbols": sorted(symbol_metrics),
+                "safety_envelope": safety_envelope,
+            },
         )
     state.last_learning_run_date = now.date()
 
@@ -36003,6 +36463,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         for gate, count in decision_gate_counts.items()
         if gate != "OK_TRADE" and int(count) > 0
     }
+    _update_gate_effectiveness_analytics(
+        decision_gate_counts={gate: int(count) for gate, count in decision_gate_counts.items()},
+        decision_records_total=int(decision_records_total),
+        accepted_decisions=accepted_decisions,
+    )
     if reject_gate_counts:
         top_reasons = sorted(
             reject_gate_counts.items(),

@@ -1,9 +1,11 @@
+import json
 import sys
 
 import pytest
 
 pd = pytest.importorskip("pandas")
 
+from ai_trading.core import bot_engine
 from ai_trading.core.bot_engine import SignalManager
 
 
@@ -203,3 +205,69 @@ def test_signal_ml_can_disable_regime_thresholds(monkeypatch):
     assert signal == 1
     assert confidence == pytest.approx(0.8, abs=1e-6)
     assert label == "ml"
+
+
+def test_signal_ml_shadow_logs_predictions(monkeypatch, tmp_path):
+    class ChampionModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.1, 0.9]]
+
+    class ChallengerModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+
+        def predict(self, _X):
+            return [0]
+
+        def predict_proba(self, _X):
+            return [[0.7, 0.3]]
+
+    shadow_path = tmp_path / "ml_shadow.jsonl"
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SHADOW_LOG_PATH", str(shadow_path))
+    monkeypatch.setattr(bot_engine, "_load_shadow_model", lambda: ChallengerModel())
+    manager = SignalManager()
+
+    result = manager.signal_ml(_minimal_df(), model=ChampionModel(), symbol="AAPL")
+
+    assert result is not None
+    payload = json.loads(shadow_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert payload["symbol"] == "AAPL"
+    assert payload["champion_probability"] == pytest.approx(0.9, abs=1e-6)
+    assert payload["challenger_probability"] == pytest.approx(0.7, abs=1e-6)
+
+
+def test_signal_ml_reports_training_serving_skew(monkeypatch, caplog):
+    class SkewedModel:
+        feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+        training_feature_stats_ = {
+            "rsi": {"mean": 50.0, "std": 1.0, "p05": 49.0, "p95": 51.0},
+            "macd": {"mean": 0.0, "std": 0.1, "p05": -0.1, "p95": 0.1},
+            "atr": {"mean": 1.0, "std": 0.2, "p05": 0.7, "p95": 1.3},
+            "vwap": {"mean": 1.0, "std": 0.05, "p05": 0.9, "p95": 1.1},
+            "sma_50": {"mean": 1.0, "std": 0.05, "p05": 0.9, "p95": 1.1},
+            "sma_200": {"mean": 1.0, "std": 0.05, "p05": 0.9, "p95": 1.1},
+        }
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    df = _minimal_df()
+    df.loc[df.index[-1], "rsi"] = 90.0
+    monkeypatch.setenv("AI_TRADING_ML_SKEW_MONITOR_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ML_SKEW_MEAN_ABS_Z_THRESHOLD", "0.5")
+    monkeypatch.setenv("AI_TRADING_ML_SKEW_OUTLIER_RATIO_THRESHOLD", "0.1")
+    caplog.set_level("WARNING")
+    manager = SignalManager()
+
+    result = manager.signal_ml(df, model=SkewedModel(), symbol="AAPL")
+
+    assert result is not None
+    assert "ML_TRAINING_SERVING_SKEW" in caplog.text

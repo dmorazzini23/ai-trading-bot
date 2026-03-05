@@ -89,6 +89,32 @@ def _is_auth(exc: Exception) -> bool:
     )
 
 
+def _auth_reason_label(exc: Exception) -> str:
+    code = _status_code(exc)
+    lowered = str(exc).lower()
+    if ("token" in lowered or "session" in lowered) and "expired" in lowered:
+        return "TOKEN_EXPIRED"
+    if any(
+        token in lowered
+        for token in (
+            "missing api key",
+            "missing credentials",
+            "invalid api key",
+            "invalid credentials",
+            "no api key",
+            "no credentials",
+        )
+    ):
+        return "CREDENTIALS_MISSING"
+    if any(token in lowered for token in ("permission denied", "scope", "not allowed")):
+        return "PERMISSION_DENIED"
+    if code == 401:
+        return "UNAUTHORIZED"
+    if code == 403:
+        return "FORBIDDEN"
+    return "UNKNOWN"
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     if _status_code(exc) == 429:
         return True
@@ -156,24 +182,34 @@ def classify_exception(
         details["status_code"] = status_code
 
     if _is_auth(exc):
+        auth_reason = _auth_reason_label(exc)
+        details["auth_reason"] = auth_reason
         dependency_lc = (dependency or "").lower()
         if dependency_lc.startswith("data_") or dependency_lc.startswith("quotes_"):
+            reason_code = "AUTH_PROVIDER_DISABLE"
+            if auth_reason != "UNKNOWN":
+                reason_code = f"{reason_code}_{auth_reason}"
             return ErrorInfo(
                 category=ErrorCategory.AUTH,
                 scope=scope,
                 action=ErrorAction.DISABLE_PROVIDER,
                 retryable=False,
                 dependency=dependency,
-                reason_code="AUTH_PROVIDER_DISABLE",
+                reason_code=reason_code,
                 details=details,
             )
+        reason_code = "AUTH_HALT"
+        if dependency_lc.startswith("broker_"):
+            reason_code = "AUTH_BROKER_HALT"
+        if auth_reason != "UNKNOWN":
+            reason_code = f"{reason_code}_{auth_reason}"
         return ErrorInfo(
             category=ErrorCategory.AUTH,
             scope=scope,
             action=ErrorAction.HALT_TRADING,
             retryable=False,
             dependency=dependency,
-            reason_code="AUTH_HALT",
+            reason_code=reason_code,
             details=details,
         )
     if _is_rate_limit(exc):
