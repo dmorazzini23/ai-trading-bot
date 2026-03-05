@@ -14,6 +14,13 @@ from ai_trading.training import after_hours
 pytest.importorskip("sklearn")
 
 
+@pytest.fixture(autouse=True)
+def _disable_no_new_data_skip_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Most tests in this module assert training/promotion behavior and should not
+    # short-circuit on persisted dataset fingerprint state.
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SKIP_IF_NO_NEW_SIGNAL_DATA", "0")
+
+
 def _write_tca(path: Path, n: int = 300) -> None:
     rows: list[dict[str, object]] = []
     for idx in range(n):
@@ -59,20 +66,31 @@ def _write_after_hours_report(
     *,
     ts: datetime,
     model_name: str,
+    model_id: str | None = None,
+    governance_status: str | None = None,
     mean_expectancy_bps: float,
+    max_drawdown_bps: float = 1000.0,
     hit_rate_stability: float,
     brier_score: float,
+    regime_calibration: dict[str, object] | None = None,
     candidates: list[dict[str, object]],
 ) -> None:
     payload = {
         "ts": ts.isoformat(),
-        "model": {"name": model_name},
+        "model": {
+            "name": model_name,
+            "model_id": model_id,
+            "governance_status": governance_status,
+        },
         "metrics": {
             "mean_expectancy_bps": float(mean_expectancy_bps),
+            "max_drawdown_bps": float(max_drawdown_bps),
             "hit_rate_stability": float(hit_rate_stability),
             "brier_score": float(brier_score),
         },
         "candidate_metrics": candidates,
+        "regime_calibration": regime_calibration or {},
+        "promotion": {"status": governance_status},
     }
     path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
 
@@ -458,6 +476,91 @@ def test_regime_calibration_threshold_adjustment_applies_bump(
     assert "uptrend" in adjustments
 
 
+def test_load_prior_model_metrics_prefers_distinct_production_model(tmp_path: Path) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    base_ts = datetime(2026, 1, 10, 21, 15, tzinfo=UTC)
+    _write_after_hours_report(
+        report_dir / "after_hours_training_20260110_211500.json",
+        ts=base_ts - timedelta(days=2),
+        model_name="logreg",
+        model_id="model-prod-a",
+        governance_status="production",
+        mean_expectancy_bps=10.0,
+        max_drawdown_bps=700.0,
+        hit_rate_stability=0.7,
+        brier_score=0.2,
+        candidates=[
+            {
+                "name": "logreg",
+                "selected": True,
+                "mean_expectancy_bps": 10.0,
+                "max_drawdown_bps": 700.0,
+                "turnover_ratio": 0.2,
+                "hit_rate_stability": 0.7,
+                "brier_score": 0.2,
+                "support": 120,
+                "profitable_fold_ratio": 0.6,
+            }
+        ],
+    )
+    _write_after_hours_report(
+        report_dir / "after_hours_training_20260110_221500.json",
+        ts=base_ts - timedelta(days=1),
+        model_name="logreg",
+        model_id="model-shadow-b",
+        governance_status="shadow",
+        mean_expectancy_bps=12.0,
+        max_drawdown_bps=900.0,
+        hit_rate_stability=0.71,
+        brier_score=0.19,
+        candidates=[
+            {
+                "name": "logreg",
+                "selected": True,
+                "mean_expectancy_bps": 12.0,
+                "max_drawdown_bps": 900.0,
+                "turnover_ratio": 0.2,
+                "hit_rate_stability": 0.71,
+                "brier_score": 0.19,
+                "support": 120,
+                "profitable_fold_ratio": 0.6,
+            }
+        ],
+    )
+    # Most recent report has same model id as current latest daily alias;
+    # loader should still look back to a distinct prior promoted model.
+    _write_after_hours_report(
+        report_dir / "after_hours_training_20260110.json",
+        ts=base_ts,
+        model_name="logreg",
+        model_id="model-shadow-b",
+        governance_status="shadow",
+        mean_expectancy_bps=12.0,
+        max_drawdown_bps=900.0,
+        hit_rate_stability=0.71,
+        brier_score=0.19,
+        candidates=[
+            {
+                "name": "logreg",
+                "selected": True,
+                "mean_expectancy_bps": 12.0,
+                "max_drawdown_bps": 900.0,
+                "turnover_ratio": 0.2,
+                "hit_rate_stability": 0.71,
+                "brier_score": 0.19,
+                "support": 120,
+                "profitable_fold_ratio": 0.6,
+            }
+        ],
+    )
+
+    prior = after_hours._load_prior_model_metrics(report_dir=report_dir)
+    assert prior is not None
+    assert prior["model_id"] == "model-prod-a"
+    assert prior["governance_status"] == "production"
+
+
 def test_after_hours_training_skips_before_close() -> None:
     result = after_hours.run_after_hours_training(
         now=datetime(2026, 1, 6, 19, 0, tzinfo=UTC),  # 14:00 New York
@@ -528,8 +631,10 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert Path(result["model_path"]).exists()
     assert Path(result["manifest_path"]).exists()
     assert Path(result["report_path"]).exists()
+    assert Path(result["daily_report_path"]).exists()
     assert Path(result["promoted_model_path"]).exists()
     assert Path(result["promoted_manifest_path"]).exists()
+    assert "_" in Path(result["report_path"]).stem
 
     report_payload = json.loads(Path(result["report_path"]).read_text(encoding="utf-8"))
     assert "metrics" in report_payload
@@ -547,6 +652,51 @@ def test_after_hours_training_trains_and_writes_outputs(
     manifest_payload = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
     assert "metadata" in manifest_payload
     assert manifest_payload["metadata"]["strategy"] == "after_hours_ml_edge"
+
+
+def test_after_hours_training_skips_when_no_new_signal_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+    state_path = tmp_path / "runtime" / "after_hours_training_state.json"
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_STATE_PATH", str(state_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SKIP_IF_NO_NEW_SIGNAL_DATA", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_NEW_ROWS_FOR_RETRAIN", "25")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+
+    first = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+    )
+    assert first["status"] == "trained"
+    assert state_path.exists()
+
+    second = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 15, tzinfo=UTC),
+    )
+    assert second["status"] == "skipped"
+    assert second["reason"] == "no_new_signal_data"
+    assert second["new_rows"] < second["min_new_rows"]
+    assert second["unchanged_dataset_fingerprint"] is True
 
 
 def test_after_hours_training_falls_back_when_model_dir_read_only(
@@ -740,6 +890,73 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     assert result["governance_status"] == "production"
     assert result["promotion"]["policy"] == "strict"
     assert result["promotion"]["gate_passed"] is True
+    assert "roadmap" in result
+    assert "phase_1_week_1" in result["roadmap"]
+
+
+def test_after_hours_required_phase1_gate_blocks_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_SAMPLES", "1")
+    monkeypatch.setenv("AI_TRADING_POLICY_PROMOTION_MIN_OOS_NET_BPS", "-9999")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_SENSITIVITY_SWEEP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_EXPECTANCY_BPS", "-9999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MIN_HIT_RATE_STABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PHASE1_GATE", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_ROWS", "999999")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_EXPECTANCY_BPS", "-9999")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_TURNOVER_RATIO", "1.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_HIT_RATE_STABILITY", "0.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_BRIER_SCORE", "1.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+    )
+
+    assert result["status"] == "trained"
+    assert result["governance_status"] == "shadow"
+    assert result["promotion"]["strict_gates"]["rows"] is True
+    assert result["roadmap"]["phase_1_week_1"]["required_for_promotion"] is True
+    assert result["roadmap"]["phase_1_week_1"]["gates"]["rows"] is False
+    assert result["promotion"]["additional_gates"]["phase1_week1"] is False
+    assert result["promotion"]["combined_gates"]["phase1_week1"] is False
+    assert result["promotion"]["gate_passed"] is False
 
 
 def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
@@ -816,6 +1033,7 @@ def test_threshold_by_regime_uses_drawdown_penalty(
     )
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS", "999999")
 
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_DRAWDOWN_PENALTY", "0.0")
     no_penalty = after_hours._threshold_by_regime(
@@ -832,6 +1050,32 @@ def test_threshold_by_regime_uses_drawdown_penalty(
 
     assert no_penalty["regular"] == pytest.approx(0.35)
     assert with_penalty["regular"] == pytest.approx(0.55)
+
+
+def test_threshold_by_regime_respects_drawdown_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = pd.DataFrame(
+        {
+            "regime": ["regular"] * 10,
+            "realized_edge_bps": [-30.0, 60.0, -25.0, 55.0, -20.0, 50.0, -10.0, 45.0, -5.0, 40.0],
+        }
+    )
+    probabilities = np.asarray([0.8, 0.8, 0.75, 0.75, 0.7, 0.7, 0.55, 0.55, 0.5, 0.5], dtype=float)
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_DRAWDOWN_PENALTY", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS", "15.0")
+
+    thresholds = after_hours._threshold_by_regime(
+        dataset,
+        probabilities,
+        default_threshold=0.5,
+    )
+
+    # This setup has no feasible threshold under the cap, so the selector should
+    # fall back to the least-bad infeasible threshold (minimum drawdown first).
+    assert thresholds["regular"] == pytest.approx(0.35)
 
 
 def test_promotion_gate_bundle_requires_profitable_folds(
@@ -932,6 +1176,151 @@ def test_promotion_gate_bundle_requires_prior_model_improvement_margin(
     assert promotion["prior_model_comparison"]["gate"] is False
     assert promotion["gate_passed"] is False
     assert promotion["status"] == "shadow"
+
+
+def test_phase1_week1_gate_bundle_reports_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="logreg",
+        fold_count=5,
+        profitable_fold_count=3,
+        profitable_fold_ratio=0.6,
+        support=180,
+        mean_expectancy_bps=2.1,
+        max_drawdown_bps=320.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.53,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.45, 0.62], dtype=float),
+        brier_score=0.31,
+    )
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_ROWS", "100")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_SUPPORT", "100")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_EXPECTANCY_BPS", "1.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_DRAWDOWN_BPS", "9999")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_TURNOVER_RATIO", "0.5")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_HIT_RATE_STABILITY", "0.5")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_BRIER_SCORE", "0.2")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_PROFITABLE_FOLD_RATIO", "0.4")
+
+    phase1 = after_hours._phase1_week1_gate_bundle(
+        best=best,
+        rows=400,
+        sensitivity_sweep={"gate": False},
+        prior_metrics=None,
+    )
+
+    assert phase1["enabled"] is True
+    assert phase1["gates"]["brier"] is False
+    assert phase1["gates"]["sensitivity"] is False
+    assert phase1["gate_passed"] is False
+
+
+def test_phase1_week1_gate_blocks_material_regime_calibration_degradation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="logreg",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=200,
+        mean_expectancy_bps=3.0,
+        max_drawdown_bps=250.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.75,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.45, 0.62], dtype=float),
+        brier_score=0.2,
+        regime_calibration={
+            "uptrend": {"support": 120.0, "brier_score": 0.26, "ece": 0.12},
+            "volatile": {"support": 80.0, "brier_score": 0.23, "ece": 0.10},
+        },
+    )
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_REQUIRE_PRIOR_IMPROVEMENT", "0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_ROWS", "100")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_SUPPORT", "100")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_EXPECTANCY_BPS", "1.0")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_DRAWDOWN_BPS", "9999")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_TURNOVER_RATIO", "0.5")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_HIT_RATE_STABILITY", "0.5")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_BRIER_SCORE", "0.5")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MIN_PROFITABLE_FOLD_RATIO", "0.4")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_REGIME_CALIBRATION_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_REGIME_BRIER_DELTA", "0.02")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_REGIME_ECE_DELTA", "0.03")
+    monkeypatch.setenv("AI_TRADING_ROADMAP_PHASE1_MAX_DEGRADED_REGIMES", "0")
+
+    phase1 = after_hours._phase1_week1_gate_bundle(
+        best=best,
+        rows=400,
+        sensitivity_sweep={"gate": True},
+        prior_metrics={
+            "regime_calibration": {
+                "uptrend": {"support": 120.0, "brier_score": 0.20, "ece": 0.06},
+                "volatile": {"support": 80.0, "brier_score": 0.21, "ece": 0.08},
+            }
+        },
+        regime_calibration=best.regime_calibration,
+    )
+
+    assert phase1["calibration_diagnostics"]["degraded_regimes"] >= 1
+    assert phase1["gates"]["regime_calibration"] is False
+    assert phase1["gate_passed"] is False
+
+
+def test_promotion_gate_bundle_honors_additional_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=120,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+        brier_score=0.1,
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_POLICY", "strict")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_ROWS", "100")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_SUPPORT", "50")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_FOLDS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.49")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLDS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_PROFITABLE_FOLD_RATIO", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PRIOR_IMPROVEMENT", "0")
+
+    promotion = after_hours._promotion_gate_bundle(
+        best=best,
+        rows=400,
+        edge_gates={
+            "expectancy": True,
+            "drawdown": True,
+            "turnover": True,
+            "stability": True,
+            "sensitivity": True,
+        },
+        additional_gates={"phase1_week1": False},
+    )
+
+    assert promotion["additional_gates"]["phase1_week1"] is False
+    assert promotion["combined_gates"]["phase1_week1"] is False
+    assert promotion["gate_passed"] is False
+    assert promotion["status"] == "shadow"
+
 
 def test_on_market_close_runs_after_hours_pipeline(
     tmp_path: Path,

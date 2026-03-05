@@ -1246,8 +1246,9 @@ def _recent_report_snapshots(
     pending_report: Mapping[str, Any] | None = None,
 ) -> list[_ReportSnapshot]:
     snapshots: list[_ReportSnapshot] = []
+    seen_keys: set[tuple[str, str]] = set()
     if report_dir.exists():
-        report_paths = sorted(report_dir.glob("after_hours_training_*.json"))
+        report_paths = _after_hours_report_paths(report_dir)
         for report_path in report_paths[-max_reports:]:
             try:
                 payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -1257,11 +1258,17 @@ def _recent_report_snapshots(
                 continue
             parsed = _report_snapshot_from_payload(payload, source=str(report_path))
             if parsed is not None:
+                dedupe_key = (parsed.ts.isoformat(), str(parsed.model_name))
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
                 snapshots.append(parsed)
     if isinstance(pending_report, Mapping):
         parsed_pending = _report_snapshot_from_payload(pending_report, source="<pending>")
         if parsed_pending is not None:
-            snapshots.append(parsed_pending)
+            dedupe_key = (parsed_pending.ts.isoformat(), str(parsed_pending.model_name))
+            if dedupe_key not in seen_keys:
+                snapshots.append(parsed_pending)
     snapshots.sort(key=lambda item: item.ts)
     if len(snapshots) > max_reports:
         return snapshots[-max_reports:]
@@ -1699,6 +1706,13 @@ def _threshold_by_regime(
     drawdown_penalty_per_bps = float(
         get_env("AI_TRADING_AFTER_HOURS_THRESHOLD_DRAWDOWN_PENALTY", 0.003, cast=float)
     )
+    drawdown_cap_bps = float(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS",
+            get_env("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", 300.0, cast=float),
+            cast=float,
+        )
+    )
     min_expectancy_bps = float(
         get_env("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", 0.0, cast=float)
     )
@@ -1709,7 +1723,10 @@ def _threshold_by_regime(
             out[regime] = float(default_threshold)
             continue
         best_threshold = float(default_threshold)
-        best_key = (-1, -float("inf"), -float("inf"), -float("inf"), -1)
+        best_feasible_key = (-float("inf"), -float("inf"), -1)
+        best_infeasible_key = (float("inf"), float("inf"), float("inf"))
+        best_infeasible_threshold = float(default_threshold)
+        feasible_found = False
         for threshold in _THRESHOLD_GRID:
             selected = valid_mask & (probabilities >= threshold)
             support = int(np.sum(selected))
@@ -1726,17 +1743,28 @@ def _threshold_by_regime(
                 max_drawdown_bps=drawdown_bps,
                 penalty_per_bps=drawdown_penalty_per_bps,
             )
-            score_key = (
-                1 if expectancy_bps >= min_expectancy_bps else 0,
-                score,
-                expectancy_bps,
-                -drawdown_bps,
-                support,
-            )
-            if score_key > best_key:
-                best_key = score_key
-                best_threshold = float(threshold)
-        out[regime] = best_threshold
+            if drawdown_bps <= drawdown_cap_bps:
+                if expectancy_bps < min_expectancy_bps:
+                    continue
+                feasible_key = (
+                    score,
+                    expectancy_bps,
+                    support,
+                )
+                if feasible_key > best_feasible_key:
+                    best_feasible_key = feasible_key
+                    best_threshold = float(threshold)
+                    feasible_found = True
+            else:
+                infeasible_key = (
+                    drawdown_bps,
+                    -expectancy_bps,
+                    -float(support),
+                )
+                if infeasible_key < best_infeasible_key:
+                    best_infeasible_key = infeasible_key
+                    best_infeasible_threshold = float(threshold)
+        out[regime] = best_threshold if feasible_found else best_infeasible_threshold
     return out
 
 
@@ -2008,43 +2036,111 @@ def _promotion_score(*, expectancy_bps: float, max_drawdown_bps: float) -> float
     )
 
 
-def _load_prior_model_metrics(*, report_dir: Path) -> dict[str, Any] | None:
+def _after_hours_report_paths(report_dir: Path) -> list[Path]:
     if not report_dir.exists():
+        return []
+    return sorted(report_dir.glob("after_hours_training_*.json"))
+
+
+def _prior_metrics_from_report_payload(
+    payload: Mapping[str, Any],
+    *,
+    report_path: Path,
+) -> dict[str, Any] | None:
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, Mapping):
         return None
-    report_paths = sorted(report_dir.glob("after_hours_training_*.json"))
-    for report_path in reversed(report_paths):
+    try:
+        mean_expectancy_bps = float(metrics.get("mean_expectancy_bps"))
+        max_drawdown_bps = float(metrics.get("max_drawdown_bps"))
+    except (TypeError, ValueError):
+        return None
+    model_payload = payload.get("model")
+    model_id = None
+    governance_status = None
+    if isinstance(model_payload, Mapping):
+        model_id = model_payload.get("model_id")
+        governance_status = model_payload.get("governance_status")
+    return {
+        "report_path": str(report_path),
+        "model_id": model_id,
+        "governance_status": governance_status,
+        "mean_expectancy_bps": mean_expectancy_bps,
+        "max_drawdown_bps": max_drawdown_bps,
+        "mean_hit_rate": float(metrics.get("mean_hit_rate", 0.0) or 0.0),
+        "hit_rate_stability": float(metrics.get("hit_rate_stability", 0.0) or 0.0),
+        "support": int(metrics.get("support", 0) or 0),
+        "fold_count": int(metrics.get("fold_count", 0) or 0),
+        "profitable_fold_count": int(metrics.get("profitable_fold_count", 0) or 0),
+        "profitable_fold_ratio": float(metrics.get("profitable_fold_ratio", 0.0) or 0.0),
+        "regime_calibration": payload.get("regime_calibration"),
+        "ts": payload.get("ts"),
+    }
+
+
+def _report_is_production(payload: Mapping[str, Any]) -> bool:
+    model_payload = payload.get("model")
+    governance_status = (
+        str(model_payload.get("governance_status", "") or "").strip().lower()
+        if isinstance(model_payload, Mapping)
+        else ""
+    )
+    if governance_status == "production":
+        return True
+    promotion_payload = payload.get("promotion")
+    promotion_status = (
+        str(promotion_payload.get("status", "") or "").strip().lower()
+        if isinstance(promotion_payload, Mapping)
+        else ""
+    )
+    return promotion_status == "production"
+
+
+def _load_prior_model_metrics(*, report_dir: Path) -> dict[str, Any] | None:
+    report_candidates: list[dict[str, Any]] = []
+    for report_path in _after_hours_report_paths(report_dir):
         try:
             payload = json.loads(report_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError):
             continue
-        metrics = payload.get("metrics")
-        if not isinstance(metrics, Mapping):
+        if not isinstance(payload, Mapping):
             continue
-        try:
-            mean_expectancy_bps = float(metrics.get("mean_expectancy_bps"))
-            max_drawdown_bps = float(metrics.get("max_drawdown_bps"))
-        except (TypeError, ValueError):
+        parsed = _prior_metrics_from_report_payload(payload, report_path=report_path)
+        if parsed is None:
             continue
-        model_payload = payload.get("model")
-        model_id = None
-        governance_status = None
-        if isinstance(model_payload, Mapping):
-            model_id = model_payload.get("model_id")
-            governance_status = model_payload.get("governance_status")
-        return {
-            "report_path": str(report_path),
-            "model_id": model_id,
-            "governance_status": governance_status,
-            "mean_expectancy_bps": mean_expectancy_bps,
-            "max_drawdown_bps": max_drawdown_bps,
-            "mean_hit_rate": float(metrics.get("mean_hit_rate", 0.0) or 0.0),
-            "hit_rate_stability": float(metrics.get("hit_rate_stability", 0.0) or 0.0),
-            "support": int(metrics.get("support", 0) or 0),
-            "fold_count": int(metrics.get("fold_count", 0) or 0),
-            "profitable_fold_count": int(metrics.get("profitable_fold_count", 0) or 0),
-            "profitable_fold_ratio": float(metrics.get("profitable_fold_ratio", 0.0) or 0.0),
-        }
-    return None
+        parsed["is_production"] = _report_is_production(payload)
+        parsed["parsed_ts"] = _parse_ts(parsed.get("ts"))
+        report_candidates.append(parsed)
+    if not report_candidates:
+        return None
+    report_candidates.sort(
+        key=lambda item: (
+            item.get("parsed_ts") or datetime.min.replace(tzinfo=UTC),
+            str(item.get("report_path", "")),
+        )
+    )
+    latest = report_candidates[-1]
+    latest_model_id = str(latest.get("model_id") or "")
+
+    production_distinct = [
+        item
+        for item in report_candidates
+        if bool(item.get("is_production", False))
+        and str(item.get("model_id") or "") != latest_model_id
+    ]
+    if production_distinct:
+        chosen = production_distinct[-1]
+    else:
+        distinct_any = [
+            item
+            for item in report_candidates
+            if str(item.get("model_id") or "") != latest_model_id
+        ]
+        chosen = distinct_any[-1] if distinct_any else latest
+    result = dict(chosen)
+    result.pop("is_production", None)
+    result.pop("parsed_ts", None)
+    return result
 
 
 def _promotion_gate_bundle(
@@ -2053,6 +2149,7 @@ def _promotion_gate_bundle(
     rows: int,
     edge_gates: Mapping[str, bool],
     prior_metrics: Mapping[str, Any] | None = None,
+    additional_gates: Mapping[str, bool] | None = None,
 ) -> dict[str, Any]:
     policy = _promotion_policy_name()
     strict_gates: dict[str, bool] = {}
@@ -2172,6 +2269,12 @@ def _promotion_gate_bundle(
         }
     combined_gates: dict[str, bool] = {str(k): bool(v) for k, v in dict(edge_gates).items()}
     combined_gates.update(strict_gates)
+    normalized_additional_gates: dict[str, bool] = {}
+    if additional_gates:
+        normalized_additional_gates = {
+            str(key): bool(value) for key, value in dict(additional_gates).items()
+        }
+        combined_gates.update(normalized_additional_gates)
     require_sensitivity = bool(
         get_env("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_SENSITIVITY", True, cast=bool)
     )
@@ -2186,10 +2289,262 @@ def _promotion_gate_bundle(
         "require_sensitivity": require_sensitivity,
         "edge_gates": {str(k): bool(v) for k, v in dict(edge_gates).items()},
         "strict_gates": strict_gates,
+        "additional_gates": normalized_additional_gates,
         "prior_model_comparison": prior_model_comparison,
         "combined_gates": combined_gates,
         "gate_passed": gate_passed,
         "status": status,
+    }
+
+
+def _regime_calibration_diagnostics(
+    *,
+    current: Mapping[str, Any] | None,
+    prior: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    enabled = bool(
+        get_env(
+            "AI_TRADING_ROADMAP_PHASE1_REGIME_CALIBRATION_GATE_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    max_brier_delta = _clamp(
+        float(get_env("AI_TRADING_ROADMAP_PHASE1_MAX_REGIME_BRIER_DELTA", 0.02, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+    max_ece_delta = _clamp(
+        float(get_env("AI_TRADING_ROADMAP_PHASE1_MAX_REGIME_ECE_DELTA", 0.03, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+    max_degraded_regimes = max(
+        0, int(get_env("AI_TRADING_ROADMAP_PHASE1_MAX_DEGRADED_REGIMES", 0, cast=int))
+    )
+    min_support = max(
+        1,
+        int(get_env("AI_TRADING_ROADMAP_PHASE1_REGIME_CALIBRATION_MIN_SUPPORT", 25, cast=int)),
+    )
+    summary: dict[str, Any] = {
+        "enabled": enabled,
+        "gate": True,
+        "thresholds": {
+            "max_brier_delta": float(max_brier_delta),
+            "max_ece_delta": float(max_ece_delta),
+            "max_degraded_regimes": int(max_degraded_regimes),
+            "min_support": int(min_support),
+        },
+        "compared_regimes": 0,
+        "degraded_regimes": 0,
+        "regimes": {},
+    }
+    if not enabled:
+        summary["reason"] = "disabled"
+        return summary
+    if not isinstance(current, Mapping):
+        summary["reason"] = "missing_current_calibration"
+        return summary
+    if not isinstance(prior, Mapping):
+        summary["reason"] = "missing_prior_calibration"
+        return summary
+    degraded = 0
+    compared = 0
+    regime_details: dict[str, Any] = {}
+    for regime, current_metrics in current.items():
+        if not isinstance(current_metrics, Mapping):
+            continue
+        prior_metrics = prior.get(str(regime))
+        if not isinstance(prior_metrics, Mapping):
+            continue
+        current_support = int(current_metrics.get("support", 0) or 0)
+        prior_support = int(prior_metrics.get("support", 0) or 0)
+        if current_support < min_support or prior_support < min_support:
+            continue
+        try:
+            current_brier = float(current_metrics.get("brier_score", 0.0) or 0.0)
+            prior_brier = float(prior_metrics.get("brier_score", 0.0) or 0.0)
+            current_ece = float(current_metrics.get("ece", 0.0) or 0.0)
+            prior_ece = float(prior_metrics.get("ece", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        brier_delta = current_brier - prior_brier
+        ece_delta = current_ece - prior_ece
+        materially_worse = bool(brier_delta > max_brier_delta or ece_delta > max_ece_delta)
+        if materially_worse:
+            degraded += 1
+        compared += 1
+        regime_details[str(regime)] = {
+            "current_support": int(current_support),
+            "prior_support": int(prior_support),
+            "current_brier_score": float(current_brier),
+            "prior_brier_score": float(prior_brier),
+            "brier_delta": float(brier_delta),
+            "current_ece": float(current_ece),
+            "prior_ece": float(prior_ece),
+            "ece_delta": float(ece_delta),
+            "materially_worse": materially_worse,
+        }
+    summary["compared_regimes"] = int(compared)
+    summary["degraded_regimes"] = int(degraded)
+    summary["regimes"] = regime_details
+    summary["gate"] = bool(degraded <= max_degraded_regimes)
+    if compared <= 0:
+        summary["reason"] = "no_overlap"
+    return summary
+
+
+def _phase1_week1_gate_bundle(
+    *,
+    best: CandidateMetrics,
+    rows: int,
+    sensitivity_sweep: Mapping[str, Any],
+    prior_metrics: Mapping[str, Any] | None = None,
+    regime_calibration: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    enabled = bool(get_env("AI_TRADING_ROADMAP_PHASE1_ENABLED", True, cast=bool))
+    require_for_promotion = bool(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_REQUIRE_PHASE1_GATE", False, cast=bool)
+    )
+    require_prior_improvement = bool(
+        get_env("AI_TRADING_ROADMAP_PHASE1_REQUIRE_PRIOR_IMPROVEMENT", True, cast=bool)
+    )
+    thresholds = {
+        "min_rows": int(get_env("AI_TRADING_ROADMAP_PHASE1_MIN_ROWS", 1200, cast=int)),
+        "min_support": int(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MIN_SUPPORT", 120, cast=int)
+        ),
+        "min_expectancy_bps": float(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MIN_EXPECTANCY_BPS", 1.5, cast=float)
+        ),
+        "max_drawdown_bps": float(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MAX_DRAWDOWN_BPS", 1800.0, cast=float)
+        ),
+        "max_turnover_ratio": float(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MAX_TURNOVER_RATIO", 0.35, cast=float)
+        ),
+        "min_hit_rate_stability": float(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MIN_HIT_RATE_STABILITY", 0.60, cast=float)
+        ),
+        "max_brier_score": float(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MAX_BRIER_SCORE", 0.27, cast=float)
+        ),
+        "min_profitable_fold_ratio": _clamp(
+            float(
+                get_env(
+                    "AI_TRADING_ROADMAP_PHASE1_MIN_PROFITABLE_FOLD_RATIO",
+                    0.45,
+                    cast=float,
+                )
+            ),
+            low=0.0,
+            high=1.0,
+        ),
+        "min_prior_score_delta": float(
+            get_env("AI_TRADING_ROADMAP_PHASE1_MIN_PRIOR_SCORE_DELTA", 0.15, cast=float)
+        ),
+    }
+    metrics = {
+        "rows": int(rows),
+        "support": int(best.support),
+        "mean_expectancy_bps": float(best.mean_expectancy_bps),
+        "max_drawdown_bps": float(best.max_drawdown_bps),
+        "turnover_ratio": float(best.turnover_ratio),
+        "hit_rate_stability": float(best.hit_rate_stability),
+        "brier_score": float(best.brier_score),
+        "profitable_fold_ratio": float(best.profitable_fold_ratio),
+        "sensitivity_gate": bool(sensitivity_sweep.get("gate", True)),
+    }
+    calibration_diagnostics = _regime_calibration_diagnostics(
+        current=regime_calibration,
+        prior=(
+            prior_metrics.get("regime_calibration")
+            if isinstance(prior_metrics, Mapping)
+            else None
+        ),
+    )
+    if not enabled:
+        return {
+            "enabled": False,
+            "required_for_promotion": require_for_promotion,
+            "gate_passed": True,
+            "gates": {},
+            "thresholds": thresholds,
+            "metrics": metrics,
+            "calibration_diagnostics": calibration_diagnostics,
+            "prior_model_comparison": {
+                "required": require_prior_improvement,
+                "available": False,
+                "gate": True,
+                "reason": "phase1_disabled",
+            },
+        }
+    candidate_score = _promotion_score(
+        expectancy_bps=best.mean_expectancy_bps,
+        max_drawdown_bps=best.max_drawdown_bps,
+    )
+    prior_gate = True
+    prior_model_comparison: dict[str, Any] = {
+        "required": require_prior_improvement,
+        "available": False,
+        "gate": True,
+        "candidate_score": float(candidate_score),
+        "margin_required": float(thresholds["min_prior_score_delta"]),
+    }
+    if require_prior_improvement:
+        if prior_metrics is None:
+            prior_gate = False
+            prior_model_comparison["reason"] = "no_prior_metrics"
+        else:
+            try:
+                prior_expectancy = float(prior_metrics.get("mean_expectancy_bps"))
+                prior_drawdown = float(prior_metrics.get("max_drawdown_bps"))
+            except (TypeError, ValueError):
+                prior_gate = False
+                prior_model_comparison["reason"] = "invalid_prior_metrics"
+            else:
+                prior_score = _promotion_score(
+                    expectancy_bps=prior_expectancy,
+                    max_drawdown_bps=prior_drawdown,
+                )
+                score_delta = float(candidate_score - prior_score)
+                prior_gate = score_delta >= float(thresholds["min_prior_score_delta"])
+                prior_model_comparison.update(
+                    {
+                        "available": True,
+                        "prior_score": float(prior_score),
+                        "score_delta": float(score_delta),
+                        "prior_report_path": prior_metrics.get("report_path"),
+                        "prior_model_id": prior_metrics.get("model_id"),
+                        "prior_governance_status": prior_metrics.get("governance_status"),
+                    }
+                )
+    prior_model_comparison["gate"] = bool(prior_gate)
+    gates = {
+        "rows": int(rows) >= int(thresholds["min_rows"]),
+        "support": int(best.support) >= int(thresholds["min_support"]),
+        "expectancy": float(best.mean_expectancy_bps) >= float(thresholds["min_expectancy_bps"]),
+        "drawdown": float(best.max_drawdown_bps) <= float(thresholds["max_drawdown_bps"]),
+        "turnover": float(best.turnover_ratio) <= float(thresholds["max_turnover_ratio"]),
+        "stability": float(best.hit_rate_stability)
+        >= float(thresholds["min_hit_rate_stability"]),
+        "brier": float(best.brier_score) <= float(thresholds["max_brier_score"]),
+        "profitable_fold_ratio": float(best.profitable_fold_ratio)
+        >= float(thresholds["min_profitable_fold_ratio"]),
+        "sensitivity": bool(sensitivity_sweep.get("gate", True)),
+        "regime_calibration": bool(calibration_diagnostics.get("gate", True)),
+        "prior_model_improvement": bool(prior_gate),
+    }
+    gate_passed = all(bool(value) for value in gates.values())
+    return {
+        "enabled": True,
+        "required_for_promotion": require_for_promotion,
+        "gate_passed": bool(gate_passed),
+        "gates": gates,
+        "thresholds": thresholds,
+        "metrics": metrics,
+        "calibration_diagnostics": calibration_diagnostics,
+        "prior_model_comparison": prior_model_comparison,
     }
 
 
@@ -2350,6 +2705,107 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, sort_keys=True, default=str, indent=2), encoding="utf-8")
     return path
+
+
+def _write_after_hours_reports(
+    *,
+    report_dir: Path,
+    now_utc: datetime,
+    payload: Mapping[str, Any],
+) -> tuple[Path, Path]:
+    report_obj = dict(payload)
+    timestamped_path = report_dir / f"after_hours_training_{now_utc.strftime('%Y%m%d_%H%M%S')}.json"
+    daily_alias_path = report_dir / f"after_hours_training_{now_utc.strftime('%Y%m%d')}.json"
+    _write_json(timestamped_path, report_obj)
+    if bool(get_env("AI_TRADING_AFTER_HOURS_WRITE_DAILY_REPORT_ALIAS", True, cast=bool)):
+        _write_json(daily_alias_path, report_obj)
+    return timestamped_path, daily_alias_path
+
+
+def _after_hours_training_state_path() -> Path:
+    raw = str(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_TRAINING_STATE_PATH",
+            "runtime/after_hours_training_state.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    if not raw:
+        raw = "runtime/after_hours_training_state.json"
+    return _resolve_after_hours_output_path(
+        raw,
+        default_relative="runtime/after_hours_training_state.json",
+    )
+
+
+def _load_after_hours_training_state() -> Mapping[str, Any] | None:
+    path = _after_hours_training_state_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "AFTER_HOURS_TRAINING_STATE_READ_FAILED",
+            extra={"path": str(path)},
+        )
+        return None
+    if isinstance(payload, Mapping):
+        return payload
+    return None
+
+
+def _write_after_hours_training_state(payload: Mapping[str, Any]) -> Path | None:
+    path = _after_hours_training_state_path()
+    fallback = (paths.DATA_DIR / "runtime/after_hours_training_state.json").resolve()
+    try:
+        writable_dir = _resolve_writable_output_dir(
+            requested=path.parent,
+            fallback=fallback.parent,
+            event_name="AFTER_HOURS_TRAINING_STATE_PATH_FALLBACK",
+        )
+    except RuntimeError:
+        logger.warning(
+            "AFTER_HOURS_TRAINING_STATE_WRITE_FAILED",
+            extra={"path": str(path), "reason": "no_writable_directory"},
+        )
+        return None
+    target = path if writable_dir == path.parent else (fallback if writable_dir == fallback.parent else writable_dir / path.name)
+    try:
+        return _write_json(target, dict(payload))
+    except OSError as exc:
+        logger.warning(
+            "AFTER_HOURS_TRAINING_STATE_WRITE_FAILED",
+            extra={"path": str(target), "error": str(exc)},
+        )
+        return None
+
+
+def _new_rows_since_training_state(
+    dataset: Any,
+    *,
+    previous_state: Mapping[str, Any] | None,
+) -> int:
+    if dataset is None or getattr(dataset, "empty", True):
+        return 0
+    if not isinstance(previous_state, Mapping):
+        return int(len(dataset))
+    prev_raw = previous_state.get("max_label_ts")
+    prev_label_ts = _parse_ts(prev_raw)
+    if prev_label_ts is None:
+        return int(len(dataset))
+    import pandas as pd
+    try:
+        label_ts = pd.to_datetime(dataset["label_ts"], utc=True, errors="coerce")
+    except Exception:
+        return int(len(dataset))
+    if label_ts is None:
+        return int(len(dataset))
+    valid = label_ts.dropna()
+    if valid.empty:
+        return 0
+    return int((valid > prev_label_ts).sum())
 
 
 def _maybe_promote_to_runtime_model_path(
@@ -2648,6 +3104,42 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "required_rows": min_rows,
             "timestamp": now_utc.isoformat(),
         }
+    dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
+    training_state = _load_after_hours_training_state()
+    min_new_rows = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_MIN_NEW_ROWS_FOR_RETRAIN", 25, cast=int)),
+    )
+    new_rows = _new_rows_since_training_state(
+        dataset,
+        previous_state=training_state,
+    )
+    previous_fp = (
+        str(training_state.get("dataset_fingerprint", "") or "").strip()
+        if isinstance(training_state, Mapping)
+        else ""
+    )
+    unchanged_dataset_fingerprint = bool(previous_fp) and previous_fp == dataset_fp
+    force_retrain = bool(get_env("AI_TRADING_AFTER_HOURS_FORCE_RETRAIN", False, cast=bool))
+    skip_no_new_signal_data = bool(
+        get_env("AI_TRADING_AFTER_HOURS_SKIP_IF_NO_NEW_SIGNAL_DATA", True, cast=bool)
+    )
+    if (
+        skip_no_new_signal_data
+        and not force_retrain
+        and isinstance(training_state, Mapping)
+        and (unchanged_dataset_fingerprint or int(new_rows) < min_new_rows)
+    ):
+        return {
+            "status": "skipped",
+            "reason": "no_new_signal_data",
+            "rows": int(len(dataset)),
+            "new_rows": int(new_rows),
+            "min_new_rows": int(min_new_rows),
+            "unchanged_dataset_fingerprint": bool(unchanged_dataset_fingerprint),
+            "dataset_fingerprint": str(dataset_fp),
+            "timestamp": now_utc.isoformat(),
+        }
     split_idx = max(20, int(len(dataset) * 0.7))
     horizon_days = int(get_env("AI_TRADING_AFTER_HOURS_HORIZON_DAYS", 1, cast=int))
     embargo_days = int(get_env("AI_TRADING_AFTER_HOURS_EMBARGO_DAYS", 1, cast=int))
@@ -2746,13 +3238,33 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     )
     gate_map = _meets_edge_targets(best, targets)
     gate_map["sensitivity"] = bool(sensitivity_sweep.get("gate", True))
+    phase1_week1 = _phase1_week1_gate_bundle(
+        best=best,
+        rows=int(len(dataset)),
+        sensitivity_sweep=sensitivity_sweep,
+        prior_metrics=prior_model_metrics,
+        regime_calibration=best.regime_calibration,
+    )
+    roadmap_additional_gates: dict[str, bool] = {}
+    if bool(phase1_week1.get("required_for_promotion", False)):
+        roadmap_additional_gates["phase1_week1"] = bool(phase1_week1.get("gate_passed", False))
     promotion = _promotion_gate_bundle(
         best=best,
         rows=int(len(dataset)),
         edge_gates=gate_map,
         prior_metrics=prior_model_metrics,
+        additional_gates=roadmap_additional_gates,
     )
     status = str(promotion["status"])
+    logger.info(
+        "AFTER_HOURS_PHASE1_GATE_EVAL",
+        extra={
+            "enabled": bool(phase1_week1.get("enabled", False)),
+            "required_for_promotion": bool(phase1_week1.get("required_for_promotion", False)),
+            "gate_passed": bool(phase1_week1.get("gate_passed", False)),
+            "gates": dict(phase1_week1.get("gates", {})),
+        },
+    )
     logger.info(
         "AFTER_HOURS_PROMOTION_EVAL",
         extra={
@@ -2765,7 +3277,6 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         },
     )
 
-    dataset_fp = _dataset_fingerprint(dataset, symbols=symbols, cost_floor_bps=cost_floor_bps)
     manifest_metadata = _build_manifest_metadata(
         symbols=symbols,
         rows=int(len(dataset)),
@@ -2857,6 +3368,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             },
             "prior_model_metrics": prior_model_metrics,
             "sensitivity_sweep": sensitivity_sweep,
+            "roadmap": {"phase_1_week_1": phase1_week1},
         },
     )
     promoted_model_path, promoted_manifest_path = _maybe_promote_to_runtime_model_path(
@@ -2871,6 +3383,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         feature_hash=str(manifest_metadata.get("feature_hash", "")),
         governance_status=status,
     )
+    training_data_delta = {
+        "new_rows": int(new_rows),
+        "min_new_rows": int(min_new_rows),
+        "unchanged_dataset_fingerprint": bool(unchanged_dataset_fingerprint),
+    }
     report = {
         "ts": now_utc.isoformat(),
         "symbols": symbols,
@@ -2908,7 +3425,9 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "sensitivity_sweep": sensitivity_sweep,
         "edge_gates": gate_map,
         "promotion": promotion,
+        "roadmap": {"phase_1_week_1": phase1_week1},
         "prior_model_metrics": prior_model_metrics,
+        "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
         "selection_weights": dict(selection_weights),
         "runtime_promotion": {
@@ -2931,9 +3450,27 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "report_count": int(model_selection_retune.get("report_count", 0) or 0),
             },
         )
-    report_path = _write_json(
-        report_dir / f"after_hours_training_{now_utc.strftime('%Y%m%d')}.json",
-        report,
+    report_path, daily_report_path = _write_after_hours_reports(
+        report_dir=report_dir,
+        now_utc=now_utc,
+        payload=report,
+    )
+    max_label_ts = _parse_ts(str(dataset["label_ts"].iloc[-1]))
+    _write_after_hours_training_state(
+        {
+            "updated_at": now_utc.isoformat(),
+            "rows": int(len(dataset)),
+            "dataset_fingerprint": str(dataset_fp),
+            "max_label_ts": (
+                max_label_ts.isoformat()
+                if isinstance(max_label_ts, datetime)
+                else str(dataset["label_ts"].iloc[-1])
+            ),
+            "report_path": str(report_path),
+            "daily_report_path": str(daily_report_path),
+            "model_id": str(model_id),
+            "model_name": str(best.name),
+        }
     )
     logger.info(
         "AFTER_HOURS_TRAINING_COMPLETE",
@@ -2945,6 +3482,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "brier_score": best.brier_score,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "report_path": str(report_path),
+            "daily_report_path": str(daily_report_path),
             "governance_status": status,
         },
     )
@@ -2956,6 +3494,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "model_path": str(model_path),
         "manifest_path": str(manifest_path),
         "report_path": str(report_path),
+        "daily_report_path": str(daily_report_path),
         "governance_status": status,
         "edge_gates": gate_map,
         "rows": int(len(dataset)),
@@ -2966,9 +3505,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "prior_model_metrics": prior_model_metrics,
         "selection_weights": dict(selection_weights),
         "model_selection_retune": model_selection_retune,
+        "training_data_delta": training_data_delta,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
         "promotion": promotion,
+        "roadmap": {"phase_1_week_1": phase1_week1},
         "rl_overlay": rl_overlay,
     }
 

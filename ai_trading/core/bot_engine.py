@@ -32584,26 +32584,238 @@ def _gate_effectiveness_summary_path() -> Path:
     )
 
 
+def _gate_effectiveness_include_attribution() -> bool:
+    return bool(get_env("AI_TRADING_GATE_EFFECTIVENESS_INCLUDE_ATTRIBUTION", True, cast=bool))
+
+
+def _gate_effectiveness_exclude_global_halts() -> bool:
+    return bool(get_env("AI_TRADING_GATE_EFFECTIVENESS_EXCLUDE_GLOBAL_HALTS", True, cast=bool))
+
+
+def _gate_name_is_halt_noise(gate_name: str) -> bool:
+    gate = str(gate_name or "").strip().upper()
+    if not gate:
+        return False
+    if gate in {"AUTH_HALT", "HALT_TRADING", "IDLE_MARKET_CLOSED", "MARKET_CLOSED_BLOCK"}:
+        return True
+    return "HALT" in gate
+
+
+def _analytics_counter_map(raw: Any) -> dict[str, int]:
+    out: dict[str, int] = {}
+    if not isinstance(raw, Mapping):
+        return out
+    for key, value in raw.items():
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            out[str(key)] = count
+    return out
+
+
+def _analytics_stats_map(raw: Any) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    if not isinstance(raw, Mapping):
+        return out
+    def _as_float(value: Any) -> float:
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    for key, value in raw.items():
+        if not isinstance(value, Mapping):
+            continue
+        item = {
+            "count": _as_float(value.get("count", 0.0)),
+            "accepted_records": _as_float(value.get("accepted_records", 0.0)),
+            "blocked_records": _as_float(value.get("blocked_records", 0.0)),
+            "expected_net_edge_bps_sum": _as_float(value.get("expected_net_edge_bps_sum", 0.0)),
+            "edge_proxy_bps_sum": _as_float(value.get("edge_proxy_bps_sum", 0.0)),
+        }
+        out[str(key)] = item
+    return out
+
+
+def _bump_analytics_stats(
+    bucket: dict[str, dict[str, float]],
+    key: str,
+    *,
+    accepted: bool,
+    expected_net_edge_bps: float,
+    edge_proxy_bps: float,
+) -> None:
+    item = bucket.setdefault(
+        str(key),
+        {
+            "count": 0.0,
+            "accepted_records": 0.0,
+            "blocked_records": 0.0,
+            "expected_net_edge_bps_sum": 0.0,
+            "edge_proxy_bps_sum": 0.0,
+        },
+    )
+    item["count"] += 1.0
+    if accepted:
+        item["accepted_records"] += 1.0
+    else:
+        item["blocked_records"] += 1.0
+    item["expected_net_edge_bps_sum"] += float(expected_net_edge_bps)
+    item["edge_proxy_bps_sum"] += float(edge_proxy_bps)
+
+
+def _merge_analytics_stats(
+    target: dict[str, dict[str, float]],
+    source: Mapping[str, Any],
+) -> None:
+    for key, raw_metrics in source.items():
+        if not isinstance(raw_metrics, Mapping):
+            continue
+        item = target.setdefault(
+            str(key),
+            {
+                "count": 0.0,
+                "accepted_records": 0.0,
+                "blocked_records": 0.0,
+                "expected_net_edge_bps_sum": 0.0,
+                "edge_proxy_bps_sum": 0.0,
+            },
+        )
+        item["count"] += float(raw_metrics.get("count", 0.0) or 0.0)
+        item["accepted_records"] += float(raw_metrics.get("accepted_records", 0.0) or 0.0)
+        item["blocked_records"] += float(raw_metrics.get("blocked_records", 0.0) or 0.0)
+        item["expected_net_edge_bps_sum"] += float(
+            raw_metrics.get("expected_net_edge_bps_sum", 0.0) or 0.0
+        )
+        item["edge_proxy_bps_sum"] += float(raw_metrics.get("edge_proxy_bps_sum", 0.0) or 0.0)
+
+
 def _update_gate_effectiveness_analytics(
     *,
     decision_gate_counts: Mapping[str, int],
     decision_records_total: int,
     accepted_decisions: int,
+    decision_observations: Sequence[Mapping[str, Any]] | None = None,
 ) -> None:
     if not _gate_effectiveness_analytics_enabled():
         return
     log_path = _gate_effectiveness_log_path()
     summary_path = _gate_effectiveness_summary_path()
+    include_attribution = _gate_effectiveness_include_attribution()
+    exclude_global_halts = _gate_effectiveness_exclude_global_halts()
+    records_total = int(max(0, decision_records_total))
+    accepted_records = int(max(0, accepted_decisions))
+    rejected_records = int(max(0, records_total - accepted_records))
+    gate_counts: dict[str, int] = {
+        str(gate): int(count)
+        for gate, count in decision_gate_counts.items()
+        if str(gate).strip() and int(count) > 0
+    }
+    excluded_records = 0
+    excluded_gate_counts: Counter[str] = Counter()
+    gate_attribution_cycle: dict[str, dict[str, float]] = {}
+    symbol_attribution_cycle: dict[str, dict[str, float]] = {}
+    regime_attribution_cycle: dict[str, dict[str, float]] = {}
+    total_expected_net_edge_bps = 0.0
+    total_edge_proxy_bps = 0.0
+    if decision_observations:
+        records_total = 0
+        accepted_records = 0
+        rejected_records = 0
+        gate_counts = {}
+        for raw_item in decision_observations:
+            if not isinstance(raw_item, Mapping):
+                continue
+            gates_raw = raw_item.get("gates")
+            if isinstance(gates_raw, (str, bytes, bytearray)):
+                gates_iterable: list[Any] = [gates_raw]
+            elif isinstance(gates_raw, Sequence):
+                gates_iterable = list(gates_raw)
+            else:
+                gates_iterable = []
+            gates = [
+                str(gate).strip()
+                for gate in gates_iterable
+                if str(gate).strip()
+            ]
+            if not gates:
+                continue
+            symbol = str(raw_item.get("symbol", "") or "").strip().upper() or "UNKNOWN"
+            regime = str(raw_item.get("regime", "") or "").strip().upper() or "UNKNOWN"
+            accepted = bool(raw_item.get("accepted", "OK_TRADE" in gates))
+            try:
+                expected_net_edge_bps = float(raw_item.get("expected_net_edge_bps", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                expected_net_edge_bps = 0.0
+            try:
+                edge_proxy_bps = float(raw_item.get("edge_proxy_bps", expected_net_edge_bps) or 0.0)
+            except (TypeError, ValueError):
+                edge_proxy_bps = float(expected_net_edge_bps)
+            is_global_halt_noise = bool(
+                exclude_global_halts
+                and symbol == "ALL"
+                and any(_gate_name_is_halt_noise(gate) for gate in gates)
+            )
+            if is_global_halt_noise:
+                excluded_records += 1
+                for gate in gates:
+                    excluded_gate_counts[str(gate)] += 1
+                continue
+            records_total += 1
+            if accepted:
+                accepted_records += 1
+            else:
+                rejected_records += 1
+            total_expected_net_edge_bps += float(expected_net_edge_bps)
+            total_edge_proxy_bps += float(edge_proxy_bps)
+            if include_attribution:
+                _bump_analytics_stats(
+                    symbol_attribution_cycle,
+                    symbol,
+                    accepted=accepted,
+                    expected_net_edge_bps=expected_net_edge_bps,
+                    edge_proxy_bps=edge_proxy_bps,
+                )
+                _bump_analytics_stats(
+                    regime_attribution_cycle,
+                    regime,
+                    accepted=accepted,
+                    expected_net_edge_bps=expected_net_edge_bps,
+                    edge_proxy_bps=edge_proxy_bps,
+                )
+            for gate in gates:
+                gate_key = str(gate)
+                gate_counts[gate_key] = int(gate_counts.get(gate_key, 0)) + 1
+                if include_attribution:
+                    _bump_analytics_stats(
+                        gate_attribution_cycle,
+                        gate_key,
+                        accepted=accepted,
+                        expected_net_edge_bps=expected_net_edge_bps,
+                        edge_proxy_bps=edge_proxy_bps,
+                    )
     cycle_payload = {
         "ts": datetime.now(UTC).isoformat(),
-        "records_total": int(max(0, decision_records_total)),
-        "accepted_records": int(max(0, accepted_decisions)),
-        "rejected_records": int(max(0, decision_records_total - accepted_decisions)),
+        "records_total": int(max(0, records_total)),
+        "accepted_records": int(max(0, accepted_records)),
+        "rejected_records": int(max(0, rejected_records)),
+        "excluded_records": int(max(0, excluded_records)),
+        "excluded_gate_counts": {
+            str(gate): int(count)
+            for gate, count in sorted(excluded_gate_counts.items(), key=lambda item: (-item[1], item[0]))
+            if int(count) > 0
+        },
         "gate_counts": {
             str(gate): int(count)
-            for gate, count in decision_gate_counts.items()
+            for gate, count in gate_counts.items()
             if str(gate).strip() and int(count) > 0
         },
+        "total_expected_net_edge_bps": float(total_expected_net_edge_bps),
+        "total_edge_proxy_bps": float(total_edge_proxy_bps),
+        "gate_attribution": gate_attribution_cycle if include_attribution else {},
+        "symbol_attribution": symbol_attribution_cycle if include_attribution else {},
+        "regime_attribution": regime_attribution_cycle if include_attribution else {},
     }
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -32620,7 +32832,14 @@ def _update_gate_effectiveness_analytics(
         "total_records": 0,
         "total_accepted_records": 0,
         "total_rejected_records": 0,
+        "excluded_records_total": 0,
         "gate_totals": {},
+        "excluded_gate_totals": {},
+        "total_expected_net_edge_bps": 0.0,
+        "total_edge_proxy_bps": 0.0,
+        "gate_attribution": {},
+        "symbol_attribution": {},
+        "regime_attribution": {},
     }
     try:
         if summary_path.exists():
@@ -32629,14 +32848,11 @@ def _update_gate_effectiveness_analytics(
                 summary.update(loaded)
     except Exception:
         logger.debug("GATE_EFFECTIVENESS_SUMMARY_READ_FAILED", exc_info=True)
-    gate_totals_raw = summary.get("gate_totals")
-    gate_totals: dict[str, int] = {}
-    if isinstance(gate_totals_raw, Mapping):
-        for key, value in gate_totals_raw.items():
-            try:
-                gate_totals[str(key)] = int(value)
-            except (TypeError, ValueError):
-                continue
+    gate_totals = _analytics_counter_map(summary.get("gate_totals"))
+    excluded_gate_totals = _analytics_counter_map(summary.get("excluded_gate_totals"))
+    gate_attribution = _analytics_stats_map(summary.get("gate_attribution"))
+    symbol_attribution = _analytics_stats_map(summary.get("symbol_attribution"))
+    regime_attribution = _analytics_stats_map(summary.get("regime_attribution"))
     summary["total_records"] = int(summary.get("total_records", 0) or 0) + int(
         cycle_payload["records_total"]
     )
@@ -32646,9 +32862,25 @@ def _update_gate_effectiveness_analytics(
     summary["total_rejected_records"] = int(
         summary.get("total_rejected_records", 0) or 0
     ) + int(cycle_payload["rejected_records"])
+    summary["excluded_records_total"] = int(summary.get("excluded_records_total", 0) or 0) + int(
+        cycle_payload["excluded_records"]
+    )
+    summary["total_expected_net_edge_bps"] = float(
+        summary.get("total_expected_net_edge_bps", 0.0) or 0.0
+    ) + float(cycle_payload["total_expected_net_edge_bps"])
+    summary["total_edge_proxy_bps"] = float(summary.get("total_edge_proxy_bps", 0.0) or 0.0) + float(
+        cycle_payload["total_edge_proxy_bps"]
+    )
     for gate, count in cycle_payload["gate_counts"].items():
         gate_totals[str(gate)] = int(gate_totals.get(str(gate), 0)) + int(count)
+    for gate, count in cycle_payload["excluded_gate_counts"].items():
+        excluded_gate_totals[str(gate)] = int(excluded_gate_totals.get(str(gate), 0)) + int(count)
+    if include_attribution:
+        _merge_analytics_stats(gate_attribution, cycle_payload["gate_attribution"])
+        _merge_analytics_stats(symbol_attribution, cycle_payload["symbol_attribution"])
+        _merge_analytics_stats(regime_attribution, cycle_payload["regime_attribution"])
     summary["gate_totals"] = gate_totals
+    summary["excluded_gate_totals"] = excluded_gate_totals
     total_records = max(1, int(summary["total_records"]))
     gate_effectiveness = {
         gate: {
@@ -32658,6 +32890,9 @@ def _update_gate_effectiveness_analytics(
         for gate, count in sorted(gate_totals.items(), key=lambda item: (-item[1], item[0]))
     }
     summary["gate_effectiveness"] = gate_effectiveness
+    summary["gate_attribution"] = gate_attribution
+    summary["symbol_attribution"] = symbol_attribution
+    summary["regime_attribution"] = regime_attribution
     summary["updated_at"] = cycle_payload["ts"]
     try:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34349,6 +34584,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     decision_path = getattr(cfg, "decision_log_path", None)
     decision_gate_counts: Counter[str] = Counter()
     decision_records_total = 0
+    decision_observations: list[dict[str, Any]] = []
     write_decision_record_impl = cast(Any, globals().get("_write_decision_record"))
 
     def _write_decision_record(record: DecisionRecord, path: str | None) -> None:  # type: ignore[no-redef]
@@ -34356,11 +34592,52 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
         decision_records_total += 1
         gates_raw = getattr(record, "gates", None)
+        gates: list[str] = []
         if isinstance(gates_raw, Sequence):
             for gate in gates_raw:
                 gate_text = str(gate or "").strip()
                 if gate_text:
                     decision_gate_counts[gate_text] += 1
+                    gates.append(gate_text)
+        symbol_value = str(getattr(record, "symbol", "") or "").strip().upper() or "UNKNOWN"
+        config_snapshot_raw = getattr(record, "config_snapshot", None)
+        config_snapshot = (
+            dict(config_snapshot_raw)
+            if isinstance(config_snapshot_raw, Mapping)
+            else {}
+        )
+        regime_value = (
+            str(config_snapshot.get("liquidity_regime", "") or "").strip().upper() or "UNKNOWN"
+        )
+        metrics_raw = getattr(record, "metrics", None)
+        metrics = dict(metrics_raw) if isinstance(metrics_raw, Mapping) else {}
+        tca_raw = getattr(record, "tca", None)
+        tca = dict(tca_raw) if isinstance(tca_raw, Mapping) else {}
+        try:
+            expected_net_edge_bps = float(metrics.get("expected_net_edge_bps", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            expected_net_edge_bps = 0.0
+        try:
+            realized_is_bps = float(tca.get("is_bps", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            realized_is_bps = 0.0
+        accepted = "OK_TRADE" in gates
+        edge_proxy_bps = (
+            float(expected_net_edge_bps - abs(realized_is_bps))
+            if accepted
+            else float(expected_net_edge_bps)
+        )
+        decision_observations.append(
+            {
+                "symbol": symbol_value,
+                "gates": list(gates),
+                "accepted": bool(accepted),
+                "regime": regime_value,
+                "expected_net_edge_bps": float(expected_net_edge_bps),
+                "realized_is_bps": float(realized_is_bps),
+                "edge_proxy_bps": float(edge_proxy_bps),
+            }
+        )
         write_decision_record_impl(record, path)
 
     allocation_weights: dict[str, float] = {}
@@ -36458,15 +36735,44 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         _write_decision_record(record, decision_path)
     accepted_decisions = int(decision_gate_counts.get("OK_TRADE", 0))
-    reject_gate_counts = {
-        gate: int(count)
-        for gate, count in decision_gate_counts.items()
-        if gate != "OK_TRADE" and int(count) > 0
-    }
+    if _gate_effectiveness_exclude_global_halts() and decision_observations:
+        filtered_reject_counts: Counter[str] = Counter()
+        for observation in decision_observations:
+            if not isinstance(observation, Mapping):
+                continue
+            symbol_value = str(observation.get("symbol", "") or "").strip().upper()
+            gates_raw = observation.get("gates")
+            if isinstance(gates_raw, (str, bytes, bytearray)):
+                gates_iterable: list[Any] = [gates_raw]
+            elif isinstance(gates_raw, Sequence):
+                gates_iterable = list(gates_raw)
+            else:
+                gates_iterable = []
+            gates = [str(gate).strip() for gate in gates_iterable if str(gate).strip()]
+            if (
+                symbol_value == "ALL"
+                and any(_gate_name_is_halt_noise(gate) for gate in gates)
+            ):
+                continue
+            for gate in gates:
+                if gate != "OK_TRADE":
+                    filtered_reject_counts[gate] += 1
+        reject_gate_counts = {
+            gate: int(count)
+            for gate, count in filtered_reject_counts.items()
+            if int(count) > 0
+        }
+    else:
+        reject_gate_counts = {
+            gate: int(count)
+            for gate, count in decision_gate_counts.items()
+            if gate != "OK_TRADE" and int(count) > 0
+        }
     _update_gate_effectiveness_analytics(
         decision_gate_counts={gate: int(count) for gate, count in decision_gate_counts.items()},
         decision_records_total=int(decision_records_total),
         accepted_decisions=accepted_decisions,
+        decision_observations=decision_observations,
     )
     if reject_gate_counts:
         top_reasons = sorted(
