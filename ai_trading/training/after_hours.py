@@ -9,6 +9,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 import shutil
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from ai_trading.data.splits import PurgedGroupTimeSeriesSplit
 from ai_trading.features.indicators import (
     compute_atr,
     compute_macd,
+    compute_macds,
     compute_sma,
     compute_vwap,
 )
@@ -41,14 +43,23 @@ from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 logger = get_logger(__name__)
 
-FEATURE_COLUMNS: tuple[str, ...] = (
+_BASE_FEATURE_COLUMNS: tuple[str, ...] = (
     "rsi",
     "macd",
     "atr",
     "vwap",
     "sma_50",
     "sma_200",
+    "signal",
 )
+_DERIVED_FEATURE_COLUMNS: tuple[str, ...] = (
+    "atr_pct",
+    "vwap_distance",
+    "sma_spread",
+    "macd_signal_gap",
+    "rsi_centered",
+)
+FEATURE_COLUMNS: tuple[str, ...] = _BASE_FEATURE_COLUMNS + _DERIVED_FEATURE_COLUMNS
 _THRESHOLD_GRID: tuple[float, ...] = (0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7)
 _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "ts",
@@ -58,6 +69,50 @@ _TCA_TIMESTAMP_KEYS: tuple[str, ...] = (
     "submitted_at",
     "decision_ts",
     "fill_ts",
+)
+_MODEL_SELECTION_WEIGHT_SPECS: tuple[tuple[str, str, float, float, float], ...] = (
+    (
+        "drawdown_penalty",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_DRAWDOWN_PENALTY",
+        0.003,
+        0.0,
+        0.05,
+    ),
+    (
+        "turnover_penalty",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_TURNOVER_PENALTY",
+        0.75,
+        0.0,
+        5.0,
+    ),
+    (
+        "brier_penalty",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_BRIER_PENALTY",
+        4.0,
+        0.0,
+        60.0,
+    ),
+    (
+        "stability_weight",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_STABILITY_WEIGHT",
+        0.5,
+        0.0,
+        5.0,
+    ),
+    (
+        "support_log_weight",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_SUPPORT_LOG_WEIGHT",
+        0.05,
+        0.0,
+        1.0,
+    ),
+    (
+        "profitable_fold_weight",
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_PROFITABLE_FOLD_WEIGHT",
+        0.5,
+        0.0,
+        5.0,
+    ),
 )
 def _resolve_after_hours_output_path(path_value: str, *, default_relative: str) -> Path:
     """Resolve output paths relative to writable runtime roots when possible."""
@@ -180,6 +235,30 @@ class CandidateMetrics:
     hit_rate_stability: float
     regime_metrics: dict[str, dict[str, float]]
     oof_probabilities: np.ndarray
+    brier_score: float = 1.0
+
+
+@dataclass(slots=True)
+class _CandidateSnapshot:
+    name: str
+    mean_expectancy_bps: float
+    max_drawdown_bps: float
+    turnover_ratio: float
+    hit_rate_stability: float
+    brier_score: float
+    support: int
+    profitable_fold_ratio: float
+
+
+@dataclass(slots=True)
+class _ReportSnapshot:
+    ts: datetime
+    source: str
+    model_name: str
+    mean_expectancy_bps: float
+    hit_rate_stability: float
+    brier_score: float
+    candidates: list[_CandidateSnapshot]
 
 
 class _FallbackProbabilityModel:
@@ -462,6 +541,36 @@ def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _augment_training_features(frame: Any) -> Any:
+    import pandas as pd
+
+    close = pd.to_numeric(frame.get("close"), errors="coerce")
+    close_abs = close.abs().replace(0.0, np.nan)
+    atr = pd.to_numeric(frame.get("atr"), errors="coerce")
+    vwap = pd.to_numeric(frame.get("vwap"), errors="coerce").replace(0.0, np.nan)
+    sma_50 = pd.to_numeric(frame.get("sma_50"), errors="coerce")
+    sma_200 = pd.to_numeric(frame.get("sma_200"), errors="coerce")
+    macd = pd.to_numeric(frame.get("macd"), errors="coerce")
+    rsi = pd.to_numeric(frame.get("rsi"), errors="coerce")
+    signal = pd.to_numeric(
+        frame.get("signal", frame.get("macds", frame.get("macd"))),
+        errors="coerce",
+    )
+
+    frame["signal"] = signal
+    frame["atr_pct"] = (atr / close_abs) * 100.0
+    frame["vwap_distance"] = (close / vwap) - 1.0
+    frame["sma_spread"] = (sma_50 - sma_200) / close_abs
+    frame["macd_signal_gap"] = macd - signal
+    frame["rsi_centered"] = (rsi - 50.0) / 50.0
+
+    for column in _DERIVED_FEATURE_COLUMNS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+    return frame
+
+
 def _build_symbol_dataset(
     symbol: str,
     start_dt: datetime,
@@ -482,11 +591,13 @@ def _build_symbol_dataset(
             return pd.DataFrame()
     frame = frame.sort_index()
     frame = compute_macd(frame)
+    frame = compute_macds(frame)
     frame = compute_atr(frame)
     frame = compute_vwap(frame)
     frame = compute_sma(frame, windows=(50, 200))
     close_arr = frame["close"].astype(float).to_numpy()
     frame["rsi"] = _safe_rsi(close_arr)
+    frame = _augment_training_features(frame)
     future_ret_bps = (
         frame["close"].astype(float).shift(-1) / frame["close"].astype(float) - 1.0
     ) * 10_000.0
@@ -550,6 +661,19 @@ def _fit_candidate_model(name: str, seed: int):
             return CalibratedClassifierCV(base, method="sigmoid", cv=3)
         except Exception:
             return _FallbackProbabilityModel()
+    if name == "histgb":
+        from sklearn.calibration import CalibratedClassifierCV
+        from sklearn.ensemble import HistGradientBoostingClassifier
+
+        base = HistGradientBoostingClassifier(
+            max_depth=6,
+            learning_rate=0.05,
+            max_iter=350,
+            min_samples_leaf=24,
+            l2_regularization=0.02,
+            random_state=seed,
+        )
+        return CalibratedClassifierCV(base, method="sigmoid", cv=3)
     if name == "lightgbm":
         from sklearn.calibration import CalibratedClassifierCV
 
@@ -746,6 +870,12 @@ def _evaluate_candidate(
     valid_probs_mask = np.isfinite(oof_probs)
     selected_all = valid_probs_mask & (oof_probs >= threshold)
     regime_metrics = _regime_summary(regimes, selected_all, edge)
+    brier_score = 1.0
+    if np.any(valid_probs_mask):
+        y_values = y.to_numpy(dtype=float)[valid_probs_mask]
+        probs_values = np.clip(oof_probs[valid_probs_mask], 1e-6, 1.0 - 1e-6)
+        if y_values.size and probs_values.size == y_values.size:
+            brier_score = float(np.mean((probs_values - y_values) ** 2))
     hit_stability = 1.0
     if len(fold_hits) > 1:
         hit_stability = max(0.0, 1.0 - float(pstdev(fold_hits)))
@@ -764,6 +894,7 @@ def _evaluate_candidate(
         hit_rate_stability=float(hit_stability),
         regime_metrics=regime_metrics,
         oof_probabilities=oof_probs,
+        brier_score=float(brier_score),
     )
 
 
@@ -774,6 +905,618 @@ def _score_expectancy_with_drawdown_penalty(
     penalty_per_bps: float,
 ) -> float:
     return float(expectancy_bps) - (float(max_drawdown_bps) * float(penalty_per_bps))
+
+
+def _model_selection_weight_bounds() -> dict[str, tuple[float, float]]:
+    return {name: (low, high) for name, _env, _default, low, high in _MODEL_SELECTION_WEIGHT_SPECS}
+
+
+def _model_selection_default_weights() -> dict[str, float]:
+    out: dict[str, float] = {}
+    for name, env_name, default_value, low, high in _MODEL_SELECTION_WEIGHT_SPECS:
+        value = float(get_env(env_name, default_value, cast=float))
+        if not math.isfinite(value):
+            value = float(default_value)
+        out[name] = _clamp(value, low=low, high=high)
+    return out
+
+
+def _normalize_model_selection_weights(
+    candidate: Mapping[str, Any] | None,
+    *,
+    defaults: Mapping[str, float] | None = None,
+) -> dict[str, float]:
+    base = dict(defaults or _model_selection_default_weights())
+    if not isinstance(candidate, Mapping):
+        return base
+    bounds = _model_selection_weight_bounds()
+    for key, (low, high) in bounds.items():
+        raw_value = candidate.get(key)
+        if raw_value is None:
+            continue
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(parsed):
+            continue
+        base[key] = _clamp(parsed, low=low, high=high)
+    return base
+
+
+def _model_selection_overrides_path() -> Path:
+    raw = str(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_PATH",
+            "runtime/model_selection_overrides.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    if not raw:
+        raw = "runtime/model_selection_overrides.json"
+    return _resolve_after_hours_output_path(
+        raw,
+        default_relative="runtime/model_selection_overrides.json",
+    )
+
+
+def _load_model_selection_overrides() -> dict[str, float] | None:
+    enabled = bool(
+        get_env("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_ENABLED", True, cast=bool)
+    )
+    if not enabled:
+        return None
+    path = _model_selection_overrides_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "AFTER_HOURS_SELECTION_OVERRIDE_READ_FAILED",
+            extra={"path": str(path)},
+        )
+        return None
+    if isinstance(payload, Mapping):
+        nested = payload.get("weights")
+        if isinstance(nested, Mapping):
+            return _normalize_model_selection_weights(nested)
+        return _normalize_model_selection_weights(payload)
+    return None
+
+
+def _resolved_model_selection_weights(
+    *,
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, float]:
+    defaults = _model_selection_default_weights()
+    runtime_overrides = _load_model_selection_overrides() if overrides is None else dict(overrides)
+    return _normalize_model_selection_weights(runtime_overrides, defaults=defaults)
+
+
+def _candidate_selection_score_from_snapshot(
+    metrics: _CandidateSnapshot,
+    *,
+    weights: Mapping[str, float],
+) -> float:
+    drawdown_penalty = float(weights["drawdown_penalty"])
+    turnover_penalty = float(weights["turnover_penalty"])
+    brier_penalty = float(weights["brier_penalty"])
+    stability_weight = float(weights["stability_weight"])
+    support_log_weight = float(weights["support_log_weight"])
+    profitable_fold_weight = float(weights["profitable_fold_weight"])
+    return (
+        float(metrics.mean_expectancy_bps)
+        - (float(metrics.max_drawdown_bps) * drawdown_penalty)
+        - (float(metrics.turnover_ratio) * turnover_penalty)
+        - (float(metrics.brier_score) * brier_penalty)
+        + (float(metrics.hit_rate_stability) * stability_weight)
+        + (float(math.log1p(max(0, int(metrics.support)))) * support_log_weight)
+        + (float(metrics.profitable_fold_ratio) * profitable_fold_weight)
+    )
+
+
+def _candidate_selection_score(
+    metrics: CandidateMetrics,
+    *,
+    weights: Mapping[str, float] | None = None,
+) -> float:
+    resolved_weights = (
+        _resolved_model_selection_weights()
+        if weights is None
+        else _normalize_model_selection_weights(weights)
+    )
+    snapshot = _CandidateSnapshot(
+        name=metrics.name,
+        mean_expectancy_bps=float(metrics.mean_expectancy_bps),
+        max_drawdown_bps=float(metrics.max_drawdown_bps),
+        turnover_ratio=float(metrics.turnover_ratio),
+        hit_rate_stability=float(metrics.hit_rate_stability),
+        brier_score=float(metrics.brier_score),
+        support=int(metrics.support),
+        profitable_fold_ratio=float(metrics.profitable_fold_ratio),
+    )
+    return _candidate_selection_score_from_snapshot(snapshot, weights=resolved_weights)
+
+
+def _coerce_finite_float(raw: Any, *, default: float) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(value):
+        return float(default)
+    return float(value)
+
+
+def _selection_eval_weights() -> dict[str, float]:
+    defaults = {
+        "drawdown_penalty": float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_DRAWDOWN_PENALTY", 0.003, cast=float)
+        ),
+        "turnover_penalty": float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_TURNOVER_PENALTY", 0.75, cast=float)
+        ),
+        "brier_penalty": float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_BRIER_PENALTY", 4.0, cast=float)
+        ),
+        "stability_weight": float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_STABILITY_WEIGHT", 0.5, cast=float)
+        ),
+        "support_log_weight": float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_SUPPORT_LOG_WEIGHT", 0.05, cast=float)
+        ),
+        "profitable_fold_weight": float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_PROFITABLE_FOLD_WEIGHT", 0.5, cast=float)
+        ),
+    }
+    return _normalize_model_selection_weights(defaults, defaults=defaults)
+
+
+def _selection_utility(
+    snapshot: _CandidateSnapshot,
+    *,
+    eval_weights: Mapping[str, float],
+) -> float:
+    return _candidate_selection_score_from_snapshot(snapshot, weights=eval_weights)
+
+
+def _report_candidate_from_payload(payload: Mapping[str, Any]) -> _CandidateSnapshot | None:
+    name = str(payload.get("name", "") or "").strip()
+    if not name:
+        return None
+    return _CandidateSnapshot(
+        name=name,
+        mean_expectancy_bps=_coerce_finite_float(
+            payload.get("mean_expectancy_bps"),
+            default=0.0,
+        ),
+        max_drawdown_bps=_coerce_finite_float(
+            payload.get("max_drawdown_bps"),
+            default=0.0,
+        ),
+        turnover_ratio=_coerce_finite_float(
+            payload.get("turnover_ratio"),
+            default=0.0,
+        ),
+        hit_rate_stability=_coerce_finite_float(
+            payload.get("hit_rate_stability"),
+            default=0.0,
+        ),
+        brier_score=_coerce_finite_float(
+            payload.get("brier_score"),
+            default=1.0,
+        ),
+        support=max(0, int(_coerce_finite_float(payload.get("support"), default=0.0))),
+        profitable_fold_ratio=_coerce_finite_float(
+            payload.get("profitable_fold_ratio"),
+            default=0.0,
+        ),
+    )
+
+
+def _report_snapshot_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    source: str,
+) -> _ReportSnapshot | None:
+    ts = _parse_ts(payload.get("ts"))
+    if ts is None:
+        return None
+    raw_candidates = payload.get("candidate_metrics")
+    candidates: list[_CandidateSnapshot] = []
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates:
+            if not isinstance(item, Mapping):
+                continue
+            parsed = _report_candidate_from_payload(item)
+            if parsed is not None:
+                candidates.append(parsed)
+    if not candidates:
+        return None
+    model_name = ""
+    model_payload = payload.get("model")
+    if isinstance(model_payload, Mapping):
+        model_name = str(model_payload.get("name", "") or "").strip()
+    if not model_name:
+        for item in raw_candidates if isinstance(raw_candidates, list) else []:
+            if isinstance(item, Mapping) and bool(item.get("selected")):
+                model_name = str(item.get("name", "") or "").strip()
+                if model_name:
+                    break
+    if not model_name:
+        model_name = candidates[0].name
+    selected = next((item for item in candidates if item.name == model_name), candidates[0])
+    metrics_payload = payload.get("metrics")
+    metrics = metrics_payload if isinstance(metrics_payload, Mapping) else {}
+    return _ReportSnapshot(
+        ts=ts,
+        source=source,
+        model_name=model_name,
+        mean_expectancy_bps=_coerce_finite_float(
+            metrics.get("mean_expectancy_bps"),
+            default=selected.mean_expectancy_bps,
+        ),
+        hit_rate_stability=_coerce_finite_float(
+            metrics.get("hit_rate_stability"),
+            default=selected.hit_rate_stability,
+        ),
+        brier_score=_coerce_finite_float(
+            metrics.get("brier_score"),
+            default=selected.brier_score,
+        ),
+        candidates=candidates,
+    )
+
+
+def _recent_report_snapshots(
+    *,
+    report_dir: Path,
+    max_reports: int,
+    pending_report: Mapping[str, Any] | None = None,
+) -> list[_ReportSnapshot]:
+    snapshots: list[_ReportSnapshot] = []
+    if report_dir.exists():
+        report_paths = sorted(report_dir.glob("after_hours_training_*.json"))
+        for report_path in report_paths[-max_reports:]:
+            try:
+                payload = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, Mapping):
+                continue
+            parsed = _report_snapshot_from_payload(payload, source=str(report_path))
+            if parsed is not None:
+                snapshots.append(parsed)
+    if isinstance(pending_report, Mapping):
+        parsed_pending = _report_snapshot_from_payload(pending_report, source="<pending>")
+        if parsed_pending is not None:
+            snapshots.append(parsed_pending)
+    snapshots.sort(key=lambda item: item.ts)
+    if len(snapshots) > max_reports:
+        return snapshots[-max_reports:]
+    return snapshots
+
+
+def _drift_breach_summary(reports: list[_ReportSnapshot]) -> dict[str, Any]:
+    baseline_window = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_RETUNE_BASELINE_WINDOW", 5, cast=int)),
+    )
+    recent_window = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_RETUNE_RECENT_WINDOW", 2, cast=int)),
+    )
+    min_reports = max(
+        3,
+        int(get_env("AI_TRADING_AFTER_HOURS_RETUNE_MIN_REPORTS", 8, cast=int)),
+    )
+    summary: dict[str, Any] = {
+        "ready": False,
+        "breached": False,
+        "report_count": int(len(reports)),
+        "baseline_window": int(baseline_window),
+        "recent_window": int(recent_window),
+        "min_reports": int(min_reports),
+        "gates": {},
+    }
+    if len(reports) < min_reports or len(reports) <= recent_window:
+        summary["reason"] = "insufficient_reports"
+        return summary
+    baseline_count = min(baseline_window, len(reports) - recent_window)
+    if baseline_count <= 0:
+        summary["reason"] = "insufficient_baseline_window"
+        return summary
+    baseline_reports = reports[-(recent_window + baseline_count) : -recent_window]
+    recent_reports = reports[-recent_window:]
+    baseline_brier = float(mean(item.brier_score for item in baseline_reports))
+    recent_brier = float(mean(item.brier_score for item in recent_reports))
+    baseline_expectancy = float(mean(item.mean_expectancy_bps for item in baseline_reports))
+    recent_expectancy = float(mean(item.mean_expectancy_bps for item in recent_reports))
+    baseline_stability = float(mean(item.hit_rate_stability for item in baseline_reports))
+    recent_stability = float(mean(item.hit_rate_stability for item in recent_reports))
+    brier_drift_pct = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_BRIER_DRIFT_PCT", 0.15, cast=float)),
+        low=0.0,
+        high=10.0,
+    )
+    brier_abs_threshold = _clamp(
+        float(
+            get_env("AI_TRADING_AFTER_HOURS_RETUNE_BRIER_ABS_THRESHOLD", 0.25, cast=float)
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    expectancy_drop_bps = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_EXPECTANCY_DROP_BPS", 5.0, cast=float)),
+        low=0.0,
+        high=500.0,
+    )
+    stability_drop = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_STABILITY_DROP", 0.08, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+    brier_gate = (
+        recent_brier >= brier_abs_threshold
+        if baseline_brier <= 0.0
+        else recent_brier > (baseline_brier * (1.0 + brier_drift_pct))
+    )
+    expectancy_gate = recent_expectancy < (baseline_expectancy - expectancy_drop_bps)
+    stability_gate = recent_stability < (baseline_stability - stability_drop)
+    gates = {
+        "brier_drift": bool(brier_gate),
+        "expectancy_drop": bool(expectancy_gate),
+        "stability_drop": bool(stability_gate),
+    }
+    summary.update(
+        {
+            "ready": True,
+            "breached": any(gates.values()),
+            "gates": gates,
+            "baseline": {
+                "brier_score": baseline_brier,
+                "mean_expectancy_bps": baseline_expectancy,
+                "hit_rate_stability": baseline_stability,
+                "sample": len(baseline_reports),
+            },
+            "recent": {
+                "brier_score": recent_brier,
+                "mean_expectancy_bps": recent_expectancy,
+                "hit_rate_stability": recent_stability,
+                "sample": len(recent_reports),
+            },
+            "thresholds": {
+                "brier_drift_pct": brier_drift_pct,
+                "brier_abs_threshold": brier_abs_threshold,
+                "expectancy_drop_bps": expectancy_drop_bps,
+                "stability_drop": stability_drop,
+            },
+        }
+    )
+    return summary
+
+
+def _evaluate_weight_configuration(
+    reports: list[_ReportSnapshot],
+    *,
+    selection_weights: Mapping[str, float],
+    eval_weights: Mapping[str, float],
+    reference_weights: Mapping[str, float],
+    regularization: float,
+) -> float:
+    utilities: list[float] = []
+    for report in reports:
+        if not report.candidates:
+            continue
+        selected = max(
+            report.candidates,
+            key=lambda item: (
+                _candidate_selection_score_from_snapshot(item, weights=selection_weights),
+                item.mean_expectancy_bps,
+                -item.max_drawdown_bps,
+                item.support,
+            ),
+        )
+        utilities.append(_selection_utility(selected, eval_weights=eval_weights))
+    if not utilities:
+        return -float("inf")
+    deviation = sum(
+        abs(float(selection_weights[key]) - float(reference_weights[key]))
+        for key in reference_weights
+    )
+    return float(mean(utilities)) - (float(regularization) * float(deviation))
+
+
+def _retune_selection_weights(
+    reports: list[_ReportSnapshot],
+    *,
+    current_weights: Mapping[str, float],
+) -> dict[str, Any]:
+    normalized_current = _normalize_model_selection_weights(current_weights)
+    eval_weights = _selection_eval_weights()
+    regularization = max(
+        0.0,
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_WEIGHT_REGULARIZATION", 0.2, cast=float)),
+    )
+    search_rounds = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_RETUNE_SEARCH_ROUNDS", 4, cast=int)),
+    )
+    factor_values = [
+        value
+        for value in _parse_float_grid(
+            str(
+                get_env(
+                    "AI_TRADING_AFTER_HOURS_RETUNE_SEARCH_FACTORS",
+                    "0.5,0.75,1.0,1.25,1.5,2.0",
+                    cast=str,
+                )
+                or ""
+            ),
+            fallback=(0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
+        )
+        if value > 0.0 and math.isfinite(value)
+    ]
+    if not factor_values:
+        factor_values = [1.0]
+    bounds = _model_selection_weight_bounds()
+    baseline_score = _evaluate_weight_configuration(
+        reports,
+        selection_weights=normalized_current,
+        eval_weights=eval_weights,
+        reference_weights=normalized_current,
+        regularization=regularization,
+    )
+    best_weights = dict(normalized_current)
+    best_score = float(baseline_score)
+    tolerance = float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_SEARCH_TOLERANCE", 1e-9, cast=float))
+    for _ in range(search_rounds):
+        improved = False
+        for key, (low, high) in bounds.items():
+            base_value = float(best_weights[key])
+            candidate_values = {
+                _clamp(base_value * factor, low=low, high=high) for factor in factor_values
+            }
+            candidate_values.add(base_value)
+            local_best_score = best_score
+            local_best_weights = dict(best_weights)
+            for candidate_value in sorted(candidate_values):
+                trial = dict(best_weights)
+                trial[key] = float(candidate_value)
+                trial_score = _evaluate_weight_configuration(
+                    reports,
+                    selection_weights=trial,
+                    eval_weights=eval_weights,
+                    reference_weights=normalized_current,
+                    regularization=regularization,
+                )
+                if trial_score > (local_best_score + tolerance):
+                    local_best_score = float(trial_score)
+                    local_best_weights = trial
+            if local_best_score > (best_score + tolerance):
+                best_score = local_best_score
+                best_weights = local_best_weights
+                improved = True
+        if not improved:
+            break
+    min_improvement = max(
+        0.0,
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_MIN_UTILITY_IMPROVEMENT", 0.02, cast=float)),
+    )
+    max_relative_change = max(
+        (
+            abs(best_weights[key] - normalized_current[key]) / max(abs(normalized_current[key]), 1e-9)
+            for key in normalized_current
+        ),
+        default=0.0,
+    )
+    min_weight_change_pct = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_RETUNE_MIN_WEIGHT_CHANGE_PCT", 0.05, cast=float)),
+        low=0.0,
+        high=10.0,
+    )
+    improved_enough = best_score >= (baseline_score + min_improvement)
+    moved_enough = max_relative_change >= min_weight_change_pct
+    retuned = bool(improved_enough and moved_enough)
+    return {
+        "retuned": retuned,
+        "baseline_score": float(baseline_score),
+        "best_score": float(best_score),
+        "min_improvement": float(min_improvement),
+        "max_relative_change": float(max_relative_change),
+        "min_weight_change_pct": float(min_weight_change_pct),
+        "weights": dict(best_weights if retuned else normalized_current),
+        "search_rounds": int(search_rounds),
+        "search_factors": list(factor_values),
+        "eval_weights": dict(eval_weights),
+    }
+
+
+def _write_model_selection_overrides(
+    *,
+    now_utc: datetime,
+    weights: Mapping[str, float],
+    drift_summary: Mapping[str, Any],
+) -> Path:
+    requested_path = _model_selection_overrides_path()
+    fallback_path = (paths.DATA_DIR / "runtime/model_selection_overrides.json").resolve()
+    writable_dir = _resolve_writable_output_dir(
+        requested=requested_path.parent,
+        fallback=fallback_path.parent,
+        event_name="AFTER_HOURS_SELECTION_OVERRIDE_PATH_FALLBACK",
+    )
+    if writable_dir == requested_path.parent:
+        target_path = requested_path
+    elif writable_dir == fallback_path.parent:
+        target_path = fallback_path
+    else:
+        target_path = writable_dir / requested_path.name
+    payload = {
+        "updated_at": now_utc.isoformat(),
+        "weights": _normalize_model_selection_weights(weights),
+        "drift_summary": dict(drift_summary),
+    }
+    return _write_json(target_path, payload)
+
+
+def _maybe_retune_model_selection_weights(
+    *,
+    now_utc: datetime,
+    report_dir: Path,
+    pending_report: Mapping[str, Any] | None,
+    current_weights: Mapping[str, float],
+) -> dict[str, Any]:
+    enabled = bool(get_env("AI_TRADING_AFTER_HOURS_RETUNE_ENABLED", True, cast=bool))
+    summary: dict[str, Any] = {
+        "enabled": enabled,
+        "retuned": False,
+        "drift_summary": {},
+    }
+    if not enabled:
+        summary["reason"] = "disabled"
+        return summary
+    max_reports = max(
+        3,
+        int(get_env("AI_TRADING_AFTER_HOURS_RETUNE_MAX_REPORTS", 60, cast=int)),
+    )
+    report_snapshots = _recent_report_snapshots(
+        report_dir=report_dir,
+        max_reports=max_reports,
+        pending_report=pending_report,
+    )
+    drift_summary = _drift_breach_summary(report_snapshots)
+    summary["drift_summary"] = drift_summary
+    summary["report_count"] = len(report_snapshots)
+    if not bool(drift_summary.get("ready", False)):
+        summary["reason"] = str(drift_summary.get("reason", "not_ready"))
+        return summary
+    if not bool(drift_summary.get("breached", False)):
+        summary["reason"] = "no_drift_breach"
+        return summary
+    tuning = _retune_selection_weights(
+        report_snapshots,
+        current_weights=current_weights,
+    )
+    summary["tuning"] = tuning
+    if not bool(tuning.get("retuned", False)):
+        summary["reason"] = "no_material_improvement"
+        return summary
+    override_path = _write_model_selection_overrides(
+        now_utc=now_utc,
+        weights=tuning["weights"],
+        drift_summary=drift_summary,
+    )
+    summary.update(
+        {
+            "retuned": True,
+            "reason": "drift_breach",
+            "override_path": str(override_path),
+            "weights": dict(tuning["weights"]),
+        }
+    )
+    return summary
 
 
 def _threshold_by_regime(
@@ -1222,6 +1965,12 @@ def _promotion_gate_bundle(
 def _candidate_names() -> list[str]:
     names: list[str] = ["logreg"]
     try:
+        from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: F401
+    except Exception:
+        pass
+    else:
+        names.append("histgb")
+    try:
         import lightgbm  # noqa: F401
     except Exception:
         pass
@@ -1240,11 +1989,13 @@ def _serialize_candidate_metrics(
     candidates: list[CandidateMetrics],
     *,
     best_name: str,
+    selection_weights: Mapping[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     ranked = sorted(
         candidates,
         key=lambda item: (
+            _candidate_selection_score(item, weights=selection_weights),
             item.mean_expectancy_bps,
             -item.max_drawdown_bps,
             item.support,
@@ -1266,6 +2017,8 @@ def _serialize_candidate_metrics(
                 "turnover_ratio": item.turnover_ratio,
                 "mean_hit_rate": item.mean_hit_rate,
                 "hit_rate_stability": item.hit_rate_stability,
+                "brier_score": item.brier_score,
+                "selection_score": _candidate_selection_score(item, weights=selection_weights),
                 "regime_metrics": item.regime_metrics,
             }
         )
@@ -1458,7 +2211,10 @@ def _maybe_train_rl_overlay(
             "recommend_use_rl_agent": False,
             "error": str(exc),
         }
-    data = dataset.loc[:, FEATURE_COLUMNS].astype(float).to_numpy()
+    rl_dataset = dataset
+    if any(column not in rl_dataset.columns for column in FEATURE_COLUMNS):
+        rl_dataset = _augment_training_features(rl_dataset.copy())
+    data = rl_dataset.reindex(columns=list(FEATURE_COLUMNS)).astype(float).to_numpy()
     close_series = dataset.get("close")
     if close_series is not None:
         close_prices = close_series.astype(float).to_numpy()
@@ -1693,13 +2449,20 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "reason": "no_candidate_models",
             "timestamp": now_utc.isoformat(),
         }
+    selection_weights = _resolved_model_selection_weights()
     best = max(
         candidate_results,
-        key=lambda item: (item.mean_expectancy_bps, -item.max_drawdown_bps, item.support),
+        key=lambda item: (
+            _candidate_selection_score(item, weights=selection_weights),
+            item.mean_expectancy_bps,
+            -item.max_drawdown_bps,
+            item.support,
+        ),
     )
     candidate_metrics_payload = _serialize_candidate_metrics(
         candidate_results,
         best_name=best.name,
+        selection_weights=selection_weights,
     )
     requested_report_dir = _resolve_after_hours_output_path(
         str(get_env("AI_TRADING_AFTER_HOURS_REPORT_DIR", "runtime/research_reports", cast=str) or ""),
@@ -1800,6 +2563,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "model_path": str(model_path),
             "fill_quality": fill_quality,
             "sensitivity_sweep": sensitivity_sweep,
+            "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "manifest_metadata": manifest_metadata,
         },
         dataset_fingerprint=dataset_fp,
@@ -1825,6 +2589,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "turnover_ratio": best.turnover_ratio,
                 "mean_hit_rate": best.mean_hit_rate,
                 "hit_rate_stability": best.hit_rate_stability,
+                "brier_score": best.brier_score,
+                "selection_score": _candidate_selection_score(best, weights=selection_weights),
                 "profitable_fold_count": best.profitable_fold_count,
                 "profitable_fold_ratio": best.profitable_fold_ratio,
             },
@@ -1864,6 +2630,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "turnover_ratio": best.turnover_ratio,
             "mean_hit_rate": best.mean_hit_rate,
             "hit_rate_stability": best.hit_rate_stability,
+            "brier_score": best.brier_score,
+            "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "fold_count": best.fold_count,
             "profitable_fold_count": best.profitable_fold_count,
             "profitable_fold_ratio": best.profitable_fold_ratio,
@@ -1878,11 +2646,27 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "promotion": promotion,
         "prior_model_metrics": prior_model_metrics,
         "rl_overlay": rl_overlay,
+        "selection_weights": dict(selection_weights),
         "runtime_promotion": {
             "model_path": promoted_model_path,
             "manifest_path": promoted_manifest_path,
         },
     }
+    model_selection_retune = _maybe_retune_model_selection_weights(
+        now_utc=now_utc,
+        report_dir=report_dir,
+        pending_report=report,
+        current_weights=selection_weights,
+    )
+    report["model_selection_retune"] = model_selection_retune
+    if bool(model_selection_retune.get("retuned", False)):
+        logger.info(
+            "AFTER_HOURS_SELECTION_RETUNED",
+            extra={
+                "override_path": str(model_selection_retune.get("override_path", "")),
+                "report_count": int(model_selection_retune.get("report_count", 0) or 0),
+            },
+        )
     report_path = _write_json(
         report_dir / f"after_hours_training_{now_utc.strftime('%Y%m%d')}.json",
         report,
@@ -1894,6 +2678,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "model_name": best.name,
             "rows": int(len(dataset)),
             "expectancy_bps": best.mean_expectancy_bps,
+            "brier_score": best.brier_score,
+            "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "report_path": str(report_path),
             "governance_status": status,
         },
@@ -1909,9 +2695,13 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "governance_status": status,
         "edge_gates": gate_map,
         "rows": int(len(dataset)),
+        "selection_score": _candidate_selection_score(best, weights=selection_weights),
+        "brier_score": best.brier_score,
         "candidate_metrics": candidate_metrics_payload,
         "sensitivity_sweep": sensitivity_sweep,
         "prior_model_metrics": prior_model_metrics,
+        "selection_weights": dict(selection_weights),
+        "model_selection_retune": model_selection_retune,
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
         "promotion": promotion,

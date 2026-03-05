@@ -13549,6 +13549,7 @@ class SignalManager:
                 feat = list(model.feature_names_in_)
             else:
                 feat = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
+            df = _augment_ml_inference_features(df, feat)
             missing = [column for column in feat if column not in df.columns]
             if missing:
                 logger.error(
@@ -19578,6 +19579,71 @@ def _build_feature_frames(
         if len(_FEATURE_CACHE) > _FEATURE_CACHE_LIMIT:
             _FEATURE_CACHE.popitem(last=False)
         return raw_df, feat_df, None
+
+
+def _augment_ml_inference_features(df: pd.DataFrame, feature_names: list[str]) -> pd.DataFrame:
+    """Derive compact fallback features expected by after-hours trained models."""
+
+    if not feature_names:
+        return df
+    required = {str(name) for name in feature_names}
+    if required.issubset(set(df.columns)):
+        return df
+
+    frame = df.copy()
+    close = pd.to_numeric(frame.get("close"), errors="coerce") if "close" in frame.columns else None
+    close_abs = close.abs().replace(0.0, np.nan) if close is not None else None
+
+    if "signal" in required and "signal" not in frame.columns:
+        if "macds" in frame.columns:
+            frame["signal"] = pd.to_numeric(frame["macds"], errors="coerce")
+        elif "macd" in frame.columns:
+            frame["signal"] = pd.to_numeric(frame["macd"], errors="coerce")
+
+    if "atr_pct" in required and "atr_pct" not in frame.columns:
+        if close_abs is not None and "atr" in frame.columns:
+            atr = pd.to_numeric(frame["atr"], errors="coerce")
+            frame["atr_pct"] = (atr / close_abs) * 100.0
+
+    if "vwap_distance" in required and "vwap_distance" not in frame.columns:
+        if close is not None and "vwap" in frame.columns:
+            vwap = pd.to_numeric(frame["vwap"], errors="coerce").replace(0.0, np.nan)
+            frame["vwap_distance"] = (close / vwap) - 1.0
+
+    if "sma_spread" in required and "sma_spread" not in frame.columns:
+        if close_abs is not None and "sma_50" in frame.columns and "sma_200" in frame.columns:
+            sma_50 = pd.to_numeric(frame["sma_50"], errors="coerce")
+            sma_200 = pd.to_numeric(frame["sma_200"], errors="coerce")
+            frame["sma_spread"] = (sma_50 - sma_200) / close_abs
+
+    if "macd_signal_gap" in required and "macd_signal_gap" not in frame.columns:
+        if "macd" in frame.columns:
+            macd = pd.to_numeric(frame["macd"], errors="coerce")
+            if "signal" in frame.columns:
+                signal = pd.to_numeric(frame["signal"], errors="coerce")
+            elif "macds" in frame.columns:
+                signal = pd.to_numeric(frame["macds"], errors="coerce")
+            else:
+                signal = macd
+            frame["macd_signal_gap"] = macd - signal
+
+    if "rsi_centered" in required and "rsi_centered" not in frame.columns and "rsi" in frame.columns:
+        rsi = pd.to_numeric(frame["rsi"], errors="coerce")
+        frame["rsi_centered"] = (rsi - 50.0) / 50.0
+
+    for column in (
+        "signal",
+        "atr_pct",
+        "vwap_distance",
+        "sma_spread",
+        "macd_signal_gap",
+        "rsi_centered",
+    ):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+    return frame
 
 
 def _model_feature_names(model) -> list[str]:

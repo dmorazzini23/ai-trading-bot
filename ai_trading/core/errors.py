@@ -73,7 +73,20 @@ def _is_auth(exc: Exception) -> bool:
     code = _status_code(exc)
     if code in {401, 403}:
         return True
-    return any(_has_text(exc, token) for token in ("unauthorized", "forbidden", "auth"))
+    return any(
+        _has_text(exc, token)
+        for token in (
+            "unauthorized",
+            "forbidden",
+            "authentication",
+            "authorization",
+            "auth failed",
+            "invalid api key",
+            "missing api key",
+            "missing credentials",
+            "permission denied",
+        )
+    )
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -143,6 +156,17 @@ def classify_exception(
         details["status_code"] = status_code
 
     if _is_auth(exc):
+        dependency_lc = (dependency or "").lower()
+        if dependency_lc.startswith("data_") or dependency_lc.startswith("quotes_"):
+            return ErrorInfo(
+                category=ErrorCategory.AUTH,
+                scope=scope,
+                action=ErrorAction.DISABLE_PROVIDER,
+                retryable=False,
+                dependency=dependency,
+                reason_code="AUTH_PROVIDER_DISABLE",
+                details=details,
+            )
         return ErrorInfo(
             category=ErrorCategory.AUTH,
             scope=scope,

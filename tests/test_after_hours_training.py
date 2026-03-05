@@ -54,6 +54,293 @@ def _synthetic_daily(symbol: str):
     )
 
 
+def _write_after_hours_report(
+    path: Path,
+    *,
+    ts: datetime,
+    model_name: str,
+    mean_expectancy_bps: float,
+    hit_rate_stability: float,
+    brier_score: float,
+    candidates: list[dict[str, object]],
+) -> None:
+    payload = {
+        "ts": ts.isoformat(),
+        "model": {"name": model_name},
+        "metrics": {
+            "mean_expectancy_bps": float(mean_expectancy_bps),
+            "hit_rate_stability": float(hit_rate_stability),
+            "brier_score": float(brier_score),
+        },
+        "candidate_metrics": candidates,
+    }
+    path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
+
+
+def test_build_symbol_dataset_adds_derived_feature_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+    dataset = after_hours._build_symbol_dataset(
+        "AAPL",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, tzinfo=UTC),
+        cost_floor_bps=8.0,
+    )
+    assert not dataset.empty
+    for column in (
+        "signal",
+        "atr_pct",
+        "vwap_distance",
+        "sma_spread",
+        "macd_signal_gap",
+        "rsi_centered",
+    ):
+        assert column in dataset.columns
+        assert np.isfinite(dataset[column].to_numpy()).all()
+
+
+def test_candidate_selection_score_penalizes_poor_calibration() -> None:
+    strong = after_hours.CandidateMetrics(
+        name="model_a",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=150,
+        mean_expectancy_bps=1.8,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.3,
+        mean_hit_rate=0.56,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.12,
+    )
+    weak = after_hours.CandidateMetrics(
+        name="model_b",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=150,
+        mean_expectancy_bps=1.8,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.3,
+        mean_hit_rate=0.56,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.34,
+    )
+
+    assert after_hours._candidate_selection_score(strong) > after_hours._candidate_selection_score(
+        weak
+    )
+
+
+def test_candidate_selection_score_honors_runtime_weight_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggressive_expectancy = after_hours.CandidateMetrics(
+        name="aggressive",
+        fold_count=5,
+        profitable_fold_count=3,
+        profitable_fold_ratio=0.6,
+        support=120,
+        mean_expectancy_bps=4.5,
+        max_drawdown_bps=180.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.52,
+        hit_rate_stability=0.5,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.45,
+    )
+    calibrated = after_hours.CandidateMetrics(
+        name="calibrated",
+        fold_count=5,
+        profitable_fold_count=3,
+        profitable_fold_ratio=0.6,
+        support=120,
+        mean_expectancy_bps=2.2,
+        max_drawdown_bps=180.0,
+        turnover_ratio=0.2,
+        mean_hit_rate=0.52,
+        hit_rate_stability=0.5,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.4, 0.6], dtype=float),
+        brier_score=0.05,
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_ENABLED", "0")
+    baseline_aggressive = after_hours._candidate_selection_score(aggressive_expectancy)
+    baseline_calibrated = after_hours._candidate_selection_score(calibrated)
+    assert baseline_aggressive > baseline_calibrated
+    override_path = tmp_path / "selection_overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "weights": {
+                    "drawdown_penalty": 0.003,
+                    "turnover_penalty": 0.75,
+                    "brier_penalty": 30.0,
+                    "stability_weight": 0.5,
+                    "support_log_weight": 0.05,
+                    "profitable_fold_weight": 0.5,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_PATH",
+        str(override_path),
+    )
+    overridden_aggressive = after_hours._candidate_selection_score(aggressive_expectancy)
+    overridden_calibrated = after_hours._candidate_selection_score(calibrated)
+    assert overridden_aggressive < overridden_calibrated
+
+
+def test_model_selection_retune_skips_without_drift_breach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime(2026, 1, 10, 21, 15, tzinfo=UTC)
+    for idx in range(8):
+        ts = now - timedelta(days=8 - idx)
+        _write_after_hours_report(
+            report_dir / f"after_hours_training_202601{idx + 1:02d}.json",
+            ts=ts,
+            model_name="logreg",
+            mean_expectancy_bps=18.0,
+            hit_rate_stability=0.79,
+            brier_score=0.16,
+            candidates=[
+                {
+                    "name": "logreg",
+                    "selected": True,
+                    "mean_expectancy_bps": 18.0,
+                    "max_drawdown_bps": 240.0,
+                    "turnover_ratio": 0.18,
+                    "hit_rate_stability": 0.79,
+                    "brier_score": 0.16,
+                    "support": 160,
+                    "profitable_fold_ratio": 0.8,
+                },
+                {
+                    "name": "xgboost",
+                    "selected": False,
+                    "mean_expectancy_bps": 16.0,
+                    "max_drawdown_bps": 220.0,
+                    "turnover_ratio": 0.16,
+                    "hit_rate_stability": 0.8,
+                    "brier_score": 0.15,
+                    "support": 160,
+                    "profitable_fold_ratio": 0.82,
+                },
+            ],
+        )
+    override_path = tmp_path / "runtime" / "model_selection_overrides.json"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_REPORTS", "6")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_BASELINE_WINDOW", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_RECENT_WINDOW", "2")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_PATH",
+        str(override_path),
+    )
+    summary = after_hours._maybe_retune_model_selection_weights(
+        now_utc=now,
+        report_dir=report_dir,
+        pending_report=None,
+        current_weights=after_hours._resolved_model_selection_weights(),
+    )
+    assert summary["retuned"] is False
+    assert summary["reason"] == "no_drift_breach"
+    assert not override_path.exists()
+
+
+def test_model_selection_retune_writes_overrides_on_drift_breach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime(2026, 1, 10, 21, 15, tzinfo=UTC)
+    for idx in range(9):
+        ts = now - timedelta(days=9 - idx)
+        degraded = idx >= 6
+        _write_after_hours_report(
+            report_dir / f"after_hours_training_202602{idx + 1:02d}.json",
+            ts=ts,
+            model_name="logreg",
+            mean_expectancy_bps=(8.0 if degraded else 20.0),
+            hit_rate_stability=(0.62 if degraded else 0.82),
+            brier_score=(0.34 if degraded else 0.11),
+            candidates=[
+                {
+                    "name": "logreg",
+                    "selected": True,
+                    "mean_expectancy_bps": 20.0,
+                    "max_drawdown_bps": 450.0,
+                    "turnover_ratio": 0.25,
+                    "hit_rate_stability": 0.4,
+                    "brier_score": 0.5,
+                    "support": 120,
+                    "profitable_fold_ratio": 0.4,
+                },
+                {
+                    "name": "xgboost",
+                    "selected": False,
+                    "mean_expectancy_bps": 14.0,
+                    "max_drawdown_bps": 150.0,
+                    "turnover_ratio": 0.1,
+                    "hit_rate_stability": 0.8,
+                    "brier_score": 0.05,
+                    "support": 120,
+                    "profitable_fold_ratio": 0.8,
+                },
+            ],
+        )
+    override_path = tmp_path / "runtime" / "model_selection_overrides.json"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_REPORTS", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_BASELINE_WINDOW", "5")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_RECENT_WINDOW", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_BRIER_DRIFT_PCT", "0.1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EXPECTANCY_DROP_BPS", "4.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_STABILITY_DROP", "0.05")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_DRAWDOWN_PENALTY", "0.02")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_BRIER_PENALTY", "30.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_EVAL_TURNOVER_PENALTY", "1.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_WEIGHT_REGULARIZATION", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_UTILITY_IMPROVEMENT", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_MIN_WEIGHT_CHANGE_PCT", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RETUNE_SEARCH_FACTORS", "0.5,1.0,1.5,2.0,3.0")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_MODEL_SELECTION_OVERRIDES_PATH",
+        str(override_path),
+    )
+    summary = after_hours._maybe_retune_model_selection_weights(
+        now_utc=now,
+        report_dir=report_dir,
+        pending_report=None,
+        current_weights=after_hours._resolved_model_selection_weights(),
+    )
+    assert summary["retuned"] is True
+    assert summary["reason"] == "drift_breach"
+    assert Path(summary["override_path"]).exists()
+    payload = json.loads(Path(summary["override_path"]).read_text(encoding="utf-8"))
+    assert "weights" in payload
+    assert payload["weights"] != after_hours._model_selection_default_weights()
+
+
 def test_after_hours_training_skips_before_close() -> None:
     result = after_hours.run_after_hours_training(
         now=datetime(2026, 1, 6, 19, 0, tzinfo=UTC),  # 14:00 New York

@@ -20,6 +20,13 @@ def test_classify_auth_halts() -> None:
     assert info.reason_code == "AUTH_HALT"
 
 
+def test_classify_data_auth_disables_provider() -> None:
+    info = classify_exception(_HttpError(403, "forbidden"), dependency="data_primary")
+    assert info.category is ErrorCategory.AUTH
+    assert info.action is ErrorAction.DISABLE_PROVIDER
+    assert info.reason_code == "AUTH_PROVIDER_DISABLE"
+
+
 def test_classify_rate_limit_retries() -> None:
     info = classify_exception(_HttpError(429, "too many requests"), dependency="data_primary")
     assert info.category is ErrorCategory.RATE_LIMIT
@@ -36,4 +43,10 @@ def test_classify_programming_halts() -> None:
 def test_classify_invariant_halts() -> None:
     info = classify_exception(ValueError("nan encountered in netting"), dependency="broker_positions")
     assert info.category is ErrorCategory.INVARIANT_VIOLATION
+    assert info.action is ErrorAction.HALT_TRADING
+
+
+def test_auth_matcher_does_not_trigger_on_non_auth_words() -> None:
+    info = classify_exception(RuntimeError("authoritative source mismatch"), dependency="data_primary")
+    assert info.category is ErrorCategory.UNKNOWN
     assert info.action is ErrorAction.HALT_TRADING

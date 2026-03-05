@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
+from functools import lru_cache
+import math
 from typing import Any, Iterable
 
 
@@ -87,6 +89,135 @@ class DecisionRecord:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class NettingCostParams:
+    base_bps: float
+    min_bps: float
+    max_bps: float
+    spread_proxy_ratio: float
+    spread_fallback_bps: float
+    spread_bps_cap: float
+    spread_weight: float
+    vol_proxy_ratio: float
+    vol_fallback_bps: float
+    vol_bps_cap: float
+    vol_weight: float
+    participation_weight: float
+    participation_bps_cap: float
+
+
+def _bounded_float(
+    value: Any,
+    *,
+    default: float,
+    min_value: float,
+    max_value: float,
+) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = float(default)
+    if not math.isfinite(parsed):
+        parsed = float(default)
+    return max(min_value, min(max_value, parsed))
+
+
+@lru_cache(maxsize=1)
+def _netting_cost_params() -> NettingCostParams:
+    # Import lazily to avoid config import work during module import.
+    from ai_trading.config.management import get_env
+
+    def _cfg(
+        key: str,
+        default: float,
+        *,
+        min_value: float,
+        max_value: float,
+    ) -> float:
+        raw = get_env(key, default, cast=float)
+        return _bounded_float(
+            raw,
+            default=default,
+            min_value=min_value,
+            max_value=max_value,
+        )
+
+    min_bps = _cfg("AI_TRADING_NETTING_COST_MIN_BPS", 1.0, min_value=0.0, max_value=500.0)
+    max_bps = _cfg("AI_TRADING_NETTING_COST_MAX_BPS", 25.0, min_value=0.0, max_value=1000.0)
+    if max_bps < min_bps:
+        max_bps = min_bps
+    return NettingCostParams(
+        base_bps=_cfg("AI_TRADING_NETTING_COST_BASE_BPS", 2.0, min_value=0.0, max_value=200.0),
+        min_bps=min_bps,
+        max_bps=max_bps,
+        spread_proxy_ratio=_cfg(
+            "AI_TRADING_NETTING_SPREAD_PROXY_RATIO",
+            0.12,
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        spread_fallback_bps=_cfg(
+            "AI_TRADING_NETTING_SPREAD_FALLBACK_BPS",
+            2.0,
+            min_value=0.0,
+            max_value=200.0,
+        ),
+        spread_bps_cap=_cfg(
+            "AI_TRADING_NETTING_SPREAD_BPS_CAP",
+            20.0,
+            min_value=0.0,
+            max_value=1000.0,
+        ),
+        spread_weight=_cfg(
+            "AI_TRADING_NETTING_SPREAD_WEIGHT",
+            0.60,
+            min_value=0.0,
+            max_value=10.0,
+        ),
+        vol_proxy_ratio=_cfg(
+            "AI_TRADING_NETTING_VOL_PROXY_RATIO",
+            0.10,
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        vol_fallback_bps=_cfg(
+            "AI_TRADING_NETTING_VOL_FALLBACK_BPS",
+            1.0,
+            min_value=0.0,
+            max_value=200.0,
+        ),
+        vol_bps_cap=_cfg(
+            "AI_TRADING_NETTING_VOL_BPS_CAP",
+            15.0,
+            min_value=0.0,
+            max_value=1000.0,
+        ),
+        vol_weight=_cfg(
+            "AI_TRADING_NETTING_VOL_WEIGHT",
+            0.35,
+            min_value=0.0,
+            max_value=10.0,
+        ),
+        participation_weight=_cfg(
+            "AI_TRADING_NETTING_PARTICIPATION_WEIGHT",
+            1.25,
+            min_value=0.0,
+            max_value=20.0,
+        ),
+        participation_bps_cap=_cfg(
+            "AI_TRADING_NETTING_PARTICIPATION_BPS_CAP",
+            20.0,
+            min_value=0.0,
+            max_value=1000.0,
+        ),
+    )
+
+
+def clear_netting_cost_cache() -> None:
+    """Test hook for forcing cost parameter reload."""
+    _netting_cost_params.cache_clear()
+
+
 def compute_sleeve_target_dollars(
     cfg: SleeveConfig,
     score: float,
@@ -131,16 +262,40 @@ def estimate_cost_bps(
 ) -> float:
     if price <= 0:
         return 0.0
-    spread_bps = 5.0
+    params = _netting_cost_params()
+
+    spread_bps = params.spread_fallback_bps
     if spread is not None and spread > 0:
-        spread_bps = min(100.0, (spread / price) * 10000.0)
-    vol_bps = 5.0
+        raw_spread_bps = max(0.0, (float(spread) / float(price)) * 10_000.0)
+        spread_bps = min(
+            params.spread_bps_cap,
+            raw_spread_bps * params.spread_proxy_ratio,
+        )
+
+    vol_bps = params.vol_fallback_bps
     if vol is not None and vol > 0:
-        vol_bps = min(100.0, vol * 10000.0)
-    size_bps = 0.0
+        raw_vol_bps = max(0.0, float(vol) * 10_000.0)
+        vol_bps = min(
+            params.vol_bps_cap,
+            raw_vol_bps * params.vol_proxy_ratio,
+        )
+
+    participation_bps = 0.0
     if volume and volume > 0 and size_dollars > 0:
-        size_bps = min(100.0, (size_dollars / max(volume * price, 1.0)) * 10000.0)
-    return spread_bps + 0.5 * vol_bps + size_bps
+        participation = max(0.0, float(size_dollars) / max(float(volume) * float(price), 1.0))
+        # Square-root impact dampens participation cost for small clips.
+        participation_bps = min(
+            params.participation_bps_cap,
+            params.participation_weight * math.sqrt(participation * 100.0),
+        )
+
+    estimate = (
+        params.base_bps
+        + (params.spread_weight * spread_bps)
+        + (params.vol_weight * vol_bps)
+        + participation_bps
+    )
+    return max(params.min_bps, min(params.max_bps, estimate))
 
 
 def apply_cost_gate(expected_edge_bps: float, expected_cost_bps: float, cost_k: float) -> bool:

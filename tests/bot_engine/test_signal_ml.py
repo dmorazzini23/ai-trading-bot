@@ -77,6 +77,41 @@ def test_signal_ml_returns_none_when_features_missing(caplog):
     assert "ML_SIGNAL_MISSING_FEATURES" in caplog.text
 
 
+def test_signal_ml_derives_after_hours_features_when_missing() -> None:
+    class DummyModel:
+        feature_names_in_ = [
+            "rsi",
+            "macd",
+            "atr",
+            "vwap",
+            "sma_50",
+            "sma_200",
+            "signal",
+            "atr_pct",
+            "vwap_distance",
+            "sma_spread",
+            "macd_signal_gap",
+            "rsi_centered",
+        ]
+
+        def predict(self, _X):
+            return [1]
+
+        def predict_proba(self, _X):
+            return [[0.2, 0.8]]
+
+    manager = SignalManager()
+    df = _minimal_df()
+
+    result = manager.signal_ml(df, model=DummyModel(), symbol="AAPL")
+
+    assert result is not None
+    signal, confidence, label = result
+    assert signal == 1
+    assert confidence == pytest.approx(0.8, abs=1e-6)
+    assert label == "ml"
+
+
 def test_signal_ml_prediction_error_returns_none(caplog):
     class DummyModel:
         feature_names_in_ = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
