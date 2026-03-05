@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import zlib
 
 import numpy as np
 import pandas as pd
@@ -40,7 +41,8 @@ def _write_tca(path: Path, n: int = 300) -> None:
 
 def _synthetic_daily(symbol: str):
     idx = pd.date_range("2024-01-01", periods=480, freq="D", tz="UTC")
-    rng = np.random.default_rng(abs(hash(symbol)) % (2**32))
+    seed = zlib.adler32(symbol.encode("utf-8")) & 0xFFFFFFFF
+    rng = np.random.default_rng(seed)
     drift = 0.08 if symbol == "AAPL" else 0.03
     steps = rng.normal(loc=drift, scale=1.4, size=len(idx))
     close = 120.0 + np.cumsum(steps)

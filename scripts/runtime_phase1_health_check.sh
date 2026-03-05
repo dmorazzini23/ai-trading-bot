@@ -12,6 +12,7 @@ ENV_RUNTIME_FILE="${ENV_RUNTIME_FILE:-/home/aiuser/ai-trading-bot/.env.runtime}"
 
 AUTH_HALT_MAX_RATE="${AUTH_HALT_MAX_RATE:-0.35}"
 OK_TRADE_MIN_RATE="${OK_TRADE_MIN_RATE:-0.01}"
+CYCLE_DUPLICATE_INTENT_MAX_RATE="${CYCLE_DUPLICATE_INTENT_MAX_RATE:-0.70}"
 RATE_ALERT_MIN_ROWS="${RATE_ALERT_MIN_ROWS:-100}"
 DECISION_STALE_MAX_AGE_MINUTES="${DECISION_STALE_MAX_AGE_MINUTES:-90}"
 SUPPRESS_OFFHOURS_STALE_DECISION_ALERTS="${SUPPRESS_OFFHOURS_STALE_DECISION_ALERTS:-1}"
@@ -179,7 +180,7 @@ echo "runtime_dir=${RUNTIME_DIR}"
 echo "decision_file=${DECISION_FILE}"
 echo "report_dir=${REPORT_DIR}"
 echo "window_rows=${N}"
-echo "thresholds: auth_halt_max_rate=${AUTH_HALT_MAX_RATE}, ok_trade_min_rate=${OK_TRADE_MIN_RATE}"
+echo "thresholds: auth_halt_max_rate=${AUTH_HALT_MAX_RATE}, ok_trade_min_rate=${OK_TRADE_MIN_RATE}, cycle_duplicate_intent_max_rate=${CYCLE_DUPLICATE_INTENT_MAX_RATE}"
 echo "decision_window: min_rows_for_rate_alerts=${RATE_ALERT_MIN_ROWS}, stale_max_age_minutes=${DECISION_STALE_MAX_AGE_MINUTES}"
 
 skip_decision_derived_artifact_checks=0
@@ -218,12 +219,14 @@ else
           rows: length,
           ok_trade_rows: (map(select((.gates // []) | index("OK_TRADE"))) | length),
           auth_halt_rows: (map(select((.gates // []) | index("AUTH_HALT"))) | length),
+          cycle_duplicate_intent_rows: (map(select((.gates // []) | index("CYCLE_DUPLICATE_INTENT"))) | length),
           order_pacing_cap_rows: (map(select((.gates // []) | index("ORDER_PACING_CAP_BLOCK"))) | length)
         }'
   )"
   rows="$(jq -r '.rows' <<<"${stats_json}")"
   ok_rows="$(jq -r '.ok_trade_rows' <<<"${stats_json}")"
   auth_rows="$(jq -r '.auth_halt_rows' <<<"${stats_json}")"
+  duplicate_rows="$(jq -r '.cycle_duplicate_intent_rows' <<<"${stats_json}")"
   pacing_rows="$(jq -r '.order_pacing_cap_rows' <<<"${stats_json}")"
 
   if [[ "${rows}" -le 0 ]]; then
@@ -255,13 +258,15 @@ else
 
     auth_rate="$(awk -v n="${auth_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
     ok_rate="$(awk -v n="${ok_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
+    duplicate_rate="$(awk -v n="${duplicate_rows}" -v d="${rows}" 'BEGIN { printf "%.6f", (d > 0 ? n / d : 0.0) }')"
     auth_pct="$(awk -v r="${auth_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
     ok_pct="$(awk -v r="${ok_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
-    echo "window_stats: rows=${rows} auth_halt_rows=${auth_rows} ok_trade_rows=${ok_rows} order_pacing_cap_rows=${pacing_rows} decision_age_minutes=${decision_age_m}"
-    echo "window_rates: auth_halt_rate=${auth_rate} (${auth_pct}%), ok_trade_rate=${ok_rate} (${ok_pct}%)"
+    duplicate_pct="$(awk -v r="${duplicate_rate}" 'BEGIN { printf "%.2f", r * 100.0 }')"
+    echo "window_stats: rows=${rows} auth_halt_rows=${auth_rows} ok_trade_rows=${ok_rows} cycle_duplicate_intent_rows=${duplicate_rows} order_pacing_cap_rows=${pacing_rows} decision_age_minutes=${decision_age_m}"
+    echo "window_rates: auth_halt_rate=${auth_rate} (${auth_pct}%), ok_trade_rate=${ok_rate} (${ok_pct}%), cycle_duplicate_intent_rate=${duplicate_rate} (${duplicate_pct}%)"
 
     if [[ "${skip_rate_alerts}" -eq 1 ]]; then
-      echo "INFO: AUTH_HALT/OK_TRADE threshold checks skipped for this decision window"
+      echo "INFO: AUTH_HALT/OK_TRADE/CYCLE_DUPLICATE_INTENT threshold checks skipped for this decision window"
     else
       if rate_gt "${auth_rate}" "${AUTH_HALT_MAX_RATE}"; then
         fail "AUTH_HALT spike detected: ${auth_rate} > ${AUTH_HALT_MAX_RATE}"
@@ -273,6 +278,12 @@ else
         fail "OK_TRADE collapse detected: ${ok_rate} < ${OK_TRADE_MIN_RATE}"
       else
         ok "OK_TRADE rate within threshold"
+      fi
+
+      if rate_gt "${duplicate_rate}" "${CYCLE_DUPLICATE_INTENT_MAX_RATE}"; then
+        fail "CYCLE_DUPLICATE_INTENT spike detected: ${duplicate_rate} > ${CYCLE_DUPLICATE_INTENT_MAX_RATE}"
+      else
+        ok "CYCLE_DUPLICATE_INTENT rate within threshold"
       fi
     fi
 

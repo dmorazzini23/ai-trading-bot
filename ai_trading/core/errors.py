@@ -71,7 +71,30 @@ def _is_transient_network(exc: Exception) -> bool:
 
 def _is_auth(exc: Exception) -> bool:
     code = _status_code(exc)
-    if code in {401, 403}:
+    if code == 401:
+        return True
+    if code == 403:
+        lowered = str(exc).lower()
+        non_auth_forbidden_tokens = (
+            "insufficient_day_trading_buying_power",
+            "insufficient_buying_power",
+            "not_enough_equity",
+            "shorting_not_permitted",
+            "no_shares_available",
+            "short_open_blocked",
+            "insufficient day trading buying power",
+            "insufficient buying power",
+            "not enough equity",
+            "shorting is not permitted",
+            "no shares available to short",
+            "cannot open short",
+            "cannot open a long buy while a short sell order is open",
+            "cannot open a short sell while a long buy order is open",
+            "insufficient qty",
+            "insufficient quantity",
+        )
+        if any(token in lowered for token in non_auth_forbidden_tokens):
+            return False
         return True
     return any(
         _has_text(exc, token)
@@ -142,7 +165,23 @@ def _is_bad_data(exc: Exception) -> bool:
 
 def _is_order_rejected(exc: Exception) -> bool:
     lowered = str(exc).lower()
-    return "reject" in lowered or "insufficient" in lowered
+    return any(
+        token in lowered
+        for token in (
+            "reject",
+            "insufficient",
+            "shorting_not_permitted",
+            "no_shares_available",
+            "short_open_blocked",
+            "shorting is not permitted",
+            "no shares available to short",
+            "cannot open short",
+            "cannot open a long buy while a short sell order is open",
+            "cannot open a short sell while a long buy order is open",
+            "not enough equity",
+            "buying power",
+        )
+    )
 
 
 def _is_broker_state(exc: Exception) -> bool:

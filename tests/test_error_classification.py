@@ -59,3 +59,25 @@ def test_auth_matcher_does_not_trigger_on_non_auth_words() -> None:
     info = classify_exception(RuntimeError("authoritative source mismatch"), dependency="data_primary")
     assert info.category is ErrorCategory.UNKNOWN
     assert info.action is ErrorAction.HALT_TRADING
+
+
+def test_classify_broker_capacity_forbidden_as_order_reject() -> None:
+    info = classify_exception(
+        _HttpError(403, "insufficient buying power"),
+        dependency="broker_submit",
+        symbol="AAPL",
+    )
+    assert info.category is ErrorCategory.ORDER_REJECTED
+    assert info.action is ErrorAction.SKIP_SYMBOL
+    assert info.reason_code == "ORDER_REJECTED_SKIP"
+
+
+def test_classify_broker_short_restriction_forbidden_as_order_reject() -> None:
+    info = classify_exception(
+        _HttpError(403, "shorting_not_permitted"),
+        dependency="broker_submit",
+        symbol="AAPL",
+    )
+    assert info.category is ErrorCategory.ORDER_REJECTED
+    assert info.action is ErrorAction.SKIP_SYMBOL
+    assert info.reason_code == "ORDER_REJECTED_SKIP"
