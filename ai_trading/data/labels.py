@@ -55,6 +55,7 @@ def triple_barrier_labels(
     vertical_barrier_times: "pd.Series" | None = None,
 ) -> "pd.DataFrame":
     pd = load_pandas()
+    _ = num_threads  # Reserved for API compatibility; implementation is single-threaded.
     """
     Triple barrier labeling method.
     

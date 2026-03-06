@@ -1183,11 +1183,13 @@ async def run_with_concurrency(limit: int, coros):
     total = 0
     iterator = iter(coros)
 
-    while True:
-        while len(pending) < max_concurrency:
+    iterator_exhausted = False
+    while pending or not iterator_exhausted:
+        while len(pending) < max_concurrency and not iterator_exhausted:
             try:
                 coro = next(iterator)
             except StopIteration:
+                iterator_exhausted = True
                 break
             pending.add(asyncio.create_task(_run(total, coro)))
             total += 1
@@ -12711,7 +12713,6 @@ def get_minute_df(
             return empty_frame if empty_frame is not None else (pd.DataFrame() if pd is not None else original_df)
         if last_empty_error is not None:
             raise last_empty_error
-            raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
 
     try:
         df = _post_process(original_df, symbol=symbol, timeframe="1Min")
@@ -12742,7 +12743,6 @@ def get_minute_df(
             return pd.DataFrame() if pd is not None else []
         if last_empty_error is not None:
             raise last_empty_error
-            raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
     coverage_meta: dict[str, object] = {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}
     repair_used_backup = False

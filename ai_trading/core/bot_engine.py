@@ -98,7 +98,6 @@ from ai_trading.utils.datetime import ensure_datetime
 import ai_trading.data.market_calendar as market_calendar
 from ai_trading.data.timeutils import (
     ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
-    nyse_session_utc as _nyse_session_utc,  # AI-AGENT-REF: derive NYSE RTH in UTC
     previous_business_day as _prev_bus_day,  # AI-AGENT-REF: default previous session
 )
 from ai_trading.data_validation import is_valid_ohlcv
@@ -3639,7 +3638,6 @@ from ai_trading.logging import (
     info_kv,
     warning_kv,
 )  # AI-AGENT-REF: structured logging helper
-from ai_trading.utils.safe_cast import as_int
 from ai_trading.utils.universe import load_universe as load_universe_from_path
 
 from ai_trading.config.settings import (
@@ -17997,8 +17995,6 @@ def fractional_kelly_size(
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.error("Error in Kelly calculation: %s", e)
         return 0
-
-    return size
 
 
 def vol_target_position_size(

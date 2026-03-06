@@ -460,8 +460,9 @@ class ProductionValidator:
     def _check_data_encryption(self) -> float:
         """Check data encryption implementation."""
         try:
-            import cryptography
-            return 95
+            import importlib.util
+
+            return 95 if importlib.util.find_spec("cryptography") else 50
         except ImportError:
             return 50
 

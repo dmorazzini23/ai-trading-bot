@@ -333,7 +333,7 @@ class IFeatureEngineer(ABC):
         """Get list of feature names."""
 
     @abstractmethod
-    async def update_features(self, new_data: pd.DataFrame) -> pd.DataFrame:
+    async def update_features(self, _new_data: pd.DataFrame) -> pd.DataFrame:
         """Update features with new data."""
 
 class IMetricsCollector(ABC):

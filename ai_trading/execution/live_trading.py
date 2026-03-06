@@ -7525,7 +7525,6 @@ class ExecutionEngine:
 
     def long_only_mode_reason(self) -> str | None:
         return self._long_only_mode_reason
-        return None
 
     def _order_flip_mode(self) -> str:
         try:

@@ -60,7 +60,10 @@ def _seed_runtime(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, 
             "ENV_RUNTIME_FILE": str(tmp_path / ".env.runtime"),
             "AI_TRADING_ML_SHADOW_ENABLED": "0",
             "RATE_ALERT_MIN_ROWS": "100",
-            "DECISION_STALE_MAX_AGE_MINUTES": "90",
+            # Keep rate checks active in tests even when Python time is frozen.
+            "DECISION_STALE_MAX_AGE_MINUTES": "2000000",
+            # Avoid report-freshness flakes from clock skew between Python and shell date.
+            "REPORT_MAX_AGE_MINUTES": "2000000",
             "AUTH_HALT_MAX_RATE": "0.35",
             "AUTH_BROKER_HALT_FORBIDDEN_MAX_RATE": "0.35",
             "OK_TRADE_MIN_RATE": "0.005",

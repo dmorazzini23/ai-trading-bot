@@ -249,6 +249,7 @@ def train_xgboost_with_optuna(
     X_train: Any, y_train: Any, X_val: Any, y_val: Any
 ) -> Any:  # pragma: no cover - heavy optional
     """Hyperparameter search for an XGBoost model using Optuna."""
+    _ = (X_val, y_val)  # Reserved for future holdout scoring; currently CV-only.
 
     import optuna
     import xgboost as xgb

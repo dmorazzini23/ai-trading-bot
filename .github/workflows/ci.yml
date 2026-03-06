@@ -73,8 +73,10 @@ jobs:
         run: make audit-exceptions
       - name: Legacy scan
         run: make legacy-scan
+      - name: Dead code scan
+        run: vulture ai_trading scripts run.py --min-confidence 80
       - name: Tests
-        run: pytest -q -n auto --maxfail=1
+        run: pytest -q -n auto --maxfail=1 --cov=ai_trading --cov-fail-under=60
 
   determinism-seed-matrix:
     runs-on: ubuntu-22.04

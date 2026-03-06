@@ -22,7 +22,7 @@ try:
 except ImportError:
     PRODUCTION_MONITORING_AVAILABLE = False
 try:
-    from performance_optimizer import cached, get_performance_optimizer, initialize_performance_optimizer, profile_performance
+    from performance_optimizer import cached, get_performance_optimizer, initialize_performance_optimizer
     PERFORMANCE_OPTIMIZER_AVAILABLE = True
 except ImportError:
     PERFORMANCE_OPTIMIZER_AVAILABLE = False

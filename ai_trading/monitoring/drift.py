@@ -222,6 +222,7 @@ class DriftMonitor:
         Returns:
             SignalAttribution metrics
         """
+        _ = benchmark_returns  # Reserved for benchmark-relative attribution extensions.
         pd = load_pandas()
         import numpy as np
 

@@ -362,6 +362,7 @@ class SignalAggregator:
             actual_return: Actual return achieved
             prediction_horizon: Horizon of the prediction (in periods)
         """
+        _ = prediction_horizon  # Reserved for horizon-conditioned performance tracking.
         try:
             if signal_id not in self.signal_metrics:
                 self.signal_metrics[signal_id] = {'returns': [], 'sharpe_ratio': 0.0, 'hit_rate': 0.5, 'recent_performance': 0.5}

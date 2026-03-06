@@ -264,6 +264,8 @@ def mark_symbol_stale() -> None:
 def end_cycle(stale_threshold_ratio: float = 0.30) -> None:
     """Finalize cycle bookkeeping and promote shadow mode if required."""
 
+    _ = stale_threshold_ratio  # Kept for API stability; stale-ratio promotion was removed.
+
     # Shadow cycles are not promoted based on stale ratios; only explicit
     # guards (e.g., PDT lockout) should enforce shadow mode.
     if STATE.shadow_cycle_forced:

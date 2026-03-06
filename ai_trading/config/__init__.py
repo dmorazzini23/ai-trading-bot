@@ -378,6 +378,7 @@ def log_config(mask_fields: Sequence[str] | None = None) -> None:
     """Mark configuration as logged without emitting secrets."""
 
     global _CONFIG_LOGGED
+    _ = mask_fields
     if _CONFIG_LOGGED:
         return
     _CONFIG_LOGGED = True

@@ -23,7 +23,7 @@ try:
     from ai_trading.core.bot_engine import DataFetcher
     from ai_trading.evaluation.walkforward import WalkForwardEvaluator
     from ai_trading.logging import logger
-    from ai_trading.signals import SignalDecisionPipeline, generate_cost_aware_signals
+    from ai_trading.signals import SignalDecisionPipeline
 except ImportError:
     sys.exit(1)
 

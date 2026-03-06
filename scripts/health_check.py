@@ -23,8 +23,6 @@ from typing import Any
 import psutil
 try:
     from production_monitoring import CircuitBreaker, ProductionMonitor, get_production_monitor
-    from production_monitoring import HealthCheckResult as ProdHealthCheckResult
-    from production_monitoring import HealthStatus as ProdHealthStatus
     PRODUCTION_MONITORING_AVAILABLE = True
 except ImportError:
     PRODUCTION_MONITORING_AVAILABLE = False

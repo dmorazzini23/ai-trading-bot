@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
-from .market_regime import MarketRegime, detect_market_regime
+from .market_regime import MarketRegime
 
 
 @dataclass(frozen=True)

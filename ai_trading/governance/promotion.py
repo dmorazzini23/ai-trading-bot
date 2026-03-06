@@ -387,6 +387,7 @@ class ModelPromotion:
         Returns:
             True if shadow testing started successfully
         """
+        _ = benchmark_model_id  # Reserved for future benchmark-vs-shadow comparisons.
         try:
             model_info = self.registry.model_index.get(model_id)
             if model_info is None:
