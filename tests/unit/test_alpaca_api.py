@@ -1,15 +1,13 @@
 import builtins
-import importlib
 import sys
 
 import pytest
-from tests.optdeps import require
 
 from ai_trading.broker import alpaca_credentials
+from ai_trading import alpaca_api
 
 @pytest.mark.unit
 def test_pending_orders_lock_exists_and_is_lock():
-    alpaca_api = require("alpaca_api")
     assert hasattr(alpaca_api, "_pending_orders_lock")
     lock = alpaca_api._pending_orders_lock
     # Check that it has threading lock behavior
@@ -19,18 +17,11 @@ def test_pending_orders_lock_exists_and_is_lock():
     assert isinstance(alpaca_api._pending_orders, dict)
 
 @pytest.mark.unit
-@pytest.mark.skipif(
-    importlib.util.find_spec("alpaca_api") is None,
-    reason="alpaca_api not installed",
-)
 def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
-    alpaca_api = require("alpaca_api")
     submit = getattr(alpaca_api, "submit_order", None)
     if submit is None:
         pytest.skip("submit_order not available")
 
-    # Mock the DRY_RUN setting to False so the actual client is used
-    monkeypatch.setattr(alpaca_api, "DRY_RUN", False)
     monkeypatch.setenv("SHADOW_MODE", "0")
 
     # Create a simple order request object
@@ -49,8 +40,8 @@ def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
     order_req = OrderReq()
     res = submit(
         order_req.symbol,
-        order_req.qty,
         order_req.side,
+        qty=order_req.qty,
         time_in_force=order_req.time_in_force,
         client=dummy_alpaca_client,
     )

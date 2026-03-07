@@ -378,6 +378,20 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    """Return environment float value with graceful fallback."""
+    try:
+        value = get_env(name, default, cast=float)
+    except Exception:
+        value = default
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _coerce_memo_ts(raw: Any) -> datetime | None:
     """Return ``datetime`` for memo timestamp inputs."""
     if raw is None:
@@ -937,8 +951,8 @@ def _provider_switch_cooldown_seconds() -> float:
 
 def _env_signature() -> tuple[str | None, str | None]:
     return (
-        os.getenv("ALPACA_DATA_FEED"),
-        os.getenv("ALPACA_SIP_UNAUTHORIZED"),
+        str(get_env("ALPACA_DATA_FEED", "") or "") or None,
+        "1" if _is_sip_unauthorized() else "0",
     )
 
 
@@ -1619,36 +1633,82 @@ _IEX_EMPTY_THRESHOLD = 1
 # to short-circuit further Alpaca requests and fall back to the secondary
 # provider when the upstream repeatedly returns empty payloads.
 _ALPACA_EMPTY_ERROR_COUNTS: dict[tuple[str, str], int] = {}
-_ALPACA_EMPTY_ERROR_THRESHOLD = int(os.getenv("ALPACA_EMPTY_ERROR_THRESHOLD", "2"))
 _ALPACA_CLOSE_NAN_COUNTS: dict[tuple[str, str, str], int] = {}
-_ALPACA_CLOSE_NAN_DISABLE_THRESHOLD = max(
-    1, int(os.getenv("ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", "1")),
-)
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 _EMPTY_RETRY_THRESHOLD = max(2, _EMPTY_BAR_THRESHOLD)
-_FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
-# Configurable backoff parameters for retry logic
-_FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
-_FETCH_BARS_BACKOFF_CAP = float(os.getenv("FETCH_BARS_BACKOFF_CAP", "5"))
 _MIN_RATE_LIMIT_SLEEP_SECONDS = 1.0
 _HOST_LIMIT_DEFAULT = 4
 _HOST_LIMIT_LOCK = Lock()
 _HOST_LIMIT_STATE: dict[str, Any] = {"env": None, "value": _HOST_LIMIT_DEFAULT}
 _HOST_SEMAPHORES: dict[str, Semaphore] = {}
-_MINUTE_GAP_WARNING_THRESHOLD = max(
-    0, int(os.getenv("MINUTE_GAP_WARNING_THRESHOLD", "3")),
-)
-_http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
-if _http_fallback_env is None:
-    _ENABLE_HTTP_FALLBACK = True
-else:
-    _ENABLE_HTTP_FALLBACK = _http_fallback_env.strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+
+# Backward-compatible runtime tuning knobs.
+# Tests and ops tooling monkeypatch these names directly.
+_ALPACA_EMPTY_ERROR_THRESHOLD = max(1, _env_int("ALPACA_EMPTY_ERROR_THRESHOLD", 2))
+_ALPACA_CLOSE_NAN_DISABLE_THRESHOLD = max(1, _env_int("ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", 1))
+_FETCH_BARS_MAX_RETRIES = max(1, _env_int("FETCH_BARS_MAX_RETRIES", 5))
+_FETCH_BARS_BACKOFF_BASE = max(1.0, _env_float("FETCH_BARS_BACKOFF_BASE", 2.0))
+_FETCH_BARS_BACKOFF_CAP = max(_FETCH_BARS_BACKOFF_BASE, _env_float("FETCH_BARS_BACKOFF_CAP", 5.0))
+_MINUTE_GAP_WARNING_THRESHOLD = max(0, _env_int("MINUTE_GAP_WARNING_THRESHOLD", 3))
+_ENABLE_HTTP_FALLBACK = str(get_env("ENABLE_HTTP_FALLBACK", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+
+def _alpaca_empty_error_threshold() -> int:
+    try:
+        return max(1, int(globals().get("_ALPACA_EMPTY_ERROR_THRESHOLD", 2)))
+    except Exception:
+        return max(1, _env_int("ALPACA_EMPTY_ERROR_THRESHOLD", 2))
+
+
+def _alpaca_close_nan_disable_threshold() -> int:
+    try:
+        return max(1, int(globals().get("_ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", 1)))
+    except Exception:
+        return max(1, _env_int("ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", 1))
+
+
+def _fetch_bars_max_retries() -> int:
+    try:
+        return max(1, int(globals().get("_FETCH_BARS_MAX_RETRIES", 5)))
+    except Exception:
+        return max(1, _env_int("FETCH_BARS_MAX_RETRIES", 5))
+
+
+def _fetch_bars_backoff_base() -> float:
+    try:
+        return max(1.0, float(globals().get("_FETCH_BARS_BACKOFF_BASE", 2.0)))
+    except Exception:
+        return max(1.0, _env_float("FETCH_BARS_BACKOFF_BASE", 2.0))
+
+
+def _fetch_bars_backoff_cap() -> float:
+    try:
+        cap_value = float(globals().get("_FETCH_BARS_BACKOFF_CAP", 5.0))
+    except Exception:
+        cap_value = _env_float("FETCH_BARS_BACKOFF_CAP", 5.0)
+    return max(_fetch_bars_backoff_base(), cap_value)
+
+
+def _minute_gap_warning_threshold() -> int:
+    try:
+        return max(0, int(globals().get("_MINUTE_GAP_WARNING_THRESHOLD", 3)))
+    except Exception:
+        return max(0, _env_int("MINUTE_GAP_WARNING_THRESHOLD", 3))
+
+
+def _enable_http_fallback() -> bool:
+    raw = globals().get("_ENABLE_HTTP_FALLBACK", None)
+    if raw is None:
+        raw = get_env("ENABLE_HTTP_FALLBACK", "1")
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _env_flag_enabled(name: str, default: str = "0") -> bool:
@@ -1689,7 +1749,7 @@ def _http_fallback_permitted(
     if forced:
         return True
     if enable_flag is None:
-        global_enabled = bool(globals().get("_ENABLE_HTTP_FALLBACK", _ENABLE_HTTP_FALLBACK))
+        global_enabled = _enable_http_fallback()
     else:
         global_enabled = bool(enable_flag)
     if not global_enabled:
@@ -2127,7 +2187,7 @@ def _cycle_safe_mode_active(current_cycle: str | None = None) -> tuple[bool, str
 def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
     extra: dict[str, object] = {}
 
-    sip_flagged = os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1" or _is_sip_unauthorized()
+    sip_flagged = _is_sip_unauthorized()
     if sip_flagged:
         extra["sip_locked"] = True
         if _intraday_feed_prefers_sip():
@@ -4699,17 +4759,17 @@ refresh_default_feed()
 
 def _env_flag(key: str, default: bool = False) -> bool:
     """Return truthy flag for ``key`` honouring ``default`` when unset."""
-    raw = os.getenv(key)
+    raw = get_env(key, None)
     if raw is None:
         return bool(default)
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _prefers_sip() -> bool:
-    feed = os.getenv("ALPACA_DATA_FEED", "iex").strip().lower()
+    feed = str(get_env("ALPACA_DATA_FEED", "iex") or "iex").strip().lower()
     if "sip" in feed:
         return True
-    failover = os.getenv("ALPACA_FEED_FAILOVER", "")
+    failover = str(get_env("ALPACA_FEED_FAILOVER", "") or "")
     if any(part.strip().lower() == "sip" for part in failover.split(",")):
         return True
     try:
@@ -4755,7 +4815,6 @@ def _is_sip_unauthorized() -> bool:
     if _now_monotonic() >= _SIP_UNAUTHORIZED_UNTIL:
         _SIP_UNAUTHORIZED = False
         _SIP_UNAUTHORIZED_UNTIL = None
-        os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
         return False
     return True
 
@@ -4768,10 +4827,6 @@ def _mark_sip_unauthorized(cooldown_s: float = 1800.0) -> None:
     except Exception:
         cooldown = 1800.0
     _SIP_UNAUTHORIZED_UNTIL = _now_monotonic() + cooldown
-    if _pytest_active():
-        os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
-    else:
-        os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
 
 
 def _clear_sip_lockout_for_tests() -> None:
@@ -4779,13 +4834,9 @@ def _clear_sip_lockout_for_tests() -> None:
     global _SIP_UNAUTHORIZED, _SIP_UNAUTHORIZED_UNTIL
     _SIP_UNAUTHORIZED = False
     _SIP_UNAUTHORIZED_UNTIL = None
-    os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
 
 
 def _get_cycle_id() -> str:
-    cycle_env = os.environ.get("AI_TRADING_CYCLE_ID")
-    if cycle_env:
-        return str(cycle_env)
     bot_engine = sys.modules.get("ai_trading.core.bot_engine")
     if bot_engine is not None:
         try:
@@ -4819,7 +4870,6 @@ def _reset_provider_auth_state_for_tests() -> None:
     _clear_sip_lockout_for_tests()
     if preserve_unauth:
         _SIP_UNAUTHORIZED = True
-        os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
     _SIP_UNAVAILABLE_LOGGED.clear()
     _CYCLE_FALLBACK_FEED.clear()
     _ALLOW_SIP = None
@@ -4904,7 +4954,7 @@ def _should_disable_alpaca_on_empty(
             except Exception:
                 pass
 
-        if count >= _ALPACA_CLOSE_NAN_DISABLE_THRESHOLD:
+        if count >= _alpaca_close_nan_disable_threshold():
             provider_label = f"alpaca_{feed_label}" if feed_label else "alpaca"
             try:
                 provider_monitor.disable(provider_label, reason="nan_close")
@@ -4968,8 +5018,6 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
         return False
 
     pytest_active = _detect_pytest_env()
-    sip_env_flag = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower()
-    sip_env_locked = sip_env_flag in {"1", "true", "yes"}
     try:
         configured = _sip_configured()
     except Exception:
@@ -4979,7 +5027,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
         sip_state_locked = _is_sip_unauthorized()
 
     if pytest_active:
-        if sip_env_locked or sip_state_locked:
+        if sip_state_locked:
             return False
         if not configured and not override_present:
             return False
@@ -8677,7 +8725,7 @@ def _fetch_bars(
 
     # Track request start time for retry/backoff telemetry
     start_time = monotonic_time()
-    max_retries = _FETCH_BARS_MAX_RETRIES
+    max_retries = _fetch_bars_max_retries()
     data_base_url = _get_alpaca_data_base_url()
     skip_sip_after_threshold = False
 
@@ -8850,11 +8898,8 @@ def _fetch_bars(
             fb_interval, fb_feed, fb_start, fb_end = fb
             from_feed = _feed
             pytest_active_local = _pytest_active()
-            sip_env_flag = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower()
-            sip_env_locked = sip_env_flag in {"1", "true", "yes"}
             sip_runtime_locked = (
-                sip_env_locked
-                or bool(globals().get("_SIP_UNAUTHORIZED"))
+                bool(globals().get("_SIP_UNAUTHORIZED"))
                 or bool(_state.get("sip_unauthorized"))
             )
             try:
@@ -9232,7 +9277,10 @@ def _fetch_bars(
                 _depth_exit(None)
                 raise
             _state["retries"] = attempt
-            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            backoff = min(
+                _fetch_bars_backoff_base() ** (_state["retries"] - 1),
+                _fetch_bars_backoff_cap(),
+            )
             logger.debug(
                 "RETRY_FETCH_ERROR",
                 extra=_norm_extra(
@@ -9326,7 +9374,10 @@ def _fetch_bars(
                 )
                 raise
             _state["retries"] = attempt
-            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            backoff = min(
+                _fetch_bars_backoff_base() ** (_state["retries"] - 1),
+                _fetch_bars_backoff_cap(),
+            )
             logger.debug(
                 "RETRY_FETCH_ERROR",
                 extra=_norm_extra(
@@ -9767,8 +9818,8 @@ def _fetch_bars(
             if attempt <= max_retries and can_retry_timeframe and _state["retries"] < max_retries:
                 if not outside_market_hours:
                     planned_backoff = min(
-                        _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
-                        _FETCH_BARS_BACKOFF_CAP,
+                        _fetch_bars_backoff_base() ** (_state["retries"]),
+                        _fetch_bars_backoff_cap(),
                     )
                     corr_for_retry = prev_corr
                     planned_retry_meta = _coerce_json_primitives(
@@ -10159,7 +10210,7 @@ def _fetch_bars(
                 cnt = _ALPACA_EMPTY_ERROR_COUNTS.get(tf_key, 0) + 1
                 _ALPACA_EMPTY_ERROR_COUNTS[tf_key] = cnt
                 provider_monitor.record_failure("alpaca", "empty")
-                if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
+                if cnt >= _alpaca_empty_error_threshold():
                     provider_str, normalized_provider = _resolve_backup_provider()
                     resolved_provider = normalized_provider or provider_str
                     provider_fallback.labels(
@@ -10256,8 +10307,8 @@ def _fetch_bars(
                         else:
                             _state["retries"] = attempt
                             backoff = min(
-                                _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1),
-                                _FETCH_BARS_BACKOFF_CAP,
+                                _fetch_bars_backoff_base() ** (_state["retries"] - 1),
+                                _fetch_bars_backoff_cap(),
                             )
                             logger.debug(
                                 "RETRY_AFTER_SIP_FALLBACK_DISABLED",
@@ -11015,8 +11066,8 @@ def _fetch_bars(
         if empty_attempts < max_retries:
             try:
                 backoff_seconds = min(
-                    _FETCH_BARS_BACKOFF_BASE ** empty_attempts,
-                    _FETCH_BARS_BACKOFF_CAP,
+                    _fetch_bars_backoff_base() ** empty_attempts,
+                    _fetch_bars_backoff_cap(),
                 )
             except Exception:
                 backoff_seconds = 0.0
@@ -11852,7 +11903,7 @@ def get_minute_df(
     allow_empty_override = False
     threshold_log_emitted = False
     last_empty_log_level: int | None = None
-    fetch_retry_cap = max(1, int(globals().get("_FETCH_BARS_MAX_RETRIES", 1)))
+    fetch_retry_cap = _fetch_bars_max_retries()
 
     def _disable_signal_active(provider_label: str) -> bool:
         try:
@@ -12109,7 +12160,7 @@ def get_minute_df(
                     outside_hours_window = _outside_market_hours(start_dt, end_dt)
                 except Exception:
                     outside_hours_window = False
-                http_fallback_enabled = bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
+                http_fallback_enabled = _enable_http_fallback()
                 try:
                     backup_policy_enabled = bool(alpaca_empty_to_backup())
                 except Exception:
@@ -13002,7 +13053,7 @@ def get_minute_df(
             extra={
                 "env": http_fallback_env,
                 "allowed": fallback_allowed,
-                "enable_flag": bool(_ENABLE_HTTP_FALLBACK),
+                "enable_flag": _enable_http_fallback(),
             },
         )
         if not fallback_allowed:
@@ -13640,7 +13691,7 @@ def get_bars(
             )
             return fallback_frame
     if not return_meta and normalized_feed == "sip" and result is None and (
-        _SIP_UNAUTHORIZED or bool(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
+        _SIP_UNAUTHORIZED or _is_sip_unauthorized()
     ):
         pandas_mod = _ensure_pandas()
         if pandas_mod is not None:
@@ -13810,7 +13861,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
             state_obj = _get_fetch_state()
             state = state_obj if isinstance(state_obj, dict) else {}
             short_circuit = bool(state.get("short_circuit_empty"))
-            fallbacks_off = not bool(globals().get("_ENABLE_HTTP_FALLBACK", True))
+            fallbacks_off = not _enable_http_fallback()
             if short_circuit and fallbacks_off:
                 try:
                     empty_frame = _empty_ohlcv_frame()
@@ -13877,7 +13928,7 @@ if "_FETCH_BARS_WRAPPED" not in globals():
                 abort_logged = bool(state.get("abort_logged"))
                 fallback_feed = state.get("last_fallback_feed")
                 providers = tuple(state.get("providers") or ())
-                fallback_global = globals().get("_ENABLE_HTTP_FALLBACK", True)
+                fallback_global = _enable_http_fallback()
                 fallbacks_off = isinstance(fallback_global, bool) and not fallback_global
                 outside = False
                 try:

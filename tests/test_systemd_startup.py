@@ -15,6 +15,20 @@ from pathlib import Path
 import pytest
 
 
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    project_root = Path(__file__).resolve().parents[1]
+    stub_path = project_root / "tests" / "stubs"
+    python_path_parts = [str(project_root)]
+    if stub_path.exists():
+        python_path_parts.append(str(stub_path))
+    existing_path = env.get("PYTHONPATH", "")
+    if existing_path:
+        python_path_parts.append(existing_path)
+    env["PYTHONPATH"] = os.pathsep.join(python_path_parts)
+    return env
+
+
 class TestSystemdStartupCompatibility:
     """Test systemd-compatible startup behavior."""
 
@@ -239,23 +253,13 @@ class TestSystemdStartupCompatibility:
 
         try:
             # Run the test script in a clean subprocess
-            env = os.environ.copy()
-            project_root = Path(__file__).resolve().parents[1]
-            stub_path = project_root / "tests" / "stubs"
-            python_path_parts = [str(project_root)]
-            if stub_path.exists():
-                python_path_parts.append(str(stub_path))
-            existing_path = env.get("PYTHONPATH", "")
-            if existing_path:
-                python_path_parts.append(existing_path)
-            env["PYTHONPATH"] = os.pathsep.join(python_path_parts)
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
                 check=True,
-                env=env,
+                env=_subprocess_env(),
             )
 
             if result.stderr:
@@ -307,24 +311,13 @@ print("✓ management import succeeded with rejecting SettingsConfigDict")
             script_path = f.name
 
         try:
-            env = os.environ.copy()
-            project_root = Path(__file__).resolve().parents[1]
-            stub_path = project_root / "tests" / "stubs"
-            python_path_parts = [str(project_root)]
-            if stub_path.exists():
-                python_path_parts.append(str(stub_path))
-            existing_path = env.get("PYTHONPATH", "")
-            if existing_path:
-                python_path_parts.append(existing_path)
-            env["PYTHONPATH"] = os.pathsep.join(python_path_parts)
-
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
                 check=True,
-                env=env,
+                env=_subprocess_env(),
             )
 
             assert result.returncode == 0, result.stderr
@@ -347,8 +340,18 @@ ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
         try:
             test_script = f'''
 import os
+from pathlib import Path
 from ai_trading.config.management import _resolve_alpaca_env, reload_env
 reload_env("{alpaca_env_path}", override=True)
+if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
+    for line in Path("{alpaca_env_path}").read_text(encoding="utf-8").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            os.environ[key] = value
 
 api_key, secret_key, base_url = _resolve_alpaca_env()
 
@@ -362,7 +365,24 @@ print("✓ ALPACA schema with .env file works")
                 f.write(test_script)
                 script_path = f.name
 
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30, check=True)  # AI-AGENT-REF: Added timeout and check for security
+            env = _subprocess_env()
+            for key in (
+                "ALPACA_API_KEY",
+                "ALPACA_SECRET_KEY",
+                "APCA_API_KEY_ID",
+                "APCA_API_SECRET_KEY",
+                "PYTEST_RUNNING",
+                "TESTING",
+            ):
+                env.pop(key, None)
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,  # AI-AGENT-REF: Added timeout and check for security
+                env=env,
+            )
             assert result.returncode == 0, f"ALPACA test failed: {result.stderr}"
             os.unlink(script_path)
 
@@ -402,7 +422,14 @@ print("✓ All UTC timestamp functions work correctly")
             script_path = f.name
 
         try:
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30, check=True)  # AI-AGENT-REF: Added timeout and check for security
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,  # AI-AGENT-REF: Added timeout and check for security
+                env=_subprocess_env(),
+            )
             if result.stderr:
                 pass
             assert result.returncode == 0, f"UTC test failed: {result.stderr}"
@@ -432,7 +459,14 @@ print("✓ Main module import works correctly")
             script_path = f.name
 
         try:
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30, check=True)  # AI-AGENT-REF: Added timeout and check for security
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,  # AI-AGENT-REF: Added timeout and check for security
+                env=_subprocess_env(),
+            )
             if result.stderr:
                 pass
             assert result.returncode == 0, f"Lazy import test failed: {result.stderr}"

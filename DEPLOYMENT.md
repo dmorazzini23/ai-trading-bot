@@ -36,8 +36,7 @@ This guide covers deployment strategies, environment setup, CI/CD configuration,
 - **Network**: Redundant connections, <50ms latency to exchanges
 
 #### Broker SDK Versions
-- **alpaca-trade-api**: `3.2.0` (runtime pin; rebuild images after upgrading).
-- **alpaca-py**: `0.42.1` (installed for tests and tooling; exclude from runtime containers when possible).
+- **alpaca-py**: `0.42.1` (runtime pin; rebuild images after upgrading).
 
 ### Development Environment
 

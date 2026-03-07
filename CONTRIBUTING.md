@@ -12,7 +12,7 @@
 - **Structured logging only**. Use existing JSON logging helpers; do not print().
 - **Use `runtime`** (an instance of `BotRuntime`) across hot paths. **Do not introduce `ctx`**.
 - Keep `ai_trading` imports stable; avoid dynamic `exec`/`eval`.
-- **Alpaca SDK policy**: runtime pins to `alpaca-trade-api==3.2.0`; keep `alpaca-py==0.42.1` for tests and helper tooling only.
+- **Alpaca SDK policy**: runtime pins to `alpaca-py==0.42.1`.
 
 ## Runtime & Config
 - `TradingConfig`: read-only settings (broker creds, paths, limits).
@@ -24,7 +24,7 @@
 - Prefer explicit imports; avoid wildcard.
 
 ## Testing & Validation
-- Compile: `python -m py_compile $(git ls-files '*.py')`
+- Compile: `python3 -m py_compile $(git ls-files '*.py')`
 - Lint (optional): `ruff check .` / `flake8` if configured.
 - Service: `sudo systemctl restart ai-trading.service`
 - Logs: `journalctl -u ai-trading.service -f | sed -n '1,200p'`

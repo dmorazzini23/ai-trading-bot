@@ -508,17 +508,8 @@ def _initialize_alpaca_clients() -> bool:
             be.trading_client = None
             be.data_client = None
             return False
-        factory_cls = trading_client_cls
-        legacy_module = str(getattr(trading_client_cls, "__module__", ""))
-        if legacy_module.startswith("alpaca_trade_api"):
-            try:
-                from alpaca.trading.client import TradingClient as _NativeTradingClient
-            except Exception:
-                _NativeTradingClient = None
-            if _NativeTradingClient is not None:
-                factory_cls = _NativeTradingClient
         try:
-            raw_trading_client = factory_cls(
+            raw_trading_client = trading_client_cls(
                 api_key=key,
                 secret_key=secret,
                 paper="paper" in str(base_url).lower(),

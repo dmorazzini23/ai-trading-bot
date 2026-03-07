@@ -10,7 +10,6 @@ aiohttp==3.12.15
     # via -r requirements.txt
 aiosignal==1.4.0
     # via aiohttp
-alpaca-trade-api==3.2.0
 alpaca-py==0.42.1
     # via
     #   -r requirements-dev.txt

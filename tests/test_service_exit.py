@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 
 def test_service_exits_cleanly():
@@ -17,5 +18,11 @@ def test_service_exits_cleanly():
         sys.exit(m.main(['--iterations','1','--interval','0']) or 0)
         '''
     )
-    proc = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True)
+    env = os.environ.copy()
+    project_root = str(Path(__file__).resolve().parents[1])
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        project_root if not existing_pythonpath else f"{project_root}{os.pathsep}{existing_pythonpath}"
+    )
+    proc = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr

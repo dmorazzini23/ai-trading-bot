@@ -64,7 +64,7 @@ Set the following to control position sizing:
 
 ### Alpaca market-data troubleshooting
 
-1. **Confirm SDK pinning.** Production deployments must run `alpaca-trade-api==3.2.0`. Check the installed wheel with `pip show alpaca-trade-api` on the host and redeploy if the version differs.
+1. **Confirm SDK pinning.** Production deployments must run `alpaca-py==0.42.1`. Check the installed wheel with `pip show alpaca-py` on the host and redeploy if the version differs.
 2. **Verify market-data entitlements.** Use the service credentials to call the `/v2/stocks/{symbol}/bars` endpoint via `curl` or the `StockHistoricalDataClient`. A `403` or IEX-only data indicates the account has fallen back to the free tier; open a support ticket to restore SIP access when required.
 3. **Inspect live feed metadata.** Run an interactive shell and call `ai_trading.data.fetch.get_minute_df("AAPL", start, end)` while the incident is active. The returned DataFrame exposes `df.attrs["source_label"]` (and related keys) so you can confirm which provider served the data when `IEX_MINUTE_DATA_STALE` triggers.
 4. **Restore primary feed preference.** After Alpaca minute data is healthy, clear any forced fallback by reloading the service (or calling the admin task) so that `provider_monitor` observes fresh bars and stops preferring the backup provider.

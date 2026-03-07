@@ -77,7 +77,7 @@ secret-scan:
 
 legacy-scan:
 	@echo "== legacy import scan =="
-	@ci/scripts/forbid_alpaca_trade_api.sh
+	@ci/scripts/verify_alpaca_sdk.sh
 	@ci/scripts/forbid_legacy_imports.sh
 	@$(PYTHON) tools/ci_guard_no_apca.py
 

@@ -11,4 +11,4 @@ def test_main_exits_when_alpaca_sdk_missing(monkeypatch, caplog):
         with pytest.raises(SystemExit) as excinfo:
             m.main([])
     assert excinfo.value.code == 1
-    assert any("pip install alpaca-trade-api==3.2.0" in record.getMessage() for record in caplog.records)
+    assert any("pip install alpaca-py==0.42.1" in record.getMessage() for record in caplog.records)

@@ -27091,6 +27091,7 @@ app = Flask(__name__)
 
 @app.route("/health", methods=["GET"])
 @app.route("/health_check", methods=["GET"])
+@app.route("/healthz", methods=["GET"])
 def health() -> str:
     """Health endpoint exposing basic system metrics."""
     try:

@@ -43,7 +43,7 @@ SIP entitlements are restored before switching the intraday feed to `sip`.
 ### Validation Checklist
 
 1. Export the required variables in the deployment environment.
-2. Run `pip show alpaca-trade-api` to confirm runtime pins `3.2.0`.
+2. Run `pip show alpaca-py` to confirm runtime pins `0.42.1`.
 3. Start the service and watch for
    `TRADING_PARAMS_VALIDATED`/`DATA_PROVIDER_READY` logs.
 4. For SIP, call `alpaca-proxy/data/v2/stocks/AAPL/bars` with the deployment

@@ -1,6 +1,6 @@
 # AGENTS: Operating Contract & Playbook
 
-**Last updated:** 2025-10-02  
+**Last updated:** 2026-03-06  
 **Runtime targets:** Ubuntu 24.04 • Python 3.12.3 • zoneinfo-only • API on :9001 • Health server on `HEALTHCHECK_PORT` (default :8081)
 
 This document is the authoritative playbook for Codex-style editing in this repository. If reality drifts, update this file immediately.
@@ -16,8 +16,8 @@ This document is the authoritative playbook for Codex-style editing in this repo
   - If `HEALTHCHECK_PORT == API_PORT`, the API may serve health endpoints on the shared port; otherwise run health in its own thread/process.
 - **Configuration access:** via `ai_trading.config.management` only (`get_env`, `reload_env`, `SEED`). No ad-hoc `os.environ` walks in runtime code.
 - **SDK policy:**
-  - Runtime: **`alpaca-trade-api` 3.2.0**.
-  - Dev/test-only: **`alpaca-py (dev/test-only)`** 0.42.0 is available for mocks, fixtures, or tooling—never ship it in production execution paths.
+  - Runtime: **`alpaca-py` 0.42.1**.
+  - Avoid `alpaca-trade-api` in runtime paths.
 - **Logging:** Structured logger only; no raw `print` in runtime or tests unless asserting stdout.
 - **Shims:** **No shims.** Fix root causes directly; do not add compatibility layers or wrapper modules.
 
@@ -38,7 +38,7 @@ Agents must run and report these checks when changing runtime or library code (d
 - `pytest -q`
 - `ruff` (limit to changed paths when possible)
 - `mypy` (at least on changed files/modules)
-- `python -m py_compile $(git ls-files '*.py')`
+- `python3 -m py_compile $(git ls-files '*.py')`
 
 Always add or update unit tests when fixing bugs or adding behavior.
 
@@ -74,6 +74,5 @@ Use these stable strings to anchor surgical edits:
 ## 7. Anti-Patterns to Avoid
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
 - Adding raw `print` statements or silent exception handling.
-- Migrating runtime off `alpaca-trade-api` without explicit approval.
+- Migrating runtime off pinned `alpaca-py` without explicit approval.
 - Conflating API and health ports, or assuming shared-port deployment without checking `HEALTHCHECK_PORT`.
-

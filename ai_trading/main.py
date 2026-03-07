@@ -252,13 +252,13 @@ def _http_profile_logging_enabled() -> bool:
 def _safe_find_spec(module_name: str):
     try:
         return importlib.util.find_spec(module_name)
-    except ValueError:
+    except (ValueError, ImportError, ModuleNotFoundError):
         return None
 
 
-ALPACA_AVAILABLE = _safe_find_spec("alpaca_trade_api") is not None
+ALPACA_AVAILABLE = _safe_find_spec("alpaca.trading.client") is not None
 if not ALPACA_AVAILABLE:
-    if sys.modules.get("alpaca_trade_api") is not None:
+    if sys.modules.get("alpaca.trading.client") is not None or sys.modules.get("alpaca") is not None:
         ALPACA_AVAILABLE = True
 
 from ai_trading.settings import get_seed_int
@@ -1448,7 +1448,7 @@ def _check_alpaca_sdk() -> None:
         )
         return
 
-    logger.error("ALPACA_TRADE_API_REQUIRED: pip install alpaca-trade-api==3.2.0 is required")
+    logger.error("ALPACA_SDK_REQUIRED: pip install alpaca-py==0.42.1 is required")
     raise SystemExit(1)
 
 

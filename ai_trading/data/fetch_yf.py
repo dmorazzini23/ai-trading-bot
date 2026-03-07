@@ -16,7 +16,7 @@ import pandas as pd
 try:  # optional dependency; tests stub behaviour when absent
     import yfinance as yf
 except Exception:  # pragma: no cover - optional dependency missing
-    yf = None  # type: ignore[assignment]
+    yf = None
 
 from ai_trading.config.management import get_env
 from ai_trading.data.normalize import ensure_ohlcv
@@ -35,12 +35,29 @@ def _env_int(name: str, default: int) -> int:
     return int(default if value is None else value)
 
 
-YF_TIMEOUT = _env_float("YF_TIMEOUT", 8.0)
-YF_RETRIES = _env_int("YF_RETRIES", 3)
-YF_BACKOFF = _env_float("YF_BACKOFF", 0.7)
-YF_CHUNK_SIZE = _env_int("YF_CHUNK_SIZE", 40)
-YF_CACHE_DIR = Path(get_env("YF_CACHE_DIR", "/var/cache/ai-trading-bot/yf"))
-YF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+def _yf_timeout() -> float:
+    return _env_float("YF_TIMEOUT", 8.0)
+
+
+def _yf_retries() -> int:
+    return max(1, _env_int("YF_RETRIES", 3))
+
+
+def _yf_backoff() -> float:
+    return max(0.1, _env_float("YF_BACKOFF", 0.7))
+
+
+def _yf_chunk_size() -> int:
+    return max(1, _env_int("YF_CHUNK_SIZE", 40))
+
+
+def _yf_cache_dir() -> Path:
+    cache_dir = Path(get_env("YF_CACHE_DIR", "/var/cache/ai-trading-bot/yf"))
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.debug("YF_CACHE_DIR_CREATE_FAILED", extra={"path": str(cache_dir)}, exc_info=True)
+    return cache_dir
 
 _VALID_INTERVALS = frozenset(
     {
@@ -68,7 +85,7 @@ _INTERVAL_ALIASES = {
 
 
 def _sleep_backoff(attempt: int) -> None:
-    delay = max(0.1, (attempt + 1) * YF_BACKOFF)
+    delay = max(0.1, (attempt + 1) * _yf_backoff())
     time.sleep(delay)
 
 
@@ -86,7 +103,7 @@ def _download_batch(
         group_by="ticker",
         auto_adjust=False,
         progress=False,
-        timeout=YF_TIMEOUT,
+        timeout=_yf_timeout(),
         threads=False,
         repair=True,
     )
@@ -114,7 +131,7 @@ def normalize_yf_interval(interval: str | None) -> str | None:
 
 
 def _cache_read_or_none(key: str) -> Optional[pd.DataFrame]:
-    path = YF_CACHE_DIR / key
+    path = _yf_cache_dir() / key
     if not path.exists():
         return None
     try:
@@ -125,7 +142,7 @@ def _cache_read_or_none(key: str) -> Optional[pd.DataFrame]:
 
 
 def _cache_write(key: str, df: pd.DataFrame) -> None:
-    path = YF_CACHE_DIR / key
+    path = _yf_cache_dir() / key
     try:
         df.to_parquet(path)
     except Exception:
@@ -143,12 +160,14 @@ def fetch_yf_batched(
     if pytest_mode and not os.getenv("PYTEST_YF_ALLOW_NETWORK"):
         return out
 
-    for i in range(0, len(tickers_unique), YF_CHUNK_SIZE):
-        chunk = tickers_unique[i : i + YF_CHUNK_SIZE]
+    chunk_size = _yf_chunk_size()
+    retries = _yf_retries()
+    for i in range(0, len(tickers_unique), chunk_size):
+        chunk = tickers_unique[i : i + chunk_size]
         cache_key = _cache_key(chunk, start, end, period, normalized_interval)
         df: pd.DataFrame | None = _cache_read_or_none(cache_key)
         if df is None:
-            for attempt in range(max(1, YF_RETRIES)):
+            for attempt in range(retries):
                 try:
                     df = _download_batch(
                         chunk,

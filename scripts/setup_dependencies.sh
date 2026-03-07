@@ -54,13 +54,13 @@ fi
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip install --upgrade pip
-pip install -r requirements.txt
-"$ROOT_DIR/ci/scripts/forbid_alpaca_trade_api.sh"
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
+"$ROOT_DIR/ci/scripts/verify_alpaca_sdk.sh"
 
 # Verify TA-Lib installation
 echo "Verifying TA-Lib installation..."
-python -c "import talib; print('TA-Lib successfully installed and working!')" || {
+python3 -c "import talib; print('TA-Lib successfully installed and working!')" || {
     echo "WARNING: TA-Lib Python package installation failed."
     echo "The system will use fallback implementations."
     echo "For enhanced technical analysis, ensure TA-Lib is properly installed:"
@@ -72,6 +72,5 @@ echo "Setup complete!"
 echo ""
 echo "Next steps:"
 echo "1. Copy .env.example to .env and configure your API keys"
-echo "2. Run the trading bot with: python -m ai_trading"
+echo "2. Run the trading bot with: python3 -m ai_trading"
 echo "3. Check logs/ directory for execution logs"
-

@@ -18,18 +18,18 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 > Python **3.12** required. Tooling targets **py312**.
 
 ```bash
-python -m pip install -U pip
-pip install -e .  # installs runtime deps including alpaca-trade-api==3.2.0
-python -c "import alpaca_trade_api, pkgutil; assert alpaca_trade_api.__version__=='3.2.0'"  # verify runtime SDK pin
-python -m ai_trading --dry-run
+python3 -m pip install -U pip
+pip install -e .  # installs runtime deps including alpaca-py==0.42.1
+python3 -c "import importlib.metadata as m; assert m.version('alpaca-py')=='0.42.1'"  # verify runtime SDK pin
+python3 -m ai_trading --dry-run
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
-RUN_HEALTHCHECK=1 python -m ai_trading.app &
+RUN_HEALTHCHECK=1 python3 -m ai_trading.app &
 curl -s http://127.0.0.1:8081/healthz
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/metrics
 ```
 
-The runtime SDK check ensures `alpaca-trade-api==3.2.0` is active; install it explicitly with `pip install alpaca-trade-api==3.2.0` if the assertion fails.
+The runtime SDK check ensures `alpaca-py==0.42.1` is active; install it explicitly with `pip install alpaca-py==0.42.1` if the assertion fails.
 
 The dry run exits with status **0** and prints `INDICATOR_IMPORT_OK`, confirming optional indicator modules are available.
 
@@ -40,7 +40,7 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 
 The health server binds to `HEALTHCHECK_PORT` (default **8081**) and must not reuse the API port (**9001**).
 
-Runtime pins to **`alpaca-trade-api==3.2.0`**. Install **`alpaca-py`** only in dev/test environments for mocks and helper tooling.
+Runtime pins to **`alpaca-py==0.42.1`**.
 Startup validates required environment variables (API keys, feed selection, risk
 parameters) at launch and exits early with clear remediation hints if
 configuration is missing.
@@ -259,7 +259,7 @@ Symbols are automatically screened based on volume (>100K daily) and volatility 
 This trading bot requires both **Python packages** and **system libraries** for optimal performance:
 
 #### Required System Dependencies
-- **Python 3.8+**: Core runtime environment
+- **Python 3.12.3**: Core runtime environment
 - **Git**: For repository management and updates
 
 #### Python Dependencies
@@ -268,8 +268,7 @@ All Python packages are specified in `requirements.txt`, including:
 - **pandas**, **numpy**: Data processing and numerical computations
 - **pandas-market-calendars**: Exchange session calendars
 - **scikit-learn**: Machine learning algorithms
-- **alpaca-trade-api==3.2.0**: Runtime broker integration
-- **alpaca-py==0.42.x**: Dev/test-only helpers, mocks, and tooling
+- **alpaca-py==0.42.1**: Runtime broker integration
 - **tenacity** *(optional)*: Robust retry helpers; falls back to a lightweight internal version if absent
 
 **Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
@@ -840,7 +839,7 @@ fall back to another feed or skip the symbol to avoid infinite loops.
   equity-based sizing. Optionally set `MAX_POSITION_SIZE_PCT` to cap positions as
   a percentage of the portfolio.
 
-If any `ALPACA_*` credentials are missing or `alpaca-trade-api` is not installed,
+If any `ALPACA_*` credentials are missing or `alpaca-py` is not installed,
 the bot now aborts startup with a clear error instead of running without broker
 connectivity.
 
@@ -1636,7 +1635,7 @@ Environment="AI_TRADING_TICKERS_CSV=/etc/ai-trading-bot/tickers.csv"
 
 ### Runbook
 ```bash
-python -m py_compile $(git ls-files '*.py') || exit 1
+python3 -m py_compile $(git ls-files '*.py') || exit 1
 sudo systemctl restart ai-trading.service
 journalctl -u ai-trading.service -f | sed -n '1,200p'
 ```

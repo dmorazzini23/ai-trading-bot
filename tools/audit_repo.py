@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Repository audit utility.
 
 AI-AGENT-REF: emits code hygiene metrics and fails on risky constructs.
