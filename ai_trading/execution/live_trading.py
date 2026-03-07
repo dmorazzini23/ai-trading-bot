@@ -270,9 +270,11 @@ def _pytest_mode_active() -> bool:
     """Return ``True`` when pytest appears to be driving execution."""
 
     env_token = _runtime_env("PYTEST_RUNNING")
-    if isinstance(env_token, str) and env_token.strip().lower() in {"1", "true", "yes", "on"}:
-        return True
-    return False
+    if isinstance(env_token, bool):
+        return env_token
+    if env_token is not None and str(env_token).strip():
+        return str(env_token).strip().lower() in {"1", "true", "yes", "on"}
+    return "pytest" in sys.modules
 
 
 def _log_quote_entry_block(symbol: str, gate: str, extra: Mapping[str, Any] | None = None) -> None:
@@ -491,7 +493,7 @@ def _mark_long_only_reason(
 def _require_bid_ask_quotes() -> bool:
     """Return ``True`` when execution requires bid/ask quotes."""
 
-    if _runtime_env("PYTEST_RUNNING"):
+    if _pytest_mode_active():
         return False
     try:
         cfg = get_trading_config()

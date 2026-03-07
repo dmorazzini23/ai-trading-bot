@@ -56,7 +56,11 @@ def _now_ts() -> float:
     return 0.0
 
 
-from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
+from ai_trading.config.management import (
+    MAX_EMPTY_RETRIES,
+    get_env,
+    set_runtime_env_override,
+)
 from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 from ai_trading.data.timeutils import ensure_utc_datetime
 from ai_trading.logging import (
@@ -145,12 +149,12 @@ _DATA_HEALTH_STATE: dict[str, Any] = {
 
 
 def _should_bootstrap_primary_first() -> bool:
-    raw = os.getenv("AI_TRADING_BOOTSTRAP_PRIMARY_ONLY", "1").strip()
+    raw = str(get_env("AI_TRADING_BOOTSTRAP_PRIMARY_ONLY", "1") or "").strip()
     return raw.lower() not in {"0", "false"}
 
 
 def _configured_primary_provider() -> str | None:
-    provider = os.getenv("DATA_PROVIDER", "").strip()
+    provider = str(get_env("DATA_PROVIDER", "") or "").strip()
     return provider or None
 
 
@@ -537,7 +541,7 @@ def _resolve_consecutive_failure_threshold() -> int:
         except Exception:
             candidate = None
     if candidate is None:
-        raw = os.getenv("AI_TRADING_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD", "").strip()
+        raw = str(get_env("AI_TRADING_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD", "") or "").strip()
         if raw:
             try:
                 candidate = int(raw)
@@ -705,7 +709,7 @@ def _resolve_host_limit() -> tuple[str | None, int]:
         except Exception:
             env_value = None
         if env_value is None:
-            env_value = os.getenv(key)
+            env_value = get_env(key)
         if env_value in (None, ""):
             continue
         try:
@@ -880,7 +884,7 @@ def _sip_allowed() -> bool:
     """Return ``True`` when SIP access is permitted for the current process."""
     force_flag = bool(globals().get("_FORCE_SIP_REQUEST"))
     override = globals().get("_ALLOW_SIP")
-    allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower()
+    allow_env = str(get_env("ALPACA_ALLOW_SIP", "") or "").strip().lower()
 
     if force_flag and override is not False:
         return True
@@ -891,7 +895,7 @@ def _sip_allowed() -> bool:
     if allow_env in {"1", "true", "yes", "on"}:
         return True
     if _detect_pytest_env():
-        if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"):
+        if get_env("ALPACA_API_KEY") and get_env("ALPACA_SECRET_KEY"):
             return True
     try:
         resolved = resolve_alpaca_feed("sip")
@@ -904,7 +908,7 @@ def _sip_explicitly_disabled() -> bool:
     override = globals().get("_ALLOW_SIP")
     if override is False:
         return True
-    allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower()
+    allow_env = str(get_env("ALPACA_ALLOW_SIP", "") or "").strip().lower()
     return allow_env in {"0", "false", "no", "off"}
 
 
@@ -981,7 +985,7 @@ def _ensure_override_state_current() -> None:
 
 def _current_intraday_feed() -> str:
     """Return the active intraday feed identifier."""
-    env_feed = os.getenv("DATA_FEED_INTRADAY")
+    env_feed = get_env("DATA_FEED_INTRADAY")
     if env_feed not in (None, ""):
         normalized = env_feed.strip().lower()
         if normalized:
@@ -1001,7 +1005,7 @@ def _current_intraday_feed() -> str:
         if settings is not None:
             feed = getattr(settings, "data_feed_intraday", None) or getattr(settings, "alpaca_data_feed", None)
     if feed in (None, ""):
-        feed = os.getenv("ALPACA_DATA_FEED")
+        feed = get_env("ALPACA_DATA_FEED")
     normalized = str(feed or "iex").strip().lower()
     return normalized or "iex"
 
@@ -1716,7 +1720,7 @@ def _env_flag_enabled(name: str, default: str = "0") -> bool:
     try:
         raw_value = get_env(name, default)
     except Exception:
-        raw_value = os.environ.get(name, default)
+        raw_value = get_env(name, default)
     if raw_value is None:
         raw_value = default
     if isinstance(raw_value, bool):
@@ -1982,7 +1986,7 @@ _BACKUP_PRIMARY_PROBE_AT: dict[tuple[str, str], datetime] = {}
 _BACKUP_SKIP_WINDOW = timedelta(minutes=10)
 _GLOBAL_BACKUP_SKIP_UNTIL: dict[str, datetime] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
-_FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
+_FALLBACK_TTL_SECONDS = int(get_env("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
 # symbol/timeframe per cycle. The mapping is pruned as cycles advance to avoid
 # unbounded growth.
@@ -2002,14 +2006,14 @@ def _global_backup_skip_enabled(timeframe: str) -> bool:
 
     if str(timeframe or "").strip().lower() != "1min":
         return False
-    raw = os.getenv("AI_TRADING_GLOBAL_BACKUP_SKIP_ENABLED", "1").strip().lower()
+    raw = str(get_env("AI_TRADING_GLOBAL_BACKUP_SKIP_ENABLED", "1") or "").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
 
 def _global_backup_skip_window() -> timedelta:
     """Return global backup skip window duration."""
 
-    raw = os.getenv("AI_TRADING_GLOBAL_BACKUP_SKIP_SECONDS", "45").strip()
+    raw = str(get_env("AI_TRADING_GLOBAL_BACKUP_SKIP_SECONDS", "45") or "").strip()
     try:
         seconds = int(raw)
     except (TypeError, ValueError):
@@ -2067,7 +2071,7 @@ def _clear_global_backup_skip(timeframe: str) -> None:
 def _backup_primary_probe_interval() -> timedelta:
     """Return interval between forced primary probes during backup skip windows."""
 
-    raw = os.getenv("BACKUP_PRIMARY_PROBE_SECONDS", "90").strip()
+    raw = str(get_env("BACKUP_PRIMARY_PROBE_SECONDS", "90") or "").strip()
     try:
         seconds = int(raw)
     except (TypeError, ValueError):
@@ -2788,7 +2792,7 @@ def _mark_fallback(
             fallback_feed=fallback_name or resolved_feed or provider_for_register,
         )
 
-    allow_env = os.getenv("ALPACA_ALLOW_SIP", "").strip()
+    allow_env = str(get_env("ALPACA_ALLOW_SIP", "") or "").strip()
     allow_override = globals().get("_ALLOW_SIP")
     try:
         sip_configured = bool(_sip_configured())
@@ -4251,9 +4255,9 @@ _FINNHUB_CAPTURE_KEYS: set[str] = set()
 
 def _pytest_logging_active() -> bool:
     """Return ``True`` when pytest's logging capture is active."""
-    if os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}:
+    if get_env("PYTEST_RUNNING") in {"1", "true", "True"}:
         return True
-    if os.getenv("PYTEST_CURRENT_TEST"):
+    if get_env("PYTEST_CURRENT_TEST"):
         return True
     try:
         root_handlers = getattr(logging.getLogger(), "handlers", [])
@@ -4412,7 +4416,7 @@ def _symbol_exists(symbol: str) -> bool:
             return False
     except Exception:
         pass
-    path = os.getenv("AI_TRADING_TICKERS_CSV") or os.getenv("TICKERS_FILE_PATH")
+    path = get_env("AI_TRADING_TICKERS_CSV") or get_env("TICKERS_FILE_PATH")
     if not path:
         try:
             from importlib.resources import files as pkg_files
@@ -4611,7 +4615,7 @@ def _env_source_override_raw(timeframe: str) -> tuple[str, ...] | None:
     try:
         raw_value = get_env(env_key)
     except Exception:
-        raw_value = os.getenv(env_key)
+        raw_value = get_env(env_key)
     normalized = str(raw_value or "").strip().lower()
     if not normalized or normalized in {"auto", "default"}:
         return None
@@ -4632,7 +4636,7 @@ def _env_source_override_raw(timeframe: str) -> tuple[str, ...] | None:
             try:
                 candidate = get_env(key)
             except Exception:
-                candidate = os.getenv(key)
+                candidate = get_env(key)
             if candidate:
                 feed_candidates.append(str(candidate).strip().lower())
         for candidate in feed_candidates:
@@ -4652,7 +4656,7 @@ def _source_regime_mode() -> str:
     try:
         raw_value = get_env("AI_TRADING_SOURCE_REGIME_MODE")
     except Exception:
-        raw_value = os.getenv("AI_TRADING_SOURCE_REGIME_MODE")
+        raw_value = get_env("AI_TRADING_SOURCE_REGIME_MODE")
     mode = str(raw_value or "").strip().lower()
     if mode in {"consistent", "lockstep", "strict"}:
         return "consistent"
@@ -4705,7 +4709,7 @@ def refresh_default_feed(feed: str | None = None) -> str:
     global _DEFAULT_FEED, _DATA_FEED_OVERRIDE, _LAST_OVERRIDE_LOGGED
 
     if feed is None:
-        env_source = os.getenv("MINUTE_SOURCE")
+        env_source = get_env("MINUTE_SOURCE")
         if env_source:
             candidate = env_source
         else:
@@ -4794,10 +4798,10 @@ def _now_monotonic() -> float:
 
 
 def _detect_pytest_env() -> bool:
-    flag = os.getenv("PYTEST_RUNNING")
+    flag = get_env("PYTEST_RUNNING")
     if flag and str(flag).strip().lower() not in {"0", "false", "no", "off"}:
         return True
-    if os.getenv("PYTEST_CURRENT_TEST"):
+    if get_env("PYTEST_CURRENT_TEST"):
         return True
     return False
 
@@ -4888,7 +4892,7 @@ def _reset_provider_auth_state_for_tests() -> None:
 
 
 def _sip_configured() -> bool:
-    if os.getenv("PYTEST_RUNNING"):
+    if get_env("PYTEST_RUNNING"):
         return _sip_allowed()
     if not _sip_allowed():
         return False
@@ -5091,9 +5095,9 @@ def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
     end = now - _dt.timedelta(minutes=1)
     tf = str(timeframe).lower()
     if "day" in tf:
-        days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", "200"))
+        days = int(get_env("DATA_LOOKBACK_DAYS_DAILY", "200"))
     else:
-        days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", "5"))
+        days = int(get_env("DATA_LOOKBACK_DAYS_MINUTE", "5"))
     start = end - _dt.timedelta(days=days)
     return (start, end)
 
@@ -5935,7 +5939,7 @@ def _normalize_finnhub_bars(frame: Any) -> pd.DataFrame | Any:
 def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     pd_local = _ensure_pandas()
     fetcher_is_stub = getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False)
-    if fetcher_is_stub and os.getenv("FINNHUB_API_KEY"):
+    if fetcher_is_stub and get_env("FINNHUB_API_KEY"):
         fetcher_is_stub = False
     if fetcher_is_stub:
         if pd_local is None:
@@ -5985,14 +5989,14 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
 
     promoted = fallback_order.resolve_promoted_provider(symbol, interval=interval)
     if promoted:
-        if promoted in {"finnhub", "finnhub_low_latency"} and not os.getenv("FINNHUB_API_KEY"):
+        if promoted in {"finnhub", "finnhub_low_latency"} and not get_env("FINNHUB_API_KEY"):
             fallback_order.demote_provider(symbol, promoted)
         else:
             provider_str = promoted
             normalized = promoted
 
     if normalized in {"finnhub", "finnhub_low_latency"}:
-        finnhub_env = os.getenv("ENABLE_FINNHUB")
+        finnhub_env = get_env("ENABLE_FINNHUB", resolve_aliases=False)
         if finnhub_env is not None and finnhub_env.strip().lower() in {"0", "false", "no", "off"}:
             fallback_order.demote_provider(symbol, provider_str)
             provider_str = "yahoo"
@@ -6778,7 +6782,7 @@ def _repair_rth_minute_gaps(
         and (provider_attr or "alpaca").startswith("alpaca")
     )
     if severe_primary_gap:
-        finnhub_api_key = os.getenv("FINNHUB_API_KEY")
+        finnhub_api_key = get_env("FINNHUB_API_KEY")
         if finnhub_api_key:
             promoted_provider = fallback_order.promote_high_resolution(symbol, provider="finnhub")
         try:
@@ -6964,7 +6968,7 @@ def _repair_rth_minute_gaps(
 
 
 def _read_env_float(key: str) -> float | None:
-    raw = os.getenv(key, "").strip()
+    raw = str(get_env(key, "") or "").strip()
     if raw:
         try:
             return float(raw)
@@ -7653,7 +7657,7 @@ def _fetch_bars(
     pytest_active = _detect_pytest_env()
     global _NO_SESSION_ALPACA_OVERRIDE, _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count, _alpaca_empty_streak
     if pytest_active:
-        os.environ.setdefault("PYTEST_RUNNING", "1")
+        set_runtime_env_override("PYTEST_RUNNING", "1")
     if pd is None:
         raise RuntimeError("pandas not available")
     if start is None:
@@ -7726,7 +7730,7 @@ def _fetch_bars(
         )
         prelogged_empty_metric = True
         globals()["_NO_SESSION_ALPACA_OVERRIDE"] = None
-        override_env = os.getenv("ENABLE_HTTP_FALLBACK")
+        override_env = get_env("ENABLE_HTTP_FALLBACK")
         if override_env is not None:
             normalized_env = override_env.strip().lower()
             env_allows_http = bool(normalized_env) and normalized_env not in {"0", "false", "no", "off"}
@@ -8353,7 +8357,7 @@ def _fetch_bars(
     ):
         return _finalize_frame(None)
 
-    env_has_keys = bool(os.getenv("ALPACA_API_KEY")) and bool(os.getenv("ALPACA_SECRET_KEY"))
+    env_has_keys = bool(get_env("ALPACA_API_KEY")) and bool(get_env("ALPACA_SECRET_KEY"))
     if not _has_alpaca_keys() and not _pytest_active():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
@@ -8409,7 +8413,7 @@ def _fetch_bars(
             skip_until_dt = global_skip_until_dt
             skip_from_global = True
     if pytest_active and skip_until_dt is not None:
-        preserve_skip = bool(os.getenv("ENABLE_HTTP_FALLBACK"))
+        preserve_skip = bool(get_env("ENABLE_HTTP_FALLBACK"))
         if not preserve_skip:
             _clear_backup_skip(symbol, _interval)
             skip_until_dt = None
@@ -10978,7 +10982,7 @@ def _fetch_bars(
     fallback = None
     sip_locked_initial = _is_sip_unauthorized()
     _allow_sip_override = globals().get("_ALLOW_SIP")
-    http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+    http_fallback_env = get_env("ENABLE_HTTP_FALLBACK")
     http_env_enabled = False
     if http_fallback_env is not None:
         http_env_enabled = http_fallback_env.strip().lower() not in {
@@ -10995,7 +10999,7 @@ def _fetch_bars(
     explicit_sip_override = (
         _allow_sip_override is not None
         and (
-            bool(os.getenv("PYTEST_RUNNING"))
+            bool(get_env("PYTEST_RUNNING"))
             or http_env_enabled
             or http_fallback_enabled
         )
@@ -11463,7 +11467,7 @@ def get_minute_df(
     _set_fetch_state(_state)
     _GLOBAL_RETRY_LIMIT_LOGGED = False
     _clear_gap_ratio_state()
-    testing_mode = os.getenv("TESTING")
+    testing_mode = get_env("TESTING")
     if testing_mode and testing_mode.strip().lower() in {"1", "true", "yes"}:
         _clear_backup_skip(symbol, "1Min")
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -11486,7 +11490,7 @@ def get_minute_df(
     _state["primary_label"] = primary_label
     _state["backup_label"] = backup_label
 
-    http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+    http_fallback_env = get_env("ENABLE_HTTP_FALLBACK")
     if http_fallback_env is None:
         fallback_allowed_flag = bool(http_fallback_allowed)
     else:
@@ -11498,9 +11502,9 @@ def get_minute_df(
             enable_flag=env_enabled,
         )
 
-    backup_env_override = os.getenv("BACKUP_DATA_PROVIDER")
+    backup_env_override = get_env("BACKUP_DATA_PROVIDER")
     if backup_env_override is None:
-        backup_env_override = os.getenv("BACKUP_PROVIDER")
+        backup_env_override = get_env("BACKUP_PROVIDER")
     backup_env_value = (backup_env_override or "").strip().lower()
     if backup_env_value:
         _state["backup_env_override"] = backup_env_value
@@ -11818,7 +11822,7 @@ def get_minute_df(
                 normalized_feed = _normalize_feed_value(cached_cycle_feed)
             except Exception:
                 normalized_feed = str(cached_cycle_feed).strip().lower()
-    finnhub_key_present = bool(os.getenv("FINNHUB_API_KEY")) and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
+    finnhub_key_present = bool(get_env("FINNHUB_API_KEY")) and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     if tf_key in _SKIPPED_SYMBOLS:
         skip_window_until = skip_until_dt
         skip_window_active_local = skip_window_active
@@ -11885,7 +11889,7 @@ def get_minute_df(
     fallback_logged = False
     fallback_frame: Any | None = None
     backup_attempted = False
-    enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
+    enable_finnhub = str(get_env("ENABLE_FINNHUB", "1") or "").lower() not in ("0", "false")
     has_finnhub = finnhub_key_present
     use_finnhub = enable_finnhub and bool(has_finnhub)
     if forced_provider_label == "finnhub":
@@ -11960,7 +11964,7 @@ def get_minute_df(
             extra={"symbol": symbol, "timeframe": "1Min"},
         )
     if backup_label:
-        prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
+        prefer_primary_first = bool(get_env("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
         if skip_primary_due_to_fallback:
             active_provider = backup_label
         elif prefer_primary_first:
@@ -12006,7 +12010,7 @@ def get_minute_df(
     switch_recorded = False
     forced_threshold_sip_switch_logged = False
 
-    finnhub_api_key = os.getenv("FINNHUB_API_KEY")
+    finnhub_api_key = get_env("FINNHUB_API_KEY")
     if finnhub_api_key and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", True):
         finnhub_frame = _minute_df_from_finnhub(symbol, start_dt, end_dt)
         if finnhub_frame is not None and not getattr(finnhub_frame, "empty", True):
@@ -13043,7 +13047,7 @@ def get_minute_df(
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
     if used_backup:
         _register_backup_skip()
-        http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+        http_fallback_env = get_env("ENABLE_HTTP_FALLBACK")
         if http_fallback_env is None:
             fallback_allowed = False
         else:
@@ -13059,7 +13063,7 @@ def get_minute_df(
         if not fallback_allowed:
             mark_success(symbol, "1Min")
     else:
-        http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+        http_fallback_env = get_env("ENABLE_HTTP_FALLBACK")
         fallback_allowed = (
             False
             if http_fallback_env is None

@@ -6,13 +6,13 @@ export PYTHONHASHSEED=0
 export PYTHONDONTWRITEBYTECODE=1
 
 echo "== Import smoke =="
-python -X dev -c "import ai_trading; print('IMPORT_OK')"
+python3 -X dev -c "import ai_trading; print('IMPORT_OK')"
 
 echo "== CLI dry-run =="
-python -m ai_trading --dry-run || { echo 'dry-run failed'; exit 1; }
+python3 -m ai_trading --dry-run || { echo 'dry-run failed'; exit 1; }
 
 echo "== Heavy import check =="
-python - <<'PY'
+python3 - <<'PY'
 import importlib, sys
 import os
 os.environ.setdefault('PYTEST_RUNNING', '1')

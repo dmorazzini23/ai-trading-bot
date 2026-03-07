@@ -1180,7 +1180,7 @@ Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 Environment=AI_TRADING_MODELS_DIR=/var/lib/ai-trading-bot/models
 Environment=AI_TRADING_OUTPUT_DIR=/var/lib/ai-trading-bot/output
 Environment=API_PORT=9001
-ExecStart=/opt/ai-trading-bot/venv/bin/python -m ai_trading
+ExecStart=/opt/ai-trading-bot/venv/bin/python3 -m ai_trading
 Restart=on-failure
 RestartSec=10
 
@@ -1238,7 +1238,7 @@ export DISABLE_DAILY_RETRAIN=1     # Disable
 python3 -m retrain --trade-log data/trades.csv --model-path artifacts/meta_model.pkl
 
 # Schedule retraining
-echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python -m retrain --trade-log /var/lib/ai-trading/trades.csv" | crontab -
+echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python3 -m retrain --trade-log /var/lib/ai-trading/trades.csv" | crontab -
 ```
 
 ### Maintenance Tasks
@@ -1344,7 +1344,7 @@ make test-all
 
 # 5. Performance profiling (when needed)
 python3 -m cProfile -m ai_trading
-pyinstrument python -m ai_trading
+pyinstrument python3 -m ai_trading
 ```
 
 ### Creating Tests

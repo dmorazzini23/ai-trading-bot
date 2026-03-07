@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -12,15 +11,20 @@ from typing import TYPE_CHECKING, Any
 
 from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
-    build_alpaca_health_payload,
-    build_runtime_health_payload,
+    build_canonical_healthz_payload,
+    build_health_exception_payload,
+    build_service_health_payload,
 )
 from ai_trading.utils.optional_dep import missing
 
 try:
-    from ai_trading.config.management import get_env as _managed_get_env
+    from ai_trading.config.management import (
+        get_env as _managed_get_env,
+        set_runtime_env_override as _set_runtime_env_override,
+    )
 except Exception:  # pragma: no cover - fallback for minimal bootstraps
     _managed_get_env = None
+    _set_runtime_env_override = None
 
 
 def _managed_env(name: str, default: Any = None) -> Any:
@@ -28,10 +32,12 @@ def _managed_env(name: str, default: Any = None) -> Any:
 
     if _managed_get_env is not None:
         try:
+            if name in {"PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING"}:
+                return _managed_get_env(name, default, resolve_aliases=False)
             return _managed_get_env(name, default)
         except Exception:
-            return os.getenv(name, default)
-    return os.getenv(name, default)
+            return default
+    return default
 
 
 try:
@@ -85,13 +91,20 @@ _REQUIRED_TEST_ENV = {
 def _pytest_active() -> bool:
     """Return True when running under pytest (via env hints or modules)."""
     flag = _managed_env("PYTEST_RUNNING")
-    if flag is not None and str(flag).strip():
-        return str(flag).strip().lower() not in {"0", "false", "no", "off"}
+    flag_present = flag is not None and str(flag).strip() != ""
+    if isinstance(flag, bool):
+        flag_truthy = flag
+    elif flag_present:
+        flag_truthy = str(flag).strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        flag_truthy = False
+    if flag_truthy:
+        return True
     current = _managed_env("PYTEST_CURRENT_TEST")
     if current:
         return True
     active = "pytest" in sys.modules
-    if not active and (flag is not None or current):
+    if not active and (flag_present or current):
         _log.debug(
             "PYTEST_DETECT_FALSE",
             extra={
@@ -111,7 +124,8 @@ def _seed_pytest_env_defaults() -> None:
     for key, default in _REQUIRED_TEST_ENV.items():
         if str(_managed_env(key, "")).strip():
             continue
-        os.environ[key] = default
+        if _set_runtime_env_override is not None:
+            _set_runtime_env_override(key, default)
 
 
 class _FallbackResponse:
@@ -539,14 +553,13 @@ def create_app():
         if (not alpaca_import_ok) or (not key) or (not secret):
             shadow = False
 
-        payload = build_runtime_health_payload(
+        payload = build_service_health_payload(
             service_name=_SERVICE_NAME,
             force_ok_for_pytest=pytest_mode,
             healthy_status_mode="service",
             ok_mode="connectivity",
-        )
-        payload["alpaca"] = build_alpaca_health_payload(
-            {
+            env_error=app.config.get("_ENV_ERR"),
+            alpaca_context={
                 "sdk_ok": sdk_ok,
                 "initialized": bool(trading_client),
                 "client_attached": bool(trading_client),
@@ -556,11 +569,9 @@ def create_app():
                 "paper": paper,
                 "shadow_mode": shadow,
             },
-            enrich_from_runtime_env=False,
+            enrich_alpaca_from_runtime_env=False,
         )
         env_err = app.config.get("_ENV_ERR")
-        if env_err and not payload.get("reason"):
-            payload["reason"] = env_err
         if env_err:
             errors.append(str(env_err))
 
@@ -586,20 +597,16 @@ def create_app():
         """Minimal liveness probe with provider diagnostics."""
         try:
             pytest_mode = _pytest_active()
-            payload = build_runtime_health_payload(
+            payload = build_canonical_healthz_payload(
                 service_name=_SERVICE_NAME,
                 force_ok_for_pytest=pytest_mode,
                 healthy_status_mode="service",
                 ok_mode="connectivity",
+                env_error=app.config.get("_ENV_ERR"),
             )
-            payload["alpaca"] = build_alpaca_health_payload()
-            env_err = app.config.get("_ENV_ERR")
-            if not payload.get("ok") and env_err and not payload.get("reason"):
-                payload["reason"] = env_err
-            if pytest_mode:
-                payload["ok"] = True
-                payload.setdefault("status", payload.get("status") or "healthy")
-            elif _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST"):
+            if (not pytest_mode) and (
+                _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
+            ):
                 _log.warning(
                     "PYTEST_OVERRIDE_SKIPPED",
                     extra={
@@ -611,13 +618,7 @@ def create_app():
             return _safe_response(payload, status=200)
         except Exception as exc:
             _log.exception("HEALTHZ_HANDLER_FAILED", exc_info=exc)
-            fallback_payload = {
-                "ok": False,
-                "status": "degraded",
-                "service": "ai-trading",
-                "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                "error": str(exc),
-            }
+            fallback_payload = build_health_exception_payload(exc, service_name=_SERVICE_NAME)
             return _safe_response(fallback_payload, status=500)
 
     @app.route("/metrics")

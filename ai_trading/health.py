@@ -3,12 +3,11 @@ from __future__ import annotations
 """Lightweight health check HTTP server utilities."""
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any, Mapping
 
 from ai_trading.health_payload import (
-    build_alpaca_health_payload,
-    build_runtime_health_payload,
+    build_canonical_healthz_payload,
+    build_health_exception_payload,
 )
 from ai_trading.logging import get_logger
 from ai_trading.app import _install_route_tracker, _ensure_test_client
@@ -108,32 +107,21 @@ class HealthCheck:
 
                 ctx_alpaca = self._get_ctx_attr("alpaca", None)
                 alpaca_ctx = dict(ctx_alpaca) if isinstance(ctx_alpaca, Mapping) else None
-                alpaca_payload = build_alpaca_health_payload(alpaca_ctx)
-
-                payload = build_runtime_health_payload(
+                payload = build_canonical_healthz_payload(
                     service_name=str(service_name or "ai-trading"),
                     force_ok_for_pytest=False,
                     healthy_status_mode="healthy",
                     ok_mode="connectivity",
+                    alpaca_context=alpaca_ctx,
+                    error=err,
                 )
-                payload["alpaca"] = alpaca_payload
-                if err:
-                    payload["ok"] = False
-                    payload["status"] = "degraded"
-                    payload["error"] = err
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "HEALTH_ENDPOINT_ERROR",
                     extra={"error": str(exc)},
                 )
                 payload = _emit_response(
-                    {
-                        "ok": False,
-                        "service": "ai-trading",
-                        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        "status": "degraded",
-                        "error": str(exc) or exc.__class__.__name__,
-                    },
+                    build_health_exception_payload(exc, service_name="ai-trading"),
                     status=500,
                 )
                 return payload

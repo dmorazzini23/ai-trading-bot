@@ -235,4 +235,92 @@ def build_runtime_health_payload(
     return payload
 
 
-__all__ = ["build_runtime_health_payload", "build_alpaca_health_payload"]
+def build_service_health_payload(
+    *,
+    service_name: str = "ai-trading",
+    force_ok_for_pytest: bool = False,
+    healthy_status_mode: str = "service",
+    ok_mode: str = "connectivity",
+    env_error: Any | None = None,
+    alpaca_context: Mapping[str, Any] | None = None,
+    enrich_alpaca_from_runtime_env: bool = True,
+) -> dict[str, Any]:
+    """Build canonical API/health-service payload shared by all health entrypoints."""
+
+    payload = build_runtime_health_payload(
+        service_name=service_name,
+        force_ok_for_pytest=force_ok_for_pytest,
+        healthy_status_mode=healthy_status_mode,
+        ok_mode=ok_mode,
+    )
+    payload["alpaca"] = build_alpaca_health_payload(
+        alpaca_context,
+        enrich_from_runtime_env=enrich_alpaca_from_runtime_env,
+    )
+
+    env_error_text = str(env_error or "").strip()
+    if env_error_text and not payload.get("reason"):
+        payload["reason"] = env_error_text
+
+    if force_ok_for_pytest:
+        payload["ok"] = True
+        payload.setdefault("status", payload.get("status") or "healthy")
+    return payload
+
+
+def build_canonical_healthz_payload(
+    *,
+    service_name: str = "ai-trading",
+    force_ok_for_pytest: bool = False,
+    healthy_status_mode: str = "healthy",
+    ok_mode: str = "connectivity",
+    env_error: Any | None = None,
+    alpaca_context: Mapping[str, Any] | None = None,
+    enrich_alpaca_from_runtime_env: bool = True,
+    error: str | None = None,
+    extras: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build canonical ``/healthz`` payload shared across runtime entrypoints."""
+
+    payload = build_service_health_payload(
+        service_name=service_name,
+        force_ok_for_pytest=force_ok_for_pytest,
+        healthy_status_mode=healthy_status_mode,
+        ok_mode=ok_mode,
+        env_error=env_error,
+        alpaca_context=alpaca_context,
+        enrich_alpaca_from_runtime_env=enrich_alpaca_from_runtime_env,
+    )
+    error_text = str(error or "").strip()
+    if error_text:
+        payload["ok"] = False
+        payload["status"] = "degraded"
+        payload["error"] = error_text
+    if extras:
+        payload.update(dict(extras))
+    return payload
+
+
+def build_health_exception_payload(
+    exc: Exception,
+    *,
+    service_name: str = "ai-trading",
+) -> dict[str, Any]:
+    """Build a normalized degraded payload for health handler exceptions."""
+
+    return {
+        "ok": False,
+        "status": "degraded",
+        "service": service_name,
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "error": str(exc),
+    }
+
+
+__all__ = [
+    "build_runtime_health_payload",
+    "build_alpaca_health_payload",
+    "build_service_health_payload",
+    "build_canonical_healthz_payload",
+    "build_health_exception_payload",
+]

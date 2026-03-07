@@ -240,8 +240,8 @@ def _bootstrap_env(name: str, default: Any = None) -> Any:
         try:
             return _BOOTSTRAP_GET_ENV(name, default)
         except (TypeError, ValueError, RuntimeError):
-            return os.getenv(name, default)
-    return os.getenv(name, default)
+            return default
+    return default
 
 
 try:
@@ -354,8 +354,8 @@ from ai_trading.config import (
     DATA_FEED_INTRADAY,
 )
 from ai_trading.health_payload import (
-    build_alpaca_health_payload,
-    build_runtime_health_payload,
+    build_canonical_healthz_payload,
+    build_health_exception_payload,
 )
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
@@ -773,19 +773,25 @@ TESTING = str(get_env("TESTING", "")).strip().lower() in {"1", "true", "yes", "o
 _TEST_ENV_VARS = ("PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING")
 
 
-def _truthy_env(value: str | None) -> bool:
+def _truthy_env(value: Any) -> bool:
     """Return ``True`` when ``value`` looks truthy ("1", "true", etc.)."""
 
     if value is None:
         return False
-    return value.strip().lower() not in {"", "0", "false", "no"}
+    if isinstance(value, bool):
+        return value
+    try:
+        normalized = str(value).strip().lower()
+    except COMMON_EXC:
+        return False
+    return normalized not in {"", "0", "false", "no"}
 
 
 def _pytest_running() -> bool:
     """Return ``True`` when pytest execution is detected via managed config."""
 
     try:
-        raw = get_env("PYTEST_RUNNING", None)
+        raw = get_env("PYTEST_RUNNING", None, resolve_aliases=False)
     except COMMON_EXC:
         raw = None
 
@@ -823,7 +829,7 @@ def _is_testing_env() -> bool:
         try:
             raw = get_env(key, None)
         except COMMON_EXC:
-            raw = os.getenv(key)
+            raw = get_env(key)
         if raw is not None and _truthy_env(str(raw)):
             return True
     return False
@@ -866,20 +872,15 @@ trading_client = None
 data_client = None
 
 
-def _validate_trading_api(api: Any) -> bool:
-    """Delegate to modular implementation (backwards-compatible façade)."""
-    from ai_trading.core.alpaca_client import _validate_trading_api as _impl
-    return _impl(api)
+from ai_trading.core.alpaca_client import (
+    _validate_trading_api,
+    list_open_orders,
+)
 
 
-def list_open_orders(api: Any):
-    from ai_trading.core.alpaca_client import list_open_orders as _impl
-    return _impl(api)
+def ensure_alpaca_attached(ctx: Any) -> None:
+    """Attach initialized Alpaca client to runtime context when needed."""
 
-
-# -- New helper: ensure context has an attached Alpaca client -----------------
-def ensure_alpaca_attached(ctx) -> None:
-    """Attach global trading client to the context if it's missing."""
     if get_env("PYTEST_RUNNING", None) and not (
         get_env("ALPACA_API_KEY", None) and get_env("ALPACA_SECRET_KEY", None)
     ):
@@ -947,14 +948,6 @@ def ensure_alpaca_attached(ctx) -> None:
         return
     if not _validate_trading_api(api):
         return
-
-# Rebind canonical Alpaca helpers to modular implementations (post-definition override)
-from ai_trading.core.alpaca_client import (  # noqa: E402
-    _validate_trading_api as _validate_trading_api,
-    list_open_orders as list_open_orders,
-    ensure_alpaca_attached as ensure_alpaca_attached,
-    _initialize_alpaca_clients as _initialize_alpaca_clients,
-)
 
 from ai_trading.config.settings import (
     sentiment_retry_max,
@@ -1078,14 +1071,14 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
             df = get_bars_df(
                 sym,
                 bars.TimeFrame.Day,
-                feed=os.getenv("ALPACA_DATA_FEED", "iex"),
+                feed=get_env("ALPACA_DATA_FEED", "iex"),
             )  # AI-AGENT-REF: derive window & feed
             if df is None or df.empty:
                 errors.append(f"{sym}:empty")
         except COMMON_EXC as exc:  # AI-AGENT-REF: narrow catch
             errors.append(f"{sym}:{exc}")
     if errors:
-        feed = os.getenv("ALPACA_DATA_FEED", "iex")
+        feed = get_env("ALPACA_DATA_FEED", "iex")
         logger.critical(
             "DATA_HEALTH_FAIL",
             extra={"endpoint": "alpaca/bars", "feed": feed, "symbols": symbols, "errors": errors},
@@ -1154,8 +1147,6 @@ from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.core.alpaca_client import (
     _validate_trading_api,
     list_open_orders,
-    ensure_alpaca_attached,
-    _initialize_alpaca_clients,
 )
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.guards import staleness
@@ -1625,7 +1616,7 @@ def _mask_env_name(name: str) -> str:
 
 
 def _get_env_str(key: str) -> str:
-    raw = os.getenv(key)
+    raw = get_env(key, resolve_aliases=False)
     if raw not in (None, ""):
         return str(raw)
     masked = _mask_env_name(key)
@@ -1635,7 +1626,7 @@ def _get_env_str(key: str) -> str:
 
 def _require_env_keys(*keys: str) -> None:
     for key in keys:
-        if os.getenv(key) in (None, ""):
+        if get_env(key, resolve_aliases=False) in (None, ""):
             masked = _mask_env_name(key)
             logger.error("Missing required environment variable: %s", masked)
             raise RuntimeError(f"Missing required environment variable: {masked}")
@@ -1649,7 +1640,7 @@ def _env_flag(key: str, default: bool = False) -> bool:
     except COMMON_EXC:
         value = None
     if value is None:
-        value = os.getenv(key)
+        value = get_env(key)
     if isinstance(value, bool):
         return value
     if value in (None, ""):
@@ -3446,7 +3437,7 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
         cwd = Path(BASE_DIR)
     candidates.append(cwd / "logs")
 
-    env_state = os.getenv("XDG_STATE_HOME")
+    env_state = get_env("XDG_STATE_HOME")
     if env_state:
         expanded = Path(env_state).expanduser()
         if expanded.is_absolute():
@@ -3532,8 +3523,8 @@ def default_trade_log_path() -> str:
         )
 
     env_candidates = [
-        ("TRADE_LOG_PATH", os.getenv("TRADE_LOG_PATH")),
-        ("AI_TRADING_TRADE_LOG_PATH", os.getenv("AI_TRADING_TRADE_LOG_PATH")),
+        ("TRADE_LOG_PATH", get_env("TRADE_LOG_PATH")),
+        ("AI_TRADING_TRADE_LOG_PATH", get_env("AI_TRADING_TRADE_LOG_PATH")),
     ]
     env_failures: list[dict[str, str]] = []
     had_env_override = False
@@ -3669,7 +3660,7 @@ logger = get_logger("ai_trading.core.bot_engine")
 def _emit_pytest_capture(level: int, message: str) -> None:
     """Forward ``message`` to pytest's log capture handler when active."""
 
-    if os.getenv("PYTEST_RUNNING") != "1" and not os.getenv("PYTEST_CURRENT_TEST"):
+    if get_env("PYTEST_RUNNING") != "1" and not get_env("PYTEST_CURRENT_TEST"):
         return
     try:
         handler_refs = getattr(logging, "_handlerList", ())
@@ -3913,7 +3904,7 @@ def _runtime_execution_mode() -> str:
     try:
         raw = get_env("EXECUTION_MODE", "sim")
     except COMMON_EXC:
-        raw = os.getenv("EXECUTION_MODE", "sim")
+        raw = get_env("EXECUTION_MODE", "sim")
     return str(raw or "sim").strip().lower() or "sim"
 
 
@@ -4031,7 +4022,7 @@ def _load_required_model(*, allow_test_placeholder: bool = False) -> Any:
         return _set_required_model_cache(mdl, kind="module", module=modname)
 
     if allow_test_placeholder and _is_testing_env():
-        detected = [key for key in _TEST_ENV_VARS if _truthy_env(os.getenv(key))]
+        detected = [key for key in _TEST_ENV_VARS if _truthy_env(get_env(key))]
         logger.info(
             "MODEL_PLACEHOLDER_IN_USE",
             extra={"source": "test", "detected_env": detected},
@@ -4342,9 +4333,9 @@ _CONFIG_LOGGED: bool = False
 
 def _should_relax_drawdown_requirements() -> bool:
     return (
-        _truthy_env(os.getenv("PYTEST_RUNNING"))
-        or _truthy_env(os.getenv("TESTING"))
-        or _truthy_env(os.getenv("RUN_HEALTHCHECK"))
+        _pytest_running()
+        or _truthy_env(get_env("TESTING", None, resolve_aliases=False))
+        or _truthy_env(get_env("RUN_HEALTHCHECK", None, resolve_aliases=False))
     )
 
 
@@ -4403,7 +4394,7 @@ def _resolve_runtime_trading_mode() -> str:
             getattr(cfg, "trading_mode", DEFAULT_TRADING_MODE)
         )
     except COMMON_EXC:
-        env_mode = os.getenv("AI_TRADING_TRADING_MODE") or DEFAULT_TRADING_MODE
+        env_mode = get_env("AI_TRADING_TRADING_MODE") or DEFAULT_TRADING_MODE
         return _normalize_runtime_trading_mode(env_mode)
 
 
@@ -4422,7 +4413,7 @@ def _resolve_orders_threshold(cfg: TradingConfig, key: str, default: float) -> f
         candidate = getattr(cfg, key, None)
     if candidate in (None, ""):
         env_key = f"ORDERS_{key.upper()}"
-        raw_env = os.getenv(env_key)
+        raw_env = get_env(env_key)
         if raw_env not in (None, ""):
             try:
                 candidate = float(raw_env)
@@ -4918,7 +4909,7 @@ warnings.filterwarnings(
 from ai_trading import utils
 
 # AI-AGENT-REF: lazy import heavy feature computation modules to speed up import for tests
-if not os.getenv("PYTEST_RUNNING"):
+if not get_env("PYTEST_RUNNING"):
     from ai_trading.features.indicators import (
         compute_macd,
         compute_macds,
@@ -5357,7 +5348,7 @@ from ai_trading.utils.retry import (
 )
 
 # AI-AGENT-REF: lazy ichimoku setup to avoid pandas_ta import in tests
-if not os.getenv("PYTEST_RUNNING"):
+if not get_env("PYTEST_RUNNING"):
     ta.ichimoku = (
         ta.ichimoku if hasattr(ta, "ichimoku") else lambda *a, **k: (pd.DataFrame(), {})
     )
@@ -5697,7 +5688,7 @@ from bs4 import BeautifulSoup
 try:
     from flask import Flask, jsonify
 except ModuleNotFoundError:
-    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
+    if str(get_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes"}:
         class Flask:  # type: ignore[override]
             """Lightweight Flask shim for test environments without flask."""
 
@@ -5748,7 +5739,7 @@ else:  # pragma: no cover - no rebalance without Alpaca
 import pickle
 
 # AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
-if not os.getenv("PYTEST_RUNNING") and ALPACA_AVAILABLE:
+if not get_env("PYTEST_RUNNING") and ALPACA_AVAILABLE:
     try:
         from ai_trading.meta_learning import optimize_signals  # type: ignore
     except (
@@ -5852,7 +5843,7 @@ def _ensure_alpaca_env_or_raise():
     k, s, b = _resolve_alpaca_env()
     # Check for shadow mode
     shadow_mode = is_shadow_mode()
-    pytest_running = str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+    pytest_running = str(get_env("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
     if shadow_mode:
         return k, s, b
     if not (k and s):
@@ -5877,8 +5868,8 @@ def init_runtime_config():
         if not getattr(CFG, "testing", False):  # Allow missing credentials in test mode
             raise e
         # AI-AGENT-REF: Use environment variables even in test mode to avoid hardcoded secrets
-        ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
-        ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "")
+        ALPACA_API_KEY = str(get_env("TEST_ALPACA_API_KEY", "") or "")
+        ALPACA_SECRET_KEY = str(get_env("TEST_ALPACA_SECRET_KEY", "") or "")
 
     TRADING_MODE_ENV = _normalize_runtime_trading_mode(
         getattr(cfg, "trading_mode", getattr(cfg, "TRADING_MODE", None))
@@ -7191,7 +7182,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         normalized_feed = _normalize_feed_name(feed)
         if not normalized_feed:
             normalized_feed = _normalize_feed_name(
-                configured_feed or os.getenv("ALPACA_DATA_FEED")
+                configured_feed or get_env("ALPACA_DATA_FEED")
             )
         if normalized_feed == "iex":
             return 0.75, 0.75
@@ -7362,7 +7353,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
     if actual_bars < coverage_threshold:
         global _SIP_UNAUTHORIZED_LOGGED
 
-        if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+        if get_env("PYTEST_RUNNING") or get_env("PYTEST_CURRENT_TEST"):
             if not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False):
                 data_fetcher_module._clear_sip_lockout_for_tests()
 
@@ -7392,8 +7383,8 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
             except COMMON_EXC:  # pragma: no cover - defensive guard
                 sip_disabled = False
             if sip_disabled and not (
-                os.getenv("PYTEST_RUNNING")
-                or os.getenv("PYTEST_CURRENT_TEST")
+                get_env("PYTEST_RUNNING")
+                or get_env("PYTEST_CURRENT_TEST")
                 or get_env("AI_TRADING_FORCE_SIP", "0", cast=int)
             ):
                 sip_available = False
@@ -8469,7 +8460,7 @@ def abspath(fname: str) -> str:
 
 # AI-AGENT-REF: safe ML model path resolution
 DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
-env_model = os.getenv("AI_TRADING_MODEL_PATH")
+env_model = get_env("AI_TRADING_MODEL_PATH")
 MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
 WARN_IF_MODEL_MISSING = bool(
     config.get_env("AI_TRADING_WARN_IF_MODEL_MISSING", "0", cast=int)
@@ -9464,7 +9455,7 @@ def _env_float(default: float | str, *keys: str) -> float:
     if isinstance(default, str):
         name = default
         fallback = float(keys[0]) if keys else 0.0
-        raw = os.getenv(name)
+        raw = get_env(name)
         if raw in (None, ""):
             return fallback
         try:
@@ -9473,7 +9464,7 @@ def _env_float(default: float | str, *keys: str) -> float:
             logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": name, "value": raw})
             return fallback
     for k in keys:
-        v = os.getenv(k)
+        v = get_env(k)
         if v is None or v == "":
             continue
         try:
@@ -9663,7 +9654,7 @@ def validate_trading_parameters():
 
 # AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
 # Validate parameters after loading
-if not os.getenv("TESTING"):
+if not get_env("TESTING"):
     validate_trading_parameters()
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -9684,14 +9675,14 @@ run_lock = Lock()
 
 _DAILY_FETCH_MEMO: dict[tuple[str, str, str, str], tuple[float, Any]] = {}
 try:
-    _DAILY_FETCH_MEMO_TTL = float(os.getenv("DAILY_FETCH_MEMO_TTL", "60"))
+    _DAILY_FETCH_MEMO_TTL = float(get_env("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
     _DAILY_FETCH_MEMO_TTL = 60.0
 try:
     _PROVIDER_DECISION_WINDOW = float(get_env("AI_TRADING_PROVIDER_DECISION_SECS", "120", cast=float))
 except COMMON_EXC:
     try:
-        _PROVIDER_DECISION_WINDOW = float(os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", "120") or 120.0)
+        _PROVIDER_DECISION_WINDOW = float(get_env("AI_TRADING_PROVIDER_DECISION_SECS", "120") or 120.0)
     except (TypeError, ValueError):
         _PROVIDER_DECISION_WINDOW = 120.0
 _DAILY_FETCH_MEMO_TTL = max(_DAILY_FETCH_MEMO_TTL, _PROVIDER_DECISION_WINDOW)
@@ -10036,7 +10027,7 @@ def _signal_strength_threshold(ctx: Any) -> float:
     """Resolve the minimum absolute signal strength required for execution."""
 
     try:
-        if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+        if get_env("PYTEST_RUNNING") or get_env("PYTEST_CURRENT_TEST"):
             return 0.0
     except Exception:
         logger.debug("PYTEST_ENV_DETECT_FAILED", exc_info=True)
@@ -12677,7 +12668,7 @@ def _try_sip_recovery(
         logger.info("COVERAGE_RECOVERY_SIP_DISABLED", extra={"symbol": symbol})
         return None
 
-    has_sip_entitlement = str(os.getenv("ALPACA_ALLOW_SIP", "")).lower() in (
+    has_sip_entitlement = str(get_env("ALPACA_ALLOW_SIP", "")).lower() in (
         "1",
         "true",
         "yes",
@@ -13374,7 +13365,7 @@ def audit_positions(ctx) -> None:
         )
         return
 
-    max_order_size = _as_int(os.getenv("MAX_ORDER_SIZE", "1000"), 1000)
+    max_order_size = _as_int(get_env("MAX_ORDER_SIZE", "1000"), 1000)
 
     _ensure_alpaca_classes()
 
@@ -14469,7 +14460,7 @@ _META_SEED_LOCK = Lock()
 
 
 def _meta_seed_path() -> Path:
-    raw = os.getenv("AI_TRADING_META_SEED_PATH", "").strip()
+    raw = str(get_env("AI_TRADING_META_SEED_PATH", "") or "").strip()
     if raw:
         return Path(raw)
     return Path("artifacts/meta_seed_snapshots.json")
@@ -14811,7 +14802,7 @@ from ai_trading.utils.imports import (
 )
 logger = get_logger(__name__)
 
-if os.getenv("AI_TRADING_BOOTSTRAP_TRADE_LOG", "1") != "0":
+if get_env("AI_TRADING_BOOTSTRAP_TRADE_LOG", "1") != "0":
     try:
         get_trade_logger()
     except COMMON_EXC as exc:  # pragma: no cover - defensive bootstrap
@@ -14982,7 +14973,7 @@ def get_strategies():
         wanted = None
 
     if not wanted:
-        env_raw = os.getenv("STRATEGIES")
+        env_raw = get_env("STRATEGIES")
         if env_raw:
             wanted = [
                 part.strip().lower() for part in env_raw.split(",") if part.strip()
@@ -15128,12 +15119,20 @@ def _initialize_alpaca_clients() -> bool:
                     "POSITION_RECONCILER_INIT_FAILED", extra={"error": str(e)}
                 )
         except (APIError, TypeError, ValueError, OSError) as e:  # AI-AGENT-REF: expose network or auth issues
-            logger.error(
-                "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
-            )
-            logger_once.error(
-                "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
-            )
+            if _pytest_running() or is_shadow_mode():
+                logger.warning(
+                    "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
+                )
+                logger_once.warning(
+                    "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
+                )
+            else:
+                logger.error(
+                    "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
+                )
+                logger_once.error(
+                    "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
+                )
             trading_client = None
             data_client = None
             return False
@@ -15298,7 +15297,7 @@ class LazyBotContext:
         self._context.risk_engine.capital_scaler = self._context.capital_scaler
 
         # Complete context setup (only in non-test environments)
-        if not (os.getenv("PYTEST_RUNNING") or os.getenv("TESTING")):
+        if not (get_env("PYTEST_RUNNING") or get_env("TESTING")):
             try:
                 _initialize_bot_context_post_setup(self._context)
             except NameError:
@@ -16469,7 +16468,8 @@ def check_pdt_rule(ctx) -> bool:
 
     def _env_broker_block() -> bool:
         for key in ("PATTERN_DAY_TRADER_BLOCKED", "PDT_BLOCKED", "PDT_BROKER_BLOCK"):
-            if key in os.environ and _truthy(os.environ[key]):
+            value = get_env(key, None, resolve_aliases=False)
+            if value not in (None, "") and _truthy(value):
                 return True
         return False
 
@@ -16799,7 +16799,7 @@ def check_halt_flag(runtime) -> bool:
 
     # AI-AGENT-REF: thread runtime into halt checks and drop global ctx
     # 1) Environment override
-    if os.getenv("AI_TRADING_HALT", "").strip() in {"1", "true", "True"}:
+    if str(get_env("AI_TRADING_HALT", "") or "").strip() in {"1", "true", "True"}:
         return True
 
     # 2) Config file flag (if provided)
@@ -17568,7 +17568,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     last_snapshot: dict[str, float] = {}
 
     # During tests, avoid network fetches; use a reasonable default volume.
-    if os.getenv("PYTEST_RUNNING"):
+    if get_env("PYTEST_RUNNING"):
         avg_vol = volume_threshold * 10.0
     else:
         try:
@@ -18565,7 +18565,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         _idem_cache = None
         _idem_key = None
     else:
-        if getattr(CFG, "testing", False) or pytest_running or os.getenv("PYTEST_CURRENT_TEST"):
+        if getattr(CFG, "testing", False) or pytest_running or get_env("PYTEST_CURRENT_TEST"):
             _idem_cache = None
             _idem_key = None
         else:
@@ -20632,7 +20632,7 @@ class DataGateDecision:
 def _env_signature(*keys: str) -> tuple[str | None, ...]:
     """Return a hashable snapshot of selected environment variable values."""
 
-    return tuple(os.environ.get(key) for key in keys)
+    return tuple(get_env(key) for key in keys)
 
 
 def _parse_env_bool(value: str | None, default: bool) -> bool:
@@ -21522,8 +21522,8 @@ def _safe_mode_blocks_trading() -> bool:
     """Return ``True`` when the current degraded policy requires blocking trades."""
 
     # Allow paper-mode bypass when explicitly permitted via env.
-    env_mode = os.getenv("EXECUTION_MODE", "").strip().lower()
-    env_paper_bypass = os.getenv("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "").strip().lower()
+    env_mode = str(get_env("EXECUTION_MODE", "") or "").strip().lower()
+    env_paper_bypass = str(get_env("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "") or "").strip().lower()
     if env_mode == "paper" and env_paper_bypass not in {"0", "false", "no", "off"}:
         return False
     try:
@@ -21776,9 +21776,9 @@ def _enter_long(
         return True
 
     testing_mode = bool(
-        os.getenv("PYTEST_RUNNING")
-        or os.getenv("TESTING")
-        or os.getenv("DRY_RUN")
+        get_env("PYTEST_RUNNING")
+        or get_env("TESTING")
+        or get_env("DRY_RUN")
     )
     quote_price: float | None
     price_source: str
@@ -22592,9 +22592,9 @@ def _enter_short(
         return True
 
     testing_mode = bool(
-        os.getenv("PYTEST_RUNNING")
-        or os.getenv("TESTING")
-        or os.getenv("DRY_RUN")
+        get_env("PYTEST_RUNNING")
+        or get_env("TESTING")
+        or get_env("DRY_RUN")
     )
     quote_price: float | None
     price_source: str
@@ -24089,7 +24089,7 @@ def pair_trade_signal(ctx: BotContext, sym1: str, sym2: str) -> tuple[str, int]:
 def fetch_data(
     ctx: BotContext, symbols: list[str], period: str, interval: str
 ) -> pd.DataFrame | None:
-    if not os.getenv("FINNHUB_API_KEY"):
+    if not get_env("FINNHUB_API_KEY"):
         logger.debug("Skipping Finnhub fetch; FINNHUB_API_KEY not set")
         return None
     if not FINNHUB_AVAILABLE:
@@ -24099,7 +24099,7 @@ def fetch_data(
     finnhub = importlib.import_module("finnhub")
     global finnhub_client
     if finnhub_client is None:
-        finnhub_client = finnhub.Client(os.getenv("FINNHUB_API_KEY"))
+        finnhub_client = finnhub.Client(get_env("FINNHUB_API_KEY"))
 
     frames: list[pd.DataFrame] = []
     now = datetime.now(UTC)
@@ -24563,10 +24563,10 @@ def load_global_signal_performance(
     # AI-AGENT-REF: Use configurable meta-learning parameters from environment
     # Reduced requirements to allow meta-learning to activate more easily
     if min_trades is None:
-        min_trades = int(os.getenv("METALEARN_MIN_TRADES", "2"))  # Reduced from 3 to 2
+        min_trades = int(get_env("METALEARN_MIN_TRADES", "2"))  # Reduced from 3 to 2
     if threshold is None:
         threshold = float(
-            os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.3")
+            get_env("METALEARN_PERFORMANCE_THRESHOLD", "0.3")
         )  # Reduced from 0.4 to 0.3
     try:
         manager = getattr(_get_runtime_context_or_none(), "signal_manager", None)
@@ -25355,7 +25355,7 @@ def detect_regime(df: pd.DataFrame) -> str:
 def _initialize_regime_model(ctx=None):
     """Initialize regime model - load existing or train new one."""
     # Train or load regime model - skip in test environment
-    if os.getenv("TESTING") == "1" or os.getenv("PYTEST_RUNNING"):
+    if get_env("TESTING") == "1" or get_env("PYTEST_RUNNING"):
         logger.info("Skipping regime model training in test environment")
         return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     elif os.path.exists(REGIME_MODEL_PATH):
@@ -26522,7 +26522,7 @@ def _adaptive_mode_switch_enabled(cfg: TradingConfig) -> tuple[bool, str]:
         return False, "adaptive_disabled"
     precedence_policy = str(getattr(cfg, "trading_mode_precedence", "strict_mode") or "strict_mode").strip().lower()
     if precedence_policy == "env_wins":
-        if os.getenv("AI_TRADING_TRADING_MODE") not in (None, ""):
+        if get_env("AI_TRADING_TRADING_MODE") not in (None, ""):
             return False, "env_wins_locked"
     return True, "enabled"
 
@@ -27110,13 +27110,12 @@ def health() -> str:
         if runtime is None:
             raise RuntimeError("runtime not ready")
         pre_trade_health_check(runtime, runtime.tickers or REGIME_SYMBOLS)
-        payload = build_runtime_health_payload(
+        payload = build_canonical_healthz_payload(
             service_name="ai-trading",
             force_ok_for_pytest=False,
             healthy_status_mode="healthy",
             ok_mode="connectivity",
         )
-        payload["alpaca"] = build_alpaca_health_payload()
     except (
         APIError,
         TimeoutError,
@@ -27126,16 +27125,19 @@ def health() -> str:
         TypeError,
         OSError,
     ) as e:  # AI-AGENT-REF: tighten health probe error handling
-        payload = build_runtime_health_payload(
+        payload = build_canonical_healthz_payload(
             service_name="ai-trading",
             force_ok_for_pytest=False,
             healthy_status_mode="healthy",
             ok_mode="connectivity",
+            error=str(e),
         )
-        payload["alpaca"] = build_alpaca_health_payload()
-        payload["ok"] = False
-        payload["status"] = "degraded"
-        payload["error"] = str(e)
+        logger.warning(
+            "HEALTH_CHECK_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+    except Exception as e:  # pragma: no cover - defensive guardrail
+        payload = build_health_exception_payload(e, service_name="ai-trading")
         logger.warning(
             "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -29350,7 +29352,7 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
 def _pre_trade_gate() -> bool:
     """Return True when execution should be blocked before strategy evaluation."""
 
-    pytest_flag = str(os.getenv("PYTEST_RUNNING", "")).strip().lower()
+    pytest_flag = str(get_env("PYTEST_RUNNING", "")).strip().lower()
     pytest_mode = pytest_flag in {"1", "true", "yes"}
 
     if _sip_lockout_active():
@@ -29713,7 +29715,7 @@ def _process_symbols(
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
     safe_mode_policy_blocks = _safe_mode_blocks_trading()
-    pytest_mode = bool(os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"))
+    pytest_mode = bool(get_env("PYTEST_RUNNING") or get_env("PYTEST_CURRENT_TEST"))
     ctx_tracks_degraded_state = any(
         hasattr(ctx, attr_name)
         for attr_name in ("_data_degraded", "_data_degraded_reason", "_data_degraded_fatal")
@@ -29739,7 +29741,7 @@ def _process_symbols(
         degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
         if degraded_mode not in {"block", "widen"}:
             degraded_mode = "block"
-    explicit_degraded_mode = os.getenv("TRADING__DEGRADED_FEED_MODE") or os.getenv("DEGRADED_FEED_MODE")
+    explicit_degraded_mode = get_env("TRADING__DEGRADED_FEED_MODE") or get_env("DEGRADED_FEED_MODE")
     if pytest_mode and not explicit_degraded_mode and degraded_mode == "block":
         degraded_mode = "widen"
     detect_runtime_degrade = not pytest_mode or ctx_tracks_degraded_state
@@ -37321,7 +37323,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         _persist_effective_policy_snapshot(state, effective_policy, loop_id=loop_id)
         state.execution_metrics = ExecutionCycleMetrics()
         api = getattr(runtime, "api", None)
-        if api is None and os.getenv("PYTEST_RUNNING"):
+        if api is None and get_env("PYTEST_RUNNING"):
             logger.warning("ALPACA_CLIENT_MISSING")
             logging.getLogger("tests.test_broker_unavailable_paths").warning(
                 "ALPACA_CLIENT_MISSING"
@@ -38642,7 +38644,7 @@ def main() -> None:
             # AI-AGENT-REF: Add bypass for stale data during initial deployment
             stale_data = summary.get("stale_data", [])
             allow_stale_on_startup = (
-                os.getenv("ALLOW_STALE_DATA_STARTUP", "true").lower() == "true"
+                str(get_env("ALLOW_STALE_DATA_STARTUP", "true") or "").lower() == "true"
             )
 
             if stale_data and allow_stale_on_startup:
@@ -39686,7 +39688,7 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 requested_feed = None
                 configured_raw = intraday_token
 
-    sip_env_flag = _truthy_env(os.getenv("ALPACA_SIP_UNAUTHORIZED"))
+    sip_env_flag = _truthy_env(get_env("ALPACA_SIP_UNAUTHORIZED"))
     fetch_sip_flag = bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
     sip_flagged = bool(fetch_sip_flag or sip_env_flag)
     try:

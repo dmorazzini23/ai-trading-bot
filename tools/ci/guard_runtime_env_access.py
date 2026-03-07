@@ -13,7 +13,8 @@ PATTERN = re.compile(r"\bos\.(?:getenv|environ)\b")
 MAX_DIRECT_ENV_TOUCHES = {
     "ai_trading/logging/__init__.py": 1,
     "ai_trading/execution/live_trading.py": 1,
-    "ai_trading/core/bot_engine.py": 76,
+    "ai_trading/core/bot_engine.py": 2,
+    "ai_trading/data/fetch/__init__.py": 0,
 }
 
 
