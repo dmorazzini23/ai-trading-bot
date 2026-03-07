@@ -116,6 +116,7 @@ make check
 4. **`dependency-audit.yml`** - Dependency vulnerability auditing
 5. **`sbom.yml`** - CycloneDX SBOM generation
 6. **`scorecard.yml`** - OSSF scorecard analysis
+7. **`release.yml`** - Manual tagged release build and GitHub release publishing
 
 All workflows use consistent dependency installation:
 
