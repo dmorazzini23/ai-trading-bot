@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
+    build_api_health_payload,
     build_canonical_healthz_payload,
     register_healthz_routes,
-    build_service_health_payload,
 )
 from ai_trading.utils.optional_dep import missing
 
@@ -513,76 +513,11 @@ def create_app():
     def health():
         """Lightweight liveness probe with Alpaca diagnostics."""
         pytest_mode = _pytest_active()
-        errors: list[str] = []
-        alpaca_import_ok = True
-        sdk_ok = False
-        trading_client: Any = None
-        key = secret = None
-        base_url = ""
-        paper = False
-        shadow = False
-
-        try:
-            from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
-        except Exception as exc:  # pragma: no cover - defensive
-            alpaca_import_ok = False
-            errors.append(str(exc) or exc.__class__.__name__)
-            sdk_ok = False
-
-        if alpaca_import_ok:
-            try:
-                from ai_trading.core.bot_engine import _resolve_alpaca_env
-                from ai_trading.core.bot_engine import trading_client as _trading_client
-
-                trading_client = _trading_client
-                key, secret, base_url = _resolve_alpaca_env()
-                base_url = str(base_url or "")
-                paper = bool(base_url and "paper" in base_url.lower())
-            except Exception as exc:  # pragma: no cover - defensive
-                errors.append(str(exc) or exc.__class__.__name__)
-                trading_client, key, secret, base_url, paper = (None, None, None, "", False)
-
-        try:
-            from ai_trading.config.management import is_shadow_mode
-
-            shadow = bool(is_shadow_mode())
-        except Exception as exc:  # pragma: no cover - defensive
-            errors.append(str(exc) or exc.__class__.__name__)
-            shadow = False
-
-        if (not alpaca_import_ok) or (not key) or (not secret):
-            shadow = False
-
-        payload = build_service_health_payload(
+        payload = build_api_health_payload(
             service_name=_SERVICE_NAME,
             force_ok_for_pytest=pytest_mode,
-            healthy_status_mode="service",
-            ok_mode="connectivity",
             env_error=app.config.get("_ENV_ERR"),
-            alpaca_context={
-                "sdk_ok": sdk_ok,
-                "initialized": bool(trading_client),
-                "client_attached": bool(trading_client),
-                "has_key": bool(key),
-                "has_secret": bool(secret),
-                "base_url": base_url,
-                "paper": paper,
-                "shadow_mode": shadow,
-            },
-            enrich_alpaca_from_runtime_env=False,
         )
-        env_err = app.config.get("_ENV_ERR")
-        if env_err:
-            errors.append(str(env_err))
-
-        if errors:
-            payload["ok"] = False
-            payload["status"] = "degraded"
-            payload["error"] = "; ".join(dict.fromkeys(errors))
-
-        if pytest_mode and not errors:
-            payload["ok"] = True
-            payload.setdefault("status", payload.get("status") or "healthy")
 
         fallback_payload = {
             "ok": bool(payload.get("ok")),

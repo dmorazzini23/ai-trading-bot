@@ -337,19 +337,10 @@ except Exception as exc:  # pragma: no cover - fallback when optional deps missi
 def _runtime_env(name: str, default: str | None = None) -> str | None:
     """Resolve environment values through config management when available."""
 
-    raw_env = os.getenv(name)
-    if raw_env not in (None, ""):
-        return raw_env
-
-    # Keep pytest/runtime mode controls bound to process env only to avoid
-    # config-derived side effects during unit tests and startup probes.
-    if name in {"PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING", "EXECUTION_MODE"}:
-        return default
-
     resolver = _config_get_env
     if resolver is not None:
         try:
-            value = resolver(name, default=None)
+            value = resolver(name, default=None, resolve_aliases=False)
         except Exception:
             value = None
         if value not in (None, ""):

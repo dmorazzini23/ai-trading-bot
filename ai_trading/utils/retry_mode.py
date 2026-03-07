@@ -98,13 +98,13 @@ def retry_mode(
             retry_error_callback=lambda _state: fallback,
         )
 
-        def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        def tenacity_decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
             return wrapped
 
-        return decorator
+        return tenacity_decorator
 
-    def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+    def fallback_decorator(fn: Callable[..., T]) -> Callable[..., T]:
         def wrapper(*args, **kwargs):
             attempt = 0
             while True:
@@ -118,7 +118,7 @@ def retry_mode(
 
         return wrapper
 
-    return decorator
+    return fallback_decorator
 
 
 __all__ = ["retry_mode", "HAS_TENACITY"]

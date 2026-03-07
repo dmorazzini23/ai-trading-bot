@@ -6,6 +6,7 @@ import pathlib
 import signal
 import sys
 import fcntl
+from typing import Literal
 
 class ProcessManager:
     """Ensure only one ai-trading instance runs at a time."""
@@ -61,6 +62,6 @@ class ProcessManager:
             raise RuntimeError(msg)
         return self
 
-    def __exit__(self, *exc) -> bool:
+    def __exit__(self, *exc) -> Literal[False]:
         self._cleanup()
         return False

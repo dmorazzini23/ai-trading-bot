@@ -3794,7 +3794,8 @@ def fetch_sentiment(
                 data = resp.json()
                 score = float(data.get("sentiment", 0.0))
                 return _cache_sentiment_score(symbol, score)
-            except exception_types:  # type: ignore[misc] - dynamic tuple is intentional
+            # Dynamic exception tuple built from optional dependency classes.
+            except exception_types:  # type: ignore[misc]
                 continue
 
         _SENTIMENT_FAILURES += 1
@@ -18517,8 +18518,10 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             try:
                 if ids_attr is None:
                     ids_list = [client_order_id]
-                elif isinstance(ids_attr, (str, bytes)):
+                elif isinstance(ids_attr, str):
                     ids_list = [ids_attr, client_order_id]
+                elif isinstance(ids_attr, bytes):
+                    ids_list = [ids_attr.decode("utf-8", errors="ignore"), client_order_id]
                 elif isinstance(ids_attr, Iterable):
                     ids_list = list(ids_attr)
                     ids_list.append(client_order_id)

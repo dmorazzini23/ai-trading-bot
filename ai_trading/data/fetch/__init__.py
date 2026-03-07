@@ -729,7 +729,7 @@ def _resolve_host_limit() -> tuple[str | None, int]:
 
 def reload_host_limit_if_env_changed(session: HTTPSession | None = None) -> tuple[str | None, int]:
     """Hot-reload host concurrency limit when environment changes."""
-    del session  # session parameter kept for signature compatibility
+    del session
     raw, limit = _resolve_host_limit()
     with _HOST_LIMIT_LOCK:
         global _HOST_LIMIT_ENV
@@ -1553,10 +1553,6 @@ class UnauthorizedSIPError(DataFetchError):
     """Raised when Alpaca SIP requests fail due to authorization issues."""
 
 
-# Backwards compat alias
-DataFetchException = DataFetchError
-
-
 class EmptyBarsError(DataFetchError, ValueError):
     """Raised when a data provider returns no bars for a request."""
 
@@ -1647,8 +1643,7 @@ _HOST_LIMIT_LOCK = Lock()
 _HOST_LIMIT_STATE: dict[str, Any] = {"env": None, "value": _HOST_LIMIT_DEFAULT}
 _HOST_SEMAPHORES: dict[str, Semaphore] = {}
 
-# Backward-compatible runtime tuning knobs.
-# Tests and ops tooling monkeypatch these names directly.
+# Runtime tuning knobs that tests and ops tooling may monkeypatch directly.
 _ALPACA_EMPTY_ERROR_THRESHOLD = max(1, _env_int("ALPACA_EMPTY_ERROR_THRESHOLD", 2))
 _ALPACA_CLOSE_NAN_DISABLE_THRESHOLD = max(1, _env_int("ALPACA_CLOSE_NAN_DISABLE_THRESHOLD", 1))
 _FETCH_BARS_MAX_RETRIES = max(1, _env_int("FETCH_BARS_MAX_RETRIES", 5))
@@ -5090,7 +5085,7 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
         for c in df.columns
     ]
     # Upstream `_alias_rename_map` already inspects tuple pieces and underscore
-    # tokens; this legacy map keeps the manual fallback logic untouched.
+    # tokens; this map keeps the manual fallback logic explicit and local.
 
     alias_groups = {
         "timestamp": {
@@ -7622,7 +7617,7 @@ def _fetch_bars(
     adjustment: str = "raw",
     _from_get_bars: bool = False,
     return_meta: bool = False,
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
     _ensure_requests()
@@ -8217,9 +8212,11 @@ def _fetch_bars(
         feed=_feed,
     )
     _state["http_fallback_allowed"] = http_fallback_allowed
-    def _finalize_frame(candidate: Any | None) -> pd.DataFrame:
+    def _finalize_frame(candidate: Any | None) -> pd.DataFrame | None:
         if candidate is None:
-            frame = pd.DataFrame()
+            if short_circuit_empty:
+                return _empty_ohlcv_frame(pd)
+            return None
         elif isinstance(candidate, pd.DataFrame):
             frame = candidate
         else:
@@ -11152,19 +11149,19 @@ def _fetch_bars(
         )
         failure_count = _alpaca_failure_count(symbol)
         monitor = provider_monitor
-        provider_disabled = False
+        provider_is_disabled = False
         if monitor is not None:
             try:
-                provider_disabled = monitor.is_disabled("alpaca") or monitor.is_disabled("alpaca_iex")
+                provider_is_disabled = monitor.is_disabled("alpaca") or monitor.is_disabled("alpaca_iex")
             except Exception:
-                provider_disabled = False
+                provider_is_disabled = False
         threshold = _yahoo_failure_threshold()
         force_yahoo = False
         consecutive_failures = _consecutive_failure_count(symbol, _interval)
         required_failures = max(int(_ALPACA_CONSECUTIVE_FAILURE_THRESHOLD), 1)
         if _yahoo_fallback_allowed(symbol, _interval):
             yahoo_allowed = True
-            force_yahoo = provider_disabled or failure_count >= threshold
+            force_yahoo = provider_is_disabled or failure_count >= threshold
         else:
             logger.info(
                 "YAHOO_FALLBACK_SUPPRESSED",
@@ -11266,6 +11263,16 @@ def _fetch_bars(
         empty_df = _empty_ohlcv_frame(pd)
         return _finalize_frame(empty_df)
     if df is None or getattr(df, "empty", True):
+        session_open = bool(_state.get("window_has_session", True))
+        if session_open and bool(_state.get("abort_logged")):
+            return _finalize_frame(None)
+        if session_open and not short_circuit_empty:
+            try:
+                open_now = bool(is_market_open())
+            except Exception:
+                open_now = False
+            if open_now and not _outside_market_hours(_start, _end):
+                return _finalize_frame(None)
         if symbol:
             override_key = (symbol, _interval)
             desired = "sip" if _feed == "iex" else "iex"
@@ -13144,7 +13151,6 @@ def get_daily_df(
     feed: str | None = None,
     adjustment: str | None = None,
     memo: Any | None = None,
-    **kwargs: Any,
 ) -> pd.DataFrame:
     """Fetch daily bars and ensure canonical OHLCV columns."""
     use_alpaca = should_import_alpaca_sdk()
@@ -13178,10 +13184,6 @@ def get_daily_df(
             meta["memo"] = True
             meta.pop("cache", None)
             return memo_info.get("df")
-
-    if kwargs:
-        # Accept and ignore auxiliary keyword arguments for forward compatibility.
-        pass
 
     resolved_adjustment = adjustment or "raw"
     if isinstance(resolved_adjustment, str):
@@ -13713,10 +13715,6 @@ def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
     )
 
 
-# Backwards-compatibility: expose ``empty_handling`` submodule at package level
-# so legacy tests using ``ai_trading.data.fetch.empty_handling`` continue to work.
-from . import empty_handling  # noqa: E402  # defer until dependencies defined
-
 __all__ = [
     "_ALLOW_SIP",
     "_DEFAULT_FEED",
@@ -13724,7 +13722,6 @@ __all__ = [
     "_SIP_UNAUTHORIZED",
     "_VALID_FEEDS",
     "DataFetchError",
-    "DataFetchException",
     "FinnhubAPIException",
     "MissingOHLCVColumnsError",
     "UnauthorizedSIPError",
@@ -13752,7 +13749,6 @@ __all__ = [
     "clear_cached_minute_timestamp",
     "clear_safe_mode_cycle",
     "daily_fetch_memo",
-    "empty_handling",
     "ensure_datetime",
     "fetch_daily_backup",
     "fetch_daily_data_async",
@@ -13779,180 +13775,6 @@ __all__ = [
     "should_skip_symbol",
 ]
 
-
-# === TEST-COMPAT WRAPPER FOR _fetch_bars (appended; keeps production logic intact) ===
-
-
-def _pytest_active() -> bool:
-    return _detect_pytest_env()
-
-
-if "_FETCH_BARS_WRAPPED" not in globals():
-    _FETCH_BARS_WRAPPED = True
-    _FETCH_BARS_ORIG = _fetch_bars
-
-    def _fetch_bars(symbol, start, end, interval, *args, **kwargs):  # type: ignore[override]
-        """Wrapper preserves original behavior for production but smooths a few test
-        expectations:
-        - When pytest is active, bypass 'primary disabled' cooldowns so the primary
-          stubbed session is exercised.
-        - If all attempts produce empty bars and fallbacks are explicitly disabled
-          by flags/monkeypatches, return None or raise EmptyBarsError according
-          to market-hours test knobs.
-        - Ensure the 'retry limit' branch emits ALPACA_FETCH_RETRY_LIMIT before raising.
-        """
-        try:
-            if _pytest_active():
-                disabled_until_val = globals().get("_alpaca_disabled_until", None)
-                if isinstance(disabled_until_val, datetime):
-                    now_val = datetime.now(UTC)
-                    if disabled_until_val <= now_val:
-                        try:
-                            provider_monitor.record_success("alpaca")
-                        except Exception:
-                            pass
-                        try:
-                            _clear_backup_skip(symbol, interval)
-                        except Exception:
-                            pass
-                    globals()["_alpaca_disabled_until"] = None
-        except Exception:
-            pass
-
-        # Extract wrapper-only flags; do not forward to the original impl
-        return_meta = bool(kwargs.pop("return_meta", False))
-        sip_retry_flag = bool(kwargs.pop("_sip_retry", False))
-        try:
-            df = _FETCH_BARS_ORIG(
-                symbol,
-                start,
-                end,
-                interval,
-                *args,
-                return_meta=return_meta,
-                **kwargs,
-            )
-        except EmptyBarsError:
-            state_obj = _get_fetch_state()
-            state = state_obj if isinstance(state_obj, dict) else {}
-            short_circuit = bool(state.get("short_circuit_empty"))
-            fallbacks_off = not _enable_http_fallback()
-            if short_circuit and fallbacks_off:
-                try:
-                    empty_frame = _empty_ohlcv_frame()
-                except Exception:
-                    empty_frame = None
-                if empty_frame is not None:
-                    return (empty_frame, {}) if return_meta else empty_frame
-            raise
-
-        def _extract_frame(candidate: Any) -> Any:
-            if return_meta and isinstance(candidate, tuple) and candidate:
-                return candidate[0]
-            return candidate
-
-        feed_token = kwargs.get("feed")
-        normalized_feed = str(feed_token).strip().lower() if feed_token else None
-        # Use the captured flag value (kwargs may have been cleaned for ORIG)
-        sip_retry_requested = bool(sip_retry_flag)
-        # Only allow SIP retry during active trading windows
-        window_has_session = True
-        try:
-            _whs = _window_has_trading_session(ensure_datetime(start), ensure_datetime(end))
-            window_has_session = bool(_whs)
-        except Exception:
-            window_has_session = True
-        sip_retry_enabled = (
-            not sip_retry_requested
-            and normalized_feed in (None, "", "iex")
-            and _sip_allowed()
-            and _sip_configured()
-            and not bool(globals().get("_SIP_UNAUTHORIZED", False))
-            and window_has_session
-        )
-
-        if sip_retry_enabled:
-            primary_frame = _extract_frame(df)
-            primary_empty = primary_frame is None or getattr(primary_frame, "empty", False)
-            if primary_empty:
-                retry_kwargs = dict(kwargs)
-                retry_kwargs["_sip_retry"] = True
-                retry_kwargs["feed"] = "sip"
-                try:
-                    # Route through the wrapper so internal flags are handled
-                    df = _fetch_bars(
-                        symbol,
-                        start,
-                        end,
-                        interval,
-                        *args,
-                        return_meta=return_meta,
-                        **retry_kwargs,
-                    )
-                except EmptyBarsError:
-                    raise
-
-        try:
-            import pandas as _pd
-
-            if isinstance(df, _pd.DataFrame) and df.empty:
-                state_obj = _get_fetch_state()
-                state = state_obj if isinstance(state_obj, dict) else {}
-                if not state and _pytest_active():
-                    return (df, {}) if return_meta else df
-                abort_logged = bool(state.get("abort_logged"))
-                fallback_feed = state.get("last_fallback_feed")
-                providers = tuple(state.get("providers") or ())
-                fallback_global = _enable_http_fallback()
-                fallbacks_off = isinstance(fallback_global, bool) and not fallback_global
-                outside = False
-                try:
-                    outside = bool(
-                        globals().get("_outside_market_hours", lambda *a, **k: False)(),
-                    )
-                except Exception:
-                    outside = False
-                pytest_mode = _pytest_active()
-                short_circuit = bool(state.get("short_circuit_empty"))
-                if pytest_mode:
-                    if (
-                        abort_logged
-                        or outside
-                        or fallbacks_off
-                        or not fallback_feed
-                        or len(providers) <= 1
-                    ) and not short_circuit:
-                        return (None, {}) if return_meta else None
-                elif outside or fallbacks_off:
-                    if short_circuit:
-                        return (df, {}) if return_meta else df
-                    return (None, {}) if return_meta else None
-        except Exception:
-            pass
-
-        try:
-            short_circuit_local = bool(_get_fetch_state().get("short_circuit_empty"))
-            if df is None and short_circuit_local:
-                empty_frame = _empty_ohlcv_frame()
-                if empty_frame is not None:
-                    df = empty_frame
-        except Exception:
-            pass
-
-        try:
-            state = _get_fetch_state()
-            meta = dict(state.get("meta", {}) or {})
-            providers_list = list(state.get("providers", []) or [])
-            if providers_list:
-                meta.setdefault("providers", tuple(providers_list))
-            meta.setdefault("attempts", len(providers_list))
-        except Exception:
-            meta = {}
-
-        if return_meta:
-            return df, meta
-
-        return df
 def _record_gap_ratio_state(ratio: float | None, *, metadata: Mapping[str, Any] | None = None) -> None:
     state = _get_fetch_state()
     if not isinstance(state, dict):

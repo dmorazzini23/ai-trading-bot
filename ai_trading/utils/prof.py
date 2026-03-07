@@ -5,7 +5,7 @@ import math
 import os
 import time
 from contextlib import contextmanager
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 _TIMING_LEVEL_CACHE: tuple[str | None, str | None, int | None] | None = None
 
@@ -146,7 +146,7 @@ class SoftBudget:
         self.reset()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         return False
 
     def reset(self) -> None:

@@ -8,14 +8,14 @@ missing. When real pandas is available, objects are forwarded.
 try:  # pragma: no cover - exercised in environments with pandas installed
     import pandas as _pd  # type: ignore
 
-    Series = _pd.Series
-    DataFrame = _pd.DataFrame
-    Index = _pd.Index
-    DatetimeIndex = _pd.DatetimeIndex
-    Timestamp = _pd.Timestamp
-    to_numeric = _pd.to_numeric
-    isna = _pd.isna
-    read_csv = _pd.read_csv
+    _Series = _pd.Series
+    _DataFrame = _pd.DataFrame
+    _Index = _pd.Index
+    _DatetimeIndex = _pd.DatetimeIndex
+    _Timestamp = _pd.Timestamp
+    _to_numeric = _pd.to_numeric
+    _isna = _pd.isna
+    _read_csv = _pd.read_csv
     __file__ = getattr(_pd, "__file__", __file__)
 except Exception:  # pragma: no cover - stubbed fallback
     class _Stub:
@@ -25,37 +25,46 @@ except Exception:  # pragma: no cover - stubbed fallback
         def __bool__(self):  # avoid ValueError from ambiguous DataFrame truth
             return True
 
-    class Series(_Stub):
+    class _Series(_Stub):
         pass
 
-    class DataFrame(_Stub):
+    class _DataFrame(_Stub):
         @property
         def empty(self) -> bool:
             return not bool(self._data)
 
-    class Index(_Stub):
+    class _Index(_Stub):
         pass
 
-    class DatetimeIndex(Index):
+    class _DatetimeIndex(_Index):
         pass
 
-    class Timestamp:
+    class _Timestamp:
         def __init__(self, *args, **kwargs):
             pass
 
-    def to_numeric(x, *args, **kwargs):  # noqa: D401
+    def _to_numeric(x, *args, **kwargs):  # noqa: D401
         """Return the input unchanged (stub)."""
         return x
 
-    def isna(x):  # noqa: D401
+    def _isna(x):  # noqa: D401
         """Always return ``False`` (stub)."""
         return False
 
-    def read_csv(*args, **kwargs):  # noqa: D401
+    def _read_csv(*args, **kwargs):  # noqa: D401
         """Return an empty :class:`DataFrame` (stub)."""
-        return DataFrame()
+        return _DataFrame()
 
     __file__ = __file__
+
+Series = _Series
+DataFrame = _DataFrame
+Index = _Index
+DatetimeIndex = _DatetimeIndex
+Timestamp = _Timestamp
+to_numeric = _to_numeric
+isna = _isna
+read_csv = _read_csv
 
 
 __all__ = [
@@ -68,4 +77,3 @@ __all__ = [
     "isna",
     "read_csv",
 ]
-

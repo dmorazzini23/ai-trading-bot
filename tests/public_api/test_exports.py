@@ -3,7 +3,6 @@ from importlib import import_module
 EXPECTED = {
     'ai_trading': [
         'DataFetchError',
-        'DataFetchException',
         'ExecutionEngine',
         'alpaca_api',
         'app',

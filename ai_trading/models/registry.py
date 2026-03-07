@@ -8,10 +8,7 @@ conflicts.
 """
 from pathlib import Path
 
-try:  # pragma: no cover - executed on first import
-    _REGISTRY
-except NameError:  # pragma: no cover - executed on first import
-    _REGISTRY: dict[str, Path] = {}
+_REGISTRY: dict[str, Path] = {}
 
 
 def register_model(name: str, path: str | Path) -> Path:

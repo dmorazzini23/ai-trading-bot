@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ class ConfigSpec:
     min_value: float | None = None
     max_value: float | None = None
     choices: tuple[Any, ...] | None = None
-    deprecated_env: Mapping[str, str] = field(default_factory=dict)
+    deprecated_env: Mapping[str, str] = dataclass_field(default_factory=dict)
     mask: bool = False
 
 

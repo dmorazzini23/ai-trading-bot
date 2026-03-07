@@ -268,6 +268,86 @@ def build_service_health_payload(
     return payload
 
 
+def build_api_health_payload(
+    *,
+    service_name: str = "ai-trading",
+    force_ok_for_pytest: bool = False,
+    env_error: Any | None = None,
+) -> dict[str, Any]:
+    """Build the canonical `/health` payload used by API entrypoints."""
+
+    errors: list[str] = []
+    alpaca_import_ok = True
+    sdk_ok = False
+    trading_client: Any = None
+    key = secret = None
+    base_url = ""
+    paper = False
+    shadow = False
+
+    try:
+        from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
+    except Exception as exc:  # pragma: no cover - defensive
+        alpaca_import_ok = False
+        errors.append(str(exc) or exc.__class__.__name__)
+        sdk_ok = False
+
+    if alpaca_import_ok:
+        try:
+            from ai_trading.core.bot_engine import _resolve_alpaca_env
+            from ai_trading.core.bot_engine import trading_client as _trading_client
+
+            trading_client = _trading_client
+            key, secret, base_url = _resolve_alpaca_env()
+            base_url = str(base_url or "")
+            paper = bool(base_url and "paper" in base_url.lower())
+        except Exception as exc:  # pragma: no cover - defensive
+            errors.append(str(exc) or exc.__class__.__name__)
+            trading_client, key, secret, base_url, paper = (None, None, None, "", False)
+
+    try:
+        from ai_trading.config.management import is_shadow_mode
+
+        shadow = bool(is_shadow_mode())
+    except Exception as exc:  # pragma: no cover - defensive
+        errors.append(str(exc) or exc.__class__.__name__)
+        shadow = False
+
+    if (not alpaca_import_ok) or (not key) or (not secret):
+        shadow = False
+
+    payload = build_service_health_payload(
+        service_name=service_name,
+        force_ok_for_pytest=force_ok_for_pytest,
+        healthy_status_mode="service",
+        ok_mode="connectivity",
+        env_error=env_error,
+        alpaca_context={
+            "sdk_ok": sdk_ok,
+            "initialized": bool(trading_client),
+            "client_attached": bool(trading_client),
+            "has_key": bool(key),
+            "has_secret": bool(secret),
+            "base_url": base_url,
+            "paper": paper,
+            "shadow_mode": shadow,
+        },
+        enrich_alpaca_from_runtime_env=False,
+    )
+    env_error_text = str(env_error or "").strip()
+    if env_error_text:
+        errors.append(env_error_text)
+
+    if errors:
+        payload["ok"] = False
+        payload["status"] = "degraded"
+        payload["error"] = "; ".join(dict.fromkeys(errors))
+    elif force_ok_for_pytest:
+        payload["ok"] = True
+        payload.setdefault("status", payload.get("status") or "healthy")
+    return payload
+
+
 def build_canonical_healthz_payload(
     *,
     service_name: str = "ai-trading",
@@ -376,6 +456,7 @@ __all__ = [
     "build_runtime_health_payload",
     "build_alpaca_health_payload",
     "build_service_health_payload",
+    "build_api_health_payload",
     "build_canonical_healthz_payload",
     "build_health_exception_payload",
     "build_health_json_response",

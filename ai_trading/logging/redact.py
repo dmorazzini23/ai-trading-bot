@@ -53,7 +53,7 @@ def normalize_aliases(env: Mapping[str, Any]) -> dict[str, Any]:
 def _redact_inplace(obj: Any) -> Any:
     """Recursively redact matching keys."""
 
-    if isinstance(obj, Mapping):
+    if isinstance(obj, MutableMapping):
         for k, v in list(obj.items()):
             if isinstance(k, str) and _RE_KEYS.search(k):
                 obj[k] = _MASK

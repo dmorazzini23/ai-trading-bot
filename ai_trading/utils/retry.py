@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import builtins
 import random
 import time
 from collections.abc import Callable
@@ -30,8 +31,10 @@ try:  # pragma: no cover - exercised via HAS_TENACITY flag in tests
 except (ImportError, TypeError):  # pragma: no cover - fallback path when tenacity missing
     HAS_TENACITY = False
 
-    class RetryError(Exception):
+    class _FallbackRetryError(Exception):
         """Fallback RetryError used when Tenacity is unavailable."""
+
+    RetryError = _FallbackRetryError
 
     def stop_after_attempt(max_attempts: int) -> Callable[[int], bool]:
         def stop(attempt_number: int) -> bool:
@@ -56,9 +59,9 @@ except (ImportError, TypeError):  # pragma: no cover - fallback path when tenaci
     ) -> _Wait:
         def fn(attempt: int) -> float:
             delay = multiplier * (2 ** (attempt - 1))
-            delay = max(delay, min)
+            delay = builtins.max(delay, min)
             if max is not None:
-                delay = min(delay, max)
+                delay = builtins.min(delay, max)
             return delay
         return _Wait(fn)
 
@@ -169,7 +172,7 @@ def retry(
         _retry = retry if retry is not None else retry_if_exception_type(exceptions)
         dec = _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=reraise)
 
-        def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        def tenacity_policy_decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
 
             @functools.wraps(fn)
@@ -178,7 +181,7 @@ def retry(
 
             return inner
 
-        return decorator
+        return tenacity_policy_decorator
 
     if HAS_TENACITY:
         _stop = stop_after_attempt(attempts)
@@ -191,7 +194,7 @@ def retry(
         predicate = retry_if_exception_type(exceptions)
         dec = _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=reraise)
 
-        def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        def tenacity_decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
 
             @functools.wraps(fn)
@@ -200,7 +203,7 @@ def retry(
 
             return inner
 
-        return decorator
+        return tenacity_decorator
 
     # Fallback (no Tenacity installed)
     def _calc_wait(n: int) -> float:
@@ -211,7 +214,7 @@ def retry(
         # exponential
         return base * (2 ** (n - 1)) if n > 0 else 0.0
 
-    def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+    def fallback_decorator(fn: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             attempt = 0
@@ -247,7 +250,7 @@ def retry(
 
         return wrapper
 
-    return decorator
+    return fallback_decorator
 
 
 __all__ = [

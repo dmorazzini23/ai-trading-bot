@@ -34,20 +34,22 @@ class TestAlpacaImportHandling(unittest.TestCase):
         with patch("builtins.__import__", side_effect=mock_import):
             # This should simulate our conditional import pattern
             ALPACA_AVAILABLE = True
-            REST = None
+            rest_client = None
 
             try:
-                from alpaca import REST
+                from alpaca import REST as imported_rest
 
                 self.fail("Expected alpaca import to fail")
             except TypeError as e:
                 ALPACA_AVAILABLE = False
                 self.assertIn("'function' object is not iterable", str(e))
 
-                REST = object
+                rest_client = object
+            else:
+                rest_client = imported_rest
 
             self.assertFalse(ALPACA_AVAILABLE)
-            self.assertIsNotNone(REST)
+            self.assertIsNotNone(rest_client)
 
     def test_check_alpaca_available_function(self):
         """Test the check_alpaca_available utility function behavior."""
@@ -89,8 +91,8 @@ class TestAlpacaImportHandling(unittest.TestCase):
     def test_mock_classes_functionality(self):
         """Test that mock classes provide minimal required functionality."""
         # Test mock trading client
-        REST = object
-        self.assertIsNotNone(REST)
+        rest_client = object
+        self.assertIsNotNone(rest_client)
 
     def test_service_startup_simulation(self):
         """Test that service can start with alpaca import failures."""

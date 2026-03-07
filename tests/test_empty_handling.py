@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from ai_trading.data.fetch.empty_handling import fetch_with_retries, _RETRY_COUNTS
+import ai_trading.data.fetch.empty_handling as empty_handling
 from ai_trading.data.fetch import EmptyBarsError
 
 
@@ -25,10 +26,11 @@ def test_returns_empty_when_no_retry_delays(monkeypatch):
     symbol = 'AAPL'
     timeframe = '1Min'
     raiser = _Raiser(fail_times=1)
-    monkeypatch.setattr('ai_trading.data.fetch.empty_handling.is_market_open', lambda: True)
+    monkeypatch.setattr(empty_handling, "is_market_open", lambda: True)
     called: dict[str, float] = {}
     monkeypatch.setattr(
-        'ai_trading.data.fetch.empty_handling.time',
+        empty_handling,
+        "time",
         types.SimpleNamespace(sleep=lambda s: called.setdefault('sleep', s)),
     )
     df = fetch_with_retries(symbol, timeframe, raiser, [])
@@ -41,10 +43,11 @@ def test_retry_until_success(monkeypatch):
     symbol = 'MSFT'
     timeframe = '1Min'
     raiser = _Raiser(fail_times=1)
-    monkeypatch.setattr('ai_trading.data.fetch.empty_handling.is_market_open', lambda: True)
+    monkeypatch.setattr(empty_handling, "is_market_open", lambda: True)
     called: dict[str, float] = {}
     monkeypatch.setattr(
-        'ai_trading.data.fetch.empty_handling.time',
+        empty_handling,
+        "time",
         types.SimpleNamespace(sleep=lambda s: called.setdefault('sleep', s)),
     )
     df = fetch_with_retries(symbol, timeframe, raiser, [0])
@@ -58,10 +61,11 @@ def test_abort_when_market_closed(monkeypatch):
     symbol = 'IBM'
     timeframe = '1Min'
     raiser = _Raiser(fail_times=1)
-    monkeypatch.setattr('ai_trading.data.fetch.empty_handling.is_market_open', lambda: False)
+    monkeypatch.setattr(empty_handling, "is_market_open", lambda: False)
     called: dict[str, float] = {}
     monkeypatch.setattr(
-        'ai_trading.data.fetch.empty_handling.time',
+        empty_handling,
+        "time",
         types.SimpleNamespace(sleep=lambda s: called.setdefault('sleep', s)),
     )
     delays = [0, 1]
@@ -77,14 +81,15 @@ def test_raise_when_window_has_no_trading_session(monkeypatch):
     timeframe = '5Min'
     raiser = _Raiser(fail_times=3)
     retry_delays = [0.25, 0.5]
-    monkeypatch.setattr('ai_trading.data.fetch.empty_handling.is_market_open', lambda: True)
+    monkeypatch.setattr(empty_handling, "is_market_open", lambda: True)
     sleep_called = {'count': 0}
 
     def _sleep(_s: float) -> None:
         sleep_called['count'] += 1
 
     monkeypatch.setattr(
-        'ai_trading.data.fetch.empty_handling.time',
+        empty_handling,
+        "time",
         types.SimpleNamespace(sleep=_sleep),
     )
 

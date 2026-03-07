@@ -1,4 +1,4 @@
-"""Sentiment package providing a lightweight interface wrapper."""
-from .interface import analyze_text
+"""Sentiment package exports."""
+from ai_trading.analysis.sentiment import analyze_text
 
 __all__ = ["analyze_text"]

@@ -25,21 +25,6 @@ def _should_emit(key: str) -> bool:
         return True
 
 
-@overload
-def emit_once(key: str, /) -> bool: ...
-
-
-@overload
-def emit_once(
-    logger: Logger | LoggerAdapter,
-    key: str,
-    level: str,
-    msg: str,
-    /,
-    **extra: Any,
-) -> bool: ...
-
-
 def _coerce_level(level: str | int) -> int:
     """Return the numeric logging level for ``level``.
 
@@ -54,6 +39,21 @@ def _coerce_level(level: str | int) -> int:
         if isinstance(resolved, int):
             return resolved
     raise ValueError(f"Unsupported log level: {level!r}")
+
+
+@overload
+def emit_once(key: str, /) -> bool: ...
+
+
+@overload
+def emit_once(
+    logger: Logger | LoggerAdapter,
+    key: str,
+    level: str,
+    msg: str,
+    /,
+    **extra: Any,
+) -> bool: ...
 
 
 def emit_once(*args: Any, **extra: Any) -> bool:

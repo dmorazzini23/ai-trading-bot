@@ -44,7 +44,7 @@ def test_meta_learning_price_conversion():
     """Test meta learning properly converts string prices to numeric."""
 
     # Simulate the fixed price conversion logic
-    test_data = [
+    test_data: list[dict[str, str | float]] = [
         {'entry_price': '150.50', 'exit_price': '155.25'},  # String prices
         {'entry_price': 250.00, 'exit_price': 245.50},     # Numeric prices
         {'entry_price': '200.75', 'exit_price': '210.00'},  # String prices
@@ -148,4 +148,3 @@ if __name__ == "__main__":
     test_liquidity_minimum_position()
     test_stale_data_bypass_startup()
     test_rfc3339_timestamp_api_format()
-

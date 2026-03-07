@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     import numpy as np
@@ -378,7 +378,12 @@ class IHealthMonitor(ABC):
         """Get system performance metrics."""
 
     @abstractmethod
-    async def register_component(self, name: str, check_func: callable, interval: int=60) -> None:
+    async def register_component(
+        self,
+        name: str,
+        check_func: Callable[..., Any],
+        interval: int = 60,
+    ) -> None:
         """Register component for health monitoring."""
 
 class IConfigManager(ABC):

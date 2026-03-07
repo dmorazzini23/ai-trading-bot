@@ -89,10 +89,10 @@ def ensure_python_dotenv_is_real_package() -> None:
         return
 
     repo_root = _repo_root()
-    spec_origin = _resolve_spec_origin()
-    if spec_origin and _is_shadowed_path(spec_origin, repo_root):
+    resolved_spec_origin = _resolve_spec_origin()
+    if resolved_spec_origin and _is_shadowed_path(resolved_spec_origin, repo_root):
         globals()["PYTHON_DOTENV_RESOLVED"] = False
-        raise DotenvImportError(f"python-dotenv is shadowed at {spec_origin}")
+        raise DotenvImportError(f"python-dotenv is shadowed at {resolved_spec_origin}")
 
     try:
         module = importlib.import_module("dotenv")

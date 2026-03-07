@@ -40,7 +40,6 @@ _EXPORTS = {
     "utils": "ai_trading.utils",
     "ExecutionEngine": "ai_trading.execution.engine:ExecutionEngine",
     "DataFetchError": "ai_trading.data.fetch:DataFetchError",
-    "DataFetchException": "ai_trading.data.fetch:DataFetchException",
 }
 
 __all__ = sorted(_EXPORTS)
