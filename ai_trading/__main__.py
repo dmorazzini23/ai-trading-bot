@@ -5,7 +5,7 @@ import json
 import sys
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 sys.dont_write_bytecode = True
@@ -13,6 +13,7 @@ sys.dont_write_bytecode = True
 from ai_trading.exc import HTTPError
 from pydantic import BaseModel, ValidationError, field_validator
 
+from ai_trading.config.management import get_env, set_runtime_env_override
 from ai_trading.logging import get_logger
 from ai_trading.utils.time import monotonic_time
 from ai_trading.runtime.shutdown import (
@@ -24,6 +25,24 @@ from ai_trading.runtime.shutdown import (
 )
 
 logger = get_logger(__name__)
+
+
+def _env_value(name: str, default: Any = None) -> Any:
+    try:
+        return get_env(name, default, resolve_aliases=False)
+    except Exception:
+        return default
+
+
+def _env_text(name: str, default: str = "") -> str:
+    value = _env_value(name, default)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _set_execution_mode(*, paper: bool) -> None:
+    set_runtime_env_override("EXECUTION_MODE", "paper" if paper else "live")
 
 
 def _build_parser(description: str, *, symbols: bool = False) -> argparse.ArgumentParser:
@@ -151,12 +170,10 @@ def _coerce_alias_value(raw: str | None, caster: Callable[[str], object]) -> obj
 
 
 def _validate_env_alias_consistency() -> None:
-    import os
-
     mismatches: list[dict[str, str]] = []
     for canonical_key, alias_key, caster in _ENV_ALIAS_PAIRS:
-        canonical_value = _coerce_alias_value(os.getenv(canonical_key), caster)
-        alias_value = _coerce_alias_value(os.getenv(alias_key), caster)
+        canonical_value = _coerce_alias_value(_env_text(canonical_key, "") or None, caster)
+        alias_value = _coerce_alias_value(_env_text(alias_key, "") or None, caster)
         if canonical_value is None or alias_value is None:
             continue
         if canonical_value == alias_value:
@@ -194,20 +211,18 @@ except Exception:  # pragma: no cover - defensive
 def _validate_startup_config() -> _StartupConfig:
     """Validate runtime config and exit fast on errors."""
 
-    from ai_trading.config.management import get_env, validate_no_deprecated_env
+    from ai_trading.config.management import validate_no_deprecated_env
     from ai_trading.settings import get_settings
-
-    import os
 
     def _is_truthy(raw: str | None) -> bool:
         return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _validate_live_intent_store_config() -> None:
-        execution_mode = str(os.getenv("EXECUTION_MODE", "") or "").strip().lower()
+        execution_mode = _env_text("EXECUTION_MODE").strip().lower()
         if execution_mode != "live":
             return
 
-        oms_enabled = _is_truthy(os.getenv("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1"))
+        oms_enabled = _is_truthy(_env_text("AI_TRADING_OMS_INTENT_STORE_ENABLED", "1"))
         if not oms_enabled:
             message = (
                 "Invalid configuration: live mode requires AI_TRADING_OMS_INTENT_STORE_ENABLED=1."
@@ -221,7 +236,7 @@ def _validate_startup_config() -> _StartupConfig:
             )
             raise SystemExit(message)
 
-        database_url = str(os.getenv("DATABASE_URL", "") or "").strip()
+        database_url = _env_text("DATABASE_URL").strip()
         if not database_url:
             message = (
                 "Invalid configuration: live mode requires DATABASE_URL to a non-sqlite "
@@ -277,7 +292,7 @@ def _validate_startup_config() -> _StartupConfig:
     # issues at startup.
     feed_env: str | None = None
     for key in ("DATA_FEED", "ALPACA_DATA_FEED"):
-        raw = os.getenv(key)
+        raw = _env_text(key, "")
         if raw is None:
             continue
         if not raw.strip():
@@ -285,7 +300,7 @@ def _validate_startup_config() -> _StartupConfig:
         feed_env = raw
         break
 
-    timeframe_env = os.getenv("TIMEFRAME")
+    timeframe_env = _env_text("TIMEFRAME", "") or None
     try:
         validate_no_deprecated_env()
         _validate_env_alias_consistency()
@@ -305,11 +320,10 @@ def _validate_startup_config() -> _StartupConfig:
             if timeframe_env and timeframe_env.strip()
             else get_env("TIMEFRAME", "1Min")
         )
-        cfg = {
-            "timeframe": timeframe_value,
-            "data_feed": feed_value,
-        }
-        return _StartupConfig(**cfg)
+        return _StartupConfig(
+            timeframe=cast(Any, timeframe_value),
+            data_feed=cast(Any, feed_value),
+        )
     except ValidationError as e:  # pragma: no cover - exercised in tests
         logger.error("CONFIG_VALIDATION_FAILED", extra={"errors": e.errors()})
         raise SystemExit(f"Invalid configuration: {e}") from e
@@ -377,9 +391,7 @@ def run_trade() -> None:
         logging.shutdown()
         sys.exit(0)
 
-    import os
-
-    os.environ["EXECUTION_MODE"] = "paper" if args.paper else "live"
+    _set_execution_mode(paper=bool(args.paper))
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
@@ -425,9 +437,7 @@ def run_backtest() -> None:
         logging.shutdown()
         sys.exit(0)
 
-    import os
-
-    os.environ["EXECUTION_MODE"] = "paper" if args.paper else "live"
+    _set_execution_mode(paper=bool(args.paper))
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
@@ -473,9 +483,7 @@ def run_healthcheck() -> None:
         logging.shutdown()
         sys.exit(0)
 
-    import os
-
-    os.environ["EXECUTION_MODE"] = "paper" if args.paper else "live"
+    _set_execution_mode(paper=bool(args.paper))
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
@@ -489,8 +497,11 @@ def run_healthcheck() -> None:
             raise SystemExit("Import preflight failed; see logs for details")
         logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
 
+    def _run_health_check_once() -> None:
+        run_health_check()
+
     try:
-        _run_loop(run_health_check, args, "Health check")
+        _run_loop(_run_health_check_once, args, "Health check")
     finally:
         if timer is not None:
             timer.cancel()
@@ -498,8 +509,6 @@ def run_healthcheck() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Default CLI entrypoint mirroring ``run_trade``."""
-
-    import os
 
     try:
         parser = _build_parser("AI Trading Bot", symbols=True)
@@ -509,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
 
             ensure_dotenv_loaded()
             return _print_resolved_config()
-        pytest_running = os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
+        pytest_running = _env_text("PYTEST_RUNNING").strip().lower() in {"1", "true", "yes"}
         if pytest_running and not getattr(args, "dry_run", False):
             try:
                 _ = _validate_startup_config
@@ -531,9 +540,7 @@ def main(argv: list[str] | None = None) -> int:
             logging.shutdown()
             return 0
 
-        import os
-
-        os.environ["EXECUTION_MODE"] = "paper" if args.paper else "live"
+        _set_execution_mode(paper=bool(args.paper))
         from ai_trading.env import ensure_dotenv_loaded
 
         ensure_dotenv_loaded()
@@ -569,8 +576,6 @@ def main(argv: list[str] | None = None) -> int:
                 message = str(exc)
                 legacy_prefix = "AP" "CA_"
                 if legacy_prefix in message:
-                    import os
-
                     remediation = (
                         f"Legacy {legacy_prefix}* environment variables detected. Remove all {legacy_prefix}* entries "
                         "from your runtime configuration (.env, systemd Environment/EnvironmentFile, "
@@ -583,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
                             "remediation": remediation,
                         },
                     )
-                    return os.EX_CONFIG
+                    return 78
                 raise
         finally:
             if timer is not None:
@@ -608,11 +613,10 @@ if __name__ == "__main__":
     # avoid raising SystemExit so collection/execution continues cleanly.
     rc = main()
     try:
-        import os as _os
         if (
             any("pytest" in arg for arg in sys.argv)
             or any("::" in arg for arg in sys.argv)
-            or _os.getenv("PYTEST_RUNNING") == "1"
+            or _env_text("PYTEST_RUNNING") == "1"
         ):
             pass
         else:
@@ -620,9 +624,8 @@ if __name__ == "__main__":
     finally:
         try:
             import sys as _sys
-            import os as _os2
 
-            if _os2.getenv("PYTEST_RUNNING") == "1":
+            if _env_text("PYTEST_RUNNING") == "1":
                 _sys.modules.pop(__name__, None)
         except Exception:
             logger.debug("PYTEST_MAIN_MODULE_CLEANUP_FAILED", exc_info=True)

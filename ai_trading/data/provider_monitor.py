@@ -46,6 +46,27 @@ from ai_trading.utils.time import monotonic_time
 
 logger = get_logger(__name__)
 
+
+def _env_value(
+    name: str,
+    default: Any = None,
+    *,
+    cast: Callable[[Any], Any] | None = None,
+) -> Any:
+    """Read runtime config via config management without alias expansion."""
+
+    try:
+        return get_env(name, default, cast=cast, resolve_aliases=False)
+    except Exception:
+        return default
+
+
+def _env_text(name: str, default: str = "") -> str:
+    value = _env_value(name, default)
+    if value is None:
+        return ""
+    return str(value)
+
 CANON = {
     "alpaca": "alpaca",
     "alpaca_iex": "alpaca-iex",
@@ -95,10 +116,10 @@ def _extract_feed_attempts(metadata: Mapping[str, Any] | None) -> list[str]:
 
 
 def _detect_pytest_env() -> bool:
-    flag = os.getenv("PYTEST_RUNNING")
+    flag = _env_value("PYTEST_RUNNING")
     if flag and str(flag).strip().lower() not in {"0", "false", "no", "off"}:
         return True
-    if os.getenv("PYTEST_CURRENT_TEST"):
+    if _env_value("PYTEST_CURRENT_TEST"):
         return True
     return False
 
@@ -106,7 +127,7 @@ def _detect_pytest_env() -> bool:
 def _pytest_relaxed_switchovers_enabled() -> bool:
     """Return ``True`` when pytest protections should relax switchover logic."""
 
-    flag = os.getenv("PROVIDER_MONITOR_RELAXED_TEST_MODE", "").strip().lower()
+    flag = _env_text("PROVIDER_MONITOR_RELAXED_TEST_MODE").strip().lower()
     return flag in {"1", "true", "yes", "on"}
 
 
@@ -156,7 +177,7 @@ def _resolve_switch_cooldown_seconds() -> int:
         except Exception:
             candidate = None
     if candidate is None:
-        raw = os.getenv("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC", "").strip()
+        raw = _env_text("AI_TRADING_PROVIDER_SWITCH_COOLDOWN_SEC").strip()
         if raw:
             try:
                 candidate = int(raw)
@@ -204,7 +225,7 @@ def _resolve_health_passes_required() -> int:
         except Exception:
             candidate = None
     if candidate is None:
-        raw = os.getenv("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED", "").strip()
+        raw = _env_text("AI_TRADING_PROVIDER_HEALTH_PASSES_REQUIRED").strip()
         if raw:
             try:
                 candidate = int(raw)
@@ -239,13 +260,13 @@ def _resolve_safe_mode_recovery_passes() -> int:
         resolved = None
     if resolved is not None:
         candidate = resolved
-    raw = os.getenv("HEALTH_RECOVERY_PASSES", "").strip()
+    raw = _env_text("HEALTH_RECOVERY_PASSES").strip()
     if raw:
         try:
             candidate = int(raw)
         except Exception:
             logger.debug("HEALTH_RECOVERY_PASSES_PARSE_FAILED", extra={"raw": raw}, exc_info=True)
-    raw = os.getenv("AI_TRADING_SAFE_MODE_HEALTH_PASSES", "").strip()
+    raw = _env_text("AI_TRADING_SAFE_MODE_HEALTH_PASSES").strip()
     if raw:
         try:
             candidate = int(raw)
@@ -273,7 +294,7 @@ def _resolve_primary_dwell_seconds() -> float:
     except Exception:
         candidate = None
     if candidate is None:
-        raw = os.getenv("DATA_PROVIDER_PRIMARY_DWELL_SECONDS", "").strip()
+        raw = _env_text("DATA_PROVIDER_PRIMARY_DWELL_SECONDS").strip()
         if raw:
             try:
                 candidate = float(raw)
@@ -306,7 +327,7 @@ def _resolve_gap_ratio_trigger() -> float:
             candidates.append(float(env_val))
         except (TypeError, ValueError):
             pass
-    raw_env = os.getenv("AI_TRADING_GAP_RATIO_SAFE_MODE", "").strip()
+    raw_env = _env_text("AI_TRADING_GAP_RATIO_SAFE_MODE").strip()
     if raw_env:
         try:
             candidates.append(float(raw_env))
@@ -337,7 +358,7 @@ def _resolve_gap_missing_trigger() -> int:
             candidates.append(int(env_val))
         except (TypeError, ValueError):
             pass
-    raw_env = os.getenv("AI_TRADING_GAP_MISSING_SAFE_MODE", "").strip()
+    raw_env = _env_text("AI_TRADING_GAP_MISSING_SAFE_MODE").strip()
     if raw_env:
         try:
             candidates.append(int(raw_env))
@@ -395,7 +416,7 @@ def _failsoft_gap_ratio_limit() -> float:
                 candidates.append(float(env_val))
             except (TypeError, ValueError):
                 pass
-        raw_env = os.getenv(key, "").strip()
+        raw_env = _env_text(key).strip()
         if raw_env:
             try:
                 candidates.append(float(raw_env))
@@ -452,7 +473,7 @@ def safe_mode_cycle_marker() -> tuple[int, str | None]:
 def _current_intraday_feed() -> str:
     """Return the configured intraday feed identifier."""
 
-    env_feed = os.getenv("DATA_FEED_INTRADAY")
+    env_feed = _env_value("DATA_FEED_INTRADAY")
     if env_feed not in (None, ""):
         normalized = env_feed.strip().lower()
         if normalized:
@@ -470,7 +491,7 @@ def _current_intraday_feed() -> str:
         if settings is not None:
             feed = getattr(settings, "data_feed_intraday", None) or getattr(settings, "alpaca_data_feed", None)
     if feed in (None, ""):
-        feed = os.getenv("ALPACA_DATA_FEED")
+        feed = _env_value("ALPACA_DATA_FEED")
     normalized = str(feed or "iex").strip().lower()
     return normalized or "iex"
 
@@ -615,7 +636,7 @@ def _resolve_halt_flag_path() -> str:
         path = getattr(settings, "halt_flag_path", None)
         if isinstance(path, str) and path:
             return path
-    env_path = os.getenv("AI_TRADING_HALT_FLAG_PATH")
+    env_path = _env_value("AI_TRADING_HALT_FLAG_PATH")
     if env_path:
         return env_path
     return "halt.flag"
@@ -702,7 +723,7 @@ def activate_data_kill_switch(
     payload: dict[str, Any] = {"provider": provider, "reason": reason}
     if metadata:
         payload.update({k: v for k, v in metadata.items() if k not in payload})
-    if os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}:
+    if _env_text("PYTEST_RUNNING").strip().lower() in {"1", "true", "yes"}:
         log_data_quality_event(
             "kill_switch",
             provider=provider,
@@ -1220,14 +1241,14 @@ def _resolve_max_cooldown() -> float:
             except (TypeError, ValueError):  # pragma: no cover - defensive parsing
                 candidate = None
     if candidate is None:
-        raw_env = os.getenv("PROVIDER_MAX_COOLDOWN_SECONDS")
+        raw_env = _env_value("PROVIDER_MAX_COOLDOWN_SECONDS")
         if raw_env is not None:
             try:
                 candidate = float(raw_env)
             except (TypeError, ValueError):  # pragma: no cover - defensive parsing
                 candidate = None
     if candidate is None:
-        raw_env = os.getenv("DATA_PROVIDER_MAX_COOLDOWN")
+        raw_env = _env_value("DATA_PROVIDER_MAX_COOLDOWN")
         if raw_env is not None:
             try:
                 candidate = float(raw_env)
@@ -1267,7 +1288,7 @@ def _resolve_switch_quiet_seconds() -> float:
         except (TypeError, ValueError):  # pragma: no cover - defensive parsing
             pass
 
-    raw_env = os.getenv("PROVIDER_SWITCH_QUIET_SECONDS")
+    raw_env = _env_value("PROVIDER_SWITCH_QUIET_SECONDS")
     if raw_env is not None:
         try:
             return max(float(raw_env), 0.0)
@@ -1443,7 +1464,7 @@ def _decision_window_seconds() -> int:
         value = None
     if value is None:
         try:
-            value = int(os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", ""))
+            value = int(_env_text("AI_TRADING_PROVIDER_DECISION_SECS"))
         except Exception:  # pragma: no cover - defensive env parsing fallback
             value = None
     try:
@@ -1497,8 +1518,8 @@ class ProviderMonitor:
         )
         self.switch_quiet_seconds = max(float(_resolve_switch_quiet_seconds()), 0.0)
         pytest_active = (
-            os.getenv("PYTEST_RUNNING", "").strip().lower() in {"1", "true", "yes"}
-            or bool(os.getenv("PYTEST_CURRENT_TEST"))
+            _env_text("PYTEST_RUNNING").strip().lower() in {"1", "true", "yes"}
+            or bool(_env_value("PYTEST_CURRENT_TEST"))
         )
         dwell_candidate = (
             float(primary_dwell_seconds)
@@ -2201,7 +2222,7 @@ class ProviderMonitor:
                     strict_enabled = bool(strict_checker())
                 except Exception:  # pragma: no cover - defensive gating check
                     strict_enabled = False
-        env_allowed = os.getenv("ALPACA_SIP_ENABLED", "0") in {"1", "true", "True"}
+        env_allowed = _env_text("ALPACA_SIP_ENABLED", "0").strip().lower() in {"1", "true"}
         allowed = strict_enabled and env_allowed
         if not allowed:
             now_monotonic = monotonic_time()
@@ -2255,7 +2276,7 @@ class ProviderMonitor:
         global _FIRST_DECISION
         if _FIRST_DECISION:
             _FIRST_DECISION = False
-            preferred = os.getenv("DATA_PROVIDER", "").strip()
+            preferred = _env_text("DATA_PROVIDER").strip()
             preferred_norm = _normalize_provider(preferred) if preferred else ""
             primary_norm = _normalize_provider(primary)
             fail_count = self.fail_counts.get(primary, 0)

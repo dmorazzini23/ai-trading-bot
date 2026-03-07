@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from ai_trading.health_payload import (
     build_canonical_healthz_payload,
-    build_health_exception_payload,
+    register_healthz_routes,
 )
 from ai_trading.logging import get_logger
 from ai_trading.app import _install_route_tracker, _ensure_test_client
@@ -95,37 +95,37 @@ class HealthCheck:
                 pass
             return response
 
-        @self.app.route("/healthz")
-        def _healthz() -> Any:  # pragma: no cover - simple glue
+        def _build_healthz_payload() -> dict[str, Any]:
+            err: str | None = None
             try:
-                err: str | None = None
-                try:
-                    service_name = self._get_ctx_attr("service", "ai-trading")
-                except Exception as exc:  # pragma: no cover - defensive
-                    service_name = "ai-trading"
-                    err = str(exc) or exc.__class__.__name__
-
-                ctx_alpaca = self._get_ctx_attr("alpaca", None)
-                alpaca_ctx = dict(ctx_alpaca) if isinstance(ctx_alpaca, Mapping) else None
-                payload = build_canonical_healthz_payload(
-                    service_name=str(service_name or "ai-trading"),
-                    force_ok_for_pytest=False,
-                    healthy_status_mode="healthy",
-                    ok_mode="connectivity",
-                    alpaca_context=alpaca_ctx,
-                    error=err,
-                )
+                service_name = self._get_ctx_attr("service", "ai-trading")
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "HEALTH_ENDPOINT_ERROR",
-                    extra={"error": str(exc)},
-                )
-                payload = _emit_response(
-                    build_health_exception_payload(exc, service_name="ai-trading"),
-                    status=500,
-                )
-                return payload
-            return _emit_response(payload, status=200)
+                service_name = "ai-trading"
+                err = str(exc) or exc.__class__.__name__
+
+            ctx_alpaca = self._get_ctx_attr("alpaca", None)
+            alpaca_ctx = dict(ctx_alpaca) if isinstance(ctx_alpaca, Mapping) else None
+            return build_canonical_healthz_payload(
+                service_name=str(service_name or "ai-trading"),
+                force_ok_for_pytest=False,
+                healthy_status_mode="healthy",
+                ok_mode="connectivity",
+                alpaca_context=alpaca_ctx,
+                error=err,
+            )
+
+        def _health_response(payload: dict[str, Any], status: int) -> Any:
+            return _emit_response(payload, status=status)
+
+        register_healthz_routes(
+            self.app,
+            payload_builder=_build_healthz_payload,
+            response_builder=_health_response,
+            service_name=str(self._get_ctx_attr("service", "ai-trading") or "ai-trading"),
+            routes=("/healthz",),
+            logger=logger,
+            error_event="HEALTH_ENDPOINT_ERROR",
+        )
 
     # ------------------------------------------------------------------
     # Public API

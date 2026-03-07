@@ -317,10 +317,42 @@ def build_health_exception_payload(
     }
 
 
+def register_healthz_routes(
+    app: Any,
+    *,
+    payload_builder: Callable[[], Mapping[str, Any]],
+    response_builder: Callable[[dict[str, Any], int], Any],
+    service_name: str = "ai-trading",
+    routes: tuple[str, ...] = ("/healthz",),
+    methods: tuple[str, ...] = ("GET",),
+    logger: Any | None = None,
+    error_event: str = "HEALTH_CHECK_FAILED",
+) -> None:
+    """Register canonical health routes on ``app`` using shared runtime logic."""
+
+    def _healthz_handler() -> Any:
+        try:
+            payload = dict(payload_builder())
+            return response_builder(payload, 200)
+        except Exception as exc:
+            if logger is not None:
+                try:
+                    logger.exception(error_event, exc_info=exc)
+                except Exception:
+                    pass
+            fallback_payload = build_health_exception_payload(exc, service_name=service_name)
+            return response_builder(fallback_payload, 500)
+
+    for route in routes:
+        decorator = app.route(route, methods=list(methods))
+        decorator(_healthz_handler)
+
+
 __all__ = [
     "build_runtime_health_payload",
     "build_alpaca_health_payload",
     "build_service_health_payload",
     "build_canonical_healthz_payload",
     "build_health_exception_payload",
+    "register_healthz_routes",
 ]

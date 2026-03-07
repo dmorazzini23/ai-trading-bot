@@ -355,7 +355,7 @@ from ai_trading.config import (
 )
 from ai_trading.health_payload import (
     build_canonical_healthz_payload,
-    build_health_exception_payload,
+    register_healthz_routes,
 )
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
@@ -27098,11 +27098,9 @@ def on_market_close() -> None:
 app = Flask(__name__)
 
 
-@app.route("/health", methods=["GET"])
-@app.route("/health_check", methods=["GET"])
-@app.route("/healthz", methods=["GET"])
-def health() -> str:
-    """Health endpoint exposing basic system metrics."""
+def _legacy_health_payload() -> dict[str, Any]:
+    """Health endpoint payload exposing basic runtime metrics."""
+
     try:
         runtime = (
             _get_runtime_context_or_none()
@@ -27136,15 +27134,24 @@ def health() -> str:
             "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
-    except Exception as e:  # pragma: no cover - defensive guardrail
-        payload = build_health_exception_payload(e, service_name="ai-trading")
-        logger.warning(
-            "HEALTH_CHECK_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
     payload["no_signal_events"] = state.no_signal_events
     payload["indicator_failures"] = state.indicator_failures
-    return jsonify(payload), 200
+    return payload
+
+
+def _legacy_health_response(payload: dict[str, Any], status: int) -> Any:
+    return jsonify(payload), status
+
+
+register_healthz_routes(
+    app,
+    payload_builder=_legacy_health_payload,
+    response_builder=_legacy_health_response,
+    service_name="ai-trading",
+    routes=("/health", "/health_check", "/healthz"),
+    logger=logger,
+    error_event="HEALTH_CHECK_FAILED",
+)
 
 
 def start_healthcheck() -> None:

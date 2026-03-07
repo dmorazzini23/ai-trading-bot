@@ -152,13 +152,10 @@ def _runtime_env_overrides_snapshot() -> dict[str, str]:
 
 
 def _env_with_runtime_fallback(key: str) -> str | None:
-    raw_env = os.environ.get(key)
-    if raw_env not in (None, ""):
-        return raw_env
     runtime_val = _runtime_env_lookup(key)
-    if runtime_val in (None, ""):
-        return raw_env
-    return runtime_val
+    if runtime_val not in (None, ""):
+        return runtime_val
+    return os.environ.get(key)
 
 
 def _merged_env_snapshot(env: Mapping[str, str] | None = None) -> dict[str, str]:

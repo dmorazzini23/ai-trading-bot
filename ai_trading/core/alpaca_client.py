@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-"""Alpaca helpers moved from core.bot_engine with façade re-export.
-
-The canonical implementations live here. core.bot_engine imports these names
-so existing call sites continue to work. This reduces size and coupling of
-bot_engine while keeping runtime behavior identical.
-"""
+"""Canonical Alpaca client helpers shared by runtime modules."""
 
 from typing import Any
-import os
 import sys
 from importlib import import_module
 from types import ModuleType
@@ -171,7 +165,7 @@ def _validate_trading_api(api: Any) -> bool:
                     key="alpaca_list_orders_patch_failed",
                 )
         else:
-            if is_shadow_mode() or os.getenv("PYTEST_RUNNING"):
+            if is_shadow_mode() or get_env("PYTEST_RUNNING", None, resolve_aliases=False):
                 log_once.warning(
                     "ALPACA_LIST_ORDERS_MISSING",
                     key="alpaca_list_orders_missing",
@@ -181,7 +175,9 @@ def _validate_trading_api(api: Any) -> bool:
                     "ALPACA_LIST_ORDERS_MISSING",
                     key="alpaca_list_orders_missing",
                 )
-            if not is_shadow_mode() and not os.getenv("PYTEST_RUNNING"):
+            if not is_shadow_mode() and not get_env(
+                "PYTEST_RUNNING", None, resolve_aliases=False
+            ):
                 raise RuntimeError("Alpaca client missing list_orders method")
             return False
 
@@ -374,8 +370,9 @@ def list_open_orders(api: Any):
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
     log_once = _get_bot_logger_once()
-    if os.getenv("PYTEST_RUNNING") and not (
-        os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")
+    if get_env("PYTEST_RUNNING", None, resolve_aliases=False) and not (
+        get_env("ALPACA_API_KEY", None, resolve_aliases=False)
+        and get_env("ALPACA_SECRET_KEY", None, resolve_aliases=False)
     ):
         raise RuntimeError("Missing Alpaca API credentials")
     if getattr(ctx, "api", None) is not None:
@@ -389,7 +386,7 @@ def ensure_alpaca_attached(ctx) -> None:
             return
     if not _initialize_alpaca_clients():
         return
-    # Mirror the global singleton in bot_engine for compatibility
+    # Keep bot_engine runtime state synchronized with the initialized client.
     be = _get_bot_engine_module()
     api = getattr(be, "trading_client", None)
     if api is None:
@@ -524,7 +521,7 @@ def _initialize_alpaca_clients() -> bool:
             be.trading_client = trading_client_obj
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
-            if is_shadow_mode() or os.getenv("PYTEST_RUNNING"):
+            if is_shadow_mode() or get_env("PYTEST_RUNNING", None, resolve_aliases=False):
                 logger.warning("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})
                 log_once.warning("ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed")
             else:

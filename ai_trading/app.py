@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
     build_canonical_healthz_payload,
-    build_health_exception_payload,
+    register_healthz_routes,
     build_service_health_payload,
 )
 from ai_trading.utils.optional_dep import missing
@@ -592,34 +592,40 @@ def create_app():
             fallback_payload["error"] = payload.get("error")
         return _json_response(payload, fallback=fallback_payload)
 
-    @app.route("/healthz")
-    def healthz():
-        """Minimal liveness probe with provider diagnostics."""
-        try:
-            pytest_mode = _pytest_active()
-            payload = build_canonical_healthz_payload(
-                service_name=_SERVICE_NAME,
-                force_ok_for_pytest=pytest_mode,
-                healthy_status_mode="service",
-                ok_mode="connectivity",
-                env_error=app.config.get("_ENV_ERR"),
+    def _build_healthz_payload() -> dict[str, Any]:
+        pytest_mode = _pytest_active()
+        payload = build_canonical_healthz_payload(
+            service_name=_SERVICE_NAME,
+            force_ok_for_pytest=pytest_mode,
+            healthy_status_mode="service",
+            ok_mode="connectivity",
+            env_error=app.config.get("_ENV_ERR"),
+        )
+        if (not pytest_mode) and (
+            _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
+        ):
+            _log.warning(
+                "PYTEST_OVERRIDE_SKIPPED",
+                extra={
+                    "env_flag": _managed_env("PYTEST_RUNNING"),
+                    "current_test": _managed_env("PYTEST_CURRENT_TEST"),
+                    "has_pytest_module": "pytest" in sys.modules,
+                },
             )
-            if (not pytest_mode) and (
-                _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
-            ):
-                _log.warning(
-                    "PYTEST_OVERRIDE_SKIPPED",
-                    extra={
-                        "env_flag": _managed_env("PYTEST_RUNNING"),
-                        "current_test": _managed_env("PYTEST_CURRENT_TEST"),
-                        "has_pytest_module": "pytest" in sys.modules,
-                    },
-                )
-            return _safe_response(payload, status=200)
-        except Exception as exc:
-            _log.exception("HEALTHZ_HANDLER_FAILED", exc_info=exc)
-            fallback_payload = build_health_exception_payload(exc, service_name=_SERVICE_NAME)
-            return _safe_response(fallback_payload, status=500)
+        return payload
+
+    def _healthz_response(payload: dict[str, Any], status: int) -> Any:
+        return _safe_response(payload, status=status)
+
+    register_healthz_routes(
+        app,
+        payload_builder=_build_healthz_payload,
+        response_builder=_healthz_response,
+        service_name=_SERVICE_NAME,
+        routes=("/healthz",),
+        logger=_log,
+        error_event="HEALTHZ_HANDLER_FAILED",
+    )
 
     @app.route("/metrics")
     def metrics():

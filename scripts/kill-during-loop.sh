@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-python -m ai_trading --interval 30 &
+python3 -m ai_trading --interval 30 &
 BOT_PID=$!
 
 sleep 5

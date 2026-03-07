@@ -19,7 +19,7 @@ def check_env_file():
         sample_vars = []
         loaded = reload_env(str(env_path), override=True)
         if loaded is None:
-            return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
+            return (False, '❌ python-dotenv not installed. Run: python3 -m pip install python-dotenv')
         for var in required_vars:
             env_value = get_env(var)
             if var not in content:
@@ -39,7 +39,7 @@ def check_api_keys():
     try:
         loaded = reload_env('.env', override=True)
         if loaded is None:
-            return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
+            return (False, '❌ python-dotenv not installed. Run: python3 -m pip install python-dotenv')
         api_key = get_env('ALPACA_API_KEY')
         secret_key = get_env('ALPACA_SECRET_KEY')
         base_url = get_env('ALPACA_BASE_URL')
@@ -84,7 +84,7 @@ def check_config_import():
 
 def print_setup_instructions():
     """Print setup instructions."""
-    logging.info('\n🔧 Setup Instructions:\n\n1. Get your API keys:\n   → Visit: https://app.alpaca.markets/paper/dashboard/overview\n   → Generate API keys (use Paper Trading for testing))\n\n2. Configure your .env file:\n   → Copy: cp .env.example .env\n   → Edit .env and replace YOUR_* sample values with real keys\n\n3. Verify your setup:\n   → Run this script again: python verify_config.py\n\n📖 For detailed instructions, see: docs/API_KEY_SETUP.md\n')
+    logging.info('\n🔧 Setup Instructions:\n\n1. Get your API keys:\n   → Visit: https://app.alpaca.markets/paper/dashboard/overview\n   → Generate API keys (use Paper Trading for testing))\n\n2. Configure your .env file:\n   → Copy: cp .env.example .env\n   → Edit .env and replace YOUR_* sample values with real keys\n\n3. Verify your setup:\n   → Run this script again: python3 scripts/verify_config.py\n\n📖 For detailed instructions, see: docs/API_KEY_SETUP.md\n')
 
 def main():
     """Main verification function."""
@@ -107,8 +107,8 @@ def main():
     if all_good:
         logging.info('🎉 SUCCESS: Your API key configuration is ready!')
         logging.info('\nNext steps:')
-        logging.info('  → Run the bot: python -m ai_trading')
-        logging.info('  → Or run tests: python -m pytest')
+        logging.info('  → Run the bot: python3 -m ai_trading')
+        logging.info('  → Or run tests: python3 -m pytest')
     else:
         logging.info('❌ ISSUES FOUND: Please fix the above issues before running the bot.')
         print_setup_instructions()

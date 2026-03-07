@@ -6,6 +6,7 @@ import types
 
 import ai_trading
 from ai_trading import __main__ as cli
+from ai_trading.config.management import get_env
 
 
 def test_cli_paper_sets_execution_mode_only(monkeypatch) -> None:
@@ -29,4 +30,4 @@ def test_cli_paper_sets_execution_mode_only(monkeypatch) -> None:
     rc = cli.main(["--paper", "--once", "--interval", "0"])
     assert rc == 0
     assert os.environ["AI_TRADING_TRADING_MODE"] == "balanced"
-    assert os.environ["EXECUTION_MODE"] == "paper"
+    assert get_env("EXECUTION_MODE", None, resolve_aliases=False) == "paper"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import os
 import sys
 import threading
 from contextlib import AbstractAsyncContextManager, contextmanager
@@ -95,6 +94,18 @@ _ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
 
 
+def _env_raw(key: str, default: str | None = None) -> str | None:
+    """Read environment via config management without alias expansion."""
+
+    try:
+        value = config.get_env(key, default, resolve_aliases=False)
+    except Exception:
+        return default
+    if value is None:
+        return None
+    return str(value)
+
+
 def _load_fallback_concurrency_module() -> ModuleType | None:
     module = sys.modules.get("ai_trading.data.fallback.concurrency")
     if module is not None:
@@ -178,7 +189,7 @@ def _set_pooling_limit_state(limit: int, version: int) -> None:
 def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapshot:
     global _LIMIT_CACHE, _LIMIT_VERSION
 
-    env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+    env_snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
     cache = _LIMIT_CACHE
     limit = max(1, int(limit))
     version = int(version)
@@ -229,7 +240,7 @@ def _build_host_override_key(hostname: str) -> str:
 def _resolve_host_override_limit(hostname: str) -> int | None:
     host_key = _normalize_host(hostname)
     env_key = _build_host_override_key(host_key)
-    raw = os.getenv(env_key)
+    raw = _env_raw(env_key)
     if raw in (None, ""):
         return None
     try:
@@ -340,10 +351,10 @@ def testing_reset_host_limits() -> None:
 def _compute_limit(raw: str | None = None) -> int:
     if raw is None:
         raw = (
-            os.getenv("AI_TRADING_HOST_LIMIT")
-            or os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
-            or os.getenv("HTTP_MAX_WORKERS")
-            or os.getenv("HTTP_MAX_PER_HOST")
+            _env_raw("AI_TRADING_HOST_LIMIT")
+            or _env_raw("AI_TRADING_HTTP_HOST_LIMIT")
+            or _env_raw("HTTP_MAX_WORKERS")
+            or _env_raw("HTTP_MAX_PER_HOST")
         )
     if raw not in (None, ""):
         try:
@@ -370,10 +381,10 @@ def _read_limit_source(
     """Return the resolved limit and metadata describing its source."""
 
     priority_envs = (
-        ("AI_TRADING_HOST_LIMIT", os.getenv("AI_TRADING_HOST_LIMIT")),
-        ("AI_TRADING_HTTP_HOST_LIMIT", os.getenv("AI_TRADING_HTTP_HOST_LIMIT")),
-        ("HTTP_MAX_WORKERS", os.getenv("HTTP_MAX_WORKERS")),
-        ("HTTP_MAX_PER_HOST", os.getenv("HTTP_MAX_PER_HOST")),
+        ("AI_TRADING_HOST_LIMIT", _env_raw("AI_TRADING_HOST_LIMIT")),
+        ("AI_TRADING_HTTP_HOST_LIMIT", _env_raw("AI_TRADING_HTTP_HOST_LIMIT")),
+        ("HTTP_MAX_WORKERS", _env_raw("HTTP_MAX_WORKERS")),
+        ("HTTP_MAX_PER_HOST", _env_raw("HTTP_MAX_PER_HOST")),
     )
     for env_key, raw_env in priority_envs:
         if raw_env not in (None, ""):
@@ -432,7 +443,7 @@ def _resolve_limit() -> tuple[int, int]:
 
     global _LIMIT_CACHE, _LIMIT_VERSION, _LAST_LIMIT_ENV_SNAPSHOT, _HOST_LIMIT, _ENV_SNAPSHOT
 
-    env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+    env_snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
     prior_cache = _LIMIT_CACHE
     env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
     if env_changed:
@@ -468,7 +479,7 @@ def _resolve_limit() -> tuple[int, int]:
     snapshot = HostLimitSnapshot(limit, version)
     _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
     _HOST_LIMIT = max(1, int(limit))
-    _ENV_SNAPSHOT = {key: os.getenv(key) for key in _ENV_LIMIT_KEYS}
+    _ENV_SNAPSHOT = {key: _env_raw(key) for key in _ENV_LIMIT_KEYS}
 
     should_refresh = env_changed
     if not should_refresh and prior_cache is not None:
@@ -502,7 +513,7 @@ def _ensure_limit_cache() -> _ResolvedLimitCache:
             limit=limit,
             version=version,
             config_id=None,
-            env_snapshot=tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS),
+            env_snapshot=tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS),
         )
         _LIMIT_CACHE = cache
     return cache
@@ -542,14 +553,14 @@ def reload_host_limit_if_env_changed(_session: object | None = None) -> HostLimi
     global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE, _RETIRED_SEMAPHORES, _HOST_SEMAPHORES, _HOST_LIMIT, _ENV_SNAPSHOT
 
     with _reload_lock:
-        env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+        env_snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
         env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
         if env_changed:
             reset_host_semaphores(clear_limit_cache=True, bump_version=False)
         cache = _ensure_limit_cache()
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
         _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
-        _ENV_SNAPSHOT = {key: os.getenv(key) for key in _ENV_LIMIT_KEYS}
+        _ENV_SNAPSHOT = {key: _env_raw(key) for key in _ENV_LIMIT_KEYS}
         _HOST_LIMIT = snapshot.limit
         _set_pooling_limit_state(snapshot.limit, snapshot.version)
         return snapshot
@@ -779,7 +790,7 @@ def get_host_limiter(host: str):
     with _HOST_LOCK:
         limiter = _HOST_LIMITERS.get(key)
         override = _resolve_host_override_limit(normalized_host)
-        default = max(1, int(os.getenv("AI_TRADING_HTTP_HOST_LIMIT", "3")))
+        default = max(1, int(_env_raw("AI_TRADING_HTTP_HOST_LIMIT", "3")))
         limit_value = override if override is not None else default
         needs_refresh = False
         if limiter is None:
