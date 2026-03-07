@@ -9,6 +9,29 @@ import pytest
 from ai_trading import main
 
 
+def test_collect_live_kpi_snapshot_marks_zero_sample_metrics_as_insufficient(
+    monkeypatch,
+) -> None:
+    class _FakeSLOMonitor:
+        def get_slo_status(self, _metric_name: str | None = None):
+            return {"current_value": 0.0, "sample_count": 0}
+
+    import ai_trading.monitoring.slo as slo_mod
+
+    monkeypatch.setattr(slo_mod, "get_slo_monitor", lambda: _FakeSLOMonitor())
+    monkeypatch.setitem(
+        main.sys.modules,
+        "ai_trading.core.bot_engine",
+        types.SimpleNamespace(_current_drawdown=lambda: 0.0),
+    )
+
+    live_kpis, diagnostics = main._collect_live_kpi_snapshot()
+
+    assert float(live_kpis["execution_drift_bps"]) == 0.0
+    assert diagnostics["execution_drift_bps"] is None
+    assert "execution_drift_bps" in diagnostics["insufficient_data_metrics"]
+
+
 def test_live_kpi_guard_evaluates_and_can_trigger_rollback_alert(monkeypatch) -> None:
     main._LAST_PROMOTION_KPI_GUARD_TS = 0.0
     monkeypatch.setenv("AI_TRADING_PROMOTION_LIVE_KPI_GUARD_ENABLED", "1")

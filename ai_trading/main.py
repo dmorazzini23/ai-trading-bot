@@ -431,7 +431,11 @@ def _set_execution_phase(
     current_status = str(snapshot.get("status") or "").strip().lower() or "unknown"
     resolved_status = status or current_status
     if not resolved_status or resolved_status == "unknown":
-        resolved_status = "warming_up" if phase_token in {"bootstrap", "warmup", "reconcile"} else "ready"
+        resolved_status = (
+            "warming_up"
+            if phase_token in {"bootstrap", "warmup", "reconcile", "active", "runtime"}
+            else "unknown"
+        )
     try:
         runtime_state.update_service_status(
             status=resolved_status,
@@ -454,6 +458,84 @@ def _set_execution_phase(
             },
         )
         _LAST_EXECUTION_PHASE = phase_token
+
+
+def _resolve_active_service_status(
+    *,
+    provider_state: Mapping[str, Any] | None = None,
+    broker_state: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Return ``(status, reason)`` for active runtime service readiness."""
+
+    provider = provider_state if isinstance(provider_state, Mapping) else {}
+    broker = broker_state if isinstance(broker_state, Mapping) else {}
+
+    provider_status = str(provider.get("status") or "").strip().lower()
+    provider_reason = str(provider.get("reason") or "").strip()
+    data_status = str(provider.get("data_status") or "").strip().lower()
+    using_backup = bool(provider.get("using_backup"))
+
+    broker_status = str(broker.get("status") or "").strip().lower()
+
+    provider_down = provider_status in {"down", "disabled", "failed", "unreachable"}
+    provider_ready = (
+        provider_status in {"healthy", "ready"}
+        and not using_backup
+        and data_status not in {"degraded", "empty"}
+    )
+    broker_down = broker_status in {"down", "failed", "unreachable"}
+    broker_ready = broker_status in {"reachable", "ready", "connected"}
+
+    if provider_down:
+        return ("degraded", provider_reason or "provider_down")
+    if broker_down:
+        return ("degraded", "broker_unreachable")
+    if data_status in {"degraded", "empty"}:
+        return ("degraded", "data_unavailable")
+    if using_backup:
+        return ("degraded", provider_reason or "provider_fallback_active")
+    if provider_ready and broker_ready:
+        return ("ready", "runtime_health_ok")
+    if provider_status in {"", "unknown"}:
+        return ("warming_up", "provider_status_unknown")
+    if broker_status in {"", "unknown"}:
+        return ("warming_up", "broker_status_unknown")
+    return ("warming_up", "runtime_health_pending")
+
+
+def _refresh_active_service_status(
+    *,
+    cycle_index: int,
+    provider_state: Mapping[str, Any] | None = None,
+    broker_state: Mapping[str, Any] | None = None,
+) -> None:
+    """Refresh service status for the active phase using runtime provider/broker telemetry."""
+
+    provider = provider_state
+    broker = broker_state
+    if provider is None:
+        try:
+            observed_provider = runtime_state.observe_data_provider_state()
+        except Exception:
+            observed_provider = {}
+        provider = observed_provider if isinstance(observed_provider, Mapping) else {}
+    if broker is None:
+        try:
+            observed_broker = runtime_state.observe_broker_status()
+        except Exception:
+            observed_broker = {}
+        broker = observed_broker if isinstance(observed_broker, Mapping) else {}
+
+    status, reason = _resolve_active_service_status(
+        provider_state=provider,
+        broker_state=broker,
+    )
+    _set_execution_phase(
+        "active",
+        status=status,
+        reason=reason,
+        cycle_index=cycle_index,
+    )
 
 
 def _timestamp_age_seconds(raw_value: Any) -> float | None:
@@ -1109,17 +1191,40 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         "order_pacing_cap_hit_rate_pct": max(0.0, order_pacing_cap_hit_rate_pct),
         "pending_oldest_age_sec": max(0.0, pending_oldest_age_sec),
     }
+    insufficient_data_metrics: list[str] = []
+    sample_mapping = {
+        "reject_rate": reject_samples,
+        "execution_drift_bps": drift_samples,
+        "realized_slippage_bps": slippage_samples,
+        "live_calibration_ece": calibration_ece_samples,
+        "live_calibration_brier": calibration_brier_samples,
+        "drift_psi": drift_psi_samples,
+        "label_drift_psi": label_drift_samples,
+        "residual_drift_psi": residual_drift_samples,
+        "order_pacing_cap_hit_rate_pct": pacing_samples,
+        "pending_oldest_age_sec": pending_samples,
+    }
+    for metric_name, samples in sample_mapping.items():
+        if int(max(samples, 0)) <= 0:
+            insufficient_data_metrics.append(metric_name)
+
     diagnostics = {
-        "reject_rate_pct": reject_rate_pct,
-        "execution_drift_bps": execution_drift_bps,
-        "realized_slippage_bps": realized_slippage_bps,
-        "live_calibration_ece": live_calibration_ece,
-        "live_calibration_brier": live_calibration_brier,
-        "drift_psi": drift_psi,
-        "label_drift_psi": label_drift_psi,
-        "residual_drift_psi": residual_drift_psi,
-        "order_pacing_cap_hit_rate_pct": order_pacing_cap_hit_rate_pct,
-        "pending_oldest_age_sec": pending_oldest_age_sec,
+        "reject_rate_pct": reject_rate_pct if reject_samples > 0 else None,
+        "execution_drift_bps": execution_drift_bps if drift_samples > 0 else None,
+        "realized_slippage_bps": realized_slippage_bps if slippage_samples > 0 else None,
+        "live_calibration_ece": live_calibration_ece if calibration_ece_samples > 0 else None,
+        "live_calibration_brier": (
+            live_calibration_brier if calibration_brier_samples > 0 else None
+        ),
+        "drift_psi": drift_psi if drift_psi_samples > 0 else None,
+        "label_drift_psi": label_drift_psi if label_drift_samples > 0 else None,
+        "residual_drift_psi": (
+            residual_drift_psi if residual_drift_samples > 0 else None
+        ),
+        "order_pacing_cap_hit_rate_pct": (
+            order_pacing_cap_hit_rate_pct if pacing_samples > 0 else None
+        ),
+        "pending_oldest_age_sec": pending_oldest_age_sec if pending_samples > 0 else None,
         "reject_samples": reject_samples,
         "drift_samples": drift_samples,
         "slippage_samples": slippage_samples,
@@ -1130,6 +1235,7 @@ def _collect_live_kpi_snapshot() -> tuple[dict[str, float], dict[str, Any]]:
         "residual_drift_samples": residual_drift_samples,
         "pacing_samples": pacing_samples,
         "pending_samples": pending_samples,
+        "insufficient_data_metrics": sorted(insufficient_data_metrics),
     }
     return live_kpis, diagnostics
 
@@ -1222,12 +1328,17 @@ def _maybe_evaluate_live_kpi_control_band_rollbacks(*, cycle_index: int) -> None
         elif bool(result.get("breached")):
             logger.warning("LIVE_KPI_CONTROL_BAND_BREACH", extra=result)
 
+    log_live_kpis = dict(live_kpis)
+    for metric_name in diagnostics.get("insufficient_data_metrics", []):
+        if metric_name in log_live_kpis:
+            log_live_kpis[metric_name] = None
+
     logger.info(
         "LIVE_KPI_CONTROL_BAND_EVALUATED",
         extra={
             "cycle_index": int(max(cycle_index, 0)),
             "strategies": strategies,
-            "live_kpis": live_kpis,
+            "live_kpis": log_live_kpis,
             "diagnostics": diagnostics,
             "rollbacks_triggered": len(triggered),
         },
@@ -1309,12 +1420,18 @@ def _log_config_effective_summary(cfg: Any) -> None:
             to_dict_fn = getattr(cfg, "to_dict", None)
             snapshot = dict(to_dict_fn()) if callable(to_dict_fn) else {}
         snapshot_hash = config_snapshot_hash(cfg)
+        include_snapshot = bool(
+            get_env("AI_TRADING_STARTUP_CONFIG_VERBOSE", False, cast=bool)
+        )
+        extra_payload: dict[str, Any] = {
+            "config_snapshot_hash": snapshot_hash,
+            "config_snapshot_fields": int(len(snapshot)),
+        }
+        if include_snapshot:
+            extra_payload["config_snapshot"] = snapshot
         logger.info(
             "CONFIG_EFFECTIVE_SUMMARY",
-            extra={
-                "config_snapshot_hash": snapshot_hash,
-                "config_snapshot": snapshot,
-            },
+            extra=extra_payload,
         )
     except Exception:
         debug_log = getattr(logger, "debug", None)
@@ -1788,7 +1905,7 @@ def run_cycle() -> None:
         finally:
             _set_execution_phase(
                 "warmup" if warmup_mode else "active",
-                status="warming_up" if warmup_mode else "ready",
+                status="warming_up",
                 reason="startup_pending_reconcile_complete",
             )
             runtime_state_map = getattr(runtime, "state", None)
@@ -2432,6 +2549,12 @@ def run_flask_app(
     from ai_trading import app
 
     application = app.create_app()
+    suppress_startup_noise = getattr(app, "suppress_flask_startup_noise", None)
+    if callable(suppress_startup_noise):
+        try:
+            suppress_startup_noise()
+        except Exception:
+            logger.debug("FLASK_STARTUP_BANNER_SUPPRESS_FAILED", exc_info=True)
 
     def _mask_identifier(value: str | None, keep: int = 4) -> str:
         if not value:
@@ -2506,6 +2629,7 @@ def run_flask_app(
         except Exception:
             logger.debug("APP_CONFIG_ASSIGN_FALLBACK_FAILED", exc_info=True)
     debug = run_kwargs.pop("debug", False)
+    run_kwargs.setdefault("use_reloader", False)
 
     def _port_available(candidate: int) -> bool:
         families = [(socket.AF_INET, ("0.0.0.0", candidate))]
@@ -3066,19 +3190,19 @@ def main(argv: list[str] | None = None) -> None:
         elif warmup_ok:
             _set_execution_phase(
                 "active",
-                status="ready",
-                reason="startup_complete",
+                status="warming_up",
+                reason="startup_complete_pending_runtime_health",
                 cycle_index=0,
             )
         else:
             _set_execution_phase(
                 "active",
-                status="ready",
-                reason="warmup_recovered",
+                status="warming_up",
+                reason="warmup_recovered_pending_runtime_health",
                 cycle_index=0,
             )
     except Exception:
-        logger.debug("SERVICE_STATUS_READY_UPDATE_FAILED", exc_info=True)
+        logger.debug("SERVICE_STATUS_ACTIVE_UPDATE_FAILED", exc_info=True)
     S = get_settings()
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
 
@@ -3254,7 +3378,7 @@ def main(argv: list[str] | None = None) -> None:
                                 logger.info(
                                     "CYCLE_FETCH_GC",
                                     extra={
-                                        "cycle": count,
+                                        "cycle_index": cycle_index,
                                         "objects_collected": gc_result["objects_collected"],
                                     },
                                 )
@@ -3305,6 +3429,15 @@ def main(argv: list[str] | None = None) -> None:
                             broker_state = runtime_state.observe_broker_status()
                         except Exception:
                             broker_state = {}
+                        _refresh_active_service_status(
+                            cycle_index=cycle_index,
+                            provider_state=(
+                                provider_state if isinstance(provider_state, Mapping) else {}
+                            ),
+                            broker_state=(
+                                broker_state if isinstance(broker_state, Mapping) else {}
+                            ),
+                        )
                         provider_safe_mode = bool(
                             provider_state.get("safe_mode")
                             if isinstance(provider_state, Mapping)
@@ -3362,7 +3495,9 @@ def main(argv: list[str] | None = None) -> None:
                             elif str(rollback_result.get("status") or "") == "cooldown":
                                 logger.info("CANARY_AUTO_ROLLBACK_COOLDOWN", extra=rollback_result)
                         try:
-                            _maybe_evaluate_live_kpi_control_band_rollbacks(cycle_index=count)
+                            _maybe_evaluate_live_kpi_control_band_rollbacks(
+                                cycle_index=cycle_index
+                            )
                         except Exception:
                             logger.debug("LIVE_KPI_CONTROL_BAND_EVALUATION_FAILED", exc_info=True)
                     except Exception:
@@ -3404,6 +3539,7 @@ def main(argv: list[str] | None = None) -> None:
                                 logger.info(
                                     "CYCLE_COMPUTE_BUDGET",
                                     extra={
+                                        "cycle_index": cycle_index,
                                         "elapsed_ms": elapsed_ms,
                                         "budget_ms": budget_ms,
                                         "status": "OVER" if budget.over_budget() else "OK",
@@ -3414,18 +3550,19 @@ def main(argv: list[str] | None = None) -> None:
             except Exception as exc:
                 logger.error(
                     "SCHEDULER_RUN_CYCLE_EXCEPTION",
-                    extra={"iteration": count},
+                    extra={"cycle_index": cycle_index, "iteration": cycle_index},
                     exc_info=True,
                 )
                 _maybe_build_bad_session_replay_dataset(
                     trigger="scheduler_run_cycle_exception",
                     detail={
-                        "iteration": int(count),
+                        "cycle_index": int(cycle_index),
+                        "iteration": int(cycle_index),
                         "error": str(exc),
                         "exc_type": exc.__class__.__name__,
                     },
                 )
-                count += 1
+                count = cycle_index
                 try:
                     backoff_seconds = int(effective_interval)
                 except Exception:
@@ -3439,7 +3576,7 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             if budget is None:
                 continue
-            count += 1
+            count = cycle_index
             closed_cycle_detail_ttl_s = _resolve_info_log_ttl_seconds(
                 "AI_TRADING_CLOSED_CYCLE_DETAIL_LOG_TTL_SEC",
                 300.0,
@@ -3452,12 +3589,13 @@ def main(argv: list[str] | None = None) -> None:
                 logger.info(
                     "CYCLE_TIMING",
                     extra={
+                        "cycle_index": cycle_index,
                         "elapsed_ms": budget.elapsed_ms(),
                         "within_budget": not budget.over_budget(),
                     },
                 )
             _emit_cycle_slo_alerts(
-                cycle_index=count,
+                cycle_index=cycle_index,
                 compute_ms=compute_elapsed_ms,
                 closed=closed,
             )
@@ -3472,7 +3610,8 @@ def main(argv: list[str] | None = None) -> None:
                 logger.info(
                     "HEALTH_TICK",
                     extra={
-                        "iteration": count,
+                        "cycle_index": cycle_index,
+                        "iteration": cycle_index,
                         "interval": effective_interval,
                         "closed": closed,
                         "model_liveness": liveness_snapshot,

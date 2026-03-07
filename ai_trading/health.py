@@ -11,7 +11,11 @@ from ai_trading.health_payload import (
     register_healthz_routes,
 )
 from ai_trading.logging import get_logger
-from ai_trading.app import _install_route_tracker, _ensure_test_client
+from ai_trading.app import (
+    _install_route_tracker,
+    _ensure_test_client,
+    suppress_flask_startup_noise,
+)
 
 try:  # pragma: no cover - optional dependency
     from flask import Flask, jsonify
@@ -129,6 +133,7 @@ class HealthCheck:
         host = self._get_ctx_attr("host", "0.0.0.0")
         port = int(self._get_ctx_attr("port", 9001))
         try:
+            suppress_flask_startup_noise()
             self.app.run(host=host, port=port)
         except OSError as exc:
             logger.warning(

@@ -63,7 +63,7 @@ def test_standalone_health_server_handler():
     assert payload["status"] in {"healthy", "degraded"}
 
 
-def test_app_health_treats_unknown_provider_as_healthy_when_primary_is_steady(monkeypatch):
+def test_app_health_unknown_provider_is_not_upgraded_to_healthy(monkeypatch):
     provider_state = {
         "primary": "alpaca",
         "active": "alpaca",
@@ -88,6 +88,7 @@ def test_app_health_treats_unknown_provider_as_healthy_when_primary_is_steady(mo
     monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
     monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
     monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
 
     app = create_app()
     client = app.test_client()
@@ -95,9 +96,9 @@ def test_app_health_treats_unknown_provider_as_healthy_when_primary_is_steady(mo
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["status"] == "ready"
-    assert payload["ok"] is True
-    assert payload["data_provider"]["status"] == "healthy"
+    assert payload["status"] == "degraded"
+    assert payload["ok"] is False
+    assert payload["data_provider"]["status"] == "unknown"
 
 
 def test_pytest_override_keeps_ok_true(monkeypatch):
@@ -134,6 +135,36 @@ def test_pytest_override_keeps_ok_true(monkeypatch):
     assert payload["ok"] is True
     assert payload["data_provider"]["status"] == "down"
     assert payload["broker"]["connected"] is False
+
+
+def test_health_connectivity_mode_requires_known_broker_status(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "healthy",
+    }
+    broker_state = {
+        "status": "unknown",
+        "connected": None,
+    }
+    service_state = {"status": "ready"}
+    quote_state = {"status": "aligned"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "broker_status_unknown"
 
 
 def test_pytest_detection_silent_without_hints(monkeypatch, caplog):

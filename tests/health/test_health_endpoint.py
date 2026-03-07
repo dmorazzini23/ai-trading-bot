@@ -29,6 +29,7 @@ def test_health_endpoint_reports_runtime_state():
 
 def test_health_endpoint_reports_degraded_provider_state():
     runtime_state.update_data_provider_state(primary="alpaca", active="finnhub", using_backup=True, status="degraded")
+    runtime_state.update_broker_status(status="reachable", connected=True)
     ctx = SimpleNamespace(service="ai-trading")
     hc = HealthCheck(ctx=ctx)
     client = hc.app.test_client()
@@ -44,7 +45,7 @@ def test_health_endpoint_reports_degraded_provider_state():
     assert payload["fallback_active"] is True
 
 
-def test_health_endpoint_allows_unknown_provider_when_primary_is_steady() -> None:
+def test_health_endpoint_keeps_unknown_provider_unhealthy() -> None:
     runtime_state.update_data_provider_state(
         primary="alpaca",
         active="alpaca",
@@ -63,6 +64,6 @@ def test_health_endpoint_allows_unknown_provider_when_primary_is_steady() -> Non
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["status"] == "healthy"
-    assert payload["ok"] is True
-    assert payload["primary_data_provider"]["status"] == "healthy"
+    assert payload["status"] == "degraded"
+    assert payload["ok"] is False
+    assert payload["primary_data_provider"]["status"] == "unknown"

@@ -101,7 +101,7 @@ def build_runtime_health_payload(
 
     raw_provider_status = provider_state.get("status")
     provider_status = raw_provider_status or (
-        "degraded" if provider_state.get("using_backup") else "healthy"
+        "degraded" if provider_state.get("using_backup") else "unknown"
     )
     provider_status_normalized = str(provider_status or "").strip().lower()
     data_status = provider_state.get("data_status")
@@ -131,38 +131,22 @@ def build_runtime_health_payload(
         "safe_mode": bool(provider_state.get("safe_mode")),
         "data_status": data_status,
     }
-    primary_name = str(provider_payload.get("primary") or "").strip().lower()
-    active_name = str(provider_payload.get("active") or "").strip().lower()
-    try:
-        consecutive_failures = int(provider_payload.get("consecutive_failures") or 0)
-    except (TypeError, ValueError):
-        consecutive_failures = 0
-    provider_unknown = provider_status_normalized in {"", "unknown"}
-    provider_primary_steady = (
-        not provider_payload.get("using_backup")
-        and (not primary_name or not active_name or primary_name == active_name)
-        and consecutive_failures <= 0
-        and not provider_payload.get("last_error_at")
-    )
-    if provider_unknown and provider_primary_steady:
-        provider_status = "healthy"
-        provider_status_normalized = "healthy"
-        provider_payload["status"] = "healthy"
-
     broker_connected_raw = broker_state.get("connected")
     broker_status = broker_state.get("status")
-    if not broker_state:
-        broker_status = "reachable"
-        broker_connected_raw = True
-    elif not broker_status:
+    if not broker_status:
         if broker_connected_raw is None:
-            broker_status = "reachable"
+            broker_status = "unknown"
         else:
-            broker_status = "reachable" if broker_connected_raw else "unreachable"
+            broker_status = "reachable" if bool(broker_connected_raw) else "unreachable"
     broker_status_normalized = str(broker_status or "").strip().lower()
+    broker_connected: bool | None
+    if broker_connected_raw is None:
+        broker_connected = None
+    else:
+        broker_connected = bool(broker_connected_raw)
     broker_payload = {
         "status": broker_status,
-        "connected": bool(broker_connected_raw),
+        "connected": broker_connected,
         "latency_ms": broker_state.get("latency_ms"),
         "last_error": broker_state.get("last_error"),
         "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
@@ -170,23 +154,32 @@ def build_runtime_health_payload(
 
     service_status = service_state.get("status", "unknown")
     service_reason = service_state.get("reason")
-    provider_disabled = provider_status_normalized in {"down", "disabled"}
+    provider_disabled = provider_status_normalized in {"down", "disabled", "failed", "unreachable"}
+    provider_unknown = provider_status_normalized in {"", "unknown"}
     broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
+    broker_unknown = broker_status_normalized in {"", "unknown"}
     data_degraded = data_status_normalized in {"empty", "degraded"}
 
     degraded = provider_disabled or provider_payload.get("using_backup") or (
-        provider_status_normalized not in {"", "healthy", "ready"}
+        provider_status_normalized not in {"healthy", "ready"}
     )
     if broker_down:
+        degraded = True
+    if provider_unknown or broker_unknown:
         degraded = True
     if data_degraded:
         degraded = True
 
-    provider_healthy = provider_status_normalized in {"", "healthy", "ready"} and not data_degraded
-    broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
+    provider_healthy = provider_status_normalized in {"healthy", "ready"} and not data_degraded
+    broker_healthy = broker_status_normalized in {"reachable", "ready", "connected"}
     overall_ok = provider_healthy and broker_healthy
     if str(ok_mode).strip().lower() == "connectivity":
-        overall_ok = not provider_disabled and not broker_down
+        provider_connectivity_ok = (
+            provider_status_normalized in {"healthy", "ready", "degraded"}
+            and not data_degraded
+        )
+        broker_connectivity_ok = broker_status_normalized in {"reachable", "ready", "connected"}
+        overall_ok = provider_connectivity_ok and broker_connectivity_ok
     if force_ok_for_pytest:
         overall_ok = True
 
@@ -229,6 +222,10 @@ def build_runtime_health_payload(
         payload["reason"] = "data_unavailable"
     if broker_down and not payload.get("reason"):
         payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
+    if provider_unknown and not payload.get("reason"):
+        payload["reason"] = "provider_status_unknown"
+    if broker_unknown and not payload.get("reason"):
+        payload["reason"] = "broker_status_unknown"
     if force_ok_for_pytest:
         payload["ok"] = True
         payload.setdefault("status", payload.get("status") or "healthy")

@@ -4353,7 +4353,7 @@ def _log_config_loaded() -> None:
     """Log that configuration settings have been loaded."""
     global _CONFIG_LOGGED
     if not _CONFIG_LOGGED:
-        logger.info("Config settings loaded, validation deferred to runtime")
+        logger.info("Config settings loaded")
         _CONFIG_LOGGED = True
 
 

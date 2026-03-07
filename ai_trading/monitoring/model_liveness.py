@@ -171,10 +171,20 @@ class _ModelLivenessMonitor:
             ml_age_s = (
                 max(0.0, (now_utc - last_ml_signal_ts).total_seconds())
                 if last_ml_signal_ts is not None
-                else max(0.0, (now_utc - self._started_at).total_seconds())
+                else None
             )
             rl_age_s = (
                 max(0.0, (now_utc - last_rl_signal_ts).total_seconds())
+                if last_rl_signal_ts is not None
+                else None
+            )
+            ml_since_start_s = (
+                None
+                if last_ml_signal_ts is not None
+                else max(0.0, (now_utc - self._started_at).total_seconds())
+            )
+            rl_since_start_s = (
+                None
                 if last_rl_signal_ts is not None
                 else max(0.0, (now_utc - self._started_at).total_seconds())
             )
@@ -189,8 +199,18 @@ class _ModelLivenessMonitor:
                     if isinstance(last_rl_signal_ts, datetime)
                     else None
                 ),
-                "ml_age_s": round(float(ml_age_s), 3),
-                "rl_age_s": round(float(rl_age_s), 3),
+                "ml_age_s": round(float(ml_age_s), 3) if ml_age_s is not None else None,
+                "rl_age_s": round(float(rl_age_s), 3) if rl_age_s is not None else None,
+                "ml_since_start_s": (
+                    round(float(ml_since_start_s), 3)
+                    if ml_since_start_s is not None
+                    else None
+                ),
+                "rl_since_start_s": (
+                    round(float(rl_since_start_s), 3)
+                    if rl_since_start_s is not None
+                    else None
+                ),
                 "ml_max_age_s": round(
                     float(thresholds.get(_METRIC_ML_SIGNAL, 0.0)),
                     3,
@@ -355,18 +375,38 @@ class _ModelLivenessMonitor:
             ml_age_s = (
                 max(0.0, (now_utc - ml_ts).total_seconds())
                 if ml_ts is not None
-                else max(0.0, (now_utc - self._started_at).total_seconds())
+                else None
             )
             rl_age_s = (
                 max(0.0, (now_utc - rl_ts).total_seconds())
+                if rl_ts is not None
+                else None
+            )
+            ml_since_start_s = (
+                None
+                if ml_ts is not None
+                else max(0.0, (now_utc - self._started_at).total_seconds())
+            )
+            rl_since_start_s = (
+                None
                 if rl_ts is not None
                 else max(0.0, (now_utc - self._started_at).total_seconds())
             )
             return {
                 "last_ml_signal_ts": ml_ts.isoformat() if ml_ts is not None else None,
                 "last_rl_signal_ts": rl_ts.isoformat() if rl_ts is not None else None,
-                "ml_age_s": round(float(ml_age_s), 3),
-                "rl_age_s": round(float(rl_age_s), 3),
+                "ml_age_s": round(float(ml_age_s), 3) if ml_age_s is not None else None,
+                "rl_age_s": round(float(rl_age_s), 3) if rl_age_s is not None else None,
+                "ml_since_start_s": (
+                    round(float(ml_since_start_s), 3)
+                    if ml_since_start_s is not None
+                    else None
+                ),
+                "rl_since_start_s": (
+                    round(float(rl_since_start_s), 3)
+                    if rl_since_start_s is not None
+                    else None
+                ),
                 "ml_max_age_s": round(
                     max(1.0, _env_float("AI_TRADING_ML_SIGNAL_MAX_AGE_SECONDS", 5400.0)),
                     3,

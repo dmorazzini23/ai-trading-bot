@@ -78,6 +78,15 @@ def test_after_hours_training_liveness_is_monitored_when_enabled(monkeypatch) ->
     assert "after_hours_training" in metrics
 
 
+def test_model_liveness_snapshot_uses_since_start_when_no_signal(monkeypatch) -> None:
+    _set_default_liveness_env(monkeypatch)
+    snapshot = model_liveness.get_model_liveness_snapshot()
+
+    assert snapshot["last_ml_signal_ts"] is None
+    assert snapshot["ml_age_s"] is None
+    assert float(snapshot["ml_since_start_s"]) >= 0.0
+
+
 def test_canary_auto_rollback_writes_flag_and_respects_cooldown(monkeypatch, tmp_path) -> None:
     _set_default_liveness_env(monkeypatch)
     rollback_flag = tmp_path / "canary_rollback.flag"

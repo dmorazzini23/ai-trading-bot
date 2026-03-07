@@ -95,7 +95,21 @@ def test_run_flask_app(monkeypatch):
     main.run_flask_app(1234, debug=True, extra=1)
     assert called["args"] == ("0.0.0.0", 1234)
     assert called["debug"] is True
-    assert called["kwargs"] == {"extra": 1}
+    assert called["kwargs"] == {"extra": 1, "use_reloader": False}
+
+
+def test_run_flask_app_suppresses_flask_banner(monkeypatch):
+    called = {"suppressed": False}
+
+    class App:
+        def run(self, host, port, debug=False, **kwargs):
+            raise SystemExit
+
+    monkeypatch.setattr(app, "create_app", lambda: App())
+    monkeypatch.setattr(app, "suppress_flask_startup_noise", lambda: called.__setitem__("suppressed", True))
+    with pytest.raises(SystemExit):
+        main.run_flask_app(1234)
+    assert called["suppressed"] is True
 
 
 def test_run_flask_app_port_in_use(monkeypatch):

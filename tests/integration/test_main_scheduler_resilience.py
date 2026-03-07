@@ -98,10 +98,22 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
         main.main(["--iterations", "2", "--interval", "1"])
 
     assert calls["count"] == 3  # warm-up + two scheduler iterations
-    assert any(
-        "SCHEDULER_RUN_CYCLE_EXCEPTION" in record.getMessage() for record in caplog.records
+    scheduler_errors = [
+        record
+        for record in caplog.records
+        if "SCHEDULER_RUN_CYCLE_EXCEPTION" in record.getMessage()
+    ]
+    assert scheduler_errors
+    assert all(
+        getattr(record, "cycle_index", None) == getattr(record, "iteration", None)
+        for record in scheduler_errors
     )
-    assert any(
-        str(payload.get("trigger")) == "scheduler_run_cycle_exception"
+
+    scheduler_replays = [
+        payload
         for payload in replay_triggers
-    )
+        if str(payload.get("trigger")) == "scheduler_run_cycle_exception"
+    ]
+    assert scheduler_replays
+    detail = dict(scheduler_replays[0].get("detail") or {})
+    assert detail.get("cycle_index") == detail.get("iteration")

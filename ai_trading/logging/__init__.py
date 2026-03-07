@@ -26,7 +26,6 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any, Iterable, Mapping
-from zoneinfo import ZoneInfo
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
@@ -188,6 +187,8 @@ _RESERVED_LOGRECORD_KEYS = {
     "processName",
     "process",
     "asctime",
+    "ts",
+    "ts_iso",
 }
 
 
@@ -199,10 +200,6 @@ def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
 
 
 _SENSITIVE_EXTRA_KEYS = ("api_key", "secret")
-try:
-    _LOG_TIMEZONE = ZoneInfo("UTC")
-except Exception:  # pragma: no cover - zoneinfo fallback
-    _LOG_TIMEZONE = UTC  # type: ignore[assignment]
 
 _SUMMARY_SANITIZE_PATTERN = re.compile(r"[^A-Z0-9]+")
 
@@ -233,28 +230,14 @@ def sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
     cleaned = _sanitize_extra(extra)
     out: dict[str, Any] = {}
     for k, v in cleaned.items():
-        if any(tok in k.lower() for tok in _SENSITIVE_EXTRA_KEYS):
+        key_lower = k.lower()
+        if key_lower.startswith("has_"):
+            out[k] = v
+        elif any(tok in key_lower for tok in _SENSITIVE_EXTRA_KEYS):
             out[k] = _ENV_MASK
         else:
             out[k] = v
     return out
-
-
-def _structured_ts_extra() -> dict[str, Any]:
-    """Return timestamp fields for structured logging with tz offsets."""
-
-    try:
-        now = datetime.now(_LOG_TIMEZONE)
-    except Exception:  # pragma: no cover - timezone fallback
-        now = datetime.now(UTC)
-    try:
-        epoch = float(now.timestamp())
-    except Exception:
-        epoch = time.time()
-    return {
-        "ts": epoch,
-        "ts_iso": now.isoformat(),
-    }
 
 
 class ExtraSanitizerFilter(logging.Filter):
@@ -803,9 +786,6 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
         payload: dict[str, Any] = {}
         if isinstance(extra, dict):
             payload.update(extra)
-        ts_fields = _structured_ts_extra()
-        for key, value in ts_fields.items():
-            payload.setdefault(key, value)
         kwargs["extra"] = sanitize_extra(payload)
         return (msg, kwargs)
 

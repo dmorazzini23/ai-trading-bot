@@ -55,3 +55,22 @@ def test_log_config_effective_summary_emits_hash(caplog) -> None:
     summary = records[0]
     assert isinstance(getattr(summary, "config_snapshot_hash", None), str)
     assert len(summary.config_snapshot_hash) == 64
+
+
+def test_log_config_effective_summary_omits_snapshot_by_default(caplog, monkeypatch) -> None:
+    monkeypatch.delenv("AI_TRADING_STARTUP_CONFIG_VERBOSE", raising=False)
+    caplog.set_level(logging.INFO, logger="ai_trading.main")
+    cfg = TradingConfig.from_env(
+        {
+            "MAX_DRAWDOWN_THRESHOLD": "0.15",
+            "AI_TRADING_CAPITAL_CAP": "0.25",
+        }
+    )
+
+    _log_config_effective_summary(cfg)
+
+    records = [record for record in caplog.records if record.msg == "CONFIG_EFFECTIVE_SUMMARY"]
+    assert records
+    summary = records[0]
+    assert not hasattr(summary, "config_snapshot")
+    assert int(getattr(summary, "config_snapshot_fields", 0)) > 0

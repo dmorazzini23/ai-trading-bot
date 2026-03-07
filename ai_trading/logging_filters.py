@@ -54,6 +54,8 @@ class SecretFilter(logging.Filter):
             # Mask structured fields by key
             for k in list(record.__dict__.keys()):
                 lk = str(k).lower()
+                if lk.startswith("has_"):
+                    continue
                 if any(s in lk for s in self.SECRET_KEYS):
                     record.__dict__[k] = _ENV_MASK
             # Sanitize positional/keyword args only; avoid mutating format strings

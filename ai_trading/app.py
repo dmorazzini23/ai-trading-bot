@@ -128,6 +128,19 @@ def _seed_pytest_env_defaults() -> None:
             _set_runtime_env_override(key, default)
 
 
+def suppress_flask_startup_noise() -> None:
+    """Suppress Flask/Werkzeug startup banner lines on the dev server."""
+
+    get_logger("werkzeug").setLevel(logging.ERROR)
+    try:
+        from flask import cli as _flask_cli  # type: ignore
+
+        if hasattr(_flask_cli, "show_server_banner"):
+            _flask_cli.show_server_banner = lambda *_args, **_kwargs: None
+    except Exception:
+        _log.debug("FLASK_STARTUP_BANNER_SUPPRESS_FAILED", exc_info=True)
+
+
 class _FallbackResponse:
     __slots__ = ("status_code", "_payload")
 
@@ -261,7 +274,7 @@ def create_app():
         app.config = dict(getattr(app, "config", {}))
     route_registry = _install_route_tracker(app)
 
-    get_logger("werkzeug").setLevel(logging.ERROR)
+    suppress_flask_startup_noise()
 
     # Cache required env validation once during app startup.
     _seed_pytest_env_defaults()
@@ -691,5 +704,6 @@ if __name__ == "__main__":
         app = create_app()
         s = get_settings()
         port = int(s.healthcheck_port or 8081)
+        suppress_flask_startup_noise()
         app.logger.info("Starting Flask", extra={"port": port})
         app.run(host="0.0.0.0", port=port)

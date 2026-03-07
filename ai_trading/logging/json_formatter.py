@@ -95,6 +95,7 @@ class JSONFormatter(logging.Formatter):
             'msecs', 'relativeCreated', 'asctime', 'pathname', 'filename',
             'module', 'exc_info', 'exc_text', 'stack_info', 'lineno',
             'funcName', 'thread', 'threadName', 'processName', 'process',
+            'ts', 'ts_iso',
             'taskName'
         }
 

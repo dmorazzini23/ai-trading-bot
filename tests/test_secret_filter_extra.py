@@ -26,3 +26,16 @@ def test_secret_filter_masks_extra():
         log.logger.removeHandler(handler)
     assert handler.last.api_key == _ENV_MASK
     assert handler.last.value == 1
+
+
+def test_secret_filter_preserves_has_secret_boolean():
+    log = get_logger("test.secret_filter.has_secret")
+    handler = _CaptureHandler()
+    handler.addFilter(SecretFilter())
+    log.logger.addHandler(handler)
+    try:
+        log.info("msg", extra={"has_secret": False, "has_key": True})
+    finally:
+        log.logger.removeHandler(handler)
+    assert handler.last.has_secret is False
+    assert handler.last.has_key is True

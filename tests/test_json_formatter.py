@@ -27,6 +27,8 @@ def test_json_formatter_custom_fields_and_masking():
     out = fmt.format(rec)
     data = json.loads(out)
     assert set(data) >= {"ts", "level", "name", "msg", "symbol", "api_key"}
+    assert isinstance(data["ts"], str)
+    assert "ts_iso" not in data
     assert data["api_key"].endswith("1234") and set(data["api_key"]) <= set("*1234")
     assert "pathname" not in data
 
@@ -77,3 +79,13 @@ def test_json_formatter_serializes_nonstandard_types():
     assert data["dt"].startswith("2024-01-02T03:04:05")
     assert data["d"] == "2024-01-03"
     assert data["foo"] == "FOO"
+
+
+def test_json_formatter_ignores_record_ts_collision_fields():
+    fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
+    rec = _make_record(ts=123.0, ts_iso="2026-03-01T00:00:00Z")
+    out = fmt.format(rec)
+    data = json.loads(out)
+    assert isinstance(data["ts"], str)
+    assert data["ts"] != 123.0
+    assert "ts_iso" not in data

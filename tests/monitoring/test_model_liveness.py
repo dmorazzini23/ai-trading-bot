@@ -70,7 +70,10 @@ def test_liveness_payload_includes_phase_and_age_fields(monkeypatch) -> None:
     assert breach["severity"] == "warning"
     assert "last_ml_signal_ts" in breach
     assert "ml_age_s" in breach
+    assert "ml_since_start_s" in breach
     assert "ml_max_age_s" in breach
+    assert breach["ml_age_s"] is None
+    assert float(breach["ml_since_start_s"]) >= 0.0
     assert breach["market_open"] is True
     assert breach["signals_expected_now"] is True
     assert breach["phase"] == "active"
