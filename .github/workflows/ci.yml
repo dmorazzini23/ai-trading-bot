@@ -14,6 +14,14 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  AI_TRADING_DATA_DIR: ${{ github.workspace }}/.ci/data
+  AI_TRADING_CACHE_DIR: ${{ github.workspace }}/.ci/cache
+  AI_TRADING_LOG_DIR: ${{ github.workspace }}/.ci/logs
+  AI_TRADING_MODELS_DIR: ${{ github.workspace }}/.ci/models
+  AI_TRADING_OUTPUT_DIR: ${{ github.workspace }}/.ci/output
+  YF_CACHE_DIR: ${{ github.workspace }}/.ci/cache/yf
+
 jobs:
   ci:
     if: github.event_name != 'schedule'

@@ -1,23 +1,17 @@
 name: OSSF Scorecard
 
 on:
-  branch_protection_rule:
   schedule:
     - cron: "19 4 * * 2"
-  push:
-    branches: ["main", "master"]
   workflow_dispatch:
 
 permissions:
-  security-events: write
-  id-token: write
   contents: read
-  actions: read
 
 jobs:
   analysis:
     name: Scorecard analysis
-    continue-on-error: ${{ github.event_name == 'schedule' }}
+    continue-on-error: true
     runs-on: ubuntu-22.04
     steps:
       - name: Run analysis
@@ -25,8 +19,9 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          publish_results: true
-      - name: Upload SARIF results
-        uses: github/codeql-action/upload-sarif@v3
+          publish_results: false
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: results.sarif
+          name: scorecard-results
+          path: results.sarif
