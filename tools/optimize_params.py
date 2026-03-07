@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Lightweight offline parameter optimizer.
 
 Runs a quick grid search over simple strategies (momentum/mean_reversion)

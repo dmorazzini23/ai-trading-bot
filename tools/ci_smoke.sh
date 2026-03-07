@@ -6,13 +6,13 @@ set -euo pipefail
 # Install dev test dependencies unless explicitly skipped (xdist, psutil, ruff, etc.).
 if [ "${SKIP_INSTALL:-0}" != "1" ]; then
   if [ -f "requirements-dev.txt" ]; then
-    python -m pip install --upgrade pip >/dev/null 2>&1 || true
-    python -m pip install -r requirements-dev.txt
+    python3 -m pip install --upgrade pip >/dev/null 2>&1 || true
+    python3 -m pip install -r requirements-dev.txt
   fi
 fi
 
 # Syntax check on tracked sources only
-python tools/pycompile_git.py  # AI-AGENT-REF: git-aware py_compile
+python3 tools/pycompile_git.py  # AI-AGENT-REF: git-aware py_compile
 
 # -----------------
 # Python lint (ruff) — non-blocking in smoke
@@ -30,11 +30,11 @@ fi
 # Scan for raw install hints
 # -----------------
 echo "[ci_smoke] Scan for raw install hints (non-blocking)"
-python tools/scan_extras_hints.py || true
+python3 tools/scan_extras_hints.py || true
 
 # Advisory repo scan
 echo "[ci_smoke] Repo scan (non-blocking)"
-python tools/repo_scan.py || true
+python3 tools/repo_scan.py || true
 
 # -----------------
 # Targeted smoke run
@@ -42,11 +42,10 @@ python tools/repo_scan.py || true
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}
 export PYTHONWARNINGS=${PYTHONWARNINGS:-ignore}
 echo "[ci_smoke] Running minimal smoke suite (4 files)"  # AI-AGENT-REF: add optdeps test
-python tools/run_pytest.py --disable-warnings -q \
+python3 tools/run_pytest.py --disable-warnings -q \
   tests/test_runner_smoke.py \
   tests/test_utils_timing.py \
   tests/test_trading_config_aliases.py \
   tests/test_utils_optdeps.py
 
 echo "[ci_smoke] Completed."
-

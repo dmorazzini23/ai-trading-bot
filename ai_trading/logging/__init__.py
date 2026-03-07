@@ -41,11 +41,13 @@ def _emit_throttle_summary(logger: logging.Logger, key: str, suppressed: int) ->
 
 
 def _ensure_finnhub_enabled_flag() -> None:
-    """Set ENABLE_FINNHUB when a key is present; safe to call multiple times."""
+    """Emit diagnostics when Finnhub credentials are present without an explicit enable flag."""
 
     if os.getenv("FINNHUB_API_KEY") and os.getenv("ENABLE_FINNHUB") is None:
-        os.environ["ENABLE_FINNHUB"] = "1"
-        logging.getLogger(__name__).debug("ENABLE_FINNHUB_SET", extra={"enabled": True})
+        logging.getLogger(__name__).debug(
+            "ENABLE_FINNHUB_DEFAULTED",
+            extra={"enabled": True, "source": "default"},
+        )
 
 
 _ensure_finnhub_enabled_flag()

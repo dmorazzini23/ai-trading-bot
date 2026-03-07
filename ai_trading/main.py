@@ -303,6 +303,9 @@ from ai_trading.config.management import (
     config_snapshot_hash,
     enforce_alpaca_feed_policy,
     get_trading_config,
+    set_runtime_env_override,
+    clear_runtime_env_override,
+    clear_runtime_env_overrides,
 )
 from ai_trading.metrics import get_histogram, get_counter
 from ai_trading.monitoring.alerts import emit_runtime_alert
@@ -1930,6 +1933,18 @@ def _fail_fast_env() -> None:
     """Reload and validate mandatory environment variables early."""
 
     global _TEST_ALPACA_CREDS_BACKFILLED
+    clear_runtime_env_overrides(
+        (
+            "ALPACA_API_KEY",
+            "ALPACA_SECRET_KEY",
+            "ALPACA_DATA_FEED",
+            "WEBHOOK_SECRET",
+            "AI_TRADING_CAPITAL_CAP",
+            "DOLLAR_RISK_LIMIT",
+            "ALPACA_TRADING_BASE_URL",
+            "ALPACA_DATA_BASE_URL",
+        )
+    )
     _TEST_ALPACA_CREDS_BACKFILLED = False
     test_mode = _is_test_mode()
     risk_default: str | None = None
@@ -1949,7 +1964,7 @@ def _fail_fast_env() -> None:
         risk_default = defaults.pop("DOLLAR_RISK_LIMIT")
         for key, value in defaults.items():
             if not str(_raw_env(key, "") or "").strip():
-                os.environ[key] = value
+                set_runtime_env_override(key, value)
                 if key in {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}:
                     backfilled_alpaca.append(key)
                     alpaca_backfilled_during_failfast = True
@@ -1958,11 +1973,11 @@ def _fail_fast_env() -> None:
     alias_risk_limit = str(_raw_env("AI_TRADING_DAILY_LOSS_LIMIT", "") or "").strip()
     canonical_risk_limit = str(_raw_env("DOLLAR_RISK_LIMIT", "") or "").strip()
     if canonical_risk_limit == "" and alias_risk_limit != "":
-        os.environ["DOLLAR_RISK_LIMIT"] = alias_risk_limit
+        set_runtime_env_override("DOLLAR_RISK_LIMIT", alias_risk_limit)
         alias_backfilled = True
     elif test_mode and canonical_risk_limit == "":
         if risk_default is not None:
-            os.environ["DOLLAR_RISK_LIMIT"] = risk_default
+            set_runtime_env_override("DOLLAR_RISK_LIMIT", risk_default)
 
     required = [
         "ALPACA_API_KEY",
@@ -2146,7 +2161,10 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
-            os.environ["AI_TRADING_SIGNAL_MAX_POSITION_SIZE"] = str(float(resolved))
+            set_runtime_env_override(
+                "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
+                str(float(resolved)),
+            )
     except ValueError as e:
         errors.append(str(e))
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
@@ -2974,7 +2992,7 @@ def main(argv: list[str] | None = None) -> None:
             secret = _managed_env("ALPACA_SECRET_KEY")
         run_warmup = not (key and secret)
     if run_warmup:
-        os.environ["AI_TRADING_WARMUP_MODE"] = "1"
+        set_runtime_env_override("AI_TRADING_WARMUP_MODE", "1")
         _set_execution_phase(
             "warmup",
             status="warming_up",
@@ -3018,11 +3036,11 @@ def main(argv: list[str] | None = None) -> None:
         else:
             logger.info("Warm-up run_cycle completed")
         finally:
-            os.environ.pop("AI_TRADING_WARMUP_MODE", None)
+            clear_runtime_env_override("AI_TRADING_WARMUP_MODE")
         if not warmup_ok:
             logger.info("Warm-up run_cycle completed with recovery")
     else:
-        os.environ.pop("AI_TRADING_WARMUP_MODE", None)
+        clear_runtime_env_override("AI_TRADING_WARMUP_MODE")
     _reset_warmup_cooldown_timestamp()
     try:
         if api_error.is_set():
@@ -3117,8 +3135,8 @@ def main(argv: list[str] | None = None) -> None:
                         try:
                             _ewc = _managed_env("EXEC_WORKERS_WHEN_CLOSED")
                             if _ewc:
-                                os.environ["AI_TRADING_EXEC_WORKERS"] = _ewc
-                                os.environ["AI_TRADING_PRED_WORKERS"] = _ewc
+                                set_runtime_env_override("AI_TRADING_EXEC_WORKERS", _ewc)
+                                set_runtime_env_override("AI_TRADING_PRED_WORKERS", _ewc)
                         except Exception:
                             logger.debug("EXEC_WORKERS_CLOSED_HINT_SET_FAILED", exc_info=True)
                         session = build_retrying_session(
@@ -3151,10 +3169,10 @@ def main(argv: list[str] | None = None) -> None:
                         connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
                         read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0)))
                         try:
-                            if "EXEC_WORKERS_WHEN_CLOSED" in os.environ:
-                                # Unset closed hint; do not remove explicit AI_TRADING_* overrides if user set them
-                                os.environ.pop("AI_TRADING_EXEC_WORKERS", None)
-                                os.environ.pop("AI_TRADING_PRED_WORKERS", None)
+                            if _managed_env("EXEC_WORKERS_WHEN_CLOSED"):
+                                # Clear only process-local closed-session hints.
+                                clear_runtime_env_override("AI_TRADING_EXEC_WORKERS")
+                                clear_runtime_env_override("AI_TRADING_PRED_WORKERS")
                         except Exception:
                             logger.debug("EXEC_WORKERS_CLOSED_HINT_CLEAR_FAILED", exc_info=True)
                         session = build_retrying_session(

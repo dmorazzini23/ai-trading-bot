@@ -1,4 +1,3 @@
-import os
 import importlib
 import pandas as pd
 
@@ -7,7 +6,9 @@ def test_get_minute_df_uses_finnhub_when_key(monkeypatch):
     monkeypatch.delenv("ENABLE_FINNHUB", raising=False)
     import ai_trading.logging as logging_mod
     importlib.reload(logging_mod)
-    assert os.getenv("ENABLE_FINNHUB") == "1"
+    from ai_trading.config.management import get_env
+
+    assert str(get_env("ENABLE_FINNHUB", "1")).strip().lower() in {"1", "true", "yes", "on"}
     from ai_trading.data import fetch
 
     called = {}

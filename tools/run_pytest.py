@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Deterministic pytest runner used by CI smoke tests."""
 
 from __future__ import annotations

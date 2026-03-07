@@ -312,6 +312,7 @@ from ai_trading.config.management import (
     TradingConfig,
     config_snapshot_hash,
     get_trading_config,
+    clear_runtime_env_override,
 )
 try:
     from ai_trading.execution.guards import (
@@ -352,6 +353,7 @@ from ai_trading.config import (
     PRICE_PROVIDER_ORDER,
     DATA_FEED_INTRADAY,
 )
+from ai_trading.health_payload import build_runtime_health_payload
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 from ai_trading.broker.alpaca_credentials import check_alpaca_available
@@ -3255,7 +3257,7 @@ def _sip_authorized() -> bool:
         if lockout_expired:
             setattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
             setattr(data_fetcher_module, "_SIP_UNAUTHORIZED_UNTIL", None)
-            os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
+            clear_runtime_env_override("ALPACA_SIP_UNAUTHORIZED")
             sip_flagged = False
     if sip_flagged:
         return False
@@ -27101,7 +27103,11 @@ def health() -> str:
         if runtime is None:
             raise RuntimeError("runtime not ready")
         pre_trade_health_check(runtime, runtime.tickers or REGIME_SYMBOLS)
-        status = "ok"
+        payload = build_runtime_health_payload(
+            service_name="ai-trading",
+            force_ok_for_pytest=False,
+            healthy_status_mode="healthy",
+        )
     except (
         APIError,
         TimeoutError,
@@ -27111,17 +27117,21 @@ def health() -> str:
         TypeError,
         OSError,
     ) as e:  # AI-AGENT-REF: tighten health probe error handling
-        status = f"degraded: {e}"
+        payload = build_runtime_health_payload(
+            service_name="ai-trading",
+            force_ok_for_pytest=False,
+            healthy_status_mode="healthy",
+        )
+        payload["ok"] = False
+        payload["status"] = "degraded"
+        payload["error"] = str(e)
         logger.warning(
             "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
-    summary = {
-        "status": status,
-        "no_signal_events": state.no_signal_events,
-        "indicator_failures": state.indicator_failures,
-    }
-    return jsonify(summary), 200
+    payload["no_signal_events"] = state.no_signal_events
+    payload["indicator_failures"] = state.indicator_failures
+    return jsonify(payload), 200
 
 
 def start_healthcheck() -> None:

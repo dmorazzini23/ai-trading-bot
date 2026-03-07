@@ -419,27 +419,24 @@ def test_config_changes_refresh_semaphore(monkeypatch):
 
 
 def test_fallback_concurrency_shares_pooling_host_limit(monkeypatch):
-    from ai_trading.data import fallback_concurrency as legacy_concurrency
-    from ai_trading.data.fallback import concurrency as modern_concurrency
+    from ai_trading.data.fallback import concurrency as fallback_concurrency
 
     monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "3")
     pooling = _reload_pooling()
 
-    assert legacy_concurrency is modern_concurrency
+    fallback_concurrency.reset_tracking_state()
+    fallback_concurrency.reset_peak_simultaneous_workers()
 
-    legacy_concurrency.reset_tracking_state()
-    legacy_concurrency.reset_peak_simultaneous_workers()
-
-    original_state = getattr(legacy_concurrency, "_POOLING_LIMIT_STATE", None)
-    legacy_concurrency._POOLING_LIMIT_STATE = None
+    original_state = getattr(fallback_concurrency, "_POOLING_LIMIT_STATE", None)
+    fallback_concurrency._POOLING_LIMIT_STATE = None
 
     try:
         snapshot = pooling.reload_host_limit_if_env_changed()
         assert snapshot.limit == 3
 
         async def _exercise() -> tuple[int | None, int | None]:
-            limit = legacy_concurrency._get_effective_host_limit()
-            semaphore = legacy_concurrency._get_host_limit_semaphore()
+            limit = fallback_concurrency._get_effective_host_limit()
+            semaphore = fallback_concurrency._get_host_limit_semaphore()
             assert isinstance(semaphore, asyncio.Semaphore)
             recorded_limit = getattr(semaphore, "_ai_trading_host_limit", None)
             return limit, recorded_limit
@@ -453,7 +450,7 @@ def test_fallback_concurrency_shares_pooling_host_limit(monkeypatch):
         assert limit == 3
         assert recorded_limit == 3
     finally:
-        legacy_concurrency._POOLING_LIMIT_STATE = original_state
+        fallback_concurrency._POOLING_LIMIT_STATE = original_state
         monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
         _reload_pooling(pooling)
 

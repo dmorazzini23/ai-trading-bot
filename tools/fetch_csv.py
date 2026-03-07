@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Fetch daily OHLCV CSVs into ./data using yfinance.
 
 Writes data/<SYMBOL>.csv with at least a 'close' column suitable for the
@@ -45,4 +45,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

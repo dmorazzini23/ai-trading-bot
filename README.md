@@ -328,7 +328,7 @@ python3.12 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Upgrade pip
-python -m pip install -U pip
+python3 -m pip install -U pip
 
 # Core runtime and dev/test dependencies
 pip install -r requirements.txt -c constraints.txt
@@ -387,7 +387,7 @@ sma_direct = ta.trend.sma_indicator(close_series, window=20)
 #### Installation
 The ta library is automatically installed with the bot dependencies:
 ```bash
-python -m pip install -U pip
+python3 -m pip install -U pip
 pip install -e .
 ```
 
@@ -418,8 +418,8 @@ docker logs ai-trading-bot
 
 1. **Python Version Mismatch**: Ensure exactly Python 3.12.3
    ```bash
-   python --version
-   which python
+   python3 --version
+   which python3
    ```
 
 2. **Dependency Conflicts**: Clean install in fresh environment
@@ -427,7 +427,7 @@ docker logs ai-trading-bot
    rm -rf venv
    python3.12 -m venv venv
    source venv/bin/activate
-   python -m pip install -U pip
+   python3 -m pip install -U pip
    pip install -e .
    ```
 
@@ -444,10 +444,10 @@ docker logs ai-trading-bot
 4. **Technical Analysis Library Issues**:
    ```bash
    # Verify ta library installation
-   python -c "import ta; print('ta library version:', ta.__version__ if hasattr(ta, '__version__') else 'installed')"
+   python3 -c "import ta; print('ta library version:', ta.__version__ if hasattr(ta, '__version__') else 'installed')"
 
    # Check bot's technical analysis status
-   python -c "from ai_trading.strategies import imports; imports.get_ta(); print(f'TA available: {imports.TA_AVAILABLE}')"
+   python3 -c "from ai_trading.strategies import imports; imports.get_ta(); print(f'TA available: {imports.TA_AVAILABLE}')"
 
    # Reinstall if needed
    pip install --upgrade ta==0.11.0

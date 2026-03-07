@@ -11,7 +11,9 @@ def test_settings_defaults(monkeypatch):
         "ALPACA_DATA_FEED",
         "ALPACA_ADJUSTMENT",
         "CAPITAL_CAP",
+        "AI_TRADING_CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
+        "AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("AI_TRADING_POSITION_SIZE_MIN_USD", raising=False)

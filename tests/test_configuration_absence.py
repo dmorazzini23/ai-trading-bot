@@ -1,4 +1,3 @@
-import os
 import types
 from datetime import UTC, datetime, timedelta
 
@@ -67,5 +66,7 @@ def test_fail_fast_env_backfills_positive_risk_defaults(monkeypatch):
 
     m._fail_fast_env()
 
-    assert os.getenv("AI_TRADING_CAPITAL_CAP") == "0.25"
-    assert os.getenv("DOLLAR_RISK_LIMIT") == "0.05"
+    from ai_trading.config.management import get_env
+
+    assert str(get_env("AI_TRADING_CAPITAL_CAP")) == "0.25"
+    assert str(get_env("DOLLAR_RISK_LIMIT")) == "0.05"

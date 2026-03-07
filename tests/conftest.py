@@ -42,6 +42,17 @@ import pytest
 # NOTE: Avoid importing `ai_trading` modules at collection time; lazy import in helpers.
 
 
+@pytest.fixture(autouse=True)
+def _reset_runtime_env_overrides():
+    """Ensure process-local config overrides do not leak across tests."""
+
+    from ai_trading.config.management import clear_runtime_env_overrides
+
+    clear_runtime_env_overrides()
+    yield
+    clear_runtime_env_overrides()
+
+
 _ORIGINAL_PATCH_DICT = _mock.patch.dict
 _ESSENTIAL = (
     "importlib",

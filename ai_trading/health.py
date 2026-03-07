@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
+from ai_trading.health_payload import build_runtime_health_payload
 from ai_trading.logging import get_logger
-from ai_trading.telemetry import runtime_state
 from ai_trading.app import _install_route_tracker, _ensure_test_client
 
 try:  # pragma: no cover - optional dependency
@@ -96,12 +96,10 @@ class HealthCheck:
         @self.app.route("/healthz")
         def _healthz() -> Any:  # pragma: no cover - simple glue
             try:
-                ok = True
                 err: str | None = None
                 try:
                     service_name = self._get_ctx_attr("service", "ai-trading")
                 except Exception as exc:  # pragma: no cover - defensive
-                    ok = False
                     service_name = "ai-trading"
                     err = str(exc) or exc.__class__.__name__
 
@@ -157,110 +155,23 @@ class HealthCheck:
                 except Exception:
                     logger.debug("HEALTH_ALPACA_SDK_RESOLVE_FAILED", exc_info=True)
 
-                try:
-                    provider_state = runtime_state.observe_data_provider_state()
-                except Exception:
-                    provider_state = {}
-                try:
-                    quote_state = runtime_state.observe_quote_status()
-                except Exception:
-                    quote_state = {}
-                try:
-                    broker_state = runtime_state.observe_broker_status()
-                except Exception:
-                    broker_state = {}
-                try:
-                    from ai_trading.monitoring.model_liveness import (
-                        get_model_liveness_snapshot,
-                    )
-
-                    model_liveness = get_model_liveness_snapshot()
-                except Exception:
-                    model_liveness = {}
-
-                provider_section = {
-                    "primary": provider_state.get("primary"),
-                    "active": provider_state.get("active"),
-                    "backup": provider_state.get("backup"),
-                    "using_backup": bool(provider_state.get("using_backup")),
-                    "reason": provider_state.get("reason"),
-                    "updated": provider_state.get("updated"),
-                    "cooldown_seconds_remaining": provider_state.get("cooldown_sec"),
-                    "status": provider_state.get("status"),
-                    "consecutive_failures": provider_state.get("consecutive_failures"),
-                    "last_error_at": provider_state.get("last_error_at"),
-                    "gap_ratio_recent": provider_state.get("gap_ratio_recent"),
-                    "quote_fresh_ms": provider_state.get("quote_fresh_ms"),
-                    "safe_mode": bool(provider_state.get("safe_mode")),
-                }
-                gap_ratio_recent = provider_state.get("gap_ratio_recent")
-                if gap_ratio_recent is not None:
-                    try:
-                        provider_section["gap_ratio_pct"] = float(gap_ratio_recent) * 100.0
-                    except (TypeError, ValueError):
-                        provider_section["gap_ratio_pct"] = None
-                broker_section = {
-                    "connected": bool(broker_state.get("connected")),
-                    "status": broker_state.get("status") or ("reachable" if broker_state.get("connected") else "unreachable"),
-                    "latency_ms": broker_state.get("latency_ms"),
-                    "last_error": broker_state.get("last_error"),
-                    "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
-                }
-
-                provider_status_raw = provider_section.get("status")
-                provider_status = str(provider_status_raw or "").strip().lower()
-                provider_disabled = provider_status in {"down", "disabled"}
-                using_backup = bool(provider_section.get("using_backup"))
-                primary_name = str(provider_section.get("primary") or "").strip().lower()
-                active_name = str(provider_section.get("active") or "").strip().lower()
-                try:
-                    consecutive_failures = int(provider_section.get("consecutive_failures") or 0)
-                except (TypeError, ValueError):
-                    consecutive_failures = 0
-                provider_unknown = provider_status in {"", "unknown"}
-                provider_primary_steady = (
-                    not using_backup
-                    and (not primary_name or not active_name or primary_name == active_name)
-                    and consecutive_failures <= 0
-                    and not provider_section.get("last_error_at")
+                payload = build_runtime_health_payload(
+                    service_name=str(service_name or "ai-trading"),
+                    force_ok_for_pytest=False,
+                    healthy_status_mode="healthy",
                 )
-                if provider_unknown and provider_primary_steady:
-                    provider_status = "healthy"
-                    provider_section["status"] = "healthy"
-                degraded = provider_disabled or using_backup
-                if not degraded:
-                    if provider_status in {"healthy", "ready"}:
-                        degraded = False
-                    elif provider_unknown and provider_primary_steady:
-                        degraded = False
-                    else:
-                        degraded = True
-                if broker_section["status"] == "unreachable":
-                    degraded = True
-
-                ok = ok and not provider_disabled and broker_section["status"] != "unreachable"
-
-                payload = {
-                    "ok": bool(ok),
-                    "alpaca": alpaca_payload,
-                    "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    "service": service_name,
-                    "primary_data_provider": provider_section,
-                    "provider_state": provider_state,
-                    "fallback_active": bool(provider_section.get("using_backup")),
-                    "quotes_status": quote_state,
-                    "broker_connectivity": broker_section,
-                    "status": "degraded" if degraded else "healthy",
-                    "gap_ratio_recent": provider_section.get("gap_ratio_recent"),
-                    "quote_fresh_ms": provider_section.get("quote_fresh_ms"),
-                    "safe_mode": provider_section.get("safe_mode"),
-                    "cooldown_seconds_remaining": provider_section.get("cooldown_seconds_remaining"),
-                    "model_liveness": model_liveness,
-                }
-                reason_text = provider_section.get("reason")
-                if degraded and reason_text:
-                    payload["reason"] = reason_text
+                payload["alpaca"] = alpaca_payload
+                payload["broker_connectivity"] = payload.get("broker", {})
+                provider_section = payload.get("primary_data_provider", {})
+                broker_section = payload.get("broker_connectivity", {})
+                provider_status = str(provider_section.get("status") or "").strip().lower()
+                broker_status = str(broker_section.get("status") or "").strip().lower()
+                provider_disabled = provider_status in {"down", "disabled"}
+                broker_unreachable = broker_status in {"unreachable", "down", "failed"}
+                payload["ok"] = not provider_disabled and not broker_unreachable
                 if err:
+                    payload["ok"] = False
+                    payload["status"] = "degraded"
                     payload["error"] = err
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(

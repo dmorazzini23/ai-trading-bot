@@ -6,7 +6,6 @@ from types import MappingProxyType, SimpleNamespace
 import pytest
 
 from ai_trading.data.fallback import concurrency
-from ai_trading.data import fallback_concurrency as legacy_concurrency
 
 
 def test_run_with_concurrency_returns_results():
@@ -358,7 +357,7 @@ def test_run_with_concurrency_peak_counter_respects_limit():
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= 3
 
 
-@pytest.mark.parametrize("module", (concurrency, legacy_concurrency))
+@pytest.mark.parametrize("module", (concurrency,))
 def test_run_with_concurrency_respects_host_limit(module):
     tracker_lock = asyncio.Lock()
     running = 0
@@ -408,7 +407,7 @@ def test_run_with_concurrency_respects_host_limit(module):
     assert module.PEAK_SIMULTANEOUS_WORKERS >= 2
 
 
-@pytest.mark.parametrize("module", (concurrency, legacy_concurrency))
+@pytest.mark.parametrize("module", (concurrency,))
 def test_run_with_concurrency_host_limit_floors_to_one(module):
     tracker_lock = asyncio.Lock()
     running = 0
@@ -1099,9 +1098,7 @@ def test_run_with_concurrency_handles_blocking_and_failures():
     assert "BLOCK" in succeeded
 
 
-def test_legacy_shim_reuses_concurrency_module():
-    assert legacy_concurrency is concurrency
-    assert legacy_concurrency.run_with_concurrency is concurrency.run_with_concurrency
-    assert legacy_concurrency.__doc__ == concurrency.__doc__
-
+def test_concurrency_module_exports_expected_api():
+    assert callable(concurrency.run_with_concurrency)
+    assert callable(concurrency.run_with_concurrency_limit)
 

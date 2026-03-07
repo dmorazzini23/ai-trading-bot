@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from ai_trading.logging import get_logger
-from ai_trading.telemetry import runtime_state
+from ai_trading.health_payload import build_runtime_health_payload
 from ai_trading.utils.optional_dep import missing
 
 try:
@@ -598,156 +598,13 @@ def create_app():
         """Minimal liveness probe with provider diagnostics."""
         try:
             pytest_mode = _pytest_active()
-            ok = True
-            try:
-                provider_state = runtime_state.observe_data_provider_state()
-            except Exception:
-                provider_state = {}
-            try:
-                broker_state = runtime_state.observe_broker_status()
-            except Exception:
-                broker_state = {}
-            try:
-                service_state = runtime_state.observe_service_status()
-            except Exception:
-                service_state = {"status": "unknown"}
-            try:
-                quote_state = runtime_state.observe_quote_status()
-            except Exception:
-                quote_state = {}
-            try:
-                from ai_trading.monitoring.model_liveness import (
-                    get_model_liveness_snapshot,
-                )
-
-                model_liveness = get_model_liveness_snapshot()
-            except Exception:
-                model_liveness = {}
-
-            raw_provider_status = provider_state.get("status")
-            provider_status = raw_provider_status or (
-                "degraded" if provider_state.get("using_backup") else "healthy"
+            payload = build_runtime_health_payload(
+                service_name=_SERVICE_NAME,
+                force_ok_for_pytest=pytest_mode,
+                healthy_status_mode="service",
             )
-            provider_status_normalized = str(provider_status or "").strip().lower()
-            data_status = provider_state.get("data_status")
-            data_status_normalized = str(data_status or "").strip().lower()
-            gap_ratio_recent = provider_state.get("gap_ratio_recent")
-            gap_ratio_pct = None
-            if gap_ratio_recent is not None:
-                try:
-                    gap_ratio_pct = float(gap_ratio_recent) * 100.0
-                except (TypeError, ValueError):
-                    gap_ratio_pct = None
-            provider_payload = {
-                "status": provider_status,
-                "reason": provider_state.get("reason"),
-                "http_code": provider_state.get("http_code"),
-                "using_backup": bool(provider_state.get("using_backup")),
-                "active": provider_state.get("active"),
-                "primary": provider_state.get("primary"),
-                "backup": provider_state.get("backup"),
-                "consecutive_failures": provider_state.get("consecutive_failures"),
-                "last_error_at": provider_state.get("last_error_at"),
-                "cooldown_seconds_remaining": provider_state.get("cooldown_sec"),
-                "gap_ratio_recent": gap_ratio_recent,
-                "gap_ratio_pct": gap_ratio_pct,
-                "quote_fresh_ms": provider_state.get("quote_fresh_ms"),
-                "safe_mode": bool(provider_state.get("safe_mode")),
-                "data_status": data_status,
-            }
-            primary_name = str(provider_payload.get("primary") or "").strip().lower()
-            active_name = str(provider_payload.get("active") or "").strip().lower()
-            try:
-                consecutive_failures = int(provider_payload.get("consecutive_failures") or 0)
-            except (TypeError, ValueError):
-                consecutive_failures = 0
-            provider_unknown = provider_status_normalized in {"", "unknown"}
-            provider_primary_steady = (
-                not provider_payload.get("using_backup")
-                and (not primary_name or not active_name or primary_name == active_name)
-                and consecutive_failures <= 0
-                and not provider_payload.get("last_error_at")
-            )
-            if provider_unknown and provider_primary_steady:
-                provider_status = "healthy"
-                provider_status_normalized = "healthy"
-                provider_payload["status"] = "healthy"
-
-            broker_connected_raw = broker_state.get("connected")
-            broker_status = broker_state.get("status")
-            if not broker_state:
-                broker_status = "reachable"
-                broker_connected_raw = True
-            elif not broker_status:
-                if broker_connected_raw is None:
-                    broker_status = "reachable"
-                else:
-                    broker_status = "reachable" if broker_connected_raw else "unreachable"
-            broker_status_normalized = str(broker_status or "").strip().lower()
-            broker_connected = bool(broker_connected_raw)
-            broker_payload = {
-                "status": broker_status,
-                "connected": broker_connected,
-                "latency_ms": broker_state.get("latency_ms"),
-                "last_error": broker_state.get("last_error"),
-                "last_order_ack_ms": broker_state.get("last_order_ack_ms"),
-            }
-
-            status = service_state.get("status", "unknown")
-            service_reason = service_state.get("reason")
-
-            provider_disabled = provider_status_normalized in {"down", "disabled"}
-            broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
-            data_degraded = data_status_normalized in {"empty", "degraded"}
-            degraded = provider_disabled or provider_payload.get("using_backup") or (
-                provider_status_normalized not in {"", "healthy", "ready"}
-            )
-            if broker_down:
-                degraded = True
-            if data_degraded:
-                degraded = True
-
-            provider_healthy = provider_status_normalized in {"", "healthy", "ready"} and not data_degraded
-            broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
-            overall_ok = provider_healthy and broker_healthy
-            if pytest_mode:
-                overall_ok = True
-
-            timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            payload = {
-                "ok": overall_ok,
-                "timestamp": timestamp,
-                "service": _SERVICE_NAME,
-                "status": "degraded" if degraded else status,
-                "data_provider": provider_payload,
-                "broker": broker_payload,
-                "fallback_active": bool(provider_payload.get("using_backup")),
-                "quotes_status": quote_state,
-                "primary_data_provider": provider_payload,
-                "gap_ratio_recent": provider_payload.get("gap_ratio_recent"),
-                "gap_ratio_pct": gap_ratio_pct,
-                "quote_fresh_ms": provider_payload.get("quote_fresh_ms"),
-                "safe_mode": provider_payload.get("safe_mode"),
-                "provider_state": provider_state,
-                "cooldown_seconds_remaining": provider_payload.get("cooldown_seconds_remaining"),
-                "data_status": data_status,
-                "model_liveness": model_liveness,
-            }
-
-            if service_reason:
-                payload.setdefault("reason", service_reason)
-            degrade_reason = provider_payload.get("reason")
-            if degraded and degrade_reason:
-                payload.setdefault("reason", degrade_reason)
-            if degraded and provider_payload.get("http_code") is not None:
-                payload.setdefault("http_code", provider_payload.get("http_code"))
-            if data_degraded and not payload.get("reason"):
-                payload["reason"] = "data_unavailable"
-            if broker_down and not payload.get("reason"):
-                payload["reason"] = broker_state.get("last_error") or "broker_unreachable"
-
             env_err = app.config.get("_ENV_ERR")
-            if not overall_ok and env_err and not payload.get("reason"):
+            if not payload.get("ok") and env_err and not payload.get("reason"):
                 payload["reason"] = env_err
             if pytest_mode:
                 payload["ok"] = True

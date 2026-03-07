@@ -45,8 +45,8 @@ def manual_fractional(balance, price, atr, win_prob, peak):
     dollars = kelly * balance
     raw = dollars / atr
     cap_scale = frac / base_frac if base_frac else 1.0
-    cap_pos = (balance * bot.CAPITAL_CAP * cap_scale) / price
-    risk_cap = (balance * bot.DOLLAR_RISK_LIMIT) / atr
+    cap_pos = (balance * bot.get_capital_cap() * cap_scale) / price
+    risk_cap = (balance * bot.get_dollar_risk_limit()) / atr
     dollar_cap = 1e9 / price
     size = int(round(min(raw, cap_pos, risk_cap, dollar_cap, bot.MAX_POSITION_SIZE)))
     return max(size, 1)
@@ -61,6 +61,8 @@ def test_fractional_kelly_drawdown(monkeypatch, tmp_path):
     ctx = setup_ctx()
     monkeypatch.setattr(bot, 'PEAK_EQUITY_FILE', tmp_path / 'p.txt')
     monkeypatch.setattr(bot, 'is_high_vol_thr_spy', lambda: False)
+    monkeypatch.setattr(bot, "get_capital_cap", lambda: 0.25)
+    monkeypatch.setattr(bot, "get_dollar_risk_limit", lambda: 0.05)
     monkeypatch.setattr(bot.os.path, 'exists', lambda p: False)
     monkeypatch.setattr(bot, 'portalocker', types.SimpleNamespace(
         Lock=DummyLock,
@@ -84,5 +86,4 @@ def test_fractional_kelly_drawdown(monkeypatch, tmp_path):
     assert size1 == exp1
     assert size2 == exp2
     assert size2 < size1
-
 

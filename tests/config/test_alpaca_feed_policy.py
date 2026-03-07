@@ -6,6 +6,7 @@ import pytest
 
 from ai_trading.config.management import (
     enforce_alpaca_feed_policy,
+    get_env,
     get_trading_config,
     reload_trading_config,
 )
@@ -82,4 +83,4 @@ def test_config_alpaca_feed_defaults_to_sip(monkeypatch):
     info = enforce_alpaca_feed_policy()
 
     assert info == {"provider": "alpaca", "feed": "sip", "status": "sip"}
-    assert os.environ.get("ALPACA_DATA_FEED") == "sip"
+    assert get_env("ALPACA_DATA_FEED", None) == "sip"

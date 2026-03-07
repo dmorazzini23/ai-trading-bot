@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Harvest import errors and emit a report with an env header."""
 
 # AI-AGENT-REF: env summary + assertion logic

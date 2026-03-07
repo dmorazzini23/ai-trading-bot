@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import os
+from threading import RLock
 from typing import Any, Callable, Iterable, Mapping, Optional, TypeVar
 from urllib.parse import urlparse
 
 from pathlib import Path
 
 try:
-    from dotenv import load_dotenv as _load_dotenv  # type: ignore[import-not-found]
+    from dotenv import load_dotenv as _load_dotenv
 except Exception:  # pragma: no cover - optional dependency may be absent
     _load_dotenv = None
 
 _DOTENV_WARNING_EMITTED = False
+_RUNTIME_ENV_LOCK = RLock()
+_RUNTIME_ENV_OVERRIDES: dict[str, str] = {}
 
 from ai_trading.logging import logger
 from .settings import Settings, get_settings
@@ -68,7 +71,7 @@ def _deprecated_env_violations(
 ) -> list[tuple[str, str, str]]:
     """Return deprecated env key violations from *env* snapshot."""
 
-    env_map = env if env is not None else os.environ
+    env_map = _merged_env_snapshot(env)
     violations: list[tuple[str, str, str]] = []
     for canonical, deprecated_keys in _CANONICAL_ENV_MAP.items():
         for deprecated in deprecated_keys:
@@ -130,10 +133,85 @@ def _normalize_alpaca_base_url(value: str | None, *, source_key: str) -> tuple[s
     return raw, None
 
 
+def _normalise_runtime_env_key(key: str) -> str:
+    return str(key or "").strip().upper()
+
+
+def _runtime_env_lookup(key: str) -> str | None:
+    env_key = _normalise_runtime_env_key(key)
+    if not env_key:
+        return None
+    with _RUNTIME_ENV_LOCK:
+        return _RUNTIME_ENV_OVERRIDES.get(env_key)
+
+
+def _runtime_env_overrides_snapshot() -> dict[str, str]:
+    with _RUNTIME_ENV_LOCK:
+        return dict(_RUNTIME_ENV_OVERRIDES)
+
+
+def _env_with_runtime_fallback(key: str) -> str | None:
+    raw_env = os.environ.get(key)
+    if raw_env not in (None, ""):
+        return raw_env
+    runtime_val = _runtime_env_lookup(key)
+    if runtime_val in (None, ""):
+        return raw_env
+    return runtime_val
+
+
+def _merged_env_snapshot(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    if env is None:
+        snapshot = dict(os.environ)
+    else:
+        snapshot = {
+            str(key): str(value)
+            for key, value in env.items()
+            if value is not None
+        }
+    for key, value in _runtime_env_overrides_snapshot().items():
+        if snapshot.get(key) in (None, ""):
+            snapshot[key] = value
+    return snapshot
+
+
+def set_runtime_env_override(key: str, value: Any) -> None:
+    """Set an in-process environment override without mutating ``os.environ``."""
+
+    env_key = _normalise_runtime_env_key(key)
+    if not env_key:
+        return
+    with _RUNTIME_ENV_LOCK:
+        _RUNTIME_ENV_OVERRIDES[env_key] = str(value)
+
+
+def clear_runtime_env_override(key: str) -> None:
+    """Remove a previously configured in-process environment override."""
+
+    env_key = _normalise_runtime_env_key(key)
+    if not env_key:
+        return
+    with _RUNTIME_ENV_LOCK:
+        _RUNTIME_ENV_OVERRIDES.pop(env_key, None)
+
+
+def clear_runtime_env_overrides(keys: Iterable[str] | None = None) -> None:
+    """Clear one or all in-process environment overrides."""
+
+    with _RUNTIME_ENV_LOCK:
+        if keys is None:
+            _RUNTIME_ENV_OVERRIDES.clear()
+            return
+        for key in keys:
+            env_key = _normalise_runtime_env_key(key)
+            if env_key:
+                _RUNTIME_ENV_OVERRIDES.pop(env_key, None)
+
+
 def _select_alpaca_base_url(
     env: Mapping[str, str] | None = None,
 ) -> tuple[str | None, str | None, list[tuple[str, str, str]]]:
-    env_map = env or os.environ
+    env_map = _merged_env_snapshot(env)
     invalid_entries: list[tuple[str, str, str]] = []
 
     raw = env_map.get("ALPACA_TRADING_BASE_URL")
@@ -166,10 +244,9 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
     from ai_trading.utils.env import refresh_alpaca_credentials_cache
 
     def _invalidate_settings_caches() -> None:
-        try:
-            get_settings.cache_clear()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
+        cache_clear = getattr(get_settings, "cache_clear", None)
+        if callable(cache_clear):
+            cache_clear()
         try:
             import ai_trading.config as config_pkg
 
@@ -247,7 +324,7 @@ def _get_env_exact(
     cast: Optional[Callable[[Any], T]] = None,
     required: bool = False,
 ) -> T | Any:
-    raw = os.environ.get(key)
+    raw = _env_with_runtime_fallback(key)
     if raw is None:
         if required:
             raise RuntimeError(f"Missing required environment variable: {key}")
@@ -263,11 +340,7 @@ def get_env(
     required: bool = False,
     resolve_aliases: bool = True,
 ) -> T | Any:
-    """Compatibility shim returning values from :class:`TradingConfig`.
-
-    Prefer using :func:`get_trading_config` directly; this helper exists to
-    avoid touching legacy call-sites in a single patch.
-    """
+    """Resolve config values from trading config, then runtime/env overrides."""
 
     if not resolve_aliases:
         return _get_env_exact(key, default, cast=cast, required=required)
@@ -275,6 +348,11 @@ def get_env(
     spec = SPEC_BY_ENV.get(key.upper())
     if spec is None:
         return _get_env_exact(key, default, cast=cast, required=required)
+
+    for candidate in (*spec.env, *tuple(spec.deprecated_env.keys())):
+        candidate_value = _env_with_runtime_fallback(candidate)
+        if candidate_value not in (None, ""):
+            return _coerce(candidate_value, cast)
 
     env_keys = tuple(
         dict.fromkeys(
@@ -306,9 +384,7 @@ def validate_required_env(
 ) -> Mapping[str, str]:
     """Ensure mandatory Alpaca credentials and risk limits are present."""
 
-    env_snapshot: dict[str, str] = {
-        k: v for k, v in os.environ.items() if isinstance(v, str)
-    }
+    env_snapshot: dict[str, str] = _merged_env_snapshot(env)
     overrides: dict[str, str] | None = None
     config_overrides: dict[str, str] | None = None
     if env is not None:
@@ -430,11 +506,11 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
 
     api_key = (
         (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None)
-        or os.getenv("ALPACA_API_KEY")
+        or _env_with_runtime_fallback("ALPACA_API_KEY")
     )
     secret = (
         (getattr(cfg, "alpaca_secret_key", None) if cfg is not None else None)
-        or os.getenv("ALPACA_SECRET_KEY")
+        or _env_with_runtime_fallback("ALPACA_SECRET_KEY")
     )
 
     sanitized_key = api_key or None
@@ -558,7 +634,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
     # Allow Alpaca + IEX without fallback.
     if feed_normalized == "iex":
         if os.getenv("ALPACA_DATA_FEED") in (None, "") and os.getenv("ALPACA_FEED") in (None, ""):
-            os.environ["ALPACA_DATA_FEED"] = "iex"
+            set_runtime_env_override("ALPACA_DATA_FEED", "iex")
         # No provider switch; just report status so preflight logs at INFO.
         return {
             "provider": provider_normalized,
@@ -569,9 +645,9 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
     # SIP path: retain existing behavior and set helpful env defaults.
     if feed_normalized == "sip":
         if os.getenv("ALPACA_DATA_FEED") in (None, "") and os.getenv("ALPACA_FEED") in (None, ""):
-            os.environ["ALPACA_DATA_FEED"] = "sip"
+            set_runtime_env_override("ALPACA_DATA_FEED", "sip")
         if os.getenv("ALPACA_ALLOW_SIP") in (None, "") and os.getenv("ALPACA_HAS_SIP") in (None, ""):
-            os.environ.setdefault("ALPACA_ALLOW_SIP", "1")
+            set_runtime_env_override("ALPACA_ALLOW_SIP", "1")
         return {"provider": provider_normalized, "feed": "sip", "status": "sip"}
 
     # Unknown value: do nothing but surface context.
@@ -605,4 +681,7 @@ __all__ = [
     "Settings",
     "derive_cap_from_settings",
     "config_snapshot_hash",
+    "set_runtime_env_override",
+    "clear_runtime_env_override",
+    "clear_runtime_env_overrides",
 ]

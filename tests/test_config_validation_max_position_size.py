@@ -46,7 +46,9 @@ def test_no_mutation_of_settings(monkeypatch):  # AI-AGENT-REF: ensure env fallb
         d = Dummy()
         m._validate_runtime_config(cfg=CfgDummy(), tcfg=d)
         assert not hasattr(d, "max_position_size")
-        assert os.environ.get("AI_TRADING_SIGNAL_MAX_POSITION_SIZE") is not None
+        from ai_trading.config.management import get_env
+
+        assert get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE") is not None
 
 
 def test_negative_max_position_size_rejected():  # AI-AGENT-REF: reject nonpositive
