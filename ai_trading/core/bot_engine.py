@@ -355,6 +355,7 @@ from ai_trading.config import (
 )
 from ai_trading.health_payload import (
     build_canonical_healthz_payload,
+    build_health_json_response,
     register_healthz_routes,
 )
 from ai_trading.config.settings import minute_data_freshness_tolerance
@@ -27140,7 +27141,7 @@ def _legacy_health_payload() -> dict[str, Any]:
 
 
 def _legacy_health_response(payload: dict[str, Any], status: int) -> Any:
-    return jsonify(payload), status
+    return build_health_json_response(payload, status, jsonify_fn=jsonify)
 
 
 register_healthz_routes(

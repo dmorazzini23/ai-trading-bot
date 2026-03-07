@@ -8,9 +8,11 @@ import re
 from typing import Any
 
 try:  # Local import to avoid cycles during docs builds
-    from ai_trading.strategies.base import StrategySignal
+    from ai_trading.strategies.base import StrategySignal as _StrategySignalClass
 except Exception:  # pragma: no cover - optional at import time
-    StrategySignal = tuple()  # type: ignore[assignment]
+    _STRATEGY_SIGNAL_CLASS: type[Any] | None = None
+else:
+    _STRATEGY_SIGNAL_CLASS = _StrategySignalClass
 
 from ai_trading.config.management import TradingConfig, get_env, get_trading_config
 from ai_trading.core.enums import OrderSide
@@ -36,7 +38,7 @@ def _resolve_allocator_eps() -> float:
 EPS = _resolve_allocator_eps()
 
 
-def _resolve_conf_threshold(cfg) -> float:
+def _resolve_conf_threshold(cfg: Any) -> float:
     """Return a confidence threshold from various config attribute names."""
     for name in ("score_confidence_min", "min_confidence", "conf_threshold"):
         v = getattr(cfg, name, None)
@@ -204,7 +206,7 @@ class StrategyAllocator:
                     _missing_attr_warned.add(attr)
                 if isinstance(self.config, TradingConfig):
                     try:
-                        self.config._values[attr] = default  # type: ignore[attr-defined]
+                        self.config._values[attr] = default
                     except Exception:
                         logger.debug("Failed to set TradingConfig value for %s", attr, exc_info=True)
                 else:
@@ -213,10 +215,6 @@ class StrategyAllocator:
                         object.__setattr__(self.config, attr, default)
                     except Exception:
                         logger.debug("Failed to set config attribute %s", attr, exc_info=True)
-
-    def select_signals(self, signals_by_strategy: dict[str, list[Any]]) -> list[Any]:
-        """Compatibility wrapper for allocate()."""
-        return self.allocate(signals_by_strategy)
 
     def allocate(self, signals_by_strategy: dict[str, list[Any]]) -> list[Any]:
         if not signals_by_strategy or not isinstance(signals_by_strategy, dict):
@@ -411,7 +409,7 @@ class StrategyAllocator:
                         bars,
                     )
                     logger.debug("  Current history for %s: %s", key, history)
-                    if isinstance(StrategySignal, type) and isinstance(s, StrategySignal) and side_is_enum:
+                    if _STRATEGY_SIGNAL_CLASS is not None and isinstance(s, _STRATEGY_SIGNAL_CLASS) and side_is_enum:
                         if s.confidence >= threshold:
                             confirmed_signal = copy.deepcopy(s)
                             confirmed_signal.confidence = float(s.confidence)
@@ -601,7 +599,7 @@ class StrategyAllocator:
         return True
 
     def update_reward(self, strategy: str, reward: float) -> None:
-        """Update reward for a strategy (compatibility hook for tests)."""
+        """Update reward telemetry for a strategy."""
         logger.info("Strategy %s reward updated: %s", strategy, reward)
 
 

@@ -5,10 +5,9 @@ import pytest
 
 
 def test_get_bars_raises_when_settings_missing(monkeypatch):
-    import ai_trading.config.settings as settings_mod
     from ai_trading.data import fetch
 
-    monkeypatch.setattr(settings_mod, "get_settings", lambda: None)
+    monkeypatch.setattr(fetch, "_load_settings", lambda: None)
 
     start = datetime.now(UTC) - timedelta(minutes=1)
     end = datetime.now(UTC)

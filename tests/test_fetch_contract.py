@@ -49,7 +49,7 @@ def test_get_bars_never_none(monkeypatch):
 
 def test_get_bars_requires_settings(monkeypatch):
     now = pd.Timestamp("2024-01-01", tz="UTC")
-    monkeypatch.setattr(data_fetcher, "get_settings", lambda: None)
+    monkeypatch.setattr(data_fetcher, "_current_settings", lambda: None)
     with pytest.raises(RuntimeError, match="Configuration is unavailable"):
         data_fetcher.get_bars(
             "AAPL", "1Day", now - pd.Timedelta(days=1), now

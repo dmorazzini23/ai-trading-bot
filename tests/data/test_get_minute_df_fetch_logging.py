@@ -77,7 +77,7 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
     monkeypatch.setattr(
         data_fetcher,
-        "get_settings",
+        "_current_settings",
         lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
     )
     monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)
@@ -137,7 +137,7 @@ def test_backup_usage_marks_primary_unhealthy(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
     monkeypatch.setattr(
         data_fetcher,
-        "get_settings",
+        "_current_settings",
         lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
     )
     monkeypatch.setattr(data_fetcher, "_has_alpaca_keys", lambda: True, raising=False)

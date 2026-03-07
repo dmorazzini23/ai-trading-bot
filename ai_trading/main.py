@@ -36,7 +36,7 @@ _MANAGED_GET_ENV: Callable[..., Any] | None = None
 
 
 def _managed_env(name: str, default: Any = None) -> Any:
-    """Read env via config management with os.getenv fallback."""
+    """Read env via config-management helpers only."""
 
     global _MANAGED_GET_ENV_READY, _MANAGED_GET_ENV
     if not _MANAGED_GET_ENV_READY:
@@ -52,14 +52,24 @@ def _managed_env(name: str, default: Any = None) -> Any:
         try:
             return _MANAGED_GET_ENV(name, default)
         except (TypeError, ValueError, RuntimeError):
-            return os.getenv(name, default)
-    return os.getenv(name, default)
+            return default
+    return default
 
 
 def _raw_env(name: str, default: Any = None) -> Any:
     """Return raw process env value without config-layer defaults."""
 
-    value = os.getenv(name)
+    global _MANAGED_GET_ENV_READY, _MANAGED_GET_ENV
+    if not _MANAGED_GET_ENV_READY:
+        _managed_env("__bootstrap__", None)
+    if _MANAGED_GET_ENV is None:
+        return default
+    try:
+        value = _MANAGED_GET_ENV(name, None, resolve_aliases=False)
+    except TypeError:
+        value = _MANAGED_GET_ENV(name, None)
+    except Exception:
+        return default
     if value is None:
         return default
     return value

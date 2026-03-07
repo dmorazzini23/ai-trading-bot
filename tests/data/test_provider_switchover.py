@@ -13,7 +13,7 @@ def test_missing_alpaca_warning_suppressed_for_backup_provider(monkeypatch):
     _reset_emit_once(monkeypatch)
     monkeypatch.delenv("ALPACA_SIP_UNAUTHORIZED", raising=False)
     monkeypatch.setattr(fetch, "_is_sip_unauthorized", lambda: False)
-    monkeypatch.setattr(fetch, "get_settings", lambda: SimpleNamespace(data_provider="yahoo"))
+    monkeypatch.setattr(fetch, "_current_settings", lambda: SimpleNamespace(data_provider="yahoo"))
     monkeypatch.setattr(fetch, "get_data_feed_override", lambda: "yahoo")
     monkeypatch.setattr(fetch, "resolve_alpaca_feed", lambda _requested=None: None)
 
@@ -28,7 +28,7 @@ def test_missing_alpaca_warning_suppressed_when_sip_locked(monkeypatch):
     monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
     monkeypatch.setenv("DATA_FEED_INTRADAY", "sip")
     monkeypatch.setattr(fetch, "_is_sip_unauthorized", lambda: True)
-    monkeypatch.setattr(fetch, "get_settings", lambda: SimpleNamespace(data_provider="alpaca"))
+    monkeypatch.setattr(fetch, "_current_settings", lambda: SimpleNamespace(data_provider="alpaca"))
     monkeypatch.setattr(fetch, "get_data_feed_override", lambda: None)
     monkeypatch.setattr(fetch, "resolve_alpaca_feed", lambda _requested=None: "sip")
 
@@ -43,7 +43,7 @@ def test_warn_missing_alpaca_emits_once(monkeypatch, caplog):
     _reset_emit_once(monkeypatch)
     monkeypatch.delenv("ALPACA_SIP_UNAUTHORIZED", raising=False)
     monkeypatch.setattr(fetch, "_is_sip_unauthorized", lambda: False)
-    monkeypatch.setattr(fetch, "get_settings", lambda: SimpleNamespace(data_provider="alpaca"))
+    monkeypatch.setattr(fetch, "_current_settings", lambda: SimpleNamespace(data_provider="alpaca"))
     monkeypatch.setattr(fetch, "get_data_feed_override", lambda: None)
     monkeypatch.setattr(fetch, "resolve_alpaca_feed", lambda _requested=None: "iex")
 

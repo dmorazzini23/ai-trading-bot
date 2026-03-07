@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, UTC
 from ai_trading.utils.lazy_imports import load_pandas
 
 import pytest
-import ai_trading.config.settings as settings_mod
 from ai_trading.data import fetch
 from ai_trading.config import management
 
@@ -40,7 +39,7 @@ DOLLAR_RISK_LIMIT=0.05
 
     management.reload_env(str(env_path))
 
-    real_get_settings = settings_mod.get_settings
+    real_get_settings = fetch._load_settings
     calls = {"n": 0}
 
     def fake_get_settings():
@@ -49,7 +48,7 @@ DOLLAR_RISK_LIMIT=0.05
             return None
         return real_get_settings()
 
-    monkeypatch.setattr(settings_mod, "get_settings", fake_get_settings)
+    monkeypatch.setattr(fetch, "_load_settings", fake_get_settings)
     monkeypatch.setattr(fetch, "_fetch_bars", lambda *a, **k: pd.DataFrame())
 
     start = datetime.now(UTC) - timedelta(minutes=1)

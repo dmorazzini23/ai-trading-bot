@@ -33,7 +33,7 @@ from ai_trading.logging.redact import _ENV_MASK
 
 
 def _runtime_env(name: str, default: str | None = None) -> str | None:
-    """Resolve environment values via config management when available."""
+    """Resolve environment values via config-management helpers only."""
 
     mgmt_mod = sys.modules.get("ai_trading.config.management")
     getter = getattr(mgmt_mod, "get_env", None) if mgmt_mod is not None else None
@@ -44,7 +44,7 @@ def _runtime_env(name: str, default: str | None = None) -> str | None:
             managed_value = None
         if managed_value not in (None, ""):
             return str(managed_value)
-    return os.getenv(name, default)
+    return default
 
 
 def _emit_throttle_summary(logger: logging.Logger, key: str, suppressed: int) -> None:

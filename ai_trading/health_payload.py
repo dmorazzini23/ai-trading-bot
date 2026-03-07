@@ -317,6 +317,30 @@ def build_health_exception_payload(
     }
 
 
+def build_health_json_response(
+    payload: Mapping[str, Any],
+    status: int,
+    *,
+    jsonify_fn: Callable[[Mapping[str, Any]], Any],
+) -> Any:
+    """Build a robust Flask-compatible JSON response for health handlers."""
+
+    response = jsonify_fn(dict(payload))
+    if response is None or isinstance(response, Mapping):
+        return dict(payload) if status == 200 else (dict(payload), status)
+    if not (
+        callable(getattr(response, "get_data", None))
+        or callable(getattr(response, "get_json", None))
+        or hasattr(response, "status_code")
+    ):
+        return dict(payload) if status == 200 else (dict(payload), status)
+    try:
+        response.status_code = status
+    except Exception:
+        pass
+    return response
+
+
 def register_healthz_routes(
     app: Any,
     *,
@@ -354,5 +378,6 @@ __all__ = [
     "build_service_health_payload",
     "build_canonical_healthz_payload",
     "build_health_exception_payload",
+    "build_health_json_response",
     "register_healthz_routes",
 ]

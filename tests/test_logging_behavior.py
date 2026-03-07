@@ -65,19 +65,19 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     t = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
-    alloc.select_signals({"s": [sig]})
+    alloc.allocate({"s": [sig]})
     assert any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
     caplog.clear()
     alloc.hold_protect = {"AAPL": 1}
     alloc.last_direction = {"AAPL": "buy"}
     monkeypatch.setattr(time, "monotonic", lambda: t[0] + 5)
-    alloc.select_signals({"s": [sig]})
+    alloc.allocate({"s": [sig]})
     assert any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
     caplog.clear()
     alloc.hold_protect = {"AAPL": 0}  # Set to 0 so hold protect is not active
     alloc.last_direction = {"AAPL": "buy"}
     monkeypatch.setattr(time, "monotonic", lambda: t[0] + 20)
-    alloc.select_signals({"s": [sig]})
+    alloc.allocate({"s": [sig]})
     assert not any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
 
 
@@ -104,4 +104,3 @@ async def test_order_filled_once(monkeypatch, caplog):
     )
     await alpaca_api.handle_trade_update(event_fill)
     assert any("ORDER_FILLED" in r.message for r in caplog.records)
-

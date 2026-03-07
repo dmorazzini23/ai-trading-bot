@@ -11,7 +11,7 @@ def test_missing_alpaca_warning_skipped_when_keys_present(monkeypatch):
         alpaca_data_feed="iex",
     )
 
-    monkeypatch.setattr(fetch_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(fetch_mod, "_current_settings", lambda: settings)
     monkeypatch.setattr(
         fetch_mod,
         "broker_keys",

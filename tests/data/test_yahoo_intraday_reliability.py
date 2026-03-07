@@ -16,7 +16,7 @@ def test_backup_split_large_intraday_window(monkeypatch, days):
 
     monkeypatch.setattr(
         fetch_mod,
-        "get_settings",
+        "_current_settings",
         lambda: types.SimpleNamespace(backup_data_provider="yahoo", alpaca_adjustment="raw"),
     )
     monkeypatch.setattr(fetch_mod, "_has_alpaca_keys", lambda: False)

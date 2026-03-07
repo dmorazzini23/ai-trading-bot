@@ -29,7 +29,7 @@ def test_error_empty_switches_to_backup(monkeypatch):
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
     monkeypatch.setattr(
         fetch,
-        "get_settings",
+        "_current_settings",
         lambda: types.SimpleNamespace(backup_data_provider="yahoo"),
     )
 

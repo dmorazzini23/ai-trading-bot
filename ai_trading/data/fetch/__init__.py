@@ -238,6 +238,7 @@ from ai_trading.config.settings import (
     alpaca_empty_to_backup,
     alpaca_feed_failover,
     broker_keys,
+    get_settings as _load_settings,
     max_data_fallbacks,
     provider_priority,
 )
@@ -999,7 +1000,7 @@ def _current_intraday_feed() -> str:
     feed = _CFG_INTRADAY
     if feed in (None, ""):
         try:
-            settings = get_settings()
+            settings = _current_settings()
         except Exception:
             settings = None
         if settings is not None:
@@ -1329,7 +1330,7 @@ def _data_fallback_allowed() -> bool:
         return bool(explicit)
 
     try:
-        settings = get_settings()
+        settings = _current_settings()
     except Exception:
         settings = None
     if settings is not None:
@@ -1360,7 +1361,7 @@ def fetch_daily_backup(
         return filtered
 
     try:
-        backup_provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+        backup_provider = getattr(_current_settings(), "backup_data_provider", "yahoo")
     except Exception:
         backup_provider = "yahoo"
     metadata = {"symbols": sorted(filtered.keys())}
@@ -1383,11 +1384,10 @@ def fetch_daily_backup(
     return filtered
 
 
-# Lightweight indirection to support tests monkeypatching `data_fetcher.get_settings`
-def get_settings():  # pragma: no cover - simple alias for tests
-    from ai_trading.config.settings import get_settings as _get
+def _current_settings():
+    """Return current settings after synchronizing runtime overrides."""
 
-    settings = _get()
+    settings = _load_settings()
     _ensure_override_state_current()
     return settings
 
@@ -2198,7 +2198,7 @@ def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
             return False, extra
 
     try:
-        settings = get_settings()
+        settings = _current_settings()
     except Exception:
         settings = None
 
@@ -4199,29 +4199,6 @@ def ensure_ohlcv_schema(
     return work_df
 
 
-def _normalize_ohlcv_df(df, _pd: Any | None = None):
-    """Backwards-compatible shim that delegates to :func:`ensure_ohlcv_schema`."""
-    if df is None:
-        return None
-    try:
-        normalized = ensure_ohlcv_schema(
-            df,
-            source="unknown",
-            frequency="unknown",
-            _pd=_pd if _pd is not None else _pd_norm_helper,
-        )
-    except (DataFetchError, MissingOHLCVColumnsError):
-        return None
-    except Exception:
-        return None
-    try:
-        normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
-    except Exception:
-        return normalized
-    restored = _restore_timestamp_column(normalized)
-    return restored if restored is not None else normalized
-
-
 # --- END: universal OHLCV normalization helper ---
 
 
@@ -4239,7 +4216,7 @@ def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame:
 
 
 def _resolve_backup_provider() -> tuple[str, str]:
-    provider_val = getattr(get_settings(), "backup_data_provider", "yahoo")
+    provider_val = getattr(_current_settings(), "backup_data_provider", "yahoo")
     provider_str = str(provider_val).strip()
     normalized = provider_str.lower()
     if not normalized or normalized == "yfinance":
@@ -4714,7 +4691,7 @@ def refresh_default_feed(feed: str | None = None) -> str:
             candidate = env_source
         else:
             try:
-                cfg_default = get_settings()
+                cfg_default = _current_settings()
             except Exception:  # pragma: no cover - defensive fallback
                 candidate = None
             else:
@@ -4753,11 +4730,6 @@ def get_default_feed() -> str:
     return _DEFAULT_FEED
 
 
-def set_default_feed(feed: str | None) -> str:
-    """Compatibility wrapper delegating to :func:`refresh_default_feed`."""
-    return refresh_default_feed(feed)
-
-
 refresh_default_feed()
 
 
@@ -4777,7 +4749,7 @@ def _prefers_sip() -> bool:
     if any(part.strip().lower() == "sip" for part in failover.split(",")):
         return True
     try:
-        settings = get_settings()
+        settings = _current_settings()
     except Exception:
         return False
     failover_tuple = getattr(settings, "alpaca_feed_failover", ()) or ()
@@ -5982,7 +5954,7 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
 
 def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Route to configured backup provider or return empty DataFrame."""
-    settings = get_settings()
+    settings = _current_settings()
     provider = getattr(settings, "backup_data_provider", "yahoo")
     provider_str = str(provider).strip()
     normalized = provider_str.lower()
@@ -8365,7 +8337,7 @@ def _fetch_bars(
                 logger.warning(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
-                        "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
+                        "provider": getattr(_current_settings(), "backup_data_provider", "yahoo"),
                         "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_TRADING_BASE_URL to use Alpaca data",
                     },
                 )
@@ -8373,7 +8345,7 @@ def _fetch_bars(
                     AlertType.SYSTEM,
                     AlertSeverity.CRITICAL,
                     "Alpaca credentials missing; using backup provider",
-                    metadata={"provider": getattr(get_settings(), "backup_data_provider", "yahoo")},
+                    metadata={"provider": getattr(_current_settings(), "backup_data_provider", "yahoo")},
                 )
             except Exception:
                 pass
@@ -12964,7 +12936,7 @@ def get_minute_df(
             quote_age_ms=quote_age_ms,
         )
     try:
-        settings_obj = get_settings()
+        settings_obj = _current_settings()
     except Exception:
         settings_obj = None
     gap_limit = None
@@ -13565,13 +13537,13 @@ def get_bars(
     adjustment: str | None = None,
     return_meta: bool = False,
 ) -> pd.DataFrame | None | tuple[pd.DataFrame | None, dict[str, Any]]:
-    """Compatibility wrapper delegating to _fetch_bars."""
-    S = get_settings()
+    """Fetch bars using configured provider/backup logic."""
+    S = _current_settings()
     if S is None:
         from ai_trading.config import management as _cfg
 
         _cfg.reload_env()
-        S = get_settings()
+        S = _current_settings()
         if S is None:
             raise RuntimeError("Configuration is unavailable")
     # If a client-like object is passed for `feed`, route via client helper for tests
@@ -13804,7 +13776,6 @@ __all__ = [
     "retry_empty_fetch_once",
     "run_with_concurrency",
     "set_cached_minute_timestamp",
-    "set_default_feed",
     "should_skip_symbol",
 ]
 

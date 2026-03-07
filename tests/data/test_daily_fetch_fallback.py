@@ -22,7 +22,7 @@ def test_get_daily_df_uses_backup_when_columns_missing(monkeypatch):
     monkeypatch.setattr(fetch_module, "should_import_alpaca_sdk", lambda: True)
     monkeypatch.setattr(
         fetch_module,
-        "get_settings",
+        "_current_settings",
         lambda: types.SimpleNamespace(
             backup_data_provider="yahoo",
             logging_dedupe_ttl_s=0,
@@ -78,7 +78,7 @@ def test_get_daily_df_normalizes_yahoo_regular_market_schema(monkeypatch):
     monkeypatch.setattr(fetch_module, "should_import_alpaca_sdk", lambda: True)
     monkeypatch.setattr(
         fetch_module,
-        "get_settings",
+        "_current_settings",
         lambda: types.SimpleNamespace(
             backup_data_provider="yahoo",
             logging_dedupe_ttl_s=0,

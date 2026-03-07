@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from ai_trading.health_payload import (
     build_canonical_healthz_payload,
+    build_health_json_response,
     register_healthz_routes,
 )
 from ai_trading.logging import get_logger
@@ -79,22 +80,6 @@ class HealthCheck:
     def _register_routes(self) -> None:
         """Register default health route."""
 
-        def _emit_response(body: dict[str, Any], status: int = 200) -> Any:
-            response = jsonify(body)
-            if response is None or isinstance(response, Mapping):
-                return body if status == 200 else (body, status)
-            if not (
-                callable(getattr(response, "get_data", None))
-                or callable(getattr(response, "get_json", None))
-                or hasattr(response, "status_code")
-            ):
-                return body if status == 200 else (body, status)
-            try:
-                response.status_code = status
-            except Exception:
-                pass
-            return response
-
         def _build_healthz_payload() -> dict[str, Any]:
             err: str | None = None
             try:
@@ -115,7 +100,11 @@ class HealthCheck:
             )
 
         def _health_response(payload: dict[str, Any], status: int) -> Any:
-            return _emit_response(payload, status=status)
+            return build_health_json_response(
+                payload,
+                status,
+                jsonify_fn=jsonify,
+            )
 
         register_healthz_routes(
             self.app,
