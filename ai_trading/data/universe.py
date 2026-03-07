@@ -1,5 +1,7 @@
-import os
 from importlib.resources import files as pkg_files
+from pathlib import Path
+
+from ai_trading.config.management import get_env
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
 from ai_trading.utils.universe import normalize_symbol
@@ -9,22 +11,24 @@ from ai_trading.paths import TICKERS_FILE_PATH
 pd = load_pandas()
 
 def locate_tickers_csv() -> str | None:
-    env = os.getenv("AI_TRADING_TICKERS_CSV")
-    if env and os.path.isfile(env):
-        return os.path.abspath(env)
+    env = str(get_env("AI_TRADING_TICKERS_CSV", "", cast=str) or "").strip()
+    if env:
+        env_path = Path(env).expanduser()
+        if env_path.is_file():
+            return str(env_path.resolve())
     # Check ai_trading.paths.TICKERS_FILE_PATH
-    path = os.path.abspath(os.path.expanduser(os.path.normpath(str(TICKERS_FILE_PATH))))
-    if os.path.isfile(path):
-        return path
+    path = Path(str(TICKERS_FILE_PATH)).expanduser().resolve()
+    if path.is_file():
+        return str(path)
     try:
         p = pkg_files("ai_trading.data").joinpath("tickers.csv")
         if p.is_file():
             return str(p)
     except ModuleNotFoundError:
         pass
-    cwd = os.path.join(os.getcwd(), "tickers.csv")
-    if os.path.isfile(cwd):
-        return cwd
+    cwd = Path.cwd() / "tickers.csv"
+    if cwd.is_file():
+        return str(cwd)
     return None
 
 def load_universe() -> list[str]:

@@ -2,7 +2,6 @@ from __future__ import annotations
 import datetime as dt
 from datetime import timezone
 import json
-import os
 import time
 import uuid
 import inspect
@@ -119,7 +118,7 @@ class _HTTPShim:
         except AttributeError:
             if name == "post":
                 # Provide a best-effort default when the underlying session
-                # lacks ``post`` (e.g. minimal test shims without requests).
+                # lacks ``post`` (e.g. minimal test stubs without requests).
                 def _post(url, *args, **kwargs):
                     return session.request("POST", url, *args, **kwargs)
 
@@ -152,6 +151,31 @@ _log = get_logger(__name__)
 
 def _default_resolve_alpaca_env() -> tuple[None, None, str]:
     return None, None, "https://paper-api.alpaca.markets"
+
+
+def _managed_env(
+    key: str,
+    default: Any = None,
+    *,
+    cast: Any = None,
+    resolve_aliases: bool = True,
+) -> Any:
+    """Read environment variables via centralized config management."""
+
+    try:
+        from ai_trading.config import management as config_management
+
+        getter = getattr(config_management, "get_env", None)
+        if callable(getter):
+            return getter(
+                key,
+                default,
+                cast=cast,
+                resolve_aliases=resolve_aliases,
+            )
+    except Exception:
+        _log.debug("ALPACA_MANAGED_ENV_LOOKUP_FAILED", extra={"key": key}, exc_info=True)
+    return default
 
 
 def is_shadow_mode() -> bool:
@@ -195,7 +219,7 @@ def eastern_tz() -> ZoneInfo:
 EASTERN_TZ = eastern_tz()
 
 ALPACA_AVAILABLE = ALPACA_AVAILABLE and not missing("alpaca", "alpaca")
-if os.getenv("AI_TRADING_FORCE_ALPACA_UNAVAILABLE", "").strip() == "1":
+if str(_managed_env("AI_TRADING_FORCE_ALPACA_UNAVAILABLE", "", cast=str)).strip() == "1":
     ALPACA_AVAILABLE = False
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 _ALPACA_SERVICE_AVAILABLE: bool = True
@@ -355,8 +379,6 @@ class TradingClientAdapter:
         "_client",
         "_ai_trading_wrapped_client",
         "__ai_trading_adapter__",
-        "list_orders",
-        "list_positions",
         "__dict__",
     )
 
@@ -367,17 +389,8 @@ class TradingClientAdapter:
 
         if hasattr(client, "list_orders"):
             self.list_orders = client.list_orders  # type: ignore[assignment]
-        else:
-            orders_shim = self._build_list_orders_shim()
-            if orders_shim is not None:
-                self.list_orders = orders_shim  # type: ignore[assignment]
-
         if hasattr(client, "list_positions"):
             self.list_positions = client.list_positions  # type: ignore[assignment]
-        else:
-            positions_shim = self._build_list_positions_shim()
-            if positions_shim is not None:
-                self.list_positions = positions_shim  # type: ignore[assignment]
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
@@ -389,69 +402,6 @@ class TradingClientAdapter:
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic aid
         return f"TradingClientAdapter({self._client!r})"
-
-    def _build_list_orders_shim(self):
-        get_orders = getattr(self._client, "get_orders", None)
-        if not callable(get_orders):
-            return None
-
-        try:
-            sig = inspect.signature(get_orders)
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            sig = None
-        accepts_status = bool(sig and "status" in sig.parameters)
-        accepts_filter = bool(sig and "filter" in sig.parameters)
-
-        def _list_orders(*args: Any, **kwargs: Any):
-            status = kwargs.pop("status", None)
-            if status is None:
-                return get_orders(*args, **kwargs)
-
-            enum_val: Any = status
-            try:  # pragma: no cover - best effort import
-                enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                    enums_mod, "OrderStatus", None
-                )
-                if enum_cls is not None:
-                    enum_val = getattr(enum_cls, str(status).upper(), status)
-            except Exception:
-                _log.debug("ORDER_STATUS_ENUM_MAP_FAILED", exc_info=True)
-
-            if accepts_filter:
-                try:
-                    requests_mod = __import__(
-                        "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
-                    )
-                    GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
-                except Exception:
-                    GetOrdersRequest = None
-                if GetOrdersRequest is not None:
-                    try:
-                        filter_obj = GetOrdersRequest(statuses=[enum_val])
-                        return get_orders(*args, filter=filter_obj, **kwargs)
-                    except TypeError:
-                        # Fall back to status kwargs below
-                        pass
-
-            if accepts_status:
-                kwargs["status"] = enum_val
-                return get_orders(*args, **kwargs)
-
-            kwargs["status"] = enum_val
-            return get_orders(*args, **kwargs)
-
-        return _list_orders
-
-    def _build_list_positions_shim(self):
-        get_all_positions = getattr(self._client, "get_all_positions", None)
-        if not callable(get_all_positions):
-            return None
-
-        def _list_positions(*_args: Any, **_kwargs: Any):
-            return get_all_positions()
-
-        return _list_positions
 
     def cancel_order(self, order_id: Any) -> Any:
         """Cancel an order by delegating to the wrapped SDK client."""
@@ -506,7 +456,7 @@ class TradingClientAdapter:
                     continue
 
         raise RuntimeError(
-            "Alpaca client cancel_orders shim could not adapt provided API"
+            "Alpaca client cancel_orders adapter could not adapt provided API"
         ) from last_error
 
 
@@ -538,47 +488,6 @@ def get_api_error_cls():
             pass
 
     return APIError
-
-
-def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
-    """Adapter for ``get_orders`` methods lacking ``list_orders``.
-
-    ``status`` is forwarded as a top-level keyword to preserve compatibility
-    with SDKs expecting a simple string or enum. Other parameters are passed
-    through unchanged. For newer SDKs accepting a ``filter`` object, this
-    constructs :class:`GetOrdersRequest` when available.
-    """
-    status = kwargs.pop("status", None)
-
-    try:
-        use_filter = "filter" in inspect.signature(api.get_orders).parameters
-    except Exception:  # pragma: no cover - defensive
-        use_filter = False
-
-    if use_filter and status is not None:
-        try:
-            requests_mod = importlib.import_module("alpaca.trading.requests")
-            enums_mod = importlib.import_module("alpaca.trading.enums")
-            req_cls = getattr(requests_mod, "GetOrdersRequest")
-            enum_cls = getattr(enums_mod, "QueryOrderStatus")
-            enum_val = getattr(enum_cls, str(status).upper(), status)
-            filt = req_cls(statuses=[enum_val])
-        except Exception:
-            _log.debug("ORDER_FILTER_BUILD_FAILED", exc_info=True)
-        else:
-            return api.get_orders(*args, filter=filt, **kwargs)
-
-    if status is not None:
-        enum_val: Any = status
-        try:  # optional enum mapping for alpaca-py
-            enums_mod = importlib.import_module("alpaca.trading.enums")
-            enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(enums_mod, "OrderStatus", None)
-            if enum_cls is not None:
-                enum_val = getattr(enum_cls, str(status).upper(), status)
-        except Exception:
-            _log.debug("ORDER_STATUS_ENUM_FALLBACK_FAILED", exc_info=True)
-        kwargs["status"] = enum_val
-    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
 
 def _data_classes():
@@ -826,7 +735,7 @@ def _get_rest(*, bars: bool = False) -> Any:
     creds = resolve_alpaca_credentials_with_base()
     key = creds.api_key
     secret = creds.secret_key
-    oauth = os.getenv("ALPACA_OAUTH")
+    oauth = _managed_env("ALPACA_OAUTH", None, cast=str)
     base_url = creds.base_url or "https://paper-api.alpaca.markets"
     if oauth and (key or secret):
         raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
@@ -886,9 +795,9 @@ def _bars_time_window(timeframe: Any) -> tuple[dt.datetime, dt.datetime]:
         is_daily = tf_str.endswith("day") or tf_str == "day"
 
     if is_daily:
-        days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", 10))
+        days = int(_managed_env("DATA_LOOKBACK_DAYS_DAILY", "10", cast=str))
     else:
-        days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
+        days = int(_managed_env("DATA_LOOKBACK_DAYS_MINUTE", "5", cast=str))
     start = end - dt.timedelta(days=days)
     if is_daily:
         start = dt.datetime.combine(start.date(), dt.time())
@@ -1025,8 +934,8 @@ def get_bars_df(
         if last_error is not None:
             raise RuntimeError("_get_rest unavailable") from last_error
         raise RuntimeError("_get_rest unavailable")
-    feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
-    adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
+    feed = feed or _managed_env("ALPACA_DATA_FEED", "iex", cast=str)
+    adjustment = adjustment or _managed_env("ALPACA_ADJUSTMENT", "all", cast=str)
     tf_raw = timeframe
     normalize_timeframe = _module_callable(
         "_normalize_timeframe_for_tradeapi",
@@ -1230,7 +1139,7 @@ class _AlpacaConfig:
     def from_env() -> "_AlpacaConfig":
         key, sec, base = _resolve_alpaca_env()
         base = (base or "https://paper-api.alpaca.markets").rstrip("/")
-        shadow_env = os.getenv("ALPACA_SHADOW", "")
+        shadow_env = _managed_env("ALPACA_SHADOW", "", cast=str)
         shadow = is_shadow_mode() or str(shadow_env).strip().lower() in {"1", "true", "yes", "on"}
         return _AlpacaConfig(base, key, sec, shadow)
 
@@ -1419,7 +1328,7 @@ def _sdk_submit(
     # Optional retry wrapper for SDK submit
     disable_retry = client is None
     try:
-        if os.getenv("PYTEST_RUNNING"):
+        if _managed_env("PYTEST_RUNNING", False, cast=bool, resolve_aliases=False):
             disable_retry = True
     except Exception:
         _log.debug("PYTEST_MODE_DETECT_FAILED", exc_info=True)
@@ -1570,7 +1479,7 @@ def submit_order(
     - Maps HTTP errors (incl. 429) to :class:`AlpacaOrderHTTPError`.
     """
     # AI-AGENT-REF: expose deterministic submit_order with shadow + HTTP fallback
-    pytest_mode = os.getenv("PYTEST_RUNNING")
+    pytest_mode = _managed_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)
     if pytest_mode:
         try:
             from ai_trading.config.management import reload_trading_config
@@ -1586,7 +1495,10 @@ def submit_order(
         shadow is None
         and client is not None
         and pytest_mode
-        and str(os.getenv("SHADOW_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+        and str(
+            _managed_env("SHADOW_MODE", "", cast=str, resolve_aliases=False)
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
     ):
         do_shadow = False
     q_int = _as_int(qty)
@@ -1861,7 +1773,6 @@ __all__ = [
     "AlpacaAuthenticationError",
     "AlpacaOrderNetworkError",
     "generate_client_order_id",
-    "list_orders_wrapper",
     "_bars_time_window",
     "get_bars_df",
     "alpaca_get",

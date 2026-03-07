@@ -10,7 +10,6 @@ with those structures.
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import time
 from collections import deque
@@ -26,8 +25,9 @@ from collections.abc import (
 from contextlib import AbstractAsyncContextManager
 from dataclasses import fields, is_dataclass, replace
 from types import MappingProxyType, ModuleType, SimpleNamespace
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -72,7 +72,7 @@ _LOCAL_POOLING_VERSION: int = 0
 
 def _log_debug_concurrency(event: str, **payload: object) -> None:
     """Emit structured debug logs when DEBUG_CONCURRENCY is enabled."""
-    if not os.getenv("DEBUG_CONCURRENCY"):
+    if not bool(get_env("DEBUG_CONCURRENCY", False, cast=bool)):
         return
     logger.debug("DEBUG_CONCURRENCY", extra={"event": event, **payload})
 
@@ -81,9 +81,9 @@ def _running_under_pytest_worker() -> bool:
     """Return ``True`` when executing inside a pytest (xdist) worker."""
 
     return (
-        "PYTEST_CURRENT_TEST" in os.environ
-        or "PYTEST_XDIST_WORKER" in os.environ
-        or os.getenv("PYTEST_RUNNING") == "1"
+        bool(get_env("PYTEST_CURRENT_TEST", "", cast=str))
+        or bool(get_env("PYTEST_XDIST_WORKER", "", cast=str))
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
         or "pytest" in sys.modules
     )
 
@@ -429,7 +429,7 @@ def _recreate_dataclass_if_needed(
 
     if is_frozen or has_slots:
         try:
-            return replace(obj, **mutated_fields)
+            return replace(cast(Any, obj), **mutated_fields)
         except Exception:
             logger.debug("DATACLASS_REPLACE_FAILED_FALLBACK_ASSIGN", exc_info=True)
             for name, value in mutated_fields.items():
@@ -445,7 +445,7 @@ def _recreate_dataclass_if_needed(
         return obj
 
     try:
-        return replace(obj, **mutated_fields)
+        return replace(cast(Any, obj), **mutated_fields)
     except Exception:
         logger.debug("DATACLASS_REPLACE_FAILED_FINAL", exc_info=True)
         return obj
@@ -811,7 +811,7 @@ async def run_with_concurrency(
     timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
-    debug_mode = bool(os.getenv("DEBUG_CONCURRENCY"))
+    debug_mode = bool(get_env("DEBUG_CONCURRENCY", False, cast=bool))
     _patch_monotonic_for_tests()
     reset_tracking_state(reset_peak=False)
 
@@ -1234,22 +1234,6 @@ async def run_with_concurrency(
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
 
-async def run_with_concurrency_limit(
-    symbols: Iterable[str],
-    worker: Callable[[str], Awaitable[T]],
-    *,
-    max_concurrency: int = 4,
-    timeout_s: float | None = None,
-) -> tuple[dict[str, T | None], set[str], set[str]]:
-    """Compatibility alias for ``run_with_concurrency``."""
-    return await run_with_concurrency(
-        symbols,
-        worker,
-        max_concurrency,
-        timeout_s=timeout_s,
-    )
-
-
 __all__ = [
     "FAILED_SYMBOLS",
     "LAST_RUN_PEAK_SIMULTANEOUS_WORKERS",
@@ -1258,5 +1242,4 @@ __all__ = [
     "reset_peak_simultaneous_workers",
     "reset_tracking_state",
     "run_with_concurrency",
-    "run_with_concurrency_limit",
 ]

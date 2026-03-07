@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as _dt
 import datetime as _dt
 import importlib
-import os
 import sys
 from typing import Any
 
@@ -59,13 +58,6 @@ def _provider_decision_window() -> float:
         window = get_env("AI_TRADING_PROVIDER_DECISION_SECS", None, cast=float)
     except Exception:
         window = None
-    if window is None:
-        raw = os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", "").strip()
-        if raw:
-            try:
-                window = float(raw)
-            except Exception:
-                window = None
     if window is None:
         window = 120.0
 

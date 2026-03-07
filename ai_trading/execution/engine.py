@@ -10,7 +10,6 @@ from ai_trading.logging import get_logger
 import builtins
 import hashlib
 import math
-import os
 import threading
 import time
 import uuid
@@ -18,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, is_dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -2609,8 +2608,8 @@ class ExecutionEngine:
         if weight_delta is None:
             return False
         try:
-            if is_dataclass(signal):
-                fill_signal = replace(signal, weight=weight_delta)
+            if is_dataclass(signal) and not isinstance(signal, type):
+                fill_signal = replace(cast(Any, signal), weight=weight_delta)
             else:
                 fill_signal = signal.__class__(**{**getattr(signal, "__dict__", {}), "weight": weight_delta})
         except Exception:
@@ -2977,7 +2976,9 @@ class ExecutionEngine:
                             "threshold_bps": threshold,
                         },
                     )
-                    testing_flag = os.getenv("TESTING", "").strip().lower()
+                    testing_flag = str(
+                        get_env("TESTING", "", cast=str, resolve_aliases=False)
+                    ).strip().lower()
                     exec_strict = _env_bool("EXECUTION_STRICT", False)
                     if exec_strict or testing_flag in {"1", "true", "yes"}:
                         raise AssertionError(

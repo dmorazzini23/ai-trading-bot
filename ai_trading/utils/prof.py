@@ -7,6 +7,8 @@ import time
 from contextlib import contextmanager
 from typing import Any, Callable, Literal
 
+from ai_trading.config.management import get_env
+
 _TIMING_LEVEL_CACHE: tuple[str | None, str | None, int | None] | None = None
 
 
@@ -67,8 +69,10 @@ def _resolve_timing_level() -> int | None:
     """Return the configured log level for stage timing events."""
 
     global _TIMING_LEVEL_CACHE
-    primary = os.getenv("AI_TRADING_LOG_TIMINGS_LEVEL")
-    fallback = os.getenv("LOG_TIMINGS_LEVEL")
+    primary = get_env(
+        "AI_TRADING_LOG_TIMINGS_LEVEL", None, cast=str, resolve_aliases=False
+    )
+    fallback = get_env("LOG_TIMINGS_LEVEL", None, cast=str, resolve_aliases=False)
     if (
         _TIMING_LEVEL_CACHE is not None
         and _TIMING_LEVEL_CACHE[0] == primary
@@ -182,8 +186,3 @@ class SoftBudget:
         """Return True if the elapsed time has exceeded the budget."""
 
         return self._elapsed_ns() >= int(self.ms * 1_000_000)
-
-    def over(self) -> bool:
-        """Backward compatibility alias for :meth:`over_budget`."""
-
-        return self.over_budget()

@@ -5,7 +5,6 @@ This module provides a standardized runtime context that ensures consistent
 access to trading parameters and configuration across the system.
 """
 from __future__ import annotations
-import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from .protocols import AllocatorProtocol
@@ -16,6 +15,7 @@ from ai_trading.position_sizing import (
     _now_utc as _position_sizing_now,
 )
 from ai_trading.logging import get_logger
+from ai_trading.config.management import get_env
 logger = get_logger(__name__)
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
@@ -87,7 +87,9 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     Returns:
         BotRuntime with fully populated params dict
     """
-    impl_raw = os.getenv("AI_TRADING_EXECUTION_IMPL", os.getenv("EXECUTION_IMPL", ""))
+    impl_raw = get_env("AI_TRADING_EXECUTION_IMPL", "", cast=str)
+    if not impl_raw:
+        impl_raw = get_env("EXECUTION_IMPL", "", cast=str, resolve_aliases=False)
     impl = (impl_raw or "").strip().lower()
     cfg_mode_raw = getattr(cfg, "execution_mode", None)
     cfg_mode = str(cfg_mode_raw).strip().lower() if cfg_mode_raw not in (None, "") else ""
@@ -97,7 +99,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
         missing = [
             key
             for key in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_TRADING_BASE_URL")
-            if not os.getenv(key)
+            if not get_env(key, None, cast=str, resolve_aliases=False)
         ]
         if missing:
             logger.critical(
@@ -159,10 +161,8 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     else:
         if val is None and not explicit_none:
             try:
-                from ai_trading.config.management import get_env
-
                 env_val = get_env("AI_TRADING_SIGNAL_MAX_POSITION_SIZE", cast=float)
-            except (ImportError, RuntimeError):
+            except RuntimeError:
                 env_val = None
             if env_val is not None:
                 val = env_val

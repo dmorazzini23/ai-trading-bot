@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import importlib
-import os
 from dataclasses import dataclass
 from typing import cast
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -49,7 +49,7 @@ def ensure_urllib3_disable_warnings() -> None:
             logger.debug("URLLIB3_DISABLE_WARNINGS_ATTR_SET_FAILED", exc_info=True)
             return
         disable_warnings = getattr(urllib3, "disable_warnings", None)
-        if not callable(disable_warnings):  # pragma: no cover - custom module rejected shim
+        if not callable(disable_warnings):  # pragma: no cover - custom module rejected fallback hook
             return
 
     warning_category = Warning
@@ -97,8 +97,10 @@ class TimeoutSession(_SessionBase):
         defer to the parent ``Session.get`` implementation which preserves
         connection pooling and retry adapters.
         """
-        testing_flag = os.getenv("TESTING", "0") == "1"
-        pytest_flag = os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST")
+        testing_flag = bool(get_env("TESTING", False, cast=bool))
+        pytest_flag = bool(get_env("PYTEST_RUNNING", "", cast=str)) or bool(
+            get_env("PYTEST_CURRENT_TEST", "", cast=str)
+        )
         requests_get = getattr(requests, "get", None)
         patched_requests_get = False
         if callable(requests_get):
@@ -179,14 +181,20 @@ class HostLimitController:
         for env_var in _HOST_LIMIT_ENV_KEYS:
             raw: str | None
             if env_var == "AI_TRADING_HTTP_HOST_LIMIT":
-                raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT") or os.getenv("ALPACA_HOST_LIMIT")
+                raw = (
+                    str(get_env("AI_TRADING_HTTP_HOST_LIMIT", "", cast=str) or "").strip()
+                    or str(get_env("ALPACA_HOST_LIMIT", "", cast=str) or "").strip()
+                )
             elif env_var == "HTTP_MAX_WORKERS":
-                raw = os.getenv("HTTP_MAX_WORKERS")
+                raw = str(get_env("HTTP_MAX_WORKERS", "", cast=str) or "").strip()
             elif env_var == "AI_TRADING_HOST_LIMIT":
-                raw = os.getenv("AI_TRADING_HOST_LIMIT") or os.getenv("HTTP_HOST_LIMIT")
+                raw = (
+                    str(get_env("AI_TRADING_HOST_LIMIT", "", cast=str) or "").strip()
+                    or str(get_env("HTTP_HOST_LIMIT", "", cast=str) or "").strip()
+                )
             else:
-                raw = os.getenv(env_var)
-            values.append(raw)
+                raw = str(get_env(env_var, "", cast=str) or "").strip()
+            values.append(raw or None)
         return tuple(values)
 
     def apply(self, session: TimeoutSession) -> None:

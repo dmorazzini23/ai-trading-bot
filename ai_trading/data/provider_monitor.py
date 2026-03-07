@@ -2047,6 +2047,7 @@ class ProviderMonitor:
             self._last_switchover_provider = to_key
             self._last_switchover_passes = 0
             self._last_switchover_ts = now_wall
+        return None
 
     def record_health_pass(
         self,

@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-import os
 import pickle
 import re
 import time
@@ -23,6 +22,7 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
 
@@ -134,7 +134,7 @@ class ModelRegistry:
         index_filename: str | None = None,
     ) -> None:
         if base_path is None:
-            env_override = os.getenv("MODEL_REGISTRY_DIR")
+            env_override = get_env("MODEL_REGISTRY_DIR", None, cast=str, resolve_aliases=False)
             if env_override:
                 base_path = Path(env_override).expanduser()
             else:

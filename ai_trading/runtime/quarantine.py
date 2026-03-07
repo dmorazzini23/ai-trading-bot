@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -138,7 +137,9 @@ def _resolve_state_path(path: str | Path) -> Path:
         if data_root.is_absolute():
             return (data_root / target).resolve()
 
-    state_dir_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
+    state_dir_raw = str(
+        get_env("STATE_DIRECTORY", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
     if state_dir_raw:
         state_root = Path(state_dir_raw.split(":")[0]).expanduser()
         if state_root.is_absolute():

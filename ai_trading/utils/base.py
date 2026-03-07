@@ -137,9 +137,11 @@ def log_cpu_usage(lg: logging.Logger, note: str | None = None) -> None:
     lg.debug("CPU_USAGE%s: %.2f%%", suffix, pct)
 
 
-MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
-MIN_HEALTH_ROWS_D = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
-HEALTH_MIN_ROWS = int(os.getenv("HEALTH_MIN_ROWS", "100"))
+MIN_HEALTH_ROWS = int(get_env("MIN_HEALTH_ROWS", "30", cast=str, resolve_aliases=False))
+MIN_HEALTH_ROWS_D = int(
+    get_env("MIN_HEALTH_ROWS_DAILY", "5", cast=str, resolve_aliases=False)
+)
+HEALTH_MIN_ROWS = int(get_env("HEALTH_MIN_ROWS", "100", cast=str, resolve_aliases=False))
 HEALTH_THROTTLE = 10
 _last_health_log = 0.0
 
@@ -378,7 +380,9 @@ def health_rows_passed(rows):
 def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
     global _LAST_MARKET_CLOSED_DATE
-    if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
+    if str(
+        get_env("FORCE_MARKET_OPEN", "false", cast=str, resolve_aliases=False)
+    ).lower() == "true":
         logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
         return True
     check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
@@ -838,7 +842,7 @@ def validate_ohlcv(df: DataFrame, required: list[str] | None = None, require_mon
 
 def health_check(df: DataFrame, resolution: str | None = None) -> bool:
     """Return True if ``df`` has at least ``HEALTH_MIN_ROWS`` rows."""
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", "0"))
+    min_rows = int(get_env("HEALTH_MIN_ROWS", "0", cast=str, resolve_aliases=False))
     try:
         return len(df) >= min_rows
     except COMMON_EXC:

@@ -12,7 +12,6 @@ import json
 import logging
 from ai_trading.logging import get_logger
 from ai_trading.config.management import get_env
-import os
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -188,7 +187,7 @@ class SecureConfig:
         if key in self._config_cache:
             value = self._config_cache[key]
         else:
-            value = os.getenv(key, default)
+            value = get_env(key, default, cast=str, resolve_aliases=False)
             self._config_cache[key] = value
         if key in self._sensitive_keys and value and isinstance(value, str):
             if self._is_encrypted(value):

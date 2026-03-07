@@ -34,6 +34,7 @@ def compute_portfolio_weights(*args, **kwargs):
     return _compute_portfolio_weights(*args, **kwargs)
 from ai_trading.settings import get_rebalance_interval_min
 from ai_trading.utils.time import safe_utcnow
+from ai_trading.config.management import get_env
 
 logger = get_logger(__name__)
 
@@ -621,8 +622,7 @@ def start_rebalancer(ctx) -> threading.Thread:
                 logger.error('REBALANCER_LOOP_ERROR', extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
             settings = get_settings()
             sleep_interval = settings.rebalance_sleep_seconds
-            import os
-            if os.getenv('PYTEST_CURRENT_TEST') or 'test' in str(ctx).lower():
+            if get_env("PYTEST_CURRENT_TEST", "", cast=str, resolve_aliases=False) or 'test' in str(ctx).lower():
                 sleep_interval = 1
             time.sleep(sleep_interval)
     t = threading.Thread(target=loop, daemon=True)

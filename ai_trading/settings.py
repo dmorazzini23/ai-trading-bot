@@ -5,7 +5,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 from types import SimpleNamespace
-import os
 import sys
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator
 try:  # Prefer pydantic-settings v2 API
@@ -811,9 +810,9 @@ def get_news_api_key() -> str | None:
     val = getattr(get_settings(), "news_api_key", None)
     if val:
         return val
-    import os
+    from ai_trading.config.management import get_env as _get_env
 
-    return os.getenv("SENTIMENT_API_KEY")
+    return _get_env("SENTIMENT_API_KEY", None, cast=str, resolve_aliases=False)
 
 
 def get_rebalance_interval_min() -> int:
@@ -834,9 +833,29 @@ def get_rebalance_interval_min() -> int:
         return iv if iv > 0 else None
 
     env_vals: list[int] = []
-    if (m := _parse_pos_int(os.getenv("AI_TRADING_REBALANCE_INTERVAL_MIN"))) is not None:
+    from ai_trading.config.management import get_env as _get_env
+
+    if (
+        m := _parse_pos_int(
+            _get_env(
+                "AI_TRADING_REBALANCE_INTERVAL_MIN",
+                None,
+                cast=str,
+                resolve_aliases=False,
+            )
+        )
+    ) is not None:
         env_vals.append(m)
-    if (h := _parse_pos_int(os.getenv("AI_TRADING_REBALANCE_INTERVAL_HOURS"))) is not None:
+    if (
+        h := _parse_pos_int(
+            _get_env(
+                "AI_TRADING_REBALANCE_INTERVAL_HOURS",
+                None,
+                cast=str,
+                resolve_aliases=False,
+            )
+        )
+    ) is not None:
         env_vals.append(h * 60)
     if env_vals:
         return min(env_vals)
@@ -872,7 +891,9 @@ def get_portfolio_drift_threshold() -> float:
 
 
 def get_max_drawdown_threshold() -> float:
-    raw = os.getenv("MAX_DRAWDOWN_THRESHOLD")
+    from ai_trading.config.management import get_env as _get_env
+
+    raw = _get_env("MAX_DRAWDOWN_THRESHOLD", None, cast=str, resolve_aliases=False)
     if raw not in (None, ""):
         try:
             return float(raw)

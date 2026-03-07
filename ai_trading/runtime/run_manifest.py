@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,7 +102,9 @@ def _resolve_manifest_path(cfg: Any, explicit_path: str | None) -> Path:
         if data_root.is_absolute():
             return (data_root / target).resolve()
 
-    state_dir_raw = str(os.getenv("STATE_DIRECTORY", "") or "").strip()
+    state_dir_raw = str(
+        get_env("STATE_DIRECTORY", "", cast=str, resolve_aliases=False) or ""
+    ).strip()
     if state_dir_raw:
         state_root = Path(state_dir_raw.split(":")[0]).expanduser()
         if state_root.is_absolute():

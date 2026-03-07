@@ -2655,6 +2655,31 @@ def run_flask_app(
     attempt_port = port
     attempts = 0
 
+    def _signal_ready_when_serving(serving_port: int) -> threading.Event | None:
+        if ready_signal is None:
+            return None
+        stop_probe = threading.Event()
+
+        def _probe_until_ready() -> None:
+            for _ in range(100):
+                if stop_probe.is_set() or ready_signal.is_set():
+                    return
+                if _probe_local_api_health(serving_port):
+                    ready_signal.set()
+                    logger.info(
+                        "API_READY_CONFIRMED",
+                        extra={"port": serving_port, "check": "local_healthz"},
+                    )
+                    return
+                time.sleep(0.1)
+
+        threading.Thread(
+            target=_probe_until_ready,
+            name=f"api-ready-probe-{serving_port}",
+            daemon=True,
+        ).start()
+        return stop_probe
+
     while attempts < max_attempts:
         attempts += 1
         pid = get_pid_on_port(attempt_port)
@@ -2671,13 +2696,8 @@ def run_flask_app(
             logger.error("API_PORT_OCCUPIED", extra={"port": attempt_port, "pid": pid})
             raise PortInUseError(attempt_port, pid)
 
+        probe_stop = _signal_ready_when_serving(attempt_port)
         try:
-            if ready_signal is not None:
-                logger.info(
-                    "Flask app created successfully, signaling ready on port %s",
-                    attempt_port,
-                )
-                ready_signal.set()
             logger.info("Starting Flask app on 0.0.0.0:%s", attempt_port)
             application.run(host="0.0.0.0", port=attempt_port, debug=debug, **run_kwargs)
             return
@@ -2689,6 +2709,9 @@ def run_flask_app(
                 attempt_port += 1
                 continue
             raise
+        finally:
+            if probe_stop is not None:
+                probe_stop.set()
 
     raise PortInUseError(attempt_port)
 

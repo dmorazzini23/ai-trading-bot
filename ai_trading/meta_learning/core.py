@@ -293,7 +293,7 @@ def get_device() -> str:
     """
     Honor CPU_ONLY and handle environments without torch.
     """
-    if os.getenv("CPU_ONLY") == "1":
+    if str(get_env("CPU_ONLY", "", cast=str, resolve_aliases=False)) == "1":
         return "cpu"
     try:
         t = _import_torch()

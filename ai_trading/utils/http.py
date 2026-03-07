@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -58,6 +57,7 @@ except ImportError:  # pragma: no cover - fallback when urllib3 missing
 
 from contextlib import AbstractAsyncContextManager, contextmanager
 from typing import Iterator
+from ai_trading.config.management import get_env
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
 
 
@@ -71,21 +71,21 @@ def _strip_inline_comment(value: str) -> str:
 
 
 def _int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
+    raw = get_env(name, None, cast=str, resolve_aliases=False)
     if raw is None:
         return default
     try:
-        return int(_strip_inline_comment(raw))
+        return int(_strip_inline_comment(str(raw)))
     except Exception:
         return default
 
 
 def _float_env(name: str, default: float) -> float:
-    raw = os.getenv(name)
+    raw = get_env(name, None, cast=str, resolve_aliases=False)
     if raw is None:
         return default
     try:
-        return float(_strip_inline_comment(raw))
+        return float(_strip_inline_comment(str(raw)))
     except Exception:
         return default
 from ai_trading.logging import get_logger
@@ -143,18 +143,12 @@ def _coerce_host_limit(value: object | None) -> int | None:
 
 
 def _resolve_host_limit() -> int:
-    candidate: object | None = None
-    try:
-        from ai_trading.config.management import get_env as _get_env  # type: ignore
-    except Exception:  # pragma: no cover - during early bootstrap
-        _get_env = None
-    if _get_env is not None:
-        try:
-            candidate = _get_env("HTTP_MAX_CONNS_PER_HOST", None)
-        except Exception:
-            candidate = None
-    if candidate in (None, ""):
-        candidate = os.getenv("HTTP_MAX_CONNS_PER_HOST")
+    candidate: object | None = get_env(
+        "HTTP_MAX_CONNS_PER_HOST",
+        None,
+        cast=str,
+        resolve_aliases=False,
+    )
     limit = _coerce_host_limit(candidate)
     return limit if limit is not None else _DEFAULT_HOST_LIMIT
 
@@ -451,6 +445,7 @@ def request_json(
             if attempt >= retries:
                 raise
             sleep(backoff * attempt)
+    raise RuntimeError("HTTP request exhausted retries without response")
 
 
 def get(url: str, **kwargs) -> requests.Response:

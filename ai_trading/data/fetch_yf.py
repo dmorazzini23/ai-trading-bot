@@ -6,7 +6,6 @@ import datetime as dt
 import hashlib
 import json
 import time
-import os
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -156,8 +155,10 @@ def fetch_yf_batched(
     tickers_unique = list(dict.fromkeys(tickers_list))
     out: Dict[str, Optional[pd.DataFrame]] = {ticker: None for ticker in tickers_unique}
     normalized_interval = normalize_yf_interval(interval) or "1d"
-    pytest_mode = "pytest" in sys.modules or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
-    if pytest_mode and not os.getenv("PYTEST_YF_ALLOW_NETWORK"):
+    pytest_mode = "pytest" in sys.modules or str(
+        get_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if pytest_mode and not get_env("PYTEST_YF_ALLOW_NETWORK", False, cast=bool, resolve_aliases=False):
         return out
 
     chunk_size = _yf_chunk_size()

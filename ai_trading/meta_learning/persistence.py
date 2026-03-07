@@ -7,14 +7,13 @@ dependencies in lean deployments.
 
 from __future__ import annotations
 
-import os
-
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,7 +26,12 @@ _CANONICAL_PATH = Path(
     / Path(
         # Allow callers/tests to override through environment while keeping a
         # stable default inside the repository workspace.
-        os.getenv("AI_TRADING_TRADE_HISTORY_PATH", "artifacts/trade_history.parquet")
+        get_env(
+            "AI_TRADING_TRADE_HISTORY_PATH",
+            "artifacts/trade_history.parquet",
+            cast=str,
+            resolve_aliases=False,
+        )
     )
 )
 
@@ -38,9 +42,13 @@ _READ_FAILURE_LOGGED: set[tuple[str, str, str]] = set()
 
 def _pytest_active() -> bool:
     return bool(
-        os.getenv("PYTEST_CURRENT_TEST")
-        or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
-        or str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
+        get_env("PYTEST_CURRENT_TEST", "", cast=str, resolve_aliases=False)
+        or str(
+            get_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
+        or str(get_env("TESTING", "", cast=str, resolve_aliases=False)).strip().lower()
+        in {"1", "true", "yes", "on"}
     )
 
 

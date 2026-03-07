@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import os
 import math
 import statistics
 import time
@@ -49,6 +48,7 @@ from pathlib import Path
 from ai_trading.utils import http
 from ai_trading.utils.time import utcnow
 from ai_trading.config import get_settings
+from ai_trading.config.management import get_env as _get_env
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
 from ai_trading.utils.lazy_imports import load_pandas
 
@@ -401,7 +401,7 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     pd = _get_pandas()
     _validate_input_df(data)
     cache_path = Path(f"cache_{ticker}.parquet") if ticker else None
-    if os.getenv("DISABLE_PARQUET"):
+    if _get_env("DISABLE_PARQUET", False, cast=bool, resolve_aliases=False):
         cache_path = None
     if (
         pd is not None
@@ -431,7 +431,7 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
 def prepare_indicators_parallel(symbols: list[str], data: dict[str, Any], max_workers: int | None = None) -> None:
     """Run :func:`prepare_indicators` over ``symbols`` concurrently,
     but fall back to serial execution for small symbol sets."""
-    if os.getenv("DISABLE_PARQUET"):
+    if _get_env("DISABLE_PARQUET", False, cast=bool, resolve_aliases=False):
         return
     SERIAL_THRESHOLD = 8
     if len(symbols) <= SERIAL_THRESHOLD:

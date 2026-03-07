@@ -18,9 +18,8 @@ def _create_registry():
         setattr(registry, "_names_to_collectors", {})
     return registry
 
-try:  # pragma: no cover - executed on first import
-    _REGISTRY
-except NameError:  # pragma: no cover - executed on first import
+_REGISTRY = globals().get("_REGISTRY")
+if _REGISTRY is None:
     _REGISTRY = _create_registry()
 
 

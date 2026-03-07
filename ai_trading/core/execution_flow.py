@@ -13,6 +13,7 @@ from threading import Thread
 import csv
 from datetime import UTC, datetime
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -426,10 +427,9 @@ def pov_submit(
     from ai_trading.core import bot_engine as _bot_engine
     import random
 
-    import os as _os
     import sys as _sys
 
-    env_token = _os.getenv("PYTEST_RUNNING")
+    env_token = get_env("PYTEST_RUNNING", None, cast=str, resolve_aliases=False)
     if isinstance(env_token, str):
         normalized = env_token.strip().lower()
         if normalized in {"1", "true", "yes", "on"}:

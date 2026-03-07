@@ -1366,7 +1366,7 @@ def _call_preflight_capacity(
     account_snapshot: Any,
     preflight_fn: Callable[..., CapacityCheck] | None = None,
 ) -> CapacityCheck:
-    """Invoke the configured preflight helper with compatibility shims."""
+    """Invoke the configured preflight helper with compatibility adapters."""
 
     fn = preflight_fn or preflight_capacity
     supports_account = False
@@ -7532,6 +7532,7 @@ class ExecutionEngine:
             return "sell"
         if value in {"cover", "long"}:
             return "buy"
+        return None
 
     def _activate_long_only_mode(self, *, reason: str, context: Mapping[str, Any] | None = None) -> None:
         normalized_reason = str(reason or "long_only")

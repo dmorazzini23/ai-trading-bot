@@ -13,11 +13,11 @@ class _LazyLoader:
     def __init__(self, module: "_LazyModule") -> None:
         self._module = module
 
-    def create_module(self, spec: ModuleSpec) -> ModuleType:  # pragma: no cover - thin shim
+    def create_module(self, spec: ModuleSpec) -> ModuleType:  # pragma: no cover - thin adapter
         del spec
         return self._module
 
-    def exec_module(self, module: ModuleType) -> None:  # pragma: no cover - thin shim
+    def exec_module(self, module: ModuleType) -> None:  # pragma: no cover - thin adapter
         del module
         self._module._load()
         return None

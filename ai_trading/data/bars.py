@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -196,17 +195,17 @@ def http_get_bars(
 
 
 def _env_bool(name: str) -> bool | None:
-    raw = os.getenv(name)
+    raw = get_env(name, None, cast=str, resolve_aliases=False)
     if raw is None:
         return None
-    return raw.strip().lower() in _TRUTHY
+    return str(raw).strip().lower() in _TRUTHY
 
 
 def _env_explicit_false(name: str) -> bool:
-    raw = os.getenv(name)
+    raw = get_env(name, None, cast=str, resolve_aliases=False)
     if raw is None:
         return False
-    return raw.strip().lower() in _FALSEY
+    return str(raw).strip().lower() in _FALSEY
 
 
 def _default_sip_entitled() -> bool:
@@ -245,7 +244,7 @@ def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_ut
     except (ValueError, TypeError):
         pass
 
-# Fallback shims removed: TimeFrame and StockBarsRequest now come from alpaca.data
+# Fallback adapters removed: TimeFrame and StockBarsRequest now come from alpaca.data
 COMMON_EXC = (ValueError, KeyError, AttributeError, TypeError, RuntimeError, ImportError, OSError, ConnectionError, TimeoutError)
 
 def _ensure_df(obj: Any) -> pd.DataFrame:
@@ -672,9 +671,17 @@ def _ensure_entitled_feed(client: Any, requested: str | None) -> str:
     fresh_generation = _extract_generation(client)
 
     entitled_lower = {feed.lower() for feed in entitled}
-    pytest_env = os.getenv("PYTEST_RUNNING", "").strip().lower() in _TRUTHY or "pytest" in sys.modules
-    has_key = any(os.getenv(var) for var in ("ALPACA_KEY", "ALPACA_API_KEY"))
-    has_secret = any(os.getenv(var) for var in ("ALPACA_SECRET", "ALPACA_SECRET_KEY"))
+    pytest_env = str(
+        get_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)
+    ).strip().lower() in _TRUTHY or "pytest" in sys.modules
+    has_key = any(
+        get_env(var, None, cast=str, resolve_aliases=False)
+        for var in ("ALPACA_KEY", "ALPACA_API_KEY")
+    )
+    has_secret = any(
+        get_env(var, None, cast=str, resolve_aliases=False)
+        for var in ("ALPACA_SECRET", "ALPACA_SECRET_KEY")
+    )
     allow_env_false = (has_key and has_secret) or pytest_env
 
     disable_allow = _env_explicit_false("ALPACA_ALLOW_SIP")
@@ -755,7 +762,9 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     with identical behavior and logging fields.
     """
     from .models import TimeFrame, StockBarsRequest
-    pytest_mode = "pytest" in sys.modules or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+    pytest_mode = "pytest" in sys.modules or str(
+        get_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)
+    ).strip().lower() in {"1", "true", "yes", "on"}
     symbol = _canon_symbol(symbol)
     sym_attr = getattr(request, 'symbol_or_symbols', None)
     try:
@@ -1118,9 +1127,7 @@ def _parse_bars(payload: Any, symbol: str, tz: str) -> pd.DataFrame:
 
 
 def _is_test_mode() -> bool:
-    import os
-
-    return bool(os.getenv("PYTEST_CURRENT_TEST"))
+    return bool(get_env("PYTEST_CURRENT_TEST", "", cast=str, resolve_aliases=False))
 
 
 try:
@@ -1145,7 +1152,9 @@ def _ensure_entitled_feed(client, feed):  # type: ignore[override]
     allow_flag = not _env_explicit_false("ALPACA_ALLOW_SIP")
     entitled_flag = not _env_explicit_false("ALPACA_SIP_ENTITLED")
     has_flag = not _env_explicit_false("ALPACA_HAS_SIP")
-    unauthorized = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower()
+    unauthorized = str(
+        get_env("ALPACA_SIP_UNAUTHORIZED", "", cast=str, resolve_aliases=False)
+    ).strip().lower()
     sip_locked = unauthorized in {"1", "true", "yes"}
 
     if not (allow_flag and entitled_flag and has_flag):

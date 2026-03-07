@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import Iterable
+
+from ai_trading.config.management import get_env
 
 # Supported trading environments
 _SUPPORTED_ENVS: tuple[str, ...] = ("development", "paper", "live", "backtest")
@@ -40,7 +41,7 @@ def run() -> str:
     Reads ``TRADING_ENV`` from the process environment and ensures it is
     supported. The value is returned for downstream use.
     """
-    env = os.getenv("TRADING_ENV", "development")
+    env = get_env("TRADING_ENV", "development", cast=str, resolve_aliases=False)
     return _validate_env(env)
 
 

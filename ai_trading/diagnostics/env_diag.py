@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ai_trading.config.management import get_env, is_shadow_mode
@@ -23,10 +23,7 @@ def _mask(value: str | None, keep: int = 4) -> str:
 def _get_env_str(name: str, default: str = "") -> str:
     """Return an environment value via config management with safe fallback."""
 
-    try:
-        value = get_env(name, default, cast=str)
-    except Exception:
-        value = os.getenv(name, default)
+    value = get_env(name, default, cast=str)
     if value is None:
         return default
     return str(value)
@@ -71,7 +68,7 @@ def gather_alpaca_diag(extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         "has_secret": bool(secret_key),
         "shadow_mode": bool(is_shadow_mode()),
         "configured_feed": _resolve_configured_feed(),
-        "cwd": os.getcwd(),
+        "cwd": str(Path.cwd()),
     }
     if extra:
         diag.update(extra)

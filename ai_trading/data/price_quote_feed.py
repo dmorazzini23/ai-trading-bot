@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Dict
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.utils.env import resolve_alpaca_feed
 
@@ -37,7 +37,9 @@ def _normalize_feed(value: str | None) -> str | None:
 
 
 def _pytest_mode() -> bool:
-    return "pytest" in sys.modules or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in _TRUTHY
+    return "pytest" in sys.modules or str(
+        get_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)
+    ).strip().lower() in _TRUTHY
 
 
 def _sip_disabled_env(py_mode: bool) -> bool:

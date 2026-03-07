@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import threading
+
+from ai_trading.config.management import get_env
 
 _HOST_LIMITERS: dict[str, tuple[int, threading.BoundedSemaphore]] = {}
 _HOST_LOCK = threading.RLock()
@@ -10,7 +11,7 @@ _HOST_LOCK = threading.RLock()
 
 def _current_limit() -> int:
     try:
-        return max(1, int(os.getenv("HTTP_HOST_LIMIT", "8")))
+        return max(1, int(get_env("HTTP_HOST_LIMIT", "8", cast=str)))
     except Exception:
         return 8
 

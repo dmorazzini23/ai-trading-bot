@@ -75,7 +75,7 @@ _LAST_MONOTONIC: float | None = None
 
 
 def _monotonic_time() -> float:
-    """Return a monotonic timestamp with graceful fallback for test shims."""
+    """Return a monotonic timestamp with graceful fallback for test stubs."""
 
     global _LAST_MONOTONIC
 
@@ -83,7 +83,7 @@ def _monotonic_time() -> float:
     if callable(monotonic):
         try:
             value = float(monotonic())
-        except (RuntimeError, StopIteration):  # pragma: no cover - platform specific/test shims
+        except (RuntimeError, StopIteration):  # pragma: no cover - platform specific/test stubs
             if _LAST_MONOTONIC is not None:
                 return _LAST_MONOTONIC
         except Exception:

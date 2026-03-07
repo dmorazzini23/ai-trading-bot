@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +22,9 @@ def _resolve_log_path() -> str:
     - Fall back to `trades.csv` in the current working directory
     """
     # Explicit environment override always wins
-    env_path = os.getenv("TRADE_LOG_FILE") or os.getenv("AI_TRADING_TRADE_LOG_FILE")
+    env_path = get_env("TRADE_LOG_FILE", None, cast=str, resolve_aliases=False) or get_env(
+        "AI_TRADING_TRADE_LOG_FILE", None, cast=str, resolve_aliases=False
+    )
     if env_path:
         return env_path
     # Otherwise consult a lightweight config module if available
@@ -128,7 +131,9 @@ def _find_pytest_tmpdir() -> Path | None:
         return None
     # Fallback: Derive from PYTEST_CURRENT_TEST by scanning /tmp
     try:
-        test_id = os.environ.get("PYTEST_CURRENT_TEST", "")
+        test_id = str(
+            get_env("PYTEST_CURRENT_TEST", "", cast=str, resolve_aliases=False) or ""
+        )
         # Extract function name between '::' and space
         if "::" in test_id:
             func = test_id.split("::", 1)[1].split(" ", 1)[0]
@@ -161,11 +166,11 @@ def _compute_targets(main: Path) -> list[Path]:
     either path observe the file.
     """
     # If an explicit environment override is present, honor it strictly.
-    if os.getenv("TRADE_LOG_FILE"):
+    if get_env("TRADE_LOG_FILE", None, cast=str, resolve_aliases=False):
         return [main]
     # Default: single target path
     targets = [main]
-    if str(os.getenv("PYTEST_RUNNING", "")).strip():
+    if str(get_env("PYTEST_RUNNING", "", cast=str, resolve_aliases=False)).strip():
         # Prefer the per-test temporary directory when available to satisfy
         # tests that assert specific tmp_path locations.
         tmp_base = _find_pytest_tmpdir()
@@ -199,7 +204,9 @@ def log_trade(
     Accepts an optional `exposure` param and writes a compact schema when
     `extra_info` suggests a test/audit mode.
     """
-    override = os.getenv("TRADE_LOG_FILE") or os.getenv("AI_TRADING_TRADE_LOG_FILE")
+    override = get_env("TRADE_LOG_FILE", None, cast=str, resolve_aliases=False) or get_env(
+        "AI_TRADING_TRADE_LOG_FILE", None, cast=str, resolve_aliases=False
+    )
     additional_path: Path | None = None
     if override:
         main_path = Path(override)

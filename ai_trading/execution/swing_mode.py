@@ -1,10 +1,11 @@
 """Swing Trading Mode - PDT-Safe Trading Strategy."""
 
 import logging
-import os
 from datetime import datetime, time, timezone
 from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo
+
+from ai_trading.config.management import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,14 @@ MARKET_CLOSE = time(16, 0)
 def can_exit_today(position: Mapping[str, Any], now_utc: datetime) -> bool:
     """Return ``True`` when a position may exit on ``now_utc``."""
 
-    allow_env = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip()
+    allow_env = str(
+        get_env(
+            "AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT",
+            "",
+            cast=str,
+            resolve_aliases=False,
+        )
+    ).strip()
     if allow_env == "1":
         return True
 
@@ -112,7 +120,14 @@ class SwingTradingMode:
         if not self.enabled:
             return True, "swing_mode_disabled"
 
-        allow_override = os.getenv("AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT", "").strip()
+        allow_override = str(
+            get_env(
+                "AI_TRADING_SWING_ALLOW_SAME_DAY_EXIT",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+        ).strip()
         if allow_override == "1":
             return True, "env_override_allow_same_day_exit"
 
@@ -130,7 +145,14 @@ class SwingTradingMode:
         now_utc = datetime.now(timezone.utc)
         now_et = now_utc.astimezone(MARKET_TZ)
 
-        allow_after_close = os.getenv("AI_TRADING_SWING_ALLOW_AFTER_CLOSE", "").strip()
+        allow_after_close = str(
+            get_env(
+                "AI_TRADING_SWING_ALLOW_AFTER_CLOSE",
+                "",
+                cast=str,
+                resolve_aliases=False,
+            )
+        ).strip()
         same_day_entry = entry_et.date() == now_et.date()
         if same_day_entry:
             if allow_after_close == "1" and now_et.time() >= MARKET_CLOSE:

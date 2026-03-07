@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from contextlib import AbstractAsyncContextManager, contextmanager
 from pathlib import Path
 import threading
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.http import pooling
 
@@ -28,7 +28,7 @@ _PEAK = 0
 
 
 def _peak_path() -> Path:
-    raw = os.getenv(_PEAK_PATH_ENV)
+    raw = get_env(_PEAK_PATH_ENV, None, cast=str, resolve_aliases=False)
     if raw:
         try:
             return Path(raw)
@@ -110,7 +110,7 @@ def _resolve_fallback_limit() -> int:
         "HTTP_MAX_WORKERS",
         "HTTP_MAX_PER_HOST",
     ):
-        raw = os.getenv(key)
+        raw = get_env(key, None, cast=str, resolve_aliases=False)
         if raw not in (None, ""):
             try:
                 return max(1, int(raw))

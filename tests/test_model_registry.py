@@ -6,6 +6,7 @@ import pickle
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -202,7 +203,8 @@ class TestModelRegistry:
             registry = ModelRegistry(temp_dir)
             m1 = registry.register_model({"a": 1}, "s1", "t1")
             m2 = registry.register_model({"b": 2}, "s2", "t2")
-            assert sorted(registry.list_models()) == sorted([m1, m2])
+            model_ids = cast(list[str], registry.list_models())
+            assert sorted(model_ids) == sorted([m1, m2])
 
     def test_sequential_registration_updates_latest(self):
         """Sequential registrations of identical payloads should succeed."""

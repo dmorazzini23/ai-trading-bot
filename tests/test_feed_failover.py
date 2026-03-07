@@ -357,6 +357,8 @@ def test_feed_override_used_on_subsequent_requests(monkeypatch):
     )
     monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
     monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
+    start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
     monkeypatch.setattr(
         fetch,
         "_backup_get_bars",
@@ -371,9 +373,6 @@ def test_feed_override_used_on_subsequent_requests(monkeypatch):
             }
         ),
     )
-
-    start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
-    end = start + timedelta(minutes=1)
 
     first_session = _Session(
         [

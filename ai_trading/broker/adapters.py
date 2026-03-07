@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -75,7 +74,7 @@ _MANAGED_GET_ENV: Any | None = None
 
 
 def _managed_env(name: str, default: Any = None) -> Any:
-    """Read env via config management with os.getenv fallback."""
+    """Read env via config management."""
 
     global _MANAGED_GET_ENV_READY, _MANAGED_GET_ENV
     if not _MANAGED_GET_ENV_READY:
@@ -91,8 +90,8 @@ def _managed_env(name: str, default: Any = None) -> Any:
         try:
             return _MANAGED_GET_ENV(name, default)
         except (TypeError, ValueError, RuntimeError):
-            return os.getenv(name, default)
-    return os.getenv(name, default)
+            return default
+    return default
 
 
 @dataclass(slots=True)

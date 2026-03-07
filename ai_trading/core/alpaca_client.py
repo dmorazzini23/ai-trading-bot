@@ -119,7 +119,7 @@ def _validate_trading_api(api: Any) -> bool:
             accepts_status = bool(sig and "status" in sig.parameters)
             accepts_filter = bool(sig and "filter" in sig.parameters)
 
-            def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
+            def _list_orders_via_get_orders(*args: Any, **kwargs: Any):  # type: ignore[override]
                 status = kwargs.pop("status", None)
                 if status is None:
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
@@ -154,7 +154,7 @@ def _validate_trading_api(api: Any) -> bool:
                     kwargs["status"] = enum_val
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
-            if _try_setattr(api, "list_orders", _list_orders_wrapper):
+            if _try_setattr(api, "list_orders", _list_orders_via_get_orders):
                 log_once.info(
                     "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
                 )
@@ -284,7 +284,7 @@ def _validate_trading_api(api: Any) -> bool:
                             continue
 
                 raise RuntimeError(
-                    "Alpaca client cancel_orders shim could not adapt provided API"
+                    "Alpaca client cancel_orders adapter could not adapt provided API"
                 ) from last_error
 
             if _try_setattr(api, "cancel_order", _cancel_order_via_batch):
@@ -519,6 +519,10 @@ def _initialize_alpaca_clients() -> bool:
             else:
                 trading_client_obj = adapter_cls(raw_trading_client)
             be.trading_client = trading_client_obj
+            if not _validate_trading_api(be.trading_client):
+                be.trading_client = None
+                be.data_client = None
+                return False
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
             if is_shadow_mode() or get_env("PYTEST_RUNNING", None, resolve_aliases=False):

@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ai_trading.config.management import get_env
+
 logger = get_logger(__name__)
 
 try:
@@ -45,7 +47,7 @@ def set_random_seeds(seed: int = 42) -> None:
         lgb.reset_parameter({"seed": seed})  # type: ignore[attr-defined]
     except Exception:  # pragma: no cover - best effort
         pass
-    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.putenv("PYTHONHASHSEED", str(seed))
     logger.info(f"Set random seeds to {seed} for reproducible results")
 
 
@@ -282,7 +284,17 @@ class ModelSpecification:
         if not self._spec:
             return (True, "No existing specification")
         if allow_override is None:
-            allow_override = os.getenv("AI_TRADING_SPEC_OVERRIDE", "false").lower() == "true"
+            allow_override = (
+                str(
+                    get_env(
+                        "AI_TRADING_SPEC_OVERRIDE",
+                        "false",
+                        cast=str,
+                        resolve_aliases=False,
+                    )
+                ).lower()
+                == "true"
+            )
         if allow_override:
             self.logger.warning("Specification validation overridden by environment variable")
             return (True, "Override enabled")

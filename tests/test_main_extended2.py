@@ -1,7 +1,9 @@
 import os
 import sys
 import types
+import time
 from typing import Any
+import threading
 
 import errno
 import socket
@@ -110,6 +112,33 @@ def test_run_flask_app_suppresses_flask_banner(monkeypatch):
     with pytest.raises(SystemExit):
         main.run_flask_app(1234)
     assert called["suppressed"] is True
+
+
+def test_run_flask_app_signals_ready_only_after_probe(monkeypatch):
+    ready_signal = threading.Event()
+    state = {"serving": False}
+
+    class App:
+        def run(self, host, port, debug=False, **kwargs):
+            assert host == "0.0.0.0"
+            assert not ready_signal.is_set()
+            state["serving"] = True
+            deadline = time.monotonic() + 1.0
+            while not ready_signal.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert ready_signal.is_set()
+            raise SystemExit
+
+    monkeypatch.setattr(app, "create_app", lambda: App())
+    monkeypatch.setattr(
+        main,
+        "_probe_local_api_health",
+        lambda _port: bool(state["serving"]),
+    )
+    monkeypatch.setattr(main, "get_pid_on_port", lambda _port: None)
+
+    with pytest.raises(SystemExit):
+        main.run_flask_app(1234, ready_signal=ready_signal)
 
 
 def test_run_flask_app_port_in_use(monkeypatch):

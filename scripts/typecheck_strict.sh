@@ -18,10 +18,17 @@ python3 -m mypy --config-file mypy.ini \
   --disable-error-code name-defined \
   --disable-error-code has-type \
   ai_trading/__main__.py \
+  ai_trading/alpaca_api.py \
   ai_trading/app.py \
   ai_trading/core/bot_engine.py \
+  ai_trading/data/fallback/concurrency.py \
+  ai_trading/data/fetch/fallback_concurrency.py \
+  ai_trading/data/universe.py \
   ai_trading/data/provider_monitor.py \
   ai_trading/main.py \
+  ai_trading/model_loader.py \
   ai_trading/logging/__init__.py \
   ai_trading/http/pooling.py \
+  ai_trading/paths.py \
+  ai_trading/net/http.py \
   ai_trading/data/fetch/__init__.py

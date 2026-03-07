@@ -1,15 +1,29 @@
 from __future__ import annotations
 
-import os
 import time as _time
 from time import perf_counter as _perf
 from typing import Optional, Union
 
 from .sleep import _real_sleep, sleep
 
-# Prefer HTTP_TIMEOUT when present; fallback to AI_HTTP_TIMEOUT env
+
+def _managed_env(name: str, default: str) -> str:
+    """Resolve env keys via config management without import-time hard coupling."""
+
+    try:
+        from ai_trading.config.management import get_env as _get_env
+
+        value = _get_env(name, default, cast=str, resolve_aliases=False)
+    except Exception:
+        value = default
+    if value in (None, ""):
+        return default
+    return str(value)
+
+
+# Prefer HTTP_TIMEOUT when present; fallback to AI_HTTP_TIMEOUT env.
 HTTP_TIMEOUT: Union[int, float] = float(
-    os.getenv("HTTP_TIMEOUT") or os.getenv("AI_HTTP_TIMEOUT") or "10"
+    _managed_env("HTTP_TIMEOUT", "") or _managed_env("AI_HTTP_TIMEOUT", "") or "10"
 )  # AI-AGENT-REF: canonical timeout across runtime
 
 
@@ -45,7 +59,9 @@ def _robust_sleep(seconds: Union[int, float]) -> None:
         _tries += 1
 
 
-_force_local_sleep = str(os.getenv("AI_TRADING_FORCE_LOCAL_SLEEP", "1")).lower() in {"1", "true", "yes", "on"}
+_force_local_sleep = str(
+    _managed_env("AI_TRADING_FORCE_LOCAL_SLEEP", "1")
+).lower() in {"1", "true", "yes", "on"}
 if _force_local_sleep:
     sleep = _robust_sleep  # type: ignore[assignment]
 else:  # pragma: no cover

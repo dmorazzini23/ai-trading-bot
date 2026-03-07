@@ -459,7 +459,7 @@ def create_app():
             return response_factory(body, status=status, mimetype="application/json")
 
         # When ``response_class`` is unavailable (for example when stub clients swap
-        # Flask out for light-weight shims) surface the fully populated payload
+        # Flask out for light-weight stubs) surface the fully populated payload
         # directly so callers don't need to understand Flask's ``(body, status)``
         # tuple convention. Callers running under a real Flask stack will already
         # receive a wrapped ``Response`` above, preserving status semantics.

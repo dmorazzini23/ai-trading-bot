@@ -7,6 +7,7 @@ and async-safe interfaces to prevent 429 errors and API throttling.
 
 import asyncio
 from ai_trading.logging import get_logger
+from ai_trading.config.management import get_env
 import random
 import threading
 import time
@@ -360,11 +361,9 @@ def get_rate_limiter() -> RateLimiter:
     environment. Defaults to the Basic plan limit of 200 requests per minute.
     """
 
-    import os
-
     global _global_rate_limiter
     if _global_rate_limiter is None:
-        raw_rpm = os.getenv("ALPACA_RATE_LIMIT_PER_MIN", "200")
+        raw_rpm = get_env("ALPACA_RATE_LIMIT_PER_MIN", "200", cast=str, resolve_aliases=False)
         try:
             rpm = int(str(raw_rpm).strip())
         except Exception:

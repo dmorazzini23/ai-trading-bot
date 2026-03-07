@@ -5,12 +5,13 @@ import fcntl
 import os
 from contextlib import contextmanager
 from pathlib import Path
+from ai_trading.config.management import get_env
 from ai_trading.utils.time import monotonic_time
 from .timing import sleep as psleep
 _LOCKS: dict[str, int] = {}
 
 def _lock_path(name: str) -> Path:
-    worker = os.getenv('PYTEST_XDIST_WORKER')
+    worker = get_env("PYTEST_XDIST_WORKER", "", cast=str, resolve_aliases=False)
     suffix = f'.{worker}' if worker else ''
     d = Path('/tmp/ai-trading-locks')
     d.mkdir(parents=True, exist_ok=True)

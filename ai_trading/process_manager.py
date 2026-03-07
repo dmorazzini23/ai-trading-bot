@@ -8,11 +8,15 @@ import sys
 import fcntl
 from typing import Literal
 
+from ai_trading.config.management import get_env
+
 class ProcessManager:
     """Ensure only one ai-trading instance runs at a time."""
 
     def __init__(self, lock_name: str='ai-trading', dir_env: str='AI_TRADING_RUNTIME_DIR') -> None:
-        runtime_dir = pathlib.Path(os.getenv(dir_env, '/tmp')).resolve()
+        runtime_dir = pathlib.Path(
+            get_env(dir_env, "/tmp", cast=str, resolve_aliases=False)
+        ).resolve()
         runtime_dir.mkdir(parents=True, exist_ok=True)
         self._lockfile = runtime_dir / f'{lock_name}.lock'
         self._fd: int | None = None
@@ -31,7 +35,9 @@ class ProcessManager:
         except OSError as e:
             raise RuntimeError("Another ai-trading instance is already running.") from e
         atexit.register(self._cleanup)
-        running_tests = str(os.getenv("PYTEST_RUNNING", "0")).strip().lower()
+        running_tests = str(
+            get_env("PYTEST_RUNNING", "0", cast=str, resolve_aliases=False)
+        ).strip().lower()
         if running_tests not in {"1", "true", "yes"}:
             signal.signal(signal.SIGTERM, self._sigexit)
             signal.signal(signal.SIGINT, self._sigexit)
@@ -40,7 +46,9 @@ class ProcessManager:
     def _sigexit(self, *_args) -> None:
         """Handle termination signals and release lock."""
         self._cleanup()
-        running_tests = str(os.getenv("PYTEST_RUNNING", "0")).strip().lower()
+        running_tests = str(
+            get_env("PYTEST_RUNNING", "0", cast=str, resolve_aliases=False)
+        ).strip().lower()
         if running_tests in {"1", "true", "yes"}:
             return
         sys.exit(0)

@@ -1,17 +1,11 @@
 # ai_trading/data/fetch/fallback_concurrency.py
 from __future__ import annotations
 
-import os
 import threading
 from contextlib import contextmanager
 from typing import Iterator
 
-try:  # Prefer config-managed environment lookups when available.
-    from ai_trading.config.management import get_env  # type: ignore
-except Exception:  # pragma: no cover - fallback when config management unavailable
-
-    def get_env(key: str, default: object | None = None, *, cast: object | None = None) -> object | None:  # type: ignore[override]
-        return os.getenv(key, default)  # type: ignore[arg-type]
+from ai_trading.config.management import get_env
 
 
 _ENV_PRIORITY: tuple[str, ...] = (
@@ -42,13 +36,10 @@ def _coerce_limit(value: object | None) -> int | None:
 
 def _resolve_limit_from_env() -> int:
     for key in _ENV_PRIORITY:
-        candidate = None
         try:
             candidate = get_env(key, None)
         except Exception:
             candidate = None
-        if candidate in (None, ""):
-            candidate = os.getenv(key)
         limit = _coerce_limit(candidate)
         if limit is not None:
             return limit
@@ -118,14 +109,6 @@ def fallback_slot() -> Iterator[None]:
         _release_slot()
 
 
-@contextmanager
-def limit_concurrency() -> Iterator[None]:
-    """Backwards-compatible alias for :func:`fallback_slot`."""
-
-    with fallback_slot():
-        yield
-
-
 def get_peak_concurrency() -> int:
     """Return the highest number of concurrent fallback slots observed."""
 
@@ -163,7 +146,6 @@ def reset_fallback_counters(reset_limit: bool = False) -> None:
 
 __all__ = [
     "fallback_slot",
-    "limit_concurrency",
     "reload_fallback_limit",
     "reset_fallback_counters",
     "get_peak_concurrency",

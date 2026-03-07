@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Mapping
+
+from ai_trading.config.management import get_env
 
 _DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
 _CANONICAL_KEY = "ALPACA_API_KEY"
@@ -56,7 +57,21 @@ class AlpacaCredentials:
 
 
 def _coerce_env(env: Mapping[str, str] | None) -> dict[str, str]:
-    source = env if env is not None else os.environ
+    if env is None:
+        source: Mapping[str, str | None] = {
+            key: get_env(key, None, cast=str, resolve_aliases=False)
+            for key in (
+                _CANONICAL_KEY,
+                "ALPACA_KEY",
+                _CANONICAL_SECRET,
+                "ALPACA_SECRET",
+                _CANONICAL_TRADING_BASE_URL,
+                "ALPACA_API_URL",
+                "ALPACA_BASE_URL",
+            )
+        }
+    else:
+        source = env
     result: dict[str, str] = {}
     for raw_key, raw_value in source.items():
         if not isinstance(raw_value, str):

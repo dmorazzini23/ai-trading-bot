@@ -3806,6 +3806,7 @@ def fetch_sentiment(
             return _cache_sentiment_score(symbol, 0.0)
         sleep_s = SENTIMENT_BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, SENTIMENT_BACKOFF_BASE)
         time.sleep(sleep_s)
+    return _cache_sentiment_score(symbol, 0.0)
 
 
 def _sha256_file(path: str) -> str:
@@ -4869,10 +4870,7 @@ except (
     logger.warning("Config settings import failed: %s", e)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
-try:
-    profile  # type: ignore[name-defined]
-except NameError:  # pragma: no cover - used only when kernprof is absent
-
+if "profile" not in globals():  # pragma: no cover - used only when kernprof is absent
     def profile(func):  # type: ignore[return-type]
         return func
 
@@ -5692,7 +5690,7 @@ try:
 except ModuleNotFoundError:
     if str(get_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes"}:
         class Flask:  # type: ignore[override]
-            """Lightweight Flask shim for test environments without flask."""
+            """Lightweight Flask stub for test environments without flask."""
 
             def __init__(self, name: str):
                 self.name = name
@@ -9898,8 +9896,8 @@ def get_circuit_breaker_health() -> dict:
         return {}
 
 
-# IMPORTANT: Alpaca credentials will be validated at runtime when needed.
-# Do not validate at import time to prevent crashes during module loading.
+# IMPORTANT: startup fail-fast already validates required credentials.
+# Keep this module import-safe by avoiding env validation at import time.
 
 
 # Prometheus-safe account fetch with circuit breaker protection
@@ -9936,7 +9934,7 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
 
     try:
         ensure_alpaca_attached(ctx)
-    except COMMON_EXC as exc:  # pragma: no cover - defensive against shim failures
+    except COMMON_EXC as exc:  # pragma: no cover - defensive against adapter failures
         logger_once.error(
             "FAILED_TO_ATTACH_ALPACA_CLIENT",
             key="alpaca_attach_failed",
@@ -13252,7 +13250,7 @@ def _read_trade_log(
                 broker=broker,
             )
         except TypeError:
-            # Backward-compatible shim for patched tests that only accept
+            # Backward-compatible adapter for patched tests that only accept
             # the legacy ``sync_from_broker`` keyword.
             fallback_frame, fallback_source = load_trade_history(
                 sync_from_broker=sync_from_broker,

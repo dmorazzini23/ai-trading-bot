@@ -19,6 +19,20 @@ logger = get_logger(__name__)
 APP_NAME = "ai-trading-bot"
 
 
+def _managed_env(name: str, default: str | None = None) -> str | None:
+    """Read environment values through config-management helpers."""
+
+    try:
+        from ai_trading.config.management import get_env
+
+        value = get_env(name, default, cast=str)
+    except Exception:
+        value = default
+    if value in (None, ""):
+        return default
+    return str(value)
+
+
 def _ensure_dir(path: Path) -> Path:
     """Ensure *path* exists, is absolute, and writable with 0700 perms."""
 
@@ -38,7 +52,7 @@ def _ensure_dir(path: Path) -> Path:
 
 
 def _fallback_tmp_dir() -> Path:
-    base = os.getenv("TMPDIR") or tempfile.gettempdir()
+    base = _managed_env("TMPDIR", tempfile.gettempdir()) or tempfile.gettempdir()
     fallback = Path(base).expanduser() / APP_NAME
     fallback.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(PermissionError):
@@ -48,7 +62,7 @@ def _fallback_tmp_dir() -> Path:
 
 def _resolve_from_env(names: tuple[str, ...], default: Path) -> Path:
     for name in names:
-        raw = os.getenv(name)
+        raw = _managed_env(name)
         if not raw:
             continue
         candidate = Path(raw.split(":")[0]).expanduser()
@@ -68,7 +82,7 @@ def _default_data_dir() -> Path:
 
 
 def _default_cache_dir() -> Path:
-    cache_home = os.getenv("XDG_CACHE_HOME")
+    cache_home = _managed_env("XDG_CACHE_HOME")
     if cache_home:
         return Path(cache_home)
     return Path("/var/cache") / APP_NAME
@@ -84,7 +98,7 @@ LOG_DIR = _resolve_from_env(("AI_TRADING_LOG_DIR", "LOGS_DIRECTORY"), _default_l
 
 
 def _resolve_optional_dir(env: str, default: Path) -> Path:
-    raw = os.getenv(env)
+    raw = _managed_env(env)
     if not raw:
         return _ensure_dir(default)
     candidate = Path(raw).expanduser()
@@ -97,9 +111,18 @@ def _resolve_optional_dir(env: str, default: Path) -> Path:
 MODELS_DIR = _resolve_optional_dir("AI_TRADING_MODELS_DIR", DATA_DIR / "models")
 OUTPUT_DIR = _resolve_optional_dir("AI_TRADING_OUTPUT_DIR", DATA_DIR / "output")
 
-DB_PATH = Path(os.getenv("AI_TRADING_DB_PATH", str(DATA_DIR / "trades.db")))
-SLIPPAGE_LOG_PATH = Path(os.getenv("SLIPPAGE_LOG_PATH", str(LOG_DIR / "slippage.csv")))
-TICKERS_FILE_PATH = Path(os.getenv("TICKERS_FILE_PATH", str(DATA_DIR / "tickers.csv")))
+DB_PATH = Path(
+    _managed_env("AI_TRADING_DB_PATH", str(DATA_DIR / "trades.db"))
+    or str(DATA_DIR / "trades.db")
+)
+SLIPPAGE_LOG_PATH = Path(
+    _managed_env("SLIPPAGE_LOG_PATH", str(LOG_DIR / "slippage.csv"))
+    or str(LOG_DIR / "slippage.csv")
+)
+TICKERS_FILE_PATH = Path(
+    _managed_env("TICKERS_FILE_PATH", str(DATA_DIR / "tickers.csv"))
+    or str(DATA_DIR / "tickers.csv")
+)
 
 
 _INITIALIZED = False

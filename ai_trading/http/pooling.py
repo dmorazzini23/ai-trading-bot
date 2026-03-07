@@ -772,10 +772,7 @@ def host_limiter(hostname: str | None = None):
 
 
 # === TEST-COMPAT DEFAULT HOST LIMITER ===
-try:
-    _HOST_LIMITERS
-except NameError:
-    _HOST_LIMITERS = {}
+_HOST_LIMITERS: dict[str, threading.Semaphore] = {}
 
 _HOST_LOCK = threading.Lock()
 

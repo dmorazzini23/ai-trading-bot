@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from collections import Counter
-import os
 from threading import Lock
 
+from ai_trading.config.management import get_env
 from ai_trading.data.metrics import (
     backup_provider_used as _backup_provider_used_counter,
     metrics as _metrics,
@@ -67,10 +67,10 @@ _ALPACA_FAILED_LOCK = Lock()
 
 
 def _env_truthy(name: str) -> bool:
-    value = os.getenv(name)
+    value = get_env(name, None, cast=str, resolve_aliases=False)
     if value is None:
         return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def mark_skipped(symbol: str, timeframe: str) -> int:

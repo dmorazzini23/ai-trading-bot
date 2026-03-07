@@ -1100,5 +1100,4 @@ def test_run_with_concurrency_handles_blocking_and_failures():
 
 def test_concurrency_module_exports_expected_api():
     assert callable(concurrency.run_with_concurrency)
-    assert callable(concurrency.run_with_concurrency_limit)
-
+    assert not hasattr(concurrency, "run_with_concurrency_limit")

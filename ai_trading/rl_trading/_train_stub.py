@@ -2,7 +2,7 @@
 
 This lightweight module allows the RL training package to remain importable
 when optional dependencies are unavailable.  The API mirrors the minimal
-surface used in tests and production shims, ensuring callers can still obtain
+surface used in tests and production adapters, ensuring callers can still obtain
 deterministic placeholder behaviour.
 """
 

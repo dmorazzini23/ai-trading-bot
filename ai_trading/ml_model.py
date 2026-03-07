@@ -45,8 +45,8 @@ except Exception:  # pragma: no cover
             def __enter__(self) -> _Dummy:  # pragma: no cover - trivial
                 return self
 
-            def __exit__(self, exc_type, exc, tb) -> bool:  # pragma: no cover
-                return False
+            def __exit__(self, exc_type, exc, tb) -> None:  # pragma: no cover
+                return None
 
         return _Dummy()
 

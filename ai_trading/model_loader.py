@@ -8,10 +8,10 @@ avoids ``pickle.load`` where possible.
 
 from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
+from ai_trading.config.management import get_env
 from datetime import UTC
 from pathlib import Path
 from dataclasses import asdict
-import os
 import json
 
 import joblib
@@ -195,9 +195,9 @@ def load_model(symbol: str) -> object:
         extra={"symbol": symbol, "paths": [str(p) for p in dirs]},
     )
     test_mode = (
-        os.getenv("PYTEST_CURRENT_TEST")
-        or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
-        or str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
+        bool(get_env("PYTEST_CURRENT_TEST", "", cast=str))
+        or bool(get_env("PYTEST_RUNNING", False, cast=bool))
+        or bool(get_env("TESTING", False, cast=bool))
     )
     allow_placeholder = "PLACEHOLDER" in str(symbol).upper()
     if test_mode and allow_placeholder:
