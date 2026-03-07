@@ -112,9 +112,10 @@ make check
 
 1. **`ci.yml`** - Main CI workflow (push/PR + scheduled nightly full-deps checks)
 2. **`codeql.yml`** - Static security analysis
-3. **`dependency-audit.yml`** - Dependency vulnerability auditing
-4. **`sbom.yml`** - CycloneDX SBOM generation
-5. **`scorecard.yml`** - OSSF scorecard analysis
+3. **`workflow-lint.yml`** - Lints GitHub workflow files with actionlint
+4. **`dependency-audit.yml`** - Dependency vulnerability auditing
+5. **`sbom.yml`** - CycloneDX SBOM generation
+6. **`scorecard.yml`** - OSSF scorecard analysis
 
 All workflows use consistent dependency installation:
 
