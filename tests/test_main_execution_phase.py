@@ -285,3 +285,53 @@ def test_emit_cycle_slo_alerts_applies_provider_telemetry_stale_alert_cooldown(
     main._emit_cycle_slo_alerts(cycle_index=2, compute_ms=10.0, closed=False)
 
     assert emitted.count("ALERT_PROVIDER_TELEMETRY_STALE") == 1
+
+
+def test_emit_cycle_slo_alerts_emits_execution_quality_degraded_alert(monkeypatch) -> None:
+    main._EXECUTION_QUALITY_LAST_ALERT_TS = 0.0
+    monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_EXECUTION_QUALITY_ALERT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_EXECUTION_QUALITY_ALERT_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_SLO_EXECUTION_QUALITY_MIN_ROWS", "10")
+    monkeypatch.setattr(
+        main,
+        "_load_recent_execution_quality_metrics",
+        lambda **_kwargs: {"rows": 120.0, "dup_rate": 0.83, "ok_rate": 0.01},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"updated": datetime.now(UTC).isoformat(), "active": "alpaca", "status": "healthy"},
+    )
+
+    emitted: list[str] = []
+    monkeypatch.setattr(main, "emit_runtime_alert", lambda name, **_kwargs: emitted.append(name))
+    main._emit_cycle_slo_alerts(cycle_index=7, compute_ms=10.0, closed=False)
+
+    assert "ALERT_EXECUTION_QUALITY_DEGRADED" in emitted
+
+
+def test_emit_cycle_slo_alerts_skips_execution_quality_alert_when_ok_trade_rate_recovers(
+    monkeypatch,
+) -> None:
+    main._EXECUTION_QUALITY_LAST_ALERT_TS = 0.0
+    monkeypatch.setenv("AI_TRADING_CYCLE_SLO_ALERTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_EXECUTION_QUALITY_ALERT_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_SLO_EXECUTION_QUALITY_ALERT_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_SLO_EXECUTION_QUALITY_MIN_ROWS", "10")
+    monkeypatch.setattr(
+        main,
+        "_load_recent_execution_quality_metrics",
+        lambda **_kwargs: {"rows": 120.0, "dup_rate": 0.81, "ok_rate": 0.04},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"updated": datetime.now(UTC).isoformat(), "active": "alpaca", "status": "healthy"},
+    )
+
+    emitted: list[str] = []
+    monkeypatch.setattr(main, "emit_runtime_alert", lambda name, **_kwargs: emitted.append(name))
+    main._emit_cycle_slo_alerts(cycle_index=8, compute_ms=10.0, closed=False)
+
+    assert "ALERT_EXECUTION_QUALITY_DEGRADED" not in emitted

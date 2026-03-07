@@ -4,6 +4,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "20 09 * * 1-5"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,6 +16,7 @@ permissions:
 
 jobs:
   ci:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-22.04
     env:
       PYTHONDONTWRITEBYTECODE: 1
@@ -23,6 +26,8 @@ jobs:
       ALPACA_SECRET_KEY: "test"
       # If your code looks at this to choose paper/live, force paper/offline
       ALPACA_ENV: "paper"
+      # Ratcheting floor: bump by +2-3 points per sprint toward 95%+.
+      COVERAGE_MIN: "80"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,9 +81,14 @@ jobs:
       - name: Dead code scan
         run: vulture ai_trading scripts run.py --min-confidence 80
       - name: Tests
-        run: pytest -q -n auto --maxfail=1 --cov=ai_trading --cov-fail-under=60
+        run: |
+          pytest -q -n auto --maxfail=1 \
+            --cov=ai_trading \
+            --cov-report=term-missing \
+            --cov-fail-under="${COVERAGE_MIN}"
 
   determinism-seed-matrix:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -115,3 +125,36 @@ jobs:
             tests/integration/test_parity_invariants.py \
             tests/unit/test_simulated_broker_reproducible.py \
             tests/unit/test_no_unseeded_global_random_simulator_usage.py
+
+  nightly-full-deps:
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      ALPACA_ENV: "paper"
+      COVERAGE_MIN: "80"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            requirements/*.txt
+      - name: Install full test deps bundle
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r requirements-test.txt
+      - name: Nightly full-deps tests with coverage
+        run: |
+          pytest -q --maxfail=1 \
+            --cov=ai_trading \
+            --cov-report=term-missing \
+            --cov-fail-under="${COVERAGE_MIN}"

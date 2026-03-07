@@ -25,9 +25,15 @@ ExecStartPre=/usr/bin/install -d -m 700 -o aiuser -g aiuser \
     /var/lib/ai-trading-bot \
     /var/lib/ai-trading-bot/models \
     /var/lib/ai-trading-bot/output \
+    /var/lib/ai-trading-bot/runtime \
     /var/cache/ai-trading-bot \
     /var/log/ai-trading-bot \
     /home/aiuser/ai-trading-bot/logs
+ExecStartPre=/usr/bin/install -d -m 775 -o aiuser -g aiuser \
+    /var/lib/ai-trading-bot/runtime/research_reports
+ExecStartPre=/usr/bin/chown -R aiuser:aiuser /var/lib/ai-trading-bot/runtime/research_reports
+ExecStartPre=/usr/bin/find /var/lib/ai-trading-bot/runtime/research_reports -type f \
+    -name after_hours_training*.json -exec /usr/bin/chmod 664 {} +
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading
 # Allow long-lived process; systemd will supervise restarts
 RuntimeMaxSec=0

@@ -110,17 +110,17 @@ make check
 
 ### GitHub Actions
 
-1. **`ci.yml`** - Main CI workflow for pull requests
-2. **`python.yml`** - Lint and test workflow
-3. **`python-app.yml`** - Coverage testing
-4. **`perf-check.yml`** - Performance benchmarks
-5. **`deploy.yml`** - Production deployment
+1. **`ci.yml`** - Main CI workflow (push/PR + scheduled nightly full-deps checks)
+2. **`codeql.yml`** - Static security analysis
+3. **`dependency-audit.yml`** - Dependency vulnerability auditing
+4. **`sbom.yml`** - CycloneDX SBOM generation
+5. **`scorecard.yml`** - OSSF scorecard analysis
 
 All workflows use consistent dependency installation:
 
 ```yaml
 - name: Install dependencies
-  run: make install-dev
+  run: pip install -r requirements-dev.txt
 ```
 
 ## Environment Validation
@@ -154,7 +154,7 @@ make install-dev
 - Check that all dependencies are installed
 
 **CI failures due to dependencies**
-- All workflows now use `make install-dev` for consistency
+- CI and security workflows install dependencies from `requirements*.txt`
 - Check workflow logs for specific package installation failures
 
 ### Network Issues

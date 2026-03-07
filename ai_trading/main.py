@@ -1,6 +1,8 @@
 from __future__ import annotations
 import argparse
+from collections import deque
 import copy
+import json
 import os
 import threading
 import time
@@ -107,6 +109,7 @@ _LAST_BAD_SESSION_REPLAY_TS = 0.0
 _PRIMARY_FALLBACK_STREAK_SINCE_TS: float | None = None
 _PRIMARY_FALLBACK_LAST_ALERT_TS = 0.0
 _PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = 0.0
+_EXECUTION_QUALITY_LAST_ALERT_TS = 0.0
 
 
 def _claim_market_close_training(date_key: str) -> bool:
@@ -460,6 +463,148 @@ def _timestamp_age_seconds(raw_value: Any) -> float | None:
     return max(age, 0.0)
 
 
+def _load_recent_execution_quality_metrics(
+    *,
+    decision_path: Path,
+    window_seconds: float,
+    max_rows: int,
+) -> dict[str, float]:
+    """Return dup/ok gate rates for records inside the recent decision window."""
+
+    if window_seconds <= 0.0 or max_rows <= 0:
+        return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
+
+    tail_rows: deque[str] = deque(maxlen=max_rows)
+    try:
+        with decision_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if text:
+                    tail_rows.append(text)
+    except OSError:
+        return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
+
+    rows = 0
+    dup_rows = 0
+    ok_rows = 0
+    for line in tail_rows:
+        try:
+            payload = json.loads(line)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        record_ts = payload.get("bar_ts") or payload.get("ts") or payload.get("timestamp")
+        age_seconds = _timestamp_age_seconds(record_ts)
+        if age_seconds is None or age_seconds > window_seconds:
+            continue
+
+        gates_raw = payload.get("gates")
+        if isinstance(gates_raw, (str, bytes, bytearray)):
+            gate_items = [gates_raw]
+        elif isinstance(gates_raw, list | tuple):
+            gate_items = list(gates_raw)
+        else:
+            gate_items = []
+        gate_tokens = {
+            str(item).strip().upper()
+            for item in gate_items
+            if str(item).strip()
+        }
+        rows += 1
+        if "CYCLE_DUPLICATE_INTENT" in gate_tokens:
+            dup_rows += 1
+        if "OK_TRADE" in gate_tokens:
+            ok_rows += 1
+
+    if rows <= 0:
+        return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
+    denominator = float(rows)
+    return {
+        "rows": denominator,
+        "dup_rate": float(dup_rows) / denominator,
+        "ok_rate": float(ok_rows) / denominator,
+    }
+
+
+def _emit_execution_quality_alert(*, cycle_index: int, closed: bool) -> None:
+    """Emit critical alerts when duplicate-intent dominates live execution windows."""
+
+    global _EXECUTION_QUALITY_LAST_ALERT_TS
+    enabled = bool(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_ALERT_ENABLED", True, cast=bool))
+    if not enabled:
+        return
+
+    include_closed = bool(
+        get_env("AI_TRADING_SLO_EXECUTION_QUALITY_INCLUDE_CLOSED", False, cast=bool)
+    )
+    if closed and not include_closed:
+        _EXECUTION_QUALITY_LAST_ALERT_TS = 0.0
+        return
+
+    window_minutes = int(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_WINDOW_MINUTES", 30, cast=int))
+    window_minutes = max(5, min(window_minutes, 240))
+    window_seconds = float(window_minutes) * 60.0
+    max_rows = int(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_MAX_ROWS", 5000, cast=int))
+    max_rows = max(100, min(max_rows, 50000))
+    min_rows = int(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_MIN_ROWS", 100, cast=int))
+    min_rows = max(1, min(min_rows, max_rows))
+    dup_rate_max = float(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_DUP_RATE_MAX", 0.70, cast=float))
+    ok_rate_min = float(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_OK_RATE_MIN", 0.02, cast=float))
+    cooldown_seconds = float(
+        get_env("AI_TRADING_SLO_EXECUTION_QUALITY_ALERT_COOLDOWN_SEC", 300.0, cast=float)
+    )
+    cooldown_seconds = max(0.0, min(cooldown_seconds, 86400.0))
+    decision_log_raw = str(
+        get_env("AI_TRADING_DECISION_LOG_PATH", "runtime/decision_records.jsonl", cast=str)
+        or "runtime/decision_records.jsonl"
+    )
+    decision_path = _resolve_runtime_artifact_path(
+        decision_log_raw,
+        default_relative="runtime/decision_records.jsonl",
+    )
+    metrics = _load_recent_execution_quality_metrics(
+        decision_path=decision_path,
+        window_seconds=window_seconds,
+        max_rows=max_rows,
+    )
+    rows = int(metrics.get("rows", 0.0))
+    if rows < min_rows:
+        return
+
+    dup_rate = float(metrics.get("dup_rate", 0.0))
+    ok_rate = float(metrics.get("ok_rate", 0.0))
+    breached = dup_rate > dup_rate_max and ok_rate < ok_rate_min
+    if not breached:
+        _EXECUTION_QUALITY_LAST_ALERT_TS = 0.0
+        return
+
+    now_wall_ts = float(time.time())
+    if (
+        cooldown_seconds > 0.0
+        and _EXECUTION_QUALITY_LAST_ALERT_TS > 0.0
+        and (now_wall_ts - float(_EXECUTION_QUALITY_LAST_ALERT_TS)) < cooldown_seconds
+    ):
+        return
+
+    emit_runtime_alert(
+        "ALERT_EXECUTION_QUALITY_DEGRADED",
+        severity="critical",
+        details={
+            "cycle_index": int(cycle_index),
+            "window_minutes": int(window_minutes),
+            "rows": rows,
+            "dup_rate": round(float(dup_rate), 6),
+            "ok_rate": round(float(ok_rate), 6),
+            "dup_rate_max": round(float(dup_rate_max), 6),
+            "ok_rate_min": round(float(ok_rate_min), 6),
+            "decision_path": str(decision_path),
+            "market_closed": bool(closed),
+        },
+    )
+    _EXECUTION_QUALITY_LAST_ALERT_TS = now_wall_ts
+
+
 def _provider_fallback_active_for_timeframes(
     provider_state: Mapping[str, Any] | None,
     *,
@@ -669,6 +814,8 @@ def _emit_cycle_slo_alerts(
                 },
             )
             _PROVIDER_TELEMETRY_STALE_LAST_ALERT_TS = now_wall_ts
+
+    _emit_execution_quality_alert(cycle_index=cycle_index, closed=closed)
 
     fallback_alerts_enabled = bool(
         get_env("AI_TRADING_SLO_PRIMARY_FALLBACK_ALERT_ENABLED", True, cast=bool)

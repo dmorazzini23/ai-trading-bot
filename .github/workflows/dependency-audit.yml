@@ -1,15 +1,29 @@
 name: Dependency Audit
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "35 09 * * 1"
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "requirements*.txt"
+      - "requirements/**"
+      - "pyproject.toml"
+      - ".github/workflows/dependency-audit.yml"
+  pull_request:
+    paths:
+      - "requirements*.txt"
+      - "requirements/**"
+      - "pyproject.toml"
+      - ".github/workflows/dependency-audit.yml"
 
 permissions:
   contents: read
 
 jobs:
   pip-audit:
+    continue-on-error: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

@@ -17,6 +17,7 @@ permissions:
 jobs:
   analysis:
     name: Scorecard analysis
+    continue-on-error: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-22.04
     steps:
       - name: Run analysis

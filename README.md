@@ -1,8 +1,9 @@
 # 🚀 AI Trading Bot
 
-[![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/python-app.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/python-app.yml)
+[![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/codeql.yml)
+[![Dependency Audit](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/dependency-audit.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/dependency-audit.yml)
 [![codecov](https://codecov.io/gh/dmorazzini23/ai-trading-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/dmorazzini23/ai-trading-bot)
-[![deploy](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml)
 [![Python 3.12.3](https://img.shields.io/badge/python-3.12.3-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Extras](https://img.shields.io/badge/extras-optional-6f42c1)](#install-extras)

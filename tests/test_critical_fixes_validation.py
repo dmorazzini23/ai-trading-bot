@@ -182,6 +182,16 @@ class TestCriticalFixes(unittest.TestCase):
             "Should have correct working directory",
         )
         self.assertIn(
+            "/var/lib/ai-trading-bot/runtime/research_reports",
+            content,
+            "Service should provision after-hours report directory",
+        )
+        self.assertIn(
+            "chown -R aiuser:aiuser /var/lib/ai-trading-bot/runtime/research_reports",
+            content,
+            "Service should normalize after-hours report ownership at startup",
+        )
+        self.assertIn(
             "NoNewPrivileges=true", content, "Should have security restrictions"
         )
         self.assertIn("ProtectSystem=strict", content, "Should protect system")
