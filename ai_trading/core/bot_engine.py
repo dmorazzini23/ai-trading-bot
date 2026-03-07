@@ -18181,12 +18181,18 @@ def submit_order(
             ):
                 skip_handler = getattr(_exec_engine, "_skip_submit", None)
                 normalized_side = _normalize_submit_side(side_norm) or side_norm
+                compaction = getattr(state, "cycle_submit_compaction", None)
+                reserved_count = len(compaction) if isinstance(compaction, set) else 0
                 if callable(skip_handler):
                     try:
                         skip_handler(
                             symbol=symbol,
                             side=normalized_side,
                             reason="cycle_duplicate_intent",
+                            context={
+                                "source": "bot_cycle_compaction",
+                                "reserved_intents": int(reserved_count),
+                            },
                         )
                     except Exception:
                         logger.debug("CYCLE_INTENT_PRECHECK_SKIP_HANDLER_FAILED", exc_info=True)
@@ -36729,7 +36735,6 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             continue
 
         try:
-            orders_attempted += 1
             order = submit_order(
                 runtime,
                 symbol,
@@ -36809,6 +36814,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 reason=error_info.reason_code,
                 now=now,
             )
+            orders_attempted += 1
             record = DecisionRecord(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
@@ -36829,6 +36835,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 reason=submit_none_reason,
                 now=now,
             )
+            if submit_none_reason not in {"CYCLE_DUPLICATE_INTENT", "DUPLICATE_INTENT"}:
+                orders_attempted += 1
             record = DecisionRecord(
                 symbol=symbol,
                 bar_ts=net_target.bar_ts,
@@ -36839,6 +36847,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
             _write_decision_record(record, decision_path)
             continue
+        orders_attempted += 1
         order_status = getattr(order, "status", None) if order is not None else None
         if ledger is not None:
             ledger.record(
@@ -37518,7 +37527,34 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 else:
                     return
             if _netting_pipeline_enabled(runtime):
-                _run_netting_cycle(state, runtime, loop_id, loop_start)
+                cycle_engine = getattr(runtime, "execution_engine", None)
+                cycle_started = False
+                if cycle_engine is not None:
+                    start_hook = getattr(cycle_engine, "start_cycle", None)
+                    if callable(start_hook):
+                        try:
+                            start_hook()
+                            cycle_started = True
+                        except Exception as exc:
+                            logger.warning(
+                                "EXECUTION_START_CYCLE_FAILED",
+                                extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+                                exc_info=True,
+                            )
+                try:
+                    _run_netting_cycle(state, runtime, loop_id, loop_start)
+                finally:
+                    if cycle_started and cycle_engine is not None:
+                        end_hook = getattr(cycle_engine, "end_cycle", None)
+                        if callable(end_hook):
+                            try:
+                                end_hook()
+                            except Exception as exc:
+                                logger.warning(
+                                    "EXECUTION_END_CYCLE_FAILED",
+                                    extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+                                    exc_info=True,
+                                )
                 return
             if get_verbose_logging():
                 logger.info(

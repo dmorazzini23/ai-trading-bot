@@ -517,6 +517,9 @@ def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_fa
     ]
     assert detail_records
     assert detail_records[-1].reason == "cycle_duplicate_intent"
+    detail_context = getattr(detail_records[-1], "context", None)
+    assert isinstance(detail_context, dict)
+    assert detail_context.get("source") == "execution_cycle_compaction"
 
 
 def test_skip_submit_detail_logs_are_ttl_coalesced(engine_factory, caplog, monkeypatch):

@@ -459,3 +459,93 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
     assert call["asset_class"] == "equity"
     assert dummy_risk.last_price == pytest.approx(expected_price)
     assert dummy_risk.last_price == pytest.approx(call["limit_price"])
+
+
+def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch):
+    class DummyExecutionEngine:
+        def __init__(self) -> None:
+            self.start_cycle_called = 0
+            self.end_cycle_called = 0
+
+        def start_cycle(self) -> None:
+            self.start_cycle_called += 1
+
+        def end_cycle(self) -> None:
+            self.end_cycle_called += 1
+
+    class DummyRiskEngine:
+        def wait_for_exposure_update(self, _timeout: float) -> None:
+            return None
+
+    class DummyAPI:
+        def list_orders(self, *args, **kwargs):  # noqa: D401 - minimal stub
+            return []
+
+        def cancel_order(self, *args, **kwargs):  # noqa: D401 - minimal stub
+            return None
+
+    class DummyLock:
+        def acquire(self, blocking: bool = False) -> bool:
+            return True
+
+        def release(self) -> None:
+            return None
+
+    state = eng.BotState()
+    state.startup_cleanup_done = True
+    dummy_exec = DummyExecutionEngine()
+    runtime = types.SimpleNamespace(
+        api=DummyAPI(),
+        risk_engine=DummyRiskEngine(),
+        execution_engine=dummy_exec,
+        exec_engine=dummy_exec,
+        tickers=["AAPL"],
+        universe_tickers=["AAPL"],
+    )
+
+    monkeypatch.setattr(eng, "_ALPACA_IMPORT_ERROR", None)
+    monkeypatch.setattr(eng, "_ensure_alpaca_classes", lambda: None)
+    monkeypatch.setattr(eng, "_init_metrics", lambda: None)
+    monkeypatch.setattr(eng, "run_lock", DummyLock())
+    monkeypatch.setattr(eng, "_ensure_execution_engine", lambda _runtime: None)
+    monkeypatch.setattr(eng, "_enforce_dependency_preflight", lambda _runtime: None)
+    monkeypatch.setattr(
+        eng,
+        "_resolve_trading_config",
+        lambda _runtime: types.SimpleNamespace(rth_only=False, allow_extended=True),
+    )
+    monkeypatch.setattr(
+        eng,
+        "_active_effective_policy",
+        lambda _state, _cfg: types.SimpleNamespace(
+            trading_mode="balanced",
+            objective=types.SimpleNamespace(objective_name="expected_net_edge_after_fees_slippage_borrow"),
+        ),
+    )
+    monkeypatch.setattr(eng, "write_run_manifest", lambda *args, **kwargs: None)
+    monkeypatch.setattr(eng, "_persist_effective_policy_snapshot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(eng, "is_market_open", lambda: True)
+    monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _runtime: None)
+    monkeypatch.setattr(eng, "_validate_trading_api", lambda _api: True)
+    monkeypatch.setattr(eng, "check_pdt_rule", lambda _runtime: False)
+    monkeypatch.setattr(eng, "get_strategies", lambda: [])
+    monkeypatch.setattr(eng, "list_open_orders", lambda _api: [])
+    monkeypatch.setattr(eng, "_handle_pending_orders", lambda _orders, _runtime: False)
+    monkeypatch.setattr(eng, "_netting_pipeline_enabled", lambda _runtime: True)
+    monkeypatch.setattr(eng, "_check_runtime_stops", lambda _runtime: None)
+    monkeypatch.setattr(eng, "_log_loop_heartbeat", lambda *_a, **_k: None)
+    monkeypatch.setattr(eng, "flush_log_throttle_summaries", lambda: None)
+    monkeypatch.setattr(eng.provider_monitor, "is_safe_mode_active", lambda: False)
+
+    netting_calls = {"count": 0}
+
+    def _run_netting_stub(*_args, **_kwargs):
+        netting_calls["count"] += 1
+
+    monkeypatch.setattr(eng, "_run_netting_cycle", _run_netting_stub)
+
+    eng.run_all_trades_worker(state, runtime)
+
+    assert netting_calls["count"] == 1
+    assert dummy_exec.start_cycle_called == 1
+    assert dummy_exec.end_cycle_called == 1

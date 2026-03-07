@@ -2077,6 +2077,12 @@ class ExecutionEngine:
         """Best-effort end-of-cycle hook aligned with core engine expectations."""
 
         self._emit_cycle_execution_kpis()
+        try:
+            with self._cycle_reserved_intents_lock:
+                self._cycle_reserved_intents.clear()
+        except Exception:
+            self._cycle_reserved_intents = set()
+            self._cycle_reserved_intents_lock = Lock()
         self._cycle_account = None
         self._cycle_account_fetched = False
         order_mgr = getattr(self, "order_manager", None)
@@ -6620,11 +6626,20 @@ class ExecutionEngine:
         if not closing_position and not self._reserve_cycle_intent(symbol, mapped_side):
             self.stats.setdefault("skipped_orders", 0)
             self.stats["skipped_orders"] += 1
+            reserved_count = 0
+            intents_snapshot = getattr(self, "_cycle_reserved_intents", None)
+            if isinstance(intents_snapshot, set):
+                reserved_count = len(intents_snapshot)
             self._skip_submit(
                 symbol=symbol,
                 side=mapped_side,
                 reason="cycle_duplicate_intent",
                 order_type=order_type_normalized,
+                context={
+                    "source": "execution_cycle_compaction",
+                    "engine_cycle_index": int(max(getattr(self, "_engine_cycle_index", 0), 0)),
+                    "reserved_intents": int(reserved_count),
+                },
                 submit_started_at=submit_started_at,
             )
             return None
