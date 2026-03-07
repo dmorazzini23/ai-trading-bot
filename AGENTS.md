@@ -14,6 +14,7 @@ This document is the authoritative playbook for Codex-style editing in this repo
   - Flask **API on :9001** (0.0.0.0:9001).
   - Dedicated **Health server on `HEALTHCHECK_PORT`** (default 8081) serving `GET /healthz` with JSON and HTTP 200 when healthy.
   - If `HEALTHCHECK_PORT == API_PORT`, the API may serve health endpoints on the shared port; otherwise run health in its own thread/process.
+  - Health routes must be registered through the shared canonical helpers; do not add bespoke per-entrypoint health implementations.
 - **Configuration access:** via `ai_trading.config.management` only (`get_env`, `reload_env`, `SEED`). No ad-hoc `os.environ` walks in runtime code.
 - **SDK policy:**
   - Runtime: **`alpaca-py` 0.42.1**.
@@ -38,6 +39,7 @@ Agents must run and report these checks when changing runtime or library code (d
 - `pytest -q`
 - `ruff` (limit to changed paths when possible)
 - `mypy` (at least on changed files/modules)
+- `bash scripts/typecheck_strict.sh`
 - `python3 -m py_compile $(git ls-files '*.py')`
 
 Always add or update unit tests when fixing bugs or adding behavior.
@@ -67,12 +69,14 @@ Use these stable strings to anchor surgical edits:
   - `curl -sS http://127.0.0.1:9001/` (API route as applicable)
   - `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`
 - Health endpoints must degrade gracefully (never raise uncaught exceptions); log structured diagnostics.
+- Keep health response construction and route registration on the shared canonical path; entrypoints may adapt payload context but must not fork health semantics.
 - Respect fail-fast configuration: missing required env vars should raise immediately with actionable errors.
 
 ---
 
 ## 7. Anti-Patterns to Avoid
 - Reintroducing shims, optional import helpers, or dynamic SDK swaps.
+- Adding new direct `os.getenv` / `os.environ` runtime access outside `ai_trading.config.management`, except for tightly justified non-runtime validation code.
 - Adding raw `print` statements or silent exception handling.
 - Migrating runtime off pinned `alpaca-py` without explicit approval.
 - Conflating API and health ports, or assuming shared-port deployment without checking `HEALTHCHECK_PORT`.
