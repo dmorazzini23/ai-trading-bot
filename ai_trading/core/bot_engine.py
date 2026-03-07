@@ -353,7 +353,10 @@ from ai_trading.config import (
     PRICE_PROVIDER_ORDER,
     DATA_FEED_INTRADAY,
 )
-from ai_trading.health_payload import build_runtime_health_payload
+from ai_trading.health_payload import (
+    build_alpaca_health_payload,
+    build_runtime_health_payload,
+)
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 from ai_trading.broker.alpaca_credentials import check_alpaca_available
@@ -3237,9 +3240,9 @@ def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
 def _sip_lockout_active() -> bool:
     """Return ``True`` when the runtime has flagged SIP access as unauthorized."""
 
-    if _truthy_env(os.getenv("PYTEST_RUNNING")):
+    if _truthy_env(get_env("PYTEST_RUNNING", None)):
         return False
-    return bool(os.getenv("ALPACA_SIP_UNAUTHORIZED")) or bool(
+    return bool(get_env("ALPACA_SIP_UNAUTHORIZED", None)) or bool(
         getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
     )
 
@@ -3269,17 +3272,19 @@ def _sip_authorized() -> bool:
     truthy = {"1", "true", "yes", "on", "enable", "enabled"}
     falsy = {"0", "false", "no", "off", "disable", "disabled"}
 
-    raw_allow = os.getenv("ALPACA_ALLOW_SIP")
+    raw_allow = get_env("ALPACA_ALLOW_SIP", None)
     allow_flag: bool | None = None
-    if raw_allow is not None:
-        lowered = raw_allow.strip().lower()
+    if isinstance(raw_allow, bool):
+        allow_flag = raw_allow
+    elif raw_allow is not None:
+        lowered = str(raw_allow).strip().lower()
         if lowered in truthy:
             allow_flag = True
         elif lowered in falsy:
             return False
 
-    has_key = bool(os.getenv("ALPACA_API_KEY"))
-    has_secret = bool(os.getenv("ALPACA_SECRET_KEY"))
+    has_key = bool(get_env("ALPACA_API_KEY", None))
+    has_secret = bool(get_env("ALPACA_SECRET_KEY", None))
     if not (has_key and has_secret):
         if allow_flag:
             return False
@@ -3292,9 +3297,11 @@ def _sip_authorized() -> bool:
             pass
 
     has_entitlement: bool | None = None
-    raw_entitlement = os.getenv("ALPACA_HAS_SIP")
-    if raw_entitlement is not None:
-        lowered = raw_entitlement.strip().lower()
+    raw_entitlement = get_env("ALPACA_HAS_SIP", None)
+    if isinstance(raw_entitlement, bool):
+        has_entitlement = raw_entitlement
+    elif raw_entitlement is not None:
+        lowered = str(raw_entitlement).strip().lower()
         if lowered in truthy:
             has_entitlement = True
         elif lowered in falsy:
@@ -27107,7 +27114,9 @@ def health() -> str:
             service_name="ai-trading",
             force_ok_for_pytest=False,
             healthy_status_mode="healthy",
+            ok_mode="connectivity",
         )
+        payload["alpaca"] = build_alpaca_health_payload()
     except (
         APIError,
         TimeoutError,
@@ -27121,7 +27130,9 @@ def health() -> str:
             service_name="ai-trading",
             force_ok_for_pytest=False,
             healthy_status_mode="healthy",
+            ok_mode="connectivity",
         )
+        payload["alpaca"] = build_alpaca_health_payload()
         payload["ok"] = False
         payload["status"] = "degraded"
         payload["error"] = str(e)

@@ -269,7 +269,7 @@ def _maybe_accept_backup_quote(
 def _pytest_mode_active() -> bool:
     """Return ``True`` when pytest appears to be driving execution."""
 
-    env_token = os.getenv("PYTEST_RUNNING")
+    env_token = _runtime_env("PYTEST_RUNNING")
     if isinstance(env_token, str) and env_token.strip().lower() in {"1", "true", "yes", "on"}:
         return True
     return False
@@ -332,6 +332,29 @@ except Exception as exc:  # pragma: no cover - fallback when optional deps missi
     _config_get_env = None
 
 
+def _runtime_env(name: str, default: str | None = None) -> str | None:
+    """Resolve environment values through config management when available."""
+
+    raw_env = os.getenv(name)
+    if raw_env not in (None, ""):
+        return raw_env
+
+    # Keep pytest/runtime mode controls bound to process env only to avoid
+    # config-derived side effects during unit tests and startup probes.
+    if name in {"PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING", "EXECUTION_MODE"}:
+        return default
+
+    resolver = _config_get_env
+    if resolver is not None:
+        try:
+            value = resolver(name, default=None)
+        except Exception:
+            value = None
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
 def _resolve_ack_timeout_seconds() -> float:
     """Resolve broker ack timeout (15-30s recommended for live trading)."""
 
@@ -377,7 +400,7 @@ def _resolve_bool_env(name: str) -> bool | None:
             except Exception:
                 logger.debug("BOOL_ENV_CAST_FAILED", extra={"name": name, "value": value}, exc_info=True)
                 return None
-    raw = os.getenv(name)
+    raw = _runtime_env(name)
     if not raw:
         return None
     try:
@@ -468,7 +491,7 @@ def _mark_long_only_reason(
 def _require_bid_ask_quotes() -> bool:
     """Return ``True`` when execution requires bid/ask quotes."""
 
-    if os.getenv("PYTEST_RUNNING"):
+    if _runtime_env("PYTEST_RUNNING"):
         return False
     try:
         cfg = get_trading_config()
@@ -1203,7 +1226,7 @@ def _config_int(name: str, default: int | None) -> int | None:
         except Exception:
             raw = None
     if raw in (None, ""):
-        raw = os.getenv(name)
+        raw = _runtime_env(name)
     if raw in (None, ""):
         return default
     try:
@@ -1222,7 +1245,7 @@ def _config_float(name: str, default: float | None) -> float | None:
         except Exception:
             raw = None
     if raw in (None, ""):
-        raw = os.getenv(name)
+        raw = _runtime_env(name)
     if raw in (None, ""):
         return default
     try:
@@ -1251,7 +1274,7 @@ def _config_decimal(name: str, default: Decimal) -> Decimal:
         except Exception:
             raw = None
     if raw in (None, ""):
-        raw = os.getenv(name)
+        raw = _runtime_env(name)
     if raw in (None, ""):
         return default
     try:
@@ -1543,7 +1566,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
             except Exception:
                 execution_mode_raw = None
         if execution_mode_raw in (None, ""):
-            execution_mode_raw = os.getenv("EXECUTION_MODE")
+            execution_mode_raw = _runtime_env("EXECUTION_MODE")
         execution_mode = str(execution_mode_raw or "sim").strip().lower()
         has_account_endpoint = bool(
             broker is not None and callable(getattr(broker, "get_account", None)),
@@ -1752,7 +1775,7 @@ def _halt_flag_path() -> str:
         path = getattr(settings, "halt_flag_path", None)
         if isinstance(path, str) and path:
             return path
-    env_path = os.getenv("AI_TRADING_HALT_FLAG_PATH")
+    env_path = _runtime_env("AI_TRADING_HALT_FLAG_PATH")
     if env_path:
         return env_path
     return "halt.flag"
@@ -1771,10 +1794,10 @@ def _safe_mode_policy() -> tuple[bool, str]:
         if cfg_mode not in (None, ""):
             mode_value = str(cfg_mode).strip().lower()
     if not mode_value:
-        env_mode = os.getenv("EXECUTION_MODE")
+        env_mode = _runtime_env("EXECUTION_MODE")
         mode_value = env_mode.strip().lower() if env_mode else "paper"
     if not allow:
-        env_flag = os.getenv("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "")
+        env_flag = _runtime_env("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "") or ""
         if env_flag:
             allow = env_flag.strip().lower() in {"1", "true", "yes", "on"}
     return bool(allow), str(mode_value or "paper").strip().lower()
@@ -1787,12 +1810,12 @@ def _safe_mode_guard(
 ) -> bool:
     allow_paper_bypass, execution_mode = _safe_mode_policy()
     # For paper mode, always allow safe-mode bypass unless explicitly halted.
-    env_mode = os.getenv("EXECUTION_MODE", "").strip().lower()
+    env_mode = (_runtime_env("EXECUTION_MODE", "") or "").strip().lower()
     if env_mode:
         execution_mode = env_mode
     else:
         execution_mode = execution_mode or "paper"
-    env_flag = os.getenv("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "")
+    env_flag = _runtime_env("AI_TRADING_SAFE_MODE_ALLOW_PAPER", "") or ""
     env_paper_bypass = env_flag.strip().lower() not in {"0", "false", "no", "off"}
     if execution_mode == "paper":
         # Hard bypass for paper to prevent provider safe-mode from blocking orders.
@@ -1800,7 +1823,7 @@ def _safe_mode_guard(
         if allow_paper_bypass:
             return False
     reason: str | None = None
-    env_override = os.getenv("AI_TRADING_HALT", "").strip().lower()
+    env_override = (_runtime_env("AI_TRADING_HALT", "") or "").strip().lower()
     if env_override in {"1", "true", "yes"}:
         reason = "env_halt"
     elif is_safe_mode_active():
@@ -1811,7 +1834,7 @@ def _safe_mode_guard(
             if (
                 os.path.exists(halt_file)
                 and execution_mode != "sim"
-                and os.getenv("PYTEST_RUNNING", "").strip().lower() not in {"1", "true", "yes"}
+                and (_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() not in {"1", "true", "yes"}
             ):
                 reason = "halt_flag"
         except OSError as exc:  # pragma: no cover - filesystem guard
@@ -1881,7 +1904,7 @@ class ExecutionEngine:
 
         self.ctx = ctx
         requested_mode = (
-            execution_mode or getattr(ctx, "execution_mode", None) or os.getenv("EXECUTION_MODE") or "paper"
+            execution_mode or getattr(ctx, "execution_mode", None) or _runtime_env("EXECUTION_MODE") or "paper"
         )
         self._explicit_mode = execution_mode
         self._explicit_shadow = shadow_mode
@@ -1893,7 +1916,7 @@ class ExecutionEngine:
         self.settings = None
         self.execution_mode = str(requested_mode).lower()
         self.shadow_mode = bool(shadow_mode)
-        testing_flag = os.getenv("TESTING", "")
+        testing_flag = _runtime_env("TESTING", "") or ""
         self._testing_mode = str(testing_flag).strip().lower() in {"1", "true", "yes"}
         self.order_timeout_seconds = 0
         self.slippage_limit_bps = 0
@@ -2156,7 +2179,7 @@ class ExecutionEngine:
             except Exception:
                 policy_raw = None
         if policy_raw in (None, ""):
-            policy_raw = os.getenv("AI_TRADING_PENDING_NEW_POLICY")
+            policy_raw = _runtime_env("AI_TRADING_PENDING_NEW_POLICY")
         policy = str(policy_raw or "off").strip().lower()
         if policy in {"", "0", "false", "no", "none", "off", "disabled"}:
             policy = "off"
@@ -2364,7 +2387,7 @@ class ExecutionEngine:
             except Exception:
                 raw_value = None
         if raw_value in (None, ""):
-            raw_value = os.getenv("AI_TRADING_EXECUTION_PHASE_BLOCKED")
+            raw_value = _runtime_env("AI_TRADING_EXECUTION_PHASE_BLOCKED")
         if raw_value in (None, ""):
             raw_value = "bootstrap,reconcile"
         tokens = {
@@ -3337,7 +3360,7 @@ class ExecutionEngine:
         if broker_client is not None and has_account and has_orders:
             return broker_client
 
-        provider_raw = os.getenv("AI_TRADING_BROKER_PROVIDER", "alpaca")
+        provider_raw = _runtime_env("AI_TRADING_BROKER_PROVIDER", "alpaca")
         provider = str(provider_raw or "alpaca").strip().lower()
         adapter = build_broker_adapter(provider=provider, client=broker_client)
         if adapter is not None:
@@ -3783,7 +3806,7 @@ class ExecutionEngine:
         details: Mapping[str, Any] | None = None,
     ) -> None:
         default_path = "runtime/broker_resilience_playbook.jsonl"
-        configured = str(os.getenv("AI_TRADING_BROKER_RESILIENCE_PLAYBOOK_PATH", default_path) or default_path)
+        configured = str(_runtime_env("AI_TRADING_BROKER_RESILIENCE_PLAYBOOK_PATH", default_path) or default_path)
         path = Path(configured).expanduser()
         if not path.is_absolute():
             path = (Path(__file__).resolve().parents[2] / path).resolve()
@@ -3826,7 +3849,7 @@ class ExecutionEngine:
             except Exception:
                 provider_raw = None
         if provider_raw in (None, ""):
-            provider_raw = os.getenv("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
+            provider_raw = _runtime_env("AI_TRADING_BROKER_FAILOVER_PROVIDER", "paper")
         provider = str(provider_raw or "paper").strip().lower()
         if not provider:
             return None
@@ -3982,7 +4005,7 @@ class ExecutionEngine:
             except Exception:
                 raw_state_path = None
         if raw_state_path in (None, ""):
-            raw_state_path = os.getenv(
+            raw_state_path = _runtime_env(
                 "AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_STATE_PATH",
                 "/tmp/ai-trading-order-submit-rate-limit.json",
             )
@@ -4261,7 +4284,7 @@ class ExecutionEngine:
         capacity_prechecked = _safe_bool(kwargs.pop("capacity_prechecked", False))
         pytest_mode = (
             "pytest" in sys.modules
-            or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+            or str(_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes", "on"}
         )
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
@@ -4839,7 +4862,7 @@ class ExecutionEngine:
         capacity_prechecked = _safe_bool(kwargs.pop("capacity_prechecked", False))
         pytest_mode = (
             "pytest" in sys.modules
-            or str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+            or str(_runtime_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes", "on"}
         )
         price_hint_override = kwargs.pop("price_hint", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
@@ -8024,8 +8047,8 @@ class ExecutionEngine:
             getattr(getattr(self, "config", None), "time_in_force", None),
             getattr(getattr(self, "config", None), "execution_time_in_force", None),
             runtime_tif,
-            os.getenv("EXECUTION_TIME_IN_FORCE"),
-            os.getenv("ALPACA_TIME_IN_FORCE"),
+            _runtime_env("EXECUTION_TIME_IN_FORCE"),
+            _runtime_env("ALPACA_TIME_IN_FORCE"),
         )
         for candidate in candidates:
             normalized = _normalize(candidate)
@@ -8635,7 +8658,7 @@ class ExecutionEngine:
             return {"status": "skipped", "reason": "pdt_lockout", "context": {"pdt": True}}
 
         resp: Any | None = None
-        if os.environ.get("PYTEST_RUNNING"):
+        if _runtime_env("PYTEST_RUNNING"):
             client = getattr(self, "trading_client", None)
             submit = getattr(client, "submit_order", None)
             if callable(submit):
@@ -8677,7 +8700,7 @@ class ExecutionEngine:
         )
         try:
             if resp is None:
-                if os.environ.get("PYTEST_RUNNING"):
+                if _runtime_env("PYTEST_RUNNING"):
                     mock_id = f"alpaca-pending-{int(time.time() * 1000)}"
                     resp = {
                         "id": mock_id,
@@ -8983,9 +9006,7 @@ class ExecutionEngine:
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""
-        import os
-
-        if os.environ.get("PYTEST_RUNNING"):
+        if _runtime_env("PYTEST_RUNNING"):
             logger.debug("ORDER_CANCEL_OK", extra={"id": order_id})
             return True
         else:
@@ -9003,9 +9024,7 @@ class ExecutionEngine:
 
     def _get_order_status_alpaca(self, order_id: str) -> dict:
         """Get order status via Alpaca API."""
-        import os
-
-        if os.environ.get("PYTEST_RUNNING"):
+        if _runtime_env("PYTEST_RUNNING"):
             return {"id": order_id, "status": "filled", "filled_qty": "100"}
         else:
             order = self.trading_client.get_order(order_id)
@@ -9021,9 +9040,7 @@ class ExecutionEngine:
 
     def _get_account_alpaca(self) -> dict:
         """Get account info via Alpaca API."""
-        import os
-
-        if os.environ.get("PYTEST_RUNNING"):
+        if _runtime_env("PYTEST_RUNNING"):
             return {"equity": "100000", "buying_power": "100000"}
         else:
             account = self.trading_client.get_account()
@@ -9036,9 +9053,7 @@ class ExecutionEngine:
 
     def _get_positions_alpaca(self) -> list[dict]:
         """Get positions via Alpaca API."""
-        import os
-
-        if os.environ.get("PYTEST_RUNNING"):
+        if _runtime_env("PYTEST_RUNNING"):
             return []
         else:
             positions = self.trading_client.list_positions()

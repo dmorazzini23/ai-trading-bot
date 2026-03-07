@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
-from ai_trading.health_payload import build_runtime_health_payload
+from ai_trading.health_payload import (
+    build_alpaca_health_payload,
+    build_runtime_health_payload,
+)
 from ai_trading.logging import get_logger
 from ai_trading.app import _install_route_tracker, _ensure_test_client
 
@@ -14,18 +17,18 @@ try:  # pragma: no cover - optional dependency
     from flask import Flask, jsonify
 except Exception:  # pragma: no cover - stub for tests when flask missing
     class Flask:  # type: ignore
-        def __init__(self, *a, **k):
-            self.config = {}
+        def __init__(self, *a: Any, **k: Any) -> None:
+            self.config: dict[str, Any] = {}
 
-        def route(self, *a, **k):
-            def deco(func):
+        def route(self, *a: Any, **k: Any) -> Any:
+            def deco(func: Any) -> Any:
                 return func
             return deco
 
-        def run(self, *a, **k):
+        def run(self, *a: Any, **k: Any) -> None:
             return None
 
-    def jsonify(payload):  # type: ignore
+    def jsonify(payload: Any) -> Any:  # type: ignore
         return payload
 
 
@@ -77,7 +80,7 @@ class HealthCheck:
     def _register_routes(self) -> None:
         """Register default health route."""
 
-        def _emit_response(body: dict, status: int = 200):
+        def _emit_response(body: dict[str, Any], status: int = 200) -> Any:
             response = jsonify(body)
             if response is None or isinstance(response, Mapping):
                 return body if status == 200 else (body, status)
@@ -104,71 +107,16 @@ class HealthCheck:
                     err = str(exc) or exc.__class__.__name__
 
                 ctx_alpaca = self._get_ctx_attr("alpaca", None)
-                alpaca_ctx = dict(ctx_alpaca) if isinstance(ctx_alpaca, Mapping) else {}
-                alpaca_payload = {
-                    "sdk_ok": False,
-                    "initialized": False,
-                    "client_attached": False,
-                    "has_key": False,
-                    "has_secret": False,
-                    "base_url": "",
-                    "paper": False,
-                    "shadow_mode": False,
-                }
-                try:
-                    for key, value in alpaca_ctx.items():
-                        if key in alpaca_payload:
-                            if isinstance(alpaca_payload[key], bool):
-                                alpaca_payload[key] = bool(value)
-                            else:
-                                alpaca_payload[key] = value or ""
-                except Exception:
-                    pass
-
-                # Fallback to resolved runtime env when context does not provide
-                # Alpaca details (common for the dedicated health server path).
-                try:
-                    from ai_trading.utils.env import (
-                        alpaca_credential_status,
-                        get_alpaca_base_url,
-                    )
-
-                    has_key, has_secret = alpaca_credential_status()
-                    if has_key:
-                        alpaca_payload["has_key"] = True
-                    if has_secret:
-                        alpaca_payload["has_secret"] = True
-                    if not alpaca_payload.get("base_url"):
-                        alpaca_payload["base_url"] = str(get_alpaca_base_url() or "")
-                except Exception:
-                    logger.debug("HEALTH_ALPACA_ENV_RESOLVE_FAILED", exc_info=True)
-
-                if alpaca_payload.get("base_url"):
-                    alpaca_payload["paper"] = "paper" in str(
-                        alpaca_payload["base_url"]
-                    ).lower()
-
-                try:
-                    from ai_trading.alpaca_api import ALPACA_AVAILABLE as _alpaca_sdk_ok
-
-                    alpaca_payload["sdk_ok"] = bool(_alpaca_sdk_ok)
-                except Exception:
-                    logger.debug("HEALTH_ALPACA_SDK_RESOLVE_FAILED", exc_info=True)
+                alpaca_ctx = dict(ctx_alpaca) if isinstance(ctx_alpaca, Mapping) else None
+                alpaca_payload = build_alpaca_health_payload(alpaca_ctx)
 
                 payload = build_runtime_health_payload(
                     service_name=str(service_name or "ai-trading"),
                     force_ok_for_pytest=False,
                     healthy_status_mode="healthy",
+                    ok_mode="connectivity",
                 )
                 payload["alpaca"] = alpaca_payload
-                payload["broker_connectivity"] = payload.get("broker", {})
-                provider_section = payload.get("primary_data_provider", {})
-                broker_section = payload.get("broker_connectivity", {})
-                provider_status = str(provider_section.get("status") or "").strip().lower()
-                broker_status = str(broker_section.get("status") or "").strip().lower()
-                provider_disabled = provider_status in {"down", "disabled"}
-                broker_unreachable = broker_status in {"unreachable", "down", "failed"}
-                payload["ok"] = not provider_disabled and not broker_unreachable
                 if err:
                     payload["ok"] = False
                     payload["status"] = "degraded"

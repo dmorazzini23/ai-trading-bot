@@ -6,6 +6,7 @@ Exports are resolved lazily to keep package import side-effect free.
 from __future__ import annotations
 
 from importlib import import_module as _import_module
+from typing import Any
 
 PYTEST_DONT_REWRITE = ["ai_trading"]
 
@@ -45,7 +46,7 @@ _EXPORTS = {
 __all__ = sorted(_EXPORTS)
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     target = _EXPORTS.get(name)
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from pathlib import Path
 
+_load_dotenv: Callable[..., bool] | None
 try:
     from dotenv import load_dotenv as _load_dotenv
 except Exception:  # pragma: no cover - optional dependency may be absent
@@ -226,10 +227,11 @@ def _select_alpaca_base_url(
     for deprecated_key in ("ALPACA_API_URL", "ALPACA_BASE_URL"):
         deprecated_value = env_map.get(deprecated_key)
         if deprecated_value not in (None, ""):
+            deprecated_value_str = str(deprecated_value)
             invalid_entries.append(
                 (
                     deprecated_key,
-                    deprecated_value,
+                    deprecated_value_str,
                     "Set ALPACA_TRADING_BASE_URL for trading endpoints; "
                     "remove ALPACA_API_URL/ALPACA_BASE_URL.",
                 )
@@ -319,7 +321,7 @@ def _coerce(value: Any, cast: Optional[Callable[[Any], T]]) -> T | Any:
 
 def _get_env_exact(
     key: str,
-    default: Optional[str] = None,
+    default: Any = None,
     *,
     cast: Optional[Callable[[Any], T]] = None,
     required: bool = False,
@@ -334,7 +336,7 @@ def _get_env_exact(
 
 def get_env(
     key: str,
-    default: Optional[str] = None,
+    default: Any = None,
     *,
     cast: Optional[Callable[[Any], T]] = None,
     required: bool = False,

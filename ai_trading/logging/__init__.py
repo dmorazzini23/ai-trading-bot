@@ -32,6 +32,21 @@ from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
 
 
+def _runtime_env(name: str, default: str | None = None) -> str | None:
+    """Resolve environment values via config management when available."""
+
+    mgmt_mod = sys.modules.get("ai_trading.config.management")
+    getter = getattr(mgmt_mod, "get_env", None) if mgmt_mod is not None else None
+    if callable(getter):
+        try:
+            managed_value = getter(name, default)
+        except Exception:
+            managed_value = None
+        if managed_value not in (None, ""):
+            return str(managed_value)
+    return os.getenv(name, default)
+
+
 def _emit_throttle_summary(logger: logging.Logger, key: str, suppressed: int) -> None:
     """Emit a standard LOG_THROTTLE_SUMMARY line when suppression warrants it."""
 
@@ -43,7 +58,7 @@ def _emit_throttle_summary(logger: logging.Logger, key: str, suppressed: int) ->
 def _ensure_finnhub_enabled_flag() -> None:
     """Emit diagnostics when Finnhub credentials are present without an explicit enable flag."""
 
-    if os.getenv("FINNHUB_API_KEY") and os.getenv("ENABLE_FINNHUB") is None:
+    if _runtime_env("FINNHUB_API_KEY") and _runtime_env("ENABLE_FINNHUB") is None:
         logging.getLogger(__name__).debug(
             "ENABLE_FINNHUB_DEFAULTED",
             extra={"enabled": True, "source": "default"},
@@ -81,7 +96,7 @@ def _monotonic_time() -> float:
 
 
 def _ensure_pytest_logging_bridge() -> None:
-    if os.getenv("PYTEST_RUNNING") not in {"1", "true", "True"}:
+    if _runtime_env("PYTEST_RUNNING") not in {"1", "true", "True"}:
         return
     root = logging.getLogger()
     for handler in list(root.handlers):
@@ -276,21 +291,21 @@ class MessageThrottleFilter(logging.Filter):
             except (TypeError, ValueError):
                 return 5.0
 
-        raw_seconds = os.getenv("LOG_TIMING_THROTTLE_SECONDS")
+        raw_seconds = _runtime_env("LOG_TIMING_THROTTLE_SECONDS")
         if raw_seconds is not None:
             try:
                 return max(float(raw_seconds), 0.0)
             except (TypeError, ValueError):
                 return 5.0
 
-        raw_ms = os.getenv("LOG_TIMING_THROTTLE_MS")
+        raw_ms = _runtime_env("LOG_TIMING_THROTTLE_MS")
         if raw_ms is not None:
             try:
                 return max(float(raw_ms) / 1000.0, 0.0)
             except (TypeError, ValueError):
                 return 5.0
 
-        raw_seconds_legacy = os.getenv("LOG_THROTTLE_SECONDS")
+        raw_seconds_legacy = _runtime_env("LOG_THROTTLE_SECONDS")
         try:
             return max(float(raw_seconds_legacy), 0.0) if raw_seconds_legacy is not None else 5.0
         except (TypeError, ValueError):
@@ -527,7 +542,7 @@ class RateLimitedEventTracker:
 
 
 def _resolve_rate_limit_window() -> float:
-    raw = os.getenv("AI_TRADING_LOG_RATE_LIMIT_WINDOW_SEC")
+    raw = _runtime_env("AI_TRADING_LOG_RATE_LIMIT_WINDOW_SEC")
     if raw is None:
         return 120.0
     try:
@@ -732,7 +747,7 @@ def flush_log_throttle_summaries(logger: logging.Logger | logging.LoggerAdapter 
     if not _THROTTLE_FILTER:
         return
 
-    pytest_running = _truthy_flag(os.getenv("PYTEST_RUNNING"))
+    pytest_running = _truthy_flag(_runtime_env("PYTEST_RUNNING"))
     namespace = _logger_namespace(logger)
     if pytest_running and namespace is None:
         namespace = _infer_logger_namespace_from_stack()
@@ -1033,7 +1048,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         _ensure_single_handler(logger)
         logger.handlers.clear()
         S = None
-        level_name_env_default = os.getenv("LOG_LEVEL", "INFO")
+        level_name_env_default = _runtime_env("LOG_LEVEL", "INFO")
         try:
             from ai_trading.config import get_settings, management as config
 
@@ -1063,7 +1078,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         try:
             http_env_default = config.get_env("LOG_LEVEL_HTTP", "WARNING")
         except Exception:
-            http_env_default = os.getenv("LOG_LEVEL_HTTP", "WARNING")
+            http_env_default = _runtime_env("LOG_LEVEL_HTTP", "WARNING")
         http_level_name = getattr(S, "log_level_http", http_env_default)
         http_level = getattr(logging, str(http_level_name).upper(), logging.WARNING)
         for _name in ("urllib3", "requests"):
@@ -1097,7 +1112,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             rotating_handler.addFilter(extra_filter)
             handlers.append(rotating_handler)
         # In tests, avoid background queue threads to prevent timeout interference
-        if os.getenv("PYTEST_RUNNING") == "1" or os.getenv("LOG_DISABLE_QUEUE") == "1":
+        if _runtime_env("PYTEST_RUNNING") == "1" or _runtime_env("LOG_DISABLE_QUEUE") == "1":
             logger.handlers = handlers
             _listener = None
             _LOGGING_LISTENER = None
@@ -1779,7 +1794,7 @@ def setup_enhanced_logging(
 def _setup_performance_logging():
     """Setup performance-specific logging handlers."""
     perf_logger = get_logger("performance")
-    perf_file = os.path.join(os.getenv("BOT_LOG_DIR", "logs"), "performance.log")
+    perf_file = os.path.join(_runtime_env("BOT_LOG_DIR", "logs") or "logs", "performance.log")
     try:
         Path(os.path.dirname(perf_file)).mkdir(parents=True, exist_ok=True)
     except PermissionError as e:

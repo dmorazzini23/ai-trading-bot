@@ -15,4 +15,6 @@ PY
 ruff check .
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 mypy ai_trading tests
+scripts/typecheck_strict.sh
+python3 tools/ci/guard_runtime_env_access.py
 pytest -q

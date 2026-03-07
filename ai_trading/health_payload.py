@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from ai_trading.telemetry import runtime_state
 
 
-def _safe_observe(observer, default):
+def _safe_observe(observer: Callable[[], Any], default: Any) -> Any:
     try:
         return observer()
     except Exception:
@@ -27,18 +27,76 @@ def _model_liveness_snapshot() -> dict[str, Any]:
     return {}
 
 
+def build_alpaca_health_payload(
+    context: Mapping[str, Any] | None = None,
+    *,
+    enrich_from_runtime_env: bool = True,
+) -> dict[str, Any]:
+    """Build a normalized Alpaca diagnostic section for health payloads."""
+
+    payload: dict[str, Any] = {
+        "sdk_ok": False,
+        "initialized": False,
+        "client_attached": False,
+        "has_key": False,
+        "has_secret": False,
+        "base_url": "",
+        "paper": False,
+        "shadow_mode": False,
+    }
+    if isinstance(context, Mapping):
+        for key, value in context.items():
+            if key not in payload:
+                continue
+            if isinstance(payload[key], bool):
+                payload[key] = bool(value)
+            elif value is not None:
+                payload[key] = value
+
+    if enrich_from_runtime_env:
+        try:
+            from ai_trading.utils.env import alpaca_credential_status, get_alpaca_base_url
+
+            has_key, has_secret = alpaca_credential_status()
+            payload["has_key"] = bool(payload["has_key"] or has_key)
+            payload["has_secret"] = bool(payload["has_secret"] or has_secret)
+            if not payload.get("base_url"):
+                payload["base_url"] = str(get_alpaca_base_url() or "")
+        except Exception:
+            pass
+
+        try:
+            from ai_trading.alpaca_api import ALPACA_AVAILABLE as alpaca_sdk_ok
+
+            payload["sdk_ok"] = bool(payload["sdk_ok"] or alpaca_sdk_ok)
+        except Exception:
+            pass
+
+    if payload.get("base_url"):
+        payload["paper"] = bool(payload["paper"] or ("paper" in str(payload["base_url"]).lower()))
+
+    return payload
+
+
 def build_runtime_health_payload(
     *,
     service_name: str = "ai-trading",
     force_ok_for_pytest: bool = False,
     healthy_status_mode: str = "service",
+    ok_mode: str = "strict",
 ) -> dict[str, Any]:
     """Build a normalized runtime health payload shared by API/health surfaces."""
 
-    provider_state = _safe_observe(runtime_state.observe_data_provider_state, {})
-    broker_state = _safe_observe(runtime_state.observe_broker_status, {})
-    service_state = _safe_observe(runtime_state.observe_service_status, {"status": "unknown"})
-    quote_state = _safe_observe(runtime_state.observe_quote_status, {})
+    provider_state: dict[str, Any] = _safe_observe(
+        runtime_state.observe_data_provider_state,
+        {},
+    )
+    broker_state: dict[str, Any] = _safe_observe(runtime_state.observe_broker_status, {})
+    service_state: dict[str, Any] = _safe_observe(
+        runtime_state.observe_service_status,
+        {"status": "unknown"},
+    )
+    quote_state: dict[str, Any] = _safe_observe(runtime_state.observe_quote_status, {})
     model_liveness = _model_liveness_snapshot()
 
     raw_provider_status = provider_state.get("status")
@@ -127,6 +185,8 @@ def build_runtime_health_payload(
     provider_healthy = provider_status_normalized in {"", "healthy", "ready"} and not data_degraded
     broker_healthy = broker_status_normalized in {"", "reachable", "ready", "connected"}
     overall_ok = provider_healthy and broker_healthy
+    if str(ok_mode).strip().lower() == "connectivity":
+        overall_ok = not provider_disabled and not broker_down
     if force_ok_for_pytest:
         overall_ok = True
 
@@ -145,6 +205,7 @@ def build_runtime_health_payload(
         "status": resolved_status,
         "data_provider": provider_payload,
         "broker": broker_payload,
+        "broker_connectivity": broker_payload,
         "fallback_active": bool(provider_payload.get("using_backup")),
         "quotes_status": quote_state,
         "primary_data_provider": provider_payload,
@@ -174,4 +235,4 @@ def build_runtime_health_payload(
     return payload
 
 
-__all__ = ["build_runtime_health_payload"]
+__all__ = ["build_runtime_health_payload", "build_alpaca_health_payload"]

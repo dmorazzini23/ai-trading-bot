@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "== Compile =="
-python -m py_compile $(git ls-files '*.py')
+python3 -m py_compile $(git ls-files '*.py')
 
 echo "== Broad except Exception (top offenders) =="
 grep -R --line-number --include='*.py' "except Exception" ai_trading | \

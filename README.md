@@ -49,7 +49,7 @@ configuration is missing.
 Verify Alpaca connectivity and data access:
 
 ```bash
-python ai_trading/scripts/self_check.py
+python3 ai_trading/scripts/self_check.py
 ```
 
 The script fetches a small sample of SPY bars using `alpaca-py` and exits with status **0** on success.
@@ -81,7 +81,7 @@ finishing the current safe checkpoint before exiting with status **0**.
 
 Key operational points:
 
-* `python -m ai_trading` registers signal handlers immediately and honours
+* `python3 -m ai_trading` registers signal handlers immediately and honours
   cooperative stop requests in the main scheduler, API bootstrap, and per-symbol
   execution loops.
 * `--max-runtime-seconds N` arms a daemon timer that triggers the same graceful
@@ -467,19 +467,19 @@ For comprehensive development environment setup, see [**docs/DEVELOPMENT.md**](d
 
 ```bash
 # Verify environment and imports only
-python -m ai_trading --dry-run
+python3 -m ai_trading --dry-run
 
 # Start the bot with default settings
-python -m ai_trading
+python3 -m ai_trading
 
 # Or use the convenience script
 ./start.sh
 
 # Run a single paper-trading cycle
-python -m ai_trading --once --paper
+python3 -m ai_trading --once --paper
 
 # Continuous live trading with a 10s loop interval
-python -m ai_trading --live --interval 10
+python3 -m ai_trading --live --interval 10
 ```
 
 ### 📈 Backtesting & Optimization
@@ -491,10 +491,10 @@ python -m ai_trading --live --interval 10
 
 ```bash
 # Run backtest on popular ETFs
-python backtester.py --symbols SPY,QQQ,IWM --start 2024-01-01 --end 2024-12-31
+python3 backtester.py --symbols SPY,QQQ,IWM --start 2024-01-01 --end 2024-12-31
 
 # Test with custom parameters
-python backtester.py \
+python3 backtester.py \
   --symbols AAPL,MSFT,GOOGL \
   --start 2023-01-01 \
   --end 2024-01-01 \
@@ -506,14 +506,14 @@ python backtester.py \
 
 ```bash
 # Run with specific strategy
-python backtester.py \
+python3 backtester.py \
   --symbols SPY \
   --strategy momentum \
   --timeframes 1h,1d \
   --optimize-hyperparams
 
 # Multi-timeframe analysis
-python backtester.py \
+python3 backtester.py \
   --symbols SPY,AAPL,TSLA \
   --timeframes 5m,15m,1h,1d \
   --lookback-days 90
@@ -533,7 +533,7 @@ The bot automatically uses optimized parameters when available:
 cat best_hyperparams.json
 
 # Manual optimization
-python -m ai_trading.algorithm_optimizer --symbols SPY --iterations 100
+python3 -m ai_trading.algorithm_optimizer --symbols SPY --iterations 100
 ```
 
 ### 🎛️ Trading Modes
@@ -546,7 +546,7 @@ export ALPACA_API_URL=https://paper-api.alpaca.markets
 export TRADING_MODE=paper
 
 # Start bot
-python -m ai_trading
+python3 -m ai_trading
 ```
 
 #### Live Trading (Production)
@@ -558,7 +558,7 @@ export TRADING_MODE=production
 export MAX_POSITION_PCT=0.03  # Conservative sizing
 
 # Start with extra safety checks
-python -m ai_trading --confirm-live-trading
+python3 -m ai_trading --confirm-live-trading
 ```
 
 ### 📊 Monitoring & Control
@@ -567,7 +567,7 @@ python -m ai_trading --confirm-live-trading
 
 ```bash
 # Start web dashboard
-python monitoring_dashboard.py
+python3 monitoring_dashboard.py
 
 # Access at http://localhost:5000
 # View real-time performance, positions, and logs
@@ -583,7 +583,7 @@ tail -F logs/scheduler.log
 tail -F logs/scheduler.log | grep -E "(BUY|SELL|ERROR)"
 
 # Performance summary
-python -c "
+python3 -c "
 import pandas as pd
 trades = pd.read_csv('trades.csv')
 print(f'Total trades: {len(trades)}')
@@ -596,16 +596,16 @@ print(f'Total PnL: ${trades[\"pnl\"].sum():.2f}')
 
 ```bash
 # System health check
-python health_check.py
+python3 health_check.py
 
 # API connectivity test
-python -c "
+python3 -c "
 from ai_trading.data import fetch as data_fetcher
 test_all_providers(['SPY'])
 "
 
 # Risk limits check
-python -m ai_trading.risk.engine --check-limits
+python3 -m ai_trading.risk.engine --check-limits
 ```
 
 ### 🔄 Advanced Usage
@@ -644,7 +644,7 @@ class CustomMomentumStrategy(BaseStrategy):
         return signals
 
 # Usage
-python -m ai_trading --strategy custom_momentum
+python3 -m ai_trading --strategy custom_momentum
 ```
 
 #### Programmatic Trading
@@ -702,26 +702,26 @@ pytest -m "integration"  # Integration tests
 
 ```bash
 # Profile bot performance
-python -m cProfile -m ai_trading > profile_output.txt
+python3 -m cProfile -m ai_trading > profile_output.txt
 
 # Memory profiling
-python -m memory_profiler -m ai_trading.core.bot_engine
+python3 -m memory_profiler -m ai_trading.core.bot_engine
 
 # Benchmark indicators
-python profile_indicators.py
+python3 profile_indicators.py
 ```
 
 #### Data Management
 
 ```bash
 # Fetch and cache data for development
-python -m ai_trading.data.fetch --cache --symbols SPY,AAPL --days 30
+python3 -m ai_trading.data.fetch --cache --symbols SPY,AAPL --days 30
 
 # Clean up old data
-python cleanup.py --older-than 30days
+python3 cleanup.py --older-than 30days
 
 # Validate data quality
-python data_validator.py --check-all
+python3 data_validator.py --check-all
 ```
 
 ### 🔧 Troubleshooting
@@ -733,15 +733,15 @@ For common issues and solutions, see [**TROUBLESHOOTING.md**](TROUBLESHOOTING.md
 ```bash
 # Reset and restart
 ./cleanup_pycache.sh
-python health_check.py
-python -m ai_trading
+python3 health_check.py
+python3 -m ai_trading
 
 # Check logs for errors
 grep -i error logs/scheduler.log | tail -10
 
 # Validate configuration
-python -m ai_trading.tools.env_validate
-python verify_config.py
+python3 -m ai_trading.tools.env_validate
+python3 verify_config.py
 ```
 
 The CLI validates `DATA_FEED` and `TIMEFRAME` at startup using Pydantic and
@@ -952,10 +952,10 @@ MAX_POSITION_PCT=0.01  # Very small positions for testing
 
 ```bash
 # Validate your configuration
-python -m ai_trading.tools.env_validate
+python3 -m ai_trading.tools.env_validate
 
 # Check API connectivity
-python -c "
+python3 -c "
 from alpaca.trading.client import TradingClient
 import os
 client = TradingClient(
@@ -1215,10 +1215,10 @@ curl http://localhost:9001/healthz
 curl -s -o /dev/null -w "%{http_code}" http://localhost:9001/metrics
 
 # System resource monitoring
-python monitoring_dashboard.py &
+python3 monitoring_dashboard.py &
 
 # Performance metrics
-python metrics.py --export-prometheus
+python3 metrics.py --export-prometheus
 ```
 
 ---
@@ -1235,7 +1235,7 @@ export ENABLE_DAILY_RETRAIN=true   # Enable (default)
 export DISABLE_DAILY_RETRAIN=1     # Disable
 
 # Manual retraining
-python -m retrain --trade-log data/trades.csv --model-path artifacts/meta_model.pkl
+python3 -m retrain --trade-log data/trades.csv --model-path artifacts/meta_model.pkl
 
 # Schedule retraining
 echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python -m retrain --trade-log /var/lib/ai-trading/trades.csv" | crontab -
@@ -1249,7 +1249,7 @@ echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python -m retrain --trade-log /var/
 # daily_maintenance.sh
 
 # Rotate logs
-python logger_rotator.py
+python3 logger_rotator.py
 
 # Cleanup old data
 find data/ -name "*.csv" -mtime +30 -delete
@@ -1258,20 +1258,20 @@ find data/ -name "*.csv" -mtime +30 -delete
 cp .env backup/.env.$(date +%Y%m%d)
 
 # Health check
-python health_check.py || echo "Health check failed" | mail -s "Bot Alert" admin@example.com
+python3 health_check.py || echo "Health check failed" | mail -s "Bot Alert" admin@example.com
 
 # Performance report
-python performance_optimizer.py --generate-report
+python3 performance_optimizer.py --generate-report
 ```
 
 ### Performance Monitoring
 
 ```bash
 # Generate performance report
-python performance_optimizer.py --report
+python3 performance_optimizer.py --report
 
 # View trading statistics
-python -c "
+python3 -c "
 import pandas as pd
 trades = pd.read_csv('trades.csv')
 print('=== Trading Performance ===')
@@ -1343,7 +1343,7 @@ black --check .
 make test-all
 
 # 5. Performance profiling (when needed)
-python -m cProfile -m ai_trading
+python3 -m cProfile -m ai_trading
 pyinstrument python -m ai_trading
 ```
 
@@ -1404,8 +1404,8 @@ Store profiling output in the git-ignored `artifacts/` directory.
 ```bash
 # CPU profiling
 mkdir -p artifacts
-python -m cProfile -o artifacts/profile.stats -m ai_trading
-python -c "
+python3 -m cProfile -o artifacts/profile.stats -m ai_trading
+python3 -c "
 import pstats
 p = pstats.Stats('artifacts/profile.stats')
 p.sort_stats('cumulative').print_stats(20)
@@ -1413,13 +1413,13 @@ p.sort_stats('cumulative').print_stats(20)
 
 # Memory profiling
 pip install memory-profiler
-python -m memory_profiler -m ai_trading.core.bot_engine
+python3 -m memory_profiler -m ai_trading.core.bot_engine
 
 # Line-by-line profiling
 kernprof -l -v -m ai_trading.core.bot_engine
 
 # Real-time performance monitoring
-python performance_optimizer.py --monitor --duration 3600
+python3 performance_optimizer.py --monitor --duration 3600
 ```
 
 ### Optimization Techniques
@@ -1602,7 +1602,7 @@ pip install -r requirements-extras-train.txt
 ```
 
 ```bash
-python -m ai_trading.training.train_ml
+python3 -m ai_trading.training.train_ml
 ```
 
 If neither variable is provided at runtime, the engine logs a single warning
@@ -1669,11 +1669,11 @@ Environment variables controlling startup import checks:
 ## Development quick start
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
+python3 -m venv .venv && . .venv/bin/activate
 bash scripts/bootstrap.sh
-python -m compileall ai_trading
+python3 -m compileall ai_trading
 pytest -q
-python -m ai_trading --help
+python3 -m ai_trading --help
 ```
 
 If imports fail for missing scientific packages, ensure you've run

@@ -17,7 +17,7 @@ fi
 
 # Step 2: Test basic config imports
 echo "2. Testing config imports..."
-python - << 'PY'
+python3 - << 'PY'
 import sys
 sys.path.insert(0, '.')
 
@@ -42,7 +42,7 @@ PY
 
 # Step 3: Test that key modules import without shims
 echo "3. Testing core module imports..."
-python - << 'PY'
+python3 - << 'PY'
 import sys
 sys.path.insert(0, '.')
 
@@ -65,7 +65,7 @@ PY
 
 # Step 4: Compile check for syntax errors
 echo "4. Running syntax validation..."
-python -m py_compile $(find ai_trading -name "*.py" | head -20) || {
+python3 -m py_compile $(find ai_trading -name "*.py" | head -20) || {
     echo "❌ Syntax errors found in Python files"
     exit 1
 }
@@ -73,7 +73,7 @@ echo "✅ Core Python files compile successfully"
 
 # Step 5: Test Settings access patterns
 echo "5. Testing standardized config access..."
-python - << 'PY'
+python3 - << 'PY'
 import sys
 sys.path.insert(0, '.')
 
