@@ -146,8 +146,8 @@ class MLModel:
     def save(self, path: str | None = None) -> str:
         ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         model_dir = (Path(__file__).parent / "models").resolve()
-        path = Path(path) if path else model_dir / f"model_{ts}.pkl"
-        abs_path = path.resolve()
+        target_path = Path(path) if path is not None else model_dir / f"model_{ts}.pkl"
+        abs_path = target_path.resolve()
         if not abs_path.is_relative_to(model_dir):
             raise RuntimeError(f"Model path outside allowed directory: {abs_path}")
         abs_path.parent.mkdir(parents=True, exist_ok=True)

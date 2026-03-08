@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from threading import RLock
 from typing import Any, Callable, Iterable, Mapping, Optional, TypeVar
 from urllib.parse import urlparse
@@ -151,6 +152,12 @@ def _runtime_env_overrides_snapshot() -> dict[str, str]:
         return dict(_RUNTIME_ENV_OVERRIDES)
 
 
+def merged_env_snapshot(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return process env merged with in-process runtime overrides."""
+
+    return _merged_env_snapshot(env)
+
+
 def _env_with_runtime_fallback(key: str) -> str | None:
     runtime_val = _runtime_env_lookup(key)
     if runtime_val not in (None, ""):
@@ -171,6 +178,21 @@ def _merged_env_snapshot(env: Mapping[str, str] | None = None) -> dict[str, str]
         if snapshot.get(key) in (None, ""):
             snapshot[key] = value
     return snapshot
+
+
+def is_test_runtime(*, include_pytest_module: bool = True) -> bool:
+    """Return ``True`` when the current process is executing under tests."""
+
+    truthy = {"1", "true", "yes", "on"}
+    for key in ("PYTEST_RUNNING", "TESTING"):
+        raw = get_env(key, "", cast=str, resolve_aliases=False)
+        if str(raw or "").strip().lower() in truthy:
+            return True
+    if str(get_env("PYTEST_CURRENT_TEST", "", cast=str, resolve_aliases=False) or "").strip():
+        return True
+    if str(get_env("PYTEST_XDIST_WORKER", "", cast=str, resolve_aliases=False) or "").strip():
+        return True
+    return include_pytest_module and ("pytest" in sys.modules)
 
 
 def set_runtime_env_override(key: str, value: Any) -> None:
@@ -256,7 +278,7 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
             # Best-effort cache invalidation; runtime config reload still proceeds.
             pass
 
-    skip_dotenv = bool(os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"))
+    skip_dotenv = is_test_runtime(include_pytest_module=False)
 
     if path is None:
         if skip_dotenv:
@@ -619,9 +641,9 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
 
     # Determine requested feed, honoring any explicit environment override.
     env_candidates = (
-        os.getenv("ALPACA_DATA_FEED"),
-        os.getenv("DATA_FEED"),
-        os.getenv("ALPACA_FEED"),
+        _env_with_runtime_fallback("ALPACA_DATA_FEED"),
+        _env_with_runtime_fallback("DATA_FEED"),
+        _env_with_runtime_fallback("ALPACA_FEED"),
     )
     explicit_feed = next((value for value in env_candidates if value not in (None, "")), None)
     feed_value = explicit_feed or getattr(cfg, "alpaca_data_feed", None) or ""
@@ -632,7 +654,7 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
 
     # Allow Alpaca + IEX without fallback.
     if feed_normalized == "iex":
-        if os.getenv("ALPACA_DATA_FEED") in (None, "") and os.getenv("ALPACA_FEED") in (None, ""):
+        if _env_with_runtime_fallback("ALPACA_DATA_FEED") in (None, "") and _env_with_runtime_fallback("ALPACA_FEED") in (None, ""):
             set_runtime_env_override("ALPACA_DATA_FEED", "iex")
         # No provider switch; just report status so preflight logs at INFO.
         return {
@@ -643,9 +665,9 @@ def enforce_alpaca_feed_policy() -> dict[str, str] | None:
 
     # SIP path: retain existing behavior and set helpful env defaults.
     if feed_normalized == "sip":
-        if os.getenv("ALPACA_DATA_FEED") in (None, "") and os.getenv("ALPACA_FEED") in (None, ""):
+        if _env_with_runtime_fallback("ALPACA_DATA_FEED") in (None, "") and _env_with_runtime_fallback("ALPACA_FEED") in (None, ""):
             set_runtime_env_override("ALPACA_DATA_FEED", "sip")
-        if os.getenv("ALPACA_ALLOW_SIP") in (None, "") and os.getenv("ALPACA_HAS_SIP") in (None, ""):
+        if _env_with_runtime_fallback("ALPACA_ALLOW_SIP") in (None, "") and _env_with_runtime_fallback("ALPACA_HAS_SIP") in (None, ""):
             set_runtime_env_override("ALPACA_ALLOW_SIP", "1")
         return {"provider": provider_normalized, "feed": "sip", "status": "sip"}
 
@@ -683,4 +705,6 @@ __all__ = [
     "set_runtime_env_override",
     "clear_runtime_env_override",
     "clear_runtime_env_overrides",
+    "merged_env_snapshot",
+    "is_test_runtime",
 ]

@@ -1,6 +1,6 @@
 import logging
-import os
 import re
+import sys
 from typing import Any
 
 from ai_trading.logging.redact import _ENV_MASK
@@ -15,6 +15,23 @@ TOKEN_RE = re.compile('([A-Za-z0-9_\\-]{12,})')
 def _mask(val: str) -> str:
     return _ENV_MASK if val else val
 
+
+def _runtime_env_snapshot() -> dict[str, str]:
+    mgmt_mod = sys.modules.get("ai_trading.config.management")
+    snapshot_getter = getattr(mgmt_mod, "merged_env_snapshot", None) if mgmt_mod is not None else None
+    if not callable(snapshot_getter):
+        return {}
+    try:
+        snapshot = snapshot_getter()
+    except Exception:
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in snapshot.items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+
+
 class SecretFilter(logging.Filter):
     """Masks secrets in log records and structured extras."""  # AI-AGENT-REF: scrub structured extras
 
@@ -24,7 +41,7 @@ class SecretFilter(logging.Filter):
         """Collect potential secret values from environment for masking."""
         vals: set[str] = set()
         try:
-            for k, v in os.environ.items():
+            for k, v in _runtime_env_snapshot().items():
                 if not v:
                     continue
                 kl = str(k).upper()

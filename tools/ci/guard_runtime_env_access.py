@@ -9,38 +9,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PATTERN = re.compile(r"\bos\.(?:getenv|environ)\b")
 
-# Ratchet limits for runtime-critical hot paths. These modules must use
-# ``ai_trading.config.management`` helpers instead of ad-hoc env access.
-# Any non-zero exception here must be explicitly justified and reduced over time.
-MAX_DIRECT_ENV_TOUCHES = {
-    "ai_trading/main.py": 0,
-    "ai_trading/__main__.py": 0,
-    "ai_trading/app.py": 0,
-    "ai_trading/health.py": 0,
-    "ai_trading/logging/__init__.py": 0,
-    "ai_trading/http/pooling.py": 0,
-    "ai_trading/data/provider_monitor.py": 0,
-    "ai_trading/execution/live_trading.py": 0,
-    "ai_trading/core/bot_engine.py": 0,
-    "ai_trading/data/fetch/__init__.py": 0,
-    "ai_trading/strategy_allocator.py": 0,
-}
+# Tiny allowlist for config/bootstrap and operator tooling.
+ALLOWLIST_PREFIXES = (
+    "ai_trading/config/",
+    "ai_trading/scripts/",
+    "ai_trading/tools/",
+    "ai_trading/validation/",
+)
+ALLOWLIST_FILES: set[str] = set()
+
+
+def _is_allowlisted(rel_path: str) -> bool:
+    if rel_path in ALLOWLIST_FILES:
+        return True
+    return rel_path.startswith(ALLOWLIST_PREFIXES)
 
 
 def main() -> int:
     failures: list[str] = []
-    for rel_path, max_allowed in MAX_DIRECT_ENV_TOUCHES.items():
-        path = ROOT / rel_path
-        if not path.exists():
-            failures.append(f"{rel_path}: missing file")
+    for path in sorted((ROOT / "ai_trading").rglob("*.py")):
+        rel_path = path.relative_to(ROOT).as_posix()
+        if _is_allowlisted(rel_path):
             continue
-        content = path.read_text(encoding="utf-8")
-        touches = len(PATTERN.findall(content))
-        print(f"{rel_path}: direct_env_touches={touches} max_allowed={max_allowed}")
-        if touches > max_allowed:
-            failures.append(
-                f"{rel_path}: {touches} direct env touches exceeds max {max_allowed}"
-            )
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            if PATTERN.search(line):
+                failures.append(f"{rel_path}:{line_number}: {line.strip()}")
 
     if failures:
         print("RUNTIME_ENV_ACCESS_GUARD_FAILED")

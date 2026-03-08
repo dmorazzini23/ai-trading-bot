@@ -1,10 +1,10 @@
 import importlib
 import importlib.machinery
 import importlib.util
-import os
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 
 class DotenvImportError(ImportError):
@@ -14,6 +14,22 @@ class DotenvImportError(ImportError):
 PYTHON_DOTENV_RESOLVED: bool | None = None
 _ASSERT_GUARD_DISABLED: bool = False
 _ASSERT_GUARD_DISABLED_FOR: str | None = None
+
+
+def _managed_env_value(name: str) -> str | None:
+    for module_name in ("ai_trading.config", "ai_trading.config.management"):
+        module = sys.modules.get(module_name)
+        getter = getattr(module, "get_env", None) if module is not None else None
+        if not callable(getter):
+            continue
+        try:
+            value = getter(name, None, cast=str, resolve_aliases=False)
+        except Exception:
+            continue
+        if value in (None, ""):
+            continue
+        return str(value)
+    return None
 
 
 def _repo_root() -> Path:
@@ -110,9 +126,10 @@ def ensure_python_dotenv_is_real_package() -> None:
     if spec is None:
         spec = importlib.machinery.PathFinder.find_spec("dotenv")
     spec_origin: Path | None = None
-    if spec is not None and getattr(spec, "origin", None):
+    raw_spec_origin = getattr(spec, "origin", None) if spec is not None else None
+    if isinstance(raw_spec_origin, str) and raw_spec_origin:
         try:
-            spec_origin = Path(spec.origin).resolve()
+            spec_origin = Path(raw_spec_origin).resolve()
         except Exception:
             spec_origin = None
     if spec_origin is not None:
@@ -143,7 +160,7 @@ def guard_dotenv_shadowing() -> None:
 def assert_dotenv_not_shadowed() -> None:
     global _ASSERT_GUARD_DISABLED, _ASSERT_GUARD_DISABLED_FOR
 
-    current_test = os.getenv("PYTEST_CURRENT_TEST")
+    current_test = _managed_env_value("PYTEST_CURRENT_TEST")
     if _ASSERT_GUARD_DISABLED and _ASSERT_GUARD_DISABLED_FOR is not None:
         if current_test != _ASSERT_GUARD_DISABLED_FOR:
             _ASSERT_GUARD_DISABLED = False
@@ -162,7 +179,7 @@ def disable_dotenv_guard() -> None:
 
     global _ASSERT_GUARD_DISABLED, _ASSERT_GUARD_DISABLED_FOR
     _ASSERT_GUARD_DISABLED = True
-    _ASSERT_GUARD_DISABLED_FOR = os.getenv("PYTEST_CURRENT_TEST")
+    _ASSERT_GUARD_DISABLED_FOR = _managed_env_value("PYTEST_CURRENT_TEST")
 
 
 def enable_dotenv_guard() -> None:
@@ -176,7 +193,7 @@ def enable_dotenv_guard() -> None:
 class _EnvCheckModule(types.ModuleType):
     """Module wrapper that interprets guard overrides as on/off toggles."""
 
-    def __setattr__(self, name: str, value) -> None:  # type: ignore[override]
+    def __setattr__(self, name: str, value: Any) -> None:
         if name == "assert_dotenv_not_shadowed":
             canonical = object.__getattribute__(self, "_CANONICAL_ASSERT_GUARD")
             if value is canonical:
@@ -184,7 +201,7 @@ class _EnvCheckModule(types.ModuleType):
                 object.__setattr__(self, "_ASSERT_GUARD_DISABLED_FOR", None)
             else:
                 object.__setattr__(self, "_ASSERT_GUARD_DISABLED", True)
-                object.__setattr__(self, "_ASSERT_GUARD_DISABLED_FOR", os.getenv("PYTEST_CURRENT_TEST"))
+                object.__setattr__(self, "_ASSERT_GUARD_DISABLED_FOR", _managed_env_value("PYTEST_CURRENT_TEST"))
             super().__setattr__(name, canonical)
             super().__setattr__("_ASSERT_GUARD_DISABLED", object.__getattribute__(self, "_ASSERT_GUARD_DISABLED"))
             super().__setattr__("_ASSERT_GUARD_DISABLED_FOR", object.__getattribute__(self, "_ASSERT_GUARD_DISABLED_FOR"))

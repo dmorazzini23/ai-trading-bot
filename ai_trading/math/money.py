@@ -100,11 +100,13 @@ class Money:
         """Absolute value of Money."""
         return Money(abs(self._amount))
 
-    def __eq__(self, other: Union['Money', Number]) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check equality."""
         if isinstance(other, Money):
             return self._amount == other._amount
-        return self._amount == to_decimal(other)
+        if isinstance(other, (int, float, str, Decimal)):
+            return self._amount == to_decimal(other)
+        return False
 
     def __lt__(self, other: Union['Money', Number]) -> bool:
         """Less than comparison."""

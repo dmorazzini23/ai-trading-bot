@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
+
+from ai_trading.config.management import get_env
 
 
 _BOOL_TRUE = {"1", "true", "yes", "on", "enable", "enabled"}
@@ -16,11 +17,11 @@ _BOOL_KEYS = {"ALPACA_ALLOW_SIP", "ALPACA_HAS_SIP"}
 
 
 class _EnvProxy:
-    """Proxy object exposing ``os.environ`` via attributes."""
+    """Proxy object exposing managed environment values via attributes."""
 
     def __getattr__(self, name: str) -> Any:
         key = _ALIASES.get(name, name)
-        value = os.getenv(key)
+        value = get_env(key, None, cast=str, resolve_aliases=False)
         if value is None:
             return None
         if key in _BOOL_KEYS:
@@ -36,4 +37,3 @@ env = _EnvProxy()
 
 
 __all__ = ["env"]
-

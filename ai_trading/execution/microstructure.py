@@ -404,7 +404,11 @@ class MarketMicrostructureEngine:
             logger.error(f'Error analyzing market microstructure for {symbol}: {e}')
             return self._create_default_microstructure_data(symbol)
 
-    def estimate_execution_impact(self, order_size: int, microstructure_data: MarketMicrostructureData) -> dict[str, float]:
+    def estimate_execution_impact(
+        self,
+        order_size: int,
+        microstructure_data: MarketMicrostructureData,
+    ) -> dict[str, float | str]:
         """
         Estimate execution impact based on microstructure analysis.
 

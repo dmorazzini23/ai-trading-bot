@@ -125,7 +125,7 @@ class TaxAwareRebalancer:
             self._regime_detector = create_regime_detector()
         return self._regime_detector
 
-    def calculate_tax_impact(self, position: dict[str, Any], current_price: float) -> dict[str, float]:
+    def calculate_tax_impact(self, position: dict[str, Any], current_price: float) -> dict[str, Any]:
         """
         Calculate tax impact of selling a position.
 

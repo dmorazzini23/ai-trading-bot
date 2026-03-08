@@ -1,7 +1,6 @@
 """Environment variable helpers for broker configuration."""
 from __future__ import annotations
 
-import os
 from typing import Mapping
 from urllib.parse import urlparse
 
@@ -12,6 +11,7 @@ from ai_trading.broker.alpaca_credentials import (
     resolve_alpaca_credentials_with_base,
     reset_alpaca_credential_state,
 )
+from ai_trading.config.management import get_env
 
 _DEFAULT_DATA_BASE_URL = "https://data.alpaca.markets"
 _FORBIDDEN_TRADING_HOSTS = {
@@ -22,8 +22,8 @@ _FORBIDDEN_TRADING_HOSTS = {
 _DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None, str | None, str | None] | None = None
 
 
-def _bool_env(env: Mapping[str, str | None], key: str) -> bool:
-    raw = env.get(key)
+def _bool_env_key(key: str) -> bool:
+    raw = get_env(key, None, cast=str, resolve_aliases=False)
     if raw is None:
         return False
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
@@ -134,12 +134,12 @@ def get_alpaca_data_base_url() -> str:
             normalized = f"{normalized}{path}"
         return normalized.rstrip("/") or _DEFAULT_DATA_BASE_URL
 
-    legacy_data_url = os.getenv("ALPACA_DATA_URL")
+    legacy_data_url = get_env("ALPACA_DATA_URL", None, cast=str, resolve_aliases=False)
     if legacy_data_url not in (None, ""):
         raise RuntimeError(
             "ALPACA_DATA_URL is deprecated. Set ALPACA_DATA_BASE_URL instead."
         )
-    override = os.getenv("ALPACA_DATA_BASE_URL")
+    override = get_env("ALPACA_DATA_BASE_URL", None, cast=str, resolve_aliases=False)
     return _sanitize(override)
 
 
@@ -168,18 +168,17 @@ def resolve_alpaca_feed(requested: str | None) -> str | None:
     override, _ = _resolve_data_feed_override()
     if override == "yahoo":
         return None
-    env = os.environ
-    allow_sip = _bool_env(env, "ALPACA_ALLOW_SIP")
-    has_sip = _bool_env(env, "ALPACA_HAS_SIP") or _bool_env(env, "ALPACA_SIP_ENTITLED")
-    sip_unauth = _bool_env(env, "ALPACA_SIP_UNAUTHORIZED")
+    allow_sip = _bool_env_key("ALPACA_ALLOW_SIP")
+    has_sip = _bool_env_key("ALPACA_HAS_SIP") or _bool_env_key("ALPACA_SIP_ENTITLED")
+    sip_unauth = _bool_env_key("ALPACA_SIP_UNAUTHORIZED")
 
     if override:
         requested = override
     elif not requested:
         requested = (
-            os.getenv("ALPACA_DEFAULT_FEED")
-            or os.getenv("ALPACA_DATA_FEED")
-            or os.getenv("DATA_FEED_INTRADAY")
+            get_env("ALPACA_DEFAULT_FEED", None, cast=str, resolve_aliases=False)
+            or get_env("ALPACA_DATA_FEED", None, cast=str, resolve_aliases=False)
+            or get_env("DATA_FEED_INTRADAY", None, cast=str, resolve_aliases=False)
             or "iex"
         )
 

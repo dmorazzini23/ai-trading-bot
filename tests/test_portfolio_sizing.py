@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -224,7 +225,7 @@ def test_scale_to_target_volatility_and_error_fallback() -> None:
 def test_calculate_inverse_vol_weights_error_fallback() -> None:
     sizer = sizing.VolatilityTargetingSizer()
     result = sizer._calculate_inverse_vol_weights(
-        signals={"AAA": "bad", "BBB": "also_bad"},
+        signals=cast(dict[str, float], {"AAA": "bad", "BBB": "also_bad"}),
         volatilities={"AAA": 0.2, "BBB": 0.3},
     )
     assert result == {"AAA": 0.5, "BBB": 0.5}
@@ -359,15 +360,15 @@ def test_cluster_constraints_error_fallback_and_scaling() -> None:
     assert sum(constrained.values()) == pytest.approx(1.0)
     assert constrained["CCC"] > 0.1
 
-    bad = sizer._apply_cluster_constraints({"AAA": "bad"}, {1: ["AAA"]})
+    bad = sizer._apply_cluster_constraints(cast(dict[str, float], {"AAA": "bad"}), {1: ["AAA"]})
     assert bad == {"AAA": "bad"}
 
 
 def test_turnover_error_paths_and_history_trim() -> None:
     sizer = sizing.TurnoverPenaltySizer(lookback_periods=2)
-    assert sizer._calculate_turnover({"AAA": 1.0}, {"AAA": "bad"}) == 0.0
+    assert sizer._calculate_turnover({"AAA": 1.0}, cast(dict[str, float], {"AAA": "bad"})) == 0.0
 
-    reduced = sizer._reduce_turnover({"AAA": "bad"}, {"AAA": 0.5}, 1.0)
+    reduced = sizer._reduce_turnover(cast(dict[str, float], {"AAA": "bad"}), {"AAA": 0.5}, 1.0)
     assert reduced == {"AAA": "bad"}
 
     sizer._update_position_history({"AAA": 1.0})

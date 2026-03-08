@@ -10,13 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from statistics import median
 from typing import Any, Mapping
+
+from ai_trading.config.management import merged_env_snapshot
 
 
 CANONICAL_MODE_KEY = "AI_TRADING_TRADING_MODE"
@@ -266,7 +267,7 @@ class ExecutionApproval:
 
 def _env_map(env: Mapping[str, str] | None = None) -> dict[str, str]:
     if env is None:
-        return {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        return merged_env_snapshot()
     return {str(k): str(v) for k, v in env.items() if v is not None}
 
 

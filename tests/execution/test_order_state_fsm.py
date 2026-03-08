@@ -1,6 +1,7 @@
 import logging
 from collections import defaultdict
 from types import SimpleNamespace
+from typing import Any, Mapping
 
 import pytest
 
@@ -45,7 +46,7 @@ class FSMEngine(live_trading.LiveTradingExecutionEngine):
     def _ensure_initialized(self) -> bool:
         return True
 
-    def _pre_execution_order_checks(self, _order: dict | None) -> bool:
+    def _pre_execution_order_checks(self, _order: Mapping[str, Any] | None = None) -> bool:
         return True
 
     def _pre_execution_checks(self) -> bool:

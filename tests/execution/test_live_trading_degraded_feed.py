@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import logging
 
 import pytest
+from typing import Any, Mapping
 
 from ai_trading.execution import live_trading
 
@@ -56,7 +57,7 @@ class DummyLiveEngine(live_trading.LiveTradingExecutionEngine):
     def _ensure_initialized(self) -> bool:  # pragma: no cover - deterministic
         return True
 
-    def _pre_execution_order_checks(self, _order: dict | None) -> bool:
+    def _pre_execution_order_checks(self, _order: Mapping[str, Any] | None = None) -> bool:
         return True
 
     def _pre_execution_checks(self) -> bool:  # pragma: no cover - deterministic

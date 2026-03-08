@@ -10,7 +10,7 @@ def test_reconcile_halts(monkeypatch):
     cfg.update(recon_enabled=True)
     runtime = SimpleNamespace(cfg=cfg, api=None)
     state = bot_engine.BotState()
-    state.position_cache = {"AAPL": 10.0}
+    state.position_cache = {"AAPL": 10}
 
     monkeypatch.setattr(
         "ai_trading.oms.reconcile.fetch_broker_positions",

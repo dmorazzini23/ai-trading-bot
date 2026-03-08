@@ -339,7 +339,13 @@ class SymbolCostModel:
                 return (True, 'Available but expensive')
         return (True, 'Available')
 
-    def calculate_holding_cost(self, symbol: str, position_value: float, days_held: float=1.0, is_short: bool=False) -> dict[str, float]:
+    def calculate_holding_cost(
+        self,
+        symbol: str,
+        position_value: float,
+        days_held: float = 1.0,
+        is_short: bool = False,
+    ) -> dict[str, float | bool]:
         """
         Calculate cost of holding position overnight.
 
@@ -365,7 +371,14 @@ class SymbolCostModel:
         total_cost_dollars = overnight_cost_dollars + borrow_cost_dollars
         return {'overnight_cost_bps': overnight_cost_bps, 'overnight_cost_dollars': overnight_cost_dollars, 'borrow_cost_bps': borrow_cost_bps, 'borrow_cost_dollars': borrow_cost_dollars, 'total_holding_cost_bps': total_cost_bps, 'total_holding_cost_dollars': total_cost_dollars, 'days_held': days_held, 'is_short': is_short}
 
-    def adjust_for_holding_costs(self, symbol: str, target_size: float, expected_holding_days: float=1.0, max_holding_cost_bps: float=5.0, is_short: bool=False) -> tuple[float, dict[str, float]]:
+    def adjust_for_holding_costs(
+        self,
+        symbol: str,
+        target_size: float,
+        expected_holding_days: float = 1.0,
+        max_holding_cost_bps: float = 5.0,
+        is_short: bool = False,
+    ) -> tuple[float, dict[str, float | bool | str]]:
         """
         Adjust position size considering holding costs.
 

@@ -152,7 +152,7 @@ def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symb
         try:
             df = fetch(sym, '1Min', start, end)
             if (
-                df is not None
+                isinstance(df, pd.DataFrame)
                 and not df.empty
                 and 'close' in df.columns
                 and (df['close'] > 0).all()

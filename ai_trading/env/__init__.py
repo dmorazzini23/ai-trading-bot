@@ -3,9 +3,9 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
-import os
-import sys
+from pathlib import Path
 
+from ai_trading.config.management import is_test_runtime, set_runtime_env_override
 from ai_trading.utils.env import refresh_alpaca_credentials_cache
 
 def _ensure_dotenv_module() -> tuple[object | None, bool]:
@@ -18,7 +18,7 @@ def _ensure_dotenv_module() -> tuple[object | None, bool]:
         return None, False
 
     if not hasattr(module, "dotenv_values"):
-        def _stub_dotenv_values(*_args, **_kwargs):
+        def _stub_dotenv_values(*_args: object, **_kwargs: object) -> dict[str, str]:
             return {}
 
         setattr(module, "dotenv_values", _stub_dotenv_values)
@@ -82,18 +82,12 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
         return
     # Never load `.env` during pytest collection/execution; tests must be
     # hermetic and not depend on developer/production environment files.
-    if (
-        os.getenv("PYTEST_RUNNING")
-        or os.getenv("TESTING")
-        or os.getenv("PYTEST_CURRENT_TEST")
-        or os.getenv("PYTEST_XDIST_WORKER")
-        or "pytest" in sys.modules
-    ):
+    if is_test_runtime(include_pytest_module=True):
         _ENV_LOADED = True
         refresh_alpaca_credentials_cache()
         return
-    os.environ.setdefault("MULTI_LOAD_TEST", "safe_value")
-    path = dotenv_path or os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)), ".env")
+    set_runtime_env_override("MULTI_LOAD_TEST", "safe_value")
+    path = dotenv_path or str(Path(__file__).resolve().parents[2] / ".env")
     loaded = load_dotenv_if_present(path)
     if not loaded and path != ".env":
         loaded = load_dotenv_if_present()

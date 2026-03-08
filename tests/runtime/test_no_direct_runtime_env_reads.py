@@ -11,19 +11,11 @@ DIRECT_ENV_PATTERN = re.compile(r"\bos\.getenv\b|\bos\.environ\b")
 # snapshots or implement config/env bootstrap mechanics.
 _ALLOWLIST_PREFIXES = (
     "ai_trading/config/",
-    "ai_trading/env/",
     "ai_trading/scripts/",
     "ai_trading/tools/",
     "ai_trading/validation/",
 )
-_ALLOWLIST_FILES = {
-    "ai_trading/logging_filters.py",
-    "ai_trading/policy/compiler.py",
-    "ai_trading/util/env_check.py",
-    "ai_trading/utils/env.py",
-    "ai_trading/utils/environment.py",
-    "ai_trading/utils/exec.py",
-}
+_ALLOWLIST_FILES = set()
 
 
 def _is_allowlisted(rel_path: str) -> bool:

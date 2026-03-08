@@ -1,8 +1,9 @@
 """Execution helpers for isolated subprocess and worker environments."""
 from __future__ import annotations
 
-import os
 from typing import Iterable, Mapping, Sequence
+
+from ai_trading.config.management import merged_env_snapshot
 
 # Default list of environment variables to preserve when sanitizing.
 _DEFAULT_WHITELIST = {
@@ -20,7 +21,7 @@ def _sanitize_executor_env(
 ) -> dict[str, str]:
     """Return a sanitized copy of *env* preserving only whitelisted variables."""
 
-    source = env or os.environ
+    source = env or merged_env_snapshot()
     allowed = set(_DEFAULT_WHITELIST)
     if whitelist:
         allowed.update(whitelist)
@@ -49,8 +50,8 @@ def get_worker_env_override(
 ) -> int:
     """Return a sanitized integer override for executor worker counts."""
 
-    env_map = env or os.environ
-    search_order = (key,)
+    env_map = env or merged_env_snapshot()
+    search_order: tuple[str, ...] = (key,)
     if fallback_keys:
         search_order += tuple(fallback_keys)
 

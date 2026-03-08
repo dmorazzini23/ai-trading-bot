@@ -2,6 +2,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
+from typing import Literal
 
 import pytest
 
@@ -565,10 +566,10 @@ def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release(
             self._initial_value = value
             self._held = 0
 
-        async def acquire(self) -> bool:
-            result = await super().acquire()
+        async def acquire(self) -> Literal[True]:
+            await super().acquire()
             self._held += 1
-            return result
+            return True
 
         def release(self) -> None:
             if self._held <= 0:

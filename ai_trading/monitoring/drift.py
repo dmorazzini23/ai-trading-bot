@@ -123,7 +123,6 @@ class DriftMonitor:
                     'min': float(feature_values.min()),
                     'max': float(feature_values.max()),
                     'count': len(feature_values),
-                    'updated_at': datetime.now(UTC).isoformat(),
                 }
         self._save_baseline_stats()
         self.logger.info(f'Updated baseline for {len(feature_data.columns)} features')

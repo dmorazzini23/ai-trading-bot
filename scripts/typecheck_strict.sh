@@ -14,9 +14,6 @@ python3 -m mypy --config-file mypy_strict.ini \
 # baseline type coverage in this gate.
 python3 -m mypy --config-file mypy.ini \
   --follow-imports=skip \
-  --disable-error-code call-overload \
-  --disable-error-code name-defined \
-  --disable-error-code has-type \
   ai_trading/__main__.py \
   ai_trading/alpaca_api.py \
   ai_trading/app.py \
@@ -28,7 +25,14 @@ python3 -m mypy --config-file mypy.ini \
   ai_trading/main.py \
   ai_trading/model_loader.py \
   ai_trading/logging/__init__.py \
+  ai_trading/logging_filters.py \
   ai_trading/http/pooling.py \
   ai_trading/paths.py \
   ai_trading/net/http.py \
-  ai_trading/data/fetch/__init__.py
+  ai_trading/data/fetch/__init__.py \
+  ai_trading/policy/compiler.py \
+  ai_trading/utils/env.py \
+  ai_trading/utils/environment.py \
+  ai_trading/utils/exec.py \
+  ai_trading/env/__init__.py \
+  ai_trading/util/env_check.py
