@@ -39,6 +39,8 @@ from ai_trading.utils.time import is_generator_stop, monotonic_time
 
 if TYPE_CHECKING:  # pragma: no cover - import hints for type checkers
     import pandas as pd
+else:
+    pd: Any | None = None
 
 
 def _now_ts() -> float:
@@ -1416,10 +1418,6 @@ def _coerce_json_primitives(data: Mapping[str, Any] | None) -> dict[str, Any]:
         else:
             safe[key] = str(value)
     return safe
-
-
-# Optional dependency placeholders
-pd: Any | None = None
 
 
 class _RequestsModulePlaceholder:
@@ -5432,7 +5430,7 @@ def _flatten_and_normalize_ohlcv(
         except Exception:
             df["close"] = df["c"]
 
-    def _recover_close_column(frame: pd.DataFrame) -> str | None:
+    def _recover_close_column(frame: Any) -> str | None:
         fallback_candidates: tuple[str, ...] = (
             "c",
             "vw",
@@ -7510,7 +7508,7 @@ def fetch_daily_data_async(
     urls = [_build_daily_url(sym, start_dt, end_dt) for sym in symbols]
     timeout = clamp_request_timeout(timeout)
     results = http.map_get(urls, timeout=timeout)
-    out: dict[str, pd.DataFrame] = {}
+    out: dict[str, Any] = {}
     for sym, (res, err) in zip(symbols, results, strict=False):
         if err or res is None:
             raise DataFetchError(str(err))
@@ -7861,7 +7859,7 @@ def _fetch_bars(
         success_metrics["success_emitted"] = True
         success_metrics["fallback_emitted"] = False
 
-    def _run_backup_fetch(interval_code: str, *, from_provider: str | None = None) -> pd.DataFrame:
+    def _run_backup_fetch(interval_code: str, *, from_provider: str | None = None) -> Any:
         provider_str, normalized_provider = _resolve_backup_provider()
         resolved_provider = normalized_provider or provider_str
         feed_tag = normalized_provider or provider_str
@@ -8237,7 +8235,7 @@ def _fetch_bars(
         feed=_feed,
     )
     _state["http_fallback_allowed"] = http_fallback_allowed
-    def _finalize_frame(candidate: Any | None) -> pd.DataFrame | None:
+    def _finalize_frame(candidate: Any | None) -> Any | None:
         if candidate is None:
             if short_circuit_empty:
                 return _empty_ohlcv_frame(pd)
@@ -8766,7 +8764,7 @@ def _fetch_bars(
         *,
         headers: dict[str, str],
         timeout: float | tuple[float, float],
-    ) -> pd.DataFrame:
+    ) -> Any:
         nonlocal _interval, _feed, _start, _end
         global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count, _ALPACA_DISABLED_ALERTED
         _register_provider_attempt(_feed)
@@ -8779,7 +8777,7 @@ def _fetch_bars(
 
         reload_host_limit_if_env_changed(session)
 
-        def _empty_result() -> pd.DataFrame:
+        def _empty_result() -> Any:
             empty_frame = _empty_ohlcv_frame()
             if empty_frame is not None:
                 return empty_frame
@@ -8811,7 +8809,7 @@ def _fetch_bars(
             return _empty_result()
         _state["req_depth"] = proposed_depth
 
-        def _depth_exit(result: pd.DataFrame | None) -> pd.DataFrame | None:
+        def _depth_exit(result: Any | None) -> Any | None:
             existing_depth = _state.get("req_depth", 0)
             try:
                 current_value = int(existing_depth or 0)
@@ -8883,7 +8881,7 @@ def _fetch_bars(
 
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False,
-        ) -> pd.DataFrame | None:
+        ) -> Any | None:
             """Execute a provider fallback attempt.
 
             Side effects
@@ -9654,7 +9652,7 @@ def _fetch_bars(
                 except Exception:
                     pass
                 return _depth_exit(_req(session, fallback, headers=headers, timeout=timeout))
-            backup_frame: pd.DataFrame | None = None
+            backup_frame: Any | None = None
             if callable(_backup_get_bars):
                 try:
                     backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
@@ -11021,7 +11019,7 @@ def _fetch_bars(
         return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
     df = None
-    http_fallback_frame: pd.DataFrame | None = None
+    http_fallback_frame: Any | None = None
 
     empty_attempts = 0
     threshold_logged = False
@@ -12612,7 +12610,7 @@ def get_minute_df(
             )
             logger.warning("YF_1", extra={"symbol": symbol, "interval": "1m"})
             _emit_capture_record("YF_1", extra={"symbol": symbol, "interval": "1m"})
-            dfs: list[pd.DataFrame] = []  # type: ignore[var-annotated]
+            dfs: list[Any] = []
             cur_start = start_dt
             while cur_start < end_dt:
                 cur_end = min(cur_start + max_span, end_dt)

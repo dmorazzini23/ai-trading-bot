@@ -1,7 +1,7 @@
 import importlib
 import sys
 import types
-from typing import Callable, cast
+from typing import Any, Callable, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +9,19 @@ from ai_trading.config import management as config
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("requests")
+sys = cast(Any, sys)
+
+
+def _ensure_module(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return cast(types.ModuleType, module)
+
+
+def _set_module_attr(module_name: str, attr_name: str, value: Any) -> None:
+    setattr(_ensure_module(module_name), attr_name, value)
 
 _PATCHED_MODULES = {
     "bs4",
@@ -57,9 +70,9 @@ try:
     pass  # type: ignore
 except ImportError:
     sys.modules["pandas"] = types.ModuleType("pandas")
-    sys.modules["pandas"].DataFrame = MagicMock()
-    sys.modules["pandas"].Series = MagicMock()
-    sys.modules["pandas"].concat = MagicMock()
+    _set_module_attr("pandas", "DataFrame", MagicMock())
+    _set_module_attr("pandas", "Series", MagicMock())
+    _set_module_attr("pandas", "concat", MagicMock())
 
 pytestmark = pytest.mark.integration
 
@@ -67,11 +80,11 @@ try:
     import numpy  # type: ignore  # noqa: F401
 except ImportError:
     sys.modules["numpy"] = types.ModuleType("numpy")
-    sys.modules["numpy"].array = MagicMock()
-    sys.modules["numpy"].nan = float("nan")
-    sys.modules["numpy"].NaN = float("nan")
-    sys.modules["numpy"].random = MagicMock()
-    sys.modules["numpy"].arange = MagicMock()
+    _set_module_attr("numpy", "array", MagicMock())
+    _set_module_attr("numpy", "nan", float("nan"))
+    _set_module_attr("numpy", "NaN", float("nan"))
+    _set_module_attr("numpy", "random", MagicMock())
+    _set_module_attr("numpy", "arange", MagicMock())
 
 try:
     import pandas_ta  # type: ignore  # noqa: F401
@@ -80,18 +93,18 @@ except ImportError:
 if "pandas_ta" in sys.modules:
     mod = sys.modules["pandas_ta"]
     if not hasattr(mod, "momentum"):
-        mod.momentum = types.SimpleNamespace(rsi=MagicMock())
-    mod.atr = getattr(mod, "atr", MagicMock(return_value=MagicMock()))
-    mod.rsi = getattr(mod, "rsi", MagicMock(return_value=MagicMock()))
-    mod.macd = getattr(mod, "macd", MagicMock(return_value={"MACD_12_26_9": MagicMock()}))
-    mod.sma = getattr(mod, "sma", MagicMock(return_value=MagicMock()))
+        setattr(mod, "momentum", types.SimpleNamespace(rsi=MagicMock()))
+    setattr(mod, "atr", getattr(mod, "atr", MagicMock(return_value=MagicMock())))
+    setattr(mod, "rsi", getattr(mod, "rsi", MagicMock(return_value=MagicMock())))
+    setattr(mod, "macd", getattr(mod, "macd", MagicMock(return_value={"MACD_12_26_9": MagicMock()})))
+    setattr(mod, "sma", getattr(mod, "sma", MagicMock(return_value=MagicMock())))
 
 try:
     import pandas_market_calendars  # type: ignore  # noqa: F401
 except ImportError:
     sys.modules["pandas_market_calendars"] = types.ModuleType("pandas_market_calendars")
 if not hasattr(sys.modules["pandas_market_calendars"], "get_calendar"):
-    sys.modules["pandas_market_calendars"].get_calendar = MagicMock()
+    _set_module_attr("pandas_market_calendars", "get_calendar", MagicMock())
 
 mods = [
     "bs4",
@@ -118,11 +131,11 @@ mods = [
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
-sys.modules["alpaca"].TradingClient = object
-sys.modules["alpaca"].APIError = Exception
+_set_module_attr("alpaca", "TradingClient", object)
+_set_module_attr("alpaca", "APIError", Exception)
 sys.modules["alpaca.trading.client"] = types.ModuleType("alpaca.trading.client")
-sys.modules["alpaca.trading.client"].TradingClient = object
-sys.modules["alpaca.trading.client"].APIError = Exception
+_set_module_attr("alpaca.trading.client", "TradingClient", object)
+_set_module_attr("alpaca.trading.client", "APIError", Exception)
 sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
 sys.modules.setdefault("alpaca.data.requests", types.ModuleType("alpaca.data.requests"))
 sys.modules.setdefault("alpaca.data.timeframe", types.ModuleType("alpaca.data.timeframe"))
@@ -181,8 +194,8 @@ class _StockBarsRequest:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["alpaca.data.requests"].StockBarsRequest = _StockBarsRequest
-sys.modules["alpaca.data"].StockBarsRequest = _StockBarsRequest
+_set_module_attr("alpaca.data.requests", "StockBarsRequest", _StockBarsRequest)
+_set_module_attr("alpaca.data", "StockBarsRequest", _StockBarsRequest)
 
 
 
@@ -229,10 +242,10 @@ class _TFUnit:
 
 
 
-sys.modules["alpaca.data.timeframe"].TimeFrame = _TF
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = _TFUnit
-sys.modules["alpaca.data"].TimeFrame = _TF
-sys.modules["alpaca.data"].TimeFrameUnit = _TFUnit
+_set_module_attr("alpaca.data.timeframe", "TimeFrame", _TF)
+_set_module_attr("alpaca.data.timeframe", "TimeFrameUnit", _TFUnit)
+_set_module_attr("alpaca.data", "TimeFrame", _TF)
+_set_module_attr("alpaca.data", "TimeFrameUnit", _TFUnit)
 
 
 class _FClient:
@@ -240,9 +253,9 @@ class _FClient:
         pass
 
 
-sys.modules["finnhub"].Client = _FClient
-sys.modules["finnhub"].FinnhubAPIException = Exception
-sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
+_set_module_attr("finnhub", "Client", _FClient)
+_set_module_attr("finnhub", "FinnhubAPIException", Exception)
+_set_module_attr("bs4", "BeautifulSoup", lambda *a, **k: None)
 
 
 class _Flask:
@@ -256,7 +269,7 @@ class _Flask:
         return decorator
 
 
-sys.modules["flask"].Flask = _Flask
+_set_module_attr("flask", "Flask", _Flask)
 
 
 class _RFC:
@@ -279,22 +292,22 @@ class _PCA:
         pass
 
 
-sys.modules["sklearn.ensemble"].RandomForestClassifier = _RFC
-sys.modules["sklearn.linear_model"].Ridge = _Ridge
-sys.modules["sklearn.linear_model"].BayesianRidge = _BR
-sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
-sys.modules["prometheus_client"].Counter = lambda *a, **k: None
-sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
-sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
+_set_module_attr("sklearn.ensemble", "RandomForestClassifier", _RFC)
+_set_module_attr("sklearn.linear_model", "Ridge", _Ridge)
+_set_module_attr("sklearn.linear_model", "BayesianRidge", _BR)
+_set_module_attr("sklearn.decomposition", "PCA", _PCA)
+_set_module_attr("prometheus_client", "start_http_server", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Counter", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Gauge", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Histogram", lambda *a, **k: None)
 sys.modules["pipeline"] = types.ModuleType("pipeline")
 sys.modules["metrics_logger"] = types.ModuleType("metrics_logger")
 sys.modules["pybreaker"] = types.ModuleType("pybreaker")
-sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
-sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
-sys.modules["ratelimit"].limits = MagicMock(return_value=lambda f: f)
-sys.modules["ratelimit"].sleep_and_retry = MagicMock(return_value=lambda f: f)
-sys.modules["pybreaker"].CircuitBreaker = MagicMock()
+_set_module_attr("pipeline", "model_pipeline", lambda *a, **k: None)
+_set_module_attr("metrics_logger", "log_metrics", lambda *a, **k: None)
+_set_module_attr("ratelimit", "limits", MagicMock(return_value=lambda f: f))
+_set_module_attr("ratelimit", "sleep_and_retry", MagicMock(return_value=lambda f: f))
+_set_module_attr("pybreaker", "CircuitBreaker", MagicMock())
 sys.modules["strategy_allocator"] = types.ModuleType("strategy_allocator")
 
 
@@ -314,7 +327,7 @@ class _Alloc:
         pass
 
 
-sys.modules["strategy_allocator"].StrategyAllocator = _Alloc
+_set_module_attr("strategy_allocator", "StrategyAllocator", _Alloc)
 sys.modules["ai_trading.capital_scaling"] = types.ModuleType("ai_trading.capital_scaling")
 _cap_mod = sys.modules["ai_trading.capital_scaling"]
 def _update_if_present(runtime, equity):
@@ -339,9 +352,9 @@ def _capital_scale(runtime):
             return 1.0
     return 1.0
 
-_cap_mod.update_if_present = _update_if_present
-_cap_mod.capital_scale = _capital_scale
-_cap_mod.capital_scaler_update = _update_if_present
+setattr(_cap_mod, "update_if_present", _update_if_present)
+setattr(_cap_mod, "capital_scale", _capital_scale)
+setattr(_cap_mod, "capital_scaler_update", _update_if_present)
 
 
 class _CapScaler:
@@ -358,9 +371,9 @@ class _CapScaler:
         return size
 
 
-_cap_mod.CapitalScalingEngine = _CapScaler
-_cap_mod.drawdown_adjusted_kelly = lambda *a, **k: 0.02
-_cap_mod.volatility_parity_position = lambda *a, **k: 0.01
+setattr(_cap_mod, "CapitalScalingEngine", _CapScaler)
+setattr(_cap_mod, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
+setattr(_cap_mod, "volatility_parity_position", lambda *a, **k: 0.01)
 
 
 

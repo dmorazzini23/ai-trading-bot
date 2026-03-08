@@ -1,9 +1,23 @@
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
 pd = pytest.importorskip("pandas")
+sys = cast(Any, sys)
+
+
+def _ensure_module(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return cast(types.ModuleType, module)
+
+
+def _set_module_attr(module_name: str, attr_name: str, value: Any) -> None:
+    setattr(_ensure_module(module_name), attr_name, value)
 
 dummy = types.ModuleType("dummy")
 mods = [
@@ -31,14 +45,27 @@ mods = [
     "prometheus_client",
     "finnhub",
     "pybreaker",
-    "ai_trading.execution",
     "strategy_allocator",
 ]
+_PATCHED_MODULES = set(mods) | {"requests.exceptions"}
+_ORIGINAL_MODULES = {name: sys.modules.get(name) for name in _PATCHED_MODULES}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_module_state_after_tests():
+    yield
+    for name, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(name, None)
+            continue
+        sys.modules[name] = original
+
+
 for name in mods:
     if name not in sys.modules:
         sys.modules[name] = types.ModuleType(name)
-        sys.modules[name].__spec__ = types.SimpleNamespace()
-sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
+        setattr(sys.modules[name], "__spec__", types.SimpleNamespace())
+_set_module_attr("pipeline", "model_pipeline", lambda *a, **k: None)
 
 class _Flask:
     def __init__(self, *a, **k):
@@ -53,31 +80,31 @@ class _Flask:
     def run(self, *a, **k):
         pass
 
-sys.modules["flask"].Flask = _Flask
-sys.modules["flask"].jsonify = lambda *a, **k: None
-sys.modules["flask"].Response = object
-sys.modules["requests"].get = lambda *a, **k: None
+_set_module_attr("flask", "Flask", _Flask)
+_set_module_attr("flask", "jsonify", lambda *a, **k: None)
+_set_module_attr("flask", "Response", object)
+_set_module_attr("requests", "get", lambda *a, **k: None)
 exc_mod = types.ModuleType("requests.exceptions")
-exc_mod.HTTPError = Exception
-exc_mod.RequestException = Exception
-sys.modules["requests"].exceptions = exc_mod
+setattr(exc_mod, "HTTPError", Exception)
+setattr(exc_mod, "RequestException", Exception)
+_set_module_attr("requests", "exceptions", exc_mod)
 sys.modules["requests.exceptions"] = exc_mod
-sys.modules["requests"].RequestException = Exception
+_set_module_attr("requests", "RequestException", Exception)
 sys.modules["urllib3"] = types.ModuleType("urllib3")
-sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
-sys.modules["alpaca"].TradingClient = object
-sys.modules["alpaca"].APIError = Exception
-sys.modules["sklearn.ensemble"].RandomForestClassifier = object
-sys.modules["sklearn.ensemble"].GradientBoostingClassifier = object
-sys.modules["sklearn.linear_model"].Ridge = object
-sys.modules["sklearn.linear_model"].BayesianRidge = object
-sys.modules["sklearn.decomposition"].PCA = object
-sys.modules["sklearn.metrics"].accuracy_score = lambda *a, **k: 0
-sys.modules["sklearn.model_selection"].train_test_split = lambda *a, **k: ([], [])
-sys.modules["sklearn.preprocessing"].StandardScaler = object
-sys.modules["prometheus_client"].REGISTRY = object()
-sys.modules["prometheus_client"].CollectorRegistry = object
-sys.modules["prometheus_client"].Summary = object
+_set_module_attr("urllib3", "exceptions", types.SimpleNamespace(HTTPError=Exception))
+_set_module_attr("alpaca", "TradingClient", object)
+_set_module_attr("alpaca", "APIError", Exception)
+_set_module_attr("sklearn.ensemble", "RandomForestClassifier", object)
+_set_module_attr("sklearn.ensemble", "GradientBoostingClassifier", object)
+_set_module_attr("sklearn.linear_model", "Ridge", object)
+_set_module_attr("sklearn.linear_model", "BayesianRidge", object)
+_set_module_attr("sklearn.decomposition", "PCA", object)
+_set_module_attr("sklearn.metrics", "accuracy_score", lambda *a, **k: 0)
+_set_module_attr("sklearn.model_selection", "train_test_split", lambda *a, **k: ([], []))
+_set_module_attr("sklearn.preprocessing", "StandardScaler", object)
+_set_module_attr("prometheus_client", "REGISTRY", object())
+_set_module_attr("prometheus_client", "CollectorRegistry", object)
+_set_module_attr("prometheus_client", "Summary", object)
 
 
 class _FakeREST:
@@ -85,8 +112,8 @@ class _FakeREST:
         pass
 
 
-sys.modules["alpaca.trading.client"].TradingClient = _FakeREST
-sys.modules["alpaca.trading.client"].APIError = Exception
+_set_module_attr("alpaca.trading.client", "TradingClient", _FakeREST)
+_set_module_attr("alpaca.trading.client", "APIError", Exception)
 class _DummyTradingClient:
     def __init__(self, *a, **k):
         pass
@@ -106,33 +133,33 @@ class _PCA:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.ensemble"].RandomForestClassifier = _RF
-sys.modules["sklearn.linear_model"].Ridge = _Ridge
-sys.modules["sklearn.linear_model"].BayesianRidge = _BR
-sys.modules["sklearn.decomposition"].PCA = _PCA
+_set_module_attr("sklearn.ensemble", "RandomForestClassifier", _RF)
+_set_module_attr("sklearn.linear_model", "Ridge", _Ridge)
+_set_module_attr("sklearn.linear_model", "BayesianRidge", _BR)
+_set_module_attr("sklearn.decomposition", "PCA", _PCA)
 class _DummyReq:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["alpaca.data.requests"].StockBarsRequest = _DummyReq
-sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _DummyReq
+_set_module_attr("alpaca.data.requests", "StockBarsRequest", _DummyReq)
+_set_module_attr("alpaca.data.requests", "StockLatestQuoteRequest", _DummyReq)
 class _DummyTimeFrame:
     Day = object()
 
-sys.modules["alpaca.data.timeframe"].TimeFrame = _DummyTimeFrame
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
-sys.modules["alpaca.data"].TimeFrame = _DummyTimeFrame
-sys.modules["alpaca.data"].StockBarsRequest = _DummyReq
+_set_module_attr("alpaca.data.timeframe", "TimeFrame", _DummyTimeFrame)
+_set_module_attr("alpaca.data.timeframe", "TimeFrameUnit", object)
+_set_module_attr("alpaca.data", "TimeFrame", _DummyTimeFrame)
+_set_module_attr("alpaca.data", "StockBarsRequest", _DummyReq)
 
-sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
-sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
-sys.modules["prometheus_client"].Counter = lambda *a, **k: None
-sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
-sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
-sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
-sys.modules["finnhub"].FinnhubAPIException = Exception
-sys.modules["finnhub"].Client = lambda *a, **k: None
-sys.modules["strategy_allocator"].StrategyAllocator = object
+_set_module_attr("bs4", "BeautifulSoup", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "start_http_server", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Counter", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Gauge", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Histogram", lambda *a, **k: None)
+_set_module_attr("metrics_logger", "log_metrics", lambda *a, **k: None)
+_set_module_attr("finnhub", "FinnhubAPIException", Exception)
+_set_module_attr("finnhub", "Client", lambda *a, **k: None)
+_set_module_attr("strategy_allocator", "StrategyAllocator", object)
 class _DummyBreaker:
     def __init__(self, *a, **k):
         pass
@@ -140,7 +167,7 @@ class _DummyBreaker:
     def __call__(self, func):
         return func
 
-sys.modules["pybreaker"].CircuitBreaker = _DummyBreaker
+_set_module_attr("pybreaker", "CircuitBreaker", _DummyBreaker)
 class _CapScaler:
     def __init__(self, *a, **k):
         pass
@@ -154,18 +181,18 @@ class _CapScaler:
     def scale_position(self, size):
         return size
 import ai_trading.capital_scaling as _cap_mod
-_cap_mod.CapitalScalingEngine = _CapScaler
+setattr(_cap_mod, "CapitalScalingEngine", _CapScaler)
 if "pandas_market_calendars" in sys.modules:
-    sys.modules["pandas_market_calendars"].get_calendar = (
+    _set_module_attr("pandas_market_calendars", "get_calendar", (
         lambda *a, **k: types.SimpleNamespace(
             schedule=lambda *a, **k: pd.DataFrame()
         )
-    )
+    ))
 if "pandas_ta" in sys.modules:
-    sys.modules["pandas_ta"].atr = lambda *a, **k: pd.Series([0])
-    sys.modules["pandas_ta"].rsi = lambda *a, **k: pd.Series([0])
-    sys.modules["pandas_ta"].obv = lambda *a, **k: pd.Series([0])
-    sys.modules["pandas_ta"].vwap = lambda *a, **k: pd.Series([0])
+    _set_module_attr("pandas_ta", "atr", lambda *a, **k: pd.Series([0]))
+    _set_module_attr("pandas_ta", "rsi", lambda *a, **k: pd.Series([0]))
+    _set_module_attr("pandas_ta", "obv", lambda *a, **k: pd.Series([0]))
+    _set_module_attr("pandas_ta", "vwap", lambda *a, **k: pd.Series([0]))
 
 from ai_trading.core import bot_engine as bot
 

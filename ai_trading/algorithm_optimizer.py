@@ -539,7 +539,7 @@ class AlgorithmOptimizer:
     def validate_mathematical_models(self) -> dict[str, Any]:
         """Validate mathematical models and calculations."""
 
-        validation_results = {
+        validation_results: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "tests_run": [],
             "tests_passed": 0,
@@ -680,4 +680,3 @@ __all__ = [
     "get_algorithm_optimizer",
     "initialize_algorithm_optimizer",
 ]
-

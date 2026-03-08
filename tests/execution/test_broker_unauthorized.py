@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -33,7 +34,7 @@ def execution_engine(monkeypatch):
     monkeypatch.setattr(lt, "get_trading_config", lambda: trading_config)
     monkeypatch.setattr(lt, "get_settings", lambda: SimpleNamespace(halt_flag_path="halt.flag"))
 
-    engine = lt.ExecutionEngine()
+    engine: Any = lt.ExecutionEngine()
     engine.is_initialized = True
     engine._ensure_initialized = lambda: True
     engine._pre_execution_checks = lambda: True
@@ -71,7 +72,7 @@ def test_broker_unauthorized_engages_backoff(monkeypatch, execution_engine):
     def raise_unauthorized(_order):
         raise UnauthorizedError()
 
-    engine._submit_order_to_alpaca = raise_unauthorized  # type: ignore[assignment]
+    engine._submit_order_to_alpaca = raise_unauthorized
 
     result = engine.submit_market_order("AAPL", "buy", 1)
 
@@ -86,7 +87,7 @@ def test_broker_unauthorized_engages_backoff(monkeypatch, execution_engine):
         called.append(True)
         return {"id": "should_not"}
 
-    engine._submit_order_to_alpaca = should_not_execute  # type: ignore[assignment]
+    engine._submit_order_to_alpaca = should_not_execute
 
     result_second = engine.submit_market_order("AAPL", "buy", 1)
 

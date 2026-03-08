@@ -41,7 +41,3 @@ def test_ai_trading_import_without_alpaca(monkeypatch):
             elif name == target_prefixes[1] or name.startswith(f"{target_prefixes[1]}."):
                 sys.modules.pop(name, None)
         sys.modules.update(restore_modules)
-
-
-if __name__ == "__main__":
-    test_ai_trading_import_without_alpaca()

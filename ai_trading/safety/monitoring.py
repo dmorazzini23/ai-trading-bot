@@ -46,14 +46,32 @@ class SafetyMonitor:
         self.state = TradingState.STOPPED
         self.is_monitoring = False
         self.emergency_stop_triggered = False
-        self.thresholds = {'max_daily_loss': 0.05, 'max_position_risk': 0.02, 'max_drawdown': 0.1, 'min_available_cash': 1000, 'max_orders_per_minute': 50, 'max_failed_orders': 10, 'circuit_breaker_threshold': 5}
-        self.metrics = {'daily_pnl': 0.0, 'current_drawdown': 0.0, 'orders_this_minute': 0, 'failed_orders_count': 0, 'last_order_time': None, 'available_cash': 0.0, 'total_portfolio_value': 0.0, 'active_positions': 0, 'system_start_time': safe_utcnow()}
+        self.thresholds: dict[str, float] = {
+            'max_daily_loss': 0.05,
+            'max_position_risk': 0.02,
+            'max_drawdown': 0.1,
+            'min_available_cash': 1000.0,
+            'max_orders_per_minute': 50.0,
+            'max_failed_orders': 10.0,
+            'circuit_breaker_threshold': 5.0,
+        }
+        self.metrics: dict[str, Any] = {
+            'daily_pnl': 0.0,
+            'current_drawdown': 0.0,
+            'orders_this_minute': 0,
+            'failed_orders_count': 0,
+            'last_order_time': None,
+            'available_cash': 0.0,
+            'total_portfolio_value': 0.0,
+            'active_positions': 0,
+            'system_start_time': safe_utcnow(),
+        }
         self.alert_callbacks: list[Callable] = []
-        self._monitor_thread = None
+        self._monitor_thread: threading.Thread | None = None
         self.emergency_actions: list[Callable] = []
         logger.info('SafetyMonitor initialized')
 
-    def start_monitoring(self):
+    def start_monitoring(self) -> None:
         """Start the safety monitoring system."""
         if self.is_monitoring:
             logger.warning('Safety monitoring already running')
@@ -65,7 +83,7 @@ class SafetyMonitor:
         logger.info('Safety monitoring started')
         self._send_alert(AlertSeverity.INFO, 'Safety monitoring system started')
 
-    def stop_monitoring(self):
+    def stop_monitoring(self) -> None:
         """Stop the safety monitoring system."""
         if not self.is_monitoring:
             return
@@ -76,7 +94,7 @@ class SafetyMonitor:
         logger.info('Safety monitoring stopped')
         self._send_alert(AlertSeverity.INFO, 'Safety monitoring system stopped')
 
-    def emergency_stop(self, reason: str='Manual emergency stop'):
+    def emergency_stop(self, reason: str='Manual emergency stop') -> None:
         """Trigger emergency stop of trading system."""
         logger.critical(f'EMERGENCY STOP TRIGGERED: {reason}')
         self.emergency_stop_triggered = True
@@ -89,7 +107,7 @@ class SafetyMonitor:
         self._send_alert(AlertSeverity.EMERGENCY, f'Emergency stop triggered: {reason}')
         self.pause_trading('Emergency stop')
 
-    def pause_trading(self, reason: str='Manual pause'):
+    def pause_trading(self, reason: str='Manual pause') -> None:
         """Pause trading activities."""
         if self.state == TradingState.EMERGENCY_STOP:
             logger.warning('Cannot pause - system in emergency stop')
@@ -98,7 +116,7 @@ class SafetyMonitor:
         logger.warning(f'Trading paused: {reason}')
         self._send_alert(AlertSeverity.WARNING, f'Trading paused: {reason}')
 
-    def resume_trading(self, reason: str='Manual resume'):
+    def resume_trading(self, reason: str='Manual resume') -> bool:
         """Resume trading activities."""
         if self.emergency_stop_triggered:
             logger.error('Cannot resume - emergency stop active. Manual reset required.')
@@ -108,7 +126,7 @@ class SafetyMonitor:
         self._send_alert(AlertSeverity.INFO, f'Trading resumed: {reason}')
         return True
 
-    def reset_emergency_stop(self, authorization_code: str=None):
+    def reset_emergency_stop(self, authorization_code: str | None=None) -> bool:
         """Reset emergency stop (requires authorization)."""
         if authorization_code != 'RESET_AUTHORIZED':
             logger.error('Emergency stop reset denied - invalid authorization')
@@ -120,7 +138,7 @@ class SafetyMonitor:
         self._send_alert(AlertSeverity.WARNING, 'Emergency stop reset - manual restart required')
         return True
 
-    def update_metrics(self, **kwargs):
+    def update_metrics(self, **kwargs: Any) -> None:
         """Update monitoring metrics."""
         for key, value in kwargs.items():
             if key in self.metrics:
@@ -129,9 +147,9 @@ class SafetyMonitor:
             self.metrics['last_order_time'] = safe_utcnow()
             self.metrics['orders_this_minute'] += 1
 
-    def check_safety_thresholds(self) -> list[dict]:
+    def check_safety_thresholds(self) -> list[dict[str, Any]]:
         """Check all safety thresholds and return any violations."""
-        violations = []
+        violations: list[dict[str, Any]] = []
         if abs(self.metrics['daily_pnl']) > self.thresholds['max_daily_loss'] * self.metrics['total_portfolio_value']:
             violations.append({'type': 'daily_loss_limit', 'severity': AlertSeverity.CRITICAL, 'message': f"Daily loss limit exceeded: {self.metrics['daily_pnl']:.2f}", 'action': 'emergency_stop'})
         if self.metrics['current_drawdown'] > self.thresholds['max_drawdown']:
@@ -150,15 +168,15 @@ class SafetyMonitor:
         health = {'status': self.state.value, 'emergency_stop_active': self.emergency_stop_triggered, 'monitoring_active': self.is_monitoring, 'uptime_seconds': uptime.total_seconds(), 'metrics': self.metrics.copy(), 'thresholds': self.thresholds.copy(), 'violations': self.check_safety_thresholds(), 'timestamp': safe_utcnow().isoformat()}
         return health
 
-    def add_alert_callback(self, callback: Callable):
+    def add_alert_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
         """Add callback for alert notifications."""
         self.alert_callbacks.append(callback)
 
-    def add_emergency_action(self, action: Callable):
+    def add_emergency_action(self, action: Callable[[str], None]) -> None:
         """Add emergency action to execute during emergency stop."""
         self.emergency_actions.append(action)
 
-    def _monitoring_loop(self):
+    def _monitoring_loop(self) -> None:
         """Main monitoring loop."""
         minute_reset_time = safe_utcnow()
         while self.is_monitoring:
@@ -181,7 +199,7 @@ class SafetyMonitor:
                 logger.error(f'Error in monitoring loop: {e}')
                 time.sleep(5)
 
-    def _send_alert(self, severity: AlertSeverity, message: str):
+    def _send_alert(self, severity: AlertSeverity, message: str) -> None:
         """Send alert to all registered callbacks."""
         alert = {'severity': severity.value, 'message': message, 'timestamp': safe_utcnow().isoformat(), 'system_state': self.state.value}
         if severity == AlertSeverity.EMERGENCY:
@@ -210,12 +228,12 @@ class KillSwitch:
         """Initialize kill switch."""
         self.safety_monitor = safety_monitor
         self.kill_file_path = 'KILL_SWITCH.flag'
-        self.auto_kill_time = None
+        self.auto_kill_time: datetime | None = None
         self.is_monitoring = False
-        self._monitor_thread = None
+        self._monitor_thread: threading.Thread | None = None
         logger.info('Kill switch initialized')
 
-    def start_monitoring(self):
+    def start_monitoring(self) -> None:
         """Start kill switch monitoring."""
         if self.is_monitoring:
             return
@@ -224,23 +242,23 @@ class KillSwitch:
         self._monitor_thread.start()
         logger.info('Kill switch monitoring started')
 
-    def stop_monitoring(self):
+    def stop_monitoring(self) -> None:
         """Stop kill switch monitoring."""
         self.is_monitoring = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=5)
 
-    def set_auto_kill_time(self, kill_time: datetime):
+    def set_auto_kill_time(self, kill_time: datetime) -> None:
         """Set automatic kill time."""
         self.auto_kill_time = kill_time
         logger.warning(f'Auto-kill time set for: {kill_time.isoformat()}')
 
-    def trigger_kill_switch(self, reason: str='Manual kill switch'):
+    def trigger_kill_switch(self, reason: str='Manual kill switch') -> None:
         """Manually trigger kill switch."""
         logger.critical(f'KILL SWITCH TRIGGERED: {reason}')
         self.safety_monitor.emergency_stop(f'Kill switch: {reason}')
 
-    def _kill_switch_monitor(self):
+    def _kill_switch_monitor(self) -> None:
         """Monitor for kill switch triggers."""
         while self.is_monitoring:
             try:
@@ -277,21 +295,29 @@ class PerformanceMonitor:
 
     def __init__(self):
         """Initialize performance monitor."""
-        self.metrics = {'order_latency': [], 'execution_times': [], 'memory_usage': [], 'cpu_usage': [], 'api_response_times': [], 'error_rates': {}, 'throughput': 0}
+        self.metrics: dict[str, Any] = {
+            'order_latency': [],
+            'execution_times': [],
+            'memory_usage': [],
+            'cpu_usage': [],
+            'api_response_times': [],
+            'error_rates': {},
+            'throughput': 0,
+        }
         self.start_time = safe_utcnow()
         logger.info('Performance monitor initialized')
 
-    def record_order_latency(self, latency_ms: float):
+    def record_order_latency(self, latency_ms: float) -> None:
         """Record order execution latency."""
         self.metrics['order_latency'].append({'timestamp': safe_utcnow(), 'latency_ms': latency_ms})
         if len(self.metrics['order_latency']) > 1000:
             self.metrics['order_latency'] = self.metrics['order_latency'][-500:]
 
-    def record_api_response_time(self, endpoint: str, response_time_ms: float):
+    def record_api_response_time(self, endpoint: str, response_time_ms: float) -> None:
         """Record API response time."""
         self.metrics['api_response_times'].append({'timestamp': safe_utcnow(), 'endpoint': endpoint, 'response_time_ms': response_time_ms})
 
-    def record_error(self, error_type: str):
+    def record_error(self, error_type: str) -> None:
         """Record error occurrence."""
         if error_type not in self.metrics['error_rates']:
             self.metrics['error_rates'][error_type] = 0

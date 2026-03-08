@@ -1,9 +1,10 @@
 """Runtime settings with env aliases and safe defaults."""
 from __future__ import annotations
+import json
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal, cast
 from types import SimpleNamespace
 import sys
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator
@@ -13,6 +14,11 @@ except Exception:  # pragma: no cover - fallback to pydantic v1 style
     from pydantic import BaseSettings
 
     SettingsConfigDict = None
+
+try:
+    from pydantic_settings import NoDecode
+except Exception:  # pragma: no cover - compatibility with lean pydantic-settings stubs
+    NoDecode = object
 from ai_trading.logging import logger
 
 
@@ -28,7 +34,7 @@ def _secret_to_str(val: Any) -> str | None:
     if val is None or isinstance(val, FieldInfo):
         return None
     if isinstance(val, SecretStr):
-        return val.get_secret_value()
+        return cast(str, val.get_secret_value())
     if isinstance(val, str):
         return val
     return str(val)
@@ -145,7 +151,6 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "ALPACA_API_KEY",
             "AI_TRADING_ALPACA_API_KEY",
         ),
-        env=("ALPACA_API_KEY", "AI_TRADING_ALPACA_API_KEY"),
     )
     alpaca_secret_key: SecretStr | None = Field(
         default=None,
@@ -154,7 +159,6 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "ALPACA_SECRET_KEY",
             "AI_TRADING_ALPACA_SECRET_KEY",
         ),
-        env=("ALPACA_SECRET_KEY", "AI_TRADING_ALPACA_SECRET_KEY"),
     )
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     enable_finnhub: bool = Field(True, alias="ENABLE_FINNHUB")
@@ -172,7 +176,6 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     )
     trading_mode: str = Field(
         default="balanced",
-        env="AI_TRADING_TRADING_MODE",
         validation_alias=AliasChoices("AI_TRADING_TRADING_MODE", "trading_mode"),
     )
     WEBHOOK_SECRET: str | None = Field(
@@ -207,9 +210,9 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         "STATIC",
         validation_alias=AliasChoices("MAX_POSITION_MODE", "AI_TRADING_MAX_POSITION_MODE"),
     )
-    finnhub_rpm: int = Field(default=55, env="AI_TRADING_FINNHUB_RPM")
-    max_trades_per_day: int = Field(default=200, env="AI_TRADING_MAX_TRADES_PER_DAY")
-    max_trades_per_hour: int = Field(default=30, env="AI_TRADING_MAX_TRADES_PER_HOUR")
+    finnhub_rpm: int = Field(default=55, validation_alias="AI_TRADING_FINNHUB_RPM")
+    max_trades_per_day: int = Field(default=200, validation_alias="AI_TRADING_MAX_TRADES_PER_DAY")
+    max_trades_per_hour: int = Field(default=30, validation_alias="AI_TRADING_MAX_TRADES_PER_HOUR")
     min_position_hold_seconds: int = Field(
         default=0,
         validation_alias=AliasChoices(
@@ -393,7 +396,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "ALPHA_DECAY_MAX_TRADES_WINDOW",
         ),
     )
-    conf_threshold: float = Field(default=0.75, env="AI_TRADING_CONF_THRESHOLD")
+    conf_threshold: float = Field(default=0.75, validation_alias="AI_TRADING_CONF_THRESHOLD")
     score_confidence_min: float | None = Field(default=None, alias="SCORE_CONFIDENCE_MIN")
     score_size_max_boost: float = Field(
         1.0, alias="SCORE_SIZE_MAX_BOOST", description="Upper bound of raw size multiplier at confidence=1.0"
@@ -407,14 +410,17 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         ge=0.0,
         description="Fallback liquidity multiplier when live quotes are unavailable.",
     )
-    buy_threshold: float = Field(default=0.4, env="AI_TRADING_BUY_THRESHOLD")
-    sector_exposure_cap: float = Field(default=0.33, env="AI_TRADING_SECTOR_EXPOSURE_CAP")
-    max_portfolio_positions: int = Field(default=20, env="AI_TRADING_MAX_PORTFOLIO_POSITIONS")
-    disaster_dd_limit: float = Field(default=0.25, env="AI_TRADING_DISASTER_DD_LIMIT")
-    data_cache_enable: bool = Field(default=True, env="AI_TRADING_DATA_CACHE_ENABLE")
-    data_cache_ttl_seconds: int = Field(default=300, env="AI_TRADING_DATA_CACHE_TTL_SECONDS")
-    data_cache_dir: str = Field(default=str(Path.home() / ".cache" / "ai_trading"), env="AI_TRADING_DATA_CACHE_DIR")
-    data_cache_disk_enable: bool = Field(True, env="AI_TRADING_DATA_CACHE_DISK_ENABLE")
+    buy_threshold: float = Field(default=0.4, validation_alias="AI_TRADING_BUY_THRESHOLD")
+    sector_exposure_cap: float = Field(default=0.33, validation_alias="AI_TRADING_SECTOR_EXPOSURE_CAP")
+    max_portfolio_positions: int = Field(default=20, validation_alias="AI_TRADING_MAX_PORTFOLIO_POSITIONS")
+    disaster_dd_limit: float = Field(default=0.25, validation_alias="AI_TRADING_DISASTER_DD_LIMIT")
+    data_cache_enable: bool = Field(default=True, validation_alias="AI_TRADING_DATA_CACHE_ENABLE")
+    data_cache_ttl_seconds: int = Field(default=300, validation_alias="AI_TRADING_DATA_CACHE_TTL_SECONDS")
+    data_cache_dir: str = Field(
+        default=str(Path.home() / ".cache" / "ai_trading"),
+        validation_alias="AI_TRADING_DATA_CACHE_DIR",
+    )
+    data_cache_disk_enable: bool = Field(True, validation_alias="AI_TRADING_DATA_CACHE_DISK_ENABLE")
     minute_cache_ttl: int = Field(300, alias="MINUTE_CACHE_TTL")
     market_cache_enabled: bool = Field(False, alias="MARKET_CACHE_ENABLED")
     market_cache_ttl: int = Field(86400, alias="MARKET_CACHE_TTL")
@@ -424,12 +430,11 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     minute_gap_backfill: str | None = Field("auto", alias="MINUTE_GAP_BACKFILL")
     data_max_gap_ratio_bps: float = Field(
         default=50.0,
-        env="DATA_MAX_GAP_RATIO_BPS",
         validation_alias=AliasChoices("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"),
     )
     data_cooldown_seconds: int = Field(
         default=120,
-        env="DATA_COOLDOWN_SECONDS",
+        validation_alias="DATA_COOLDOWN_SECONDS",
     )
     data_daily_fetch_min_interval_s: float = Field(
         0.0,
@@ -440,12 +445,10 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     )
     price_slippage_bps: float = Field(
         default=10.0,
-        env="PRICE_SLIPPAGE_BPS",
         validation_alias=AliasChoices("PRICE_SLIPPAGE_BPS", "SLIPPAGE_BPS"),
     )
     log_timing_throttle_seconds: float = Field(
         default=5.0,
-        env="LOG_TIMING_THROTTLE_SECONDS",
         validation_alias=AliasChoices(
             "LOG_TIMING_THROTTLE_SECONDS",
             "LOG_TIMING_THROTTLE_MS",
@@ -454,35 +457,40 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     )
     allocator_eps: float = Field(
         default=1e-6,
-        env="ALLOCATOR_EPS",
+        validation_alias="ALLOCATOR_EPS",
     )
     meta_sync_from_broker: bool = Field(
         default=True,
-        env="META_SYNC_FROM_BROKER",
+        validation_alias="META_SYNC_FROM_BROKER",
     )
     env_import_guard: bool = Field(
         default=True,
-        env="ENV_IMPORT_GUARD",
+        validation_alias="ENV_IMPORT_GUARD",
     )
     pretrade_lookback_days: int = Field(120, alias="PRETRADE_LOOKBACK_DAYS")
-    verbose_logging: bool = Field(default=False, env="AI_TRADING_VERBOSE_LOGGING")
-    enable_plotting: bool = Field(default=False, env="AI_TRADING_ENABLE_PLOTTING")
+    verbose_logging: bool = Field(default=False, validation_alias="AI_TRADING_VERBOSE_LOGGING")
+    enable_plotting: bool = Field(default=False, validation_alias="AI_TRADING_ENABLE_PLOTTING")
     position_size_min_usd: float = Field(
         default=POSITION_SIZE_MIN_USD_DEFAULT,
-        env="AI_TRADING_POSITION_SIZE_MIN_USD",
+        validation_alias="AI_TRADING_POSITION_SIZE_MIN_USD",
     )
-    volume_threshold: float = Field(default=0.0, env="AI_TRADING_VOLUME_THRESHOLD")
+    volume_threshold: float = Field(default=0.0, validation_alias="AI_TRADING_VOLUME_THRESHOLD")
     alpaca_data_feed: Literal["iex", "sip"] = Field(
         "iex",
-        env="ALPACA_DATA_FEED",
         validation_alias=AliasChoices("ALPACA_DATA_FEED", "DATA_FEED", "data_feed"),
     )
-    alpaca_feed_failover: tuple[str, ...] = Field(("sip",), env="ALPACA_FEED_FAILOVER")
-    alpaca_empty_to_backup: bool = Field(True, env="ALPACA_EMPTY_TO_BACKUP")
-    alpaca_adjustment: Literal["all", "raw"] = Field("all", env="ALPACA_ADJUSTMENT")
-    data_provider_priority: tuple[str, ...] = Field(("alpaca_iex", "yahoo"), env="DATA_PROVIDER_PRIORITY")
-    safe_mode_allow_paper: bool = Field(False, env="AI_TRADING_SAFE_MODE_ALLOW_PAPER")
-    max_data_fallbacks: int = Field(2, env="MAX_DATA_FALLBACKS")
+    alpaca_feed_failover: Annotated[tuple[str, ...], NoDecode] = Field(
+        ("sip",),
+        validation_alias="ALPACA_FEED_FAILOVER",
+    )
+    alpaca_empty_to_backup: bool = Field(True, validation_alias="ALPACA_EMPTY_TO_BACKUP")
+    alpaca_adjustment: Literal["all", "raw"] = Field("all", validation_alias="ALPACA_ADJUSTMENT")
+    data_provider_priority: Annotated[tuple[str, ...], NoDecode] = Field(
+        ("alpaca_iex", "yahoo"),
+        validation_alias="DATA_PROVIDER_PRIORITY",
+    )
+    safe_mode_allow_paper: bool = Field(False, validation_alias="AI_TRADING_SAFE_MODE_ALLOW_PAPER")
+    max_data_fallbacks: int = Field(2, validation_alias="MAX_DATA_FALLBACKS")
     minute_data_freshness_tolerance_seconds: int = Field(
         900,
         validation_alias=AliasChoices(
@@ -490,15 +498,14 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
             "AI_TRADING_MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS",
         ),
     )
-    daily_loss_limit: float = Field(default=0.05, env="AI_TRADING_DAILY_LOSS_LIMIT")
+    daily_loss_limit: float = Field(default=0.05, validation_alias="AI_TRADING_DAILY_LOSS_LIMIT")
     max_drawdown_threshold: float = Field(
         default=0.08,
-        env=("MAX_DRAWDOWN_THRESHOLD",),
+        validation_alias="MAX_DRAWDOWN_THRESHOLD",
     )
-    portfolio_drift_threshold: float = Field(default=0.15, env="AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD")
+    portfolio_drift_threshold: float = Field(default=0.15, validation_alias="AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD")
     capital_cap: float = Field(
         0.25,
-        env="AI_TRADING_CAPITAL_CAP",
         validation_alias=AliasChoices("AI_TRADING_CAPITAL_CAP", "capital_cap"),
     )
     dollar_risk_limit: float = Field(
@@ -507,7 +514,6 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     )
     max_position_size: float | None = Field(
         8000.0,
-        env="AI_TRADING_SIGNAL_MAX_POSITION_SIZE",
         description=(
             "Absolute max dollars per position. If None, derive from equity * "
             "capital_cap; if equity unknown, use static fallback."
@@ -534,7 +540,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     trade_cooldown_min: int = Field(15, alias="TRADE_COOLDOWN_MIN")
     health_tick_seconds: int = Field(
         default=300,
-        env="AI_TRADING_HEALTH_TICK_SECONDS",
+        validation_alias="AI_TRADING_HEALTH_TICK_SECONDS",
         ge=30,
         description=(
             "Interval between background health checks in seconds. A minimum"
@@ -628,9 +634,17 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
                 default = ("sip",)
             return tuple(default or ())
         if isinstance(v, str):
-            if not v.strip():
+            raw = v.strip()
+            if not raw:
                 return tuple()
-            return tuple(i.strip() for i in v.split(",") if i.strip())
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, (list, tuple)):
+                    return tuple(str(i).strip() for i in parsed if str(i).strip())
+            return tuple(i.strip() for i in raw.split(",") if i.strip())
         return tuple(v)
 
     @field_validator("alpaca_feed_failover", mode="after")
@@ -652,9 +666,25 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
 
     @field_validator("data_provider_priority", mode="before")
     @classmethod
-    def _split_priority(cls, v):
+    def _split_priority(cls, v, info):
+        if isinstance(v, FieldInfo) or v is None:
+            try:
+                default = cls.model_fields[info.field_name].default
+            except Exception:
+                default = ("alpaca_iex", "yahoo")
+            return tuple(default or ())
         if isinstance(v, str):
-            return tuple(i.strip() for i in v.split(",") if i.strip())
+            raw = v.strip()
+            if not raw:
+                return tuple()
+            if raw.startswith("["):
+                try:
+                    parsed = json.loads(raw)
+                except (TypeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, (list, tuple)):
+                    return tuple(str(i).strip() for i in parsed if str(i).strip())
+            return tuple(i.strip() for i in raw.split(",") if i.strip())
         return tuple(v)
 
     @field_validator("data_provider_priority")
@@ -731,7 +761,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         env_key = "ALPACA_TRADING_BASE_URL"
         normalized, message = config_management._normalize_alpaca_base_url(value, source_key=env_key)
         if normalized:
-            return normalized
+            return cast(str, normalized)
         guidance = message or config_management.ALPACA_URL_GUIDANCE
         raise ValueError(guidance)
 
@@ -792,7 +822,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
                 case_sensitive = False
                 validate_assignment = True
     else:  # pragma: no cover - compatibility with pydantic v1 BaseSettings
-        class Config:  # type: ignore[override,unused-ignore]
+        class Config:  # type: ignore[override,unused-ignore,no-redef]
             env_prefix = "AI_TRADING_"
             extra = "ignore"
             case_sensitive = False
@@ -802,17 +832,18 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return module-level Settings singleton."""
-    return Settings()
+    settings_factory = cast(Any, Settings)
+    return cast(Settings, settings_factory())
 
 
 def get_news_api_key() -> str | None:
     """Lazy accessor for optional News API key."""
     val = getattr(get_settings(), "news_api_key", None)
     if val:
-        return val
+        return cast(str, val)
     from ai_trading.config.management import get_env as _get_env
 
-    return _get_env("SENTIMENT_API_KEY", None, cast=str, resolve_aliases=False)
+    return cast(str | None, _get_env("SENTIMENT_API_KEY", None, cast=str, resolve_aliases=False))
 
 
 def get_rebalance_interval_min() -> int:

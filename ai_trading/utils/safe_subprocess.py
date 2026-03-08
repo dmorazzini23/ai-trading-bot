@@ -8,6 +8,7 @@ import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any, cast
 
 log = logging.getLogger(__name__)
 
@@ -86,10 +87,11 @@ def safe_subprocess_run(
             watchdog.cancel()
         stdout_text = _normalize_stream(getattr(exc, "output", None))
         stderr_text = _normalize_stream(getattr(exc, "stderr", None))
-        result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
-        exc.stdout = stdout_text
-        exc.stderr = stderr_text
-        exc.result = result
+        timeout_result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
+        exc_any = cast(Any, exc)
+        exc_any.stdout = stdout_text
+        exc_any.stderr = stderr_text
+        exc_any.result = timeout_result
         timeout_value: float | None
         if timeout_param is not None:
             timeout_value = float(timeout_param)
@@ -99,7 +101,7 @@ def safe_subprocess_run(
                 timeout_value = float(timeout_attr) if timeout_attr is not None else None
             except (TypeError, ValueError):
                 timeout_value = None
-        exc.timeout = timeout_value
+        exc_any.timeout = timeout_value
         log.warning(
             "SAFE_SUBPROCESS_TIMEOUT",
             extra={"cmd": cmd, "timeout": timeout_value},
@@ -108,12 +110,12 @@ def safe_subprocess_run(
     except (OSError, subprocess.SubprocessError) as exc:
         if watchdog is not None:
             watchdog.cancel()
-        result = _coerce_exception_result(exc, cmd)
+        error_result = _coerce_exception_result(exc, cmd)
         log.warning(
             "SAFE_SUBPROCESS_ERROR",
-            extra={"cmd": cmd, "returncode": result.returncode, "error": str(exc), "exc_type": type(exc).__name__},
+            extra={"cmd": cmd, "returncode": error_result.returncode, "error": str(exc), "exc_type": type(exc).__name__},
         )
-        return result
+        return error_result
     finally:
         if watchdog is not None:
             watchdog.cancel()
@@ -132,11 +134,12 @@ def safe_subprocess_run(
             stderr=stderr_text,
         )
         timeout_value = float(timeout_param)
-        result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
-        synthetic_timeout.stdout = stdout_text
-        synthetic_timeout.stderr = stderr_text
-        synthetic_timeout.result = result
-        synthetic_timeout.timeout = timeout_value
+        timeout_result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
+        synthetic_any = cast(Any, synthetic_timeout)
+        synthetic_any.stdout = stdout_text
+        synthetic_any.stderr = stderr_text
+        synthetic_any.result = timeout_result
+        synthetic_any.timeout = timeout_value
         log.warning(
             "SAFE_SUBPROCESS_TIMEOUT",
             extra={"cmd": cmd, "timeout": timeout_value},

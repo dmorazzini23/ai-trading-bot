@@ -72,7 +72,7 @@ class TimeframeHierarchy:
 
     def get_rank(self, timeframe: TimeFrame) -> int:
         """Get rank for a timeframe (1=highest, 8=lowest)."""
-        return self.hierarchy.get(timeframe, {}).get('rank', 999)
+        return int(self.hierarchy.get(timeframe, {}).get('rank', 999))
 
     def is_higher_timeframe(self, tf1: TimeFrame, tf2: TimeFrame) -> bool:
         """Check if tf1 is a higher timeframe than tf2."""
@@ -115,8 +115,8 @@ class MultiTimeframeAnalyzer:
         """Initialize multi-timeframe analyzer."""
         self.primary_timeframes = primary_timeframes or [TimeFrame.DAY_1, TimeFrame.HOUR_4, TimeFrame.HOUR_1, TimeFrame.MINUTE_15]
         self.hierarchy = TimeframeHierarchy()
-        self.current_signals = {}
-        self.signal_history = {}
+        self.current_signals: dict[str, dict[TimeFrame, list[MultiTimeframeSignal]]] = {}
+        self.signal_history: dict[str, list[dict[str, Any]]] = {}
         self.alignment_threshold = 0.7
         self.confidence_threshold = 0.6
         logger.info(f'MultiTimeframeAnalyzer initialized with timeframes: {[tf.value for tf in self.primary_timeframes]}')
@@ -134,7 +134,7 @@ class MultiTimeframeAnalyzer:
         """
         try:
             analysis_start = datetime.now(UTC)
-            timeframe_signals = {}
+            timeframe_signals: dict[TimeFrame, list[MultiTimeframeSignal]] = {}
             for timeframe in self.primary_timeframes:
                 if timeframe in market_data:
                     signals = self._analyze_timeframe(symbol, timeframe, market_data[timeframe])
@@ -153,7 +153,7 @@ class MultiTimeframeAnalyzer:
     def _analyze_timeframe(self, symbol: str, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Analyze a single timeframe and generate signals."""
         try:
-            signals = []
+            signals: list[MultiTimeframeSignal] = []
             if len(data) < 20:
                 logger.warning(f'Insufficient data for {symbol} {timeframe.value}: {len(data)} bars')
                 return signals
@@ -177,7 +177,7 @@ class MultiTimeframeAnalyzer:
         """Generate moving average signals."""
         import pandas as pd  # heavy import; keep local
         try:
-            signals = []
+            signals: list[MultiTimeframeSignal] = []
             data['SMA_20'] = data['close'].rolling(20).mean()
             data['SMA_50'] = data['close'].rolling(50).mean()
             data['EMA_12'] = data['close'].ewm(span=12).mean()
@@ -216,7 +216,7 @@ class MultiTimeframeAnalyzer:
         """Generate RSI-based signals."""
         import pandas as pd  # heavy import; keep local
         try:
-            signals = []
+            signals: list[MultiTimeframeSignal] = []
             delta = data['close'].diff()
             gain = delta.where(delta > 0, 0).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -247,7 +247,7 @@ class MultiTimeframeAnalyzer:
         """Generate MACD signals."""
         import pandas as pd  # heavy import; keep local
         try:
-            signals = []
+            signals: list[MultiTimeframeSignal] = []
             ema_12 = data['close'].ewm(span=12).mean()
             ema_26 = data['close'].ewm(span=26).mean()
             data['MACD'] = ema_12 - ema_26
@@ -277,7 +277,7 @@ class MultiTimeframeAnalyzer:
         """Generate Bollinger Band signals."""
         import pandas as pd  # heavy import; keep local
         try:
-            signals = []
+            signals: list[MultiTimeframeSignal] = []
             data['BB_Middle'] = data['close'].rolling(20).mean()
             data['BB_Std'] = data['close'].rolling(20).std()
             data['BB_Upper'] = data['BB_Middle'] + data['BB_Std'] * 2
@@ -311,7 +311,7 @@ class MultiTimeframeAnalyzer:
         """Generate volume-based signals."""
         import pandas as pd  # heavy import; keep local
         try:
-            signals = []
+            signals: list[MultiTimeframeSignal] = []
             if 'volume' not in data.columns:
                 return signals
             data['Volume_SMA'] = data['volume'].rolling(20).mean()
@@ -343,8 +343,8 @@ class MultiTimeframeAnalyzer:
     def _combine_timeframe_signals(self, symbol: str, timeframe_signals: dict[TimeFrame, list[MultiTimeframeSignal]]) -> dict[str, Any]:
         """Combine signals across all timeframes."""
         try:
-            indicator_scores = {}
-            all_signals = []
+            indicator_scores: dict[str, list[float]] = {}
+            all_signals: list[MultiTimeframeSignal] = []
             for timeframe, signals in timeframe_signals.items():
                 weight = self.hierarchy.get_weight(timeframe)
                 for signal in signals:
@@ -353,7 +353,7 @@ class MultiTimeframeAnalyzer:
                         indicator_scores[signal.indicator] = []
                     weighted_score = signal.score * weight
                     indicator_scores[signal.indicator].append(weighted_score)
-            combined_scores = {}
+            combined_scores: dict[str, float] = {}
             for indicator, scores in indicator_scores.items():
                 combined_scores[indicator] = sum(scores) / len(scores) if scores else 0.0
             overall_score = sum(combined_scores.values()) / len(combined_scores) if combined_scores else 0.0
@@ -370,13 +370,13 @@ class MultiTimeframeAnalyzer:
         """Analyze signal alignment across timeframes."""
         try:
             alignment_analysis = {'overall_alignment': 0.0, 'alignment_by_indicator': {}, 'conflicting_timeframes': [], 'consensus_direction': SignalDirection.NEUTRAL, 'alignment_strength': 'weak'}
-            indicator_groups = {}
+            indicator_groups: dict[str, dict[TimeFrame, MultiTimeframeSignal]] = {}
             for timeframe, signals in timeframe_signals.items():
                 for signal in signals:
                     if signal.indicator not in indicator_groups:
                         indicator_groups[signal.indicator] = {}
                     indicator_groups[signal.indicator][timeframe] = signal
-            indicator_alignments = {}
+            indicator_alignments: dict[str, float] = {}
             for indicator, tf_signals in indicator_groups.items():
                 alignment_score = self._calculate_indicator_alignment(tf_signals)
                 indicator_alignments[indicator] = alignment_score
@@ -416,7 +416,7 @@ class MultiTimeframeAnalyzer:
             directions = [signal.direction.value for signal in tf_signals.values()]
             if len(set(directions)) == 1:
                 return 1.0
-            direction_counts = {}
+            direction_counts: dict[int, int] = {}
             for direction in directions:
                 direction_counts[direction] = direction_counts.get(direction, 0) + 1
             max_count = max(direction_counts.values())
@@ -426,13 +426,17 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error calculating indicator alignment: {e}')
             return 0.0
 
-    def _generate_trading_recommendation(self, combined_analysis: dict, alignment_analysis: dict) -> dict[str, Any]:
+    def _generate_trading_recommendation(
+        self,
+        combined_analysis: dict[str, Any],
+        alignment_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
         """Generate final trading recommendation."""
         try:
             recommendation = {'action': 'HOLD', 'confidence': 0.0, 'risk_level': 'medium', 'position_size_multiplier': 1.0, 'reasoning': [], 'warnings': []}
-            overall_score = combined_analysis.get('overall_score', 0.0)
-            alignment = alignment_analysis.get('overall_alignment', 0.0)
-            avg_confidence = combined_analysis.get('average_confidence', 0.0)
+            overall_score = float(combined_analysis.get('overall_score', 0.0) or 0.0)
+            alignment = float(alignment_analysis.get('overall_alignment', 0.0) or 0.0)
+            avg_confidence = float(combined_analysis.get('average_confidence', 0.0) or 0.0)
             if overall_score > 2.0 and alignment > 0.6:
                 recommendation['action'] = 'BUY'
                 recommendation['confidence'] = min(0.95, (overall_score / 5.0 + alignment) / 2)
@@ -471,7 +475,11 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error generating trading recommendation: {e}')
             return {'action': 'HOLD', 'confidence': 0.0, 'error': str(e)}
 
-    def _update_signal_history(self, symbol: str, signals: dict[TimeFrame, list[MultiTimeframeSignal]]):
+    def _update_signal_history(
+        self,
+        symbol: str,
+        signals: dict[TimeFrame, list[MultiTimeframeSignal]],
+    ) -> None:
         """Update signal history for trend analysis."""
         try:
             if symbol not in self.signal_history:

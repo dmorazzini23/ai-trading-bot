@@ -16,7 +16,7 @@ import os
 import stat
 import tempfile
 import sys
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, cast
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, cast
 from types import SimpleNamespace
 from collections import Counter, OrderedDict, deque
 from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
@@ -719,7 +719,7 @@ class _DataClientAdapter:
         return get(*args, **kwargs)
 
 
-def _parse_timeframe(tf: Any) -> bars.TimeFrame:
+def _parse_timeframe(tf: Any) -> Any:
     """Map configuration values to :class:`bars.TimeFrame` enums."""
 
     from ai_trading.timeframe import canonicalize_timeframe
@@ -6039,7 +6039,7 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
         def execute_order(
             self,
             symbol: str,
-            side: OrderSide,
+            side: Any,
             qty: int,
             *args: Any,
             **kwargs: Any,
@@ -9712,7 +9712,7 @@ slippage_lock = Lock()
 meta_lock = Lock()
 run_lock = Lock()
 
-_DAILY_FETCH_MEMO: dict[tuple[str, str, str, str], tuple[float, Any]] = {}
+_DAILY_FETCH_MEMO: dict[tuple[str, ...], tuple[float, Any]] = {}
 try:
     _DAILY_FETCH_MEMO_TTL = float(get_env("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
@@ -10230,9 +10230,13 @@ def compute_spy_vol_stats(runtime) -> None:
 def is_high_vol_thr_spy() -> bool:
     """Return True if SPY ATR > mean + 2*std."""
     with vol_lock:
-        mean = _VOL_STATS["mean"]
-        std = _VOL_STATS["std"]
-    if mean is None or std is None:
+        mean_raw = _VOL_STATS["mean"]
+        std_raw = _VOL_STATS["std"]
+    if not isinstance(mean_raw, (int, float)) or not isinstance(std_raw, (int, float)):
+        return False
+    mean = float(mean_raw)
+    std = float(std_raw)
+    if std <= 0.0:
         return False
 
     with cache_lock:
@@ -13558,7 +13562,17 @@ PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
 SENTIMENT_TTL_SEC = 600  # 10 minutes
 # AI-AGENT-REF: Enhanced sentiment caching for rate limiting
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
-_SENTIMENT_CIRCUIT_BREAKER = {
+
+
+class _SentimentCircuitBreakerState(TypedDict):
+    failures: int
+    last_failure: float
+    state: str
+    next_retry: float
+    opened_at: float
+
+
+_SENTIMENT_CIRCUIT_BREAKER: _SentimentCircuitBreakerState = {
     "failures": 0,
     "last_failure": 0,
     "state": "closed",
@@ -14350,11 +14364,11 @@ class SignalManager:
         if df.empty:
             # Ensure callers never consume stale component state when there is no data
             self.last_components = []
-            return 0.0, 0.0, "no_data"
+            return 0, 0.0, "no_data"
 
         if original_len < self.mean_rev_lookback:
             self.last_components = []
-            return 0.0, 0.0, "no_data"
+            return 0, 0.0, "no_data"
 
         signal_factories = {
             "momentum": lambda: self.signal_momentum(df, model),
@@ -14383,7 +14397,7 @@ class SignalManager:
         if not signals:
             # Clearing prevents downstream consumers from reusing a previous evaluation
             self.last_components = []
-            return 0.0, 0.0, "no_data"
+            return 0, 0.0, "no_data"
 
         performance_map: dict[str, float] = {}
         for raw_tag, raw_score in performance_data.items():
@@ -14483,7 +14497,7 @@ class SignalManager:
             adjusted_signals.append((int(direction), float(adjusted_weight), label))
         if not adjusted_signals:
             self.last_components = []
-            return 0.0, 0.0, "no_data"
+            return 0, 0.0, "no_data"
         if changed_components:
             log_throttled_event(
                 logger,
@@ -14502,7 +14516,7 @@ class SignalManager:
         conf_map = {label: w for _, w, label in adjusted_signals}
         confidence = composite_signal_confidence(conf_map)
         labels = "+".join(conf_map.keys())
-        return math.copysign(1, score), confidence, labels
+        return int(math.copysign(1, score)), confidence, labels
 
 _METALEARN_FALLBACK_SYMBOL_LOGGED: set[str] = set()
 _META_SEED_LOCK = Lock()
@@ -14707,8 +14721,8 @@ class BotContext:
     risk_engine: RiskEngine | None = None
     allocator: StrategyAllocator | None = None
     strategies: list[Any] = field(default_factory=list)
-    execution_engine: ExecutionEngine | None = None
-    exec_engine: ExecutionEngine | None = None
+    execution_engine: Any | None = None
+    exec_engine: Any | None = None
     model: Any | None = None
     initial_rebalance_done: bool = False
     # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
@@ -15910,7 +15924,8 @@ def _check_sentiment_circuit_breaker() -> bool:
     cb = _SENTIMENT_CIRCUIT_BREAKER
 
     if cb["state"] == "open":
-        open_for = now - cb.get("opened_at", cb["last_failure"])
+        opened_at = cb["opened_at"] if cb["opened_at"] > 0 else cb["last_failure"]
+        open_for = now - opened_at
         if open_for > SENTIMENT_RECOVERY_TIMEOUT:
             cb["state"] = "half-open"
             sentiment_cb_state.set(1)
@@ -15922,7 +15937,7 @@ def _check_sentiment_circuit_breaker() -> bool:
             )
         sentiment_cb_state.set(2)
         return False
-    if now < cb.get("next_retry", 0):
+    if now < cb["next_retry"]:
         logger.debug("Sentiment retry delayed %.1fs", cb["next_retry"] - now)
         return False
     sentiment_cb_state.set(0)
@@ -15988,7 +16003,13 @@ def _record_sentiment_failure(
             logger.debug(
                 "Sentiment failure %s; next retry in %.1fs", cb["failures"], delay
             )
-    state_val = {"closed": 0, "half-open": 1, "open": 2}[cb["state"]]
+    state = cb["state"]
+    if state == "half-open":
+        state_val = 1
+    elif state == "open":
+        state_val = 2
+    else:
+        state_val = 0
     sentiment_cb_state.set(state_val)
     if escalate_provider_failure:
         provider_monitor.record_failure("sentiment", reason, error)
@@ -18127,7 +18148,7 @@ def submit_order(
     *,
     price: float | None = None,
     **exec_kwargs: Any,
-) -> Order | None:
+) -> Any | None:
     """Submit an order using the institutional execution engine."""
     exec_kwargs = dict(exec_kwargs)
 
@@ -18317,7 +18338,7 @@ def _call_submit_order(
     price: float,
     annotations: Mapping[str, Any] | None = None,
     price_hint: float | None = None,
-) -> Order | None:
+) -> Any | None:
     """Invoke ``submit_order`` while tolerating monkeypatched call-sites."""
 
     submit_fn = submit_order
@@ -18372,7 +18393,7 @@ def _call_submit_order(
     )
 
 
-def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Order | None:
+def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Any | None:
     """Submit an order while guarding against closed-market submissions.
 
     The market status check is skipped when running in testing mode, when the
@@ -19553,7 +19574,7 @@ def _safe_trade(
     balance: float,
     model: Any,
     regime_ok: bool,
-    side: OrderSide | None = None,
+    side: Any | None = None,
     *,
     price_df: pd.DataFrame | None = None,
 ) -> bool:
@@ -24086,7 +24107,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     old = ctx.portfolio_weights
     drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
-        return True
+        return
     with portfolio_lock:  # FIXED: protect shared portfolio state
         ctx.portfolio_weights = current
     total_value = float(ctx.api.get_account().portfolio_value)
@@ -24436,10 +24457,13 @@ def update_signal_weights() -> None:
                     old = {}
         else:
             old = {}
-        merged = {
-            tag: round(ALPHA * w + (1 - ALPHA) * old.get(tag, w), 3)
-            for tag, w in new_weights.items()
-        }
+        merged: dict[str, float] = {}
+        for tag, w in new_weights.items():
+            try:
+                historical_weight = float(old.get(tag, w))
+            except (TypeError, ValueError):
+                historical_weight = float(w)
+            merged[tag] = round((ALPHA * float(w)) + ((1 - ALPHA) * historical_weight), 3)
         out_df = pd.DataFrame.from_dict(
             merged, orient="index", columns=["weight"]
         ).reset_index()
@@ -26652,8 +26676,10 @@ def update_bot_mode(state: BotState) -> None:
 def adaptive_risk_scaling(ctx: BotContext) -> None:
     """Adjust risk parameters based on volatility, rewards and drawdown."""
     try:
-        vol = _VOL_STATS.get("mean", 0)
-        spy_atr = _VOL_STATS.get("last", 0)
+        vol_raw = _VOL_STATS.get("mean", 0.0)
+        spy_atr_raw = _VOL_STATS.get("last", 0.0)
+        vol = float(vol_raw) if isinstance(vol_raw, (int, float)) else 0.0
+        spy_atr = float(spy_atr_raw) if isinstance(spy_atr_raw, (int, float)) else 0.0
         avg_r = _average_reward(30)
         dd = _current_drawdown()
         try:
@@ -28435,7 +28461,7 @@ def _dedupe_cycle_intents(candidates: list[Any]) -> tuple[list[Any], dict[str, A
 
 def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
-    signals_by_strategy: dict[str, list[TradeSignal]] = {}
+    signals_by_strategy: dict[str, list[Any]] = {}
     for strat in ctx.strategies:
         try:
             gen = getattr(strat, "generate", None)
@@ -37599,9 +37625,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     str(sym).strip().upper() for sym in blocked_symbols_raw if str(sym).strip()
                 }
                 if _pending_orders_block_scope() == "symbol" and blocked_symbols:
+                    blocked_symbols_sample = sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT]
                     blocked_payload = {
                         "blocked_symbols_count": len(blocked_symbols),
-                        "blocked_symbols": sorted(blocked_symbols)[:_PENDING_ORDER_SAMPLE_LIMIT],
+                        "blocked_symbols": blocked_symbols_sample,
                     }
                     blocked_ttl_s = _resolve_runtime_info_log_ttl_seconds(
                         "AI_TRADING_PENDING_SYMBOL_BLOCK_ACTIVE_LOG_TTL_SEC",
@@ -37609,7 +37636,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     )
                     blocked_signature = (
                         f"{blocked_payload['blocked_symbols_count']}:"
-                        f"{','.join(blocked_payload['blocked_symbols'][:3])}"
+                        f"{','.join(blocked_symbols_sample[:3])}"
                     )
                     if _should_emit_runtime_info_log(
                         runtime,

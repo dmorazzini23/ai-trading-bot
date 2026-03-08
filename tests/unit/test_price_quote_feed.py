@@ -1,10 +1,15 @@
 import os
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
 import ai_trading.data.fetch as data_fetch
+
+
+def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
+    setattr(cast(Any, module), name, value)
 
 if "numpy" not in sys.modules:  # pragma: no cover - test stub for optional dep
 
@@ -29,15 +34,15 @@ if "numpy" not in sys.modules:  # pragma: no cover - test stub for optional dep
 
 if "portalocker" not in sys.modules:  # pragma: no cover - optional dependency stub
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
-    portalocker_stub.LockException = RuntimeError
-    portalocker_stub.AlreadyLocked = RuntimeError
+    _set_module_attr(portalocker_stub, "LOCK_EX", 1)
+    _set_module_attr(portalocker_stub, "LockException", RuntimeError)
+    _set_module_attr(portalocker_stub, "AlreadyLocked", RuntimeError)
 
     def _noop_lock(*args, **kwargs):  # noqa: D401 - stub
         return None
 
-    portalocker_stub.lock = _noop_lock
-    portalocker_stub.unlock = _noop_lock
+    _set_module_attr(portalocker_stub, "lock", _noop_lock)
+    _set_module_attr(portalocker_stub, "unlock", _noop_lock)
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:  # pragma: no cover - optional dependency stub
@@ -47,12 +52,11 @@ if "bs4" not in sys.modules:  # pragma: no cover - optional dependency stub
         def __init__(self, *args, **kwargs) -> None:  # noqa: D401 - stub
             raise NotImplementedError("BeautifulSoup stub invoked")
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     sys.modules["bs4"] = bs4_stub
 
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
 from ai_trading.core import bot_engine
-from ai_trading.core.enums import OrderSide as CoreOrderSide
 from ai_trading.execution import live_trading
 from ai_trading.utils import base as utils_base
 
@@ -436,7 +440,7 @@ def test_execute_order_routes_market(monkeypatch):
     monkeypatch.setattr(engine, "submit_market_order", types.MethodType(fake_market, engine))
     monkeypatch.setattr(engine, "submit_limit_order", types.MethodType(fake_limit, engine))
 
-    order_id = engine.execute_order("AAPL", CoreOrderSide.BUY, 10)
+    order_id = engine.execute_order("AAPL", "buy", 10)
 
     assert order_id == "OID-MARKET"
     assert "market" in calls and "limit" not in calls
@@ -446,7 +450,7 @@ def test_execute_order_routes_market(monkeypatch):
 
 def test_execute_order_routes_limit(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
-    calls: dict[str, dict[str, object]] = {}
+    calls: dict[str, dict[str, Any]] = {}
 
     def fake_market(self, symbol, side, quantity, **kwargs):  # pragma: no cover - ensure unused
         calls["market"] = {
@@ -471,7 +475,7 @@ def test_execute_order_routes_limit(monkeypatch):
 
     order_id = engine.execute_order(
         "MSFT",
-        CoreOrderSide.SELL,
+        "sell",
         7,
         price=123.45,
         tif="ioc",
@@ -498,7 +502,7 @@ def test_execute_order_limit_slippage_does_not_raise(monkeypatch, caplog):
     monkeypatch.setitem(core_constants.EXECUTION_PARAMETERS, "MAX_SLIPPAGE_BPS", 0.1)
     monkeypatch.setattr(engine_mod, "hash", lambda _symbol: 0, raising=False)
 
-    calls: dict[str, dict[str, object]] = {}
+    calls: dict[str, dict[str, Any]] = {}
 
     def fake_market(self, symbol, side, quantity, **kwargs):  # pragma: no cover - ensure unused
         calls["market"] = {"symbol": symbol, "side": side, "qty": quantity, "kwargs": kwargs}
@@ -511,7 +515,7 @@ def test_execute_order_limit_slippage_does_not_raise(monkeypatch, caplog):
     monkeypatch.setattr(engine, "submit_market_order", types.MethodType(fake_market, engine))
     monkeypatch.setattr(engine, "submit_limit_order", types.MethodType(fake_limit, engine))
 
-    result = engine.execute_order("FAKE", CoreOrderSide.BUY, 10, price=100.0)
+    result = engine.execute_order("FAKE", "buy", 10, price=100.0)
 
     assert result is not None
     assert "limit" in calls and "market" not in calls
@@ -527,7 +531,7 @@ def test_execute_order_market_slippage_guard(monkeypatch, caplog):
     monkeypatch.setitem(core_constants.EXECUTION_PARAMETERS, "MAX_SLIPPAGE_BPS", 0.1)
     monkeypatch.setattr(engine_mod, "hash", lambda _symbol: 0, raising=False)
 
-    calls: dict[str, dict[str, object]] = {}
+    calls: dict[str, dict[str, Any]] = {}
 
     def fake_market(self, symbol, side, quantity, **kwargs):
         calls["market"] = {"symbol": symbol, "side": side, "qty": quantity, "kwargs": kwargs}
@@ -541,7 +545,7 @@ def test_execute_order_market_slippage_guard(monkeypatch, caplog):
     monkeypatch.setattr(engine, "submit_limit_order", types.MethodType(fake_limit, engine))
 
     with pytest.raises(AssertionError):
-        engine.execute_order("FAKE", CoreOrderSide.BUY, 10, order_type="market", price=100.0)
+        engine.execute_order("FAKE", "buy", 10, order_type="market", price=100.0)
 
     assert "limit" not in calls
     assert any(record.message == "SLIPPAGE_THRESHOLD_EXCEEDED" for record in caplog.records)
@@ -562,7 +566,7 @@ def test_submit_limit_order_quantizes_price(monkeypatch):
     monkeypatch.setattr(engine, "_ensure_initialized", lambda: True)
     monkeypatch.setattr(engine, "_pre_execution_checks", lambda: True)
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_submit(self, order_data):
         captured["order_data"] = order_data

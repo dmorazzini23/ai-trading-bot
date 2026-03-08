@@ -4,9 +4,29 @@ from __future__ import annotations
 
 import types
 import sys
+from typing import Any, cast
 from unittest.mock import Mock, call
 
 import pytest
+
+sys = cast(Any, sys)
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
+
+
+def _zeros(shape: Any, dtype: Any = None) -> Any:
+    if isinstance(shape, int):
+        return [0] * shape
+    return [[0 for _ in range(shape[1])] for _ in range(shape[0])]
+
+
+def _ones(shape: Any, dtype: Any = None) -> Any:
+    if isinstance(shape, int):
+        return [1] * shape
+    return [[1 for _ in range(shape[1])] for _ in range(shape[0])]
+
 
 sklearn_stub = types.ModuleType("sklearn")
 ensemble_stub = types.ModuleType("sklearn.ensemble")
@@ -19,59 +39,55 @@ class _RF:  # noqa: D401 - minimal placeholder
     pass
 
 
-ensemble_stub.GradientBoostingClassifier = _GB
-ensemble_stub.RandomForestClassifier = _RF
+_set_module_attr(ensemble_stub, "GradientBoostingClassifier", _GB)
+_set_module_attr(ensemble_stub, "RandomForestClassifier", _RF)
 sys.modules.setdefault("sklearn", sklearn_stub)
 sys.modules.setdefault("sklearn.ensemble", ensemble_stub)
 metrics_stub = types.ModuleType("sklearn.metrics")
-metrics_stub.accuracy_score = lambda *a, **k: 0.0
+_set_module_attr(metrics_stub, "accuracy_score", lambda *a, **k: 0.0)
 sys.modules.setdefault("sklearn.metrics", metrics_stub)
 model_selection_stub = types.ModuleType("sklearn.model_selection")
-model_selection_stub.train_test_split = lambda *a, **k: ([], [])
+_set_module_attr(model_selection_stub, "train_test_split", lambda *a, **k: ([], []))
 sys.modules.setdefault("sklearn.model_selection", model_selection_stub)
 preproc_stub = types.ModuleType("sklearn.preprocessing")
-preproc_stub.StandardScaler = type("StandardScaler", (), {})
+_set_module_attr(preproc_stub, "StandardScaler", type("StandardScaler", (), {}))
 sys.modules.setdefault("sklearn.preprocessing", preproc_stub)
 
 numpy_stub = types.ModuleType("numpy")
-numpy_stub.nan = float("nan")
-numpy_stub.NaN = float("nan")
-numpy_stub.isfinite = lambda *_a, **_k: True
-numpy_stub.asarray = lambda value, *a, **k: value
-numpy_stub.array = lambda value, *a, **k: value
-numpy_stub.stack = lambda seq, *a, **k: list(seq)
-numpy_stub.std = lambda *_a, **_k: 0.0
-numpy_stub.mean = lambda *_a, **_k: 0.0
-numpy_stub.clip = lambda arr, *a, **k: arr
-numpy_stub.argmax = lambda *_a, **_k: 0
-numpy_stub.where = lambda cond, x, y: x if cond else y
-numpy_stub.float32 = float
-numpy_stub.float64 = float
-numpy_stub.eye = lambda n, dtype=None: [
+_set_module_attr(numpy_stub, "nan", float("nan"))
+_set_module_attr(numpy_stub, "NaN", float("nan"))
+_set_module_attr(numpy_stub, "isfinite", lambda *_a, **_k: True)
+_set_module_attr(numpy_stub, "asarray", lambda value, *a, **k: value)
+_set_module_attr(numpy_stub, "array", lambda value, *a, **k: value)
+_set_module_attr(numpy_stub, "stack", lambda seq, *a, **k: list(seq))
+_set_module_attr(numpy_stub, "std", lambda *_a, **_k: 0.0)
+_set_module_attr(numpy_stub, "mean", lambda *_a, **_k: 0.0)
+_set_module_attr(numpy_stub, "clip", lambda arr, *a, **k: arr)
+_set_module_attr(numpy_stub, "argmax", lambda *_a, **_k: 0)
+_set_module_attr(numpy_stub, "where", lambda cond, x, y: x if cond else y)
+_set_module_attr(numpy_stub, "float32", float)
+_set_module_attr(numpy_stub, "float64", float)
+_set_module_attr(numpy_stub, "eye", lambda n, dtype=None: [
     [1 if i == j else 0 for j in range(n)] for i in range(n)
-]
-numpy_stub.zeros = lambda shape, dtype=None: [0] * shape if isinstance(shape, int) else [
-    [0 for _ in range(shape[1])] for _ in range(shape[0])
-]
-numpy_stub.ones = lambda shape, dtype=None: [1] * shape if isinstance(shape, int) else [
-    [1 for _ in range(shape[1])] for _ in range(shape[0])
-]
-numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
-numpy_stub.polyfit = lambda *_a, **_k: [0.0]
-numpy_stub.where = lambda cond, x, y: x if cond else y
-numpy_stub.isnan = lambda *_a, **_k: False
-numpy_stub.isscalar = lambda obj: not isinstance(obj, (list, tuple, dict, set))
-numpy_stub.bool_ = bool
+])
+_set_module_attr(numpy_stub, "zeros", _zeros)
+_set_module_attr(numpy_stub, "ones", _ones)
+_set_module_attr(numpy_stub, "random", types.SimpleNamespace(seed=lambda *_a, **_k: None))
+_set_module_attr(numpy_stub, "polyfit", lambda *_a, **_k: [0.0])
+_set_module_attr(numpy_stub, "where", lambda cond, x, y: x if cond else y)
+_set_module_attr(numpy_stub, "isnan", lambda *_a, **_k: False)
+_set_module_attr(numpy_stub, "isscalar", lambda obj: not isinstance(obj, (list, tuple, dict, set)))
+_set_module_attr(numpy_stub, "bool_", bool)
 sys.modules.setdefault("numpy", numpy_stub)
 
 portalocker_stub = types.ModuleType("portalocker")
-portalocker_stub.LOCK_EX = 1
-portalocker_stub.lock = lambda *_a, **_k: None
-portalocker_stub.unlock = lambda *_a, **_k: None
+_set_module_attr(portalocker_stub, "LOCK_EX", 1)
+_set_module_attr(portalocker_stub, "lock", lambda *_a, **_k: None)
+_set_module_attr(portalocker_stub, "unlock", lambda *_a, **_k: None)
 sys.modules.setdefault("portalocker", portalocker_stub)
 
 bs4_stub = types.ModuleType("bs4")
-bs4_stub.BeautifulSoup = type("BeautifulSoup", (), {})
+_set_module_attr(bs4_stub, "BeautifulSoup", type("BeautifulSoup", (), {}))
 sys.modules.setdefault("bs4", bs4_stub)
 
 class _Flask:
@@ -93,8 +109,8 @@ class _Flask:
 
 
 flask_stub = types.ModuleType("flask")
-flask_stub.Flask = _Flask
-flask_stub.jsonify = lambda obj=None, *a, **k: obj
+_set_module_attr(flask_stub, "Flask", _Flask)
+_set_module_attr(flask_stub, "jsonify", lambda obj=None, *a, **k: obj)
 sys.modules.setdefault("flask", flask_stub)
 
 cachetools_stub = types.ModuleType("cachetools")
@@ -118,7 +134,7 @@ class _TTLCache(dict):
         super().__setitem__(key, value)
 
 
-cachetools_stub.TTLCache = _TTLCache
+_set_module_attr(cachetools_stub, "TTLCache", _TTLCache)
 sys.modules.setdefault("cachetools", cachetools_stub)
 
 import ai_trading.core.bot_engine as eng
@@ -138,8 +154,8 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
         def __init__(self, *, statuses=None):
             self.statuses = statuses
 
-    enums_mod.OrderStatus = OrderStatus
-    requests_mod.GetOrdersRequest = GetOrdersRequest
+    _set_module_attr(enums_mod, "OrderStatus", OrderStatus)
+    _set_module_attr(requests_mod, "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
@@ -231,8 +247,8 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
         def __init__(self, *, statuses=None):
             self.statuses = statuses
 
-    enums_mod.OrderStatus = OrderStatus
-    requests_mod.GetOrdersRequest = GetOrdersRequest
+    _set_module_attr(enums_mod, "OrderStatus", OrderStatus)
+    _set_module_attr(requests_mod, "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
@@ -437,10 +453,10 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             self.feed = feed
 
     signals_mod = types.ModuleType("ai_trading.signals")
-    signals_mod.enhance_signals_with_position_logic = (
+    _set_module_attr(signals_mod, "enhance_signals_with_position_logic", (
         lambda signals, _ctx, _hold: signals
-    )
-    signals_mod.generate_position_hold_signals = lambda _ctx, _pos: []
+    ))
+    _set_module_attr(signals_mod, "generate_position_hold_signals", lambda _ctx, _pos: [])
 
     monkeypatch.setitem(sys.modules, "ai_trading.signals", signals_mod)
     monkeypatch.setattr(eng, "StockLatestQuoteRequest", DummyQuoteRequest)

@@ -2,9 +2,13 @@ import logging
 import sys
 import types
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 import pytest
+
+
+def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
+    setattr(cast(Any, module), name, value)
 
 
 if "numpy" not in sys.modules:
@@ -32,18 +36,18 @@ if "numpy" not in sys.modules:
 if "ai_trading.indicators" not in sys.modules:
     indicators_stub = types.ModuleType("ai_trading.indicators")
     _zero = lambda *args, **kwargs: 0
-    indicators_stub.atr = _zero
-    indicators_stub.compute_atr = _zero
-    indicators_stub.mean_reversion_zscore = _zero
-    indicators_stub.rsi = _zero
-    indicators_stub.__getattr__ = lambda _name: _zero  # type: ignore[attr-defined]
+    _set_module_attr(indicators_stub, "atr", _zero)
+    _set_module_attr(indicators_stub, "compute_atr", _zero)
+    _set_module_attr(indicators_stub, "mean_reversion_zscore", _zero)
+    _set_module_attr(indicators_stub, "rsi", _zero)
+    _set_module_attr(indicators_stub, "__getattr__", lambda _name: _zero)
     sys.modules["ai_trading.indicators"] = indicators_stub
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
-    portalocker_stub.lock = lambda *args, **kwargs: None
-    portalocker_stub.unlock = lambda *args, **kwargs: None
+    _set_module_attr(portalocker_stub, "LOCK_EX", 1)
+    _set_module_attr(portalocker_stub, "lock", lambda *args, **kwargs: None)
+    _set_module_attr(portalocker_stub, "unlock", lambda *args, **kwargs: None)
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:
@@ -62,16 +66,17 @@ if "bs4" not in sys.modules:
         def get_text(self, *_args, **_kwargs):
             return ""
 
-    bs4_stub.BeautifulSoup = lambda *_args, **_kwargs: _Soup()
+    _set_module_attr(bs4_stub, "BeautifulSoup", lambda *_args, **_kwargs: _Soup())
     sys.modules["bs4"] = bs4_stub
 
 
 class DummyAPI:
     def __init__(self):
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-        self.list_positions = lambda: []
+        self.list_positions: Any = lambda: []
         self.submit_order = lambda **_kwargs: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
         self.get_order = lambda oid: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
+        self.client_order_ids: list[str] = []
 
 
 def test_safe_submit_order_pending_new(monkeypatch):
@@ -126,7 +131,7 @@ class EnumStatus(Enum):
 class EnumOrderAPI:
     def __init__(self):
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-        self.list_positions = lambda: []
+        self.list_positions: Any = lambda: []
         self._order = types.SimpleNamespace(
             id=1,
             status=EnumStatus.PENDING_NEW,
@@ -163,7 +168,7 @@ def test_safe_submit_order_pending_new_enum(monkeypatch, caplog):
 class MissingFieldsAPI:
     def __init__(self):
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-        self.list_positions = lambda: []
+        self.list_positions: Any = lambda: []
         self.submit_order = lambda **_kwargs: types.SimpleNamespace(id=1, status="filled")
         self.get_order = lambda oid: types.SimpleNamespace(id=1, status="filled")
 
@@ -221,7 +226,7 @@ def test_safe_submit_order_uses_order_request(monkeypatch):
             self.client_order_ids: list[str] = []
             self.calls: list[Any] = []
             self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-            self.list_positions = lambda: []
+            self.list_positions: Any = lambda: []
 
         def submit_order(self, *, order_data):  # type: ignore[no-untyped-def]
             self.calls.append(order_data)
@@ -327,7 +332,7 @@ def test_safe_submit_order_handles_stubbed_alpaca(monkeypatch):
         def __init__(self):
             self.client_order_ids: list[str | None] = []
             self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-            self.list_positions = lambda: []
+            self.list_positions: Any = lambda: []
 
         def submit_order(self, *, order_data):  # type: ignore[no-untyped-def]
             cid = getattr(order_data, "client_order_id", None)

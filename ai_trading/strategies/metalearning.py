@@ -44,19 +44,19 @@ class MetaLearning(BaseStrategy):
         """Initialize MetaLearning strategy."""
         super().__init__(strategy_id, name, risk_level)
         self.parameters = {'lookback_period': 60, 'feature_window': 20, 'prediction_horizon': 5, 'min_confidence': 0.6, 'ensemble_weight_rf': 0.6, 'ensemble_weight_gb': 0.4, 'retrain_frequency': 7, 'min_data_points': 50}
-        self.rf_model = None
-        self.gb_model = None
-        self.scaler = None
+        self.rf_model: Any = None
+        self.gb_model: Any = None
+        self.scaler: Any = None
         self.is_trained = False
-        self.last_training_date = None
-        self.feature_columns = []
-        self.prediction_cache = {}
-        self.cache_expiry = {}
+        self.last_training_date: datetime | None = None
+        self.feature_columns: list[str] = []
+        self.prediction_cache: dict[str, dict[str, Any]] = {}
+        self.cache_expiry: dict[str, datetime] = {}
         self.prediction_accuracy = 0.0
-        self.model_confidence_history = []
+        self.model_confidence_history: list[float] = []
         logger.info(f'MetaLearning strategy initialized with risk level {risk_level}')
 
-    def execute_strategy(self, data=None, symbol: str=None) -> dict:
+    def execute_strategy(self, data: Any = None, symbol: str | None = None) -> dict[str, Any]:
         """
         Main execution method called by bot_engine.
 
@@ -78,7 +78,7 @@ class MetaLearning(BaseStrategy):
             if self._is_cached_prediction_valid(symbol):
                 cached_result = self.prediction_cache[symbol]
                 logger.debug(f'Using cached prediction for {symbol}')
-                return cached_result
+                return dict(cached_result)
             if data is None:
                 end_date = datetime.now(UTC)
                 start_date = end_date - timedelta(days=self.parameters['lookback_period'])
@@ -268,7 +268,7 @@ class MetaLearning(BaseStrategy):
             self.last_training_date = datetime.now(UTC)
             return True
 
-    def predict_price_movement(self, data) -> dict | None:
+    def predict_price_movement(self, data: Any) -> dict[str, Any] | None:
         """
         Generate ML-based price movement predictions.
 
@@ -470,12 +470,12 @@ class MetaLearning(BaseStrategy):
             return False
         return datetime.now(UTC) < self.cache_expiry[symbol]
 
-    def _cache_prediction(self, symbol: str, result: dict):
+    def _cache_prediction(self, symbol: str, result: dict[str, Any]) -> None:
         """Cache prediction result."""
         self.prediction_cache[symbol] = result
         self.cache_expiry[symbol] = datetime.now(UTC) + timedelta(hours=1)
 
-    def _convert_prediction_to_signal(self, symbol: str, prediction: dict, data) -> dict:
+    def _convert_prediction_to_signal(self, symbol: str, prediction: dict[str, Any], data: Any) -> dict[str, Any]:
         """Convert ML prediction to trading signal format."""
         try:
             direction = prediction['direction']
@@ -504,11 +504,11 @@ class MetaLearning(BaseStrategy):
             logger.error(f'Error converting prediction to signal: {e}')
             return self._neutral_signal()
 
-    def _neutral_signal(self) -> dict:
+    def _neutral_signal(self) -> dict[str, Any]:
         """Return neutral/hold signal."""
         return {'signal': 'hold', 'confidence': 0.0, 'strength': 0.0, 'price_target': None, 'stop_loss': None, 'reasoning': 'Insufficient data or low confidence for prediction'}
 
-    def _fallback_prediction(self, data) -> dict:
+    def _fallback_prediction(self, data: Any) -> dict[str, Any]:
         """Enhanced fallback prediction when ML models are not available."""
         try:
             if not PANDAS_AVAILABLE:

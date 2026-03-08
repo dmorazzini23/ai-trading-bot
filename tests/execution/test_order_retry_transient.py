@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from ai_trading.execution import live_trading as lt
 
 
-def _engine_with_retry() -> lt.ExecutionEngine:
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+def _engine_with_retry() -> Any:
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine.retry_config = {"max_attempts": 3, "base_delay": 0.0, "max_delay": 0.0, "exponential_base": 1.0}
     engine.stats = {"retry_count": 0}
     engine.circuit_breaker = {"failure_count": 0, "is_open": False, "last_failure": None}

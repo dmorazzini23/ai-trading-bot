@@ -567,7 +567,7 @@ def _emit_rate_limit_summaries(summaries: list[RateLimitedSummary]) -> None:
 
 
 def log_throttled_event(
-    logger: logging.Logger,
+    logger: logging.Logger | logging.LoggerAdapter,
     key: str,
     *,
     level: int = logging.WARNING,
@@ -584,7 +584,10 @@ def log_throttled_event(
 
     should_log, summaries = tracker.record(
         key,
-        logger_name=logger.name or _ROOT_LOGGER_NAME,
+        logger_name=(
+            (logger.logger.name if isinstance(logger, logging.LoggerAdapter) else logger.name)
+            or _ROOT_LOGGER_NAME
+        ),
         extra=extra,
     )
     _emit_rate_limit_summaries(summaries)
@@ -1378,7 +1381,7 @@ def log_backup_provider_used(
     start: datetime,
     end: datetime,
     extra: Mapping[str, Any] | None = None,
-    logger: logging.Logger | None = None,
+    logger: logging.Logger | logging.LoggerAdapter | None = None,
 ) -> dict[str, Any]:
     """Log and record when the backup data provider serves a window."""
     payload: dict[str, Any] = {
@@ -1545,7 +1548,11 @@ def log_performance_metrics(
 
 
 def log_trading_event(
-    event_type: str, symbol: str, details: dict[str, any], level: str = "INFO", include_context: bool = True
+    event_type: str,
+    symbol: str,
+    details: dict[str, Any],
+    level: str = "INFO",
+    include_context: bool = True,
 ) -> None:
     """
     Log structured trading events with comprehensive context information.
@@ -1622,7 +1629,7 @@ def log_trading_event(
     log_method("TRADING_EVENT: %s", json_message)
 
 
-def _sanitize_log_data(data: dict[str, any]) -> dict[str, any]:
+def _sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
     """
     Remove or mask sensitive information from log data.
 
@@ -1651,7 +1658,7 @@ def _sanitize_log_data(data: dict[str, any]) -> dict[str, any]:
     return sanitized
 
 
-def _get_system_context() -> dict[str, any]:
+def _get_system_context() -> dict[str, Any]:
     """
     Gather relevant system context for debugging purposes.
 

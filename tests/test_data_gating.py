@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -10,21 +10,27 @@ from ai_trading.config.runtime import TradingConfig
 from ai_trading.config.management import reload_trading_config
 
 
+def _clear_cache(func: Any) -> None:
+    cache_clear = getattr(func, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def clear_gating_caches():
-    bot_engine._strict_data_gating_enabled.cache_clear()
-    bot_engine._gap_ratio_gate_limit.cache_clear()
-    bot_engine._fallback_gap_ratio_limit.cache_clear()
-    bot_engine._fallback_quote_max_age_seconds.cache_clear()
-    bot_engine._liquidity_fallback_cap.cache_clear()
-    bot_engine._degraded_gap_limit_ratio.cache_clear()
+    _clear_cache(bot_engine._strict_data_gating_enabled)
+    _clear_cache(bot_engine._gap_ratio_gate_limit)
+    _clear_cache(bot_engine._fallback_gap_ratio_limit)
+    _clear_cache(bot_engine._fallback_quote_max_age_seconds)
+    _clear_cache(bot_engine._liquidity_fallback_cap)
+    _clear_cache(bot_engine._degraded_gap_limit_ratio)
     yield
-    bot_engine._strict_data_gating_enabled.cache_clear()
-    bot_engine._gap_ratio_gate_limit.cache_clear()
-    bot_engine._fallback_gap_ratio_limit.cache_clear()
-    bot_engine._fallback_quote_max_age_seconds.cache_clear()
-    bot_engine._liquidity_fallback_cap.cache_clear()
-    bot_engine._degraded_gap_limit_ratio.cache_clear()
+    _clear_cache(bot_engine._strict_data_gating_enabled)
+    _clear_cache(bot_engine._gap_ratio_gate_limit)
+    _clear_cache(bot_engine._fallback_gap_ratio_limit)
+    _clear_cache(bot_engine._fallback_quote_max_age_seconds)
+    _clear_cache(bot_engine._liquidity_fallback_cap)
+    _clear_cache(bot_engine._degraded_gap_limit_ratio)
 
 
 def _fresh_state() -> BotState:
@@ -160,7 +166,7 @@ def test_fallback_gap_ratio_prefers_trading_config(monkeypatch):
         fallback_gap_limit_bps=900,
     )
     monkeypatch.setattr(bot_engine, "get_trading_config", lambda: cfg)
-    bot_engine._fallback_gap_ratio_limit.cache_clear()
+    _clear_cache(bot_engine._fallback_gap_ratio_limit)
 
     result = bot_engine._fallback_gap_ratio_limit()
 
@@ -174,7 +180,7 @@ def test_gap_ratio_limit_relaxes_when_failsoft(monkeypatch):
     monkeypatch.setattr(bot_engine.provider_monitor, "safe_mode_degraded_only", lambda: True)
     monkeypatch.setattr(bot_engine.provider_monitor, "is_safe_mode_active", lambda: True)
     monkeypatch.setattr(bot_engine.runtime_state, "observe_data_provider_state", lambda: {"using_backup": True})
-    bot_engine._gap_ratio_gate_limit.cache_clear()
+    _clear_cache(bot_engine._gap_ratio_gate_limit)
 
     result = bot_engine._gap_ratio_gate_limit()
 

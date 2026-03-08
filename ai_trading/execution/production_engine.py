@@ -7,7 +7,7 @@ real-time monitoring, and advanced risk management capabilities.
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from types import SimpleNamespace
 
 from alpaca.common.exceptions import APIError
@@ -40,11 +40,11 @@ class ProductionExecutionCoordinator:
         self.halt_manager = TradingHaltManager()
         self.risk_manager = RiskManager(risk_level)
         self.alert_manager = AlertManager()
-        self.pending_orders = {}
-        self.completed_orders = {}
-        self.rejected_orders = {}
-        self.execution_stats = {'total_orders': 0, 'successful_orders': 0, 'rejected_orders': 0, 'average_execution_time_ms': 0.0, 'total_slippage_bps': 0.0, 'last_reset': datetime.now(UTC)}
-        self.current_positions = {}
+        self.pending_orders: dict[str, Any] = {}
+        self.completed_orders: dict[str, Any] = {}
+        self.rejected_orders: dict[str, Any] = {}
+        self.execution_stats: dict[str, Any] = {'total_orders': 0, 'successful_orders': 0, 'rejected_orders': 0, 'average_execution_time_ms': 0.0, 'total_slippage_bps': 0.0, 'last_reset': datetime.now(UTC)}
+        self.current_positions: dict[str, dict[str, Any]] = {}
         # Ensure slippage log exists for monitoring/tests
         try:
             os.makedirs(LOG_DIR, exist_ok=True)
@@ -76,7 +76,7 @@ class ProductionExecutionCoordinator:
             logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'submit', 'order_id': order_request.client_order_id})
             raise
 
-    async def submit_order(self, symbol: str, side: OrderSide, quantity: int, order_type: OrderType=OrderType.MARKET, price: float | None=None, strategy: str='unknown', metadata: dict=None) -> ExecutionResult:
+    async def submit_order(self, symbol: str, side: OrderSide, quantity: int, order_type: OrderType=OrderType.MARKET, price: float | None=None, strategy: str='unknown', metadata: dict[str, Any] | None=None) -> ExecutionResult:
         """
         Submit order with comprehensive safety checks and optimization.
 
@@ -116,7 +116,7 @@ class ProductionExecutionCoordinator:
             if prefer_limit and price_hint is not None and order_type == OrderType.MARKET and (urgency is None or float(urgency) <= 0.5):
                 order_type = OrderType.LIMIT
                 price = float(price_hint)
-            order = Order(symbol=symbol, side=side, quantity=quantity, order_type=order_type, price=price, strategy_id=strategy, **md)
+            order = Order(symbol=symbol, side=side, quantity=quantity, order_type=order_type, price=cast(Any, price), strategy_id=strategy, **md)
             safety_result = await self._comprehensive_safety_check(order)
             if not safety_result['approved']:
                 await self._handle_order_rejection(order, safety_result['reason'])
@@ -159,7 +159,18 @@ class ProductionExecutionCoordinator:
             if order.quantity > EXECUTION_PARAMETERS['MAX_ORDER_SIZE']:
                 return {'approved': False, 'reason': 'Quantity exceeds maximum limit'}
             position_history = self._get_symbol_history(order.symbol)
-            risk_assessment = self.risk_manager.assess_trade_risk(order.symbol, order.quantity, order.price or 100.0, self.account_equity, position_history)
+            order_price = getattr(order.price, 'amount', order.price)
+            try:
+                order_price_value = float(order_price if order_price is not None else 100.0)
+            except (TypeError, ValueError):
+                order_price_value = 100.0
+            risk_assessment = self.risk_manager.assess_trade_risk(
+                order.symbol,
+                order.quantity,
+                order_price_value,
+                self.account_equity,
+                position_history,
+            )
             if not risk_assessment['approved']:
                 return {'approved': False, 'reason': f"Risk assessment failed: {', '.join(risk_assessment['warnings'])}"}
             if self._has_recent_similar_order(order):
@@ -172,8 +183,13 @@ class ProductionExecutionCoordinator:
     async def _optimize_order_size(self, order: Order) -> dict[str, Any]:
         """Optimize order size using dynamic position sizing."""
         try:
-            market_data = {'current_price': order.price or 100.0, 'atr': 2.0, 'volume': 1000000}
-            historical_data = {'returns': [], 'trade_history': []}
+            order_price = getattr(order.price, 'amount', order.price)
+            try:
+                current_price = float(order_price if order_price is not None else 100.0)
+            except (TypeError, ValueError):
+                current_price = 100.0
+            market_data = {'current_price': current_price, 'atr': 2.0, 'volume': 1000000}
+            historical_data: dict[str, Any] = {'returns': [], 'trade_history': []}
             sizing_result = self.position_sizer.calculate_optimal_position(order.symbol, self.account_equity, market_data['current_price'], market_data, historical_data)
             halt_status = self.halt_manager.is_trading_allowed()
             position_multiplier = halt_status.get('position_size_multiplier', 1.0)
@@ -230,12 +246,14 @@ class ProductionExecutionCoordinator:
                 del self.pending_orders[order.id]
             return ExecutionResult(status='failed', order_id=order.id, symbol=order.symbol, side=order.side.value if isinstance(order.side, OrderSide) else order.side, quantity=order.quantity, message=f'Execution failed: {e}', error_code='execution_error')
 
-    async def _post_execution_processing(self, order: Order, execution_result: dict, original_quantity: int):
+    async def _post_execution_processing(self, order: Order, execution_result: Any, original_quantity: int):
         """Handle post-execution processing and notifications."""
         try:
-            if execution_result['status'] == 'success':
+            payload = execution_result.to_dict() if hasattr(execution_result, 'to_dict') else execution_result
+            payload = payload if isinstance(payload, dict) else {}
+            if payload.get('status') == 'success':
                 self.halt_manager.record_trade()
-                notional_value = order.quantity * execution_result['fill_price']
+                notional_value = order.quantity * float(payload.get('fill_price', 0) or 0)
                 if notional_value > 50000:
                     await asyncio.to_thread(
                         self.alert_manager.send_trading_alert,
@@ -244,13 +262,13 @@ class ProductionExecutionCoordinator:
                         {
                             'side': order.side.value,
                             'quantity': order.quantity,
-                            'fill_price': execution_result['fill_price'],
+                            'fill_price': payload.get('fill_price'),
                             'notional_value': notional_value,
-                            'slippage_bps': execution_result.get('actual_slippage_bps', 0),
+                            'slippage_bps': payload.get('actual_slippage_bps', 0),
                         },
                         AlertSeverity.INFO,
                     )
-                slippage = execution_result.get('actual_slippage_bps', 0)
+                slippage = float(payload.get('actual_slippage_bps', 0) or 0)
                 if slippage > EXECUTION_PARAMETERS['MAX_SLIPPAGE_BPS']:
                     await asyncio.to_thread(
                         self.alert_manager.send_performance_alert,
@@ -259,7 +277,9 @@ class ProductionExecutionCoordinator:
                         EXECUTION_PARAMETERS['MAX_SLIPPAGE_BPS'],
                         AlertSeverity.WARNING,
                     )
-                logger.info(f"Order {order.id} executed successfully: {order.symbol} {order.side.value} {order.quantity} @ ${execution_result['fill_price']:.2f}")
+                logger.info(
+                    f"Order {order.id} executed successfully: {order.symbol} {order.side.value} {order.quantity} @ ${float(payload.get('fill_price', 0) or 0):.2f}"
+                )
             else:
                 await asyncio.to_thread(
                     self.alert_manager.send_trading_alert,
@@ -267,12 +287,12 @@ class ProductionExecutionCoordinator:
                     order.symbol,
                     {
                         'order_id': order.id,
-                        'reason': execution_result.get('message', 'Unknown'),
+                        'reason': payload.get('message', 'Unknown'),
                         'quantity': order.quantity,
                     },
                     AlertSeverity.WARNING,
                 )
-                logger.warning(f"Order {order.id} execution failed: {execution_result.get('message')}")
+                logger.warning(f"Order {order.id} execution failed: {payload.get('message')}")
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('POST_EXECUTION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
 

@@ -25,8 +25,10 @@ try:  # pragma: no cover - Alpaca SDK optional in tests
     from alpaca.common.exceptions import APIError
 except Exception:  # ImportError
 
-    class APIError(Exception):
+    class _FallbackAPIError(Exception):
         """Fallback when Alpaca SDK is unavailable."""
+
+    APIError = _FallbackAPIError
 
 
 from ai_trading.logging.emit_once import emit_once
@@ -75,7 +77,7 @@ ORDERS_SUBMITTED: Any | None = None
 _orders_submitted_total: Any | None = None
 
 
-def _ensure_orders_submitted_metric(registry: CollectorRegistry):
+def _ensure_orders_submitted_metric(registry: Any):
     collectors = getattr(registry, "_names_to_collectors", None)
     if collectors is None:
         collectors = {}
@@ -325,7 +327,7 @@ class Order:
         self.status = OrderStatus.PENDING
         self.filled_quantity = 0
         self.average_fill_price = Money(0)
-        self.fills = []
+        self.fills: list[dict[str, Any]] = []
         self.created_at = safe_utcnow()
         self._created_monotonic = kwargs.get("created_monotonic", monotonic_time())
         self.updated_at = self.created_at
@@ -372,7 +374,8 @@ class Order:
     def notional_value(self) -> Money:
         """Calculate notional value of order with precise money math."""
         price = self.price or self.average_fill_price or Money(0)
-        return Money(abs(self.quantity)) * price
+        value = Money(abs(self.quantity)) * price
+        return value if isinstance(value, Money) else Money(value)
 
     def add_fill(self, quantity: int, price: Money, timestamp: datetime | None = None):
         """Add a fill to the order with precise money math."""
@@ -394,7 +397,7 @@ class Order:
         self.updated_at = timestamp
         logger.debug(f"Fill added to order {self.id}: {quantity}@{price} ({self.fill_percentage:.1f}% filled)")
 
-    def cancel(self, reason: str = "User cancelled"):
+    def cancel(self, reason: str = "User cancelled") -> bool:
         """Cancel the order."""
         if self.status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
             logger.warning(f"Cannot cancel order {self.id} in status {self.status}")
@@ -452,6 +455,13 @@ class ExecutionResult(str):
         "reconciled",
         "ack_timed_out",
     )
+    order: Order | None
+    status: OrderStatus | None
+    filled_quantity: float
+    requested_quantity: float
+    signal_weight: float | None
+    reconciled: bool
+    ack_timed_out: bool
 
     def __new__(
         cls,
@@ -860,9 +870,9 @@ class OrderManager:
                 )
 
         if summary["intents_checked"] > 0:
-            payload: dict[str, Any] = dict(summary)
-            payload["status_counts"] = status_counts
-            logger.info("OMS_INTENT_RECONCILE", extra=payload)
+            summary_payload: dict[str, Any] = dict(summary)
+            summary_payload["status_counts"] = status_counts
+            logger.info("OMS_INTENT_RECONCILE", extra=summary_payload)
         return summary
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
@@ -1656,7 +1666,7 @@ class ExecutionEngine:
         info = OrderInfo(
             order_id=order.id,
             symbol=order.symbol,
-            side=getattr(order.side, "value", order.side),
+            side=str(getattr(order.side, "value", order.side)),
             qty=getattr(order, "quantity", getattr(order, "qty", 0)),
             submitted_time=time.time(),
             last_status=getattr(order.status, "value", getattr(order, "status", "new")),
@@ -1722,7 +1732,7 @@ class ExecutionEngine:
             return None
 
         def _extract_qty(value: Any) -> float:
-            candidates = []
+            candidates: list[Any] = []
             if isinstance(value, Mapping):
                 candidates.extend(
                     value.get(key)
@@ -1808,13 +1818,28 @@ class ExecutionEngine:
         """Assess liquidity and optionally adjust quantity."""
         bid, ask = (0.0, 0.0)
         try:
-            bid, ask = self._latest_quote()
+            quote_snapshot = getattr(self, "_latest_quote", {})
+            if isinstance(quote_snapshot, Mapping):
+                bid = float(quote_snapshot.get("bid", 0.0) or 0.0)
+                ask = float(quote_snapshot.get("ask", 0.0) or 0.0)
+            elif callable(quote_snapshot):
+                bid, ask = quote_snapshot()
         except (RuntimeError, ValueError):
             return (quantity, False)
         spread_pct = (ask - bid) / bid if bid else 0.0
         if spread_pct >= 0.01:
             return (int(quantity * 0.75), False)
         return (quantity, False)
+
+    def _supports_asset_class(self) -> bool:
+        """Return ``True`` when broker supports explicit asset-class payloads."""
+        broker = getattr(self, "broker_interface", None)
+        if broker is None:
+            return False
+        advertised = getattr(broker, "supports_asset_class", None)
+        if advertised is not None:
+            return bool(advertised)
+        return False
 
     def cleanup_stale_orders(self, now: float | None = None, max_age_seconds: int | None = None) -> int:
         """Remove stale orders and attempt cancelation via broker."""
@@ -2893,7 +2918,8 @@ class ExecutionEngine:
             while remaining > 0 and order.status != OrderStatus.CANCELED:
                 fill_quantity = min(remaining, max(1, remaining // 3))
                 fill_price = base_price * (1 + jitter_ratio)
-                order.add_fill(fill_quantity, fill_price)
+                tick = TICK_BY_SYMBOL.get(order.symbol)
+                order.add_fill(fill_quantity, Money(fill_price, tick))
                 self._update_position(order.symbol, order.side, fill_quantity)
                 remaining -= fill_quantity
                 if remaining > 0:

@@ -7,6 +7,7 @@ and real-time risk controls for institutional trading operations.
 import math
 import statistics
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
 from ..core.constants import RISK_PARAMETERS
@@ -34,10 +35,17 @@ class RiskManager:
         self.max_correlation_exposure = RISK_PARAMETERS['MAX_CORRELATION_EXPOSURE']
         self.current_portfolio_risk = 0.0
         self.current_drawdown = 0.0
-        self.risk_alerts = []
+        self.risk_alerts: list[dict[str, Any]] = []
         logger.info(f'RiskManager initialized with risk_level={risk_level}, max_position_size={self.max_position_size}')
 
-    def assess_trade_risk(self, symbol: str, quantity: int, price: float, portfolio_value: float, position_history: list[dict]) -> dict:
+    def assess_trade_risk(
+        self,
+        symbol: str,
+        quantity: int,
+        price: float,
+        portfolio_value: float,
+        position_history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """
         Assess risk for a proposed trade.
 
@@ -52,7 +60,14 @@ class RiskManager:
             Risk assessment dictionary with recommendations
         """
         try:
-            assessment = {'symbol': symbol, 'approved': False, 'risk_score': 0.0, 'recommended_size': 0, 'warnings': [], 'metrics': {}}
+            assessment: dict[str, Any] = {
+                'symbol': symbol,
+                'approved': False,
+                'risk_score': 0.0,
+                'recommended_size': 0,
+                'warnings': [],
+                'metrics': {},
+            }
             notional_value = abs(quantity * price)
             position_size_pct = notional_value / portfolio_value if portfolio_value > 0 else 0
             assessment['metrics']['position_size_pct'] = position_size_pct
@@ -82,7 +97,7 @@ class RiskManager:
                     assessment['warnings'].append(
                         f'Kelly criterion recommends smaller position: {kelly_size}'
                     )
-            risk_score = 0
+            risk_score = 0.0
             risk_score += min(position_size_pct * 500, 50)
             risk_score += len(assessment['warnings']) * 10
             assessment['risk_score'] = risk_score
@@ -91,9 +106,20 @@ class RiskManager:
             return assessment
         except COMMON_EXC as e:
             logger.error(f'Error assessing trade risk: {e}')
-            return {'symbol': symbol, 'approved': False, 'risk_score': 100, 'recommended_size': 0, 'warnings': [f'Risk assessment error: {e}'], 'metrics': {}}
+            return {
+                'symbol': symbol,
+                'approved': False,
+                'risk_score': 100.0,
+                'recommended_size': 0,
+                'warnings': [f'Risk assessment error: {e}'],
+                'metrics': {},
+            }
 
-    def check_portfolio_risk(self, positions: list[dict], market_data: dict) -> dict:
+    def check_portfolio_risk(
+        self,
+        positions: list[dict[str, Any]],
+        market_data: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Comprehensive portfolio risk assessment.
 
@@ -113,7 +139,13 @@ class RiskManager:
                 'recommendations': [],
             }
         try:
-            assessment = {'overall_risk_level': 'Unknown', 'risk_score': 0.0, 'alerts': [], 'metrics': {}, 'recommendations': []}
+            assessment: dict[str, Any] = {
+                'overall_risk_level': 'Unknown',
+                'risk_score': 0.0,
+                'alerts': [],
+                'metrics': {},
+                'recommendations': [],
+            }
             if not positions:
                 assessment['overall_risk_level'] = 'Low'
                 return assessment
@@ -122,7 +154,7 @@ class RiskManager:
             assessment['metrics']['max_position_concentration'] = max_position_pct
             if max_position_pct > self.max_position_size:
                 assessment['alerts'].append(f'High concentration risk: {max_position_pct:.2%}')
-            sector_exposure = {}
+            sector_exposure: dict[str, float] = {}
             for pos in positions:
                 sector = pos.get('sector', 'Unknown')
                 sector_exposure[sector] = sector_exposure.get(sector, 0) + pos.get('market_value', 0)
@@ -133,7 +165,7 @@ class RiskManager:
             if self.current_drawdown > self.max_drawdown_threshold:
                 assessment['alerts'].append(f'Drawdown {self.current_drawdown:.2%} exceeds threshold {self.max_drawdown_threshold:.2%}')
                 assessment['recommendations'].append('Reduce position sizes')
-            risk_score = 0
+            risk_score = 0.0
             risk_score += max_position_pct * 100
             risk_score += max_sector_pct * 100
             risk_score += self.current_drawdown * 200
@@ -153,7 +185,7 @@ class RiskManager:
             logger.error(f'Error checking portfolio risk: {e}')
             return {'overall_risk_level': 'Critical', 'risk_score': 100.0, 'alerts': [f'Risk assessment error: {e}'], 'metrics': {}, 'recommendations': ['Manual review required']}
 
-    def update_drawdown(self, current_value: float, peak_value: float):
+    def update_drawdown(self, current_value: float, peak_value: float) -> None:
         """Update current drawdown metrics."""
         try:
             if peak_value > 0:
@@ -162,11 +194,11 @@ class RiskManager:
         except COMMON_EXC as e:
             logger.error(f'Error updating drawdown: {e}')
 
-    def get_risk_alerts(self) -> list[dict]:
+    def get_risk_alerts(self) -> list[dict[str, Any]]:
         """Get current risk alerts."""
         return self.risk_alerts.copy()
 
-    def add_risk_alert(self, alert_type: str, message: str, severity: str='medium'):
+    def add_risk_alert(self, alert_type: str, message: str, severity: str='medium') -> None:
         """Add a risk alert."""
         try:
             alert = {'timestamp': datetime.now(UTC), 'type': alert_type, 'message': message, 'severity': severity}

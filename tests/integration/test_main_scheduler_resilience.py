@@ -115,5 +115,6 @@ def test_scheduler_logs_and_continues_after_runtime_error(monkeypatch, caplog):
         if str(payload.get("trigger")) == "scheduler_run_cycle_exception"
     ]
     assert scheduler_replays
-    detail = dict(scheduler_replays[0].get("detail") or {})
+    detail_payload = scheduler_replays[0].get("detail")
+    detail = detail_payload if isinstance(detail_payload, dict) else {}
     assert detail.get("cycle_index") == detail.get("iteration")

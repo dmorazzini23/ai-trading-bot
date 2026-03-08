@@ -33,7 +33,7 @@ def engine_factory(monkeypatch):
     monkeypatch.setattr(lt, "get_tick_size", lambda symbol: Decimal("0.01"))
 
     def _build_engine(execute_behavior=None, *, use_real_submit: bool = False, trading_client=None):
-        engine = object.__new__(lt.ExecutionEngine)
+        engine: Any = object.__new__(lt.ExecutionEngine)
         engine._refresh_settings = lambda: None
         engine.is_initialized = True
         engine._ensure_initialized = lambda: True
@@ -435,7 +435,7 @@ def test_submit_market_order_pdt_lockout_logs(caplog):
         "count": 4,
     }
 
-    engine = object.__new__(lt.ExecutionEngine)
+    engine: Any = object.__new__(lt.ExecutionEngine)
     engine._refresh_settings = lambda: None
     engine.is_initialized = True
     engine._ensure_initialized = lambda: True

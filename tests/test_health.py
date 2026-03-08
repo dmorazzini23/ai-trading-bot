@@ -1,11 +1,25 @@
 import importlib
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("requests")
+sys = cast(Any, sys)
+
+
+def _ensure_module(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return cast(types.ModuleType, module)
+
+
+def _set_module_attr(module_name: str, attr_name: str, value: Any) -> None:
+    setattr(_ensure_module(module_name), attr_name, value)
 
 _PATCHED_MODULES = {
     "sklearn",
@@ -75,20 +89,20 @@ for name in mods:
         sys.modules[name] = types.ModuleType(name)
 
 if "sklearn" in sys.modules:
-    sys.modules["sklearn"].ensemble = sys.modules["sklearn.ensemble"]
-    sys.modules["sklearn"].linear_model = sys.modules["sklearn.linear_model"]
-    sys.modules["sklearn"].decomposition = sys.modules["sklearn.decomposition"]
+    _set_module_attr("sklearn", "ensemble", sys.modules["sklearn.ensemble"])
+    _set_module_attr("sklearn", "linear_model", sys.modules["sklearn.linear_model"])
+    _set_module_attr("sklearn", "decomposition", sys.modules["sklearn.decomposition"])
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))
 if "pandas_market_calendars" in sys.modules:
-    sys.modules["pandas_market_calendars"].get_calendar = (
+    _set_module_attr("pandas_market_calendars", "get_calendar", (
         lambda *a, **k: types.SimpleNamespace(schedule=lambda *a, **k: pd.DataFrame())
-    )
+    ))
 if "pandas_ta" in sys.modules:
-    sys.modules["pandas_ta"].atr = lambda *a, **k: pd.Series([0])
-    sys.modules["pandas_ta"].rsi = lambda *a, **k: pd.Series([0])
+    _set_module_attr("pandas_ta", "atr", lambda *a, **k: pd.Series([0]))
+    _set_module_attr("pandas_ta", "rsi", lambda *a, **k: pd.Series([0]))
 
-sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
+_set_module_attr("pipeline", "model_pipeline", lambda *a, **k: None)
 
 class _DummyStream:
     def __init__(self, *a, **k):
@@ -97,27 +111,27 @@ class _DummyStream:
     def subscribe_trade_updates(self, *a, **k):
         pass
 
-sys.modules["alpaca"].TradingClient = object
-sys.modules["alpaca"].APIError = Exception
+_set_module_attr("alpaca", "TradingClient", object)
+_set_module_attr("alpaca", "APIError", Exception)
 sys.modules.setdefault("alpaca.trading", types.ModuleType("alpaca.trading"))
 sys.modules["alpaca.trading.client"] = types.ModuleType("alpaca.trading.client")
-sys.modules["alpaca.trading.client"].TradingClient = object
-sys.modules["alpaca.trading.client"].APIError = Exception
+_set_module_attr("alpaca.trading.client", "TradingClient", object)
+_set_module_attr("alpaca.trading.client", "APIError", Exception)
 sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
 sys.modules.setdefault("alpaca.data.timeframe", types.ModuleType("alpaca.data.timeframe"))
 sys.modules.setdefault("alpaca.data.requests", types.ModuleType("alpaca.data.requests"))
-sys.modules["alpaca.data.timeframe"].TimeFrame = object
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = types.SimpleNamespace(Day="Day")
-sys.modules["alpaca.data.requests"].StockBarsRequest = object
-sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = object
-sys.modules["alpaca.data"].TimeFrame = sys.modules["alpaca.data.timeframe"].TimeFrame
-sys.modules["alpaca.data"].StockBarsRequest = sys.modules["alpaca.data.requests"].StockBarsRequest
+_set_module_attr("alpaca.data.timeframe", "TimeFrame", object)
+_set_module_attr("alpaca.data.timeframe", "TimeFrameUnit", types.SimpleNamespace(Day="Day"))
+_set_module_attr("alpaca.data.requests", "StockBarsRequest", object)
+_set_module_attr("alpaca.data.requests", "StockLatestQuoteRequest", object)
+_set_module_attr("alpaca.data", "TimeFrame", getattr(sys.modules["alpaca.data.timeframe"], "TimeFrame"))
+_set_module_attr("alpaca.data", "StockBarsRequest", getattr(sys.modules["alpaca.data.requests"], "StockBarsRequest"))
 
 class _RF:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.ensemble"].RandomForestClassifier = _RF
+_set_module_attr("sklearn.ensemble", "RandomForestClassifier", _RF)
 
 class _Ridge:
     def __init__(self, *a, **k):
@@ -127,26 +141,26 @@ class _BR:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.linear_model"].Ridge = _Ridge
-sys.modules["sklearn.linear_model"].BayesianRidge = _BR
+_set_module_attr("sklearn.linear_model", "Ridge", _Ridge)
+_set_module_attr("sklearn.linear_model", "BayesianRidge", _BR)
 
 class _PCA:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
-sys.modules["prometheus_client"].Counter = lambda *a, **k: None
-sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
-sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
-sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
-sys.modules["finnhub"].FinnhubAPIException = Exception
-sys.modules["finnhub"].Client = lambda *a, **k: None
+_set_module_attr("sklearn.decomposition", "PCA", _PCA)
+_set_module_attr("prometheus_client", "start_http_server", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Counter", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Gauge", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Histogram", lambda *a, **k: None)
+_set_module_attr("metrics_logger", "log_metrics", lambda *a, **k: None)
+_set_module_attr("finnhub", "FinnhubAPIException", Exception)
+_set_module_attr("finnhub", "Client", lambda *a, **k: None)
 # AI-AGENT-REF: Don't mock strategy_allocator to avoid test interference
 # sys.modules["strategy_allocator"].StrategyAllocator = object
 sys.modules.setdefault("ratelimit", types.ModuleType("ratelimit"))
-sys.modules["ratelimit"].limits = lambda *a, **k: lambda f: f
-sys.modules["ratelimit"].sleep_and_retry = lambda f: f
+_set_module_attr("ratelimit", "limits", lambda *a, **k: lambda f: f)
+_set_module_attr("ratelimit", "sleep_and_retry", lambda f: f)
 
 class _DummyBreaker:
     def __init__(self, *a, **k):
@@ -155,7 +169,7 @@ class _DummyBreaker:
     def __call__(self, func):
         return func
 
-sys.modules["pybreaker"].CircuitBreaker = _DummyBreaker
+_set_module_attr("pybreaker", "CircuitBreaker", _DummyBreaker)
 
 # AI-AGENT-REF: Remove ai_trading.main import that causes deep torch dependency chain
 # from ai_trading.main import main  # Not used in this test, causes torch import issues

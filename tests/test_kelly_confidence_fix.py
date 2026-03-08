@@ -8,33 +8,42 @@ import math
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
 
 if "numpy" not in sys.modules:  # pragma: no cover - lightweight stub for tests
     numpy_stub = types.ModuleType("numpy")
-    numpy_stub.nan = float("nan")
-    numpy_stub.NaN = numpy_stub.nan
-    numpy_stub.array = lambda data, *_, **__: list(data)
-    numpy_stub.asarray = lambda data, *_, **__: list(data)
-    numpy_stub.std = lambda data, *_, **__: 1.0
-    numpy_stub.diff = lambda arr: [b - a for a, b in zip(arr, arr[1:])]
-    numpy_stub.where = lambda cond, x, y: [
+    _set_module_attr(numpy_stub, "nan", float("nan"))
+    _set_module_attr(numpy_stub, "NaN", float("nan"))
+    _set_module_attr(numpy_stub, "array", lambda data, *_, **__: list(data))
+    _set_module_attr(numpy_stub, "asarray", lambda data, *_, **__: list(data))
+    _set_module_attr(numpy_stub, "std", lambda data, *_, **__: 1.0)
+    _set_module_attr(numpy_stub, "diff", lambda arr: [b - a for a, b in zip(arr, arr[1:])])
+    _set_module_attr(numpy_stub, "where", lambda cond, x, y: [
         (xi if bool(ci) else yi) for ci, xi, yi in zip(cond, x, y)
-    ]
-    numpy_stub.zeros_like = lambda arr: [0 for _ in arr]
-    numpy_stub.zeros = lambda shape, dtype=None: [0.0] * shape if isinstance(shape, int) else []
-    numpy_stub.mean = lambda data: (sum(data) / len(data)) if data else 0.0
-    numpy_stub.exp = math.exp
-    numpy_stub.float64 = float
-    numpy_stub.ndarray = list
-    numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
+    ])
+    _set_module_attr(numpy_stub, "zeros_like", lambda arr: [0 for _ in arr])
+    _set_module_attr(
+        numpy_stub,
+        "zeros",
+        lambda shape, dtype=None: [0.0] * shape if isinstance(shape, int) else [],
+    )
+    _set_module_attr(numpy_stub, "mean", lambda data: (sum(data) / len(data)) if data else 0.0)
+    _set_module_attr(numpy_stub, "exp", math.exp)
+    _set_module_attr(numpy_stub, "float64", float)
+    _set_module_attr(numpy_stub, "ndarray", list)
+    _set_module_attr(numpy_stub, "random", types.SimpleNamespace(seed=lambda *_a, **_k: None))
     sys.modules["numpy"] = numpy_stub
 
 if "portalocker" not in sys.modules:  # pragma: no cover - lightweight stub for tests
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
-    portalocker_stub.LOCK_SH = 0
-    portalocker_stub.lock = lambda *_a, **_k: None
-    portalocker_stub.unlock = lambda *_a, **_k: None
+    _set_module_attr(portalocker_stub, "LOCK_EX", 1)
+    _set_module_attr(portalocker_stub, "LOCK_SH", 0)
+    _set_module_attr(portalocker_stub, "lock", lambda *_a, **_k: None)
+    _set_module_attr(portalocker_stub, "unlock", lambda *_a, **_k: None)
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:  # pragma: no cover - lightweight stub for tests
@@ -45,7 +54,7 @@ if "bs4" not in sys.modules:  # pragma: no cover - lightweight stub for tests
             self.args = args
             self.kwargs = kwargs
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     sys.modules["bs4"] = bs4_stub
 
 # Test the actual import and function from bot_engine

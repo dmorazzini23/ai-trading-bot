@@ -4,16 +4,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import sys
 import types
+from typing import Any
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
 
 if "numpy" not in sys.modules:
     numpy_stub = types.ModuleType("numpy")
-    numpy_stub.array = lambda *a, **k: a
-    numpy_stub.ndarray = object
-    numpy_stub.float64 = float
-    numpy_stub.int64 = int
-    numpy_stub.nan = float("nan")
-    numpy_stub.NaN = float("nan")
-    numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
+    _set_module_attr(numpy_stub, "array", lambda *a, **k: a)
+    _set_module_attr(numpy_stub, "ndarray", object)
+    _set_module_attr(numpy_stub, "float64", float)
+    _set_module_attr(numpy_stub, "int64", int)
+    _set_module_attr(numpy_stub, "nan", float("nan"))
+    _set_module_attr(numpy_stub, "NaN", float("nan"))
+    _set_module_attr(numpy_stub, "random", types.SimpleNamespace(seed=lambda *_a, **_k: None))
     sys.modules["numpy"] = numpy_stub
 
 if "pandas" not in sys.modules:
@@ -35,16 +40,18 @@ if "pandas" not in sys.modules:
         def loc(self, *args, **kwargs):  # noqa: D401
             return self
 
-    pandas_stub.DataFrame = _DataFrame
-    pandas_stub.Timestamp = datetime
-    pandas_stub.Series = dict
-    pandas_stub.Index = list
-    pandas_stub.MultiIndex = list
-    pandas_stub.NaT = None
-    pandas_stub.isna = lambda *_a, **_k: False
-    pandas_stub.to_datetime = lambda *a, **k: datetime.now(UTC)
-    pandas_stub.date_range = lambda *a, **k: []
-    pandas_stub.concat = lambda frames, *a, **k: frames[0] if frames else _DataFrame()
+    _set_module_attr(pandas_stub, "DataFrame", _DataFrame)
+    _set_module_attr(pandas_stub, "Timestamp", datetime)
+    _set_module_attr(pandas_stub, "Series", dict)
+    _set_module_attr(pandas_stub, "Index", list)
+    _set_module_attr(pandas_stub, "MultiIndex", list)
+    _set_module_attr(pandas_stub, "NaT", None)
+    _set_module_attr(pandas_stub, "isna", lambda *_a, **_k: False)
+    _set_module_attr(pandas_stub, "to_datetime", lambda *a, **k: datetime.now(UTC))
+    _set_module_attr(pandas_stub, "date_range", lambda *a, **k: [])
+    _set_module_attr(
+        pandas_stub, "concat", lambda frames, *a, **k: frames[0] if frames else _DataFrame()
+    )
     sys.modules["pandas"] = pandas_stub
 
 if "sklearn" not in sys.modules:
@@ -60,11 +67,11 @@ if "sklearn" not in sys.modules:
     class _RF:  # noqa: D401 - placeholder
         pass
 
-    ensemble_stub.GradientBoostingClassifier = _GB
-    ensemble_stub.RandomForestClassifier = _RF
-    metrics_stub.accuracy_score = lambda *_a, **_k: 0.0
-    model_selection_stub.train_test_split = lambda *_a, **_k: ([], [])
-    preprocessing_stub.StandardScaler = type("StandardScaler", (), {})
+    _set_module_attr(ensemble_stub, "GradientBoostingClassifier", _GB)
+    _set_module_attr(ensemble_stub, "RandomForestClassifier", _RF)
+    _set_module_attr(metrics_stub, "accuracy_score", lambda *_a, **_k: 0.0)
+    _set_module_attr(model_selection_stub, "train_test_split", lambda *_a, **_k: ([], []))
+    _set_module_attr(preprocessing_stub, "StandardScaler", type("StandardScaler", (), {}))
 
     sys.modules.setdefault("sklearn", sklearn_stub)
     sys.modules.setdefault("sklearn.ensemble", ensemble_stub)
@@ -74,14 +81,14 @@ if "sklearn" not in sys.modules:
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
-    portalocker_stub.lock = lambda *_a, **_k: None
-    portalocker_stub.unlock = lambda *_a, **_k: None
+    _set_module_attr(portalocker_stub, "LOCK_EX", 1)
+    _set_module_attr(portalocker_stub, "lock", lambda *_a, **_k: None)
+    _set_module_attr(portalocker_stub, "unlock", lambda *_a, **_k: None)
     sys.modules["portalocker"] = portalocker_stub
 
 if "dotenv" not in sys.modules:
     dotenv_stub = types.ModuleType("dotenv")
-    dotenv_stub.load_dotenv = lambda *_a, **_k: None
+    _set_module_attr(dotenv_stub, "load_dotenv", lambda *_a, **_k: None)
     sys.modules["dotenv"] = dotenv_stub
 
 if "bs4" not in sys.modules:
@@ -94,7 +101,7 @@ if "bs4" not in sys.modules:
         def find(self, *_a, **_k):
             return None
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     sys.modules["bs4"] = bs4_stub
 
 import ai_trading.core.bot_engine as be

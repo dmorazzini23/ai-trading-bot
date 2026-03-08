@@ -7,7 +7,7 @@ import uuid
 import inspect
 import types
 from dataclasses import dataclass
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING, Type
 from threading import RLock
 
 try:
@@ -259,7 +259,6 @@ def _set_alpaca_service_available(value: bool) -> None:
 if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     from dataclasses import dataclass
     from enum import Enum
-    from typing import Any
 
     class TimeFrameUnit(Enum):
         Minute = "Min"
@@ -1261,7 +1260,7 @@ def _sdk_submit(
         stop_order_request = request_ns.get("StopOrderRequest", StopOrderRequest)
         stop_limit_order_request = request_ns.get("StopLimitOrderRequest", StopLimitOrderRequest)
         order_type = str(type or "market").lower()
-        request_cls_map: dict[str, type] = {}
+        request_cls_map: dict[str, Type[Any]] = {}
         if market_order_request is not None:
             request_cls_map["market"] = market_order_request
         if limit_order_request is not None:

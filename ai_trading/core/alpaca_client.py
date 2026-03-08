@@ -387,7 +387,7 @@ def ensure_alpaca_attached(ctx) -> None:
     if not _initialize_alpaca_clients():
         return
     # Keep bot_engine runtime state synchronized with the initialized client.
-    be = _get_bot_engine_module()
+    be: Any = _get_bot_engine_module()
     api = getattr(be, "trading_client", None)
     if api is None:
         if _alpaca_api.ALPACA_AVAILABLE and not is_shadow_mode():
@@ -430,7 +430,7 @@ def _initialize_alpaca_clients() -> bool:
     # Defer imports to avoid cycles
     import time
 
-    be = _get_bot_engine_module()
+    be: Any = _get_bot_engine_module()
 
     log_once = _get_bot_logger_once()
 

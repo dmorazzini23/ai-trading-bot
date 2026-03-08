@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import ai_trading.execution.live_trading as lt
 
@@ -9,7 +10,7 @@ def test_submit_rate_limit_permit_times_out_after_burst(
     monkeypatch,
     tmp_path,
 ) -> None:
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     state_path = tmp_path / "submit_rate_state.json"
 
     monkeypatch.setenv("AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_ENABLED", "1")
@@ -39,8 +40,8 @@ def test_submit_rate_limit_retry_after_cooldown_is_shared(
     tmp_path,
 ) -> None:
     state_path = tmp_path / "submit_rate_state.json"
-    engine_a = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
-    engine_b = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine_a: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine_b: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
 
     monkeypatch.setenv("AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_ORDER_SUBMIT_RATE_LIMIT_PER_MIN", "120")
@@ -64,7 +65,7 @@ def test_submit_rate_limit_retry_after_cooldown_is_shared(
 
 
 def test_execute_with_retry_honors_retry_after_header(monkeypatch) -> None:
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine.stats = {"retry_count": 0}
     engine.circuit_breaker = {"failure_count": 0, "is_open": False, "last_failure": None}
     engine._handle_nonretryable_api_error = lambda exc, *a, **k: None

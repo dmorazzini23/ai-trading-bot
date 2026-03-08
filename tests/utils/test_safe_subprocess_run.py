@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -8,6 +9,18 @@ from ai_trading.utils.safe_subprocess import (
     SafeSubprocessResult,
     safe_subprocess_run,
 )
+
+
+def _as_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _timeout_payload(exc: subprocess.TimeoutExpired) -> Any:
+    return cast(Any, exc)
 
 
 def test_safe_subprocess_run_success():
@@ -30,22 +43,23 @@ def test_safe_subprocess_run_timeout(caplog):
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             safe_subprocess_run(cmd, timeout=0.5)
 
-    stdout = excinfo.value.stdout
-    stderr = excinfo.value.stderr
+    exc_obj = _timeout_payload(excinfo.value)
+    stdout = _as_text(exc_obj.stdout)
+    stderr = _as_text(exc_obj.stderr)
     # Under heavy parallel CI load, the child process can time out before
     # emitting either stream, so accept both captured and empty variants.
     assert stdout in {"", "ready\n"}
     assert stderr in {"", "warn\n"}
     expected_result = SafeSubprocessResult(stdout, stderr, 124, True)
-    assert excinfo.value.cmd == cmd
-    assert isinstance(excinfo.value.result, SafeSubprocessResult)
-    assert excinfo.value.result == expected_result
-    assert excinfo.value.stdout == stdout
-    assert excinfo.value.stderr == stderr
-    assert excinfo.value.timeout == pytest.approx(0.5)
-    assert excinfo.value.result.stdout == excinfo.value.stdout
-    assert excinfo.value.result.stderr == excinfo.value.stderr
-    assert excinfo.value.__cause__ is None
+    assert exc_obj.cmd == cmd
+    assert isinstance(exc_obj.result, SafeSubprocessResult)
+    assert exc_obj.result == expected_result
+    assert _as_text(exc_obj.stdout) == stdout
+    assert _as_text(exc_obj.stderr) == stderr
+    assert exc_obj.timeout == pytest.approx(0.5)
+    assert exc_obj.result.stdout == _as_text(exc_obj.stdout)
+    assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
+    assert exc_obj.__cause__ is None
     assert caplog.records
     record = caplog.records[0]
     assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
@@ -60,10 +74,11 @@ def test_safe_subprocess_run_default_timeout(caplog):
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             safe_subprocess_run(cmd)
 
-    assert excinfo.value.cmd == cmd
-    assert excinfo.value.timeout == pytest.approx(SUBPROCESS_TIMEOUT_DEFAULT)
-    assert excinfo.value.stdout == ""
-    assert excinfo.value.stderr == ""
+    exc_obj = _timeout_payload(excinfo.value)
+    assert exc_obj.cmd == cmd
+    assert exc_obj.timeout == pytest.approx(SUBPROCESS_TIMEOUT_DEFAULT)
+    assert _as_text(exc_obj.stdout) == ""
+    assert _as_text(exc_obj.stderr) == ""
     assert caplog.records
     record = caplog.records[0]
     assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
@@ -123,15 +138,16 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
             safe_subprocess_run(["dummy"], timeout=0.25)
 
-    result = excinfo.value.result
+    exc_obj = _timeout_payload(excinfo.value)
+    result = exc_obj.result
     assert result.timeout is True
     assert result.returncode == 124
     assert result.stdout == ""
     assert result.stderr == ""
-    assert excinfo.value.stdout == ""
-    assert excinfo.value.stderr == ""
-    assert excinfo.value.result.stdout == excinfo.value.stdout
-    assert excinfo.value.result.stderr == excinfo.value.stderr
+    assert _as_text(exc_obj.stdout) == ""
+    assert _as_text(exc_obj.stderr) == ""
+    assert exc_obj.result.stdout == _as_text(exc_obj.stdout)
+    assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
     assert captured["args"] == (["dummy"],)
     assert captured["kwargs"]["stdout"] == subprocess.PIPE
     assert captured["kwargs"]["stderr"] == subprocess.PIPE
@@ -155,16 +171,17 @@ def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
     with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         safe_subprocess_run(["dummy"], timeout=0.25)
 
-    result = excinfo.value.result
+    exc_obj = _timeout_payload(excinfo.value)
+    result = exc_obj.result
     assert result.timeout is True
     assert result.returncode == 124
     assert result.stdout == "partial stdout"
     assert result.stderr == "partial stderr"
-    assert excinfo.value.stdout == "partial stdout"
-    assert excinfo.value.stderr == "partial stderr"
-    assert excinfo.value.result.stdout == excinfo.value.stdout
-    assert excinfo.value.result.stderr == excinfo.value.stderr
-    assert isinstance(excinfo.value.result, SafeSubprocessResult)
+    assert _as_text(exc_obj.stdout) == "partial stdout"
+    assert _as_text(exc_obj.stderr) == "partial stderr"
+    assert exc_obj.result.stdout == _as_text(exc_obj.stdout)
+    assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
+    assert isinstance(exc_obj.result, SafeSubprocessResult)
     assert captured["kwargs"]["timeout"] == 0.25
 
 
@@ -183,16 +200,17 @@ def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
     with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         safe_subprocess_run(["dummy"], timeout=0.25)
 
-    result = excinfo.value.result
+    exc_obj = _timeout_payload(excinfo.value)
+    result = exc_obj.result
     assert isinstance(result, SafeSubprocessResult)
     assert result.timeout is True
     assert result.returncode == 124
     assert result.stdout == "late stdout"
     assert result.stderr == "late stderr"
-    assert excinfo.value.stdout == "late stdout"
-    assert excinfo.value.stderr == "late stderr"
-    assert excinfo.value.result.stdout == excinfo.value.stdout
-    assert excinfo.value.result.stderr == excinfo.value.stderr
+    assert _as_text(exc_obj.stdout) == "late stdout"
+    assert _as_text(exc_obj.stderr) == "late stderr"
+    assert exc_obj.result.stdout == _as_text(exc_obj.stdout)
+    assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
     assert captured["kwargs"]["timeout"] == 0.25
 
 
@@ -217,17 +235,18 @@ def test_safe_subprocess_run_timeout_cleanup_timeout(monkeypatch, caplog):
 
     assert caplog.records
 
-    result = excinfo.value.result
+    exc_obj = _timeout_payload(excinfo.value)
+    result = exc_obj.result
     assert isinstance(result, SafeSubprocessResult)
     assert result.timeout is True
     assert result.returncode == 124
     assert result.stdout == "after kill stdout"
     assert result.stderr == "after kill stderr"
-    assert excinfo.value.timeout == pytest.approx(0.2)
-    assert excinfo.value.stdout == "after kill stdout"
-    assert excinfo.value.stderr == "after kill stderr"
-    assert excinfo.value.result.stdout == excinfo.value.stdout
-    assert excinfo.value.result.stderr == excinfo.value.stderr
+    assert exc_obj.timeout == pytest.approx(0.2)
+    assert _as_text(exc_obj.stdout) == "after kill stdout"
+    assert _as_text(exc_obj.stderr) == "after kill stderr"
+    assert exc_obj.result.stdout == _as_text(exc_obj.stdout)
+    assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
     assert captured["kwargs"]["timeout"] == 0.2
 
 
@@ -244,13 +263,14 @@ def test_safe_subprocess_run_timeout_populates_result_and_returncode(monkeypatch
     with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         safe_subprocess_run(["dummy"], timeout=0.3)
 
-    result = excinfo.value.result
+    exc_obj = _timeout_payload(excinfo.value)
+    result = exc_obj.result
     assert isinstance(result, SafeSubprocessResult)
     assert result.timeout is True
     assert result.returncode == 124
     assert result.stdout == ""
     assert result.stderr == ""
-    assert excinfo.value.timeout == pytest.approx(0.3)
-    assert excinfo.value.result.stdout == excinfo.value.stdout
-    assert excinfo.value.result.stderr == excinfo.value.stderr
+    assert exc_obj.timeout == pytest.approx(0.3)
+    assert exc_obj.result.stdout == _as_text(exc_obj.stdout)
+    assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
     assert captured["kwargs"]["timeout"] == 0.3

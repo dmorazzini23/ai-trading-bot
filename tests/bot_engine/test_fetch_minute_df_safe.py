@@ -2,6 +2,7 @@ import logging
 import sys
 import types
 from datetime import UTC, date, datetime, timedelta
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -14,20 +15,26 @@ pytest.importorskip("pandas")
 
 sys.modules.setdefault(
     "portalocker",
-    types.SimpleNamespace(lock=lambda *a, **k: None, unlock=lambda *a, **k: None, LOCK_EX=1),
+    cast(
+        types.ModuleType,
+        types.SimpleNamespace(lock=lambda *a, **k: None, unlock=lambda *a, **k: None, LOCK_EX=1),
+    ),
 )
-sys.modules.setdefault("bs4", types.SimpleNamespace(BeautifulSoup=object))
+sys.modules.setdefault("bs4", cast(types.ModuleType, types.SimpleNamespace(BeautifulSoup=object)))
 sys.modules.setdefault(
     "flask",
-    types.SimpleNamespace(
-        Flask=type(
-            "Flask",
-            (),
-            {
-                "__init__": lambda self, *a, **k: None,
-                "route": lambda self, *a, **k: (lambda fn: fn),
-                "after_request": lambda self, fn: fn,
-            },
+    cast(
+        types.ModuleType,
+        types.SimpleNamespace(
+            Flask=type(
+                "Flask",
+                (),
+                {
+                    "__init__": lambda self, *a, **k: None,
+                    "route": lambda self, *a, **k: (lambda fn: fn),
+                    "after_request": lambda self, fn: fn,
+                },
+            )
         )
     ),
 )

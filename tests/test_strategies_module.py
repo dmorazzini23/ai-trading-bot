@@ -2,9 +2,14 @@ import os
 import sys
 import types
 import pytest
+from typing import Any
 
 from ai_trading.config import settings as settings_module
 from ai_trading.core.bot_engine import get_strategies
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -23,58 +28,59 @@ def _stub_modules():
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
 
     trading_mod = types.ModuleType("alpaca.trading.client")
-    trading_mod.TradingClient = object
-    trading_mod.APIError = type("APIError", (Exception,), {})
+    _set_module_attr(trading_mod, "TradingClient", object)
+    _set_module_attr(trading_mod, "APIError", type("APIError", (Exception,), {}))
     monkeypatch.setitem(sys.modules, "alpaca.trading.client", trading_mod)
 
     data_mod = types.ModuleType("alpaca.data")
     tf_mod = types.ModuleType("alpaca.data.timeframe")
-    tf_mod.TimeFrame = type("TimeFrame", (object,), {})
-    tf_mod.TimeFrameUnit = type("TimeFrameUnit", (object,), {})
+    _set_module_attr(tf_mod, "TimeFrame", type("TimeFrame", (object,), {}))
+    _set_module_attr(tf_mod, "TimeFrameUnit", type("TimeFrameUnit", (object,), {}))
     req_mod = types.ModuleType("alpaca.data.requests")
-    req_mod.StockBarsRequest = type("StockBarsRequest", (object,), {})
+    _set_module_attr(req_mod, "StockBarsRequest", type("StockBarsRequest", (object,), {}))
     monkeypatch.setitem(sys.modules, "alpaca.data", data_mod)
     monkeypatch.setitem(sys.modules, "alpaca.data.timeframe", tf_mod)
     monkeypatch.setitem(sys.modules, "alpaca.data.requests", req_mod)
-    data_mod.TimeFrame = tf_mod.TimeFrame
-    data_mod.StockBarsRequest = req_mod.StockBarsRequest
+    _set_module_attr(data_mod, "TimeFrame", getattr(tf_mod, "TimeFrame"))
+    _set_module_attr(data_mod, "StockBarsRequest", getattr(req_mod, "StockBarsRequest"))
 
     df_stub = types.ModuleType("ai_trading.data.fetch")
-    df_stub.get_bars = df_stub.get_bars_batch = lambda *a, **k: []
-    df_stub.get_minute_df = lambda *a, **k: None
-    df_stub.DataFetchError = Exception
-    df_stub.get_cached_minute_timestamp = lambda *a, **k: 0
-    df_stub.last_minute_bar_age_seconds = lambda *a, **k: 0
+    _set_module_attr(df_stub, "get_bars", lambda *a, **k: [])
+    _set_module_attr(df_stub, "get_bars_batch", lambda *a, **k: [])
+    _set_module_attr(df_stub, "get_minute_df", lambda *a, **k: None)
+    _set_module_attr(df_stub, "DataFetchError", Exception)
+    _set_module_attr(df_stub, "get_cached_minute_timestamp", lambda *a, **k: 0)
+    _set_module_attr(df_stub, "last_minute_bar_age_seconds", lambda *a, **k: 0)
     monkeypatch.setitem(sys.modules, "ai_trading.data.fetch", df_stub)
 
     cal_stub = types.ModuleType("ai_trading.market.calendars")
-    cal_stub.ensure_final_bar = lambda *a, **k: None
+    _set_module_attr(cal_stub, "ensure_final_bar", lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "ai_trading.market.calendars", cal_stub)
 
     cb_stub = types.ModuleType("ai_trading.risk.circuit_breakers")
-    cb_stub.DrawdownCircuitBreaker = object
+    _set_module_attr(cb_stub, "DrawdownCircuitBreaker", object)
     monkeypatch.setitem(sys.modules, "ai_trading.risk.circuit_breakers", cb_stub)
 
     adaptive_stub = types.ModuleType("ai_trading.risk.adaptive_sizing")
-    adaptive_stub.AdaptivePositionSizer = object
-    adaptive_stub.MarketRegime = type("MarketRegime", (object,), {})
+    _set_module_attr(adaptive_stub, "AdaptivePositionSizer", object)
+    _set_module_attr(adaptive_stub, "MarketRegime", type("MarketRegime", (object,), {}))
     monkeypatch.setitem(sys.modules, "ai_trading.risk.adaptive_sizing", adaptive_stub)
 
     pandas_ta_stub = types.ModuleType("pandas_ta")
-    pandas_ta_stub._bind_known_methods = lambda: None
+    _set_module_attr(pandas_ta_stub, "_bind_known_methods", lambda: None)
     monkeypatch.setitem(sys.modules, "pandas_ta", pandas_ta_stub)
 
     rebalancer_stub = types.ModuleType("ai_trading.rebalancer")
-    rebalancer_stub.maybe_rebalance = lambda *a, **k: None
-    rebalancer_stub.rebalance_if_needed = lambda *a, **k: None
+    _set_module_attr(rebalancer_stub, "maybe_rebalance", lambda *a, **k: None)
+    _set_module_attr(rebalancer_stub, "rebalance_if_needed", lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "ai_trading.rebalancer", rebalancer_stub)
 
     pipeline_stub = types.ModuleType("ai_trading.pipeline")
-    pipeline_stub.model_pipeline = lambda *a, **k: None
+    _set_module_attr(pipeline_stub, "model_pipeline", lambda *a, **k: None)
     monkeypatch.setitem(sys.modules, "ai_trading.pipeline", pipeline_stub)
 
     finnhub_stub = types.ModuleType("finnhub")
-    finnhub_stub.FinnhubAPIException = type("FinnhubAPIException", (Exception,), {})
+    _set_module_attr(finnhub_stub, "FinnhubAPIException", type("FinnhubAPIException", (Exception,), {}))
     monkeypatch.setitem(sys.modules, "finnhub", finnhub_stub)
 
     try:

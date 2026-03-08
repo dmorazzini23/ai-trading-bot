@@ -7,9 +7,9 @@ import logging
 import math
 import statistics
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 if TYPE_CHECKING:  # pragma: no cover - used for type hints
     import numpy as np  # type: ignore
@@ -20,8 +20,10 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
 try:  # pragma: no cover - alpaca may be missing in tests
     from alpaca.common.exceptions import APIError
 except Exception:  # ImportError
-    class APIError(Exception):
+    class _FallbackAPIError(Exception):
         """Fallback APIError when alpaca package is absent."""
+
+    APIError = _FallbackAPIError
 
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout, clamp_request_timeout
@@ -51,6 +53,7 @@ from ai_trading.config import get_settings
 from ai_trading.config.management import get_env as _get_env
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame, Series as PDSeries
 
 # Heavy imports are loaded lazily within functions
 
@@ -109,7 +112,7 @@ def robust_signal_price(df) -> float:
     if pd is None or not hasattr(pd, "DataFrame"):
         return 0.001
     try:
-        return df["close"].iloc[-1]
+        return float(df["close"].iloc[-1])
     except (ValueError, KeyError, TypeError, ZeroDivisionError, AttributeError) as e:
         logger.warning("DATA_MUNGING_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return 0.001
@@ -145,13 +148,13 @@ def load_module(name):
     return importlib.import_module(name)
 
 
-def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
+def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict[str, Any]:
     """Fetch JSON from an API with simple retry logic and backoff."""
     for attempt in range(1, retries + 1):
         try:
             resp = http.get(url, timeout=clamp_request_timeout(5))
             resp.raise_for_status()
-            return resp.json()
+            return cast(dict[str, Any], resp.json())
         except RequestException as exc:
             logger.warning("API request failed (%s/%s): %s", attempt, retries, exc)
             psleep(delay * attempt)
@@ -163,7 +166,7 @@ def generate() -> int:
     return 0
 
 
-def fetch_history(symbols: Iterable[str], start, end, source: str = "alpaca") -> Any:
+def fetch_history(symbols: Sequence[str], start, end, source: str = "alpaca") -> Any:
     """Fetch historical data for symbols between start and end."""
     pd = _get_pandas()
     if pd is None or not hasattr(pd, "DataFrame"):
@@ -180,7 +183,7 @@ def fetch_history(symbols: Iterable[str], start, end, source: str = "alpaca") ->
         raise
 
 
-def compute_indicators(df: pd.DataFrame) -> Any:
+def compute_indicators(df: PDDataFrame) -> Any:
     pd = _get_pandas()
     if pd is None or not hasattr(pd, "DataFrame"):
         return df
@@ -192,7 +195,7 @@ def compute_indicators(df: pd.DataFrame) -> Any:
         raise
 
 
-def build_feature_matrix(df: pd.DataFrame) -> Any:
+def build_feature_matrix(df: PDDataFrame) -> Any:
     pd = _get_pandas()
     if pd is None or not hasattr(pd, "DataFrame"):
         return df
@@ -204,7 +207,7 @@ def build_feature_matrix(df: pd.DataFrame) -> Any:
         raise
 
 
-def score_candidates(X: pd.DataFrame, model) -> Any:
+def score_candidates(X: PDDataFrame, model) -> Any:
     """Attach model-derived score column in [0, 1] to ``X``."""
     pd = _get_pandas()
     if pd is None or not hasattr(pd, "DataFrame"):
@@ -229,7 +232,7 @@ def score_candidates(X: pd.DataFrame, model) -> Any:
         raise
 
 
-def generate_signals(scored: pd.DataFrame, buy_threshold: float) -> Any:
+def generate_signals(scored: PDDataFrame, buy_threshold: float) -> Any:
     pd = _get_pandas()
     if pd is None or not hasattr(pd, "DataFrame"):
         return scored
@@ -341,7 +344,7 @@ def _validate_input_df(data) -> None:
     pd = _get_pandas()
     if data is None:
         raise ValueError("Input must be a DataFrame")
-    if pd is not None and hasattr(pd, "DataFrame") and (not isinstance(data, pd.DataFrame)):
+    if pd is not None and hasattr(pd, "DataFrame") and (not isinstance(data, PDDataFrame)):
         raise ValueError("Input must be a DataFrame")
     required = ["open", "high", "low", "close", "volume"]
     if hasattr(data, "columns"):
@@ -443,7 +446,7 @@ def prepare_indicators_parallel(symbols: list[str], data: dict[str, Any], max_wo
         executor.map(lambda s: prepare_indicators(data[s], s), symbols)
 
 
-def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
+def generate_signal(df: PDDataFrame, column: str) -> PDSeries:
     """
     Generate trading signals from specified dataframe column.
 
@@ -530,7 +533,7 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     if df is None:
         logger.error("Dataframe is None in generate_signal")
         raise ValueError("df cannot be None")
-    if not isinstance(df, pd.DataFrame):
+    if not isinstance(df, PDDataFrame):
         logger.error("Expected DataFrame, got %s", type(df))
         raise TypeError("df must be a pandas DataFrame")
     if df.empty:
@@ -583,19 +586,23 @@ def detect_market_regime_hmm(df, n_components: int = 3, window_size: int = 1000,
         return np.zeros(len(df), dtype=int)
     arr = returns.values.reshape(-1, 1)
     train = arr[-window_size:] if arr.shape[0] > window_size else arr
+    _lin_alg_error: type[Exception]
     try:
         try:
-            from numpy.linalg import LinAlgError
+            from numpy.linalg import LinAlgError as _LinAlgError
+            _lin_alg_error = cast(type[Exception], _LinAlgError)
         except Exception:  # pragma: no cover - fallback definition
 
-            class LinAlgError(Exception):
+            class _FallbackLinAlgError(Exception):
                 pass
+
+            _lin_alg_error = _FallbackLinAlgError
 
         model = GaussianHMM(n_components=n_components, covariance_type="diag", n_iter=max_iter, random_state=42)
         model.fit(train)
         hidden_full = model.predict(arr)
         result = np.concatenate([[hidden_full[0]], hidden_full])
-    except (ValueError, RuntimeError, LinAlgError) as exc:
+    except (ValueError, RuntimeError, _lin_alg_error) as exc:
         logger.warning("MODEL_FIT_FAILED", extra={"cause": exc.__class__.__name__, "detail": str(exc)})
         return np.zeros(len(df), dtype=int)
     return np.asarray(result, dtype=int)
@@ -718,7 +725,7 @@ def generate_ensemble_signal(df) -> int:
 
     def last(col: str) -> float:
         s = df.get(col, pd.Series(dtype=float))
-        return s.iloc[-1] if not s.empty else np.nan
+        return float(s.iloc[-1]) if not s.empty else float(np.nan)
 
     signals = []
     if last("EMA_5") > last("EMA_20"):
@@ -966,10 +973,10 @@ def filter_signals_with_portfolio_optimization(signals: list, ctx, current_posit
         return signals
 
 
-def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict:
+def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict[str, Any]:
     """Prepare market data structure for portfolio analysis."""
     try:
-        market_data = {"prices": {}, "returns": {}, "volumes": {}, "correlations": {}, "volatility": {}}
+        market_data: dict[str, Any] = {"prices": {}, "returns": {}, "volumes": {}, "correlations": {}, "volatility": {}}
         symbols = set()
         for signal in signals:
             symbol = getattr(signal, "symbol", "")
@@ -1010,14 +1017,14 @@ def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict:
         return {}
 
 
-def _calculate_correlation_matrix(market_data: dict):
+def _calculate_correlation_matrix(market_data: dict[str, Any]):
     """Calculate correlation matrix between symbols."""
     try:
         returns_data = market_data.get("returns", {})
         symbols = list(returns_data.keys())
         if len(symbols) < 2:
             return
-        correlations = {}
+        correlations: dict[str, dict[str, float]] = {}
         for symbol1 in symbols:
             correlations[symbol1] = {}
             returns1 = returns_data[symbol1]
@@ -1073,19 +1080,19 @@ def _estimate_signal_profit(signal, market_data: dict) -> float:
     try:
         symbol = getattr(signal, "symbol", "")
         getattr(signal, "side", "")
-        quantity = getattr(signal, "quantity", 0)
+        quantity = float(getattr(signal, "quantity", 0) or 0.0)
         if not symbol or symbol not in market_data["prices"]:
             return 0.0
-        price = market_data["prices"][symbol]
+        price = float(market_data["prices"][symbol])
         trade_value = abs(quantity) * price
         returns = market_data.get("returns", {}).get(symbol, [])
         if len(returns) > 5:
             positive_returns = [r for r in returns[-10:] if r > 0]
             if positive_returns:
                 avg_positive_return = statistics.mean(positive_returns)
-                expected_profit = trade_value * avg_positive_return
+                expected_profit = float(trade_value * avg_positive_return)
                 return max(0.0, expected_profit)
-        return trade_value * 0.01
+        return float(trade_value * 0.01)
     except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
         logger.debug("PROFIT_ESTIMATE_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return 0.0
@@ -1120,18 +1127,18 @@ class SignalDecisionPipeline:
 
     def __init__(self, config: dict = None):
         """Initialize signal decision pipeline."""
-        self.config = config or {}
-        self.min_edge_threshold = self.config.get("min_edge_threshold", 0.001)
-        self.transaction_cost_buffer = self.config.get("transaction_cost_buffer", 0.0005)
-        self.ensemble_min_agree = self.config.get("ensemble_min_agree", 2)
-        self.ensemble_total = self.config.get("ensemble_total", 3)
-        self.atr_stop_multiplier = self.config.get("atr_stop_multiplier", 2.0)
-        self.atr_target_multiplier = self.config.get("atr_target_multiplier", 3.0)
-        self.regime_volatility_threshold = self.config.get("regime_volatility_threshold", 0.02)
+        self.config: dict[str, Any] = config or {}
+        self.min_edge_threshold: float = float(self.config.get("min_edge_threshold", 0.001))
+        self.transaction_cost_buffer: float = float(self.config.get("transaction_cost_buffer", 0.0005))
+        self.ensemble_min_agree: int = int(self.config.get("ensemble_min_agree", 2))
+        self.ensemble_total: int = int(self.config.get("ensemble_total", 3))
+        self.atr_stop_multiplier: float = float(self.config.get("atr_stop_multiplier", 2.0))
+        self.atr_target_multiplier: float = float(self.config.get("atr_target_multiplier", 3.0))
+        self.regime_volatility_threshold: float = float(self.config.get("regime_volatility_threshold", 0.02))
         logger.info("SignalDecisionPipeline initialized with cost-aware settings")
 
     def evaluate_signal_with_costs(
-        self, symbol: str, df: pd.DataFrame, predicted_edge: float, quantity: float = 1000
+        self, symbol: str, df: PDDataFrame, predicted_edge: float, quantity: float = 1000
     ) -> dict:
         """
         Evaluate a trading signal with comprehensive cost analysis.
@@ -1241,21 +1248,21 @@ class SignalDecisionPipeline:
             "notional": notional,
         }
 
-    def _calculate_current_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+    def _calculate_current_atr(self, df: PDDataFrame, period: int = 14) -> float:
         """Calculate current ATR value."""
         pd = _get_pandas()
         if pd is None or not hasattr(pd, "DataFrame"):
             return 0.0
         try:
             if len(df) < period:
-                return df["close"].iloc[-1] * 0.02
+                return float(df["close"].iloc[-1]) * 0.02
             atr_values = atr(df["high"], df["low"], df["close"], period)
-            return atr_values.iloc[-1] if not atr_values.empty else df["close"].iloc[-1] * 0.02
+            return float(atr_values.iloc[-1]) if not atr_values.empty else float(df["close"].iloc[-1]) * 0.02
         except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
             logger.warning("DATA_MUNGING_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
-            return df["close"].iloc[-1] * 0.02
+            return float(df["close"].iloc[-1]) * 0.02
 
-    def _analyze_market_regime(self, df: pd.DataFrame) -> dict:
+    def _analyze_market_regime(self, df: PDDataFrame) -> dict[str, Any]:
         """Analyze current market regime characteristics."""
         pd = _get_pandas()
         np = _get_numpy()
@@ -1288,7 +1295,7 @@ class SignalDecisionPipeline:
                 "regime_type": "unknown",
             }
 
-    def _passes_ensemble_gating(self, df: pd.DataFrame) -> bool:
+    def _passes_ensemble_gating(self, df: PDDataFrame) -> bool:
         """Check if signal passes ensemble gating requirements."""
         pd = _get_pandas()
         if pd is None or not hasattr(pd, "DataFrame"):

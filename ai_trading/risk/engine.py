@@ -6,25 +6,29 @@ import builtins
 import os
 import random
 import threading
+from _thread import LockType
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import importlib
 import sys
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
 from ai_trading.utils.time import monotonic_time
 from ai_trading.data.fetch import normalize_ohlcv_columns
+from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame
 
 try:
     from alpaca.common.exceptions import APIError
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
 
-    class APIError(Exception):
+    class _FallbackAPIError(Exception):
         pass
+
+    APIError = _FallbackAPIError
 
 
 try:
@@ -46,7 +50,7 @@ from ai_trading.settings import (
 )
 
 if not hasattr(np, "NaN"):
-    np.NaN = np.nan
+    setattr(np, "NaN", np.nan)
 
 # Lazy pandas proxy
 pd = load_pandas()
@@ -167,7 +171,7 @@ if isinstance(_existing_trade_signal, type):
 else:
 
     @dataclass
-    class TradeSignal:
+    class _TradeSignal:
         symbol: str
         side: str
         confidence: float
@@ -176,6 +180,7 @@ else:
         asset_class: str
         strength: float = 1.0
 
+    TradeSignal = _TradeSignal
     setattr(builtins, _TRADE_SIGNAL_SENTINEL, TradeSignal)
 
 
@@ -184,14 +189,14 @@ logger = get_logger(__name__)
 random.seed(SEED)
 np.random.seed(SEED)
 if not hasattr(np, "NaN"):
-    np.NaN = np.nan
+    setattr(np, "NaN", np.nan)
 MAX_DRAWDOWN = 0.05
 
 
 class RiskEngine:
     """Cross-strategy risk manager."""
 
-    _lock: object | None = None
+    _lock: LockType | None = None
 
     def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""
@@ -218,7 +223,7 @@ class RiskEngine:
         self.exposure: dict[str, float] = {}
         self.strategy_exposure: dict[str, float] = {}
         self._positions: dict[str, int] = {}
-        self._atr_cache: dict[str, tuple] = {}
+        self._atr_cache: dict[str, tuple[datetime, float]] = {}
         self._volatility_cache: dict[str, tuple] = {}
         self._volatility_alerted = False
         self.data_client = None
@@ -230,7 +235,7 @@ class RiskEngine:
                     normalized = _secret_to_str(value)
                     if not normalized:
                         continue
-                    cleaned = normalized.strip()
+                    cleaned = str(normalized).strip()
                     if cleaned:
                         return cleaned
                 return None
@@ -409,10 +414,10 @@ class RiskEngine:
                 if pd is not None and hasattr(pd, "RangeIndex") and isinstance(df_local.index, pd.RangeIndex):
                     df_local = df_local.reset_index(drop=True)
 
-                def _series(df_obj: "pd.DataFrame", name: str) -> np.ndarray | None:
+                def _series(df_obj: PDDataFrame, name: str) -> np.ndarray | None:
                     if name in df_obj:
                         try:
-                            return df_obj[name].dropna().to_numpy()
+                            return cast(np.ndarray, df_obj[name].dropna().to_numpy())
                         except AttributeError:
                             return None
                     return None
@@ -477,11 +482,11 @@ class RiskEngine:
                         records.append(record)
                 return records
 
-            def _coerce_dataframe(candidate: Any) -> "pd.DataFrame | None":
+            def _coerce_dataframe(candidate: Any) -> PDDataFrame | None:
                 if pd is None or candidate is None:
                     return None
                 try:
-                    if isinstance(candidate, pd.DataFrame):
+                    if isinstance(candidate, PDDataFrame):
                         df_candidate = candidate.copy()
                     elif isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
                         try:
@@ -798,11 +803,11 @@ class RiskEngine:
         recent_returns = np.array(self._returns[-volatility_lookback_days:])
         mean_return = np.mean(recent_returns)
         vol = np.std(recent_returns) if np.std(recent_returns) > 0 else 0.01
-        sharpe_proxy = mean_return / vol
+        sharpe_proxy = float(mean_return / vol)
         cumulative = np.cumprod(1 + recent_returns)
         running_max = np.maximum.accumulate(cumulative)
         drawdown = (cumulative - running_max) / running_max
-        max_dd = abs(np.min(drawdown)) if len(drawdown) > 0 else 0
+        max_dd = float(abs(np.min(drawdown))) if len(drawdown) > 0 else 0.0
         if sharpe_proxy > 0.5 and max_dd < 0.05:
             multiplier = min(1.2, 1 + sharpe_proxy * 0.3)
         elif sharpe_proxy < -0.3 or max_dd > 0.1:
@@ -810,7 +815,7 @@ class RiskEngine:
         else:
             multiplier = 1.0
         adaptive_cap = base_cap * multiplier
-        return np.clip(adaptive_cap, base_cap * 0.3, base_cap * 1.5)
+        return float(np.clip(adaptive_cap, base_cap * 0.3, base_cap * 1.5))
 
     def available_exposure(self, *, cap: float | None = None) -> float:
         """Return remaining exposure capacity against the effective cap."""
@@ -874,7 +879,7 @@ class RiskEngine:
 
     def can_trade(
         self,
-        signal: TradeSignal,
+        signal: Any,
         *,
         pending: float = 0.0,
         volatility: float | None = None,
@@ -898,20 +903,26 @@ class RiskEngine:
         if not isinstance(signal, TradeSignal):
             logger.error("can_trade called with invalid signal type")
             return False
-        asset_exp = self.exposure.get(signal.asset_class, 0.0) + max(pending, 0.0)
-        asset_cap = 1.1 * self._dynamic_cap(signal.asset_class, volatility, cash_ratio)
+        asset_class = str(getattr(signal, "asset_class", "equity"))
+        strategy = str(getattr(signal, "strategy", "default"))
+        symbol = str(getattr(signal, "symbol", "UNKNOWN"))
+        asset_exp = self.exposure.get(asset_class, 0.0) + max(pending, 0.0)
+        asset_cap = 1.1 * self._dynamic_cap(asset_class, volatility, cash_ratio)
         signal = self.apply_risk_scaling(signal, volatility=volatility, returns=returns)
         try:
-            signal_weight = float(signal.weight)
+            signal_weight = float(getattr(signal, "weight", 0.0))
         except (ValueError, TypeError) as e:
             logger.warning(
-                "Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s", signal.weight, signal.symbol, e
+                "Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s",
+                getattr(signal, "weight", None),
+                symbol,
+                e,
             )
             signal_weight = 0.0
         if asset_exp + signal_weight > asset_cap:
             logger.warning(
                 "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
-                signal.symbol,
+                symbol,
                 getattr(signal, "qty", "n/a"),
                 signal_weight,
                 asset_exp + signal_weight,
@@ -920,37 +931,41 @@ class RiskEngine:
             if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
-        strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
+        strat_cap = self.strategy_limits.get(strategy, self.global_limit)
         if signal_weight > strat_cap:
-            logger.warning("Strategy %s weight %.2f exceeds cap %.2f", signal.strategy, signal_weight, strat_cap)
+            logger.warning("Strategy %s weight %.2f exceeds cap %.2f", strategy, signal_weight, strat_cap)
             if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
         return True
 
-    def register_fill(self, signal: TradeSignal) -> None:
+    def register_fill(self, signal: Any) -> None:
         if not isinstance(signal, TradeSignal):
             logger.error("register_fill called with invalid signal type")
             return
-        prev = self.exposure.get(signal.asset_class, 0.0)
+        asset_class = str(getattr(signal, "asset_class", "equity"))
+        strategy = str(getattr(signal, "strategy", "default"))
+        symbol = str(getattr(signal, "symbol", "UNKNOWN"))
+        side = str(getattr(signal, "side", "buy")).lower()
+        prev = self.exposure.get(asset_class, 0.0)
         try:
-            signal_weight = float(signal.weight)
+            signal_weight = float(getattr(signal, "weight", 0.0))
         except (ValueError, TypeError) as e:
             logger.warning(
                 "Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s",
-                signal.weight,
-                signal.symbol,
+                getattr(signal, "weight", None),
+                symbol,
                 e,
             )
             signal_weight = 0.0
-        delta = signal_weight if signal.side.lower() == "buy" else -signal_weight
+        delta = signal_weight if side == "buy" else -signal_weight
         new_exposure = prev + delta
-        if new_exposure < 0 and signal.side.lower() == "sell":
+        if new_exposure < 0 and side == "sell":
             logger.warning(
                 "EXPOSURE_NEGATIVE_PREVENTED",
                 extra={
-                    "asset": signal.asset_class,
-                    "symbol": getattr(signal, "symbol", "UNKNOWN"),
+                    "asset": asset_class,
+                    "symbol": symbol,
                     "prev": prev,
                     "delta": delta,
                     "would_be": new_exposure,
@@ -958,17 +973,17 @@ class RiskEngine:
             )
             new_exposure = 0.0
             delta = -prev
-        self.exposure[signal.asset_class] = new_exposure
-        s_prev = self.strategy_exposure.get(signal.strategy, 0.0)
-        self.strategy_exposure[signal.strategy] = s_prev + delta
+        self.exposure[asset_class] = new_exposure
+        s_prev = self.strategy_exposure.get(strategy, 0.0)
+        self.strategy_exposure[strategy] = s_prev + delta
         logger.info(
             "EXPOSURE_UPDATED",
             extra={
-                "asset": signal.asset_class,
+                "asset": asset_class,
                 "prev": prev,
-                "new": self.exposure[signal.asset_class],
-                "side": signal.side,
-                "symbol": getattr(signal, "symbol", "UNKNOWN"),
+                "new": self.exposure[asset_class],
+                "side": side,
+                "symbol": symbol,
             },
         )
         import time
@@ -1062,8 +1077,8 @@ class RiskEngine:
             logger.warning("Failed to update exposure: %s", exc)
 
     def apply_risk_scaling(
-        self, signal: TradeSignal, *, volatility: float | None = None, returns: Sequence[float] | None = None
-    ) -> TradeSignal:
+        self, signal: Any, *, volatility: float | None = None, returns: Sequence[float] | None = None
+    ) -> Any:
         """
         Adjust a signal's weight based on volatility and CVaR.  This function
         uses a simple inverse‑volatility rule and CVaR scaling to shrink
@@ -1166,7 +1181,7 @@ class RiskEngine:
             logger.warning("Error calculating final quantity: %s", exc)
             return 0
 
-    def _apply_weight_limits(self, sig: TradeSignal) -> float:
+    def _apply_weight_limits(self, sig: Any) -> float:
         """Apply confidence-based weight limits considering current exposure."""
         try:
             if (
@@ -1214,7 +1229,7 @@ class RiskEngine:
             has_invalid = False
             try:
                 if hasattr(np, "any") and hasattr(np, "isnan") and hasattr(np, "isinf"):
-                    has_invalid = np.any(np.isnan(returns_array)) or np.any(np.isinf(returns_array))
+                    has_invalid = bool(np.any(np.isnan(returns_array)) or np.any(np.isinf(returns_array)))
                 else:
                     for val in returns_array:
                         if str(val).lower() in ["nan", "inf", "-inf"]:
@@ -1577,7 +1592,7 @@ def check_exposure_caps(portfolio, exposure, cap):
 
 
 def apply_trailing_atr_stop(
-    df: pd.DataFrame, entry_price: float, *, context: Any | None = None, symbol: str = "SYMBOL", qty: int | None = None
+    df: PDDataFrame, entry_price: float, *, context: Any | None = None, symbol: str = "SYMBOL", qty: int | None = None
 ) -> None:
     """Exit ``qty`` at market if the trailing stop is triggered."""
     try:
@@ -1679,7 +1694,7 @@ def compute_stop_levels(entry_price: float, atr: float, take_mult: float = 2.0) 
     return (stop, take)
 
 
-def correlation_position_weights(corr: pd.DataFrame, base: dict[str, float]) -> dict[str, float]:
+def correlation_position_weights(corr: PDDataFrame, base: dict[str, float]) -> dict[str, float]:
     """Scale weights inversely proportional to asset correlations."""
     weights = {}
     for sym, w in base.items():

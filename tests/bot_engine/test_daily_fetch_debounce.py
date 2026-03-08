@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, time as dt_time, timedelta
 import sys
 import types
+from typing import Any
 
 import pytest
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
@@ -13,16 +14,21 @@ from ai_trading.utils.lazy_imports import load_pandas
 
 pytest.importorskip("pandas")
 
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
+
+
 if "ai_trading.indicators" not in sys.modules:
     indicators_stub = types.ModuleType("ai_trading.indicators")
 
     def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
         raise RuntimeError("Indicator module unavailable in tests")
 
-    indicators_stub.compute_atr = _unavailable_indicator
-    indicators_stub.atr = _unavailable_indicator
-    indicators_stub.mean_reversion_zscore = _unavailable_indicator
-    indicators_stub.rsi = _unavailable_indicator
+    _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
+    _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
+    _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
+    _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
     sys.modules["ai_trading.indicators"] = indicators_stub
 
 if "ai_trading.signals" not in sys.modules:
@@ -32,10 +38,12 @@ if "ai_trading.signals" not in sys.modules:
     def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
         return {}
 
-    signals_indicators_stub.composite_signal_confidence = _composite_confidence_stub
+    _set_module_attr(
+        signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub
+    )
     sys.modules["ai_trading.signals"] = signals_stub
     sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
-    signals_stub.indicators = signals_indicators_stub
+    _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
 
 if "ai_trading.features" not in sys.modules:
     features_stub = types.ModuleType("ai_trading.features")
@@ -44,25 +52,25 @@ if "ai_trading.features" not in sys.modules:
     def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
         return df
 
-    features_indicators_stub.compute_macd = _feature_passthrough
-    features_indicators_stub.compute_macds = _feature_passthrough
-    features_indicators_stub.compute_vwap = _feature_passthrough
-    features_indicators_stub.compute_atr = _feature_passthrough
-    features_indicators_stub.compute_sma = _feature_passthrough
-    features_indicators_stub.ensure_columns = _feature_passthrough
+    _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
     sys.modules["ai_trading.features"] = features_stub
     sys.modules["ai_trading.features.indicators"] = features_indicators_stub
-    features_stub.indicators = features_indicators_stub
+    _set_module_attr(features_stub, "indicators", features_indicators_stub)
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
+    _set_module_attr(portalocker_stub, "LOCK_EX", 1)
 
     def _noop_lock(*_args, **_kwargs):  # pragma: no cover - safety stub
         return None
 
-    portalocker_stub.lock = _noop_lock
-    portalocker_stub.unlock = _noop_lock
+    _set_module_attr(portalocker_stub, "lock", _noop_lock)
+    _set_module_attr(portalocker_stub, "unlock", _noop_lock)
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:
@@ -75,23 +83,23 @@ if "bs4" not in sys.modules:
         def find(self, *_args, **_kwargs):
             return None
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     sys.modules["bs4"] = bs4_stub
 
 if "dotenv" not in sys.modules:
     dotenv_stub = types.ModuleType("dotenv")
-    dotenv_stub.load_dotenv = lambda *a, **k: None
+    _set_module_attr(dotenv_stub, "load_dotenv", lambda *a, **k: None)
     sys.modules["dotenv"] = dotenv_stub
 
 if "numpy" not in sys.modules:
     numpy_stub = types.ModuleType("numpy")
-    numpy_stub.array = lambda *a, **k: a
-    numpy_stub.ndarray = object
-    numpy_stub.float64 = float
-    numpy_stub.int64 = int
-    numpy_stub.nan = float("nan")
-    numpy_stub.NaN = float("nan")
-    numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
+    _set_module_attr(numpy_stub, "array", lambda *a, **k: a)
+    _set_module_attr(numpy_stub, "ndarray", object)
+    _set_module_attr(numpy_stub, "float64", float)
+    _set_module_attr(numpy_stub, "int64", int)
+    _set_module_attr(numpy_stub, "nan", float("nan"))
+    _set_module_attr(numpy_stub, "NaN", float("nan"))
+    _set_module_attr(numpy_stub, "random", types.SimpleNamespace(seed=lambda *_a, **_k: None))
     sys.modules["numpy"] = numpy_stub
 
 from ai_trading.core import bot_engine as be
@@ -106,9 +114,13 @@ class FixedDateTime(datetime):
         return base.astimezone(tz)
 
 
-def _stub_fetcher(monkeypatch) -> be.DataFetcher:
+def _ctx() -> Any:
+    return types.SimpleNamespace()
+
+
+def _stub_fetcher(monkeypatch) -> Any:
     monkeypatch.setattr(be.DataFetcher, "__post_init__", lambda self: None)
-    fetcher = be.DataFetcher()
+    fetcher: Any = be.DataFetcher()
     fetcher.settings = types.SimpleNamespace(
         alpaca_api_key="key",
         alpaca_secret_key_plain="secret",
@@ -164,7 +176,7 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", {memo_key: (5.0, memo_df)}, raising=False)
     fetcher._daily_cache = StrictCache({symbol: (fetch_date, cached_df)})
 
-    first = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    first = fetcher.get_daily_df(_ctx(), symbol)
     assert first is memo_df
     assert fetcher._daily_cache.get_calls == 0
     first_stamp = be._DAILY_FETCH_MEMO[memo_key][0]
@@ -182,7 +194,7 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     be._DAILY_FETCH_MEMO[memo_key] = (0.0, memo_df)
     be._DAILY_FETCH_MEMO[canonical_key] = (0.0, memo_df)
     fetcher._daily_cache.raise_on_get = False
-    second = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    second = fetcher.get_daily_df(_ctx(), symbol)
     assert second is cached_df
     assert memo_key in be._DAILY_FETCH_MEMO
     updated_stamp, updated_df = be._DAILY_FETCH_MEMO[memo_key]
@@ -224,7 +236,7 @@ def test_daily_fetch_memo_primary_lookup_uses_helpers(monkeypatch):
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
     monkeypatch.setattr(be.time, "monotonic", lambda: 10.0)
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
     assert result is memo_payload
     assert canonical_key in memo_store
     refreshed_stamp, refreshed_payload = memo_store[canonical_key]
@@ -283,7 +295,7 @@ def test_daily_fetch_legacy_memo_dict_short_circuits(monkeypatch, legacy_entry):
         entry_copy.setdefault("df", memo_payload)
     memo_store[legacy_key] = entry_copy
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
 
     assert result is memo_payload
     canonical_keys = [key for key in memo_store.keys() if len(key) == 4]
@@ -353,7 +365,7 @@ def test_daily_fetch_legacy_tuple_normalizes_and_skips_daily_cache(monkeypatch):
     memo_store[canonical_key] = (memo_payload, 5.0)
     memo_store[legacy_key] = (memo_payload, 5.0)
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
 
     assert result is memo_payload
     for key in (canonical_key, legacy_key):
@@ -430,7 +442,7 @@ def test_daily_fetch_canonical_and_legacy_memo_bypass_daily_cache(monkeypatch):
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
 
     assert result is memo_payload
     assert fetcher._daily_cache.get_calls == 0
@@ -486,7 +498,7 @@ def test_daily_fetch_memo_mapping_get_raises(monkeypatch):
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
 
     assert result is memo_payload
     assert legacy_key in memo_store
@@ -536,7 +548,9 @@ def test_daily_fetch_fresh_memo_skips_cache_and_provider(
     canonical_key = (symbol, "1Day", start_ts.isoformat(), end_ts.isoformat())
     legacy_key = (symbol, fetch_date.isoformat())
     memo_payload = {"memo": True}
-    memo_store = {canonical_key: memo_entry_factory(memo_payload)}
+    memo_store: dict[tuple[str, ...], tuple[float, Any]] = {
+        canonical_key: memo_entry_factory(memo_payload)
+    }
 
     class StrictCache(dict):
         def get(self, *_args, **_kwargs):  # pragma: no cover - validate memo path
@@ -547,7 +561,7 @@ def test_daily_fetch_fresh_memo_skips_cache_and_provider(
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 100.0, raising=False)
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
 
     assert result is memo_payload
     for key in (canonical_key, legacy_key):
@@ -948,13 +962,13 @@ def test_daily_missing_columns_error_sticky(monkeypatch):
     monkeypatch.setattr(be.provider_monitor, "update_data_health", _capture_update)
 
     with pytest.raises(be.data_fetcher_module.MissingOHLCVColumnsError):
-        fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+        fetcher.get_daily_df(_ctx(), symbol)
     assert len(error_calls) == 1
     assert provider_updates
     assert provider_updates[0][1].get("severity") == "hard_fail"
 
     with pytest.raises(be.data_fetcher_module.MissingOHLCVColumnsError):
-        fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+        fetcher.get_daily_df(_ctx(), symbol)
     assert len(error_calls) == 1
 
 
@@ -998,7 +1012,7 @@ def test_daily_fetch_skips_direct_when_safe_missing(monkeypatch):
     monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", fake_get_daily_df)
     monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
 
-    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    result = fetcher.get_daily_df(_ctx(), symbol)
 
     assert isinstance(result, pd.DataFrame)
     assert captured["symbol"] == symbol

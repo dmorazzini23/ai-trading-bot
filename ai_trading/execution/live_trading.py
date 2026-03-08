@@ -25,7 +25,7 @@ from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence, cast
 
 from ai_trading.logging import get_logger, log_pdt_enforcement, log_throttled_event
 from ai_trading.telemetry import runtime_state
@@ -51,53 +51,67 @@ from ai_trading.utils.process_manager import file_lock as process_file_lock
 from ai_trading.utils.time import monotonic_time
 
 try:  # pragma: no cover - optional dependency
-    from alpaca.common.exceptions import APIError as _AlpacaAPIError  # type: ignore
+    from alpaca.common.exceptions import APIError as _AlpacaAPIError  # type: ignore[import]
 except Exception:  # pragma: no cover - fallback when SDK missing
+    _AlpacaAPIError = None  # type: ignore[assignment]
 
-    class APIError(Exception):
-        """Fallback APIError when alpaca-py is unavailable."""
 
-        def __init__(  # type: ignore[no-untyped-def]
-            self,
-            message: str,
-            *args,
-            http_error: Any | None = None,
-            code: Any | None = None,
-            status_code: int | None = None,
-            **_kwargs,
-        ) -> None:
-            super().__init__(message, *args)
-            self.http_error = http_error
-            parsed_code = code
-            parsed_message = message
+class _FallbackAPIError(Exception):
+    """Fallback APIError when alpaca-py is unavailable."""
+
+    def __init__(  # type: ignore[no-untyped-def]
+        self,
+        message: str,
+        *args,
+        http_error: Any | None = None,
+        code: Any | None = None,
+        status_code: int | None = None,
+        **_kwargs,
+    ) -> None:
+        super().__init__(message, *args)
+        self.http_error = http_error
+        parsed_code = code
+        parsed_message = message
+        try:
+            payload = json.loads(message)
+            parsed_message = payload.get("message", parsed_message)
+            parsed_code = payload.get("code", parsed_code)
+        except Exception:
+            logger.debug("API_ERROR_JSON_PARSE_FAILED", exc_info=True)
+        self._code = parsed_code
+        self._message = parsed_message
+        derived_status = status_code
+        if http_error is not None:
             try:
-                payload = json.loads(message)
-                parsed_message = payload.get("message", parsed_message)
-                parsed_code = payload.get("code", parsed_code)
+                derived_status = getattr(getattr(http_error, "response", None), "status_code", derived_status)
             except Exception:
-                logger.debug("API_ERROR_JSON_PARSE_FAILED", exc_info=True)
-            self._code = parsed_code
-            self._message = parsed_message
-            derived_status = status_code
-            if http_error is not None:
-                try:
-                    derived_status = getattr(getattr(http_error, "response", None), "status_code", derived_status)
-                except Exception:
-                    logger.debug("API_ERROR_STATUS_DERIVE_FAILED", exc_info=True)
-            self._status_code = derived_status
+                logger.debug("API_ERROR_STATUS_DERIVE_FAILED", exc_info=True)
+        self._status_code = derived_status
 
-        @property
-        def status_code(self) -> int | None:  # type: ignore[override]
-            return self._status_code
+    @property
+    def status_code(self) -> int | None:
+        return self._status_code
 
-        @property
-        def code(self) -> Any:  # type: ignore[override]
-            return self._code
+    @property
+    def code(self) -> Any:
+        return self._code
 
-        @property
-        def message(self) -> str:  # type: ignore[override]
-            return self._message
-else:  # pragma: no cover - ensure consistent interface when SDK present
+    @property
+    def message(self) -> str:
+        return self._message
+
+
+if TYPE_CHECKING:
+
+    class APIError(_FallbackAPIError):
+        """Type-checker-visible APIError contract."""
+
+elif _AlpacaAPIError is None:
+
+    class APIError(_FallbackAPIError):
+        """Runtime fallback when alpaca-py is unavailable."""
+
+else:
 
     class APIError(_AlpacaAPIError):  # type: ignore[misc]
         """Compat layer ensuring alpaca APIError accepts ``http_error`` kwarg."""
@@ -158,7 +172,7 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
 
 
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
-from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
+from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
     is_safe_mode_active,
     provider_monitor,
@@ -1886,6 +1900,32 @@ class ExecutionEngine:
 
     trading_client: Any | None = None
 
+    @staticmethod
+    def _default_circuit_breaker_state() -> dict[str, Any]:
+        return {
+            "failure_count": 0,
+            "max_failures": 5,
+            "reset_time": 300,
+            "last_failure": None,
+            "is_open": False,
+        }
+
+    @staticmethod
+    def _default_stats_state() -> dict[str, Any]:
+        return {
+            "total_orders": 0,
+            "successful_orders": 0,
+            "failed_orders": 0,
+            "retry_count": 0,
+            "circuit_breaker_trips": 0,
+            "total_execution_time": 0.0,
+            "last_reset": datetime.now(UTC),
+            "capacity_skips": 0,
+            "skipped_orders": 0,
+            "failover_submits": 0,
+            "failover_failures": 0,
+        }
+
     def __init__(
         self,
         ctx: Any | None = None,
@@ -1906,7 +1946,7 @@ class ExecutionEngine:
         self._broker_sync: BrokerSyncResult | None = None
         self._open_order_qty_index: dict[str, tuple[float, float]] = {}
         self.config: AlpacaConfig | None = None
-        self.settings = None
+        self.settings: ExecutionSettingsSnapshot | None = None
         self.execution_mode = str(requested_mode).lower()
         self.shadow_mode = bool(shadow_mode)
         testing_flag = _runtime_env("TESTING", "") or ""
@@ -1917,32 +1957,14 @@ class ExecutionEngine:
         self.data_feed_intraday = "iex"
         self.is_initialized = False
         self._asset_class_support: bool | None = None
-        self.circuit_breaker: dict[str, int | bool | datetime | None] = {
-            "failure_count": 0,
-            "max_failures": 5,
-            "reset_time": 300,
-            "last_failure": None,
-            "is_open": False,
-        }
+        self.circuit_breaker: dict[str, Any] = self._default_circuit_breaker_state()
         self.retry_config = {
             "max_attempts": 3,
             "base_delay": 1.0,
             "max_delay": 30.0,
             "exponential_base": 2.0,
         }
-        self.stats = {
-            "total_orders": 0,
-            "successful_orders": 0,
-            "failed_orders": 0,
-            "retry_count": 0,
-            "circuit_breaker_trips": 0,
-            "total_execution_time": 0.0,
-            "last_reset": datetime.now(UTC),
-            "capacity_skips": 0,
-            "skipped_orders": 0,
-            "failover_submits": 0,
-            "failover_failures": 0,
-        }
+        self.stats: dict[str, Any] = self._default_stats_state()
         self.order_manager = OrderManager()
         self.base_url = get_alpaca_base_url()
         self._api_key: str | None = None
@@ -3592,12 +3614,15 @@ class ExecutionEngine:
                 return False
             self._last_initialize_attempt_mono = now_mono
             if _pytest_mode_active():
+                mock_trading_client_cls: type[Any] | None
                 try:
                     from tests.support.mocks import MockTradingClient  # type: ignore
                 except (ModuleNotFoundError, ImportError, ValueError, TypeError):
-                    MockTradingClient = None
-                if MockTradingClient:
-                    self.trading_client = MockTradingClient(paper=True)
+                    mock_trading_client_cls = None
+                else:
+                    mock_trading_client_cls = MockTradingClient
+                if mock_trading_client_cls is not None:
+                    self.trading_client = mock_trading_client_cls(paper=True)
                     self.is_initialized = True
                     self._last_initialize_success_mono = now_mono
                     self._last_broker_healthcheck_mono = now_mono
@@ -5372,7 +5397,7 @@ class ExecutionEngine:
         if not hasattr(self, "_pending_orders"):
             self._pending_orders = {}
         if not hasattr(self, "stats"):
-            self.stats = {}
+            self.stats = self._default_stats_state()
         if not hasattr(self, "order_manager"):
             self.order_manager = OrderManager()
         pytest_mode = _pytest_mode_active()
@@ -7329,13 +7354,14 @@ class ExecutionEngine:
             "done_for_day",
         }
         if not reconciled:
+            execution_result_any = cast(Any, execution_result)
             if order_status_lower in terminal_failures:
-                execution_result.status = "failed"
+                execution_result_any.status = "failed"
             elif ack_timed_out:
                 # Treat as submitted but not yet reconciled; downstream can track open orders via broker sync
-                execution_result.status = "submitted"
+                execution_result_any.status = "submitted"
             elif not execution_result.status:
-                execution_result.status = order_status_lower or "submitted"
+                execution_result_any.status = order_status_lower or "submitted"
 
         if not closing_position:
             current_submits = int(
@@ -9198,6 +9224,16 @@ class ExecutionEngine:
             return (0.0, 0.0)
         return index.get(key, (0.0, 0.0))
 
+    def _fetch_broker_state(self) -> tuple[list[Any], list[Any]]:
+        """Return broker state when no live client helper is available."""
+
+        return ([], [])
+
+    def _fetch_account_state(self) -> tuple[Any | None, float | None]:
+        """Return account state when no live client helper is available."""
+
+        return (None, None)
+
 
 class LiveTradingExecutionEngine(ExecutionEngine):
     """Execution engine variant with optional trailing-stop manager."""
@@ -9284,8 +9320,11 @@ class LiveTradingExecutionEngine(ExecutionEngine):
 
 # Export the live-capable engine under the canonical name used by the selector
 # so runtime selection for paper/live picks the class that implements broker sync.
-ExecutionEngine = LiveTradingExecutionEngine
-AlpacaExecutionEngine = LiveTradingExecutionEngine
+if TYPE_CHECKING:
+    AlpacaExecutionEngine = LiveTradingExecutionEngine
+else:  # pragma: no branch - runtime alias
+    ExecutionEngine = LiveTradingExecutionEngine
+    AlpacaExecutionEngine = LiveTradingExecutionEngine
 
 
 __all__ = [

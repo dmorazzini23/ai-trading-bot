@@ -1,6 +1,11 @@
 import types
 import sys
 import importlib.machinery
+from typing import Any
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
 
 validation_stub = types.ModuleType("ai_trading.validation")
 require_env_stub = types.ModuleType("ai_trading.validation.require_env")
@@ -10,7 +15,7 @@ ensemble_stub = types.ModuleType("sklearn.ensemble")
 metrics_stub = types.ModuleType("sklearn.metrics")
 model_selection_stub = types.ModuleType("sklearn.model_selection")
 preproc_stub = types.ModuleType("sklearn.preprocessing")
-sklearn_stub.__spec__ = importlib.machinery.ModuleSpec("sklearn", loader=None)
+_set_module_attr(sklearn_stub, "__spec__", importlib.machinery.ModuleSpec("sklearn", loader=None))
 bs4_stub = types.ModuleType("bs4")
 flask_stub = types.ModuleType("flask")
 prometheus_stub = types.ModuleType("prometheus_client")
@@ -20,7 +25,7 @@ class BeautifulSoup:  # noqa: D401
     pass
 
 
-bs4_stub.BeautifulSoup = BeautifulSoup
+_set_module_attr(bs4_stub, "BeautifulSoup", BeautifulSoup)
 class Flask:  # noqa: D401
     def __init__(self, *a, **k):
         pass
@@ -32,32 +37,32 @@ class Flask:  # noqa: D401
         return decorator
 
 
-flask_stub.Flask = Flask
-prometheus_stub.REGISTRY = object()
-prometheus_stub.Counter = object
-prometheus_stub.Gauge = object
-prometheus_stub.Histogram = object
-prometheus_stub.Summary = object
-prometheus_stub.CollectorRegistry = object
-prometheus_stub.CONTENT_TYPE_LATEST = "text/plain"
-prometheus_stub.generate_latest = lambda *a, **k: b""
-prometheus_stub.start_http_server = lambda *a, **k: None
+_set_module_attr(flask_stub, "Flask", Flask)
+_set_module_attr(prometheus_stub, "REGISTRY", object())
+_set_module_attr(prometheus_stub, "Counter", object)
+_set_module_attr(prometheus_stub, "Gauge", object)
+_set_module_attr(prometheus_stub, "Histogram", object)
+_set_module_attr(prometheus_stub, "Summary", object)
+_set_module_attr(prometheus_stub, "CollectorRegistry", object)
+_set_module_attr(prometheus_stub, "CONTENT_TYPE_LATEST", "text/plain")
+_set_module_attr(prometheus_stub, "generate_latest", lambda *a, **k: b"")
+_set_module_attr(prometheus_stub, "start_http_server", lambda *a, **k: None)
 
 
 class _Dummy:  # noqa: D401
     pass
 
 
-ensemble_stub.GradientBoostingClassifier = _Dummy
-ensemble_stub.RandomForestClassifier = _Dummy
-metrics_stub.accuracy_score = _Dummy
-model_selection_stub.train_test_split = _Dummy
-preproc_stub.StandardScaler = _Dummy
+_set_module_attr(ensemble_stub, "GradientBoostingClassifier", _Dummy)
+_set_module_attr(ensemble_stub, "RandomForestClassifier", _Dummy)
+_set_module_attr(metrics_stub, "accuracy_score", _Dummy)
+_set_module_attr(model_selection_stub, "train_test_split", _Dummy)
+_set_module_attr(preproc_stub, "StandardScaler", _Dummy)
 
-sklearn_stub.ensemble = ensemble_stub
-sklearn_stub.metrics = metrics_stub
-sklearn_stub.model_selection = model_selection_stub
-sklearn_stub.preprocessing = preproc_stub
+_set_module_attr(sklearn_stub, "ensemble", ensemble_stub)
+_set_module_attr(sklearn_stub, "metrics", metrics_stub)
+_set_module_attr(sklearn_stub, "model_selection", model_selection_stub)
+_set_module_attr(sklearn_stub, "preprocessing", preproc_stub)
 sys.modules.setdefault("sklearn", sklearn_stub)
 sys.modules.setdefault("sklearn.ensemble", ensemble_stub)
 sys.modules.setdefault("sklearn.metrics", metrics_stub)
@@ -68,8 +73,8 @@ sys.modules.setdefault("portalocker", types.ModuleType("portalocker"))
 sys.modules.setdefault("bs4", bs4_stub)
 sys.modules.setdefault("flask", flask_stub)
 sys.modules.setdefault("prometheus_client", prometheus_stub)
-pydantic_settings_stub.BaseSettings = object
-pydantic_settings_stub.SettingsConfigDict = dict
+_set_module_attr(pydantic_settings_stub, "BaseSettings", object)
+_set_module_attr(pydantic_settings_stub, "SettingsConfigDict", dict)
 
 
 def _should_halt_trading(*_a, **_k):  # noqa: D401
@@ -84,13 +89,13 @@ def _require_env_vars_public(*_a, **_k):  # noqa: D401
     return True
 
 
-require_env_stub.should_halt_trading = _should_halt_trading
-require_env_stub._require_env_vars = _require_env_vars
-require_env_stub.require_env_vars = _require_env_vars_public
-validation_stub.require_env = require_env_stub
-validation_stub.should_halt_trading = _should_halt_trading
-validation_stub._require_env_vars = _require_env_vars
-validation_stub.require_env_vars = _require_env_vars_public
+_set_module_attr(require_env_stub, "should_halt_trading", _should_halt_trading)
+_set_module_attr(require_env_stub, "_require_env_vars", _require_env_vars)
+_set_module_attr(require_env_stub, "require_env_vars", _require_env_vars_public)
+_set_module_attr(validation_stub, "require_env", require_env_stub)
+_set_module_attr(validation_stub, "should_halt_trading", _should_halt_trading)
+_set_module_attr(validation_stub, "_require_env_vars", _require_env_vars)
+_set_module_attr(validation_stub, "require_env_vars", _require_env_vars_public)
 sys.modules.setdefault("ai_trading.validation", validation_stub)
 sys.modules.setdefault("ai_trading.validation.require_env", require_env_stub)
 sys.modules.setdefault("pydantic_settings", pydantic_settings_stub)

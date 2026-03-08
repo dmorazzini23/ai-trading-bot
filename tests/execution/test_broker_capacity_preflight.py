@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 from ai_trading.execution import live_trading as lt
 from ai_trading.execution import guards
@@ -42,8 +43,8 @@ class DummyAPIError(lt.APIError):
         return self._message
 
 
-def _engine() -> lt.ExecutionEngine:
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+def _engine() -> Any:
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine.stats = {"capacity_skips": 0, "skipped_orders": 0, "retry_count": 0}
     engine.logger = lt.logger
     return engine
@@ -77,7 +78,7 @@ def test_capacity_error_passthrough_for_other_codes():
 
 
 def test_skip_shorting_when_asset_not_shortable(monkeypatch, caplog):
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine._refresh_settings = lambda: None
     engine._ensure_initialized = lambda: True
     engine._pre_execution_checks = lambda: True
@@ -120,7 +121,7 @@ def test_skip_when_pdt_limit_reached(monkeypatch, caplog):
     guards.STATE.pdt = guards.PDTState()
     guards.STATE.shadow_cycle = False
     guards.STATE.shadow_cycle_forced = False
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine._refresh_settings = lambda: None
     engine._ensure_initialized = lambda: True
     engine._pre_execution_checks = lambda: True
@@ -155,7 +156,7 @@ def test_skip_when_pdt_limit_reached(monkeypatch, caplog):
 
 
 def test_pdt_limit_imminent_warns_but_allows_trade(monkeypatch, caplog):
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine._refresh_settings = lambda: None
     engine._ensure_initialized = lambda: True
     engine._pre_execution_checks = lambda: True
@@ -206,7 +207,7 @@ def test_pdt_limit_imminent_not_emitted_for_high_equity(monkeypatch, caplog):
     guards.STATE.shadow_cycle = False
     guards.STATE.shadow_cycle_forced = False
 
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine._refresh_settings = lambda: None
     engine._ensure_initialized = lambda: True
     engine._pre_execution_checks = lambda: True
@@ -246,7 +247,7 @@ def test_pdt_limit_imminent_not_emitted_for_high_equity(monkeypatch, caplog):
 def test_preflight_helper_supports_account_kwarg():
     lt._preflight_supports_account_kwarg.cache_clear()
     account = {"id": "acct"}
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def new_signature(symbol, side, price_hint, quantity, broker, *, account=None):
         captured["args"] = (symbol, side, price_hint, quantity, broker)
@@ -270,7 +271,7 @@ def test_preflight_helper_supports_account_kwarg():
 
 def test_preflight_helper_legacy_signature():
     lt._preflight_supports_account_kwarg.cache_clear()
-    called: dict[str, object] = {}
+    called: dict[str, Any] = {}
 
     def legacy_signature(symbol, side, price_hint, quantity, broker):
         called["args"] = (symbol, side, price_hint, quantity, broker)

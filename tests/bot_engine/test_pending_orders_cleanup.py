@@ -4,7 +4,13 @@ from datetime import UTC, datetime, timedelta
 import logging
 import sys
 import types
+from typing import Any, cast
 from unittest.mock import MagicMock
+
+
+def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
+    setattr(cast(Any, module), name, value)
+
 
 if "ai_trading.indicators" not in sys.modules:
     indicators_stub = types.ModuleType("ai_trading.indicators")
@@ -12,10 +18,10 @@ if "ai_trading.indicators" not in sys.modules:
     def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
         raise RuntimeError("Indicator module unavailable in tests")
 
-    indicators_stub.compute_atr = _unavailable_indicator
-    indicators_stub.atr = _unavailable_indicator
-    indicators_stub.mean_reversion_zscore = _unavailable_indicator
-    indicators_stub.rsi = _unavailable_indicator
+    _set_module_attr(indicators_stub, "compute_atr", _unavailable_indicator)
+    _set_module_attr(indicators_stub, "atr", _unavailable_indicator)
+    _set_module_attr(indicators_stub, "mean_reversion_zscore", _unavailable_indicator)
+    _set_module_attr(indicators_stub, "rsi", _unavailable_indicator)
     sys.modules["ai_trading.indicators"] = indicators_stub
 
 if "ai_trading.signals" not in sys.modules:
@@ -25,10 +31,10 @@ if "ai_trading.signals" not in sys.modules:
     def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
         return {}
 
-    signals_indicators_stub.composite_signal_confidence = _composite_confidence_stub
+    _set_module_attr(signals_indicators_stub, "composite_signal_confidence", _composite_confidence_stub)
     sys.modules["ai_trading.signals"] = signals_stub
     sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
-    signals_stub.indicators = signals_indicators_stub
+    _set_module_attr(signals_stub, "indicators", signals_indicators_stub)
 
 if "ai_trading.features" not in sys.modules:
     features_stub = types.ModuleType("ai_trading.features")
@@ -37,25 +43,25 @@ if "ai_trading.features" not in sys.modules:
     def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
         return df
 
-    features_indicators_stub.compute_macd = _feature_passthrough
-    features_indicators_stub.compute_macds = _feature_passthrough
-    features_indicators_stub.compute_vwap = _feature_passthrough
-    features_indicators_stub.compute_atr = _feature_passthrough
-    features_indicators_stub.compute_sma = _feature_passthrough
-    features_indicators_stub.ensure_columns = _feature_passthrough
+    _set_module_attr(features_indicators_stub, "compute_macd", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_macds", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_vwap", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_atr", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "compute_sma", _feature_passthrough)
+    _set_module_attr(features_indicators_stub, "ensure_columns", _feature_passthrough)
     sys.modules["ai_trading.features"] = features_stub
     sys.modules["ai_trading.features.indicators"] = features_indicators_stub
-    features_stub.indicators = features_indicators_stub
+    _set_module_attr(features_stub, "indicators", features_indicators_stub)
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
+    _set_module_attr(portalocker_stub, "LOCK_EX", 1)
 
     def _noop_lock(*_args, **_kwargs):  # pragma: no cover - safety stub
         return None
 
-    portalocker_stub.lock = _noop_lock
-    portalocker_stub.unlock = _noop_lock
+    _set_module_attr(portalocker_stub, "lock", _noop_lock)
+    _set_module_attr(portalocker_stub, "unlock", _noop_lock)
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:
@@ -68,7 +74,7 @@ if "bs4" not in sys.modules:
         def find(self, *_args, **_kwargs):
             return None
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     sys.modules["bs4"] = bs4_stub
 
 from ai_trading.core import bot_engine as be

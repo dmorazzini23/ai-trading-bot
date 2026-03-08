@@ -9,7 +9,6 @@ This test validates the key fixes:
 """
 
 import os
-import sys
 from unittest.mock import Mock
 
 # Set testing environment
@@ -122,8 +121,3 @@ def test_comprehensive_fixes(tmp_path):
     test_latency_tracking()
 
     return True
-
-
-if __name__ == "__main__":
-    success = test_comprehensive_fixes()
-    sys.exit(0 if success else 1)

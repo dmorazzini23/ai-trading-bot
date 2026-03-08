@@ -25,7 +25,12 @@ class ProductionTradingSystem:
     with comprehensive safety, monitoring, and execution capabilities.
     """
 
-    def __init__(self, account_equity: float, risk_level: RiskLevel=RiskLevel.MODERATE, config: dict=None):
+    def __init__(
+        self,
+        account_equity: float,
+        risk_level: RiskLevel = RiskLevel.MODERATE,
+        config: dict[str, Any] | None = None,
+    ):
         """Initialize production trading system."""
         self.account_equity = account_equity
         self.risk_level = risk_level
@@ -41,9 +46,9 @@ class ProductionTradingSystem:
         self.regime_detector = RegimeDetector()
         self.is_active = False
         self.last_health_check = datetime.now(UTC)
-        self.system_errors = []
-        self.session_start_time = None
-        self.session_trades = []
+        self.system_errors: list[str] = []
+        self.session_start_time: datetime | None = None
+        self.session_trades: list[dict[str, Any]] = []
         self.session_pnl = 0.0
         logger.info(f'ProductionTradingSystem initialized with equity=${account_equity:,.2f}, risk_level={risk_level}')
 
@@ -87,7 +92,16 @@ class ProductionTradingSystem:
             trading_status = self.halt_manager.is_trading_allowed()
             if not trading_status['trading_allowed']:
                 return {'symbol': symbol, 'recommendation': 'NO_TRADE', 'reason': f"Trading halted: {', '.join(trading_status['reasons'])}", 'timestamp': datetime.now(UTC)}
-            regime_analysis = self.regime_detector.detect_regime(market_data.get('price_data', {}))
+            detect_regime = getattr(self.regime_detector, 'detect_regime', None)
+            if callable(detect_regime):
+                regime_analysis = detect_regime(market_data.get('price_data', {}))
+            else:
+                detect_current_regime = getattr(self.regime_detector, 'detect_current_regime', None)
+                if callable(detect_current_regime):
+                    detected_regime, detected_metrics = detect_current_regime(market_data.get('price_data', {}))
+                    regime_analysis = {'regime': detected_regime, 'metrics': detected_metrics}
+                else:
+                    regime_analysis = {}
             mtf_analysis = self.mtf_analyzer.analyze_symbol(symbol, market_data.get('timeframe_data', {}))
             liquidity_analysis = self.liquidity_manager.update_symbol_liquidity(symbol, market_data, market_data.get('current_price'))
             integrated_recommendation = await self._integrate_analyses(symbol, regime_analysis, mtf_analysis, liquidity_analysis)
@@ -108,8 +122,25 @@ class ProductionTradingSystem:
                 final_rec = opportunity_analysis.get('final_recommendation', {})
                 if final_rec.get('action') == 'NO_TRADE':
                     return {'status': 'rejected', 'reason': 'Analysis recommends no trade', 'analysis': opportunity_analysis}
-            execution_result = await self.execution_coordinator.submit_order(symbol, side, quantity, order_type, price, 'production_system')
-            if execution_result['status'] == 'success':
+            raw_execution_result = await self.execution_coordinator.submit_order(
+                symbol,
+                side,
+                quantity,
+                order_type,
+                price,
+                'production_system',
+            )
+            execution_result: dict[str, Any]
+            if isinstance(raw_execution_result, dict):
+                execution_result = dict(raw_execution_result)
+            else:
+                execution_result = {
+                    'status': str(getattr(raw_execution_result, 'status', 'unknown')).lower(),
+                    'symbol': symbol,
+                    'quantity': quantity,
+                    'fill_price': price,
+                }
+            if str(execution_result.get('status', '')).lower() == 'success':
                 await self._update_performance_tracking(execution_result)
                 self.session_trades.append({'timestamp': datetime.now(UTC), 'symbol': symbol, 'side': side.value, 'quantity': execution_result.get('quantity', quantity), 'fill_price': execution_result.get('fill_price', price), 'execution_result': execution_result})
             execution_time = (datetime.now(UTC) - execution_start).total_seconds()
@@ -123,7 +154,13 @@ class ProductionTradingSystem:
     async def perform_health_check(self) -> dict[str, Any]:
         """Perform comprehensive system health check."""
         try:
-            health_status = {'healthy': True, 'timestamp': datetime.now(UTC), 'issues': [], 'warnings': [], 'component_status': {}}
+            health_status: dict[str, Any] = {
+                'healthy': True,
+                'timestamp': datetime.now(UTC),
+                'issues': [],
+                'warnings': [],
+                'component_status': {},
+            }
             trading_status = self.halt_manager.is_trading_allowed()
             health_status['component_status']['halt_manager'] = trading_status
             if not trading_status['trading_allowed']:
@@ -154,7 +191,8 @@ class ProductionTradingSystem:
             execution_summary = self.execution_coordinator.get_execution_summary()
             portfolio_summary = self.performance_dashboard.get_dashboard_summary()
             liquidity_summary = self.liquidity_manager.get_portfolio_liquidity_summary()
-            regime_summary = self.regime_detector.get_regime_summary()
+            get_regime_summary = getattr(self.regime_detector, 'get_regime_summary', None)
+            regime_summary = get_regime_summary() if callable(get_regime_summary) else {}
             uptime_seconds = (datetime.now(UTC) - self.session_start_time).total_seconds() if self.session_start_time else 0
             return {'system_active': self.is_active, 'session_start_time': self.session_start_time, 'uptime_seconds': uptime_seconds, 'account_equity': self.account_equity, 'risk_level': self.risk_level.value, 'trading_status': trading_status, 'execution_summary': execution_summary, 'portfolio_summary': portfolio_summary, 'liquidity_summary': liquidity_summary, 'regime_summary': regime_summary, 'session_trades_count': len(self.session_trades), 'last_health_check': self.last_health_check, 'system_errors_count': len(self.system_errors)}
         except COMMON_EXC as e:
@@ -178,12 +216,23 @@ class ProductionTradingSystem:
     async def _integrate_analyses(self, symbol: str, regime_analysis: dict, mtf_analysis: dict, liquidity_analysis: dict) -> dict[str, Any]:
         """Integrate multiple analyses into unified recommendation."""
         try:
-            integrated = {'symbol': symbol, 'action': 'HOLD', 'confidence': 0.0, 'recommended_quantity': 0, 'reasoning': []}
-            regime_recommendations = self.regime_detector.get_regime_recommendations()
-            regime_multiplier = regime_recommendations.get('position_size_multiplier', 1.0)
+            integrated: dict[str, Any] = {
+                'symbol': symbol,
+                'action': 'HOLD',
+                'confidence': 0.0,
+                'recommended_quantity': 0,
+                'reasoning': [],
+            }
+            get_regime_recommendations = getattr(self.regime_detector, 'get_regime_recommendations', None)
+            regime_recommendations = (
+                get_regime_recommendations()
+                if callable(get_regime_recommendations)
+                else {}
+            )
+            regime_multiplier = float(regime_recommendations.get('position_size_multiplier', 1.0) or 1.0)
             mtf_recommendation = mtf_analysis.get('recommendation', {})
             mtf_action = mtf_recommendation.get('action', 'HOLD')
-            mtf_confidence = mtf_recommendation.get('confidence', 0.0)
+            mtf_confidence = float(mtf_recommendation.get('confidence', 0.0) or 0.0)
             liquidity_level = liquidity_analysis.get('liquidity_level')
             execution_recs = liquidity_analysis.get('execution_recommendations', {})
             execution_recs.get('max_participation_rate', 0.1)
@@ -211,7 +260,16 @@ class ProductionTradingSystem:
     async def _generate_final_recommendation(self, integrated_rec: dict, risk_assessment: dict, liquidity_analysis: dict) -> dict[str, Any]:
         """Generate final trading recommendation."""
         try:
-            final_rec = {'action': integrated_rec.get('action', 'HOLD'), 'confidence': integrated_rec.get('confidence', 0.0), 'recommended_quantity': 0, 'max_quantity': 0, 'order_type': OrderType.MARKET, 'execution_strategy': 'standard', 'warnings': [], 'reasoning': integrated_rec.get('reasoning', [])}
+            final_rec: dict[str, Any] = {
+                'action': integrated_rec.get('action', 'HOLD'),
+                'confidence': integrated_rec.get('confidence', 0.0),
+                'recommended_quantity': 0,
+                'max_quantity': 0,
+                'order_type': OrderType.MARKET,
+                'execution_strategy': 'standard',
+                'warnings': [],
+                'reasoning': integrated_rec.get('reasoning', []),
+            }
             if not risk_assessment.get('approved', False):
                 final_rec['action'] = 'NO_TRADE'
                 final_rec['warnings'].extend(risk_assessment.get('warnings', []))
@@ -230,12 +288,13 @@ class ProductionTradingSystem:
             logger.error(f'Error generating final recommendation: {e}')
             return {'action': 'NO_TRADE', 'warnings': [f'Recommendation error: {e}']}
 
-    async def _update_performance_tracking(self, execution_result: dict):
+    async def _update_performance_tracking(self, execution_result: Any):
         """Update performance tracking with execution result."""
         try:
-            symbol = execution_result.get('symbol', '')
-            quantity = execution_result.get('quantity', 0)
-            fill_price = execution_result.get('fill_price', 0)
+            payload: dict[str, Any] = execution_result if isinstance(execution_result, dict) else {}
+            symbol = str(payload.get('symbol', '') or '')
+            quantity = int(float(payload.get('quantity', 0) or 0))
+            fill_price = float(payload.get('fill_price', 0) or 0)
             self.performance_dashboard.update_position(symbol, quantity, fill_price, fill_price)
         except COMMON_EXC as e:
             logger.error(f'Error updating performance tracking: {e}')

@@ -1,5 +1,6 @@
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -36,7 +37,7 @@ def test_submit_limit_order_handles_timeout_without_unboundlocalerror(monkeypatc
         lambda self, *a, **k: (False, "", {}),
     )
 
-    engine = live_trading.ExecutionEngine()
+    engine: Any = live_trading.ExecutionEngine()
     engine.is_initialized = True
     engine.trading_client = object()
     engine._ensure_initialized = lambda: True
@@ -45,7 +46,7 @@ def test_submit_limit_order_handles_timeout_without_unboundlocalerror(monkeypatc
     def _raise_timeout(*args, **kwargs):
         raise TimeoutError("provider timeout")
 
-    engine._execute_with_retry = _raise_timeout  # type: ignore[assignment]
+    engine._execute_with_retry = _raise_timeout
 
     with caplog.at_level("ERROR"):
         result = engine.submit_limit_order("AAPL", "buy", 1, limit_price=123.45)

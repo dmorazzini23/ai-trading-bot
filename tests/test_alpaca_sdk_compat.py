@@ -1,5 +1,10 @@
 import sys
 import types
+from typing import Any, cast
+
+
+def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
+    setattr(cast(Any, module), name, value)
 
 class _NoWait:
     def __init__(self, *a, **k):
@@ -14,15 +19,15 @@ pd = pytest.importorskip("pandas")
 tenacity_stub = types.ModuleType("tenacity")
 class _RetryError(Exception):
     pass
-tenacity_stub.RetryError = _RetryError
-tenacity_stub.stop_after_attempt = lambda *a, **k: _NoWait()
-tenacity_stub.wait_exponential = lambda *a, **k: _NoWait()
-tenacity_stub.wait_random = lambda *a, **k: _NoWait()
-tenacity_stub.retry_if_exception_type = lambda *a, **k: _NoWait()
+_set_module_attr(tenacity_stub, "RetryError", _RetryError)
+_set_module_attr(tenacity_stub, "stop_after_attempt", lambda *a, **k: _NoWait())
+_set_module_attr(tenacity_stub, "wait_exponential", lambda *a, **k: _NoWait())
+_set_module_attr(tenacity_stub, "wait_random", lambda *a, **k: _NoWait())
+_set_module_attr(tenacity_stub, "retry_if_exception_type", lambda *a, **k: _NoWait())
 sys.modules.setdefault("tenacity", tenacity_stub)
 sys.modules.setdefault("portalocker", types.ModuleType("portalocker"))
 bs4_stub = types.ModuleType("bs4")
-bs4_stub.BeautifulSoup = object
+_set_module_attr(bs4_stub, "BeautifulSoup", object)
 sys.modules.setdefault("bs4", bs4_stub)
 flask_stub = types.ModuleType("flask")
 class Flask:  # minimal stub
@@ -33,16 +38,16 @@ class Flask:  # minimal stub
         def _decor(fn):
             return fn
         return _decor
-flask_stub.Flask = Flask
+_set_module_attr(flask_stub, "Flask", Flask)
 sys.modules.setdefault("flask", flask_stub)
 rebalancer_stub = types.ModuleType("ai_trading.rebalancer")
 def maybe_rebalance(*args, **kwargs):  # pragma: no cover - stub
     return None
-rebalancer_stub.maybe_rebalance = maybe_rebalance
+_set_module_attr(rebalancer_stub, "maybe_rebalance", maybe_rebalance)
 sys.modules.setdefault("ai_trading.rebalancer", rebalancer_stub)
 prom_stub = types.ModuleType("prometheus_client")
-prom_stub.REGISTRY = object()
-prom_stub.CollectorRegistry = object
+_set_module_attr(prom_stub, "REGISTRY", object())
+_set_module_attr(prom_stub, "CollectorRegistry", object)
 class _Noop:
     def __init__(self, *a, **k):
         pass
@@ -58,8 +63,11 @@ class _Noop:
 
     def observe(self, *a, **k):
         pass
-prom_stub.Counter = prom_stub.Gauge = prom_stub.Histogram = prom_stub.Summary = _Noop
-prom_stub.start_http_server = lambda *a, **k: None
+_set_module_attr(prom_stub, "Counter", _Noop)
+_set_module_attr(prom_stub, "Gauge", _Noop)
+_set_module_attr(prom_stub, "Histogram", _Noop)
+_set_module_attr(prom_stub, "Summary", _Noop)
+_set_module_attr(prom_stub, "start_http_server", lambda *a, **k: None)
 sys.modules.setdefault("prometheus_client", prom_stub)
 
 from ai_trading.data.bars import (
@@ -103,7 +111,7 @@ def test_safe_get_stock_bars_falls_back_to_get_bars():
         symbol_or_symbols = "SPY"
         timeframe = TimeFrame.Day
 
-    df = safe_get_stock_bars(Client(), Req(), "SPY", "TEST")
+    df = safe_get_stock_bars(Client(), cast(Any, Req()), "SPY", "TEST")
     assert not df.empty
 
 

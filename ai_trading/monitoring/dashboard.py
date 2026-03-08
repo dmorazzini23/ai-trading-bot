@@ -6,7 +6,7 @@ trading dashboards and real-time monitoring interfaces.
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from ai_trading.logging import logger
 from .alerts import AlertManager, AlertSeverity
 from .metrics import MetricsCollector, PerformanceMonitor
@@ -22,17 +22,17 @@ class RealtimeMetrics:
 
     def __init__(self, metrics_collector: MetricsCollector):
         """Initialize real-time metrics."""
-        self.metrics_collector = metrics_collector
+        self.metrics_collector: Any = metrics_collector
         self.cache_ttl = 30
-        self._cache = {}
-        self._cache_timestamps = {}
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._cache_timestamps: dict[str, datetime] = {}
         logger.info("RealtimeMetrics initialized")
 
     def get_current_pnl(self) -> dict[str, float]:
         """Get current P&L metrics."""
         cache_key = "current_pnl"
         if self._is_cached(cache_key):
-            return self._cache[cache_key]
+            return cast(dict[str, float], self._cache[cache_key])
         try:
             recent_trades = [
                 m
@@ -63,7 +63,7 @@ class RealtimeMetrics:
         """Get portfolio summary metrics."""
         cache_key = "portfolio_summary"
         if self._is_cached(cache_key):
-            return self._cache[cache_key]
+            return dict(self._cache[cache_key])
         try:
             portfolio_metrics = list(self.metrics_collector.portfolio_metrics)
             if not portfolio_metrics:
@@ -89,7 +89,7 @@ class RealtimeMetrics:
         """Get risk summary metrics."""
         cache_key = "risk_summary"
         if self._is_cached(cache_key):
-            return self._cache[cache_key]
+            return cast(dict[str, float], self._cache[cache_key])
         try:
             risk_metrics = list(self.metrics_collector.risk_metrics)
             if not risk_metrics:
@@ -114,7 +114,7 @@ class RealtimeMetrics:
         """Get execution summary metrics."""
         cache_key = "execution_summary"
         if self._is_cached(cache_key):
-            return self._cache[cache_key]
+            return dict(self._cache[cache_key])
         try:
             execution_metrics = list(self.metrics_collector.execution_metrics)
             if not execution_metrics:
@@ -155,8 +155,8 @@ class DashboardDataProvider:
         self, metrics_collector: MetricsCollector, perf_monitor: PerformanceMonitor, alert_manager: AlertManager
     ):
         """Initialize dashboard data provider."""
-        self.metrics_collector = metrics_collector
-        self.perf_monitor = perf_monitor
+        self.metrics_collector: Any = metrics_collector
+        self.perf_monitor: Any = perf_monitor
         self.alert_manager = alert_manager
         self.realtime_metrics = RealtimeMetrics(metrics_collector)
         logger.info("DashboardDataProvider initialized")
@@ -173,6 +173,12 @@ class DashboardDataProvider:
         """
         try:
             time_range = time_range or timedelta(hours=24)
+            perf_report_fn = getattr(self.perf_monitor, "get_performance_report", None)
+            if callable(perf_report_fn):
+                performance_data = perf_report_fn(time_range)
+            else:
+                perf_metrics_fn = getattr(self.perf_monitor, "get_performance_metrics", None)
+                performance_data = perf_metrics_fn() if callable(perf_metrics_fn) else {}
             dashboard_data = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "time_range_hours": time_range.total_seconds() / 3600,
@@ -182,7 +188,7 @@ class DashboardDataProvider:
                     "risk": self.realtime_metrics.get_risk_summary(),
                     "execution": self.realtime_metrics.get_execution_summary(),
                 },
-                "performance": self.perf_monitor.get_performance_report(time_range),
+                "performance": performance_data,
                 "alerts": self._get_alert_summary(),
                 "system_health": self._get_system_health(),
                 "charts": self._get_chart_data(time_range),

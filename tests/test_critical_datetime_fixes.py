@@ -55,7 +55,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
         end_dt = start_dt + timedelta(hours=1)
 
         try:
-            get_bars("AAPL", start_dt, end_dt)
+            get_bars("AAPL", "1Min", start_dt, end_dt)
         except (ValueError, TypeError) as e:  # pragma: no cover - ensure no TZ errors
             if "timezone" in str(e).lower():
                 self.fail(f"get_bars failed due to timezone issues: {e}")

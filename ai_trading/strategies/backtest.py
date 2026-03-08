@@ -8,6 +8,7 @@ import math
 import random
 import statistics
 from datetime import UTC, datetime
+from typing import Any
 from ai_trading.logging import logger
 from .base import BaseStrategy, StrategySignal
 
@@ -63,15 +64,44 @@ class BacktestEngine:
         self.enable_slippage = enable_slippage
         self.enable_partial_fills = enable_partial_fills
         self.slippage_model = slippage_model
-        from ..execution.microstructure import calculate_partial_fill_probability, calculate_slippage, estimate_half_spread, simulate_execution_with_latency
-        self.microstructure_available = True
-        self.estimate_half_spread = estimate_half_spread
-        self.calculate_slippage = calculate_slippage
-        self.calculate_partial_fill_probability = calculate_partial_fill_probability
-        self.simulate_execution_with_latency = simulate_execution_with_latency
+        from ..execution import microstructure as _micro
+        self.estimate_half_spread = getattr(
+            _micro,
+            'estimate_half_spread',
+            lambda volatility, price, liquidity: max(0.0005, min(0.005, float(volatility) * 0.5)),
+        )
+        self.calculate_slippage = getattr(
+            _micro,
+            'calculate_slippage',
+            lambda **_kwargs: 0.0,
+        )
+        self.calculate_partial_fill_probability = getattr(
+            _micro,
+            'calculate_partial_fill_probability',
+            lambda **_kwargs: 0.0,
+        )
+        self.simulate_execution_with_latency = getattr(
+            _micro,
+            'simulate_execution_with_latency',
+            lambda **_kwargs: None,
+        )
+        self.microstructure_available = all(
+            callable(fn)
+            for fn in (
+                self.estimate_half_spread,
+                self.calculate_slippage,
+                self.calculate_partial_fill_probability,
+            )
+        )
         logger.info('BacktestEngine initialized with realistic execution modeling')
 
-    def run_backtest(self, strategy: BaseStrategy, historical_data: dict, start_date: datetime, end_date: datetime) -> dict:
+    def run_backtest(
+        self,
+        strategy: BaseStrategy,
+        historical_data: dict[str, Any],
+        start_date: datetime,
+        end_date: datetime,
+    ) -> dict[str, Any]:
         """
         Run strategy backtest.
 
@@ -85,7 +115,7 @@ class BacktestEngine:
             Backtest results dictionary
         """
         try:
-            results = {'strategy_id': strategy.strategy_id, 'start_date': start_date.isoformat(), 'end_date': end_date.isoformat(), 'initial_capital': self.initial_capital, 'final_capital': self.initial_capital, 'total_return': 0.0, 'total_trades': 0, 'winning_trades': 0, 'losing_trades': 0, 'win_rate': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0, 'max_drawdown': 0.0, 'sharpe_ratio': 0.0, 'trades': []}
+            results: dict[str, Any] = {'strategy_id': strategy.strategy_id, 'start_date': start_date.isoformat(), 'end_date': end_date.isoformat(), 'initial_capital': self.initial_capital, 'final_capital': self.initial_capital, 'total_return': 0.0, 'total_trades': 0, 'winning_trades': 0, 'losing_trades': 0, 'win_rate': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0, 'max_drawdown': 0.0, 'sharpe_ratio': 0.0, 'trades': []}
             current_capital = self.initial_capital
             portfolio_values = [current_capital]
             for symbol in strategy.symbols:
@@ -143,7 +173,13 @@ class BacktestEngine:
             logger.error(f'Error running backtest: {e}')
             return {'error': str(e)}
 
-    def _simulate_trade(self, signal: StrategySignal, position_size: int, market_data: dict, trade_timestamp: datetime | None=None) -> dict:
+    def _simulate_trade(
+        self,
+        signal: StrategySignal,
+        position_size: int,
+        market_data: dict[str, Any],
+        trade_timestamp: datetime | None=None,
+    ) -> dict[str, Any]:
         """
         Simulate realistic trade execution with spreads, slippage, and latency.
 
@@ -157,10 +193,10 @@ class BacktestEngine:
             Trade execution results
         """
         try:
-            close_price = market_data.get('close', 100.0)
-            high_price = market_data.get('high', close_price * 1.01)
-            low_price = market_data.get('low', close_price * 0.99)
-            volume = market_data.get('volume', 100000)
+            close_price = float(market_data.get('close', 100.0) or 100.0)
+            high_price = float(market_data.get('high', close_price * 1.01) or (close_price * 1.01))
+            low_price = float(market_data.get('low', close_price * 0.99) or (close_price * 0.99))
+            volume = float(market_data.get('volume', 100000) or 100000)
             signal_price = close_price
             if self.microstructure_available:
                 volatility = abs(high_price - low_price) / close_price

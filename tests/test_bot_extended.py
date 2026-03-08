@@ -1,9 +1,23 @@
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
 pd = pytest.importorskip("pandas")
+sys = cast(Any, sys)
+
+
+def _ensure_module(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        sys.modules[name] = module
+    return cast(types.ModuleType, module)
+
+
+def _set_module_attr(module_name: str, attr_name: str, value: Any) -> None:
+    setattr(_ensure_module(module_name), attr_name, value)
 # Minimal stubs so that importing bot succeeds without optional deps
 mods = [
     "pandas_ta",
@@ -28,10 +42,23 @@ mods = [
     "finnhub",
     "pybreaker",
     "ratelimit",
-    "ai_trading.execution",
     "ai_trading.capital_scaling",
     "strategy_allocator",
 ]
+_PATCHED_MODULES = set(mods) | {"requests.exceptions", "flask.app"}
+_ORIGINAL_MODULES = {name: sys.modules.get(name) for name in _PATCHED_MODULES}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_module_state_after_tests():
+    yield
+    for name, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(name, None)
+            continue
+        sys.modules[name] = original
+
+
 for name in mods:
     if name not in sys.modules:
         sys.modules[name] = types.ModuleType(name)
@@ -52,21 +79,21 @@ if "ai_trading.capital_scaling" in sys.modules:
         def scale_position(self, size):
             return size
 
-    sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
+    _set_module_attr("ai_trading.capital_scaling", "CapitalScalingEngine", _CapScaler)
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))
 if "pandas_market_calendars" in sys.modules:
-    sys.modules["pandas_market_calendars"].get_calendar = (
+    _set_module_attr("pandas_market_calendars", "get_calendar", (
         lambda *a, **k: types.SimpleNamespace(
             schedule=lambda *a, **k: pd.DataFrame()
         )
-    )
+    ))
 if "pandas_ta" in sys.modules:
-    sys.modules["pandas_ta"].atr = lambda *a, **k: pd.Series([0])
-    sys.modules["pandas_ta"].rsi = lambda *a, **k: pd.Series([0])
+    _set_module_attr("pandas_ta", "atr", lambda *a, **k: pd.Series([0]))
+    _set_module_attr("pandas_ta", "rsi", lambda *a, **k: pd.Series([0]))
 
 # Provide required attributes for some stubs
-sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
+_set_module_attr("pipeline", "model_pipeline", lambda *a, **k: None)
 sys.modules.setdefault("requests", types.ModuleType("requests"))
 sys.modules.setdefault("urllib3", types.ModuleType("urllib3"))
 
@@ -79,13 +106,13 @@ class _SystemTimeWarning(Warning):
     pass
 
 
-sys.modules["urllib3"].exceptions = types.SimpleNamespace(
+_set_module_attr("urllib3", "exceptions", types.SimpleNamespace(
     HTTPError=Exception,
     HTTPWarning=_HTTPWarning,
     SystemTimeWarning=_SystemTimeWarning,
-)
+))
 sys.modules.setdefault("bs4", types.ModuleType("bs4"))
-sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
+_set_module_attr("bs4", "BeautifulSoup", lambda *a, **k: None)
 flask_mod = sys.modules.setdefault("flask", types.ModuleType("flask"))
 flask_app_mod = sys.modules.setdefault("flask.app", types.ModuleType("flask.app"))
 
@@ -140,25 +167,25 @@ class _Flask:
 
 
 if not hasattr(flask_mod, "Flask"):
-    flask_mod.Flask = _Flask
+    setattr(flask_mod, "Flask", _Flask)
 if not hasattr(flask_app_mod, "Flask"):
-    flask_app_mod.Flask = _Flask
+    setattr(flask_app_mod, "Flask", _Flask)
 if not hasattr(flask_mod, "jsonify"):
-    flask_mod.jsonify = _jsonify
+    setattr(flask_mod, "jsonify", _jsonify)
 exc_mod = types.ModuleType("requests.exceptions")
-exc_mod.HTTPError = Exception
-exc_mod.RequestException = Exception
-sys.modules["requests"].exceptions = exc_mod
-sys.modules["requests"].get = lambda *a, **k: None
+setattr(exc_mod, "HTTPError", Exception)
+setattr(exc_mod, "RequestException", Exception)
+_set_module_attr("requests", "exceptions", exc_mod)
+_set_module_attr("requests", "get", lambda *a, **k: None)
 sys.modules["requests.exceptions"] = exc_mod
-sys.modules["requests"].RequestException = Exception
-sys.modules["alpaca"].TradingClient = object
-sys.modules["alpaca"].APIError = Exception
+_set_module_attr("requests", "RequestException", Exception)
+_set_module_attr("alpaca", "TradingClient", object)
+_set_module_attr("alpaca", "APIError", Exception)
 class _RF:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.ensemble"].RandomForestClassifier = _RF
+_set_module_attr("sklearn.ensemble", "RandomForestClassifier", _RF)
 class _Ridge:
     def __init__(self, *a, **k):
         pass
@@ -167,41 +194,41 @@ class _BR:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.linear_model"].Ridge = _Ridge
-sys.modules["sklearn.linear_model"].BayesianRidge = _BR
+_set_module_attr("sklearn.linear_model", "Ridge", _Ridge)
+_set_module_attr("sklearn.linear_model", "BayesianRidge", _BR)
 class _PCA:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["alpaca.trading.client"].TradingClient = object
-sys.modules["alpaca.trading.client"].APIError = Exception
+_set_module_attr("sklearn.decomposition", "PCA", _PCA)
+_set_module_attr("alpaca.trading.client", "TradingClient", object)
+_set_module_attr("alpaca.trading.client", "APIError", Exception)
 class _DummyReq:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["alpaca.data.requests"].StockBarsRequest = _DummyReq
-sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _DummyReq
+_set_module_attr("alpaca.data.requests", "StockBarsRequest", _DummyReq)
+_set_module_attr("alpaca.data.requests", "StockLatestQuoteRequest", _DummyReq)
 class _DummyTimeFrame:
     Day = object()
 
-sys.modules["alpaca.data.timeframe"].TimeFrame = _DummyTimeFrame
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
-sys.modules["alpaca.data"].TimeFrame = _DummyTimeFrame
-sys.modules["alpaca.data"].StockBarsRequest = _DummyReq
+_set_module_attr("alpaca.data.timeframe", "TimeFrame", _DummyTimeFrame)
+_set_module_attr("alpaca.data.timeframe", "TimeFrameUnit", object)
+_set_module_attr("alpaca.data", "TimeFrame", _DummyTimeFrame)
+_set_module_attr("alpaca.data", "StockBarsRequest", _DummyReq)
 sys.modules["bs4"] = types.ModuleType("bs4")
-sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
-sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
-sys.modules["prometheus_client"].Counter = lambda *a, **k: None
-sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
-sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
-sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
-sys.modules["finnhub"].FinnhubAPIException = Exception
-sys.modules["finnhub"].Client = lambda *a, **k: None
-sys.modules["strategy_allocator"].StrategyAllocator = object
+_set_module_attr("bs4", "BeautifulSoup", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "start_http_server", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Counter", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Gauge", lambda *a, **k: None)
+_set_module_attr("prometheus_client", "Histogram", lambda *a, **k: None)
+_set_module_attr("metrics_logger", "log_metrics", lambda *a, **k: None)
+_set_module_attr("finnhub", "FinnhubAPIException", Exception)
+_set_module_attr("finnhub", "Client", lambda *a, **k: None)
+_set_module_attr("strategy_allocator", "StrategyAllocator", object)
 sys.modules.setdefault("ratelimit", types.ModuleType("ratelimit"))
-sys.modules["ratelimit"].limits = lambda *a, **k: lambda f: f
-sys.modules["ratelimit"].sleep_and_retry = lambda f: f
+_set_module_attr("ratelimit", "limits", lambda *a, **k: lambda f: f)
+_set_module_attr("ratelimit", "sleep_and_retry", lambda f: f)
 
 
 class _DummyBreaker:
@@ -211,7 +238,7 @@ class _DummyBreaker:
     def __call__(self, func):
         return func
 
-sys.modules["pybreaker"].CircuitBreaker = _DummyBreaker
+_set_module_attr("pybreaker", "CircuitBreaker", _DummyBreaker)
 
 from ai_trading.core import bot_engine as bot
 

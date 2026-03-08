@@ -3,14 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from ai_trading.execution import live_trading as lt
 
 
-def _engine_stub() -> lt.ExecutionEngine:
-    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+def _engine_stub() -> Any:
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
     engine.stats = {}
     engine._cycle_submitted_orders = 0
     engine._cycle_new_orders_submitted = 0

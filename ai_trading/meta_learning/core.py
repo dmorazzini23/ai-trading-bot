@@ -240,10 +240,13 @@ def _coerce_positive_numeric(values: dict[str, Any], require_decimal: bool = Fal
         coerced[key] = numeric_value
     return coerced
 
+PortfolioReinforcementLearner: Any | None
 try:
-    from ai_trading.portfolio_rl import PortfolioReinforcementLearner
+    from ai_trading.portfolio_rl import PortfolioReinforcementLearner as _PortfolioReinforcementLearner
+
+    PortfolioReinforcementLearner = _PortfolioReinforcementLearner
 except (ImportError, OSError):  # pragma: no cover - optional dependency
-    PortfolioReinforcementLearner = None  # type: ignore[assignment]
+    PortfolioReinforcementLearner = None
 
 
 def _import_numpy(optional: bool = False):
@@ -316,11 +319,14 @@ class SimpleMetaLearner:
             _import_torch()
         except ImportError as exc:  # pragma: no cover - environment guard
             raise RuntimeError("Meta-learner requires PyTorch") from exc
+        nn_mod: Any = nn
 
-        class _Net(nn.Module):
+        class _Net(nn_mod.Module):
             def __init__(self, d: int, h: int):
                 super().__init__()
-                self.net = nn.Sequential(nn.Linear(d, h), nn.ReLU(), nn.Linear(h, 1), nn.Sigmoid())
+                self.net = nn_mod.Sequential(
+                    nn_mod.Linear(d, h), nn_mod.ReLU(), nn_mod.Linear(h, 1), nn_mod.Sigmoid()
+                )
 
             def forward(self, x):
                 return self.net(x)
@@ -364,9 +370,21 @@ class MetaLearning:
         self.logger = get_logger(__name__ + '.MetaLearning')
         self.logger.debug('MetaLearning instance initialized')
 
-def validate_trade_data_quality(trade_log_path: str) -> dict:
+def validate_trade_data_quality(trade_log_path: str | os.PathLike[str]) -> dict[str, Any]:
     """Perform comprehensive data quality checks on trade log before meta-learning."""
-    quality_report = {'file_exists': False, 'file_readable': False, 'has_valid_format': False, 'row_count': 0, 'valid_price_rows': 0, 'data_quality_score': 0.0, 'issues': [], 'recommendations': [], 'mixed_format_detected': False, 'audit_format_rows': 0, 'meta_format_rows': 0}
+    quality_report: dict[str, Any] = {
+        'file_exists': False,
+        'file_readable': False,
+        'has_valid_format': False,
+        'row_count': 0,
+        'valid_price_rows': 0,
+        'data_quality_score': 0.0,
+        'issues': [],
+        'recommendations': [],
+        'mixed_format_detected': False,
+        'audit_format_rows': 0,
+        'meta_format_rows': 0,
+    }
     if not isinstance(trade_log_path, str | os.PathLike):
         error_msg = f'trade_log_path must be a string or PathLike object, got {type(trade_log_path).__name__}'
         quality_report['issues'].append(error_msg)
@@ -652,7 +670,7 @@ def volatility_regime_filter(atr: float, sma100: float) -> str:
     metrics_logger.log_regime_toggle('generic', regime)
     return regime
 
-def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray":
+def load_weights(path: str, default: Any | None = None) -> Any:
     """Load signal weights array from ``path`` or return ``default``."""
     np_mod = _import_numpy()
     p = Path(path).resolve()
@@ -683,7 +701,7 @@ def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray"
                 logger.debug('CSV/numpy loading failed, trying pickle: %s', e)
                 try:
                     weights = safe_pickle_load(p, ALLOWED_DIRS)
-                    if isinstance(weights, np.ndarray):
+                    if isinstance(weights, np_mod.ndarray):
                         logger.debug('Loaded weights from pickle: %s', path)
                         return weights
                     logger.warning('Invalid weights format in %s, using default', path)
@@ -704,7 +722,7 @@ def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray"
         logger.warning('Failed to load weights from %s: %s', path, e)
     return default
 
-def update_weights(weight_path: str, new_weights: "np.ndarray", metrics: dict, history_file: str = "metrics.json", n_history: int = 5) -> bool:
+def update_weights(weight_path: str, new_weights: Any, metrics: dict[str, Any], history_file: str = "metrics.json", n_history: int = 5) -> bool:
     """Update signal weights and append metric history."""
     np_mod = _import_numpy()
     if new_weights.size == 0:
@@ -767,7 +785,7 @@ def update_signal_weights(weights: dict[str, float], performance: dict[str, floa
 class WeightOptimizer:
     """Optimize signal weights from trade data."""
 
-    def optimize(self, df: "pd.DataFrame") -> dict[str, float]:
+    def optimize(self, df: Any) -> dict[str, float]:
         """Compute signal weights from ``df``.
 
         Logs a warning and returns an empty dict when ``df`` is empty.
@@ -1294,11 +1312,21 @@ def _generate_bootstrap_training_data(trade_log_path: str, target_samples: int) 
         sides_used = list({trade.get('side', 'buy') for trade in existing_data})
         avg_entry_price = np.mean([float(trade.get('entry_price', 100)) for trade in existing_data if trade.get('entry_price')])
         patterns_to_generate = max(target_samples - len(existing_data), 5)
-        bootstrap_trades = []
+        bootstrap_trades: list[dict[str, Any]] = []
         for i in range(patterns_to_generate):
             random.choice(existing_data)
-            bootstrap_trade = {'timestamp': datetime.now(UTC).isoformat(), 'symbol': random.choice(symbols_used) if symbols_used else 'SPY', 'side': random.choice(sides_used) if sides_used else 'buy', 'entry_price': _generate_realistic_price(avg_entry_price), 'exit_price': '', 'quantity': random.choice([10, 25, 50, 100]), 'signal_tags': f'bootstrap_pattern_{i}+realistic_variation', 'confidence': round(random.uniform(0.3, 0.9), 2), 'strategy': 'bootstrap_generated'}
-            entry_price = bootstrap_trade['entry_price']
+            bootstrap_trade: dict[str, Any] = {
+                'timestamp': datetime.now(UTC).isoformat(),
+                'symbol': random.choice(symbols_used) if symbols_used else 'SPY',
+                'side': random.choice(sides_used) if sides_used else 'buy',
+                'entry_price': _generate_realistic_price(avg_entry_price),
+                'exit_price': '',
+                'quantity': random.choice([10, 25, 50, 100]),
+                'signal_tags': f'bootstrap_pattern_{i}+realistic_variation',
+                'confidence': round(random.uniform(0.3, 0.9), 2),
+                'strategy': 'bootstrap_generated',
+            }
+            entry_price = float(bootstrap_trade['entry_price'])
             is_winner = i % 3 < 2
             if is_winner:
                 exit_multiplier = random.uniform(1.005, 1.04)
@@ -1307,7 +1335,7 @@ def _generate_bootstrap_training_data(trade_log_path: str, target_samples: int) 
                 exit_multiplier = random.uniform(0.97, 0.995)
                 exit_price = entry_price * exit_multiplier
             bootstrap_trade['exit_price'] = round(exit_price, 2)
-            qty = bootstrap_trade['quantity']
+            qty = float(bootstrap_trade['quantity'])
             if bootstrap_trade['side'] == 'buy':
                 pnl = (exit_price - entry_price) * qty
             else:
@@ -1399,7 +1427,7 @@ def _synthetic_bootstrap_allowed() -> bool:
     return bool(get_env("PYTEST_RUNNING", False, cast=bool))
 
 
-def _exclude_synthetic_training_rows(df: "pd.DataFrame") -> tuple["pd.DataFrame", int]:
+def _exclude_synthetic_training_rows(df: Any) -> tuple[Any, int]:
     """Exclude synthetic rows from meta-learner training unless explicitly allowed."""
 
     if df is None or len(df) == 0:
@@ -1471,7 +1499,7 @@ def _append_synthetic_trades_to_log(trade_log_path: str, synthetic_trades: list)
     except COMMON_EXC as e:
         logger.error(f'Failed to append synthetic trades: {e}')
 
-def _convert_mixed_format_to_meta(df: 'pd.DataFrame') -> 'pd.DataFrame':
+def _convert_mixed_format_to_meta(df: Any) -> Any:
     """Convert mixed format trade logs (meta headers with audit data) to pure meta-learning format.
 
     Input: Meta headers but audit data rows like UUID,timestamp,symbol,side,qty,price,mode,status
@@ -1480,8 +1508,8 @@ def _convert_mixed_format_to_meta(df: 'pd.DataFrame') -> 'pd.DataFrame':
     try:
         if df.empty:
             return df
-        meta_rows = []
-        position_tracker = {}
+        meta_rows: list[dict[str, Any]] = []
+        position_tracker: dict[str, list[dict[str, Any]]] = {}
         logger.debug(f'META_LEARNING_MIXED_CONVERSION: Processing {len(df)} rows with mixed format')
         for idx, row in df.iterrows():
             try:
@@ -1531,16 +1559,16 @@ def _convert_mixed_format_to_meta(df: 'pd.DataFrame') -> 'pd.DataFrame':
         logger.error(f'META_LEARNING_MIXED_CONVERSION: Conversion failed: {e}')
         return pd.DataFrame()
 
-def _convert_audit_to_meta_format(df: 'pd.DataFrame') -> 'pd.DataFrame':
+def _convert_audit_to_meta_format(df: Any) -> Any:
     """Convert audit format trade logs to meta-learning format.
 
     Audit format: order_id,timestamp,symbol,side,qty,price,mode,status
     Meta format: symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward
     """
     try:
-        meta_rows = []
-        position_tracker = {}
-        audit_rows = []
+        meta_rows: list[dict[str, Any]] = []
+        position_tracker: dict[str, list[dict[str, Any]]] = {}
+        audit_rows: list[Any] = []
         for _idx, row in df.iterrows():
             first_col = str(row.iloc[0]).strip()
             if len(first_col) > 20 and '-' in first_col:
@@ -1586,9 +1614,13 @@ def _convert_audit_to_meta_format(df: 'pd.DataFrame') -> 'pd.DataFrame':
                                 existing_row['exit_time'] = timestamp
                                 existing_row['exit_price'] = price_val
                                 if side == 'sell':
-                                    existing_row['reward'] = (price_val - existing_row['entry_price']) * existing_row['qty']
+                                    existing_entry_price = float(existing_row['entry_price'])
+                                    existing_qty = float(existing_row['qty'])
+                                    existing_row['reward'] = (price_val - existing_entry_price) * existing_qty
                                 else:
-                                    existing_row['reward'] = (existing_row['entry_price'] - price_val) * existing_row['qty']
+                                    existing_entry_price = float(existing_row['entry_price'])
+                                    existing_qty = float(existing_row['qty'])
+                                    existing_row['reward'] = (existing_entry_price - price_val) * existing_qty
                                 break
                     position_tracker[symbol].append(meta_row.copy())
                     meta_rows.append(meta_row)
@@ -1661,10 +1693,10 @@ def optimize_signals(
         logger.exception('optimize_signals prediction processing failed: %s', exc)
         return signal_data if signal_data is not None else []
 
-def trigger_rebalance_on_regime(df: 'pd.DataFrame') -> None:
+def trigger_rebalance_on_regime(df: Any) -> None:
     """Invoke the RL rebalancer when the market regime changes."""
     settings = get_settings()
-    if not settings.enable_reinforcement_learning:
+    if not bool(getattr(settings, "enable_reinforcement_learning", False)):
         return
     if PortfolioReinforcementLearner is None:
         raise RuntimeError('Reinforcement learning enabled but ai_trading.portfolio_rl module unavailable. Set ENABLE_REINFORCEMENT_LEARNING=False to disable')
@@ -1862,7 +1894,8 @@ def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> d
         else:
             bot_engine = sys.modules['bot_engine']
             if hasattr(bot_engine, 'load_global_signal_performance'):
-                return bot_engine.load_global_signal_performance(min_trades, threshold)
+                result = bot_engine.load_global_signal_performance(min_trades, threshold)
+                return dict(result) if isinstance(result, dict) else {}
             else:
                 logger.warning('META_LEARNING_FUNCTION_MISSING: load_global_signal_performance not found in bot_engine')
                 return {}

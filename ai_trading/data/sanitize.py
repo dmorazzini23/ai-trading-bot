@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame, Series as PDSeries
 
 pd = load_pandas()
 logger = get_logger(__name__)
@@ -49,9 +50,9 @@ class DataSanitizer:
         """
         self.config = config or SanitizationConfig()
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
-        self._rejection_stats = {'outliers': 0, 'low_volume': 0, 'stale_gaps': 0, 'stale_prices': 0, 'invalid_prices': 0, 'excessive_moves': 0, 'total_processed': 0}
+        self._rejection_stats: dict[str, int | float] = {'outliers': 0, 'low_volume': 0, 'stale_gaps': 0, 'stale_prices': 0, 'invalid_prices': 0, 'excessive_moves': 0, 'total_processed': 0}
 
-    def sanitize_bars(self, bars: pd.DataFrame, symbol: str='UNKNOWN') -> tuple[pd.DataFrame, dict[str, Any]]:
+    def sanitize_bars(self, bars: PDDataFrame, symbol: str='UNKNOWN') -> tuple[PDDataFrame, dict[str, Any]]:
         """
         Sanitize OHLCV bar data.
         
@@ -92,7 +93,7 @@ class DataSanitizer:
         report = {'symbol': symbol, 'original_count': original_count, 'cleaned_count': len(clean_bars), 'rejected_count': len(rejected_bars), 'rejection_rate': len(rejected_bars) / original_count if original_count > 0 else 0, 'rejections': self._count_rejection_reasons(rejection_reasons[rejection_mask]), 'time_range': self._get_time_range(bars) if not bars.empty else None}
         return (clean_bars, report)
 
-    def _validate_prices(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    def _validate_prices(self, bars: PDDataFrame) -> tuple[PDSeries, PDSeries]:
         """Validate price data for basic sanity checks."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -118,7 +119,7 @@ class DataSanitizer:
             self._rejection_stats['excessive_moves'] += excessive_move_mask.sum()
         return (rejection_mask, rejection_reasons)
 
-    def _detect_outliers(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    def _detect_outliers(self, bars: PDDataFrame) -> tuple[PDSeries, PDSeries]:
         """Detect outliers using MAD and Z-score methods."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -147,7 +148,7 @@ class DataSanitizer:
                 self._rejection_stats['outliers'] += outlier_mask.sum()
         return (rejection_mask, rejection_reasons)
 
-    def _filter_low_volume(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    def _filter_low_volume(self, bars: PDDataFrame) -> tuple[PDSeries, PDSeries]:
         """Filter bars with low volume."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -172,7 +173,7 @@ class DataSanitizer:
                 self._rejection_stats['low_volume'] += perc_mask.sum()
         return (rejection_mask, rejection_reasons)
 
-    def _detect_stale_data(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    def _detect_stale_data(self, bars: PDDataFrame) -> tuple[PDSeries, PDSeries]:
         """Detect stale or suspicious data patterns."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -193,7 +194,7 @@ class DataSanitizer:
             self._rejection_stats['stale_prices'] += stale_price_mask.sum()
         return (rejection_mask, rejection_reasons)
 
-    def _get_price_columns(self, bars: pd.DataFrame) -> list[str]:
+    def _get_price_columns(self, bars: PDDataFrame) -> list[str]:
         """Get price columns from DataFrame."""
         price_patterns = ['open', 'high', 'low', 'close', 'price', 'adj_close', 'vwap']
         price_cols = []
@@ -203,7 +204,7 @@ class DataSanitizer:
                 price_cols.append(col)
         return price_cols
 
-    def _get_volume_columns(self, bars: pd.DataFrame) -> list[str]:
+    def _get_volume_columns(self, bars: PDDataFrame) -> list[str]:
         """Get volume columns from DataFrame."""
         volume_patterns = ['volume', 'vol', 'shares']
         volume_cols = []
@@ -213,7 +214,7 @@ class DataSanitizer:
                 volume_cols.append(col)
         return volume_cols
 
-    def _update_reasons(self, existing: pd.Series, new: pd.Series) -> pd.Series:
+    def _update_reasons(self, existing: PDSeries, new: PDSeries) -> PDSeries:
         """Update rejection reasons, combining multiple reasons."""
         combined = existing.copy()
         for idx in new.index:
@@ -224,7 +225,7 @@ class DataSanitizer:
                     combined.loc[idx] = new.loc[idx]
         return combined
 
-    def _log_rejections(self, symbol: str, rejected_bars: pd.DataFrame, reasons: pd.Series) -> None:
+    def _log_rejections(self, symbol: str, rejected_bars: PDDataFrame, reasons: PDSeries) -> None:
         """Log rejected bars for debugging."""
         if len(rejected_bars) == 0:
             return
@@ -234,9 +235,9 @@ class DataSanitizer:
                 bar_data = rejected_bars.loc[idx].to_dict()
                 self.logger.debug(f'Rejected bar {idx} for {symbol}: {reason} - {bar_data}')
 
-    def _count_rejection_reasons(self, reasons: pd.Series) -> dict[str, int]:
+    def _count_rejection_reasons(self, reasons: PDSeries) -> dict[str, int]:
         """Count rejection reasons for reporting."""
-        reason_counts = {}
+        reason_counts: dict[str, int] = {}
         for reason_str in reasons:
             if not reason_str:
                 continue
@@ -247,13 +248,13 @@ class DataSanitizer:
                     reason_counts[reason] = reason_counts.get(reason, 0) + 1
         return reason_counts
 
-    def _get_time_range(self, bars: pd.DataFrame) -> dict[str, str] | None:
+    def _get_time_range(self, bars: PDDataFrame) -> dict[str, str] | None:
         """Get time range of bars for reporting."""
         if bars.empty or not isinstance(bars.index, pd.DatetimeIndex):
             return None
         return {'start': bars.index.min().isoformat(), 'end': bars.index.max().isoformat()}
 
-    def winsorize_series(self, series: pd.Series, limits: tuple[float, float] | None=None) -> pd.Series:
+    def winsorize_series(self, series: PDSeries, limits: tuple[float, float] | None=None) -> PDSeries:
         """
         Winsorize a series by capping extreme values.
         
@@ -295,7 +296,7 @@ def get_data_sanitizer(config: SanitizationConfig | None=None) -> DataSanitizer:
         _global_sanitizer = DataSanitizer(config)
     return _global_sanitizer
 
-def sanitize_bars(bars: pd.DataFrame, symbol: str='UNKNOWN', config: SanitizationConfig | None=None) -> tuple[pd.DataFrame, dict[str, Any]]:
+def sanitize_bars(bars: PDDataFrame, symbol: str='UNKNOWN', config: SanitizationConfig | None=None) -> tuple[PDDataFrame, dict[str, Any]]:
     """
     Convenience function to sanitize bars.
     
@@ -310,7 +311,7 @@ def sanitize_bars(bars: pd.DataFrame, symbol: str='UNKNOWN', config: Sanitizatio
     sanitizer = get_data_sanitizer(config)
     return sanitizer.sanitize_bars(bars, symbol)
 
-def winsorize_dataframe(df: pd.DataFrame, columns: list[str] | None=None, limits: tuple[float, float]=(0.01, 0.01)) -> pd.DataFrame:
+def winsorize_dataframe(df: PDDataFrame, columns: list[str] | None=None, limits: tuple[float, float]=(0.01, 0.01)) -> PDDataFrame:
     """
     Winsorize specified columns of a DataFrame.
     

@@ -497,7 +497,7 @@ def pov_submit(
             ):
                 raise RuntimeError("StockLatestQuoteRequest unavailable")
             req = _bot_engine.StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-            quote: Quote = ctx.data_client.get_stock_latest_quote(req)  # type: ignore[assignment]
+            quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (
                 (quote.ask_price - quote.bid_price)
                 if getattr(quote, "ask_price", None) and getattr(quote, "bid_price", None)

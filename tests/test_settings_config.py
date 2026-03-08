@@ -1,8 +1,13 @@
 import pytest
 from types import SimpleNamespace
+from typing import Any, cast
 from ai_trading.logging import logger
 from ai_trading.settings import Settings, get_position_size_min_usd, get_settings
 from pydantic import ValidationError
+
+
+def _new_settings(**kwargs: Any) -> Settings:
+    return cast(Any, Settings)(**kwargs)
 
 
 def test_settings_defaults(monkeypatch):
@@ -17,7 +22,7 @@ def test_settings_defaults(monkeypatch):
     ]:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("AI_TRADING_POSITION_SIZE_MIN_USD", raising=False)
-    s = Settings()
+    s = _new_settings()
     assert s.alpaca_data_feed == "iex"
     assert s.alpaca_adjustment == "all"
     assert s.capital_cap == 0.25
@@ -29,10 +34,34 @@ def test_settings_defaults(monkeypatch):
 def test_sip_feed_falls_back(monkeypatch):
     """SIP feed requests fall back to IEX when not explicitly allowed."""  # AI-AGENT-REF
     monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
-    s = Settings()
+    s = _new_settings()
     s.data_feed = "sip"
     assert s.alpaca_data_feed == "iex"
     assert s.data_feed == "iex"
+
+
+def test_tuple_settings_accept_plain_env_strings(monkeypatch):
+    """Tuple settings should accept comma-delimited env strings."""
+
+    monkeypatch.setenv("ALPACA_FEED_FAILOVER", "sip,iex")
+    monkeypatch.setenv("DATA_PROVIDER_PRIORITY", "alpaca_iex,yahoo")
+
+    s = _new_settings()
+
+    assert s.alpaca_feed_failover == ("sip", "iex")
+    assert s.data_provider_priority == ("alpaca_iex", "yahoo")
+
+
+def test_tuple_settings_accept_json_env_strings(monkeypatch):
+    """Tuple settings should also accept JSON list env strings."""
+
+    monkeypatch.setenv("ALPACA_FEED_FAILOVER", '["sip","iex"]')
+    monkeypatch.setenv("DATA_PROVIDER_PRIORITY", '["alpaca_iex","yahoo"]')
+
+    s = _new_settings()
+
+    assert s.alpaca_feed_failover == ("sip", "iex")
+    assert s.data_provider_priority == ("alpaca_iex", "yahoo")
 
 
 def test_settings_invalid_risk(monkeypatch):
@@ -44,7 +73,7 @@ def test_settings_invalid_risk(monkeypatch):
     monkeypatch.setenv("CAPITAL_CAP", "0")
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0")
     with pytest.raises(ValidationError):
-        Settings()
+        _new_settings()
 
 
 def test_main_startup_log(caplog):

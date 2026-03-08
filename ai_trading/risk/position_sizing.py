@@ -179,10 +179,16 @@ class DynamicPositionSizer:
             Dictionary with position sizing recommendations
         """
         try:
-            result = {'symbol': symbol, 'recommended_size': 0, 'sizing_methods': {}, 'risk_metrics': {}, 'warnings': []}
-            atr_value = market_data.get('atr', 0.0)
+            result: dict[str, Any] = {
+                'symbol': symbol,
+                'recommended_size': 0,
+                'sizing_methods': {},
+                'risk_metrics': {},
+                'warnings': [],
+            }
+            atr_value = float(market_data.get('atr', 0.0) or 0.0)
             returns = historical_data.get('returns', [])
-            trade_history = historical_data.get('trade_history', [])
+            trade_history: list[dict[str, Any]] = list(historical_data.get('trade_history', []) or [])
             if atr_value <= 0:
                 result['warnings'].append('Invalid ATR value, using conservative sizing')
                 atr_value = entry_price * 0.02
@@ -206,7 +212,11 @@ class DynamicPositionSizer:
             max_notional = account_equity * self.max_position_pct
             max_shares = int(max_notional / entry_price)
             result['sizing_methods']['concentration_limit'] = max_shares
-            recommended_sizes = [size for size in [atr_size, vol_adjusted_size, kelly_size, max_shares] if size > 0]
+            recommended_sizes = [
+                int(size)
+                for size in [atr_size, vol_adjusted_size, kelly_size, max_shares]
+                if int(size) > 0
+            ]
             if recommended_sizes:
                 result['recommended_size'] = min(recommended_sizes)
             else:
@@ -226,7 +236,7 @@ class DynamicPositionSizer:
             logger.error(f'Error calculating optimal position for {symbol}: {e}')
             return {'symbol': symbol, 'recommended_size': 0, 'sizing_methods': {}, 'risk_metrics': {}, 'warnings': [f'Position sizing error: {e}']}
 
-    def calculate_scaling_orders(self, base_position: int, entry_price: float, scaling_levels: int=3) -> list[dict]:
+    def calculate_scaling_orders(self, base_position: int, entry_price: float, scaling_levels: int=3) -> list[dict[str, Any]]:
         """
         Calculate scaled order entries for large positions.
 
@@ -241,7 +251,7 @@ class DynamicPositionSizer:
         try:
             if base_position <= 0 or scaling_levels <= 0:
                 return []
-            scaled_orders = []
+            scaled_orders: list[dict[str, Any]] = []
             remaining_size = base_position
             for level in range(scaling_levels):
                 if level == 0:
@@ -284,8 +294,8 @@ class PortfolioPositionManager:
         """Initialize portfolio position manager."""
         self.max_portfolio_risk = max_portfolio_risk or RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.dynamic_sizer = DynamicPositionSizer()
-        self.current_positions = {}
-        self.position_correlations = {}
+        self.current_positions: dict[str, dict[str, Any]] = {}
+        self.position_correlations: dict[str, float] = {}
         self.total_risk_exposure = 0.0
         logger.info(f'PortfolioPositionManager initialized with max_portfolio_risk={self.max_portfolio_risk}')
 
@@ -303,7 +313,14 @@ class PortfolioPositionManager:
             Assessment dictionary with approval and adjustments
         """
         try:
-            assessment = {'symbol': symbol, 'approved': False, 'adjusted_size': 0, 'risk_impact': 0.0, 'warnings': [], 'recommendations': []}
+            assessment: dict[str, Any] = {
+                'symbol': symbol,
+                'approved': False,
+                'adjusted_size': 0,
+                'risk_impact': 0.0,
+                'warnings': [],
+                'recommendations': [],
+            }
             notional_value = proposed_size * entry_price
             position_pct = notional_value / account_equity if account_equity > 0 else 0
             if position_pct > self.dynamic_sizer.max_position_pct:
@@ -330,7 +347,7 @@ class PortfolioPositionManager:
             logger.error(f'Error assessing new position for {symbol}: {e}')
             return {'symbol': symbol, 'approved': False, 'adjusted_size': 0, 'risk_impact': 0.0, 'warnings': [f'Assessment error: {e}'], 'recommendations': ['Manual review required']}
 
-    def update_position(self, symbol: str, size: int, entry_price: float):
+    def update_position(self, symbol: str, size: int, entry_price: float) -> None:
         """Update portfolio position tracking."""
         try:
             if size > 0:
@@ -351,7 +368,7 @@ class PortfolioPositionManager:
             logger.error(f'Error generating portfolio summary: {e}')
             return {'error': str(e)}
 
-    def _recalculate_risk_exposure(self):
+    def _recalculate_risk_exposure(self) -> None:
         """Recalculate total portfolio risk exposure."""
         try:
             self.total_risk_exposure = sum((pos['notional_value'] * 0.02 for pos in self.current_positions.values()))

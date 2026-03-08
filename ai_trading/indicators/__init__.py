@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from ai_trading.logging import get_logger
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame, Series as PDSeries
 from .manager import IndicatorManager, Indicator
 
 logger = get_logger(__name__)
@@ -38,7 +39,7 @@ def jit(*args, **kwargs):
 
 _INDICATOR_CACHE: dict[tuple[str, Any], Any] = {}
 
-def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
+def ichimoku_fallback(high: PDSeries, low: PDSeries, close: PDSeries) -> tuple[PDDataFrame, PDDataFrame]:
     """Simple Ichimoku cloud implementation used when pandas_ta is unavailable."""
     try:
         if len(high) == 0 or len(low) == 0 or len(close) == 0:
@@ -70,7 +71,7 @@ def _rsi_numba_core(prices_array: np.ndarray, period: int=14) -> np.ndarray:
     losses = np.where(deltas < 0, -deltas, 0.0)
     rsi = np.zeros_like(prices_array)
     if prices_array.size <= period:
-        return rsi
+        return cast(np.ndarray, rsi)
     avg_gain = gains[:period].mean()
     avg_loss = losses[:period].mean()
     rs = avg_gain / avg_loss if avg_loss != 0 else 0.0
@@ -80,7 +81,7 @@ def _rsi_numba_core(prices_array: np.ndarray, period: int=14) -> np.ndarray:
         avg_loss = (avg_loss * (period - 1) + losses[i - 1]) / period
         rs = avg_gain / avg_loss if avg_loss != 0 else 0.0
         rsi[i] = 100.0 - 100.0 / (1.0 + rs)
-    return rsi
+    return cast(np.ndarray, rsi)
 
 def rsi_numba(prices, period: int=14):
     """Compute RSI using a fast numba implementation."""
@@ -93,7 +94,7 @@ def rsi_numba(prices, period: int=14):
     return _rsi_numba_core(prices_array, period)
 
 @lru_cache(maxsize=128)
-def ema(series: Iterable[float], period: int) -> pd.Series:
+def ema(series: Sequence[float], period: int) -> PDSeries:
     """Calculate EMA with input validation."""
     try:
         if period <= 0:
@@ -109,7 +110,7 @@ def ema(series: Iterable[float], period: int) -> pd.Series:
         return pd.Series(dtype=float)
 
 @lru_cache(maxsize=128)
-def sma(series: Iterable[float], period: int) -> pd.Series:
+def sma(series: Sequence[float], period: int) -> PDSeries:
     """Calculate SMA with input validation."""
     try:
         if period <= 0:
@@ -123,7 +124,7 @@ def sma(series: Iterable[float], period: int) -> pd.Series:
     except (KeyError, ValueError, TypeError, AttributeError):
         return pd.Series(dtype=float)
 
-def bollinger_bands(x, length: int=20, num_std: float=2.0) -> pd.DataFrame:
+def bollinger_bands(x, length: int=20, num_std: float=2.0) -> PDDataFrame:
     """Calculate Bollinger Bands for given price series."""
     try:
         if length <= 0:
@@ -148,7 +149,7 @@ def bollinger_bands(x, length: int=20, num_std: float=2.0) -> pd.DataFrame:
         return pd.DataFrame({'upper': pd.Series(dtype=float), 'middle': pd.Series(dtype=float), 'lower': pd.Series(dtype=float)})
 
 @lru_cache(maxsize=128)
-def rsi(series: Iterable[float], period: int=14) -> pd.Series:
+def rsi(series: Sequence[float], period: int=14) -> PDSeries:
     """Calculate RSI with input validation."""
     try:
         if period <= 0:
@@ -163,7 +164,7 @@ def rsi(series: Iterable[float], period: int=14) -> pd.Series:
     except (KeyError, ValueError, TypeError, AttributeError):
         return pd.Series(dtype=float)
 
-def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int=14) -> pd.Series:
+def atr(high: PDSeries, low: PDSeries, close: PDSeries, period: int=14) -> PDSeries:
     """Calculate Average True Range with input validation."""
     try:
         if period <= 0:
@@ -185,24 +186,24 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int=14) -> pd
     except (KeyError, ValueError, TypeError, AttributeError):
         return pd.Series(dtype=float)
 
-def mean_reversion_zscore(series: pd.Series, window: int=20) -> pd.Series:
+def mean_reversion_zscore(series: PDSeries, window: int=20) -> PDSeries:
     rolling_mean = series.rolling(window).mean()
     rolling_std = series.rolling(window).std(ddof=0)
     return (series - rolling_mean) / rolling_std
 
-def compute_ema(df: pd.DataFrame, periods: list[int] | None=None) -> pd.DataFrame:
+def compute_ema(df: PDDataFrame, periods: list[int] | None=None) -> PDDataFrame:
     periods = periods or [5, 20, 50, 200]
     for p in periods:
         df[f'EMA_{p}'] = df['close'].ewm(span=p, adjust=False).mean()
     return df
 
-def compute_sma(df: pd.DataFrame, periods: list[int] | None=None) -> pd.DataFrame:
+def compute_sma(df: PDDataFrame, periods: list[int] | None=None) -> PDDataFrame:
     periods = periods or [5, 20, 50, 200]
     for p in periods:
         df[f'SMA_{p}'] = df['close'].rolling(window=p).mean()
     return df
 
-def compute_bollinger(df: pd.DataFrame, window: int=20, num_std: int=2) -> pd.DataFrame:
+def compute_bollinger(df: PDDataFrame, window: int=20, num_std: int=2) -> PDDataFrame:
     df['MB'] = df['close'].rolling(window=window).mean()
     df['STD'] = df['close'].rolling(window=window).std()
     df['UB'] = df['MB'] + num_std * df['STD']
@@ -210,7 +211,7 @@ def compute_bollinger(df: pd.DataFrame, window: int=20, num_std: int=2) -> pd.Da
     df['BollingerWidth'] = df['UB'] - df['LB']
     return df
 
-def compute_atr(df: pd.DataFrame, periods: list[int] | None=None) -> pd.DataFrame:
+def compute_atr(df: PDDataFrame, periods: list[int] | None=None) -> PDDataFrame:
     """
     Compute the Average True Range (ATR) for one or more lookback periods.
     """
@@ -227,7 +228,7 @@ def compute_atr(df: pd.DataFrame, periods: list[int] | None=None) -> pd.DataFram
         df[f'ATR_{p}'] = tr.rolling(window=p).mean()
     return df
 
-def calculate_macd(close: pd.Series, fast: int=12, slow: int=26, signal: int=9) -> tuple[pd.Series, pd.Series]:
+def calculate_macd(close: PDSeries, fast: int=12, slow: int=26, signal: int=9) -> tuple[PDSeries, PDSeries]:
     """Return MACD and signal line series."""
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
@@ -235,19 +236,19 @@ def calculate_macd(close: pd.Series, fast: int=12, slow: int=26, signal: int=9) 
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return (macd_line, signal_line)
 
-def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int=14) -> pd.Series:
+def calculate_atr(high: PDSeries, low: PDSeries, close: PDSeries, period: int=14) -> PDSeries:
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-def calculate_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+def calculate_vwap(high: PDSeries, low: PDSeries, close: PDSeries, volume: PDSeries) -> PDSeries:
     typical_price = (high + low + close) / 3
     cum_pv = (typical_price * volume).cumsum()
     cum_vol = volume.cumsum()
     return cum_pv / cum_vol
 
-def get_rsi_signal(series: pd.Series | pd.DataFrame, period: int=14) -> pd.Series:
+def get_rsi_signal(series: PDSeries | PDDataFrame, period: int=14) -> PDSeries:
     """Return normalized RSI signal handling DataFrame or Series input."""
-    if isinstance(series, pd.DataFrame):
+    if isinstance(series, PDDataFrame):
         close_col = series.get('close')
         if close_col is not None:
             series = close_col.astype(float)
@@ -256,11 +257,11 @@ def get_rsi_signal(series: pd.Series | pd.DataFrame, period: int=14) -> pd.Serie
     vals = rsi(tuple(series.astype(float)), period)
     return (vals - 50) / 50
 
-def get_atr_trailing_stop(close: pd.Series, high: pd.Series, low: pd.Series, period: int=14, multiplier: float=1.5) -> pd.Series:
+def get_atr_trailing_stop(close: PDSeries, high: PDSeries, low: PDSeries, period: int=14, multiplier: float=1.5) -> PDSeries:
     atr_series = calculate_atr(high, low, close, period)
     return close - multiplier * atr_series
 
-def cached_atr_trailing_stop(symbol: str, df: pd.DataFrame, period: int=14, multiplier: float=1.5) -> pd.Series:
+def cached_atr_trailing_stop(symbol: str, df: PDDataFrame, period: int=14, multiplier: float=1.5) -> PDSeries:
     """Return ATR stop with simple caching by symbol and last timestamp."""
     if df is None or df.empty:
         return pd.Series(dtype=float)
@@ -272,7 +273,7 @@ def cached_atr_trailing_stop(symbol: str, df: pd.DataFrame, period: int=14, mult
     _INDICATOR_CACHE[key] = stops
     return stops
 
-def get_vwap_bias(close: pd.Series, high: pd.Series, low: pd.Series, volume: pd.Series) -> pd.Series:
+def get_vwap_bias(close: PDSeries, high: PDSeries, low: PDSeries, volume: PDSeries) -> PDSeries:
     vwap_series = calculate_vwap(high, low, close, volume)
     bias = close / vwap_series - 1
     return bias
@@ -286,10 +287,10 @@ def vwap(prices: np.ndarray, volumes: np.ndarray) -> float:
             raise ValueError('Prices and volumes arrays must have same length')
         if np.isnan(prices).all() or np.isnan(volumes).all():
             raise ValueError('Input arrays contain only NaN values')
-        total_volume = np.sum(volumes)
+        total_volume: float = float(np.sum(volumes))
         if total_volume == 0:
             raise ValueError('Total volume cannot be zero')
-        return np.sum(prices * volumes) / total_volume
+        return float(np.sum(prices * volumes) / total_volume)
     except (ValueError, TypeError, ZeroDivisionError):
         return 0.0
 
@@ -306,8 +307,8 @@ def donchian_channel(highs: np.ndarray, lows: np.ndarray, period: int=20) -> dic
             raise ValueError(f'Insufficient data: need at least {period} periods')
         if np.isnan(highs).all() or np.isnan(lows).all():
             raise ValueError('Input arrays contain only NaN values')
-        upper = np.max(highs[-period:])
-        lower = np.min(lows[-period:])
+        upper: float = float(np.max(highs[-period:]))
+        lower: float = float(np.min(lows[-period:]))
         return {'upper': upper, 'lower': lower}
     except (ValueError, TypeError, IndexError):
         return {'upper': 0.0, 'lower': 0.0}
@@ -327,14 +328,14 @@ def obv(closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:
         raise ValueError('closes and volumes must be same-length 1D arrays')
     n = c.size
     if n == 0:
-        return np.array([], dtype=float)
+        return cast(np.ndarray, np.array([], dtype=float))
     if n == 1:
-        return np.array([0.0], dtype=float)
+        return cast(np.ndarray, np.array([0.0], dtype=float))
     delta = np.diff(c)
     sign = np.sign(delta)
     adj = sign * v[1:]
     obv_vals = np.concatenate([[0.0], np.cumsum(adj, dtype=float)])
-    return obv_vals
+    return cast(np.ndarray, obv_vals)
 
 def stochastic_rsi(prices: np.ndarray, period: int=14) -> np.ndarray:
     """Return simplified stochastic RSI as an array aligned with ``prices``."""
@@ -343,10 +344,10 @@ def stochastic_rsi(prices: np.ndarray, period: int=14) -> np.ndarray:
     downs = -np.where(deltas < 0, deltas, 0)
     rs = np.sum(ups[-period:]) / (np.sum(downs[-period:]) + 1e-09)
     rsi_val = 100 - 100 / (1 + rs)
-    return np.array([rsi_val] * len(prices))
+    return cast(np.ndarray, np.array([rsi_val] * len(prices)))
 
 def hurst_exponent(ts):
-    series = ts.iloc[:, 0] if isinstance(ts, pd.DataFrame) else ts
+    series = ts.iloc[:, 0] if isinstance(ts, PDDataFrame) else ts
     arr = series.values
     n = len(arr)
     if n > 10000:

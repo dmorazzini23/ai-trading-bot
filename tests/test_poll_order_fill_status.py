@@ -4,20 +4,27 @@ import math
 import sys
 import types
 import time
+from typing import Any, cast
 
 import pytest
 
+sys = cast(Any, sys)
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
+
 if "numpy" not in sys.modules:
     numpy_stub = types.ModuleType("numpy")
-    numpy_stub.nan = float("nan")
-    numpy_stub.NaN = numpy_stub.nan
-    numpy_stub.bool_ = bool
-    numpy_stub.float64 = float
+    _set_module_attr(numpy_stub, "nan", float("nan"))
+    _set_module_attr(numpy_stub, "NaN", float("nan"))
+    _set_module_attr(numpy_stub, "bool_", bool)
+    _set_module_attr(numpy_stub, "float64", float)
 
     def _isscalar(obj):
         return isinstance(obj, (bool, int, float, complex))
 
-    numpy_stub.isscalar = _isscalar
+    _set_module_attr(numpy_stub, "isscalar", _isscalar)
 
     def _isfinite(value):
         try:
@@ -25,7 +32,7 @@ if "numpy" not in sys.modules:
         except (TypeError, ValueError):
             return False
 
-    numpy_stub.isfinite = _isfinite
+    _set_module_attr(numpy_stub, "isfinite", _isfinite)
 
     def _random_default(*_args, **_kwargs):
         return 0.5
@@ -63,7 +70,7 @@ if "numpy" not in sys.modules:
             return seq[0]
         return None
 
-    numpy_stub.random = types.SimpleNamespace(
+    _set_module_attr(numpy_stub, "random", types.SimpleNamespace(
         seed=lambda *_args, **_kwargs: None,
         random=_random_default,
         normal=_normal,
@@ -71,19 +78,19 @@ if "numpy" not in sys.modules:
         randn=_randn,
         exponential=_exponential,
         choice=_choice,
-    )
-    numpy_stub.randn = _randn
-    numpy_stub.array = lambda data, *args, **kwargs: list(data)
-    numpy_stub.asarray = lambda data, *args, **kwargs: list(data)
+    ))
+    _set_module_attr(numpy_stub, "randn", _randn)
+    _set_module_attr(numpy_stub, "array", lambda data, *args, **kwargs: list(data))
+    _set_module_attr(numpy_stub, "asarray", lambda data, *args, **kwargs: list(data))
     sys.modules["numpy"] = numpy_stub
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.Lock = object
-    portalocker_stub.LockException = RuntimeError
-    portalocker_stub.LockingException = RuntimeError
-    portalocker_stub.unlock = lambda *_args, **_kwargs: None
-    portalocker_stub.lock = lambda *_args, **_kwargs: None
+    _set_module_attr(portalocker_stub, "Lock", object)
+    _set_module_attr(portalocker_stub, "LockException", RuntimeError)
+    _set_module_attr(portalocker_stub, "LockingException", RuntimeError)
+    _set_module_attr(portalocker_stub, "unlock", lambda *_args, **_kwargs: None)
+    _set_module_attr(portalocker_stub, "lock", lambda *_args, **_kwargs: None)
     sys.modules["portalocker"] = portalocker_stub
 
 if "ai_trading.core.bot_engine" not in sys.modules:
@@ -92,9 +99,9 @@ if "ai_trading.core.bot_engine" not in sys.modules:
     def _noop(*_args, **_kwargs):
         return None
 
-    bot_engine_stub.submit_order = _noop
-    bot_engine_stub.safe_submit_order = _noop
-    bot_engine_stub.execute_exit = _noop
+    _set_module_attr(bot_engine_stub, "submit_order", _noop)
+    _set_module_attr(bot_engine_stub, "safe_submit_order", _noop)
+    _set_module_attr(bot_engine_stub, "execute_exit", _noop)
     sys.modules["ai_trading.core.bot_engine"] = bot_engine_stub
 
 if "bs4" not in sys.modules:
@@ -107,7 +114,7 @@ if "bs4" not in sys.modules:
         def find(self, *_args, **_kwargs):
             return None
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    _set_module_attr(bs4_stub, "BeautifulSoup", _BeautifulSoup)
     sys.modules["bs4"] = bs4_stub
 
 
@@ -201,4 +208,3 @@ def test_poll_order_fill_status_warns_on_pending_new_timeout(caplog):
     assert log_record.status == "pending_new"
     assert log_record.order_id == "oid-timeout"
     assert log_record.timeout_s == 0.3
-

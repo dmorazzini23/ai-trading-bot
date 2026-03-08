@@ -4,25 +4,31 @@ import pathlib
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
+
+
+def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
+    setattr(cast(Any, module), name, value)
+
 
 if "dotenv" not in sys.modules:
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     stub_origin = repo_root / ".venv" / "lib" / "python3.11" / "site-packages" / "dotenv" / "__init__.py"
     dotenv_stub = types.ModuleType("dotenv")
     dotenv_stub.__spec__ = importlib.machinery.ModuleSpec("dotenv", loader=None, origin=str(stub_origin))
-    dotenv_stub.load_dotenv = lambda *a, **k: None
-    dotenv_stub.dotenv_values = lambda *a, **k: {}
+    _set_module_attr(dotenv_stub, "load_dotenv", lambda *a, **k: None)
+    _set_module_attr(dotenv_stub, "dotenv_values", lambda *a, **k: {})
     sys.modules["dotenv"] = dotenv_stub
 
 for missing in ("numpy", "pandas", "sklearn", "tenacity", "portalocker", "bs4"):
     if missing not in sys.modules:
         module = types.ModuleType(missing)
         if missing == "numpy":
-            module.nan = float("nan")
-            module.NaN = module.nan
-            module.array = lambda *a, **k: list(a)
-            module.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
+            _set_module_attr(module, "nan", float("nan"))
+            _set_module_attr(module, "NaN", getattr(module, "nan", float("nan")))
+            _set_module_attr(module, "array", lambda *a, **k: list(a))
+            _set_module_attr(module, "random", types.SimpleNamespace(seed=lambda *_a, **_k: None))
         if missing == "tenacity":
             def _retry(*_a, **_k):  # pragma: no cover - defensive stub
                 def decorator(func):
@@ -30,13 +36,13 @@ for missing in ("numpy", "pandas", "sklearn", "tenacity", "portalocker", "bs4"):
 
                 return decorator
 
-            module.retry = _retry
-            module.RetryError = RuntimeError
-            module.stop_after_attempt = lambda *_a, **_k: None
-            module.wait_fixed = lambda *_a, **_k: None
-            module.wait_random_exponential = lambda *_a, **_k: None
-            module.wait_exponential = lambda *_a, **_k: None
-            module.retry_if_exception_type = lambda *_a, **_k: True
+            _set_module_attr(module, "retry", _retry)
+            _set_module_attr(module, "RetryError", RuntimeError)
+            _set_module_attr(module, "stop_after_attempt", lambda *_a, **_k: None)
+            _set_module_attr(module, "wait_fixed", lambda *_a, **_k: None)
+            _set_module_attr(module, "wait_random_exponential", lambda *_a, **_k: None)
+            _set_module_attr(module, "wait_exponential", lambda *_a, **_k: None)
+            _set_module_attr(module, "retry_if_exception_type", lambda *_a, **_k: True)
         if missing == "portalocker":
             class _Lock:
                 def __init__(self, *_a, **_k):
@@ -54,13 +60,13 @@ for missing in ("numpy", "pandas", "sklearn", "tenacity", "portalocker", "bs4"):
                 def __exit__(self, *_exc):
                     return False
 
-            module.Lock = _Lock
+            _set_module_attr(module, "Lock", _Lock)
         if missing == "bs4":
             class _Soup:
                 def __init__(self, *_a, **_k):
                     self.text = ""
 
-            module.BeautifulSoup = _Soup
+            _set_module_attr(module, "BeautifulSoup", _Soup)
         sys.modules[missing] = module
 
 from ai_trading.core.bot_engine import _check_runtime_stops

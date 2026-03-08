@@ -6,8 +6,13 @@ import pytest
 import types
 import sys
 import importlib.machinery
+from typing import Any
 
 from ai_trading.data import universe
+
+
+def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
+    setattr(module, attr_name, value)
 
 validation_stub = types.ModuleType("ai_trading.validation")
 require_env_stub = types.ModuleType("ai_trading.validation.require_env")
@@ -22,7 +27,7 @@ class Flask:  # minimal stub
 
         return decorator
 
-flask_stub.Flask = Flask
+_set_module_attr(flask_stub, "Flask", Flask)
 sys.modules.setdefault("flask", flask_stub)
 
 bs4_stub = types.ModuleType("bs4")
@@ -32,30 +37,30 @@ class BeautifulSoup:  # minimal stub
     pass
 
 
-bs4_stub.BeautifulSoup = BeautifulSoup
+_set_module_attr(bs4_stub, "BeautifulSoup", BeautifulSoup)
 sys.modules.setdefault("bs4", bs4_stub)
 sklearn_stub = types.ModuleType("sklearn")
 ensemble_stub = types.ModuleType("sklearn.ensemble")
 metrics_stub = types.ModuleType("sklearn.metrics")
 model_selection_stub = types.ModuleType("sklearn.model_selection")
 preprocessing_stub = types.ModuleType("sklearn.preprocessing")
-sklearn_stub.__spec__ = importlib.machinery.ModuleSpec("sklearn", loader=None)
-ensemble_stub.__spec__ = importlib.machinery.ModuleSpec(
+_set_module_attr(sklearn_stub, "__spec__", importlib.machinery.ModuleSpec("sklearn", loader=None))
+_set_module_attr(ensemble_stub, "__spec__", importlib.machinery.ModuleSpec(
     "sklearn.ensemble", loader=None
-)
+))
 
 class _Dummy:
     pass
 
-ensemble_stub.GradientBoostingClassifier = _Dummy
-ensemble_stub.RandomForestClassifier = _Dummy
-sklearn_stub.ensemble = ensemble_stub
-metrics_stub.accuracy_score = _Dummy
-sklearn_stub.metrics = metrics_stub
-model_selection_stub.train_test_split = _Dummy
-sklearn_stub.model_selection = model_selection_stub
-preprocessing_stub.StandardScaler = _Dummy
-sklearn_stub.preprocessing = preprocessing_stub
+_set_module_attr(ensemble_stub, "GradientBoostingClassifier", _Dummy)
+_set_module_attr(ensemble_stub, "RandomForestClassifier", _Dummy)
+_set_module_attr(sklearn_stub, "ensemble", ensemble_stub)
+_set_module_attr(metrics_stub, "accuracy_score", _Dummy)
+_set_module_attr(sklearn_stub, "metrics", metrics_stub)
+_set_module_attr(model_selection_stub, "train_test_split", _Dummy)
+_set_module_attr(sklearn_stub, "model_selection", model_selection_stub)
+_set_module_attr(preprocessing_stub, "StandardScaler", _Dummy)
+_set_module_attr(sklearn_stub, "preprocessing", preprocessing_stub)
 sys.modules.setdefault("sklearn", sklearn_stub)
 sys.modules.setdefault("sklearn.ensemble", ensemble_stub)
 sys.modules.setdefault("sklearn.metrics", metrics_stub)
@@ -75,13 +80,13 @@ def should_halt_trading(*_a, **_k):
     return False
 
 
-require_env_stub._require_env_vars = _require_env_vars
-require_env_stub.require_env_vars = require_env_vars
-require_env_stub.should_halt_trading = should_halt_trading
-validation_stub.require_env = require_env_stub
-validation_stub._require_env_vars = _require_env_vars
-validation_stub.require_env_vars = require_env_vars
-validation_stub.should_halt_trading = should_halt_trading
+_set_module_attr(require_env_stub, "_require_env_vars", _require_env_vars)
+_set_module_attr(require_env_stub, "require_env_vars", require_env_vars)
+_set_module_attr(require_env_stub, "should_halt_trading", should_halt_trading)
+_set_module_attr(validation_stub, "require_env", require_env_stub)
+_set_module_attr(validation_stub, "_require_env_vars", _require_env_vars)
+_set_module_attr(validation_stub, "require_env_vars", require_env_vars)
+_set_module_attr(validation_stub, "should_halt_trading", should_halt_trading)
 sys.modules.setdefault("ai_trading.validation", validation_stub)
 sys.modules.setdefault("ai_trading.validation.require_env", require_env_stub)
 
@@ -93,14 +98,14 @@ class _Metric:  # minimal stub classes
         pass
 
 
-metrics_stub.Counter = _Metric
-metrics_stub.Gauge = _Metric
-metrics_stub.Histogram = _Metric
-metrics_stub.Summary = _Metric
-metrics_stub.CollectorRegistry = _Metric
-metrics_stub.REGISTRY = _Metric()
-metrics_stub.PROMETHEUS_AVAILABLE = False
-metrics_stub.start_http_server = lambda *a, **k: None
+_set_module_attr(metrics_stub, "Counter", _Metric)
+_set_module_attr(metrics_stub, "Gauge", _Metric)
+_set_module_attr(metrics_stub, "Histogram", _Metric)
+_set_module_attr(metrics_stub, "Summary", _Metric)
+_set_module_attr(metrics_stub, "CollectorRegistry", _Metric)
+_set_module_attr(metrics_stub, "REGISTRY", _Metric())
+_set_module_attr(metrics_stub, "PROMETHEUS_AVAILABLE", False)
+_set_module_attr(metrics_stub, "start_http_server", lambda *a, **k: None)
 sys.modules.setdefault("ai_trading.metrics", metrics_stub)
 
 from ai_trading.core import bot_engine

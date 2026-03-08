@@ -50,7 +50,7 @@ def test_start_api_waits_for_transient_port_conflicts(monkeypatch):
 
     original_socket = socket.socket
 
-    class RetrySocket(original_socket):
+    class RetrySocket(socket.socket):
         failures_remaining = 2
 
         def bind(self, address):  # type: ignore[override]

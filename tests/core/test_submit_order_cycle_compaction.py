@@ -50,4 +50,6 @@ def test_submit_order_cycle_intent_compaction(monkeypatch):
     assert len(engine.skips) == 1
     assert engine.skips[0]["reason"] == "cycle_duplicate_intent"
     assert engine.skips[0]["symbol"] == "AAPL"
-    assert engine.skips[0]["context"]["source"] == "bot_cycle_compaction"
+    context = engine.skips[0]["context"]
+    assert isinstance(context, dict)
+    assert context["source"] == "bot_cycle_compaction"

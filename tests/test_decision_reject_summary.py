@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import cast
 
 import pandas as pd
 
@@ -303,5 +304,5 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     msft_records = [record for record in written_records if str(record.symbol).upper() == "MSFT"]
     assert any("CYCLE_DUPLICATE_INTENT" in list(record.gates or []) for record in aapl_records)
     assert any("OK_TRADE" in list(record.gates or []) for record in msft_records)
-    assert int(captured_slo.get("orders_attempted", -1)) == 1
-    assert int(captured_slo.get("orders_submitted", -1)) == 1
+    assert int(cast(int, captured_slo.get("orders_attempted", -1))) == 1
+    assert int(cast(int, captured_slo.get("orders_submitted", -1))) == 1
