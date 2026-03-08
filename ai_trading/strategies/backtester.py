@@ -105,7 +105,7 @@ class DefaultExecutionModel(ExecutionModel):
     """Default composition: commission → slippage → latency."""
 
     def __init__(self, per_share_fee: float=0.0, slippage_pips: float=0.0, latency: int=0) -> None:
-        base = ImmediateExecutionModel()
+        base: ExecutionModel = ImmediateExecutionModel()
         base = CommissionModel(per_share_fee, base)
         base = SlippageModel(slippage_pips, base)
         self.model = LatencyModel(latency, base)
@@ -260,7 +260,12 @@ def main(argv: list[str] | None=None) -> None:
         csv_path = matches[0]
         logger.info(f'Loading backtest data from {csv_path}')
         df = pd.read_csv(csv_path, parse_dates=True, index_col=0)
-        df = df.loc[str(args.start):str(args.end)]
+        start_ts = pd.to_datetime(str(args.start), errors="coerce")
+        end_ts = pd.to_datetime(str(args.end), errors="coerce")
+        if not pd.isna(start_ts):
+            df = df[df.index >= start_ts]
+        if not pd.isna(end_ts):
+            df = df[df.index <= end_ts]
         engine.data = {symbol: df}
         engine.reset()
         result = engine.run([symbol])

@@ -124,7 +124,7 @@ def _log_bars_failure_once(
     elif isinstance(since, str):
         since_iso = since
     key = f"alpaca-bars-fail:{_canon_symbol(symbol)}:{feed_norm}:{since_iso or ''}:{status or 'na'}"
-    payload = {
+    payload: dict[str, Any] = {
         "symbol": _canon_symbol(symbol),
         "feed": feed_norm,
         "since": since_iso,

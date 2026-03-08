@@ -19,7 +19,6 @@ python3 -m mypy --config-file mypy_strict.ini \
 # Runtime-critical modules that are not yet strict-clean still get explicit
 # baseline type coverage in this gate.
 python3 -m mypy --config-file mypy.ini \
-  --follow-imports=skip \
   ai_trading/__main__.py \
   ai_trading/alpaca_api.py \
   ai_trading/app.py \

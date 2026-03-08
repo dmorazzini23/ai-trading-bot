@@ -9,17 +9,24 @@ import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
+
+class _CaptureHandler(logging.StreamHandler):
+    def __init__(self, sink: list[str]) -> None:
+        super().__init__()
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._sink.append(record.getMessage())
+
+
 class TestAlpacaImportHandling(unittest.TestCase):
     """Test alpaca import error handling and graceful degradation."""
 
     def setUp(self):
         """Set up test environment."""
         # Capture log output
-        self.log_output = []
-        self.test_handler = logging.StreamHandler()
-        self.test_handler.emit = lambda record: self.log_output.append(
-            record.getMessage()
-        )
+        self.log_output: list[str] = []
+        self.test_handler = _CaptureHandler(self.log_output)
 
     def test_alpaca_import_failure_graceful_handling(self):
         """Test that alpaca import failures are handled gracefully."""

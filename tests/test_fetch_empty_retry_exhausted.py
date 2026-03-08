@@ -2,6 +2,7 @@ import json
 import logging
 import types
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -47,7 +48,7 @@ def _dt_range():
 def test_skip_log_when_retries_exhausted(monkeypatch, caplog):
     start, end = _dt_range()
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
-    payloads = [{"bars": []}, {"bars": []}]
+    payloads: list[dict[str, Any]] = [{"bars": []}, {"bars": []}]
     corr_ids = ["id1", "id2"]
     sess = _Session(payloads, corr_ids)
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)

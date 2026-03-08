@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from typing import Any, cast
 
 from ai_trading.execution.engine import OrderManager
 
@@ -36,7 +37,7 @@ def test_reconcile_alerts_when_open_intents_exceed_threshold(monkeypatch, caplog
         ),
     ]
     manager = OrderManager.__new__(OrderManager)
-    manager._intent_store = _Store(intents)
+    setattr(cast(Any, manager), "_intent_store", _Store(intents))
 
     monkeypatch.setenv("AI_TRADING_OMS_OPEN_INTENT_ALERT_THRESHOLD", "2")
     caplog.set_level(logging.WARNING, logger="ai_trading.execution.engine")

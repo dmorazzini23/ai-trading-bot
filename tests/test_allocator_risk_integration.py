@@ -1,5 +1,6 @@
 import os
 import types
+from typing import Any, cast
 
 from ai_trading.strategies.base import StrategySignal
 from ai_trading.core.enums import OrderSide
@@ -20,6 +21,6 @@ def test_position_size_accepts_allocator_signal():
     eng = RiskEngine()
     eng.asset_limits["equity"] = 1.0
     eng.strategy_limits["strat"] = 1.0
-    eng.config = types.SimpleNamespace(position_size_min_usd=1, atr_multiplier=1.0)
+    eng.config = cast(Any, types.SimpleNamespace(position_size_min_usd=1, atr_multiplier=1.0))
     qty = eng.position_size(trade_sig, cash=1000.0, price=10.0)
     assert qty > 0

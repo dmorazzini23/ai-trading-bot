@@ -1,5 +1,6 @@
 import json
 import sys
+from typing import Any
 
 import pytest
 
@@ -9,7 +10,7 @@ from ai_trading.core import bot_engine
 from ai_trading.core.bot_engine import SignalManager
 
 
-def _minimal_df() -> pd.DataFrame:
+def _minimal_df() -> Any:
     """Return a DataFrame with required features for ML and VSA heuristics."""
     data = {
         "rsi": [30.0] * 20,

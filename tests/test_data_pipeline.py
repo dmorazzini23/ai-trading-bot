@@ -39,7 +39,7 @@ def test_position_none_safe(monkeypatch):
         pass
 
     ctx = Ctx()
-    ctx.api = Dummy()
+    setattr(ctx, "api", Dummy())
     from ai_trading.core import bot_engine as be
 
     assert be._current_position_qty(ctx, "SPY") == 0

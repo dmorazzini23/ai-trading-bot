@@ -16,7 +16,7 @@ _rate_limiter = get_rate_limiter()
 def fetch(
     url: str,
     *,
-    session: HTTPSession | None = None,
+    session: Any | None = None,
     route: str = "bars",
     **kwargs: Any,
 ) -> Any:

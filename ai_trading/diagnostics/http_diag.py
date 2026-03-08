@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 # Defer Flask dependency: module must import cleanly without Flask installed
+_flask_blueprint: Any = None
+_flask_current_app: Any = None
+_flask_jsonify: Any = None
 try:  # pragma: no cover - exercised via tests that stub Flask
-    from flask import Blueprint, current_app, jsonify  # type: ignore
+    from flask import Blueprint as _FlaskBlueprint
+    from flask import current_app as _FlaskCurrentApp
+    from flask import jsonify as _FlaskJsonify
+    _flask_blueprint = _FlaskBlueprint
+    _flask_current_app = _FlaskCurrentApp
+    _flask_jsonify = _FlaskJsonify
 except Exception:  # pragma: no cover - allow import without Flask
-    Blueprint = None  # type: ignore[assignment]
-    current_app = None  # type: ignore[assignment]
-    jsonify = None  # type: ignore[assignment]
+    pass
 
 from .env_diag import gather_env_diag
 
@@ -18,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint only when Flask is available; otherwise leave as None so
 # callers (e.g., app factory) can skip registration gracefully.
-diag_bp = Blueprint("diag", __name__) if "Blueprint" in globals() and Blueprint is not None else None  # type: ignore[arg-type]
+diag_bp = _flask_blueprint("diag", __name__) if _flask_blueprint is not None else None
 
 
 def _invoke_snapshot(snapshot_fn: Callable[[], Mapping[str, Any]] | None) -> Mapping[str, Any] | None:
@@ -41,15 +47,16 @@ if diag_bp is not None:
 
         payload = gather_env_diag()
         try:
-            app = current_app._get_current_object()  # type: ignore[union-attr]
+            current = cast(Any, _flask_current_app)
+            app = current._get_current_object() if current is not None else None
         except Exception:  # pragma: no cover - defensive guard in tests
-            app = None  # type: ignore[assignment]
+            app = None
         snapshot_fn = app.config.get("broker_snapshot_fn") if getattr(app, "config", None) else None
         broker_snapshot = _invoke_snapshot(snapshot_fn)
         if broker_snapshot:
             payload["broker"] = broker_snapshot
-        if callable(jsonify):
-            return jsonify(payload)  # type: ignore[misc]
+        if callable(_flask_jsonify):
+            return _flask_jsonify(payload)
         return payload
 else:
     # Fallback callable to aid direct import usage in environments without Flask.

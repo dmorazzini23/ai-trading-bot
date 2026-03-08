@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+from typing import Any, cast
 
 from ai_trading.config import get_trading_config
 from ai_trading.data.fetch import _apply_incomplete_row_policy, _drop_last_bar_enabled
@@ -8,7 +9,7 @@ from ai_trading.data.fetch import _apply_incomplete_row_policy, _drop_last_bar_e
 @pytest.fixture(autouse=True)
 def _reset_config(monkeypatch):
     monkeypatch.setenv("DATA_DROP_LAST_PARTIAL_BAR", "1")
-    get_trading_config.cache_clear()
+    cast(Any, get_trading_config).cache_clear()
     _drop_last_bar_enabled.cache_clear()
     yield
     monkeypatch.delenv("DATA_DROP_LAST_PARTIAL_BAR", raising=False)

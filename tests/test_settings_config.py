@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 
 def _new_settings(**kwargs: Any) -> Settings:
-    return cast(Any, Settings)(**kwargs)
+    return cast(Settings, Settings(**kwargs))
 
 
 def test_settings_defaults(monkeypatch):

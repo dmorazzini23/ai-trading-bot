@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ai_trading.core import alpaca_client
 
@@ -21,6 +21,7 @@ def test_validate_trading_api_maps_get_orders_to_list_orders() -> None:
     client = _GetOrdersClient()
 
     assert alpaca_client._validate_trading_api(client) is True
-    assert callable(getattr(client, "list_orders", None))
-    assert client.list_orders(status="open") == ["ok"]
+    list_orders = cast(Any, getattr(client, "list_orders", None))
+    assert callable(list_orders)
+    assert list_orders(status="open") == ["ok"]
     assert client.kwargs == {"status": "open"}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -69,7 +70,8 @@ def test_gap_failover_promotes_high_res_and_clears_safe_mode(monkeypatch, caplog
     )
 
     assert used_backup is True
-    assert metadata["fallback_provider"].startswith("finnhub")
+    fallback_provider = cast(str, metadata["fallback_provider"])
+    assert fallback_provider.startswith("finnhub")
     assert repaired is not None
     assert not getattr(repaired, "empty", True)
 
@@ -96,7 +98,7 @@ def test_gap_failover_promotes_high_res_and_clears_safe_mode(monkeypatch, caplog
     allowed, details = live_trading._maybe_accept_backup_quote(
         annotations,
         provider_hint="finnhub",
-        gap_ratio_value=metadata.get("gap_ratio", 0.0),
+        gap_ratio_value=cast(float, metadata.get("gap_ratio", 0.0)),
         min_quote_fresh_ms=1500.0,
         quote_age_ms=5000.0,
         quote_timestamp_present=False,

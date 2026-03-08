@@ -1,18 +1,19 @@
 import importlib
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
 req_mod = types.ModuleType("requests")
-req_mod.post = lambda *a, **k: None
 
 
 class _RequestException(Exception):
     pass
 
 
-req_mod.exceptions = types.SimpleNamespace(RequestException=_RequestException)
+cast(Any, req_mod).post = lambda *a, **k: None
+cast(Any, req_mod).exceptions = types.SimpleNamespace(RequestException=_RequestException)
 sys.modules.setdefault("requests", req_mod)
 
 runtime_mod = importlib.import_module("ai_trading.shadow_mode.runtime")

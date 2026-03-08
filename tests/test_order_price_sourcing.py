@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 import pytest
@@ -23,8 +23,8 @@ class DummyDataClient:
         return self.quotes.get(feed)
 
 
-def _ctx_with_quotes(quotes: dict[str | None, Any]) -> SimpleNamespace:
-    return SimpleNamespace(data_client=DummyDataClient(quotes))
+def _ctx_with_quotes(quotes: Mapping[str | None, Any]) -> SimpleNamespace:
+    return SimpleNamespace(data_client=DummyDataClient(dict(quotes)))
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +63,7 @@ def stub_stock_quote_request(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any,
 def test_price_source_prefers_nbbo(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: SimpleNamespace(bid_price=100.0, ask_price=100.5),
     }
     ctx = _ctx_with_quotes(quotes)
@@ -80,7 +80,7 @@ def test_price_source_primary_mid_when_nbbo_missing(
     caplog.set_level(logging.INFO)
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: SimpleNamespace(bid_price=0.0, ask_price=0.0),
         "iex": SimpleNamespace(bid_price=104.0, ask_price=105.0),
     }
@@ -97,7 +97,7 @@ def test_price_source_backup_mid(monkeypatch: pytest.MonkeyPatch, caplog: pytest
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
     monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: True, raising=False)
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: SimpleNamespace(bid_price=0.0, ask_price=0.0),
         "iex": SimpleNamespace(bid_price=0.0, ask_price=0.0),
         "sip": SimpleNamespace(bid_price=200.0, ask_price=201.0),
@@ -115,7 +115,7 @@ def test_price_source_last_close_fallback(monkeypatch: pytest.MonkeyPatch, caplo
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
     monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: False, raising=False)
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: None,
         "iex": None,
     }
@@ -135,7 +135,7 @@ def test_price_source_prefers_nbbo_with_stubbed_request(
 ) -> None:
     caplog.set_level(logging.INFO)
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: SimpleNamespace(bid_price=102.0, ask_price=102.5),
     }
     ctx = _ctx_with_quotes(quotes)
@@ -151,7 +151,7 @@ def test_price_source_primary_mid_with_stubbed_request(
 ) -> None:
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: SimpleNamespace(bid_price=0.0, ask_price=0.0),
         "iex": SimpleNamespace(bid_price=108.0, ask_price=109.0),
     }
@@ -169,7 +169,7 @@ def test_price_source_backup_mid_with_stubbed_request(
     monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
     monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: True, raising=False)
-    quotes = {
+    quotes: dict[str | None, Any] = {
         None: SimpleNamespace(bid_price=0.0, ask_price=0.0),
         "iex": SimpleNamespace(bid_price=0.0, ask_price=0.0),
         "sip": SimpleNamespace(bid_price=210.0, ask_price=211.0),

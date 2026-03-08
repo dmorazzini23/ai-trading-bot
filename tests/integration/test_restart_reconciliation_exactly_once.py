@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from ai_trading.core.enums import OrderSide, OrderType
@@ -32,7 +34,7 @@ def test_restart_like_pending_intent_submits_once(tmp_path) -> None:
         side=OrderSide.BUY,
         quantity=15,
         order_type=OrderType.LIMIT,
-        price=190.0,
+        price=cast(Any, 190.0),
     )
     first_response = manager.submit_order(first_order)
     assert first_response is not None
@@ -48,7 +50,7 @@ def test_restart_like_pending_intent_submits_once(tmp_path) -> None:
         side=OrderSide.BUY,
         quantity=15,
         order_type=OrderType.LIMIT,
-        price=190.0,
+        price=cast(Any, 190.0),
     )
     duplicate_response = manager.submit_order(duplicate_order)
     assert duplicate_response is None

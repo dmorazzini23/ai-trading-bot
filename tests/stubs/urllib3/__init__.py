@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import warnings
 
-try:
-    from .util.retry import Retry  # noqa: F401  # re-export for import parity
-except Exception:  # pragma: no cover - missing util stub
-    Retry = None  # type: ignore[assignment]
+def _load_retry() -> object | None:
+    try:
+        from .util.retry import Retry as loaded_retry  # noqa: F401
+        return loaded_retry
+    except Exception:  # pragma: no cover - missing util stub
+        return None
+
+
+Retry = _load_retry()
 
 __version__ = "2.0.0"
 

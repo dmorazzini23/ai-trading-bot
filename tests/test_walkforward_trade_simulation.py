@@ -89,7 +89,7 @@ def test_walkforward_fold_sim_wrapper_matches_execution_sim(tmp_path) -> None:
     wrapped = evaluator._simulate_fold_trades(y_true=y_true, y_pred=y_pred)
     direct = simulate_executed_trades(
         y_true=y_true.values,
-        y_pred=y_pred,
+        y_pred=y_pred.tolist(),
         params=evaluator.trade_simulation_params,
     )
 

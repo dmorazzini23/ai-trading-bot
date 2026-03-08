@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -43,5 +44,5 @@ def test_validate_bars_stale():
 def test_normalize_bars_lowercase():
     df = _sample_df(datetime.now(UTC) - timedelta(minutes=2))
     df.columns = ["Open", "High", "Low", "Close", "Volume"]
-    normalized = normalize_bars(df, "1Min", tz=UTC, rth_only=False)
+    normalized = normalize_bars(df, "1Min", tz=ZoneInfo("UTC"), rth_only=False)
     assert set(["open", "high", "low", "close", "volume"]).issubset(normalized.columns)

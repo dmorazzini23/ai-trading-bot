@@ -5,16 +5,13 @@ This module provides a simple long-only momentum strategy used in tests and
 example workflows.
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
+from typing import Any
 import numpy as np
 from ai_trading.logging import logger
 from ai_trading.utils.time import monotonic_time
 from ..core.enums import RiskLevel
 from ai_trading.config.profiles import load_strategy_profile, lookup_overrides
 from .base import BaseStrategy, StrategySignal
-
-if TYPE_CHECKING:  # pragma: no cover
-    import pandas as pd
 
 try:  # Keep module-level handle available for tests that monkeypatch ``pd.isna``.
     import pandas as _pd_runtime

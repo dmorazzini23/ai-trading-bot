@@ -1,5 +1,6 @@
 import sys
 import types
+from typing import Any, cast
 import numpy as np
 
 
@@ -22,7 +23,7 @@ def test_basic_pipeline_runs(monkeypatch):
                     X = step.transform(X)
             return X
 
-    skl_pipeline.Pipeline = Pipeline
+    setattr(cast(Any, skl_pipeline), "Pipeline", Pipeline)
     monkeypatch.setitem(sys.modules, "sklearn.pipeline", skl_pipeline)
     monkeypatch.syspath_prepend(".")
 

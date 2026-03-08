@@ -2,6 +2,7 @@ import json
 import logging
 import types
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from ai_trading.data import fetch
 
@@ -45,7 +46,7 @@ def test_persistent_empty_aborts_early(monkeypatch, caplog):
     fetch.refresh_alpaca_credentials_cache()
     monkeypatch.setattr(fetch, "resolve_alpaca_feed", lambda _requested=None: "iex")
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
-    payloads = [{"bars": []}, {"bars": []}, {"bars": []}]
+    payloads: list[dict[str, Any]] = [{"bars": []}, {"bars": []}, {"bars": []}]
     corr_ids = ["id1", "id2", "id3"]
     sess = _Session(payloads, corr_ids)
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)

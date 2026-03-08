@@ -137,12 +137,12 @@ class TestPortfolioRebalancingIntegration:
         """Set up test fixtures."""
         self.ctx = MockContext()
         # Add rebalancing-specific attributes
-        self.ctx.target_weights = {
+        setattr(self.ctx, "target_weights", {
             'AAPL': 0.4,
             'MSFT': 0.35,
             'GOOGL': 0.25
-        }
-        self.ctx.last_portfolio_rebalance = None
+        })
+        setattr(self.ctx, "last_portfolio_rebalance", None)
 
     def test_rebalancing_integration(self):
         """Test that portfolio optimization integrates with rebalancing logic."""

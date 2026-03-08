@@ -2,6 +2,7 @@ import datetime as dt
 import sys
 import types
 import warnings
+from typing import Any, cast
 
 import pytest
 import urllib3
@@ -61,7 +62,7 @@ def test_fetch_fallback_to_daily(monkeypatch):
 
     # Properly mocked module for pandas_ta
     mock_module = types.ModuleType("pandas_ta")
-    mock_module.atr = lambda *a, **k: pd.Series([1])
+    setattr(cast(Any, mock_module), "atr", lambda *a, **k: pd.Series([1]))
     monkeypatch.setitem(sys.modules, "pandas_ta", mock_module)
 
     types.SimpleNamespace(data_fetcher=data_fetcher)

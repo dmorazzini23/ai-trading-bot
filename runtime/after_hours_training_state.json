@@ -1,10 +1,10 @@
 {
-  "daily_report_path": "/tmp/pytest-of-root/pytest-306/test_after_hours_uses_dedicate0/reports/after_hours_training_20260106.json",
+  "daily_report_path": "/tmp/pytest-of-root/pytest-308/test_after_hours_uses_dedicate0/reports/after_hours_training_20260106.json",
   "dataset_fingerprint": "7cc03d95201cf51f9681e2bab8cee1378473a0e8d03784336647127064505631",
   "max_label_ts": "2025-04-24T00:00:00+00:00",
-  "model_id": "ml_edge-histgb-5d255955-20260308224200-0d2ed252",
+  "model_id": "ml_edge-histgb-5d255955-20260308233938-23207ac6",
   "model_name": "histgb",
-  "report_path": "/tmp/pytest-of-root/pytest-306/test_after_hours_uses_dedicate0/reports/after_hours_training_20260106_211000.json",
+  "report_path": "/tmp/pytest-of-root/pytest-308/test_after_hours_uses_dedicate0/reports/after_hours_training_20260106_211000.json",
   "rows": 560,
   "updated_at": "2026-01-06T21:10:00+00:00"
 }

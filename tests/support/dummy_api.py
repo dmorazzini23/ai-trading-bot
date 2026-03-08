@@ -1,4 +1,5 @@
 import types
+from typing import Callable
 
 
 class DummyAPI:
@@ -7,7 +8,7 @@ class DummyAPI:
     def __init__(self):
         # Simple account state; tests stub these methods directly when needed
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-        self.list_positions = lambda: []
+        self.list_positions: Callable[[], list[object]] = lambda: []
         self._order = None
 
     def submit_order(self, symbol: str, **_kwargs):

@@ -18,6 +18,14 @@ class _Client:
         self._feeds = feeds
         self._generation = generation
 
+    @property
+    def entitlements(self):
+        return list(self._feeds)
+
+    @entitlements.setter
+    def entitlements(self, value):
+        self._feeds = list(value)
+
     def get_account(self):
         return _Account(self._feeds, self._generation)
 

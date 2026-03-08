@@ -1,6 +1,7 @@
 # Ensure repository root in path
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -8,7 +9,7 @@ pytestmark = pytest.mark.usefixtures("default_env")
 
 # stub missing deps
 req_mod = types.ModuleType("requests")
-req_mod.post = lambda *a, **k: None
+setattr(cast(Any, req_mod), "post", lambda *a, **k: None)
 sys.modules.setdefault("requests", req_mod)
 
 try:

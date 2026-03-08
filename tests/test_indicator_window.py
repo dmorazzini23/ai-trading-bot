@@ -1,4 +1,5 @@
 import pytest
+from typing import Any, cast
 pd = pytest.importorskip("pandas")
 
 import sys
@@ -6,7 +7,7 @@ import types
 
 sys.modules.setdefault("portalocker", types.ModuleType("portalocker"))
 bs4_stub = types.ModuleType("bs4")
-bs4_stub.BeautifulSoup = object
+cast(Any, bs4_stub).BeautifulSoup = object
 sys.modules.setdefault("bs4", bs4_stub)
 flask_stub = types.ModuleType("flask")
 class _Flask:
@@ -18,7 +19,7 @@ class _Flask:
             return f
         return _decorator
 
-flask_stub.Flask = _Flask
+cast(Any, flask_stub).Flask = _Flask
 sys.modules.setdefault("flask", flask_stub)
 from ai_trading.core import bot_engine as be
 

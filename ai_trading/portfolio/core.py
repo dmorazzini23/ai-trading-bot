@@ -162,10 +162,14 @@ def log_portfolio_summary(ctx) -> None:
         position_source = 'broker'
         if not positions:
             risk_engine = getattr(ctx, 'risk_engine', None)
-            ledger = getattr(getattr(risk_engine, '_positions', None), 'items', lambda: [])()
+            ledger: list[tuple[str, Any]] = list(
+                getattr(getattr(risk_engine, '_positions', None), 'items', lambda: [])()
+            )
             if not ledger:
                 engine = getattr(ctx, 'execution_engine', None)
-                ledger = getattr(getattr(engine, 'position_ledger', None), 'items', lambda: [])()
+                ledger = list(
+                    getattr(getattr(engine, 'position_ledger', None), 'items', lambda: [])()
+                )
             if ledger:
                 from types import SimpleNamespace
                 positions = [SimpleNamespace(symbol=s, qty=q) for s, q in ledger]

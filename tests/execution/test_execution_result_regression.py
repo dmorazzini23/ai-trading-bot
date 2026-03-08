@@ -1,6 +1,7 @@
 """Regression tests for ExecutionResult surface properties."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -20,7 +21,7 @@ def test_execution_result_side_and_symbol(raw_side: str, expected: str) -> None:
     """ExecutionResult should expose normalized side and symbol."""
 
     order = SimpleNamespace(id="ord-1", side=raw_side, symbol="AAPL")
-    result = ExecutionResult(order, "accepted", 0, 10, None)
+    result = ExecutionResult(cast(Any, order), "accepted", 0, 10, None)
 
     assert result.side == expected
     assert result.symbol == "AAPL"

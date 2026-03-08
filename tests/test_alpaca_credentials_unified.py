@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
+from typing import Iterator
 
 import pytest
 
@@ -12,7 +13,7 @@ from ai_trading.utils import env as env_utils
 
 
 @pytest.fixture(autouse=True)
-def _reset_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Ensure environment-related caches are reset between tests."""
 
     for key in (

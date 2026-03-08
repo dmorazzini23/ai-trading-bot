@@ -481,7 +481,7 @@ def _reset_fallback_cache():
             data_fetcher._ENABLE_HTTP_FALLBACK = True
         else:
             data_fetcher._ENABLE_HTTP_FALLBACK = env_override.strip().lower() not in {"0", "false", "no", "off"}
-        data_fetcher._max_fallbacks_config = None
+        setattr(data_fetcher, "_max_fallbacks_config", None)
         if hasattr(data_fetcher, "_reset_provider_auth_state_for_tests"):
             data_fetcher._reset_provider_auth_state_for_tests()
         elif hasattr(data_fetcher, "_clear_sip_lockout_for_tests"):

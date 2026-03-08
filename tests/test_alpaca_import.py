@@ -1,11 +1,13 @@
 """Test for Alpaca import handling when packages are missing."""
 
 import sys
+from types import ModuleType
+from typing import Any, cast
 
 
 def test_ai_trading_import_without_alpaca(monkeypatch):
     """Test that ai_trading can be imported even when alpaca packages are missing."""
-    restore_modules: dict[str, object] = {}
+    restore_modules: dict[str, ModuleType | None] = {}
     target_prefixes = ("alpaca", "ai_trading")
     for name, module in list(sys.modules.items()):
         if name == target_prefixes[0] or name.startswith(f"{target_prefixes[0]}."):
@@ -40,4 +42,5 @@ def test_ai_trading_import_without_alpaca(monkeypatch):
                 sys.modules.pop(name, None)
             elif name == target_prefixes[1] or name.startswith(f"{target_prefixes[1]}."):
                 sys.modules.pop(name, None)
-        sys.modules.update(restore_modules)
+        for module_name, module in restore_modules.items():
+            sys.modules[module_name] = cast(Any, module)

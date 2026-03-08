@@ -14,7 +14,7 @@ class _TTLCache(dict):
         self.ttl = ttl
 
 
-cachetools_stub.TTLCache = _TTLCache
+setattr(cachetools_stub, "TTLCache", _TTLCache)
 sys.modules.setdefault("cachetools", cachetools_stub)
 
 from ai_trading.core.enums import OrderSide, OrderType

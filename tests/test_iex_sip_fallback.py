@@ -1,6 +1,7 @@
 import json
 import types
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -51,6 +52,7 @@ def test_iex_empty_switches_to_sip(monkeypatch, caplog, preferred_feeds, provide
 
     def fake_get(url, params=None, headers=None, timeout=None):
         feeds.append(params.get("feed"))
+        data: dict[str, Any]
         if params.get("feed") == "iex":
             data = {"bars": []}
         else:

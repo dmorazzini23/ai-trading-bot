@@ -277,7 +277,10 @@ class _FallbackProbabilityModel:
             arr = np.asarray(X, dtype=float)
         if arr.ndim == 1:
             arr = arr.reshape(-1, 1)
-        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.asarray(
+            np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0),
+            dtype=float,
+        )
 
     def fit(self, X: Any, y: Any) -> "_FallbackProbabilityModel":
         X_arr = self._as_array(X)
@@ -720,7 +723,7 @@ def _predict_probabilities(model: Any, X: Any) -> np.ndarray:
             return arr
     if hasattr(model, "decision_function"):
         scores = np.asarray(model.decision_function(X), dtype=float)
-        return 1.0 / (1.0 + np.exp(-scores))
+        return np.asarray(1.0 / (1.0 + np.exp(-scores)), dtype=float)
     preds = np.asarray(model.predict(X), dtype=float)
     return np.clip(preds, 0.0, 1.0)
 

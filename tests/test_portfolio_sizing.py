@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import cast
+from typing import Iterator, cast
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ from ai_trading.portfolio import sizing
 
 
 @pytest.fixture(autouse=True)
-def _reset_equity_cache() -> None:
+def _reset_equity_cache() -> Iterator[None]:
     sizing._equity_cache.ts = None
     sizing._equity_cache.equity = None
     yield

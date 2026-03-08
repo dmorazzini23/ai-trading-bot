@@ -30,7 +30,7 @@ def test_save_and_load_roundtrip():
     df = pd.DataFrame({"a": [1.0]})
     model.fit(df, [1.0])
     path = model_dir / "roundtrip.pkl"
-    saved = model.save(path)
+    saved = model.save(str(path))
     loaded = ml_model.MLModel.load(saved)
     assert isinstance(loaded.pipeline, types.SimpleNamespace)
     Path(saved).unlink()
@@ -41,4 +41,3 @@ def test_save_outside_model_dir_raises(tmp_path):
     model = ml_model.MLModel(pipe)
     with pytest.raises(RuntimeError):
         model.save(tmp_path / "m.pkl")
-

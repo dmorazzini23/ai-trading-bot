@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 from types import SimpleNamespace
+from typing import Any, cast
 
 from ai_trading.execution import live_trading
 
@@ -36,7 +37,7 @@ def _build_engine(monkeypatch):
         "last_failure": None,
         "is_open": False,
     }
-    engine.order_manager = object()
+    engine.order_manager = cast(Any, object())
     engine._pending_orders = {}
     engine._order_signal_meta = {}
     engine._cycle_account = None

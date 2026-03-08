@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from types import ModuleType
 import importlib
+from typing import Any, Callable
 
 mcal: ModuleType | None = None
 MARKET_CALENDAR_AVAILABLE = False
@@ -126,7 +127,9 @@ class AlignedClock:
                 next_close += timedelta(days=1)
         if self.calendar:
             try:
-                valid_days = getattr(self.calendar, "valid_days", lambda *a, **k: [])
+                valid_days: Callable[..., Any] = getattr(
+                    self.calendar, "valid_days", lambda *a, **k: []
+                )
                 trading_days = valid_days(
                     start_date=next_close.date(), end_date=next_close.date() + timedelta(days=7)
                 )
@@ -248,7 +251,7 @@ class AlignedClock:
             market_close = schedule.iloc[0]["market_close"]
             market_open = market_open.tz_convert(timestamp.tzinfo)
             market_close = market_close.tz_convert(timestamp.tzinfo)
-            return market_open <= timestamp <= market_close
+            return bool(market_open <= timestamp <= market_close)
         except (ValueError, TypeError) as e:
             self.logger.warning(f"Market hours check failed: {e.__class__.__name__}: {e}")
             return False

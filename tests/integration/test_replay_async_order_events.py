@@ -37,8 +37,8 @@ def test_replay_event_loop_emits_async_fill_events_deterministically() -> None:
 
     fills = [event for event in first["events"] if event.get("event_type") == "fill"]
     assert fills
-    first_bar = _parse_utc(bars[0]["ts"])
-    second_bar = _parse_utc(bars[1]["ts"])
+    first_bar = _parse_utc(str(bars[0]["ts"]))
+    second_bar = _parse_utc(str(bars[1]["ts"]))
     assert any(first_bar < _parse_utc(str(event["ts"])) < second_bar for event in fills)
 
 

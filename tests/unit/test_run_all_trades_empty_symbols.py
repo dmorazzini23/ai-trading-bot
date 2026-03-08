@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 import sys
+from typing import Any, cast
 from unittest.mock import Mock
 
 import ai_trading.core.bot_engine as eng
@@ -21,8 +22,8 @@ def test_run_all_trades_handles_empty_symbols(monkeypatch):
         def __init__(self, *, statuses=None):
             self.statuses = statuses
 
-    enums_mod.OrderStatus = OrderStatus
-    requests_mod.GetOrdersRequest = GetOrdersRequest
+    setattr(cast(Any, enums_mod), "OrderStatus", OrderStatus)
+    setattr(cast(Any, requests_mod), "GetOrdersRequest", GetOrdersRequest)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)

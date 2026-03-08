@@ -333,14 +333,14 @@ class RiskValidator:
         try:
             if not current_positions or account_equity <= 0:
                 return 0.0
-            position_weights = []
+            position_weights: list[float] = []
             for position_info in current_positions.values():
-                notional_value = position_info.get('notional_value', 0)
+                notional_value = float(position_info.get('notional_value', 0.0))
                 weight = notional_value / account_equity
                 position_weights.append(weight)
             if not position_weights:
                 return 0.0
-            hhi = sum((weight ** 2 for weight in position_weights))
+            hhi = float(sum((weight ** 2 for weight in position_weights)))
             max_hhi = 1.0
             return hhi / max_hhi
         except (KeyError, ValueError, TypeError, ZeroDivisionError):

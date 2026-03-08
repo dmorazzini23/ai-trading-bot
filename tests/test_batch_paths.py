@@ -45,7 +45,7 @@ def test_intraday_entries_and_exits(monkeypatch):
 def test_intraday_range_split(monkeypatch):
     import math
 
-    calls: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    calls: list[tuple[object, object]] = []
 
     def fake_get_bars_batch(chunk, timeframe, start, end, feed=None):
         calls.append((pd.Timestamp(start), pd.Timestamp(end)))
@@ -67,6 +67,6 @@ def test_intraday_range_split(monkeypatch):
 
     max_span = pd.Timedelta(days=8)
     assert calls
-    assert all((e - s) <= max_span for s, e in calls)
+    assert all((pd.Timestamp(e) - pd.Timestamp(s)) <= max_span for s, e in calls)
     expected = math.ceil((pd.Timestamp(end) - pd.Timestamp(start)) / max_span)
     assert len(calls) == expected

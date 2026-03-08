@@ -1,5 +1,6 @@
 """Test for the submit_order NameError fix."""
 import os
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from ai_trading.core.enums import OrderSide
@@ -169,7 +170,7 @@ def test_submit_order_stub_engine_accepts_price(monkeypatch):
         # Reload bot_engine so it picks up the stubbed execution module.
         sys.modules.pop("ai_trading.core.bot_engine", None)
         stub_bot_engine = importlib.import_module("ai_trading.core.bot_engine")
-        stub_bot_engine._exec_engine = stub_bot_engine.ExecutionEngine()
+        setattr(cast(Any, stub_bot_engine), "_exec_engine", stub_bot_engine.ExecutionEngine())
 
         with patch("ai_trading.core.bot_engine.market_is_open", return_value=True):
             mock_ctx = Mock(spec=stub_bot_engine.BotContext)

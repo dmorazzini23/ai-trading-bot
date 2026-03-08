@@ -197,7 +197,7 @@ def previous_trading_session(d: date) -> date:
                 return d
             if isinstance(prev, date):
                 return prev
-            return prev
+            return d
         except Exception:  # pragma: no cover - fall back
             logger.debug("CALENDAR_PREVIOUS_SESSION_FAILED", extra={"date": d.isoformat()}, exc_info=True)
 

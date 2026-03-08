@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -85,11 +86,11 @@ def test_execute_order_logs_submission_and_broker_state(caplog):
 
 def test_execute_order_validation_failure_logs_context(caplog):
     engine = StubExecutionEngine()
-    engine._position_tracker = {"AAPL": 4}
+    setattr(engine, "_position_tracker", {"AAPL": 4})
     caplog.set_level(logging.ERROR)
 
     with pytest.raises(ValueError):
-        engine.execute_order("AAPL", "invalid", qty=5, order_type="market")
+        engine.execute_order("AAPL", cast(Any, "invalid"), qty=5, order_type="market")
 
     failure = next(record for record in caplog.records if record.msg == "ORDER_VALIDATION_FAILED")
     assert failure.symbol == "AAPL"
@@ -102,4 +103,3 @@ def test_execute_order_validation_failure_logs_context(caplog):
 
     qty_failure = next(record for record in caplog.records if record.msg == "ORDER_VALIDATION_FAILED")
     assert qty_failure.reason == "invalid_qty"
-

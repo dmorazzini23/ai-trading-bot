@@ -1,6 +1,7 @@
 """Tests for allocation delta sizing and execution logging helpers."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import logging
 import pytest
@@ -33,7 +34,7 @@ def test_record_broker_sync_metrics_updates_state(caplog) -> None:
     snapshot = SimpleNamespace(open_orders=(1, 2, 3), positions=("AAPL",))
 
     caplog.set_level(logging.INFO)
-    bot_engine._record_broker_sync_metrics(state, snapshot)
+    bot_engine._record_broker_sync_metrics(state, cast(Any, snapshot))
 
     assert state.execution_metrics.open_orders == 3
     assert state.execution_metrics.positions == 1

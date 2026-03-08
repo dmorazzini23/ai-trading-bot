@@ -74,7 +74,7 @@ class BotRuntime:
     state: dict[str, Any] = field(default_factory=dict)
     enforce_daytrade_limit: bool = False
 
-def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
+def build_runtime(cfg: Any, **kwargs: Any) -> BotRuntime:
     """
     Build a runtime context from trading configuration.
     

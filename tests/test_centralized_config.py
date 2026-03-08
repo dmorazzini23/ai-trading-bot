@@ -333,7 +333,7 @@ class TestCentralizedConfig:
             expected["take_profit_factor"]
         )
 
-        reload_trading_config("balanced")
+        reload_trading_config({"AI_TRADING_TRADING_MODE": "balanced"})
 
     def test_conservative_mode_parameters(self, monkeypatch):
         """Test conservative mode specific values."""

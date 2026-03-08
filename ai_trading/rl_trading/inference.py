@@ -135,7 +135,10 @@ class UnifiedRLInference:
             confidence = 0.8 if action_int != 0 else 0.2
         else:
             if np.isscalar(raw_action):
-                action_float = float(raw_action)
+                if isinstance(raw_action, (bool, int, float, np.integer, np.floating)):
+                    action_float = float(raw_action)
+                else:
+                    action_float = 0.0
             else:
                 action_array = np.asarray(raw_action, dtype=np.float32).reshape(-1)
                 action_float = float(action_array[0]) if action_array.size else 0.0

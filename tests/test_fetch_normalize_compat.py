@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,7 @@ from ai_trading.data.fetch import _is_normalized_ohlcv_frame
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
 
 
-def _make_index(ts: list[datetime]) -> "pd.DatetimeIndex":
+def _make_index(ts: list[datetime]) -> Any:
     return pd.DatetimeIndex(ts, name="timestamp")
 
 

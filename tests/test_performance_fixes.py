@@ -9,6 +9,7 @@ This test validates the key fixes:
 """
 
 import os
+from typing import Any, cast
 from unittest.mock import Mock
 
 # Set testing environment
@@ -105,7 +106,7 @@ def test_latency_tracking():
 
     # Test latency calculation (this will fail on API calls, but that's expected in test)
     try:
-        engine._handle_order_result("AAPL", "buy", mock_order, 150.00, 100, start_time)
+        cast(Any, engine)._handle_order_result("AAPL", "buy", mock_order, 150.00, 100, start_time)
     except (AttributeError, ConnectionError):
         # Expected to fail on API calls in test environment
         pass

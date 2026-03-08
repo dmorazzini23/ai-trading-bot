@@ -68,7 +68,7 @@ def test_abort_when_market_closed(monkeypatch):
         "time",
         types.SimpleNamespace(sleep=lambda s: called.setdefault('sleep', s)),
     )
-    delays = [0, 1]
+    delays = [0.0, 1.0]
     df = fetch_with_retries(symbol, timeframe, raiser, delays)
     assert df.empty
     assert delays == [0, 1]

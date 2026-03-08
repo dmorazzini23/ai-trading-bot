@@ -6,6 +6,7 @@ improving profit potential.
 """
 
 import pytest
+from typing import Any, cast
 from tests.support.mocks import MockOrderManager
 
 def test_kelly_parameters_optimization():
@@ -115,7 +116,7 @@ def test_execution_algorithm_optimization():
         from ai_trading.execution.algorithms import VWAPExecutor
 
         # Mock order manager for testing
-        vwap = VWAPExecutor(MockOrderManager())
+        vwap = VWAPExecutor(cast(Any, MockOrderManager()))
 
         # Verify optimized participation rate
         assert vwap.participation_rate == 0.15, f"Expected 0.15, got {vwap.participation_rate}"

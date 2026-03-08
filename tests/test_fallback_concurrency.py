@@ -14,7 +14,7 @@ def _mk_df():
 
 def test_daily_fallback_parallel(monkeypatch):
     # Force batch to return empty so we hit fallback path for all.
-    calls = {"single": []}
+    calls: dict[str, list[str]] = {"single": []}
     monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
     def fake_single(sym, *a, **k):
         calls["single"].append(sym)
@@ -26,7 +26,7 @@ def test_daily_fallback_parallel(monkeypatch):
     assert set(calls["single"]) == {"A","B","C","D"}
 
 def test_intraday_fallback_parallel(monkeypatch):
-    calls = {"single": []}
+    calls: dict[str, list[str]] = {"single": []}
     monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
     def fake_single(sym, *a, **k):
         calls["single"].append(sym)

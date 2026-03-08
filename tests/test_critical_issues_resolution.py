@@ -156,7 +156,7 @@ class TestOrderSpacingConfiguration(unittest.TestCase):
         """Test that risk engine provides order spacing configuration."""
         try:
             # Test the existing order_spacing method
-            risk_engine = RiskEngine({})
+            risk_engine = RiskEngine(None)
 
             # Should have order spacing method
             self.assertTrue(hasattr(risk_engine, 'order_spacing'), "RiskEngine should have order_spacing method")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import sys
 
 
 def test_indicators_import_without_numba(monkeypatch):
@@ -17,9 +18,8 @@ def test_indicators_import_without_numba(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     # Reload module to hit guarded import
-    importlib.sys.modules.pop("ai_trading.indicators", None)
+    sys.modules.pop("ai_trading.indicators", None)
     mod = importlib.import_module("ai_trading.indicators")
 
     assert hasattr(mod, "jit")
     assert getattr(mod, "_numba_jit", None) is None
-

@@ -4,8 +4,6 @@ import sys
 
 import logging
 
-from ai_trading.logging import get_logger
-
 
 def test_import_base_without_system_health(monkeypatch):
     real_import = builtins.__import__
@@ -35,7 +33,7 @@ def test_log_cpu_usage_without_psutil(monkeypatch, caplog):
     sys.modules.pop("ai_trading.monitoring.system_health", None)
     from ai_trading.utils import base
 
-    lg = get_logger("test")
+    lg = logging.getLogger("test")
     with caplog.at_level(logging.DEBUG):
         base.log_cpu_usage(lg)
     assert not any("CPU_USAGE" in r.message for r in caplog.records)

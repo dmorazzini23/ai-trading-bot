@@ -51,7 +51,7 @@ if "flask" not in sys.modules:  # pragma: no cover - import guard
 
     class _Flask:  # pragma: no cover - simple stub
         def __init__(self, *args, **kwargs) -> None:
-            self.blueprints = []
+            self.blueprints: list[object] = []
 
         def route(self, *args, **kwargs):
             def decorator(func):

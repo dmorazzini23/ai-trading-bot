@@ -11,7 +11,7 @@ def test_update_returns_one_when_absent():
 class _Scaler:
     def __init__(self, value: float):
         self.value = value
-        self.args = None
+        self.args: tuple[object, float] | None = None
 
     def update(self, runtime, equity):
         self.args = (runtime, equity)

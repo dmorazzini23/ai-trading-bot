@@ -232,7 +232,7 @@ class PerformanceBasedAllocator:
             composite_score = sharpe_component + return_component + hit_rate_component + drawdown_component
             composite_score = max(0.0, min(1.0, composite_score))
             logger.debug('Strategy %s metrics: Sharpe=%.2f, Return=%.3f, HitRate=%.1f%%, DD=%.2f%%, Score=%.3f', strategy_name, sharpe_ratio, avg_return * 252, hit_rate * 100, max_drawdown * 100, composite_score)
-            return composite_score
+            return float(composite_score)
         except (ValueError, TypeError) as e:
             logger.warning('Performance calculation failed for strategy %s: %s', strategy_name, e)
             return 0.3
@@ -296,14 +296,15 @@ class PerformanceBasedAllocator:
             if not trades:
                 return {'strategy': strategy_name, 'error': 'No trade history available'}
             windows = [5, 10, 20, 60]
-            report = {'strategy': strategy_name, 'total_trades': len(trades), 'performance_score': self._calculate_performance_score(strategy_name), 'current_allocation': self.strategy_allocations.get(strategy_name, 0.0), 'windows': {}}
+            report: dict[str, Any] = {'strategy': strategy_name, 'total_trades': len(trades), 'performance_score': self._calculate_performance_score(strategy_name), 'current_allocation': self.strategy_allocations.get(strategy_name, 0.0), 'windows': {}}
+            window_report: dict[str, dict[str, float]] = report['windows']
             for window_days in windows:
                 cutoff_date = datetime.now(UTC) - timedelta(days=window_days)
                 window_trades = [t for t in trades if t['timestamp'] >= cutoff_date]
                 if window_trades:
                     returns = [t['return_pct'] for t in window_trades]
                     pnls = [t['pnl'] for t in window_trades]
-                    report['windows'][f'{window_days}d'] = {'trades': len(window_trades), 'total_pnl': sum(pnls), 'avg_return': np.mean(returns), 'hit_rate': sum((1 for r in returns if r > 0)) / len(returns), 'sharpe': np.mean(returns) / np.std(returns) * np.sqrt(252) if np.std(returns) > 0 else 0}
+                    window_report[f'{window_days}d'] = {'trades': float(len(window_trades)), 'total_pnl': float(sum(pnls)), 'avg_return': float(np.mean(returns)), 'hit_rate': float(sum((1 for r in returns if r > 0)) / len(returns)), 'sharpe': float(np.mean(returns) / np.std(returns) * np.sqrt(252)) if np.std(returns) > 0 else 0.0}
             return report
         except (ValueError, TypeError) as e:
             logger.error('Performance report generation failed for strategy %s: %s', strategy_name, e)

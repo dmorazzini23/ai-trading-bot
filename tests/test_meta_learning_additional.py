@@ -1,10 +1,11 @@
 import types
 from pathlib import Path
+from typing import cast
 
 import pytest
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
-sklearn = pytest.importorskip("sklearn")
+sklearn_pkg = pytest.importorskip("sklearn")
 import sklearn.linear_model
 from ai_trading import meta_learning
 
@@ -71,7 +72,7 @@ def test_retrain_meta_learner(monkeypatch, tmp_path):
     df.to_csv(data, index=False)
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", _stub_ridge)
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", _stub_ridge)
     ok = meta_learning.retrain_meta_learner(str(data), str(tmp_path/"m.pkl"), str(tmp_path/"hist.pkl"), min_samples=1)
     assert ok
 
@@ -106,7 +107,7 @@ def test_retrain_meta_learner_filters_non_decimal_prices(monkeypatch, tmp_path):
 
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", _capturing_ridge)
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", _capturing_ridge)
 
     ok = meta_learning.retrain_meta_learner(
         str(data), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
@@ -115,7 +116,8 @@ def test_retrain_meta_learner_filters_non_decimal_prices(monkeypatch, tmp_path):
     assert ok
     assert captured["sample_count"] == 2
     assert captured["weight_len"] == 2
-    assert captured["x_shape"] and captured["x_shape"][0] == 2
+    x_shape = cast(tuple[int, ...] | None, captured.get("x_shape"))
+    assert x_shape and x_shape[0] == 2
 
 
 def test_retrain_meta_learner_excludes_synthetic_rows_by_default(monkeypatch, tmp_path):
@@ -146,7 +148,7 @@ def test_retrain_meta_learner_excludes_synthetic_rows_by_default(monkeypatch, tm
     monkeypatch.setenv("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", "0")
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", _capturing_ridge)
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", _capturing_ridge)
 
     ok = meta_learning.retrain_meta_learner(
         str(data), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
@@ -184,7 +186,7 @@ def test_retrain_meta_learner_keeps_synthetic_rows_with_override(monkeypatch, tm
     monkeypatch.setenv("AI_TRADING_META_LEARNING_ALLOW_SYNTHETIC_BOOTSTRAP", "1")
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", _capturing_ridge)
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", _capturing_ridge)
 
     ok = meta_learning.retrain_meta_learner(
         str(data), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=3
@@ -212,7 +214,7 @@ def test_retrain_meta_learner_handles_non_iterable_columns(monkeypatch, tmp_path
     monkeypatch.setattr(meta_learning, "getattr", fake_getattr)
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", _stub_ridge)
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", _stub_ridge)
     result = meta_learning.retrain_meta_learner(
         str(path), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
     )

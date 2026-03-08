@@ -24,7 +24,7 @@ def test_provider_quiet_period_respects_config(
     blocked = [record for record in caplog.records if record.message == "DATA_PROVIDER_SWITCHOVER_BLOCKED"]
     assert blocked
     blocked_record = blocked[-1]
-    assert blocked_record.window_seconds == 45
+    assert getattr(blocked_record, "window_seconds", None) == 45
 
     disabled_until = monitor.disabled_until.get("alpaca_iex")
     assert disabled_until is not None

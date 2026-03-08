@@ -1,6 +1,8 @@
 """
 Canonical strategies public API.
 """
+from typing import Any
+
 from .mean_reversion import MeanReversionStrategy
 from .momentum import MomentumStrategy
 from .cross_sectional_momentum import CrossSectionalMomentumStrategy
@@ -9,6 +11,7 @@ from .pairs_stat_arb import PairsStatArbStrategy
 from .pead_event import PEADEventStrategy
 from .low_beta_defensive import LowBetaDefensiveStrategy
 from .time_series_momentum_overlay import TimeSeriesMomentumOverlayStrategy
+MetaLearning: Any | None
 try:
     from .meta_learning import MetaLearning
 except (KeyError, ValueError, TypeError):

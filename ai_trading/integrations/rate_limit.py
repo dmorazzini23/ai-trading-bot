@@ -120,7 +120,9 @@ class RateLimiter:
         self._route_configs: dict[str, RateLimitConfig] = {}
         self._lock = threading.Lock()
         self._async_lock = asyncio.Lock()
-        self._metrics = defaultdict(lambda: {"requests": 0, "denials": 0, "wait_time_total": 0.0, "max_wait_time": 0.0})
+        self._metrics: dict[str, dict[str, float]] = defaultdict(
+            lambda: {"requests": 0.0, "denials": 0.0, "wait_time_total": 0.0, "max_wait_time": 0.0}
+        )
         self._setup_default_routes()
 
     def _setup_default_routes(self) -> None:
@@ -295,7 +297,7 @@ class RateLimiter:
                     "enabled": config.enabled if config else False,
                     "metrics": dict(metrics),
                 }
-            status = {
+            status: dict[str, Any] = {
                 "global": {
                     "available_tokens": self._global_bucket.available_tokens(),
                     "capacity": self._global_bucket.capacity,

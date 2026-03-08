@@ -2,6 +2,7 @@ import builtins
 import json
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -31,7 +32,7 @@ def _install_alpaca_stubs(
     """Install lightweight Alpaca stubs to avoid heavyweight imports."""
 
     stub_alpaca = types.ModuleType("ai_trading.alpaca_api")
-    stub_alpaca.ALPACA_AVAILABLE = True
+    setattr(cast(Any, stub_alpaca), "ALPACA_AVAILABLE", True)
     monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", stub_alpaca)
 
     stub_bot = types.ModuleType("ai_trading.core.bot_engine")
@@ -39,8 +40,8 @@ def _install_alpaca_stubs(
     def _resolver():
         return key, secret, base_url
 
-    stub_bot._resolve_alpaca_env = _resolver  # type: ignore[attr-defined]
-    stub_bot.trading_client = client if client is not None else object()
+    setattr(cast(Any, stub_bot), "_resolve_alpaca_env", _resolver)
+    setattr(cast(Any, stub_bot), "trading_client", client if client is not None else object())
     monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", stub_bot)
 
     try:

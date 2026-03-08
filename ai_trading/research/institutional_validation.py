@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import random
 from statistics import mean
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas
@@ -12,7 +12,10 @@ from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.data.splits import PurgedGroupTimeSeriesSplit, validate_no_leakage
 from ai_trading.risk.metrics import RiskMetricsCalculator
 
-pd = load_pandas()
+if TYPE_CHECKING:
+    import pandas as pd
+
+_pd = load_pandas()
 
 
 def _clean_returns(values: list[float] | tuple[float, ...] | np.ndarray | None) -> list[float]:
@@ -62,7 +65,7 @@ def run_purged_walk_forward_validation(
     data = frame.copy()
     if timestamp_col not in data.columns:
         data[timestamp_col] = np.arange(len(data))
-    timeline = pd.to_datetime(data[timestamp_col], utc=True, errors="coerce")
+    timeline = _pd.to_datetime(data[timestamp_col], utc=True, errors="coerce")
     data = data.assign(**{timestamp_col: timeline}).dropna(subset=[timestamp_col])
     if data.empty:
         return {
@@ -73,7 +76,7 @@ def run_purged_walk_forward_validation(
         }
 
     data = data.sort_values(timestamp_col).reset_index(drop=True)
-    timeline = pd.to_datetime(data[timestamp_col], utc=True)
+    timeline = _pd.to_datetime(data[timestamp_col], utc=True)
     splitter = PurgedGroupTimeSeriesSplit(
         n_splits=max(1, int(n_splits)),
         embargo_pct=max(0.0, float(embargo_pct)),

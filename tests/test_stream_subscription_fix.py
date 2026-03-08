@@ -11,15 +11,23 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
+class _CaptureHandler(logging.StreamHandler):
+    def __init__(self, sink: list[str]) -> None:
+        super().__init__()
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._sink.append(record.getMessage())
+
+
 class TestStreamSubscriptionFix(unittest.TestCase):
     """Test stream subscription handles None gracefully."""
 
     def setUp(self):
         """Set up test environment."""
         # Capture log output
-        self.log_output = []
-        self.test_handler = logging.StreamHandler()
-        self.test_handler.emit = lambda record: self.log_output.append(record.getMessage())
+        self.log_output: list[str] = []
+        self.test_handler = _CaptureHandler(self.log_output)
 
     @patch('builtins.__import__')
     def test_stream_subscription_with_none_stream(self, mock_import):

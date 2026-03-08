@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -33,8 +34,8 @@ def _write_synthetic_bars(csv_path: Path, periods: int = 360) -> None:
     frame.to_csv(csv_path, index=False)
 
 
-def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _load_json(path: Path) -> dict[str, Any]:
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def test_offline_replay_writes_summary_json(tmp_path: Path) -> None:

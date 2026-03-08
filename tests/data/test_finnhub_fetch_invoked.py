@@ -23,7 +23,7 @@ def test_finnhub_called_when_alpaca_none(monkeypatch):
 
     monkeypatch.setattr(data_fetcher, "_backup_get_bars", fail_backup)
 
-    called = {}
+    called: dict[str, bool] = {}
 
     def fake_fetch(symbol, start, end, resolution="1"):
         called["used"] = True
@@ -31,7 +31,7 @@ def test_finnhub_called_when_alpaca_none(monkeypatch):
 
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", fake_fetch)
 
-    mark_called = {}
+    mark_called: dict[str, bool] = {}
     monkeypatch.setattr(data_fetcher, "_mark_fallback", lambda *a, **k: mark_called.setdefault("called", True))
 
     start = dt.datetime(2023, 1, 1, tzinfo=dt.UTC)

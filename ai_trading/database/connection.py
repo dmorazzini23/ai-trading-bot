@@ -25,7 +25,7 @@ class DatabaseManager:
         self.max_overflow = kwargs.get('max_overflow', 10)
         self.pool_timeout = kwargs.get('pool_timeout', 30)
         self.pool_recycle = kwargs.get('pool_recycle', 3600)
-        self._connections = {}
+        self._connections: dict[int | None, "DatabaseSession"] = {}
         self._connection_lock = threading.Lock()
         self._is_connected = False
         logger.info(f'DatabaseManager initialized with connection: {self.connection_string}')

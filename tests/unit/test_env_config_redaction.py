@@ -1,10 +1,11 @@
 import importlib
 import logging
+from typing import Any, cast
 
 config_pkg = importlib.import_module("ai_trading.config")
 if not hasattr(config_pkg, "get_settings"):
     settings_mod = importlib.import_module("ai_trading.config.settings")
-    config_pkg.get_settings = settings_mod.get_settings
+    setattr(cast(Any, config_pkg), "get_settings", settings_mod.get_settings)
 
 from ai_trading import main
 from ai_trading.config.management import _resolve_alpaca_env, validate_required_env

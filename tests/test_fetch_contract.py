@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -33,7 +34,7 @@ def test_get_bars_never_none(monkeypatch):
         lambda client, symbol, start, end, timeframe="1Day": df,
     )
     result = data_fetcher.get_bars(
-        "AAPL", "1Day", now - pd.Timedelta(days=1), now, feed=DummyClient()
+        "AAPL", "1Day", now - pd.Timedelta(days=1), now, feed=cast(Any, DummyClient())
     )
     assert isinstance(result, pd.DataFrame)
     assert list(result.columns) == [

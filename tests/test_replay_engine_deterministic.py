@@ -6,7 +6,8 @@ from ai_trading.replay.replay_engine import ReplayConfig, ReplayEngine
 
 
 def _pipeline(event: dict[str, object]) -> dict[str, object]:
-    close = float(event["close"])
+    close_raw = event["close"]
+    close = float(close_raw) if isinstance(close_raw, (int, float)) else 0.0
     return {
         "symbol": event["symbol"],
         "ts": event["ts"],

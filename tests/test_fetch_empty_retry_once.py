@@ -64,7 +64,7 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_empty_record", lambda *a, **k: 1)
     monkeypatch.setattr(fetch, "_empty_classify", lambda **k: logging.WARNING)
 
-    sleep_called = {}
+    sleep_called: dict[str, float] = {}
     monkeypatch.setattr(
         fetch,
         "time",

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from importlib import import_module
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ai_trading.logging import get_logger
 from ai_trading.health_payload import (
@@ -40,9 +40,11 @@ def _managed_env(name: str, default: Any = None) -> Any:
     return default
 
 
+_jsonify_import_error: ImportError | None = None
 try:
     from flask import jsonify as _jsonify
-except ImportError as _jsonify_import_error:  # pragma: no cover - exercised via tests
+except ImportError as exc:  # pragma: no cover - exercised via tests
+    _jsonify_import_error = exc
     jsonify = None  # type: ignore[assignment]
 else:  # pragma: no cover - import path only evaluated once
     jsonify = _jsonify
@@ -271,7 +273,9 @@ def create_app():
 
     # Some tests may monkeypatch Flask and return objects without a real config
     if not isinstance(getattr(app, "config", None), dict):
-        app.config = dict(getattr(app, "config", {}))
+        app_config = getattr(app, "config", {})
+        app_config_dict = dict(app_config) if isinstance(app_config, Mapping) else {}
+        setattr(app, "config", cast(Any, app_config_dict))
     route_registry = _install_route_tracker(app)
 
     suppress_flask_startup_noise()
@@ -657,7 +661,7 @@ def create_app():
                 client.get = _patched_get
             return client
 
-        app.test_client = _patched_test_client
+        setattr(app, "test_client", _patched_test_client)
 
     return app
 

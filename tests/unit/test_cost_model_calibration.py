@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Mapping, cast
+
 from ai_trading.execution.cost_model import CostModel
 
 
@@ -15,7 +17,12 @@ def test_cost_model_calibration_updates_params_with_sufficient_samples() -> None
             }
         )
 
-    updated = model.calibrate(records, min_samples=80, quantile=0.55, outlier_bps=120.0)
+    updated = model.calibrate(
+        cast(list[Mapping[str, Any]], records),
+        min_samples=80,
+        quantile=0.55,
+        outlier_bps=120.0,
+    )
     assert updated.sample_count >= 80
     assert updated.version.startswith("calibrated-")
 
@@ -39,4 +46,3 @@ def test_cost_model_round_trip_persistence(tmp_path) -> None:
     loaded = CostModel.load(target)
     assert loaded.params.version == model.params.version
     assert loaded.params.base_cost_bps == model.params.base_cost_bps
-

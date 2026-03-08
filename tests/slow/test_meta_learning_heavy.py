@@ -4,7 +4,7 @@ import types
 import pytest
 
 pd = pytest.importorskip("pandas")
-sklearn = pytest.importorskip("sklearn")
+sklearn_pkg = pytest.importorskip("sklearn")
 import sklearn.linear_model
 try:
     import pydantic_settings  # noqa: F401
@@ -36,7 +36,7 @@ def test_retrain_meta_learner_success(monkeypatch):
         def predict(self, X):
             return [0] * len(X)
 
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", lambda *a, **k: DummyModel())
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", lambda *a, **k: DummyModel())
     ok = meta_learning.retrain_meta_learner("trades.csv", "m.pkl", "hist.pkl", min_samples=1)
     assert ok
 
@@ -69,7 +69,7 @@ def test_retrain_meta_training_fail(monkeypatch):
         def predict(self, X):  # pragma: no cover - interface completeness
             return [0] * len(X)
 
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", lambda *a, **k: Bad())
+    monkeypatch.setattr(sklearn_pkg.linear_model, "Ridge", lambda *a, **k: Bad())
     assert not meta_learning.retrain_meta_learner("trades.csv", "m.pkl", "hist.pkl", min_samples=1)
 
 
@@ -87,7 +87,7 @@ def test_retrain_meta_load_history(monkeypatch):
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda p: {"mock": "model"})
 
     monkeypatch.setattr(
-        sklearn.linear_model,
+        sklearn_pkg.linear_model,
         "Ridge",
         lambda *a, **k: types.SimpleNamespace(
             fit=lambda X, y, sample_weight=None: None,

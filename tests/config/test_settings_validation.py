@@ -8,7 +8,7 @@ from ai_trading.settings import Settings
 
 
 def _new_settings(**kwargs: Any) -> Settings:
-    return cast(Any, Settings)(**kwargs)
+    return cast(Settings, Settings(**kwargs))
 
 
 def test_risk_parameters_validated():

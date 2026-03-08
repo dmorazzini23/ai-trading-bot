@@ -2,6 +2,7 @@ from tests.optdeps import require
 require("numpy")
 require("pydantic")
 import sys
+from typing import Any, cast
 
 import pytest
 from ai_trading.risk.engine import RiskEngine
@@ -72,9 +73,9 @@ def _inject_dummy_trading(monkeypatch, cls):
     import types, sys
 
     mod_client = types.ModuleType("alpaca.trading.client")
-    mod_client.TradingClient = cls
+    setattr(cast(Any, mod_client), "TradingClient", cls)
     mod_trading = types.ModuleType("alpaca.trading")
-    mod_trading.client = mod_client
+    setattr(cast(Any, mod_trading), "client", mod_client)
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", mod_trading)
     monkeypatch.setitem(sys.modules, "alpaca.trading.client", mod_client)

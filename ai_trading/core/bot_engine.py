@@ -6316,7 +6316,7 @@ def load_portfolio_snapshot() -> dict[str, int]:
     return positions
 
 
-def compute_current_positions(ctx: BotContext) -> dict[str, int]:
+def compute_current_positions(ctx: Any) -> dict[str, int]:
     try:
         if hasattr(ctx.api, "list_positions"):
             positions = ctx.api.list_positions()
@@ -9010,7 +9010,7 @@ def _fetch_regime_bars(
     )
 
 
-def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
+def _build_regime_dataset(ctx: Any) -> pd.DataFrame:
     """
     Build regime dataset using a configurable basket via batched fetch.
     Returns a *wide* DataFrame: columns are symbols, rows are aligned by timestamp (index reset).
@@ -10982,7 +10982,7 @@ class DataFetcher:
 
     def get_daily_df(
         self,
-        ctx: BotContext,
+        ctx: Any,
         symbol: str,
         *,
         return_meta: bool = False,
@@ -13597,7 +13597,7 @@ def audit_positions(ctx) -> None:
                 raise
 
 
-def validate_open_orders(ctx: BotContext) -> None:
+def validate_open_orders(ctx: Any) -> None:
     logger = get_logger(__name__)
     local = _parse_local_positions()
     if not local:
@@ -13755,7 +13755,7 @@ def _normalize_regime_name(raw_regime: Any) -> str:
     return normalized or "sideways"
 
 
-def _resolve_regime_signal_components(state: BotState) -> tuple[str, ...]:
+def _resolve_regime_signal_components(state: Any) -> tuple[str, ...]:
     if not get_regime_signal_routing_enabled():
         return _ALL_SIGNAL_COMPONENTS
 
@@ -14374,8 +14374,8 @@ class SignalManager:
 
     def evaluate(
         self,
-        ctx: BotContext,
-        state: BotState,
+        ctx: Any,
+        state: Any,
         df: pd.DataFrame,
         ticker: str,
         model: Any,
@@ -15760,7 +15760,7 @@ def _update_risk_engine_exposure():
         logger.warning("Risk engine exposure update failed: %s", e)
 
 
-def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
+def data_source_health_check(ctx: Any, symbols: Sequence[str]) -> None:
     """Log warnings if no market data is available on startup."""
     data_fetcher = getattr(ctx, "data_fetcher", None)
     if data_fetcher is None:
@@ -17013,7 +17013,7 @@ def check_halt_flag(runtime) -> bool:
     return False
 
 
-def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
+def too_many_positions(ctx: Any, symbol: str | None = None) -> bool:
     """Check if there are too many positions, with allowance for rebalancing."""
     try:
         current_positions = ctx.api.get_all_positions()
@@ -17059,7 +17059,7 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
         return False
 
 
-def too_correlated(ctx: BotContext, sym: str) -> bool:
+def too_correlated(ctx: Any, sym: str) -> bool:
     try:  # AI-AGENT-REF: gate heavy import
         import pandas as pd  # type: ignore
     except ImportError:
@@ -19451,7 +19451,7 @@ def _log_exit_deferred_min_hold(
     )
 
 
-def _position_entry_price(ctx: BotContext, symbol: str) -> float | None:
+def _position_entry_price(ctx: Any, symbol: str) -> float | None:
     position_map = getattr(ctx, "position_map", None)
     if not isinstance(position_map, MappingABC):
         return None
@@ -19866,8 +19866,8 @@ def _record_price_reliability(
 
 
 def _fetch_feature_data(
-    ctx: BotContext,
-    state: BotState,
+    ctx: Any,
+    state: Any,
     symbol: str,
     price_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame | None, pd.DataFrame | None, bool | None]:
@@ -22706,8 +22706,8 @@ def _enter_long(
 
 
 def _enter_short(
-    ctx: BotContext,
-    state: BotState,
+    ctx: Any,
+    state: Any,
     symbol: str,
     feat_df: pd.DataFrame,
     final_score: float,
@@ -23566,7 +23566,7 @@ def _manage_existing_position(
 
 
 def _evaluate_trade_signal(
-    ctx: BotContext, state: BotState, feat_df: pd.DataFrame, symbol: str, model: Any
+    ctx: Any, state: Any, feat_df: pd.DataFrame, symbol: str, model: Any
 ) -> tuple[float, float, str]:
     """Return ``(final_score, confidence, strategy)`` for ``symbol``."""
 
@@ -34160,7 +34160,7 @@ def _load_latest_replay_summary(output_dir: Path, *, before_path: Path) -> dict[
     return None
 
 
-def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: bool) -> None:
+def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) -> None:
     if not _replay_schedule_due(state, now=now, market_open_now=market_open_now):
         return
     from ai_trading.replay.event_loop import ReplayEventLoop
@@ -38530,7 +38530,7 @@ def schedule_run_all_trades_with_delay(runtime):
     schedule_run_all_trades(runtime)
 
 
-def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
+def initial_rebalance(ctx: Any, symbols: list[str]) -> None:
     """Initial portfolio rebalancing."""
 
     if ctx.api is None:

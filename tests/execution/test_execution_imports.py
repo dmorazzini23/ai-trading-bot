@@ -50,7 +50,7 @@ def test_execution_engine_real_when_dotenv_unresolved(monkeypatch):
     def _indicator_default(name: str):  # pragma: no cover - fallback for unspecified attributes
         return lambda *args, **kwargs: None
 
-    indicators_stub.__getattr__ = _indicator_default  # type: ignore[attr-defined]
+    _set_module_attr(indicators_stub, "__getattr__", _indicator_default)
     monkeypatch.setitem(sys.modules, "ai_trading.indicators", indicators_stub)
 
     ipm_stub = types.ModuleType("ai_trading.position.intelligent_manager")

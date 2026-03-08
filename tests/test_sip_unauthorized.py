@@ -12,7 +12,7 @@ pd = load_pandas()
 class _RespForbidden:
     status_code = 403
     text = ""
-    headers = {}
+    headers: dict[str, str] = {}
 
     def json(self):
         return {}
@@ -49,4 +49,3 @@ def test_data_check_skips_unauthorized_symbols(monkeypatch):
     result = bot_engine.data_check(symbols, feed="sip")
     assert "AAPL" in result
     assert "MSFT" not in result
-

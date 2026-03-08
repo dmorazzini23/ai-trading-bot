@@ -285,7 +285,7 @@ def test_performance_optimizations():
 
     # Indicators should be initialized and produce values
     assert sma.update(16.0) is not None
-    assert ema.is_initialized
+    assert getattr(ema, "is_initialized", False)
 
 
 if __name__ == "__main__":

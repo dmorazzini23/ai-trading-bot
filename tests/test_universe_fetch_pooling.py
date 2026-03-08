@@ -3,7 +3,7 @@ from ai_trading.utils import http
 
 
 def test_universe_fetch_pooling(monkeypatch):
-    calls = {}
+    calls: dict[str, int] = {}
 
     def fake_map_get(urls, timeout=None, headers=None):
         calls['count'] = calls.get('count', 0) + 1

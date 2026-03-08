@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -54,7 +55,7 @@ def stub_bs4(monkeypatch):
             pass
 
     module = types.ModuleType("bs4")
-    module.BeautifulSoup = _BeautifulSoup
+    setattr(cast(Any, module), "BeautifulSoup", _BeautifulSoup)
     monkeypatch.setitem(sys.modules, "bs4", module)
     yield
 

@@ -38,7 +38,7 @@ class FSMEngine(live_trading.LiveTradingExecutionEngine):
             "margin_enabled": True,
         }
         self.trading_client = SequencedClient(statuses)
-        self._pending_order_kwargs = {}
+        self._pending_order_kwargs: dict[str, Any] = {}
 
     def _refresh_settings(self) -> None:
         return None

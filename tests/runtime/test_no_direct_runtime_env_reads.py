@@ -15,7 +15,7 @@ _ALLOWLIST_PREFIXES = (
     "ai_trading/tools/",
     "ai_trading/validation/",
 )
-_ALLOWLIST_FILES = set()
+_ALLOWLIST_FILES: set[str] = set()
 
 
 def _is_allowlisted(rel_path: str) -> bool:

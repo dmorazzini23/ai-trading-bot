@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import os
+from typing import cast
 
 
 def _imported_alpaca_modules(mod: str) -> list[str]:
@@ -24,7 +25,7 @@ def _imported_alpaca_modules(mod: str) -> list[str]:
     }
     out = subprocess.check_output([sys.executable, "-c", code], env=env)
     last = out.decode().strip().splitlines()[-1]
-    return json.loads(last)
+    return cast(list[str], json.loads(last))
 
 
 def test_bot_engine_lazy_alpaca_import():

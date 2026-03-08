@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 import types
+from typing import Any
 
 import pytest
 
@@ -33,7 +34,7 @@ class _DummyMonitor:
         return None
 
 
-def _annotate(frame: pd.DataFrame) -> pd.DataFrame:
+def _annotate(frame: Any) -> Any:
     frame.attrs["data_provider"] = "yahoo"
     frame.attrs["data_feed"] = "yahoo"
     frame.attrs["fallback_provider"] = "yahoo"
@@ -71,7 +72,7 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
         )
     )
 
-    def _fallback_copy() -> pd.DataFrame:
+    def _fallback_copy() -> Any:
         frame = fallback_template.copy()
         return _annotate(frame)
 

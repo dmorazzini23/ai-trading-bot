@@ -6,12 +6,13 @@ full market data or external dependencies.
 """
 
 import asyncio
+from typing import Any
 
 import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
 
-def create_sample_market_data(periods: int = 100, symbol: str = "TEST") -> pd.DataFrame:
+def create_sample_market_data(periods: int = 100, symbol: str = "TEST") -> Any:
     """Create sample market data for testing."""
     # Generate realistic price movement
     np.random.seed(42)  # For reproducible results

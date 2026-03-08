@@ -1,8 +1,9 @@
 import sys
 import types
+from typing import Any, cast
 
 rebalancer_stub = types.ModuleType("ai_trading.rebalancer")
-rebalancer_stub.maybe_rebalance = lambda *a, **k: None
+setattr(rebalancer_stub, "maybe_rebalance", lambda *a, **k: None)
 sys.modules.setdefault("ai_trading.rebalancer", rebalancer_stub)
 
 from ai_trading.core import bot_engine
@@ -56,7 +57,7 @@ def test_audit_positions_uses_get_all_positions(monkeypatch):
 
     api = DummyAPI()
     ctx = types.SimpleNamespace(api=api)
-    bot_engine.runtime = ctx
+    setattr(cast(Any, bot_engine), "runtime", ctx)
 
     bot_engine.audit_positions(ctx)
 

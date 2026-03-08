@@ -52,7 +52,7 @@ class BuildFeatures:
         self.lookback_window = lookback_window
         self.vol_span = vol_span
         self.regime_span = regime_span
-        self.feature_params_ = {}
+        self.feature_params_: dict[str, Any] = {}
         self.is_fitted_ = False
 
     def fit(self, X: pd.DataFrame, y: pd.Series | None=None) -> 'BuildFeatures':

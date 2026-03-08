@@ -4,6 +4,7 @@ import os
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any, cast
 
 
 def _override_env(env_overrides: dict[str, str | None]) -> dict[str, str | None]:
@@ -53,13 +54,13 @@ def test_execution_engine_instantiated_without_stub(request) -> None:
     request.addfinalizer(_finalize_env)
 
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
+    setattr(cast(Any, portalocker_stub), "LOCK_EX", 1)
 
     def _noop(*_args, **_kwargs) -> None:
         return None
 
-    portalocker_stub.lock = _noop  # type: ignore[attr-defined]
-    portalocker_stub.unlock = _noop  # type: ignore[attr-defined]
+    setattr(cast(Any, portalocker_stub), "lock", _noop)
+    setattr(cast(Any, portalocker_stub), "unlock", _noop)
     sys.modules.setdefault("portalocker", portalocker_stub)
 
     bs4_stub = types.ModuleType("bs4")
@@ -68,7 +69,7 @@ def test_execution_engine_instantiated_without_stub(request) -> None:
         def __init__(self, *_args, **_kwargs) -> None:  # noqa: D401 - simple stub
             """Placeholder BeautifulSoup stub used for import compatibility."""
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup  # type: ignore[attr-defined]
+    setattr(cast(Any, bs4_stub), "BeautifulSoup", _BeautifulSoup)
     sys.modules.setdefault("bs4", bs4_stub)
 
     from ai_trading.core import bot_engine

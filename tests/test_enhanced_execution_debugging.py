@@ -242,7 +242,7 @@ class TestPositionReconciliation(unittest.TestCase):
         def mock_get_broker_positions():
             return {symbol: 0}  # Broker shows no position
 
-        self.reconciler.get_broker_positions = mock_get_broker_positions
+        setattr(self.reconciler, "get_broker_positions", mock_get_broker_positions)
 
         # Run reconciliation
         discrepancies = self.reconciler.reconcile_positions()

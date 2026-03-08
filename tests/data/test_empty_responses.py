@@ -1,5 +1,6 @@
 import pandas as pd
 from datetime import datetime, timedelta, UTC
+from typing import Any
 
 import ai_trading.data.fetch as fetch
 
@@ -46,7 +47,7 @@ class _RespNonEmpty(_Resp):
 
 def test_alpaca_empty_responses_trigger_backup(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    calls = {"count": 0, "feeds": []}
+    calls: dict[str, Any] = {"count": 0, "feeds": []}
 
     def fake_get(*args, **kwargs):
         calls["count"] += 1

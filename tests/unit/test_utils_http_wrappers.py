@@ -13,7 +13,7 @@ from ai_trading.utils import http
     ],
 )
 def test_wrappers_delegate_request(func, method, monkeypatch):
-    captured = {}
+    captured: dict[str, object] = {}
 
     def fake_request(m, url, **kwargs):
         captured["args"] = (m, url)

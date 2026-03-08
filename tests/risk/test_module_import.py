@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from typing import Any, cast
 
 
 def _reload(module_name: str):
@@ -21,8 +22,8 @@ def _reload(module_name: str):
     stub_name = "ai_trading.risk.engine"
     if module_name == "ai_trading.risk" and stub_name not in sys.modules:
         stub = types.ModuleType(stub_name)
-        stub.RiskEngine = type("RiskEngine", (), {})  # type: ignore[attr-defined]
-        stub.__all__ = ["RiskEngine"]
+        setattr(cast(Any, stub), "RiskEngine", type("RiskEngine", (), {}))
+        setattr(cast(Any, stub), "__all__", ["RiskEngine"])
         sys.modules[stub_name] = stub
 
     try:

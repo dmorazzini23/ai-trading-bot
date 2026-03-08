@@ -11,7 +11,7 @@ def encode_multipart_formdata(
 ) -> Tuple[bytes, str]:
     """Return placeholder multipart payload and content type."""
 
-    if isinstance(fields, dict):
+    if isinstance(fields, Mapping):
         items = list(fields.items())
     else:
         items = list(fields)

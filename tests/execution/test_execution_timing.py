@@ -55,7 +55,7 @@ def test_stage_timer_minimum_elapsed_ms():
 
     tiny = [record for record in records if getattr(record, "stage", None) == "TINY"]
     assert tiny
-    assert tiny[0].elapsed_ms == 1
+    assert getattr(tiny[0], "elapsed_ms", None) == 1
 
 
 def test_submit_order_records_execution_timing(monkeypatch):

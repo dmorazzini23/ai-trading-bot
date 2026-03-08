@@ -112,10 +112,9 @@ class StackingMetaModel:
             if self.meta_label_threshold is not None:
                 prob = self.meta_model_.predict_proba(meta_X)[:, 1]
                 base_avg = meta_X.mean(axis=1)
-                return prob * base_avg
+                return np.asarray(prob * base_avg, dtype=float)
             else:
-                return self.meta_model_.predict(meta_X)
+                return np.asarray(self.meta_model_.predict(meta_X), dtype=float)
         except Exception as e:
             logger.error("STACKING_PREDICT_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             raise
-

@@ -47,7 +47,7 @@ def test_fit_and_predict():
     model_dir = Path(ml_model.__file__).resolve().parent / "models"
     if ml_model.joblib is None:
         pytest.skip("joblib not available")
-    save_path = model.save(model_dir / "m.pkl")
+    save_path = model.save(str(model_dir / "m.pkl"))
     assert Path(save_path).exists()
     loaded = MLModel.load(save_path)
     assert isinstance(loaded.pipeline, DummyPipe)

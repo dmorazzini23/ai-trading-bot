@@ -4992,7 +4992,7 @@ def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZE
     _SIP_UNAVAILABLE_LOGGED.add(key)
 
 
-def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], timeframe: str) -> bool:
+def _sip_fallback_allowed(session: Any | None, headers: dict[str, str], timeframe: str) -> bool:
     """Return True if SIP fallback should be attempted."""
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")

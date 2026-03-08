@@ -73,7 +73,7 @@ def _install_alpaca_stub() -> types.ModuleType:
         }
     )
 
-    return alpaca_stub
+    return cast(types.ModuleType, alpaca_stub)
 
 _install_alpaca_stub()
 

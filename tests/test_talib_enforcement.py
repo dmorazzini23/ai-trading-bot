@@ -1,6 +1,7 @@
 """Test TA-Lib enforcement and audit file creation improvements."""
 
 import csv
+from typing import Any, cast
 
 from tests.mocks.app_mocks import MockConfig
 
@@ -34,7 +35,7 @@ def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
     # Create mock config module
     # Temporarily replace config module
     original_config = sys.modules.get("config")
-    sys.modules["config"] = MockConfig()
+    sys.modules["config"] = cast(Any, MockConfig())
 
     try:
         # Import audit after mocking config
@@ -112,7 +113,7 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
     trade_log_path = tmp_path / "trades.csv"
 
     original_config = sys.modules.get("config")
-    sys.modules["config"] = MockConfig()
+    sys.modules["config"] = cast(Any, MockConfig())
 
     try:
         if "ai_trading.audit" in sys.modules:

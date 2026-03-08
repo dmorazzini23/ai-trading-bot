@@ -5,7 +5,7 @@ from ai_trading.config.management import Settings, derive_cap_from_settings
 
 
 def _new_settings(**kwargs: Any) -> Settings:
-    return cast(Any, Settings)(**kwargs)
+    return cast(Settings, Settings(**kwargs))
 
 
 def test_max_position_size_fallback_equity_unknown(monkeypatch):

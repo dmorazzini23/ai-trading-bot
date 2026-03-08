@@ -1,5 +1,7 @@
 """Ensure new trading configuration toggles surface via get_trading_config."""
 
+from typing import Any, cast
+
 from ai_trading.config import runtime
 
 
@@ -15,7 +17,7 @@ def test_degraded_feed_defaults(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
 
-    runtime.get_trading_config.cache_clear()
+    cast(Any, runtime.get_trading_config).cache_clear()
     cfg = runtime.get_trading_config()
 
     assert cfg.post_submit_broker_sync is True

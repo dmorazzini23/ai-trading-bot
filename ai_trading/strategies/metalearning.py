@@ -308,7 +308,7 @@ class MetaLearning(BaseStrategy):
                 predicted_class = 0 if ensemble_proba[0] > 0.5 else 1
                 confidence = max(ensemble_proba)
             else:
-                predicted_class = np.argmax(ensemble_proba)
+                predicted_class = int(np.argmax(ensemble_proba))
                 confidence = np.max(ensemble_proba)
             if n_classes == 2:
                 direction_map = {0: 'sell', 1: 'buy'}
@@ -460,7 +460,8 @@ class MetaLearning(BaseStrategy):
         if not self.is_trained or self.last_training_date is None:
             return True
         days_since_training = (datetime.now(UTC) - self.last_training_date).days
-        return days_since_training >= self.parameters['retrain_frequency']
+        retrain_frequency = int(self.parameters.get('retrain_frequency', 7))
+        return days_since_training >= retrain_frequency
 
     def _is_cached_prediction_valid(self, symbol: str) -> bool:
         """Check if cached prediction is still valid."""

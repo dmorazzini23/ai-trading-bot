@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -14,8 +15,8 @@ def _make_fetcher(monkeypatch: pytest.MonkeyPatch) -> be.DataFetcher:
 
     monkeypatch.setattr(be.DataFetcher, "__post_init__", lambda self: None)
     fetcher = be.DataFetcher()
-    fetcher.settings = types.SimpleNamespace()
-    fetcher._warn_once = lambda *a, **k: None  # type: ignore[attr-defined]
+    fetcher.settings = cast(Any, types.SimpleNamespace())
+    setattr(fetcher, "_warn_once", lambda *a, **k: None)
     return fetcher
 
 

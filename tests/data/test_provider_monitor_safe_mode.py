@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 from collections import deque
 from types import SimpleNamespace
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, cast
 
 import pytest
 
@@ -37,7 +37,7 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
     tmp_path, monkeypatch, record_name: str, expected_reason: str
 ) -> None:
     dummy_alerts = _DummyAlerts()
-    monitor = pm.ProviderMonitor(alert_manager=dummy_alerts, cooldown=1, threshold=3)
+    monitor = pm.ProviderMonitor(alert_manager=cast(Any, dummy_alerts), cooldown=1, threshold=3)
     disable_calls: list[tuple[str, float]] = []
 
     def _capture(provider: str, duration) -> None:
@@ -98,7 +98,7 @@ def test_provider_monitor_safe_mode_triggers_and_resets(
 
 def test_gap_safe_mode_uses_failsoft_when_backup_available(tmp_path, monkeypatch) -> None:
     dummy_alerts = _DummyAlerts()
-    monitor = pm.ProviderMonitor(alert_manager=dummy_alerts, cooldown=1, threshold=3)
+    monitor = pm.ProviderMonitor(alert_manager=cast(Any, dummy_alerts), cooldown=1, threshold=3)
     disable_calls: list[str] = []
 
     monitor.register_disable_callback("alpaca", lambda duration: disable_calls.append("alpaca"))

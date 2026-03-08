@@ -2,6 +2,7 @@ import importlib
 import logging
 import types
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -26,7 +27,7 @@ def test_enabled_fetcher(monkeypatch):
     monkeypatch.setenv("ENABLE_FINNHUB", "1")
     monkeypatch.setenv("FINNHUB_API_KEY", "test")
     finnhub_stub = types.ModuleType("finnhub")
-    finnhub_stub.Client = lambda key: object()
+    setattr(cast(Any, finnhub_stub), "Client", lambda key: object())
     monkeypatch.setitem(sys.modules, "finnhub", finnhub_stub)
     mod = _reload_module()
     assert not getattr(mod.fh_fetcher, "is_stub", False)

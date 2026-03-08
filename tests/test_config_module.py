@@ -1,13 +1,14 @@
 import importlib
 import os
+import sys
 
 import pytest
 
 
 def _reload_config(monkeypatch, **env):
     module_name = "ai_trading.config"
-    if module_name in list(importlib.sys.modules):
-        del importlib.sys.modules[module_name]
+    if module_name in list(sys.modules):
+        del sys.modules[module_name]
     for k in [
         "MAX_DRAWDOWN_THRESHOLD",
         "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",

@@ -54,8 +54,8 @@ class RegimeDetector:
         self.volatility_thresholds = {'low': 0.1, 'normal': 0.2, 'high': 0.35, 'extreme': 0.5}
         self.trend_thresholds = {'bull_threshold': 0.15, 'bear_threshold': -0.2, 'sideways_threshold': 0.05}
         self.fear_thresholds = {'low_fear': 15, 'normal_fear': 25, 'high_fear': 35, 'extreme_fear': 50}
-        self.regime_history = []
-        self.current_regime = None
+        self.regime_history: list[dict[str, Any]] = []
+        self.current_regime: MarketRegime | None = None
         self.regime_confidence = 0.0
         logger.info(f'RegimeDetector initialized with {lookback_periods} day lookback')
 
@@ -517,7 +517,9 @@ class RegimeDetector:
             elif self.current_regime == MarketRegime.SIDEWAYS:
                 recommendations.update({'strategy_type': 'range_bound', 'position_size_multiplier': 0.9, 'risk_level': 'medium', 'preferred_strategies': ['mean_reversion', 'range_trading', 'pairs'], 'avoid_strategies': ['trend_following', 'breakout']})
             if self.regime_confidence < 0.6:
-                recommendations['position_size_multiplier'] *= 0.8
+                raw_multiplier = recommendations.get('position_size_multiplier', 1.0)
+                multiplier = float(raw_multiplier) if isinstance(raw_multiplier, (int, float)) else 1.0
+                recommendations['position_size_multiplier'] = multiplier * 0.8
                 recommendations['risk_level'] = 'high'
             return recommendations
         except COMMON_EXC as e:

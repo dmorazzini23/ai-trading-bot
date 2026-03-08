@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from datetime import UTC, date, datetime
+from typing import Any, cast
 
 from tests.mocks.app_mocks import MockConfig
 from ai_trading.meta_learning import validate_trade_data_quality
@@ -20,7 +21,7 @@ class TestCriticalFixes(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         # AI-AGENT-REF: Use environment variables to avoid hardcoded secrets
-        sys.modules["config"] = MockConfig()
+        sys.modules["config"] = cast(Any, MockConfig())
 
     def test_sentiment_circuit_breaker_constants(self):
         """Test 1: Sentiment API Rate Limiting - Circuit breaker constants."""

@@ -1,5 +1,6 @@
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -7,8 +8,8 @@ pd = pytest.importorskip("pandas")
 from ai_trading.features import build_features_pipeline
 
 ps_stub = types.ModuleType("pydantic_settings")
-ps_stub.BaseSettings = object
-ps_stub.SettingsConfigDict = dict
+setattr(cast(Any, ps_stub), "BaseSettings", object)
+setattr(cast(Any, ps_stub), "SettingsConfigDict", dict)
 sys.modules.setdefault("pydantic_settings", ps_stub)
 
 pytestmark = pytest.mark.usefixtures("default_env", "features_env")

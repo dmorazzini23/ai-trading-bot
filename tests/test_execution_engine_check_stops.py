@@ -8,6 +8,5 @@ class DummyBroker:
 
 def test_check_stops_noop():
     eng = ExecutionEngine()
-    eng.broker = DummyBroker()
+    setattr(eng, "broker", DummyBroker())
     eng.check_stops()  # should not raise
-

@@ -55,7 +55,7 @@ def test_load_model_from_module(monkeypatch, tmp_path):
     mod = types.ModuleType("fake_model_mod")
     class Dummy:
         pass
-    mod.get_model = lambda: Dummy()
+    setattr(mod, "get_model", lambda: Dummy())
     sys.modules["fake_model_mod"] = mod
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
     monkeypatch.setenv("AI_TRADING_MODEL_MODULE", "fake_model_mod")
@@ -78,7 +78,7 @@ def test_model_loaded_once(monkeypatch):
         calls["count"] += 1
         return object()
     mod = types.ModuleType("fake_model_once")
-    mod.get_model = factory
+    setattr(mod, "get_model", factory)
     sys.modules["fake_model_once"] = mod
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
     monkeypatch.setenv("AI_TRADING_MODEL_MODULE", "fake_model_once")

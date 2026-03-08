@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import pytest
 
@@ -7,7 +8,7 @@ pd = pytest.importorskip("pandas")
 from ai_trading.data.fetch import ensure_ohlcv_schema
 
 
-def _assert_standard_columns(frame: pd.DataFrame) -> None:
+def _assert_standard_columns(frame: Any) -> None:
     assert list(frame.columns[:6]) == [
         "timestamp",
         "open",

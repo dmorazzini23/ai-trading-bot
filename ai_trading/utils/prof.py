@@ -5,7 +5,7 @@ import math
 import os
 import time
 from contextlib import contextmanager
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from ai_trading.config.management import get_env
 
@@ -109,7 +109,13 @@ def _log_at_level(logger: Any, level: int, message: str, *, extra: dict[str, Any
 
 
 @contextmanager
-def StageTimer(logger: Any, stage_name: str, *, override_ms: float | None = None, **extra: Any) -> None:
+def StageTimer(
+    logger: Any,
+    stage_name: str,
+    *,
+    override_ms: float | None = None,
+    **extra: Any,
+) -> Iterator[None]:
     t0 = _clock_seconds()
     try:
         yield

@@ -77,10 +77,10 @@ def test_action_space_parity():
 
         # Test continuous actions
         cont_actions = [0.0, 0.5, -0.3, 0.8, -0.1]
-        for i, action in enumerate(cont_actions):
-            obs_cont, reward, terminated, truncated, info = env_cont.step(action)
+        for i, cont_action in enumerate(cont_actions):
+            obs_cont, reward, terminated, truncated, info = env_cont.step(cont_action)
             logger.info(
-                f"    Step {i}: action={action:.2f}, reward={reward:.4f}, position={info['position']:.2f}"
+                f"    Step {i}: action={cont_action:.2f}, reward={reward:.4f}, position={info['position']:.2f}"
             )
 
             if terminated:
