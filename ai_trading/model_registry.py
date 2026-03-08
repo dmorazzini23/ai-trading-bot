@@ -36,7 +36,8 @@ _EVAL_DIR = MODELS_DIR / "eval"
 def _load_registry() -> dict[str, Any]:
     try:
         if _REGISTRY_PATH.exists():
-            return json.loads(_REGISTRY_PATH.read_text())
+            payload = json.loads(_REGISTRY_PATH.read_text())
+            return payload if isinstance(payload, dict) else {}
     except Exception:
         logger.debug("MODEL_REGISTRY_LOAD_FAILED", exc_info=True)
     return {}
@@ -75,12 +76,16 @@ def set_active_model(symbol: str, version: str) -> None:
 def get_active_model_meta(symbol: str) -> dict[str, Any] | None:
     reg = _load_registry()
     entry = reg.get(symbol)
-    if not entry:
+    if not isinstance(entry, dict):
         return None
     ver = entry.get("active")
-    if not ver:
+    if not isinstance(ver, str) or not ver:
         return None
-    return entry.get("versions", {}).get(ver)
+    versions = entry.get("versions")
+    if not isinstance(versions, dict):
+        return None
+    payload = versions.get(ver)
+    return payload if isinstance(payload, dict) else None
 
 
 def record_evaluation(symbol: str, metrics: dict[str, Any]) -> None:
@@ -261,11 +266,13 @@ class ModelRegistry:
                 errors.append(f"{pickler.name}: {exc}")
                 continue
             return payload, pickler.name
+        mock_type: type[Any] | None = None
         try:
-            from unittest.mock import Mock
+            from unittest.mock import Mock as _ImportedMock
+            mock_type = _ImportedMock
         except ImportError:  # pragma: no cover - stdlib always available
-            Mock = None  # type: ignore[assignment]
-        if Mock is not None and isinstance(model, Mock):
+            pass
+        if mock_type is not None and isinstance(model, mock_type):
             mock_payload = {
                 "__registry__": "mock",
                 "repr": repr(model),
@@ -306,7 +313,8 @@ class ModelRegistry:
         if not meta_path.exists():
             return None
         try:
-            return json.loads(meta_path.read_text())
+            payload = json.loads(meta_path.read_text())
+            return payload if isinstance(payload, dict) else None
         except (OSError, JSONDecodeError):
             logger.debug("MODEL_REGISTRY_META_LOAD_FAILED", exc_info=True)
             return None

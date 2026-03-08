@@ -51,15 +51,18 @@ except Exception:  # pragma: no cover
         return _Dummy()
 
 logger = logging.getLogger(__name__)
+_BaseEstimatorType: type[Any] = object
+_LinearRegressionType: type[Any] = object
 
 try:  # pragma: no cover - optional heavy dependency
-    from sklearn.base import BaseEstimator
+    from sklearn.base import BaseEstimator as _SkBaseEstimator
     from sklearn.metrics import mean_squared_error
     _SKLEARN_AVAILABLE = True
 except Exception:  # pragma: no cover
     _SKLEARN_AVAILABLE = False
+    _SkBaseEstimator = None
 
-    class BaseEstimator:  # minimal fallback
+    class _FallbackBaseEstimator:  # minimal fallback
         def __init__(self, *args, **kwargs) -> None:
             logger.error("scikit-learn is required")
             raise ImportError("scikit-learn is required")
@@ -68,14 +71,17 @@ except Exception:  # pragma: no cover
         return 0.0
 
     logger.warning("scikit-learn not available; using fallback implementations")
+    _BaseEstimatorType = _FallbackBaseEstimator
+else:
+    _BaseEstimatorType = _SkBaseEstimator
 
 try:  # pragma: no cover - optional heavy dependency
     if not _SKLEARN_AVAILABLE:
         raise ImportError("sklearn unavailable")
-    from sklearn.linear_model import LinearRegression
+    from sklearn.linear_model import LinearRegression as _SkLinearRegression
 except Exception:  # pragma: no cover
 
-    class LinearRegression:  # minimal fallback
+    class _FallbackLinearRegression:  # minimal fallback
         def fit(self, X, y):
             return self
 
@@ -85,13 +91,16 @@ except Exception:  # pragma: no cover
     logger.warning(
         "sklearn.linear_model not available; using fallback LinearRegression"
     )
+    _LinearRegressionType = _FallbackLinearRegression
+else:
+    _LinearRegressionType = _SkLinearRegression
 
 
 class MLModel:
     """Wrapper around an sklearn Pipeline with extra safety checks."""
 
-    def __init__(self, pipeline: BaseEstimator) -> None:
-        self.pipeline: BaseEstimator = pipeline
+    def __init__(self, pipeline: Any) -> None:
+        self.pipeline: Any = pipeline
         self.logger = logger
 
     # ------------------------------------------------------------------
@@ -194,14 +203,14 @@ def train_model(
     X: Sequence[float] | pd.Series | pd.DataFrame,
     y: Sequence[float] | pd.Series,
     algorithm: str = "linear",
-) -> BaseEstimator:
+) -> Any:
     """Train a simple linear model and return the estimator."""
 
     if X is None or y is None:
         raise ValueError("Invalid training data")
     if algorithm != "linear":
         raise ValueError("Unsupported algorithm")
-    model = LinearRegression()
+    model = _LinearRegressionType()
     model.fit([[v] for v in X], y)
     return model
 
@@ -264,7 +273,7 @@ def train_xgboost_with_optuna(
         cv = xgb.cv(
             params, dtrain, num_boost_round=100, nfold=3, metrics="logloss"
         )
-        return cv["test-logloss-mean"].iloc[-1]
+        return float(cv["test-logloss-mean"].iloc[-1])
 
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=50)
@@ -298,11 +307,11 @@ def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
         downloaded = False
         if url:
             try:  # pragma: no cover - network best effort
-                import requests
+                from urllib.request import Request, urlopen
 
-                resp = requests.get(url, timeout=10)
-                resp.raise_for_status()
-                path.write_bytes(resp.content)
+                req = Request(url, headers={"User-Agent": "ai-trading-bot"})
+                with urlopen(req, timeout=10) as resp:
+                    path.write_bytes(resp.read())
                 downloaded = True
                 logger.info(
                     "MODEL_DOWNLOADED",

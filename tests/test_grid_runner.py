@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+from typing import Any, Iterable
 
 from ai_trading.backtesting.grid_runner import grid_search, persist_artifacts
 
@@ -10,7 +11,7 @@ def test_grid_search_basic():
     def evaluator(params):
         return {"sharpe": params.get("kelly", 0.5) * 2, "result": "ok"}
 
-    grid = {"kelly": [0.3, 0.6], "lookback": [50, 100]}
+    grid: dict[str, Iterable[Any]] = {"kelly": [0.3, 0.6], "lookback": [50, 100]}
     result = grid_search(evaluator, grid, n_jobs=1)
 
     assert result["count"] == 4  # 2 * 2 combinations
@@ -27,7 +28,7 @@ def test_persist_artifacts():
     def evaluator(params):
         return {"sharpe": 1.23, "calmar": 0.8}
 
-    grid = {"kelly": [0.5]}
+    grid: dict[str, Iterable[Any]] = {"kelly": [0.5]}
     run = grid_search(evaluator, grid, n_jobs=1)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -53,7 +54,7 @@ def test_grid_search_empty_grid():
     def evaluator(params):
         return {"result": "empty"}
 
-    grid = {}
+    grid: dict[str, Iterable[Any]] = {}
     result = grid_search(evaluator, grid, n_jobs=1)
 
     assert result["count"] == 1  # Should still run once with empty params
@@ -65,7 +66,7 @@ def test_grid_search_single_param():
     def evaluator(params):
         return {"value": params.get("x", 0) * 2}
 
-    grid = {"x": [1, 2, 3]}
+    grid: dict[str, Iterable[Any]] = {"x": [1, 2, 3]}
     result = grid_search(evaluator, grid, n_jobs=1)
 
     assert result["count"] == 3

@@ -1,5 +1,6 @@
 import os
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -55,7 +56,7 @@ def _patch_env(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "test")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
     monkeypatch.setenv("ORDER_FLIP_MODE", "cancel_then_submit")
-    get_trading_config.cache_clear()
+    cast(Any, get_trading_config).cache_clear()
     yield
     os.environ.pop("PYTEST_RUNNING", None)
 
@@ -85,7 +86,7 @@ def test_enforce_opposite_policy_cancels_orders(monkeypatch):
 
 def test_precheck_skips_when_policy_skip(monkeypatch):
     monkeypatch.setenv("ORDER_FLIP_MODE", "skip")
-    get_trading_config.cache_clear()
+    cast(Any, get_trading_config).cache_clear()
     engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
     engine.trading_client = _ConflictClient()
     order = {"symbol": "MSFT", "side": "buy", "quantity": 5}
@@ -94,7 +95,7 @@ def test_precheck_skips_when_policy_skip(monkeypatch):
 
 
 def test_is_opposite_conflict_error_detects_conflict():
-    class DummyError:
+    class DummyError(Exception):
         def __init__(self):
             self.code = "40310000"
             self.status_code = 403

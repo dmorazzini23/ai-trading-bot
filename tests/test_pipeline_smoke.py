@@ -2,6 +2,7 @@ import importlib
 import sys
 import types
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -29,8 +30,8 @@ def test_pipeline_basic(monkeypatch):
         _load_sklearn_submodule.cache_clear()
 
     skl_base = types.ModuleType("sklearn.base")
-    skl_base.BaseEstimator = type("BE", (), {})
-    skl_base.TransformerMixin = type("TM", (), {})
+    cast(Any, skl_base).BaseEstimator = type("BE", (), {})
+    cast(Any, skl_base).TransformerMixin = type("TM", (), {})
     monkeypatch.setitem(sys.modules, "sklearn.base", skl_base)
 
     skl_pipeline = types.ModuleType("sklearn.pipeline")
@@ -45,7 +46,7 @@ def test_pipeline_basic(monkeypatch):
         def predict(self, X):
             return np.zeros(len(X))
 
-    skl_pipeline.Pipeline = Pipeline
+    cast(Any, skl_pipeline).Pipeline = Pipeline
     monkeypatch.setitem(sys.modules, "sklearn.pipeline", skl_pipeline)
 
     skl_pre = types.ModuleType("sklearn.preprocessing")
@@ -57,7 +58,7 @@ def test_pipeline_basic(monkeypatch):
         def transform(self, X):
             return np.asarray(X, dtype=float)
 
-    skl_pre.StandardScaler = StandardScaler
+    cast(Any, skl_pre).StandardScaler = StandardScaler
     monkeypatch.setitem(sys.modules, "sklearn.preprocessing", skl_pre)
 
     skl_lin = types.ModuleType("sklearn.linear_model")
@@ -72,7 +73,7 @@ def test_pipeline_basic(monkeypatch):
         def predict(self, X):
             return np.zeros(len(X))
 
-    skl_lin.SGDRegressor = SGDRegressor
+    cast(Any, skl_lin).SGDRegressor = SGDRegressor
     monkeypatch.setitem(sys.modules, "sklearn.linear_model", skl_lin)
 
     monkeypatch.syspath_prepend(".")

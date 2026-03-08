@@ -60,8 +60,8 @@ class DrawdownCircuitBreaker:
         self.state = CircuitBreakerState.CLOSED
         self.current_drawdown = 0.0
         self.peak_equity = 0.0
-        self.halt_timestamp = None
-        self.reset_callbacks = []
+        self.halt_timestamp: datetime | None = None
+        self.reset_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
         emit_once(logger, 'DRAWDOWN_CB_INIT', 'info', 'DrawdownCircuitBreaker initialized', max_drawdown=self._safe_format_percentage(self.max_drawdown))
 
     def _safe_format_percentage(self, value) -> str:
@@ -237,13 +237,13 @@ class TradingHaltManager:
         self.volatility_breaker = VolatilityCircuitBreaker()
         self.manual_halt = False
         self.manual_halt_reason = ''
-        self.manual_halt_timestamp = None
+        self.manual_halt_timestamp: datetime | None = None
         self.daily_trade_count = 0
         self.daily_loss_amount = 0.0
         self.max_daily_trades = 1000
         self.max_daily_loss = 0.05
         self.emergency_stop = False
-        self.emergency_callbacks = []
+        self.emergency_callbacks: list[Callable[[str], None]] = []
         self._lock = threading.RLock()
         logger.info('TradingHaltManager initialized')
 
@@ -269,7 +269,7 @@ class TradingHaltManager:
         """
         try:
             with self._lock:
-                status = {'trading_allowed': True, 'reasons': [], 'position_size_multiplier': 1.0, 'circuit_breakers': {}}
+                status: dict[str, Any] = {'trading_allowed': True, 'reasons': [], 'position_size_multiplier': 1.0, 'circuit_breakers': {}}
                 if self.manual_halt:
                     status['trading_allowed'] = False
                     status['reasons'].append(f'Manual halt: {self.manual_halt_reason}')
@@ -409,8 +409,8 @@ class DeadMansSwitch:
         self.timeout_seconds = timeout_seconds
         self.last_heartbeat = safe_utcnow()
         self.is_active = False
-        self.emergency_callbacks = []
-        self.monitoring_thread = None
+        self.emergency_callbacks: list[Callable[[str], None]] = []
+        self.monitoring_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         logger.info(f'DeadMansSwitch initialized with timeout={timeout_seconds}s')
 

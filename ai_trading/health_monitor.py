@@ -299,8 +299,8 @@ class HealthMonitor:
 
     async def run_all_checks(self) -> list[HealthCheckResult]:
         """Run all registered health checks."""
-        results = []
-        tasks = []
+        results: list[HealthCheckResult] = []
+        tasks: list[Any] = []
         for checker in self.checkers.values():
             if not checker.enabled:
                 continue
@@ -309,9 +309,9 @@ class HealthMonitor:
             ):
                 tasks.append(checker.run_check())
         if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
             valid_results = []
-            for result in results:
+            for result in raw_results:
                 if isinstance(result, HealthCheckResult):
                     valid_results.append(result)
                     self.health_history.append(result)
@@ -406,7 +406,7 @@ class HealthMonitor:
             for result in self.health_history
             if result.timestamp > datetime.now(UTC) - timedelta(minutes=5)
         ]
-        component_results = {}
+        component_results: dict[str, list[HealthCheckResult]] = {}
         for result in recent_results:
             if result.component not in component_results:
                 component_results[result.component] = []

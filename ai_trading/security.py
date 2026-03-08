@@ -17,26 +17,45 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast, overload
+_crypto_fernet_cls: type[Any] | None = None
+_hashes_module: Any = None
+_pbkdf2hmac_cls: Any = None
 try:
-    from cryptography.fernet import Fernet
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.fernet import Fernet as _ImportedCryptoFernet
+    from cryptography.hazmat.primitives import hashes as _ImportedCryptoHashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC as _ImportedPBKDF2HMAC
+    _crypto_fernet_cls = _ImportedCryptoFernet
+    _hashes_module = _ImportedCryptoHashes
+    _pbkdf2hmac_cls = _ImportedPBKDF2HMAC
     _CRYPTOGRAPHY_AVAILABLE = True
 except (ImportError, ValueError, TypeError):
     _CRYPTOGRAPHY_AVAILABLE = False
 
-    class Fernet:
+class _FernetLike(Protocol):
+    def encrypt(self, data: bytes) -> bytes: ...
+    def decrypt(self, token: bytes) -> bytes: ...
 
-        def __init__(self, *args, **kwargs):
-            pass
 
-        def encrypt(self, data: bytes) -> bytes:
-            return data
+class _FallbackFernet:
 
-        def decrypt(self, token: bytes) -> bytes:
-            return token
-    hashes = PBKDF2HMAC = None
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def encrypt(self, data: bytes) -> bytes:
+        return data
+
+    def decrypt(self, token: bytes) -> bytes:
+        return token
+
+
+FernetType: type[_FernetLike] = (
+    cast(type[_FernetLike], _crypto_fernet_cls)
+    if _crypto_fernet_cls is not None
+    else _FallbackFernet
+)
+HASHES_MODULE: Any = _hashes_module
+PBKDF2HMAC_CLS: Any = _pbkdf2hmac_cls
 logger = get_logger(__name__)
 
 
@@ -112,7 +131,7 @@ class SecureConfig:
         self.logger.warning('Generated new master encryption key - save MASTER_ENCRYPTION_KEY to environment')
         return key
 
-    def _init_encryption(self) -> Fernet | None:
+    def _init_encryption(self) -> _FernetLike | None:
         """Initialize encryption cipher."""
         if not _CRYPTOGRAPHY_AVAILABLE:
             message = 'Cryptography library not available - encryption disabled'
@@ -123,16 +142,22 @@ class SecureConfig:
         try:
             master_key_bytes = self._master_key.encode()
             salt = b'ai_trading_salt_2024'
-            kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
+            kdf = PBKDF2HMAC_CLS(
+                algorithm=HASHES_MODULE.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100000,
+            )
             key = base64.urlsafe_b64encode(kdf.derive(master_key_bytes))
-            return Fernet(key)
+            fernet_cls = cast(Any, FernetType)
+            return cast(_FernetLike, fernet_cls(key))
         except (ValueError, TypeError) as e:
             self.logger.error(f'Failed to initialize encryption: {e}')
             if self._production_mode:
                 raise RuntimeError('Failed to initialize encryption in production mode') from e
             return None
 
-    def _setup_audit_logging(self) -> logging.Logger:
+    def _setup_audit_logging(self) -> logging.Logger | logging.LoggerAdapter[Any]:
         """Setup dedicated audit logging."""
         audit_logger = get_logger('ai_trading.audit')
         audit_logger.setLevel(logging.INFO)
@@ -214,12 +239,21 @@ class SecureConfig:
         except (ValueError, TypeError):
             return False
 
-    def mask_sensitive_data(self, data: str | dict | list) -> str | dict | list:
+    @overload
+    def mask_sensitive_data(self, data: str) -> str: ...
+
+    @overload
+    def mask_sensitive_data(self, data: dict[str, Any]) -> dict[str, Any]: ...
+
+    @overload
+    def mask_sensitive_data(self, data: list[Any]) -> list[Any]: ...
+
+    def mask_sensitive_data(self, data: Any) -> Any:
         """Mask sensitive data for logging."""
         if isinstance(data, str):
             return self._mask_string(data)
         elif isinstance(data, dict):
-            return {k: self.mask_sensitive_data(v) for k, v in data.items()}
+            return {str(k): self.mask_sensitive_data(v) for k, v in data.items()}
         elif isinstance(data, list):
             return [self.mask_sensitive_data(item) for item in data]
         else:
@@ -237,7 +271,10 @@ class SecureConfig:
 
     def log_audit_event(self, event_type: AuditEventType, action: str, resource: str, details: dict[str, Any] | None=None, severity: SecurityLevel=SecurityLevel.INFO, user_id: str='system', result: str='success') -> None:
         """Log audit event for compliance."""
-        event = AuditEvent(timestamp=datetime.now(UTC), event_type=event_type, severity=severity, user_id=user_id, action=action, resource=resource, details=self.mask_sensitive_data(details or {}), result=result)
+        masked_details = self.mask_sensitive_data(details or {})
+        if not isinstance(masked_details, dict):
+            masked_details = {}
+        event = AuditEvent(timestamp=datetime.now(UTC), event_type=event_type, severity=severity, user_id=user_id, action=action, resource=resource, details=masked_details, result=result)
         audit_data = {'timestamp': event.timestamp.isoformat(), 'event_type': event.event_type.value, 'severity': event.severity.value, 'user_id': event.user_id, 'action': event.action, 'resource': event.resource, 'details': event.details, 'result': event.result}
         self.audit_logger.info(json.dumps(audit_data))
         if event.severity in [SecurityLevel.ERROR, SecurityLevel.CRITICAL]:
@@ -246,7 +283,7 @@ class SecureConfig:
 class SafeLogger:
     """Logger wrapper that prevents API key exposure."""
 
-    def __init__(self, logger: logging.Logger, secure_config: SecureConfig | None=None):
+    def __init__(self, logger: logging.Logger | logging.LoggerAdapter[Any], secure_config: SecureConfig | None=None):
         self.logger = logger
         self.secure_config = secure_config or SecureConfig()
         self._sensitive_patterns = ['[A-Z0-9]{20,}', 'sk-[A-Za-z0-9]{20,}', '[A-Za-z0-9+/]{32,}={0,2}']
@@ -294,6 +331,15 @@ class SecurityManager:
         self._last_security_check = datetime.now(UTC)
         self.safe_logger.info('SecurityManager initialized')
 
+    @staticmethod
+    def _handler_count(logger_obj: logging.Logger | logging.LoggerAdapter[Any]) -> int:
+        if isinstance(logger_obj, logging.LoggerAdapter):
+            base_logger = logger_obj.logger
+        else:
+            base_logger = logger_obj
+        handlers = getattr(base_logger, "handlers", [])
+        return len(handlers) if isinstance(handlers, list) else 0
+
     def get_api_key(self, service: str) -> str | None:
         """Securely retrieve API key for a service."""
         key_mapping = {'alpaca': 'ALPACA_API_KEY', 'alpaca_secret': 'ALPACA_SECRET_KEY', 'news': 'NEWS_API_KEY', 'finnhub': 'FINNHUB_API_KEY', 'fundamental': 'FUNDAMENTAL_API_KEY', 'iex': 'IEX_API_TOKEN'}
@@ -301,7 +347,8 @@ class SecurityManager:
         if not env_key:
             self.secure_config.log_audit_event(event_type=AuditEventType.API_KEY_ACCESS, action='get_api_key', resource=service, result='failure', severity=SecurityLevel.WARNING, details={'reason': 'unknown_service'})
             return None
-        api_key = self.secure_config.get_secure_config(env_key)
+        api_key_value = self.secure_config.get_secure_config(env_key)
+        api_key = api_key_value if isinstance(api_key_value, str) else None
         self.secure_config.log_audit_event(event_type=AuditEventType.API_KEY_ACCESS, action='get_api_key', resource=service, result='success' if api_key else 'failure', details={'has_key': bool(api_key)})
         return api_key
 
@@ -315,13 +362,14 @@ class SecurityManager:
             return validator(key)
         return len(key) >= 20 and any((c.isalnum() for c in key))
 
-    def mask_sensitive_data(self, payload: dict) -> dict:
+    def mask_sensitive_data(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Mask sensitive fields via SecureConfig."""
-        return self.secure_config.mask_sensitive_data(payload)
+        masked_payload = self.secure_config.mask_sensitive_data(payload)
+        return masked_payload if isinstance(masked_payload, dict) else {}
 
     def check_security_health(self) -> dict[str, Any]:
         """Perform security health check."""
-        health_status = {'encryption_available': _CRYPTOGRAPHY_AVAILABLE, 'audit_logging_active': bool(self.secure_config.audit_logger.handlers), 'failed_access_attempts': self._failed_access_attempts, 'recent_security_events': len([e for e in self._security_events if e.timestamp > datetime.now(UTC) - timedelta(hours=24)]), 'last_security_check': self._last_security_check.isoformat()}
+        health_status = {'encryption_available': _CRYPTOGRAPHY_AVAILABLE, 'audit_logging_active': self._handler_count(self.secure_config.audit_logger) > 0, 'failed_access_attempts': self._failed_access_attempts, 'recent_security_events': len([e for e in self._security_events if e.timestamp > datetime.now(UTC) - timedelta(hours=24)]), 'last_security_check': self._last_security_check.isoformat()}
         critical_issues = []
         if not _CRYPTOGRAPHY_AVAILABLE:
             critical_issues.append('Encryption library not available')

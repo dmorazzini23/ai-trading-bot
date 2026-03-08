@@ -294,7 +294,7 @@ class TrailingStopManager:
         *,
         candidate: float | None = None,
         was_init: bool = False,
-    ) -> None:
+    ) -> bool:
         """Ensure stop aligns with side and avoids immediate triggers."""
 
         epsilon = PRICE_EPSILON
@@ -392,7 +392,7 @@ class TrailingStopManager:
             current_atr = atr.iloc[-1] if not pd.isna(atr.iloc[-1]) else 0
             current_price = close.iloc[-1]
             if current_price > 0 and current_atr > 0:
-                atr_percent = current_atr * self.atr_multiplier / current_price * 100
+                atr_percent = float(current_atr * self.atr_multiplier / current_price * 100)
                 return max(1.0, min(10.0, atr_percent))
             return self.base_trail_percent
         except (KeyError, ValueError, TypeError, IndexError, ZeroDivisionError):
@@ -454,8 +454,8 @@ class TrailingStopManager:
                 weights["momentum"] = 0.2
                 weights["time_decay"] = 0.1
                 weights["fixed"] = 0.1
-            total_weight = 0
-            weighted_sum = 0
+            total_weight = 0.0
+            weighted_sum = 0.0
             for method, distance in distances.items():
                 if method in weights:
                     weight = weights[method]

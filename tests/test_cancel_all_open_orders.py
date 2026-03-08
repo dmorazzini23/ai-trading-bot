@@ -1,6 +1,7 @@
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any, cast
 
 try:
     import alpaca.trading.requests as alpaca_requests
@@ -13,7 +14,7 @@ except ModuleNotFoundError:
     sys.modules.setdefault("alpaca", alpaca_root)
     sys.modules.setdefault("alpaca.trading", trading_mod)
     sys.modules.setdefault("alpaca.trading.requests", requests_mod)
-    alpaca_requests = requests_mod
+    alpaca_requests = cast(Any, requests_mod)
 
 if "alpaca.common.exceptions" not in sys.modules:
     exceptions_mod = types.ModuleType("alpaca.common.exceptions")
@@ -52,18 +53,18 @@ if "numpy" not in sys.modules:
 
 
 if "ai_trading.indicators" not in sys.modules:
-    indicators_stub = types.ModuleType("ai_trading.indicators")
+    indicators_stub = cast(Any, types.ModuleType("ai_trading.indicators"))
     _zero = lambda *args, **kwargs: 0
     indicators_stub.atr = _zero
     indicators_stub.compute_atr = _zero
     indicators_stub.mean_reversion_zscore = _zero
     indicators_stub.rsi = _zero
-    indicators_stub.__getattr__ = lambda _name: _zero  # type: ignore[attr-defined]
+    indicators_stub.__getattr__ = lambda _name: _zero
     sys.modules["ai_trading.indicators"] = indicators_stub
 
 
 if "portalocker" not in sys.modules:
-    portalocker_stub = types.ModuleType("portalocker")
+    portalocker_stub = cast(Any, types.ModuleType("portalocker"))
     portalocker_stub.LOCK_EX = 1
     portalocker_stub.lock = lambda *args, **kwargs: None
     portalocker_stub.unlock = lambda *args, **kwargs: None
@@ -71,7 +72,7 @@ if "portalocker" not in sys.modules:
 
 
 if "bs4" not in sys.modules:
-    bs4_stub = types.ModuleType("bs4")
+    bs4_stub = cast(Any, types.ModuleType("bs4"))
 
     class _Soup:
         def __init__(self, *_args, **_kwargs):
@@ -231,7 +232,7 @@ def test_send_exit_order_uses_cancel_order_shim(monkeypatch):
     alpaca_client._validate_trading_api(api)
     runtime = _Runtime(api=api)
 
-    limit_order_ids = []
+    limit_order_ids: list[str] = []
     market_calls = []
 
     def submit_order(**kwargs):

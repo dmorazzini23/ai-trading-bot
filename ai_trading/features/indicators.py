@@ -11,6 +11,7 @@ from __future__ import annotations
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.indicators import ema
+from typing import Any
 
 logger = get_logger(__name__)
 
@@ -18,7 +19,7 @@ logger = get_logger(__name__)
 pd = load_pandas()
 
 
-def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
+def compute_macd(df: Any) -> Any:
     """Compute MACD indicator."""
     try:
         if "close" not in df.columns:
@@ -86,7 +87,7 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
-def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+def compute_atr(df: Any, period: int = 14) -> Any:
     """Compute Average True Range (ATR)."""
     try:
         if not all((col in df.columns for col in ["high", "low", "close"])):
@@ -112,7 +113,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         return df
 
 
-def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
+def compute_vwap(df: Any) -> Any:
     """Compute Volume Weighted Average Price (VWAP)."""
     try:
         if not all((col in df.columns for col in ["high", "low", "close", "volume"])):
@@ -126,7 +127,7 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
-def compute_sma(df: pd.DataFrame, windows: tuple[int, int] = (50, 200)) -> pd.DataFrame:
+def compute_sma(df: Any, windows: tuple[int, int] = (50, 200)) -> Any:
     """Compute simple moving averages for given windows."""
     try:
         if "close" not in df.columns:
@@ -141,7 +142,7 @@ def compute_sma(df: pd.DataFrame, windows: tuple[int, int] = (50, 200)) -> pd.Da
         return df
 
 
-def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
+def compute_macds(df: Any) -> Any:
     """Map MACD signal to 'macds' column if available."""
     try:
         if "macds" not in df.columns:
@@ -156,7 +157,7 @@ def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
-def ensure_columns(df: pd.DataFrame, required: list[str] | None = None, symbol: str | None = None) -> pd.DataFrame:
+def ensure_columns(df: Any, required: list[str] | None = None, symbol: str | None = None) -> Any:
     """Ensure DataFrame has required columns for calculations."""
     required = required or ["open", "high", "low", "close", "volume"]
     try:

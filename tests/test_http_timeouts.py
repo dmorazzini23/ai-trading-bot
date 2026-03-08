@@ -1,6 +1,7 @@
 """Validate timeout behavior via the centralized HTTP abstraction."""
 
 import importlib
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,11 +12,8 @@ pytest_plugins = ("tests.watchdog_ext",)
 
 def _get_session_type():
     """Resolve the requests Session type robustly."""  # AI-AGENT-REF: mirror plugin lookup
-    import importlib
-
-    import requests
-
-    Session = getattr(requests, "Session", None)
+    requests_mod = getattr(http, "requests", None)
+    Session = getattr(requests_mod, "Session", None)
     if Session is None:
         Session = getattr(importlib.import_module("requests.sessions"), "Session", None)
     return Session
@@ -95,35 +93,35 @@ def test_requests_can_still_be_patched_via_session():
     """
     Validate that our test plugin injects a default timeout into raw requests.Session calls
     even when the caller does not pass `timeout`.
-    We avoid patching internals and instead mount a spy adapter to observe kwargs.
+    We patch Session.send to observe kwargs at the transport boundary.
     """
-    from requests.adapters import HTTPAdapter
-    from requests.models import Response
+    models_mod = importlib.import_module("requests.models")
+    Response = cast(Any, getattr(models_mod, "Response"))
 
     Session = _get_session_type()
     assert Session is not None, "requests Session type must be importable for this test"
 
-    seen = {}
+    seen: dict[str, Any] = {}
+    orig_send = cast(Any, Session).send
 
-    class SpyAdapter(HTTPAdapter):
-        def send(self, request, **kwargs):
-            # capture timeout kw passed down by Session.request (via our plugin)
-            seen["timeout"] = kwargs.get("timeout")
-            resp = Response()
-            resp.status_code = 200
-            resp._content = b"ok"
-            resp.url = request.url
-            return resp
+    def _send_with_capture(self, request, **kwargs):  # noqa: ANN001
+        seen["timeout"] = kwargs.get("timeout")
+        resp = Response()
+        resp.status_code = 200
+        resp._content = b"ok"
+        resp.url = request.url
+        return resp
 
-    s = Session()
-    s.mount("http://", SpyAdapter())
-    s.mount("https://", SpyAdapter())
-
-    # Do not pass timeout -> plugin should inject default
-    r = s.get(
-        "http://localhost/_probe_ok"
-    )  # AI-AGENT-REF: trigger plugin default timeout
-    assert r.status_code == 200
-    assert (
-        seen.get("timeout") is not None
-    ), "Default timeout should be injected by the plugin"
+    cast(Any, Session).send = _send_with_capture
+    try:
+        s = Session()
+        # Do not pass timeout -> plugin should inject default
+        r = s.get(
+            "http://localhost/_probe_ok"
+        )  # AI-AGENT-REF: trigger plugin default timeout
+        assert r.status_code == 200
+        assert (
+            seen.get("timeout") is not None
+        ), "Default timeout should be injected by the plugin"
+    finally:
+        cast(Any, Session).send = orig_send

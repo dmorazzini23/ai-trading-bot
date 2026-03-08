@@ -134,8 +134,8 @@ class BaseStrategy(ABC):
         self.risk_level = risk_level
         self.created_at = datetime.now(UTC)
         self.is_active = False
-        self.parameters = {}
-        self.symbols = []
+        self.parameters: dict[str, Any] = {}
+        self.symbols: list[str] = []
         self.timeframes = ['1d']
         self.signals_generated = 0
         self.trades_executed = 0

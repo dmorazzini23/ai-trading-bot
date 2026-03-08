@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from types import SimpleNamespace
+from typing import Any, cast
 
 import ai_trading.core.bot_engine as bot_engine
 from ai_trading.core.bot_engine import SignalManager, BotState
@@ -33,7 +34,7 @@ def _patch_signals(monkeypatch):
     monkeypatch.setattr(bot_engine, "signals_evaluated", None, raising=False)
 
 
-def _base_df(length: int) -> pd.DataFrame:
+def _base_df(length: int) -> Any:
     data = {
         "close": np.arange(length, dtype=float),
         "open": np.arange(length, dtype=float),
@@ -60,7 +61,7 @@ def test_nan_indicator_rows_ignored(monkeypatch):
     df["ichimoku_conv"] = 1.0
     df["ichimoku_base"] = 1.0
     df["stochrsi"] = [0.1] * (length - 1) + [np.nan]
-    signal, _, label = sm.evaluate(ctx, state, df, "TEST", None)
+    signal, _, label = sm.evaluate(cast(Any, ctx), state, df, "TEST", None)
     assert signal == 1
     assert label == "stochrsi"
 
@@ -77,6 +78,5 @@ def test_all_nan_indicators_return_no_data(monkeypatch):
     df["ichimoku_conv"] = np.nan
     df["ichimoku_base"] = np.nan
     df["stochrsi"] = np.nan
-    signal, conf, label = sm.evaluate(ctx, state, df, "TEST", None)
+    signal, conf, label = sm.evaluate(cast(Any, ctx), state, df, "TEST", None)
     assert (signal, conf, label) == (0.0, 0.0, "no_data")
-

@@ -3,10 +3,11 @@ pd = pytest.importorskip("pandas")
 from types import SimpleNamespace
 import sys
 import types
+from typing import Any, cast
 
 # Stub heavy dependencies before importing trade_logic
 logger_mod = types.ModuleType("ai_trading.logging")
-logger_mod.get_logger = lambda name: types.SimpleNamespace(
+cast(Any, logger_mod).get_logger = lambda name: types.SimpleNamespace(
     info=lambda *a, **k: None,
     debug=lambda *a, **k: None,
     warning=lambda *a, **k: None,
@@ -14,15 +15,15 @@ logger_mod.get_logger = lambda name: types.SimpleNamespace(
 sys.modules.setdefault("ai_trading.logging", logger_mod)
 
 cap_mod = types.ModuleType("ai_trading.capital_scaling")
-cap_mod.drawdown_adjusted_kelly = lambda *a, **k: 1.0
+cast(Any, cap_mod).drawdown_adjusted_kelly = lambda *a, **k: 1.0
 sys.modules.setdefault("ai_trading.capital_scaling", cap_mod)
 
 settings_mod = types.ModuleType("ai_trading.config.settings")
-settings_mod.get_settings = lambda: SimpleNamespace(intraday_lookback_minutes=120)
+cast(Any, settings_mod).get_settings = lambda: SimpleNamespace(intraday_lookback_minutes=120)
 sys.modules.setdefault("ai_trading.config.settings", settings_mod)
 
 core_mod = types.ModuleType("ai_trading.core.bot_engine")
-core_mod._fetch_intraday_bars_chunked = lambda *a, **k: {}
+cast(Any, core_mod)._fetch_intraday_bars_chunked = lambda *a, **k: {}
 sys.modules.setdefault("ai_trading.core.bot_engine", core_mod)
 
 from ai_trading.trade_logic import _compute_entry_signal, _compute_exit_signal

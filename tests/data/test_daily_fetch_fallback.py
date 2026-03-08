@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -53,7 +54,7 @@ def test_get_daily_df_uses_backup_when_columns_missing(monkeypatch):
     def _raise_missing(*_args, **_kwargs):
         raise fetch_module.MissingOHLCVColumnsError("missing columns")
 
-    alpaca_stub.get_bars_df = _raise_missing
+    cast(Any, alpaca_stub).get_bars_df = _raise_missing
     monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", alpaca_stub)
 
     start = datetime(2024, 1, 1, tzinfo=UTC)
@@ -110,7 +111,7 @@ def test_get_daily_df_normalizes_yahoo_regular_market_schema(monkeypatch):
     def _raise_missing(*_args, **_kwargs):
         raise fetch_module.MissingOHLCVColumnsError("missing columns")
 
-    alpaca_stub.get_bars_df = _raise_missing
+    cast(Any, alpaca_stub).get_bars_df = _raise_missing
     monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", alpaca_stub)
 
     start = datetime(2024, 1, 1, tzinfo=UTC)
@@ -227,7 +228,9 @@ def test_close_nan_disable_sets_quote_fallback(monkeypatch):
     state = types.SimpleNamespace()
     bot_engine._PRICE_SOURCE.pop(symbol, None)
     bot_engine._mark_primary_provider_fallback(
-        state, symbol, reason="alpaca_primary_disabled"
+        cast(Any, state),
+        symbol,
+        reason="alpaca_primary_disabled",
     )
     assert getattr(state, "prefer_backup_quotes", False)
 

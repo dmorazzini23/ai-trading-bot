@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+from typing import Any, cast
 
 
 def _install_flask_stub(monkeypatch):
@@ -20,8 +21,8 @@ def _install_flask_stub(monkeypatch):
         def run(self, *a, **k):
             pass
 
-    stub.Flask = _Flask
-    stub.jsonify = lambda *a, **k: {}
+    cast(Any, stub).Flask = _Flask
+    cast(Any, stub).jsonify = lambda *a, **k: {}
     monkeypatch.setitem(sys.modules, "flask", stub)
 
 

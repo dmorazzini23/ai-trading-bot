@@ -1,5 +1,6 @@
 import sys
 import types
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -43,8 +44,7 @@ def test_prepare_indicators_requires_ohlcv():
 
 def test_prepare_indicators_calculates(sample_df, monkeypatch):
     """Indicators are added using pandas_ta helpers."""
-    import types
-    pta = types.ModuleType('pandas_ta')
+    pta = cast(Any, types.ModuleType('pandas_ta'))
     pta.vwap = lambda h,l,c,v: pd.Series((h+l+c)/3, index=sample_df.index)
     pta.macd = lambda c, **k: {
         'MACD_12_26_9': c * 0 + 1.0,
@@ -66,7 +66,7 @@ def test_prepare_indicators_calculates(sample_df, monkeypatch):
     }
     monkeypatch.setitem(sys.modules, 'pandas_ta', pta)
 
-    prepare_mod = types.ModuleType('ai_trading.features.prepare')
+    prepare_mod = cast(Any, types.ModuleType('ai_trading.features.prepare'))
 
     def prepare_indicators(df, freq: str = 'intraday'):
         ta = pta

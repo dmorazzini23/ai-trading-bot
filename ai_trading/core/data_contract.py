@@ -23,7 +23,7 @@ class DataContractResult:
     detail: dict[str, Any] = field(default_factory=dict)
 
 
-def _coerce_datetime_index(df: "pd.DataFrame") -> "pd.DataFrame":
+def _coerce_datetime_index(df: Any) -> Any:
     if df is None or df.empty:
         return df
     if not hasattr(df, "index"):
@@ -45,11 +45,11 @@ def _coerce_datetime_index(df: "pd.DataFrame") -> "pd.DataFrame":
 
 
 def normalize_bars(
-    df: "pd.DataFrame",
+    df: Any,
     timeframe: str,
     tz: ZoneInfo | None = None,
     rth_only: bool = True,
-) -> "pd.DataFrame":
+) -> Any:
     """Return normalized bar DataFrame with standard columns and UTC index."""
     if str(timeframe).lower() in {"1day", "day", "1d"}:
         rth_only = False
@@ -75,7 +75,7 @@ def normalize_bars(
 
 
 def validate_bars(
-    df: "pd.DataFrame",
+    df: Any,
     timeframe: str,
     freshness_seconds: int,
     rth_only: bool = True,

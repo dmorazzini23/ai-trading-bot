@@ -75,10 +75,10 @@ class MLTrainer:
         self.embargo_pct = embargo_pct
         self.purge_pct = purge_pct
         self.random_state = random_state
-        self.model = None
-        self.best_params = None
-        self.cv_results = None
-        self.feature_importance = None
+        self.model: Any | None = None
+        self.best_params: dict[str, Any] = {}
+        self.cv_results: dict[str, Any] = {}
+        self.feature_importance: dict[str, Any] = {}
         self._validate_dependencies()
 
     def _validate_dependencies(self) -> None:
@@ -191,7 +191,7 @@ class MLTrainer:
             )
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
             logger.info(f"Hyperparameter optimization completed. Best score: {study.best_value:.4f}")
-            return study.best_params
+            return dict(study.best_params)
         except (ValueError, TypeError) as e:
             logger.error(f"Error in hyperparameter optimization: {e}")
             return self._get_default_params()
@@ -308,7 +308,7 @@ class MLTrainer:
             correlation = np.corrcoef(pred_returns, true_returns)[0, 1]
             if np.isnan(correlation):
                 correlation = 0.0
-            score = 0.6 * directional_accuracy + 0.4 * abs(correlation)
+            score = float(0.6 * directional_accuracy + 0.4 * abs(correlation))
             return score
         except (ValueError, TypeError) as e:
             logger.error(f"Error calculating score: {e}")
@@ -364,6 +364,8 @@ class MLTrainer:
     def _fit_final_model(self, X: "pd.DataFrame", y: "pd.Series") -> None:
         """Fit final model on full dataset."""
         try:
+            if self.model is None:
+                raise RuntimeError("Model must be initialized before fitting")
             self.model.fit(X, y)
             if hasattr(self.model, "feature_importances_"):
                 self.feature_importance = dict(zip(X.columns, self.model.feature_importances_, strict=False))

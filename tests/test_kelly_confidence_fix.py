@@ -8,7 +8,7 @@ import math
 import sys
 import types
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 
 def _set_module_attr(module: types.ModuleType, attr_name: str, value: Any) -> None:
@@ -68,7 +68,7 @@ def test_kelly_confidence_normalization():
         from ai_trading.core.bot_engine import fractional_kelly_size
         from tests.support.mocks import MockContext as MockBotContext
 
-        ctx = MockBotContext()
+        ctx = cast(Any, MockBotContext())
         balance = 10000.0
         price = 100.0
         atr = 2.0
@@ -122,7 +122,7 @@ def test_kelly_input_validation():
         from ai_trading.core.bot_engine import fractional_kelly_size
         from tests.support.mocks import MockContext as MockBotContext
 
-        ctx = MockBotContext()
+        ctx = cast(Any, MockBotContext())
 
         # Test invalid inputs return 0 or minimal position
         assert fractional_kelly_size(ctx, -1000, 100, 2.0, 0.6) == 0  # negative balance
@@ -193,14 +193,14 @@ def test_calculate_entry_size_zero_price(monkeypatch, caplog):
         def get_stock_latest_quote(self, *_args, **_kwargs):
             return _DummyQuote()
 
-    ctx = SimpleNamespace(
+    ctx = cast(Any, SimpleNamespace(
         api=_DummyAPI(),
         data_fetcher=_DummyFetcher(),
         data_client=_DummyDataClient(),
         volume_threshold=100_000,
         params={},
         max_position_dollars=10_000.0,
-    )
+    ))
 
     caplog.set_level("INFO")
     size = calculate_entry_size(ctx, "TEST", price=0.0, atr=1.0, win_prob=0.6)

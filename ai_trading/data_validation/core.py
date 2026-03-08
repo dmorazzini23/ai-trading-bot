@@ -11,6 +11,7 @@ from ai_trading.validation.require_env import should_halt_trading
 
 # Lazy pandas proxy for on-demand import
 pd = load_pandas()
+DataFrame = Any
 __all__ = [
     "check_data_freshness",
     "get_staleness_threshold",
@@ -55,7 +56,7 @@ def get_staleness_threshold(symbol: str, ts: datetime | None=None) -> int:
         return 15
     return 120
 
-def is_valid_ohlcv(df: pd.DataFrame, min_rows: int=50) -> bool:
+def is_valid_ohlcv(df: DataFrame, min_rows: int=50) -> bool:
     """Return True if ``df`` has required OHLCV columns and rows."""
     if df is None or df.empty:
         return False
@@ -63,7 +64,7 @@ def is_valid_ohlcv(df: pd.DataFrame, min_rows: int=50) -> bool:
         return False
     return bool(len(df) >= min_rows)
 
-def check_data_freshness(df: pd.DataFrame | None, symbol: str, *, max_staleness_minutes: int=15) -> dict[str, float | str | bool]:
+def check_data_freshness(df: DataFrame | None, symbol: str, *, max_staleness_minutes: int=15) -> dict[str, float | str | bool]:
     """Return freshness info for ``symbol`` handling empty/naive data."""
     now = datetime.now(UTC)
     market_open = is_market_hours(now)
@@ -115,17 +116,17 @@ def get_stale_symbols(data_map: Mapping[str, object] | None, *, max_staleness_mi
             out.append(sym)
     return out
 
-def validate_trading_data(data_map: Mapping[str, pd.DataFrame] | None, *, max_staleness_minutes: int=15) -> dict[str, dict[str, object]]:
+def validate_trading_data(data_map: Mapping[str, DataFrame] | None, *, max_staleness_minutes: int=15) -> dict[str, dict[str, Any]]:
     """Return mapping of freshness and trading readiness."""
     data_map = data_map or {}
-    results: dict[str, dict[str, object]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for sym, df in data_map.items():
         info = check_data_freshness(df, sym, max_staleness_minutes=max_staleness_minutes)
         info['trading_ready'] = bool(info.get('is_fresh'))
         results[sym] = info
     return results
 
-def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symbol: str | None=None, *, fetcher: Callable[[str, str, datetime, datetime], pd.DataFrame] | None=None) -> bool:
+def emergency_data_check(symbols_or_df: Sequence[str] | str | DataFrame, symbol: str | None=None, *, fetcher: Callable[..., DataFrame | None] | None=None) -> bool:
     """Return True if any symbol yields non-empty recent bars.
 
     Back-compat: ``emergency_data_check(df, "AAPL")`` returns ``not df.empty``.
@@ -136,7 +137,9 @@ def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symb
             and 'close' in symbols_or_df.columns
             and (symbols_or_df['close'] > 0).all()
         )
-    if isinstance(symbols_or_df, str | bytes):
+    if isinstance(symbols_or_df, bytes):
+        to_check = [symbols_or_df.decode("utf-8", errors="ignore")]
+    elif isinstance(symbols_or_df, str):
         to_check = [symbols_or_df]
     elif isinstance(symbols_or_df, Sequence):
         to_check = list(symbols_or_df)
@@ -177,7 +180,7 @@ class ValidationResult:
 class MarketDataValidator:
     """Minimal market data validator used in tests."""
 
-    def validate_ohlc_data(self, df: pd.DataFrame, symbol: str) -> ValidationResult:
+    def validate_ohlc_data(self, df: DataFrame, symbol: str) -> ValidationResult:
         if df is None or df.empty:
             return ValidationResult(False, 0.0, ValidationSeverity.ERROR)
         cond = (df['high'] >= df[['open', 'close']].max(axis=1)) & (df['low'] <= df[['open', 'close']].min(axis=1)) & (df['volume'] >= 0)
@@ -187,7 +190,7 @@ class MarketDataValidator:
         return ValidationResult(ok, score, sev)
 
     @staticmethod
-    def positive_prices(df: pd.DataFrame) -> pd.DataFrame:
+    def positive_prices(df: DataFrame) -> DataFrame:
         return df[df['close'] > 0]
 
 def monitor_real_time_data_quality(prices: dict[str, float]) -> dict[str, Any]:

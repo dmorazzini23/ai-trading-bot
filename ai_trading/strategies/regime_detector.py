@@ -9,7 +9,7 @@ import sys
 import statistics
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 import numpy as np
 from ai_trading.logging import logger
 from ai_trading.risk.adaptive_sizing import MarketRegime, VolatilityRegime
@@ -24,7 +24,7 @@ def _canonical_market_regime_type() -> type[Any]:
     candidate = getattr(adaptive_mod, "MarketRegime", None) if adaptive_mod is not None else None
     if isinstance(candidate, type):
         return candidate
-    return MarketRegime
+    return cast(type[Any], MarketRegime)
 
 
 def _coerce_market_regime(regime: Any) -> Any:
@@ -183,7 +183,7 @@ class RegimeDetector:
                 n = len(returns)
                 x_mean = (n - 1) / 2
                 y_values = []
-                cum_return = 0
+                cum_return = 0.0
                 for r in returns:
                     cum_return += r
                     y_values.append(cum_return)
@@ -262,11 +262,11 @@ class RegimeDetector:
             correlation_matrix = market_data.get('correlations', {})
             if not correlation_matrix:
                 return 0.3
-            correlations = []
+            correlations: list[float] = []
             for symbol1, corr_dict in correlation_matrix.items():
                 for symbol2, correlation in corr_dict.items():
                     if symbol1 != symbol2:
-                        correlations.append(abs(correlation))
+                        correlations.append(abs(float(correlation)))
             if not correlations:
                 return 0.3
             avg_correlation = statistics.mean(correlations)
@@ -282,7 +282,7 @@ class RegimeDetector:
             vix_symbols = ['VIX', '^VIX', 'VIXY']
             for symbol in vix_symbols:
                 if symbol in prices:
-                    return prices[symbol]
+                    return float(prices[symbol])
             return None
         except (ValueError, TypeError, KeyError):
             return None

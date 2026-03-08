@@ -3,9 +3,10 @@ from types import SimpleNamespace
 
 import sys
 import types
+from typing import Any, cast
 
 if "numpy" not in sys.modules:  # pragma: no cover - dependency stub for tests
-    numpy_stub = types.ModuleType("numpy")
+    numpy_stub = cast(Any, types.ModuleType("numpy"))
     numpy_stub.ndarray = object
     numpy_stub.array = lambda *args, **kwargs: args[0] if args else None
     numpy_stub.isnan = lambda value: value != value
@@ -16,7 +17,7 @@ if "numpy" not in sys.modules:  # pragma: no cover - dependency stub for tests
     sys.modules["numpy"] = numpy_stub
 
 if "portalocker" not in sys.modules:  # pragma: no cover - dependency stub for tests
-    portalocker_stub = types.ModuleType("portalocker")
+    portalocker_stub = cast(Any, types.ModuleType("portalocker"))
     portalocker_stub.LOCK_EX = 1
 
     def _noop(*_args, **_kwargs):
@@ -27,7 +28,7 @@ if "portalocker" not in sys.modules:  # pragma: no cover - dependency stub for t
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:  # pragma: no cover - dependency stub for tests
-    bs4_stub = types.ModuleType("bs4")
+    bs4_stub = cast(Any, types.ModuleType("bs4"))
 
     class _BeautifulSoup:  # pragma: no cover - simple placeholder
         def __init__(self, *args, **kwargs):
@@ -111,7 +112,7 @@ def test_run_all_trades_aborts_without_api(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "get_minute_df", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "last_minute_bar_age_seconds", lambda *a, **k: 0)
     monkeypatch.setattr(bot_engine, "get_cached_minute_timestamp", lambda *a, **k: 0)
-    hb = {}
+    hb: dict[str, bool] = {}
     monkeypatch.setattr(bot_engine, "_log_loop_heartbeat", lambda *a, **k: hb.setdefault("loop", True))
     monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: hb.setdefault("halt", True))
     monkeypatch.setattr(bot_engine, "ensure_data_fetcher", lambda _rt: True)

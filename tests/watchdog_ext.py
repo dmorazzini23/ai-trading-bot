@@ -5,12 +5,9 @@ import os
 import socket
 import sys
 import time
+from typing import Any, cast
 
 import pytest
-try:
-    import requests
-except ModuleNotFoundError:  # pragma: no cover - optional dependency in CI
-    requests = None
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -47,16 +44,18 @@ def _short_sleep(monkeypatch):
 
 def _resolve_requests_session():
     """Locate requests.Session in a robust way."""  # AI-AGENT-REF: fallback lookup
-    if requests is None:
+    try:
+        requests_mod = importlib.import_module("requests")
+    except ModuleNotFoundError:  # pragma: no cover - optional dependency in CI
         return None, None
-    Session = getattr(requests, "Session", None)
+    Session = getattr(requests_mod, "Session", None)
     if Session is None:
         try:
             sess_mod = importlib.import_module("requests.sessions")
             Session = getattr(sess_mod, "Session", None)
         except (TimeoutError, Exception):  # pragma: no cover - defensive
             Session = None
-    return Session, requests
+    return Session, requests_mod
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -82,13 +81,13 @@ def _requests_default_timeout():
             kwargs["timeout"] = default_timeout
         return orig_request(self, method, url, **kwargs)
 
-    Session.request = (
+    cast(Any, Session).request = (
         request_with_default_timeout  # AI-AGENT-REF: manual patch to inject default timeout
     )
     try:
         yield
     finally:
-        Session.request = orig_request  # AI-AGENT-REF: restore original request method
+        cast(Any, Session).request = orig_request  # AI-AGENT-REF: restore original request method
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -112,11 +111,11 @@ def _block_external_network():
             f"Set ALLOW_EXTERNAL_NETWORK=1 to override."
         )
 
-    socket.socket.connect = guarded_connect  # AI-AGENT-REF: manual patch to block external network
+    cast(Any, socket.socket).connect = guarded_connect  # AI-AGENT-REF: manual patch to block external network
     try:
         yield
     finally:
-        socket.socket.connect = orig_connect  # AI-AGENT-REF: restore network connect
+        cast(Any, socket.socket).connect = orig_connect  # AI-AGENT-REF: restore network connect
 
 
 @pytest.fixture(scope="session", autouse=True)

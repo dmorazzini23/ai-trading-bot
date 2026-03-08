@@ -130,7 +130,13 @@ def test_symbol_costs():
     from ai_trading.execution.costs import SymbolCostModel, SymbolCosts
 
     # Test cost calculation
-    costs = SymbolCosts(symbol="TEST", half_spread_bps=2.0, slip_k=1.5, commission_bps=0.5, min_commission=np.float32(2.0))
+    costs = SymbolCosts(
+        symbol="TEST",
+        half_spread_bps=2.0,
+        slip_k=1.5,
+        commission_bps=0.5,
+        min_commission=float(np.float32(2.0)),
+    )
 
     # Test slippage calculation
     slippage = costs.slippage_cost_bps(volume_ratio=2.0)
@@ -151,7 +157,11 @@ def test_symbol_costs():
     assert symbol_costs.half_spread_bps > 0
 
     # Test cost impact calculation
-    impact = model.calculate_position_impact("NEWTEST", position_value=np.int64(10000), volume_ratio=np.float32(1.0))
+    impact = model.calculate_position_impact(
+        "NEWTEST",
+        position_value=float(np.int64(10000)),
+        volume_ratio=float(np.float32(1.0)),
+    )
     assert "cost_bps" in impact
     assert "cost_dollars" in impact
     assert impact["cost_dollars"] > 0
@@ -353,9 +363,9 @@ def test_backtest_cost_enforcement():
     # Test cost adjustment
     adjusted_size, cost_info = model.adjust_position_size(
         symbol="TEST",
-        target_size=np.int64(10000),
-        max_cost_bps=np.float32(15.0),
-        volume_ratio=np.int64(1),
+        target_size=float(np.int64(10000)),
+        max_cost_bps=float(np.float32(15.0)),
+        volume_ratio=float(np.int64(1)),
     )
 
     assert isinstance(adjusted_size, (int, float, np.floating))

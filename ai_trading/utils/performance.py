@@ -11,7 +11,7 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
@@ -77,7 +77,8 @@ class PerformanceCache:
         """Check if cache entry is expired."""
         if 'timestamp' not in entry:
             return True
-        age = (datetime.now(UTC) - entry['timestamp']).total_seconds()
+        timestamp = cast(datetime, entry['timestamp'])
+        age = (datetime.now(UTC) - timestamp).total_seconds()
         return age > self.ttl_seconds
 
     def _cleanup_expired(self) -> None:
@@ -140,7 +141,7 @@ def cached_operation(cache_ttl: int=300, cache_key_func: Callable | None=None):
             result = func(*args, **kwargs)
             cache.set(cache_key, result)
             return result
-        wrapper.cache = cache
+        cast(Any, wrapper).cache = cache
         return wrapper
     return decorator
 
@@ -207,7 +208,7 @@ class ParallelProcessor:
         chunk_size = max(1, len(indicator_configs) // self.max_workers)
         indicator_chunks = [indicator_configs[i:i + chunk_size] for i in range(0, len(indicator_configs), chunk_size)]
 
-        def calculate_indicator_chunk(configs: list[dict[str, Any]]) -> pd.DataFrame:
+        def calculate_indicator_chunk(configs: list[dict[str, Any]]) -> Any:
             """Calculate indicators for a chunk of configs."""
             chunk_results = pd.DataFrame()
             for config in configs:

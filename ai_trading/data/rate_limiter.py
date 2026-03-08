@@ -128,7 +128,7 @@ class RateLimiterManager:
     """Manages multiple rate limiters for different API endpoints."""
     
     def __init__(self):
-        self.limiters = {}
+        self.limiters: dict[str, TokenBucket] = {}
         self.lock = Lock()
     
     def get_or_create(
@@ -187,7 +187,7 @@ class SlidingWindowRateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.name = name
-        self.requests = deque()
+        self.requests: deque[datetime] = deque()
         self.lock = Lock()
     
     def can_proceed(self) -> tuple[bool, float]:
@@ -245,4 +245,3 @@ class SlidingWindowRateLimiter:
                 }
             )
             time.sleep(wait_time)
-

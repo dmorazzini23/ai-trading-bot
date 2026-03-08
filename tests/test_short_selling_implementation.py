@@ -6,6 +6,7 @@ Tests the specific changes needed to enable short selling capability.
 
 import os
 import unittest
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from ai_trading.order.types import OrderSide
@@ -102,12 +103,13 @@ class TestShortSellingImplementation(unittest.TestCase):
                             pass
 
                         # Verify short selling validation was called
-                        engine._validate_short_selling.assert_called_once_with(self.mock_api, "AAPL", 10)
+                        validator_mock = cast(Any, engine._validate_short_selling)
+                        validator_mock.assert_called_once_with(self.mock_api, "AAPL", 10)
                         # Verify the short sell initiation log
                         engine.logger.info.assert_any_call("SHORT_SELL_INITIATED | symbol=%s qty=%d", "AAPL", 10)
 
                         # Now test that regular sell orders are blocked when no position exists
-                        engine._validate_short_selling.reset_mock()
+                        validator_mock.reset_mock()
                         engine.logger.reset_mock()
 
                         result = engine.execute_order("AAPL", OrderSide.SELL, 10)
@@ -116,7 +118,7 @@ class TestShortSellingImplementation(unittest.TestCase):
                         self.assertIsNone(result)
                         engine.logger.info.assert_called_with("SKIP_NO_POSITION | no shares to sell, skipping")
                         # Short selling validation should NOT be called for regular sell
-                        engine._validate_short_selling.assert_not_called()
+                        validator_mock.assert_not_called()
 
     def test_order_status_monitoring_needed(self):
         """Test framework for order status monitoring."""

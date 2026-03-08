@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from ai_trading.data import provider_monitor as pm
 from ai_trading.data.metrics import provider_failure_duration_seconds
@@ -51,7 +52,7 @@ def test_outage_logging_and_alert(monkeypatch, caplog):
 
     monkeypatch.setattr(pm, "datetime", FakeDT)
     alerts = DummyAlerts()
-    monitor = pm.ProviderMonitor(cooldown=10, alert_manager=alerts)
+    monitor = pm.ProviderMonitor(cooldown=10, alert_manager=cast(Any, alerts))
 
     monitor.disable("alpaca")
     FakeDT.current = base + timedelta(seconds=15)
@@ -85,7 +86,7 @@ def test_record_switchover_backoff(monkeypatch):
         switchover_threshold=2,
         backoff_factor=2,
         max_cooldown=40,
-        alert_manager=alerts,
+        alert_manager=cast(Any, alerts),
     )
 
     monitor.record_switchover("a", "b")
@@ -164,7 +165,7 @@ def test_partial_coverage_reset_prevents_disable(monkeypatch):
         switchover_threshold=2,
         backoff_factor=2,
         max_cooldown=60,
-        alert_manager=alerts,
+        alert_manager=cast(Any, alerts),
     )
     disabled: list[float] = []
     monitor.register_disable_callback("alpaca_iex", lambda duration: disabled.append(duration.total_seconds()))
@@ -213,4 +214,3 @@ def test_record_switchover_same_provider_logs_stay(caplog):
 
     assert monitor.consecutive_switches == 0
     assert any("DATA_PROVIDER_STAY" in rec.message for rec in caplog.records)
-

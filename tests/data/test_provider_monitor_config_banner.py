@@ -26,6 +26,6 @@ def test_provider_monitor_logs_config_once(
     records = [record for record in caplog.records if record.msg == "PROVIDER_MONITOR_CONFIG"]
     assert len(records) == 1
     banner = records[0]
-    assert banner.decision_window_secs == 300
-    assert banner.switch_cooldown_secs == 600
-    assert banner.max_cooldown_secs == 900
+    assert getattr(banner, "decision_window_secs", None) == 300
+    assert getattr(banner, "switch_cooldown_secs", None) == 600
+    assert getattr(banner, "max_cooldown_secs", None) == 900

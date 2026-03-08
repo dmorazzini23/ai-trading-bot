@@ -1,12 +1,17 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
+from typing import Protocol
+
+
+class _StreamingIndicator(Protocol):
+    def update(self, x: float) -> float: ...
 
 class StreamingSMA:
 
     def __init__(self, period: int):
         self.p = int(period)
-        self.q = []
+        self.q: list[float] = []
         self.s = 0.0
 
     def update(self, x: float) -> float:
@@ -56,7 +61,7 @@ class IndicatorSpec:
 class IndicatorManager:
 
     def __init__(self):
-        self._ind: dict[str, object] = {}
+        self._ind: dict[str, _StreamingIndicator] = {}
 
     def add(self, name: str, spec: IndicatorSpec) -> None:
         if spec.kind == 'sma':

@@ -1,4 +1,5 @@
 import types
+from typing import Any, cast
 import pytest
 
 from ai_trading import alpaca_api
@@ -18,7 +19,7 @@ class DummyAPI:
         self.calls += 1
         if self.fail_status and self.calls == 1:
             err = Exception("fail")
-            err.status = self.fail_status
+            setattr(err, "status", self.fail_status)
             raise err
         return types.SimpleNamespace(id="123", **order_data)
 
@@ -120,10 +121,11 @@ def test_submit_order_uses_request_object(monkeypatch):
     )
 
     assert client.calls == 1
-    request_obj, idem = client.last
+    request_obj, idem = cast(tuple[Any, Any], client.last)
     assert isinstance(request_obj, _MarketReq)
-    assert request_obj.symbol == "AAPL"
-    assert request_obj.qty == "1"
-    assert request_obj.side == "buy"
+    request_data = cast(Any, request_obj)
+    assert request_data.symbol == "AAPL"
+    assert request_data.qty == "1"
+    assert request_data.side == "buy"
     assert idem == "idem-1"
     assert result["client_order_id"] == "idem-1"

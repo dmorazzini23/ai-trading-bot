@@ -28,10 +28,10 @@ class PerformanceMetrics:
     def __init__(self, lookback_days: int=252):
         """Initialize performance metrics."""
         self.lookback_days = lookback_days
-        self.returns = deque(maxlen=lookback_days)
-        self.equity_curve = deque(maxlen=lookback_days)
-        self.trades = deque(maxlen=1000)
-        self.current_metrics = {}
+        self.returns: deque[float] = deque(maxlen=lookback_days)
+        self.equity_curve: deque[float] = deque(maxlen=lookback_days)
+        self.trades: deque[dict[str, Any]] = deque(maxlen=1000)
+        self.current_metrics: dict[str, Any] = {}
         self.last_calculation = datetime.now(UTC)
         self.risk_free_rate = 0.02
         logger.info(f'PerformanceMetrics initialized with lookback_days={lookback_days}')
@@ -56,7 +56,7 @@ class PerformanceMetrics:
         except COMMON_EXC as e:
             logger.error(f'Error adding trade: {e}')
 
-    def calculate_sharpe_ratio(self, returns: list[float]=None) -> float:
+    def calculate_sharpe_ratio(self, returns: list[float] | None = None) -> float:
         """Calculate Sharpe ratio."""
         try:
             returns_data = returns or list(self.returns)
@@ -68,13 +68,13 @@ class PerformanceMetrics:
                 return 0.0
             daily_risk_free = self.risk_free_rate / 252
             excess_return = mean_return - daily_risk_free
-            sharpe = excess_return / std_return * 252 ** 0.5
+            sharpe = float(excess_return / std_return * 252 ** 0.5)
             return sharpe
         except COMMON_EXC as e:
             logger.error(f'Error calculating Sharpe ratio: {e}')
             return 0.0
 
-    def calculate_sortino_ratio(self, returns: list[float]=None) -> float:
+    def calculate_sortino_ratio(self, returns: list[float] | None = None) -> float:
         """Calculate Sortino ratio (using downside deviation)."""
         try:
             returns_data = returns or list(self.returns)
@@ -89,13 +89,13 @@ class PerformanceMetrics:
                 return 0.0
             daily_risk_free = self.risk_free_rate / 252
             excess_return = mean_return - daily_risk_free
-            sortino = excess_return / downside_std * 252 ** 0.5
+            sortino = float(excess_return / downside_std * 252 ** 0.5)
             return sortino
         except COMMON_EXC as e:
             logger.error(f'Error calculating Sortino ratio: {e}')
             return 0.0
 
-    def calculate_max_drawdown(self, equity_curve: list[float]=None) -> tuple[float, int]:
+    def calculate_max_drawdown(self, equity_curve: list[float] | None = None) -> tuple[float, int]:
         """Calculate maximum drawdown and duration."""
         try:
             equity_data = equity_curve or list(self.equity_curve)
@@ -170,7 +170,7 @@ class RealTimePnLTracker:
         self.daily_pnl = 0.0
         self.unrealized_pnl = 0.0
         self.realized_pnl = 0.0
-        self.pnl_history = deque(maxlen=1000)
+        self.pnl_history: deque[dict[str, Any]] = deque(maxlen=1000)
         self.daily_pnl_history = {}
         self.session_start_equity = 0.0
         self.session_high_equity = 0.0
@@ -276,13 +276,13 @@ class AnomalyDetector:
     def __init__(self, sensitivity: float=2.0):
         """Initialize anomaly detector."""
         self.sensitivity = sensitivity
-        self.returns_history = deque(maxlen=252)
-        self.pnl_history = deque(maxlen=252)
-        self.volatility_history = deque(maxlen=50)
+        self.returns_history: deque[float] = deque(maxlen=252)
+        self.pnl_history: deque[float] = deque(maxlen=252)
+        self.volatility_history: deque[float] = deque(maxlen=50)
         self.return_threshold = 0.0
         self.pnl_threshold = 0.0
         self.volatility_threshold = 0.0
-        self.recent_anomalies = deque(maxlen=100)
+        self.recent_anomalies: deque[dict[str, Any]] = deque(maxlen=100)
         logger.info(f'AnomalyDetector initialized with sensitivity={sensitivity}')
 
     def update_data(self, daily_return: float, daily_pnl: float, volatility: float):
@@ -298,7 +298,7 @@ class AnomalyDetector:
     def detect_anomalies(self, current_return: float, current_pnl: float, current_volatility: float) -> list[dict[str, Any]]:
         """Detect performance anomalies."""
         try:
-            anomalies = []
+            anomalies: list[dict[str, Any]] = []
             if len(self.returns_history) >= 30:
                 mean_return = statistics.mean(self.returns_history)
                 std_return = statistics.stdev(self.returns_history)

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, cast
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
@@ -111,9 +111,10 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
 
     handlers = getattr(log, "handlers", [])
     try:
-        from ai_trading.logging_filters import SecretFilter
+        from ai_trading.logging_filters import SecretFilter as _SecretFilter
+        secret_filter_type: type[logging.Filter] | None = _SecretFilter
     except Exception:  # pragma: no cover - optional dependency guard
-        SecretFilter = None  # type: ignore[assignment]
+        secret_filter_type = None
 
     try:
         unique: list[logging.Handler] = list(handlers)
@@ -126,8 +127,8 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
     # Preserve pytest's LogCaptureHandler instances to keep ``caplog`` functional
     for existing in unique:
         if existing.__class__.__name__ == "LogCaptureHandler":
-            if SecretFilter is not None and not any(isinstance(f, SecretFilter) for f in existing.filters):
-                existing.addFilter(SecretFilter())
+            if secret_filter_type is not None and not any(isinstance(f, secret_filter_type) for f in existing.filters):
+                existing.addFilter(secret_filter_type())
             if not any(isinstance(f, ExtraSanitizerFilter) for f in existing.filters):
                 existing.addFilter(ExtraSanitizerFilter())
             filtered.append(existing)
@@ -140,8 +141,8 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
         if h_type in seen_types:
             continue
         seen_types.add(h_type)
-        if SecretFilter is not None and not any(isinstance(f, SecretFilter) for f in h.filters):
-            h.addFilter(SecretFilter())
+        if secret_filter_type is not None and not any(isinstance(f, secret_filter_type) for f in h.filters):
+            h.addFilter(secret_filter_type())
         if not any(isinstance(f, ExtraSanitizerFilter) for f in h.filters):
             h.addFilter(ExtraSanitizerFilter())
         if _THROTTLE_FILTER not in h.filters:
@@ -152,8 +153,8 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
         h = logging.StreamHandler()
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
         h.setFormatter(fmt)
-        if SecretFilter is not None:
-            h.addFilter(SecretFilter())
+        if secret_filter_type is not None:
+            h.addFilter(secret_filter_type())
         h.addFilter(ExtraSanitizerFilter())
         h.addFilter(_THROTTLE_FILTER)
         filtered.append(h)
@@ -767,7 +768,7 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
     @property
     def filters(self) -> list[logging.Filter]:
         """Delegate filter list to the underlying logger."""
-        return self.logger.filters
+        return cast(list[logging.Filter], self.logger.filters)
 
     @filters.setter
     def filters(self, value: list[logging.Filter]) -> None:
@@ -777,7 +778,7 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
     @property
     def propagate(self) -> bool:
         """Whether the underlying logger propagates messages."""
-        return self.logger.propagate
+        return bool(self.logger.propagate)
 
     @propagate.setter
     def propagate(self, value: bool) -> None:
@@ -916,7 +917,7 @@ class CompactJsonFormatter(JSONFormatter):
 class EmitOnceLogger:
     """Logger wrapper that tracks emitted messages to prevent duplicates."""
 
-    def __init__(self, base_logger: logging.Logger):
+    def __init__(self, base_logger: logging.Logger | logging.LoggerAdapter[Any]):
         self._logger = base_logger
         self._emitted_keys: dict[str, tuple[date, int]] = {}
         self._lock = threading.Lock()
@@ -994,6 +995,7 @@ def get_rotating_handler(path: str, max_bytes: int = 5000000, backup_count: int 
     except PermissionError as exc:
         logging.getLogger(__name__).warning("Cannot create log directory %s: %s", os.path.dirname(path), exc)
         return logging.StreamHandler(sys.stderr)
+    handler: logging.Handler
     try:
         handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count)
     except OSError as exc:
@@ -1453,7 +1455,7 @@ def log_empty_retries_exhausted(
     logger.error("EMPTY_RETRIES_EXHAUSTED", extra=payload)
 
 
-def get_phase_logger(name: str, phase: str | None = None) -> logging.Logger:
+def get_phase_logger(name: str, phase: str | None = None) -> SanitizingLoggerAdapter:
     """
     Return a logger that prefixes messages with a trading 'phase' token so
     dedupe/filters in tests and structured logging can key off it.
@@ -1483,7 +1485,7 @@ def get_phase_logger(name: str, phase: str | None = None) -> logging.Logger:
 
         if not any((isinstance(f, _PhaseFilter) for f in logger.filters)):
             logger.addFilter(_PhaseFilter())
-    return logger
+    return cast(SanitizingLoggerAdapter, logger)
 
 
 def init_logger(log_file: str) -> logging.Logger:
@@ -1644,7 +1646,7 @@ def _sanitize_log_data(data: dict[str, Any]) -> dict[str, Any]:
         Sanitized data with sensitive fields masked or removed
     """
     sensitive_keys = {"api_key", "secret_key", "password", "token", "auth", "credentials", "private_key", "session_id"}
-    sanitized = {}
+    sanitized: dict[str, Any] = {}
     for key, value in data.items():
         key_lower = key.lower()
         if any((sensitive in key_lower for sensitive in sensitive_keys)):
@@ -1753,6 +1755,7 @@ def setup_enhanced_logging(
                     backupCount=backup_count,
                     encoding="utf-8",
                 )
+                file_formatter: logging.Formatter
                 if enable_json_format:
                     file_formatter = JSONFormatter()
                 else:
@@ -1840,14 +1843,15 @@ def validate_logging_setup(logger: logging.Logger | None = None, *, dedupe: bool
     else:
         after_count = before_count
         did_dedupe = False
-    validation_result = {
+    issues: list[str] = []
+    validation_result: dict[str, Any] = {
         "handlers_count": after_count,
         "before_handlers_count": before_count,
         "deduped": did_dedupe,
         "is_configured": _LOGGING_CONFIGURED,
         "expected_max_handlers": 2,
         "validation_passed": True,
-        "issues": [],
+        "issues": issues,
     }
     if after_count > 2:
         validation_result["validation_passed"] = False

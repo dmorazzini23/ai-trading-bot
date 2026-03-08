@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import UTC, datetime
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 try:  # optional dependency
     import numpy as np
@@ -262,11 +262,11 @@ def _ensure_rl() -> bool:
     DQN = sb3.DQN
     SAC = sb3.SAC
     TD3 = sb3.TD3
-    BaseCallback = sb3.common.callbacks.BaseCallback
-    EvalCallback = sb3.common.callbacks.EvalCallback
+    globals()["BaseCallback"] = cast(type[Any], sb3.common.callbacks.BaseCallback)
+    globals()["EvalCallback"] = cast(type[Any], sb3.common.callbacks.EvalCallback)
     make_vec_env = sb3.common.env_util.make_vec_env
     evaluate_policy = sb3.common.evaluation.evaluate_policy
-    DummyVecEnv = sb3.common.vec_env.DummyVecEnv
+    globals()["DummyVecEnv"] = cast(type[Any], sb3.common.vec_env.DummyVecEnv)
     _refresh_callback_classes()
     return True
 
@@ -438,7 +438,7 @@ def _build_detailed_eval_callback(base_cls: type[Any]) -> type[Any]:
             self.n_eval_episodes = n_eval_episodes
             self.deterministic = deterministic
             self.save_path = save_path
-            self.eval_results = []
+            self.eval_results: list[dict[str, Any]] = []
             self.best_mean_reward = -np.inf
 
         def _on_step(self) -> bool:
@@ -471,7 +471,7 @@ def _build_detailed_eval_callback(base_cls: type[Any]) -> type[Any]:
                 }
                 self.eval_results.append(eval_result)
                 if mean_reward > self.best_mean_reward:
-                    self.best_mean_reward = mean_reward
+                    self.best_mean_reward = float(mean_reward)
                     if self.save_path:
                         best_model_path = os.path.join(self.save_path, "best_model.zip")
                         self.model.save(best_model_path)
@@ -489,11 +489,11 @@ def _build_detailed_eval_callback(base_cls: type[Any]) -> type[Any]:
             """Collect detailed performance metrics."""
             try:
                 obs = _reset_obs(self.eval_env)
-                total_reward = 0
-                total_turnover = 0
-                total_drawdown = 0
-                total_variance = 0
-                total_constraint_violations = 0
+                total_reward = 0.0
+                total_turnover = 0.0
+                total_drawdown = 0.0
+                total_variance = 0.0
+                total_constraint_violations = 0.0
                 episode_length = 0
                 done = False
                 while not done:
@@ -600,16 +600,16 @@ class RLTrainer:
         self.eval_freq = eval_freq
         self.early_stopping_patience = early_stopping_patience
         self.seed = seed
-        self.model = None
-        self.train_env = None
-        self.eval_env = None
-        self.state_builder = None
+        self.model: Any | None = None
+        self.train_env: Any | None = None
+        self.eval_env: Any | None = None
+        self.state_builder: Any | None = None
         self._raw_data: np.ndarray | None = None
         self._raw_prices: np.ndarray | None = None
         self._artifact_env_overrides: dict[str, Any] = {}
         self._artifact_context: dict[str, Any] = {}
-        self.training_results = {}
-        self.eval_callback = None
+        self.training_results: dict[str, Any] = {}
+        self.eval_callback: Any | None = None
         logger.info(f'RLTrainer initialized with {algorithm} algorithm')
 
     @staticmethod
@@ -752,6 +752,8 @@ class RLTrainer:
                 if importlib.util.find_spec("tqdm") is None or importlib.util.find_spec("rich") is None:
                     progress_bar = False
                     logger.warning("RL_PROGRESS_BAR_UNAVAILABLE")
+            if self.model is None:
+                raise RuntimeError("RL model must be initialized before training")
             self.model.learn(
                 total_timesteps=self.total_timesteps,
                 callback=callbacks,
@@ -1049,6 +1051,8 @@ class RLTrainer:
     def _save_model_and_results(self, save_path: str) -> None:
         """Save trained model and results."""
         try:
+            if self.model is None:
+                raise RuntimeError("RL model must be initialized before saving")
             os.makedirs(save_path, exist_ok=True)
             model_path = os.path.join(save_path, f'model_{self.algorithm.lower()}.zip')
             self.model.save(model_path)

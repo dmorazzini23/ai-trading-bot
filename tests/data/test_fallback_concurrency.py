@@ -2,7 +2,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -524,7 +524,7 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
                 )
 
     original_semaphore = concurrency.asyncio.Semaphore
-    concurrency.asyncio.Semaphore = StrictSemaphore
+    setattr(cast(Any, concurrency.asyncio), "Semaphore", StrictSemaphore)
 
     tracker_lock = asyncio.Lock()
     running = 0
@@ -550,7 +550,7 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
             concurrency.run_with_concurrency(symbols, worker, max_concurrency=2, timeout_s=0.05)
         )
     finally:
-        concurrency.asyncio.Semaphore = original_semaphore
+        setattr(cast(Any, concurrency.asyncio), "Semaphore", original_semaphore)
 
     assert any(value is None for value in results.values())
     assert failed

@@ -8,6 +8,7 @@ analysis, and tax-aware rebalancing functionality.
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
+from typing import Any
 
 
 # Test adaptive position sizing
@@ -50,8 +51,8 @@ class TestAdaptivePositionSizing(unittest.TestCase):
         analyzer = self.MarketConditionAnalyzer()
 
         # Test with mock price data
-        price_data = {
-            "SPY": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110] * 10
+        price_data: dict[str, list[float]] = {
+            "SPY": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0, 110.0] * 10
         }
 
         regime = analyzer.analyze_market_regime(price_data)
@@ -167,7 +168,7 @@ class TestPreTradeValidation(unittest.TestCase):
         validator = self.RiskValidator(self.RiskLevel.MODERATE)
 
         # Test position risk validation - use smaller position within limits
-        current_positions = {}
+        current_positions: dict[str, float] = {}
         result = validator.validate_position_risk(
             "AAPL", 50, 150.0, 100000, current_positions  # 7.5% position size
         )
@@ -311,8 +312,8 @@ class TestMarketMicrostructure(unittest.TestCase):
             "volume": 50000
         }
 
-        trade_history = []
-        quote_history = []
+        trade_history: list[dict[str, Any]] = []
+        quote_history: list[dict[str, Any]] = []
 
         result = engine.analyze_market_microstructure(
             "AAPL", market_data, trade_history, quote_history

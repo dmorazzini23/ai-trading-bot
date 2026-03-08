@@ -26,7 +26,7 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
     fetch._ALLOW_SIP = True
     fetch._ENABLE_HTTP_FALLBACK = True
 
-    called = {}
+    called: dict[str, Any] = {}
 
     class StubSession:
         def __init__(self) -> None:
@@ -39,7 +39,7 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
                 "params": dict(params or {}),
                 "headers": dict(headers or {}),
             })
-            data = {"bars": []}
+            data: dict[str, Any] = {"bars": []}
             return types.SimpleNamespace(
                 status_code=200,
                 text=json.dumps(data),
@@ -107,7 +107,7 @@ def test_yahoo_fallback_suppressed_until_threshold(monkeypatch):
                 "params": dict(params or {}),
                 "headers": dict(headers or {}),
             })
-            payload = {"bars": []}
+            payload: dict[str, Any] = {"bars": []}
             return types.SimpleNamespace(
                 status_code=200,
                 text=json.dumps(payload),

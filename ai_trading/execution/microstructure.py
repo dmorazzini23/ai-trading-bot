@@ -248,7 +248,7 @@ class OrderFlowAnalyzer:
             time_span = (max(timestamps) - min(timestamps)).total_seconds() / 60
             if time_span <= 0:
                 return 0.0
-            return len(recent_trades) / time_span
+            return float(len(recent_trades) / time_span)
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
 
@@ -262,7 +262,7 @@ class OrderFlowAnalyzer:
             total_ask_size = sum((quote.get('ask_size', 0) for quote in recent_quotes))
             if total_bid_size + total_ask_size == 0:
                 return 0.0
-            return (total_bid_size - total_ask_size) / (total_bid_size + total_ask_size)
+            return float((total_bid_size - total_ask_size) / (total_bid_size + total_ask_size))
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
 
@@ -327,7 +327,7 @@ class OrderFlowAnalyzer:
             vwap = vwap_numerator / total_volume
             current_price = recent_trades[-1].get('price', 0)
             if vwap > 0 and current_price > 0:
-                return abs(current_price - vwap) / vwap
+                return float(abs(current_price - vwap) / vwap)
             return 0.0
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0

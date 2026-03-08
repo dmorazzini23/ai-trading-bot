@@ -1,9 +1,10 @@
 import types
+from typing import Any
 from ai_trading.capital_scaling import update_if_present, capital_scale
 
 
 class DummyRuntime:
-    pass
+    capital_scaler: Any
 
 
 def test_update_if_present_calls_update_then_reads_scale():
@@ -47,4 +48,3 @@ def test_capital_scale_narrowed_exceptions_return_one():
     rt.capital_scaler = BadScaler()
     val = capital_scale(rt)
     assert val == 1.0
-

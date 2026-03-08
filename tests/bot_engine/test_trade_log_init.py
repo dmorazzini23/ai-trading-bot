@@ -2,6 +2,7 @@ from ai_trading.core import bot_engine
 import pytest
 import logging
 from pathlib import Path
+from typing import cast
 
 
 class _LoggerOnceStub:
@@ -172,7 +173,9 @@ def test_get_trade_logger_falls_back_when_dir_not_writable(tmp_path, monkeypatch
 
     fallback_path = Path(bot_engine._compute_user_state_trade_log_path(log_path.name))
     assert logger_instance.path == str(fallback_path)
-    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
+    singleton = bot_engine._TRADE_LOGGER_SINGLETON
+    assert singleton is not None
+    assert singleton.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(fallback_path)
     assert fallback_path.exists()
@@ -224,7 +227,7 @@ def test_default_trade_log_path_prefers_local_logs_over_state(tmp_path, monkeypa
     def fake_access(path: str, mode: int) -> bool:  # noqa: D401, ANN001
         if bot_engine.os.path.abspath(path) == "/var/log/ai-trading-bot":
             return False
-        return original_access(path, mode)
+        return cast(bool, original_access(path, mode))
 
     monkeypatch.setattr(bot_engine.os, "access", fake_access)
 
@@ -287,7 +290,7 @@ def test_get_trade_logger_falls_back_when_env_override_unwritable(tmp_path, monk
         resolved = Path(path).resolve(strict=False)
         if resolved == env_dir.resolve():
             return False
-        return original_is_dir_writable(path)
+        return cast(bool, original_is_dir_writable(path))
 
     monkeypatch.setattr(bot_engine, "_is_dir_writable", fake_is_dir_writable)
 
@@ -301,7 +304,9 @@ def test_get_trade_logger_falls_back_when_env_override_unwritable(tmp_path, monk
 
     expected_path = logs_dir / env_target.name
     assert logger_instance.path == str(expected_path)
-    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(expected_path)
+    singleton = bot_engine._TRADE_LOGGER_SINGLETON
+    assert singleton is not None
+    assert singleton.path == str(expected_path)
     assert bot_engine.TRADE_LOG_FILE == str(expected_path)
     assert expected_path.exists()
     assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
@@ -327,7 +332,8 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     def fake_makedirs(path: str, mode: int = 0o777, exist_ok: bool = False) -> None:
         if bot_engine.os.path.abspath(path) == bot_engine.os.path.abspath(str(log_dir)):
             raise PermissionError("mocked permission error")
-        return original_makedirs(path, mode=mode, exist_ok=exist_ok)
+        original_makedirs(path, mode=mode, exist_ok=exist_ok)
+        return None
 
     monkeypatch.setattr(bot_engine.os, "makedirs", fake_makedirs)
 
@@ -355,7 +361,9 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
 
     fallback_path = Path(bot_engine._compute_user_state_trade_log_path(log_path.name))
     assert logger_instance.path == str(fallback_path)
-    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
+    singleton = bot_engine._TRADE_LOGGER_SINGLETON
+    assert singleton is not None
+    assert singleton.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
     messages = [record.getMessage() for record in caplog.records]
@@ -402,7 +410,7 @@ def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monke
                     return False
             except ValueError:
                 continue
-        return original_is_dir_writable(path)
+        return cast(bool, original_is_dir_writable(path))
 
     monkeypatch.setattr(bot_engine, "_is_dir_writable", fake_is_dir_writable)
 
@@ -416,7 +424,9 @@ def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monke
     expected_dir = temp_parent / "ai-trading-bot"
     expected_path = expected_dir / log_name
     assert logger_instance.path == str(expected_path)
-    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(expected_path)
+    singleton = bot_engine._TRADE_LOGGER_SINGLETON
+    assert singleton is not None
+    assert singleton.path == str(expected_path)
     assert bot_engine.TRADE_LOG_FILE == str(expected_path)
     assert expected_path.exists()
     assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
@@ -474,7 +484,9 @@ def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_pat
 
     fallback_path = Path(bot_engine._compute_user_state_trade_log_path(log_path.name))
     assert logger_instance.path == str(fallback_path)
-    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
+    singleton = bot_engine._TRADE_LOGGER_SINGLETON
+    assert singleton is not None
+    assert singleton.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
 
@@ -524,7 +536,7 @@ def test_emit_trade_log_fallback_logs_per_destination(monkeypatch):
     ]
 
     assert len(fallback_messages) == 2
-    keys = [call["key"] for call in fallback_messages]
+    keys = [cast(str, call["key"]) for call in fallback_messages]
     assert keys[0] != keys[1]
     assert first_path in keys[0]
     assert second_path in keys[1]

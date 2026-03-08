@@ -2,6 +2,7 @@ import importlib
 import sys
 import types
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -10,12 +11,15 @@ pd = pytest.importorskip("pandas")
 
 def _import_predict(monkeypatch):
     req_mod = types.ModuleType("requests")
-    req_mod.get = lambda *a, **k: types.SimpleNamespace(json=lambda: {"articles": []}, raise_for_status=lambda: None)
-    req_mod.exceptions = types.SimpleNamespace(RequestException=Exception)
+    cast(Any, req_mod).get = lambda *a, **k: types.SimpleNamespace(
+        json=lambda: {"articles": []},
+        raise_for_status=lambda: None,
+    )
+    cast(Any, req_mod).exceptions = types.SimpleNamespace(RequestException=Exception)
     monkeypatch.setitem(sys.modules, "requests", req_mod)
 
     prep_mod = types.ModuleType("ai_trading.features.prepare")
-    prep_mod.prepare_indicators = lambda df, freq="intraday": df.assign(feat1=0)
+    cast(Any, prep_mod).prepare_indicators = lambda df, freq="intraday": df.assign(feat1=0)
     monkeypatch.setitem(sys.modules, "ai_trading.features.prepare", prep_mod)
 
     if "ai_trading.predict" in sys.modules:

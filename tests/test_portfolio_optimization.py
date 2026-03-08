@@ -4,6 +4,7 @@ Validates core portfolio-level decision making and transaction cost analysis.
 """
 
 import os
+from typing import Any, cast
 
 import pytest
 
@@ -55,8 +56,8 @@ class TestPortfolioOptimizer:
         """Test portfolio Kelly efficiency calculation."""
         efficiency = self.optimizer.calculate_portfolio_kelly_efficiency(
             self.sample_positions,
-            self.sample_market_data['returns'],
-            self.sample_market_data['prices']
+            cast(dict[str, list[float]], self.sample_market_data['returns']),
+            cast(dict[str, float], self.sample_market_data['prices']),
         )
 
         assert 0.0 <= efficiency <= 1.0
@@ -67,7 +68,7 @@ class TestPortfolioOptimizer:
         impact = self.optimizer.calculate_correlation_impact(
             'AAPL',
             self.sample_positions,
-            self.sample_market_data['correlations']
+            cast(dict[str, dict[str, float]], self.sample_market_data['correlations']),
         )
 
         assert 0.0 <= impact <= 1.0
@@ -76,12 +77,14 @@ class TestPortfolioOptimizer:
         high_corr_data = {
             'NVDA': {'AAPL': 0.9, 'MSFT': 0.85, 'GOOGL': 0.8}
         }
-        self.sample_market_data['correlations'].update(high_corr_data)
+        cast(dict[str, dict[str, float]], self.sample_market_data['correlations']).update(
+            cast(dict[str, dict[str, float]], high_corr_data)
+        )
 
         high_impact = self.optimizer.calculate_correlation_impact(
             'NVDA',
             self.sample_positions,
-            self.sample_market_data['correlations']
+            cast(dict[str, dict[str, float]], self.sample_market_data['correlations']),
         )
 
         assert high_impact > impact  # Higher correlation should mean higher impact
@@ -141,7 +144,7 @@ class TestPortfolioOptimizer:
         should_rebalance, reasoning = self.optimizer.should_trigger_rebalance(
             self.sample_positions,
             target_weights,
-            self.sample_market_data['prices']
+            cast(dict[str, float], self.sample_market_data['prices']),
         )
 
         assert isinstance(should_rebalance, bool)

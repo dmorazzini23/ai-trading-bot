@@ -175,15 +175,21 @@ class ProfitTakingEngine:
 
     def _create_risk_multiple_targets(self, entry_price: float, risk_amount: float, position_size: int) -> list[ProfitTarget]:
         """Create risk-multiple based profit targets."""
-        targets = []
+        targets: list[ProfitTarget] = []
         try:
             if risk_amount <= 0:
                 return self._create_percentage_targets(entry_price, position_size)
             risk_per_share = risk_amount / position_size
-            r_multiples = [{'r': 2.0, 'pct': 25.0, 'priority': 1}, {'r': 3.0, 'pct': 25.0, 'priority': 2}, {'r': 5.0, 'pct': 25.0, 'priority': 3}]
-            for rm in r_multiples:
-                target_price = entry_price + risk_per_share * rm['r']
-                target = ProfitTarget(level=target_price, quantity_pct=rm['pct'], strategy=ProfitTakingStrategy.RISK_MULTIPLE, priority=rm['priority'], reason=f"{rm['r']}R target at ${target_price:.2f}")
+            r_multiples: list[tuple[float, float, int]] = [(2.0, 25.0, 1), (3.0, 25.0, 2), (5.0, 25.0, 3)]
+            for r_multiple, qty_pct, priority in r_multiples:
+                target_price = entry_price + risk_per_share * r_multiple
+                target = ProfitTarget(
+                    level=target_price,
+                    quantity_pct=qty_pct,
+                    strategy=ProfitTakingStrategy.RISK_MULTIPLE,
+                    priority=priority,
+                    reason=f"{r_multiple}R target at ${target_price:.2f}",
+                )
                 targets.append(target)
         except COMMON_EXC as exc:
             self.logger.warning('_create_risk_multiple_targets failed: %s', exc)
@@ -192,17 +198,23 @@ class ProfitTakingEngine:
 
     def _create_percentage_targets(self, entry_price: float, position_size: int) -> list[ProfitTarget]:
         """Create percentage-based profit targets as fallback."""
-        targets = []
-        percentage_levels = [{'pct': 5.0, 'qty_pct': 25.0, 'priority': 1}, {'pct': 10.0, 'qty_pct': 25.0, 'priority': 2}, {'pct': 20.0, 'qty_pct': 25.0, 'priority': 3}]
-        for level in percentage_levels:
-            target_price = entry_price * (1 + level['pct'] / 100)
-            target = ProfitTarget(level=target_price, quantity_pct=level['qty_pct'], strategy=ProfitTakingStrategy.PERCENTAGE_BASED, priority=level['priority'], reason=f"{level['pct']}% gain target at ${target_price:.2f}")
+        targets: list[ProfitTarget] = []
+        percentage_levels: list[tuple[float, float, int]] = [(5.0, 25.0, 1), (10.0, 25.0, 2), (20.0, 25.0, 3)]
+        for pct, qty_pct, priority in percentage_levels:
+            target_price = entry_price * (1 + pct / 100)
+            target = ProfitTarget(
+                level=target_price,
+                quantity_pct=qty_pct,
+                strategy=ProfitTakingStrategy.PERCENTAGE_BASED,
+                priority=priority,
+                reason=f"{pct}% gain target at ${target_price:.2f}",
+            )
             targets.append(target)
         return targets
 
     def _create_technical_targets(self, symbol: str, current_price: float, position_size: int) -> list[ProfitTarget]:
         """Create technical level-based profit targets."""
-        targets = []
+        targets: list[ProfitTarget] = []
         try:
             market_data = self._get_market_data(symbol)
             if market_data is None:

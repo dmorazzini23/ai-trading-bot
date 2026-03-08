@@ -1,9 +1,14 @@
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 import pytest
 
 from ai_trading.core import bot_engine
+
+
+def _ns(**kwargs: Any) -> Any:
+    return cast(Any, SimpleNamespace(**kwargs))
 
 
 def _stub_signal(result):
@@ -56,8 +61,8 @@ def test_signal_manager_evaluate_updates_last_components(monkeypatch):
 
     closes = pd.Series(range(250), dtype="float64")
     df = pd.DataFrame({"close": closes})
-    ctx = SimpleNamespace()
-    state = SimpleNamespace()
+    ctx = _ns()
+    state = _ns()
 
     signal, confidence, label = manager.evaluate(ctx, state, df, "TST", None)
 
@@ -130,8 +135,8 @@ def test_signal_manager_regime_routing_filters_components(monkeypatch):
 
     closes = pd.Series(range(250), dtype="float64")
     df = pd.DataFrame({"close": closes})
-    ctx = SimpleNamespace()
-    state = SimpleNamespace(current_regime="trending")
+    ctx = _ns()
+    state = _ns(current_regime="trending")
 
     signal, confidence, label = manager.evaluate(ctx, state, df, "TST", None)
 
@@ -201,8 +206,8 @@ def test_signal_manager_applies_meta_component_weights(monkeypatch):
     monkeypatch.setattr(manager, "signal_vsa", _stub_signal(None), raising=False)
 
     df = pd.DataFrame({"close": pd.Series(range(250), dtype="float64")})
-    ctx = SimpleNamespace()
-    state = SimpleNamespace(current_regime="trending")
+    ctx = _ns()
+    state = _ns(current_regime="trending")
     _signal, _confidence, _label = manager.evaluate(ctx, state, df, "TST", None)
     by_label = {label: weight for _side, weight, label in manager.last_components}
     assert by_label["momentum"] == pytest.approx(1.5)
@@ -257,8 +262,8 @@ def test_signal_manager_gate_downweights_non_qualified_tags(monkeypatch):
     monkeypatch.setattr(manager, "signal_vsa", _stub_signal(None), raising=False)
 
     df = pd.DataFrame({"close": pd.Series(range(250), dtype="float64")})
-    ctx = SimpleNamespace()
-    state = SimpleNamespace(current_regime="trending")
+    ctx = _ns()
+    state = _ns(current_regime="trending")
     _signal, _confidence, _label = manager.evaluate(ctx, state, df, "TST", None)
     by_label = {label: weight for _side, weight, label in manager.last_components}
     assert by_label["momentum"] == pytest.approx(0.4)

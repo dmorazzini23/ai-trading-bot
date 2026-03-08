@@ -3,7 +3,7 @@
 import os
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
 
@@ -149,7 +149,7 @@ def test_initialize_production_config_avoids_adapter_warning(
     monkeypatch.setattr(alpaca_client, "get_data_client_cls", lambda: _ProdDataClient)
     monkeypatch.setattr(alpaca_client, "get_api_error_cls", lambda: Exception)
 
-    stub_be = ModuleType("ai_trading.core.bot_engine")
+    stub_be = cast(Any, ModuleType("ai_trading.core.bot_engine"))
     stub_be.trading_client = None
     stub_be.data_client = None
     stub_be._ensure_alpaca_env_or_raise = lambda: (
@@ -216,7 +216,7 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
 
     original_bot_engine = sys.modules.get("ai_trading.core.bot_engine")
 
-    real_bot_engine = ModuleType("ai_trading.core.bot_engine")
+    real_bot_engine = cast(Any, ModuleType("ai_trading.core.bot_engine"))
     real_bot_engine.trading_client = "real-client"  # type: ignore[attr-defined]
     real_bot_engine.data_client = "real-data"  # type: ignore[attr-defined]
     real_bot_engine.logger_once = stub_logger
@@ -230,7 +230,7 @@ def test_initialize_uses_active_bot_engine_stub_after_real_import(
     monkeypatch.setattr(alpaca_client, "get_api_error_cls", lambda: Exception)
     monkeypatch.setattr(alpaca_client, "_shared_logger_once", None)
 
-    stub_be = ModuleType("ai_trading.core.bot_engine")
+    stub_be = cast(Any, ModuleType("ai_trading.core.bot_engine"))
     stub_be.trading_client = None  # type: ignore[attr-defined]
     stub_be.data_client = None  # type: ignore[attr-defined]
     stub_be._ensure_alpaca_env_or_raise = lambda: (

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from typing import Any, cast
 
 def test_risk_engine_init_logged_once(monkeypatch, caplog):
     """Risk engine initialization should log only once per run."""
@@ -26,10 +27,10 @@ def test_risk_engine_init_logged_once(monkeypatch, caplog):
     class APIError(Exception):
         pass
 
-    enums_mod.OrderStatus = OrderStatus
-    requests_mod.GetOrdersRequest = GetOrdersRequest
-    client_mod.TradingClient = TradingClient
-    common_mod.APIError = APIError
+    cast(Any, enums_mod).OrderStatus = OrderStatus
+    cast(Any, requests_mod).GetOrdersRequest = GetOrdersRequest
+    cast(Any, client_mod).TradingClient = TradingClient
+    cast(Any, common_mod).APIError = APIError
 
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))

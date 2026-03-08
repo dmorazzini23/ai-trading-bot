@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -8,6 +8,10 @@ import ai_trading.core.bot_engine as bot_engine
 from ai_trading.core.bot_engine import BotState
 from ai_trading.config.runtime import TradingConfig
 from ai_trading.config.management import reload_trading_config
+
+
+def _ctx(**kwargs: Any) -> Any:
+    return cast(Any, SimpleNamespace(**kwargs))
 
 
 def _clear_cache(func: Any) -> None:
@@ -54,7 +58,7 @@ def test_gap_ratio_gate_blocks(monkeypatch):
         "price_reliable": False,
         "price_reliable_reason": "gap_ratio=4.60%>limit=2.00%",
     }
-    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    ctx = _ctx(data_client=None, liquidity_annotations={})
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
@@ -87,7 +91,7 @@ def test_gap_ratio_relaxed_for_fallback(monkeypatch):
         "price_reliable": False,
         "price_reliable_reason": "gap_ratio=1.80%>limit=0.50%",
     }
-    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    ctx = _ctx(data_client=None, liquidity_annotations={})
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
@@ -127,7 +131,7 @@ def test_fallback_gap_floor_relaxes_price_reliability(monkeypatch):
         "price_reliable": False,
         "price_reliable_reason": "gap_ratio=2.00%>limit=0.50%",
     }
-    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    ctx = _ctx(data_client=None, liquidity_annotations={})
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
@@ -202,7 +206,7 @@ def test_synthetic_fallback_quote_used_when_alpaca_unavailable(monkeypatch):
     state.data_quality[symbol] = quality_entry
     state.price_reliability[symbol] = (True, None)
 
-    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    ctx = _ctx(data_client=None, liquidity_annotations={})
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
@@ -234,7 +238,7 @@ def test_missing_ohlcv_blocks(monkeypatch):
         "price_reliable": False,
         "price_reliable_reason": "ohlcv_columns_missing",
     }
-    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    ctx = _ctx(data_client=None, liquidity_annotations={})
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
@@ -257,7 +261,7 @@ def test_liquidity_fallback_cap_applies(monkeypatch):
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
     monkeypatch.setenv("AI_TRADING_LIQ_FALLBACK_CAP", "0.20")
     state = _fresh_state()
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         data_client=None,
         liquidity_annotations={"XYZ": {"fallback": True, "factor": 0.2}},
     )
@@ -294,7 +298,7 @@ def test_fallback_quote_age_blocks_when_stale(monkeypatch):
 
     state = _fresh_state()
     state.data_quality["ABC"] = {"price_reliable": True}
-    ctx = SimpleNamespace(data_client=StubClient(), liquidity_annotations={})
+    ctx = _ctx(data_client=StubClient(), liquidity_annotations={})
 
     decision = bot_engine._evaluate_data_gating(
         ctx,
@@ -325,7 +329,7 @@ def test_gap_limit_env_override(monkeypatch):
         "price_reliable": True,
         "price_reliable_reason": "gap_ratio=2.00%>limit=1.50%",
     }
-    ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
+    ctx = _ctx(data_client=None, liquidity_annotations={})
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",

@@ -1,6 +1,7 @@
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any, cast
 
 import ai_trading.logging.emit_once as emit_once_module
 
@@ -36,13 +37,13 @@ if "numpy" not in sys.modules:
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
+    cast(Any, portalocker_stub).LOCK_EX = 1
 
     def _noop(*args, **kwargs):  # noqa: D401 - compatibility shim
         return None
 
-    portalocker_stub.lock = _noop
-    portalocker_stub.unlock = _noop
+    cast(Any, portalocker_stub).lock = _noop
+    cast(Any, portalocker_stub).unlock = _noop
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:
@@ -53,7 +54,7 @@ if "bs4" not in sys.modules:
             self.args = args
             self.kwargs = kwargs
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    cast(Any, bs4_stub).BeautifulSoup = _BeautifulSoup
     sys.modules["bs4"] = bs4_stub
 
 from ai_trading.core import bot_engine
@@ -70,7 +71,7 @@ def test_liquidity_factor_handles_missing_data_client(monkeypatch):
     monkeypatch.setattr(bot_engine, "get_settings", lambda: stub_settings)
     ctx = SimpleNamespace(data_client=None, volume_threshold=100_000, last_bar_by_symbol={})
 
-    factor = bot_engine.liquidity_factor(ctx, "FAKE")
+    factor = bot_engine.liquidity_factor(cast(Any, ctx), "FAKE")
 
     assert abs(factor - 0.75) < 1e-6
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
@@ -93,7 +94,7 @@ def test_liquidity_factor_falls_back_to_last_bar(monkeypatch):
         last_bar_by_symbol={"FAKE": last_bar},
     )
 
-    factor = bot_engine.liquidity_factor(ctx, "FAKE")
+    factor = bot_engine.liquidity_factor(cast(Any, ctx), "FAKE")
 
     assert 0.1 <= factor <= 0.9
     assert factor < 0.9  # Uses last-bar heuristics rather than default directly

@@ -123,25 +123,32 @@ class TransactionCostCalculator:
         try:
             quotes = market_data.get('quotes', {})
             if symbol not in quotes:
-                price = market_data.get('prices', {}).get(symbol, 100.0)
+                prices = market_data.get('prices', {})
+                price = float(prices.get(symbol, 100.0) if isinstance(prices, dict) else 100.0)
                 estimated_spread_pct = self._estimate_spread_percentage(symbol, market_data)
-                return abs(trade_size) * price * estimated_spread_pct / 2
+                return float(abs(trade_size) * price * estimated_spread_pct / 2)
             quote = quotes[symbol]
-            bid = quote.get('bid', 0)
-            ask = quote.get('ask', 0)
-            if bid <= 0 or ask <= 0:
-                price = market_data.get('prices', {}).get(symbol, 100.0)
+            if not isinstance(quote, dict):
+                prices = market_data.get('prices', {})
+                price = float(prices.get(symbol, 100.0) if isinstance(prices, dict) else 100.0)
                 estimated_spread_pct = self._estimate_spread_percentage(symbol, market_data)
-                return abs(trade_size) * price * estimated_spread_pct / 2
+                return float(abs(trade_size) * price * estimated_spread_pct / 2)
+            bid = float(quote.get('bid', 0) or 0)
+            ask = float(quote.get('ask', 0) or 0)
+            if bid <= 0 or ask <= 0:
+                prices = market_data.get('prices', {})
+                price = float(prices.get(symbol, 100.0) if isinstance(prices, dict) else 100.0)
+                estimated_spread_pct = self._estimate_spread_percentage(symbol, market_data)
+                return float(abs(trade_size) * price * estimated_spread_pct / 2)
             spread = ask - bid
-            (bid + ask) / 2
             spread_cost = abs(trade_size) * spread / 2
             logger.debug(f'Spread cost for {symbol}: ${spread_cost:.4f} (spread=${spread:.4f}, size={trade_size})')
-            return spread_cost
+            return float(spread_cost)
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
             logger.error('SPREAD_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
-            price = market_data.get('prices', {}).get(symbol, 100.0)
-            return abs(trade_size) * price * 0.001
+            prices = market_data.get('prices', {})
+            price = float(prices.get(symbol, 100.0) if isinstance(prices, dict) else 100.0)
+            return float(abs(trade_size) * price * 0.001)
 
     def calculate_commission(self, symbol: str, trade_size: float, trade_value: float) -> float:
         """

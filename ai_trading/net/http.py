@@ -10,15 +10,25 @@ from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 
 try:
-    import requests
+    import requests  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - fallback when requests missing
+    class _FallbackSession:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def request(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("requests library is required for HTTP operations")
+
+        def get(self, *args: object, **kwargs: object) -> object:
+            return self.request(*args, **kwargs)
+
     class _RequestsFallback:
-        Session = None
+        Session = _FallbackSession
         get = None
 
     requests = _RequestsFallback()  # type: ignore[assignment]
 try:
-    from requests.adapters import HTTPAdapter
+    from requests.adapters import HTTPAdapter  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - requests missing
     HTTPAdapter = cast("type[object]", object)
 from urllib3.util.retry import Retry
@@ -68,12 +78,7 @@ def ensure_urllib3_disable_warnings() -> None:
 ensure_urllib3_disable_warnings()
 
 
-_SessionBase = cast(
-    "type[object]", requests.Session if getattr(requests, "Session", None) else object
-)
-
-
-class TimeoutSession(_SessionBase):
+class TimeoutSession(requests.Session):
     """Requests ``Session`` that injects a default timeout."""
 
     def __init__(self, default_timeout: tuple[float, float] = (5.0, 10.0)) -> None:
@@ -110,10 +115,14 @@ class TimeoutSession(_SessionBase):
                 logger.debug("REQUESTS_GET_MODULE_INSPECT_FAILED", exc_info=True)
                 patched_requests_get = True
         if testing_flag or pytest_flag or patched_requests_get:
+            timeout: float | tuple[float, float]
             if "timeout" not in kwargs or kwargs["timeout"] is None:
                 timeout = self._default_timeout
             else:
-                timeout = clamp_request_timeout(kwargs["timeout"])
+                timeout = cast(
+                    float | tuple[float, float],
+                    clamp_request_timeout(kwargs["timeout"]),
+                )
             kwargs.pop("timeout", None)
             if callable(requests_get):
                 return requests_get(url, timeout=timeout, **kwargs)

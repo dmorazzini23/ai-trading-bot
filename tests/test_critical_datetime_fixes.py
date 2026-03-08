@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 
@@ -99,12 +100,14 @@ class TestSentimentCaching(unittest.TestCase):
 
     def test_sentiment_cache_rate_limit_handling(self):
         """Test that sentiment caching properly handles rate limits."""
-        be = None
+        be: Any | None = None
         original_failures = None
         try:
             import time
 
-            from ai_trading.core import bot_engine as be
+            from ai_trading.core import bot_engine as bot_engine_mod
+
+            be = bot_engine_mod
 
             # Clear cache
             be._SENTIMENT_CACHE.clear()

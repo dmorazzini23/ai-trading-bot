@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -42,8 +43,8 @@ def test_metalean_confidence_clamped(caplog):
     feat_df = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
 
     score, confidence, _ = bot_engine._evaluate_trade_signal(
-        ctx,
-        state,
+        cast(Any, ctx),
+        cast(Any, state),
         feat_df,
         "AAPL",
         model=None,
@@ -64,8 +65,8 @@ def test_signal_confidence_clamped_to_unit_interval(caplog):
     caplog.set_level(logging.WARNING)
 
     score, confidence, _ = bot_engine._evaluate_trade_signal(
-        ctx,
-        state,
+        cast(Any, ctx),
+        cast(Any, state),
         feat_df,
         "AAPL",
         model=None,
@@ -88,8 +89,8 @@ def test_signal_confidence_uses_rms_component_weight():
     feat_df = pd.DataFrame({"close": [1, 2, 3, 4, 5]})
 
     score, confidence, _ = bot_engine._evaluate_trade_signal(
-        ctx,
-        state,
+        cast(Any, ctx),
+        cast(Any, state),
         feat_df,
         "AAPL",
         model=None,

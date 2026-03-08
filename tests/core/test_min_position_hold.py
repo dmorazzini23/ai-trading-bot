@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 
@@ -7,10 +8,14 @@ from ai_trading.core import bot_engine
 from ai_trading.core.bot_engine import BotState
 
 
+def _ctx(**kwargs: Any) -> Any:
+    return cast(Any, SimpleNamespace(**kwargs))
+
+
 def test_reversal_exit_blocked_during_min_hold(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=30)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         trade_logger=SimpleNamespace(log_exit=lambda *_a, **_k: None),
         stop_targets={},
         take_profit_targets={},
@@ -46,7 +51,7 @@ def test_reversal_exit_blocked_during_min_hold(monkeypatch):
 def test_reversal_exit_allowed_after_min_hold(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         trade_logger=SimpleNamespace(log_exit=lambda *_a, **_k: None),
         stop_targets={},
         take_profit_targets={},
@@ -82,7 +87,7 @@ def test_reversal_exit_allowed_after_min_hold(monkeypatch):
 def test_should_exit_blocks_trailing_stop_during_min_hold(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=10)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         rebalance_buys={},
         stop_targets={},
         take_profit_targets={},
@@ -108,7 +113,7 @@ def test_should_exit_blocks_trailing_stop_during_min_hold(monkeypatch):
 def test_should_exit_allows_stop_loss_during_min_hold(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=10)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         rebalance_buys={},
         stop_targets={"AAPL": 100.0},
         take_profit_targets={},
@@ -133,7 +138,7 @@ def test_should_exit_allows_stop_loss_during_min_hold(monkeypatch):
 def test_should_exit_defers_take_profit_during_min_hold_without_bypass(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=10)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         rebalance_buys={},
         stop_targets={},
         take_profit_targets={"AAPL": 101.0},
@@ -161,7 +166,7 @@ def test_should_exit_defers_take_profit_during_min_hold_without_bypass(monkeypat
 def test_should_exit_allows_take_profit_during_min_hold_with_bypass(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=10)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         rebalance_buys={},
         stop_targets={},
         take_profit_targets={"AAPL": 101.0},
@@ -189,7 +194,7 @@ def test_should_exit_allows_take_profit_during_min_hold_with_bypass(monkeypatch)
 def test_reversal_exit_allows_loser_cut_during_min_hold(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=30)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         trade_logger=SimpleNamespace(log_exit=lambda *_a, **_k: None),
         stop_targets={},
         take_profit_targets={},
@@ -226,7 +231,7 @@ def test_reversal_exit_allows_loser_cut_during_min_hold(monkeypatch):
 def test_short_reversal_holds_when_short_trend_still_valid(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         trade_logger=SimpleNamespace(log_exit=lambda *_a, **_k: None),
         stop_targets={},
         take_profit_targets={},
@@ -261,7 +266,7 @@ def test_short_reversal_holds_when_short_trend_still_valid(monkeypatch):
 def test_reversal_exit_requires_signal_confirmation(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         trade_logger=SimpleNamespace(log_exit=lambda *_a, **_k: None),
         stop_targets={},
         take_profit_targets={},
@@ -307,7 +312,7 @@ def test_reversal_exit_requires_signal_confirmation(monkeypatch):
 def test_should_exit_sets_break_even_stop_for_winner(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         rebalance_buys={},
         stop_targets={"AAPL": 95.0},
         take_profit_targets={},
@@ -349,7 +354,7 @@ def test_should_exit_sets_break_even_stop_for_winner(monkeypatch):
 def test_should_exit_tightens_trailing_atr_for_winner(monkeypatch):
     state = BotState()
     state.position_entry_times["AAPL"] = datetime.now(UTC) - timedelta(seconds=600)
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         rebalance_buys={},
         stop_targets={"AAPL": 95.0},
         take_profit_targets={},

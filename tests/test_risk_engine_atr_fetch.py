@@ -1,6 +1,7 @@
 import logging
 import os
 import types
+from typing import Any, cast
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
 os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
@@ -13,10 +14,15 @@ from ai_trading.risk.engine import RiskEngine
 
 
 pd = pytest.importorskip("pandas")
+DataFrame = Any
+
+
+def _engine() -> Any:
+    return cast(Any, RiskEngine())
 
 
 class _StockBarsClient:
-    def __init__(self, bars: pd.DataFrame) -> None:
+    def __init__(self, bars: DataFrame) -> None:
         self._bars = bars
         self.requests: list[object] = []
 
@@ -25,7 +31,7 @@ class _StockBarsClient:
         return self._bars
 
 
-def _make_df(rows: int = 30) -> pd.DataFrame:
+def _make_df(rows: int = 30) -> DataFrame:
     data = {
         "open": [1.0] * rows,
         "high": [2.0] * rows,
@@ -49,7 +55,7 @@ def simple_list_rows() -> list[list[float]]:
 
 
 def test_get_atr_data_with_stock_bars_client(caplog: pytest.LogCaptureFixture):
-    eng = RiskEngine()
+    eng = _engine()
     client = _StockBarsClient(_make_df())
     eng.ctx = types.SimpleNamespace(data_client=client)
     caplog.set_level(logging.WARNING)
@@ -68,7 +74,7 @@ def test_get_atr_data_with_stock_bars_client(caplog: pytest.LogCaptureFixture):
 
 
 def test_get_atr_data_missing_get_bars_no_data(caplog: pytest.LogCaptureFixture):
-    eng = RiskEngine()
+    eng = _engine()
     eng.ctx = types.SimpleNamespace(data_client=object())
     caplog.set_level(logging.WARNING)
     atr = eng._get_atr_data("AAPL", lookback=14)
@@ -77,7 +83,7 @@ def test_get_atr_data_missing_get_bars_no_data(caplog: pytest.LogCaptureFixture)
 
 
 def test_get_atr_data_uses_ctx_minute_data():
-    eng = RiskEngine()
+    eng = _engine()
     df = _make_df()
     eng.ctx = types.SimpleNamespace(data_client=object(), minute_data={"AAPL": df})
     atr = eng._get_atr_data("AAPL", lookback=14)
@@ -85,7 +91,7 @@ def test_get_atr_data_uses_ctx_minute_data():
 
 
 def test_get_atr_data_uses_ctx_daily_data():
-    eng = RiskEngine()
+    eng = _engine()
     df = _make_df()
     eng.ctx = types.SimpleNamespace(data_client=object(), daily_data={"AAPL": df})
     atr = eng._get_atr_data("AAPL", lookback=14)
@@ -112,14 +118,14 @@ def test_get_atr_data_with_yfinance(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(yfinance_provider, "get_yfinance", lambda: dummy_yf)
 
     provider = yfinance_provider.Provider()
-    eng = RiskEngine()
+    eng = _engine()
     eng.ctx = types.SimpleNamespace(data_client=provider)
     atr = eng._get_atr_data("AAPL", lookback=14)
     assert atr == 1.0
 
 
 def test_get_atr_data_falls_back_to_simple_get_bars(monkeypatch: pytest.MonkeyPatch):
-    eng = RiskEngine()
+    eng = _engine()
     fallback_rows = [
         {"open": 1.0, "high": 2.0, "low": 1.0, "close": 1.5}
         for _ in range(30)
@@ -127,7 +133,7 @@ def test_get_atr_data_falls_back_to_simple_get_bars(monkeypatch: pytest.MonkeyPa
 
     class FallbackClient:
         def __init__(self) -> None:
-            self.calls = []
+            self.calls: list[tuple[str, int]] = []
 
         def get_bars(self, symbol: str, limit: int):
             self.calls.append((symbol, limit))
@@ -150,7 +156,7 @@ def test_get_atr_data_falls_back_to_simple_get_bars(monkeypatch: pytest.MonkeyPa
 def test_get_atr_data_handles_yfinance_dict_rows(
     monkeypatch: pytest.MonkeyPatch, yfinance_dict_rows: list[dict[str, float]]
 ) -> None:
-    eng = RiskEngine()
+    eng = _engine()
 
     class FallbackClient:
         def __init__(self) -> None:
@@ -176,7 +182,7 @@ def test_get_atr_data_handles_yfinance_dict_rows(
 def test_get_atr_data_handles_simple_list_rows(
     monkeypatch: pytest.MonkeyPatch, simple_list_rows: list[list[float]]
 ) -> None:
-    eng = RiskEngine()
+    eng = _engine()
 
     class FallbackClient:
         def __init__(self) -> None:

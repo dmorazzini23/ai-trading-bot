@@ -22,7 +22,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from threading import Lock, Semaphore
 from types import GeneratorType, SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -990,7 +990,7 @@ def _current_intraday_feed() -> str:
     """Return the active intraday feed identifier."""
     env_feed = get_env("DATA_FEED_INTRADAY")
     if env_feed not in (None, ""):
-        normalized = env_feed.strip().lower()
+        normalized = str(env_feed).strip().lower()
         if normalized:
             return normalized
     try:
@@ -1018,7 +1018,10 @@ def _intraday_feed_prefers_sip() -> bool:
     return _current_intraday_feed() == "sip"
 
 
-def _safe_empty_should_emit(key: tuple[str, ...], when: datetime) -> bool:
+def _safe_empty_should_emit(
+    key: tuple[str, str, str, str, str],
+    when: datetime,
+) -> bool:
     hook = _empty_should_emit
     if callable(hook):
         try:
@@ -1028,7 +1031,10 @@ def _safe_empty_should_emit(key: tuple[str, ...], when: datetime) -> bool:
     return False
 
 
-def _safe_empty_record(key: tuple[str, ...], when: datetime) -> int:
+def _safe_empty_record(
+    key: tuple[str, str, str, str, str],
+    when: datetime,
+) -> int:
     hook = _empty_record
     if callable(hook):
         try:
@@ -1482,7 +1488,7 @@ def _incr_empty_metric(symbol: str, feed: str, timeframe: str) -> None:
 
 
 def _to_timeframe_str(tf: object) -> str:
-    return _canon_tf(tf)
+    return str(_canon_tf(tf))
 
 
 def _normalize_feed_value(feed: object) -> str:
@@ -1591,7 +1597,7 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     """
     pd_mod = _ensure_pandas()
 
-    out_of_bounds = ()
+    out_of_bounds: tuple[type[BaseException], ...] = ()
     if pd_mod is not None:
         try:
             out_of_bounds = (pd_mod.errors.OutOfBoundsDatetime,)
@@ -1605,7 +1611,7 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     if isinstance(value, _dt.datetime) and value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo("America/New_York"))
     try:
-        return ensure_utc_datetime(value, allow_callables=False)
+        return cast(_dt.datetime, ensure_utc_datetime(value, allow_callables=False))
     except (*out_of_bounds, TypeError, ValueError, AttributeError) as e:  # type: ignore[misc]
         raise TypeError(f"Invalid datetime input: {e}") from e
 
@@ -1647,7 +1653,7 @@ _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 _EMPTY_RETRY_THRESHOLD = max(2, _EMPTY_BAR_THRESHOLD)
 _MIN_RATE_LIMIT_SLEEP_SECONDS = 1.0
 _HOST_LIMIT_DEFAULT = 4
-_HOST_LIMIT_LOCK = Lock()
+_HOST_LIMIT_LOCK = threading.RLock()
 _HOST_LIMIT_STATE: dict[str, Any] = {"env": None, "value": _HOST_LIMIT_DEFAULT}
 _HOST_SEMAPHORES: dict[str, Semaphore] = {}
 _HOST_SEMAPHORE_LIMITS: dict[str, int] = {}
@@ -2466,7 +2472,7 @@ def _prepare_sip_fallback(
         tags = {}
     _incr("data.fetch.feed_switch", value=1.0, tags=tags)
     inc_provider_fallback("alpaca_iex", "alpaca_sip")
-    return extra_payload
+    return cast(dict[str, object], extra_payload)
 
 
 # Track consecutive empty Alpaca responses across all symbols to temporarily
@@ -4279,7 +4285,7 @@ def _find_pytest_capture_handler() -> logging.Handler | None:
             try:
                 if existing.__class__.__name__ == "LogCaptureHandler" and getattr(existing, "records", None) is not None and not getattr(existing, "closed", False):
                     _CAPTURE_HANDLER_REF = weakref.ref(existing)
-                    return existing
+                    return cast(logging.Handler, existing)
             except Exception:
                 continue
 
@@ -4289,7 +4295,7 @@ def _find_pytest_capture_handler() -> logging.Handler | None:
                     if getattr(obj, "records", None) is None or getattr(obj, "closed", False):
                         continue
                     _CAPTURE_HANDLER_REF = weakref.ref(obj)
-                    return obj
+                    return cast(logging.Handler, obj)
             except Exception:
                 continue
 
@@ -4782,7 +4788,7 @@ _CYCLE_FALLBACK_FEED: dict[tuple[str, str, str], str] = {}
 
 
 def _now_monotonic() -> float:
-    return monotonic_time()
+    return float(monotonic_time())
 
 
 def _detect_pytest_env() -> bool:
@@ -5335,10 +5341,10 @@ def _flatten_and_normalize_ohlcv(
             return True
         return False
 
-    for canonical, aliases in yahoo_schema_aliases.items():
+    for canonical, alias_candidates in yahoo_schema_aliases.items():
         if canonical in getattr(df, "columns", []):
             continue
-        for alias in aliases:
+        for alias in alias_candidates:
             if _assign_from_alias(canonical, alias):
                 break
 
@@ -7107,16 +7113,16 @@ def should_skip_symbol(
         attrs = df.attrs  # type: ignore[attr-defined]
     except Exception:
         attrs = None
-    coverage_meta: dict[str, object] | None = None
+    coverage_meta_info: dict[str, object] | None = None
     if isinstance(attrs, dict):
         existing_meta = attrs.get("_coverage_meta")
         if isinstance(existing_meta, dict):
-            coverage_meta = existing_meta
+            coverage_meta_info = existing_meta
         else:
-            coverage_meta = {}
-            attrs["_coverage_meta"] = coverage_meta
-    if coverage_meta is not None:
-        coverage_meta.update(
+            coverage_meta_info = {}
+            attrs["_coverage_meta"] = coverage_meta_info
+    if coverage_meta_info is not None:
+        coverage_meta_info.update(
             {
                 "expected": expected_count,
                 "missing_after": missing_after,
@@ -7131,15 +7137,15 @@ def should_skip_symbol(
     skip_due_to_ratio = gap_ratio > max_gap_ratio if max_gap_ratio is not None else False
     skip = catastrophic_gap or skip_due_to_ratio
     if skip:
-        if coverage_meta is None and isinstance(attrs, dict):
+        if coverage_meta_info is None and isinstance(attrs, dict):
             meta_candidate = attrs.setdefault("_coverage_meta", {})
             if isinstance(meta_candidate, dict):
-                coverage_meta = meta_candidate
-        if isinstance(coverage_meta, dict):
-            coverage_meta["skip_flagged"] = True
-            coverage_meta["gap_ratio"] = gap_ratio
-            coverage_meta["missing_after"] = missing_after
-            coverage_meta["expected"] = expected_count
+                coverage_meta_info = meta_candidate
+        if isinstance(coverage_meta_info, dict):
+            coverage_meta_info["skip_flagged"] = True
+            coverage_meta_info["gap_ratio"] = gap_ratio
+            coverage_meta_info["missing_after"] = missing_after
+            coverage_meta_info["expected"] = expected_count
         key = (symbol_str, start.date())
         if key not in _SKIP_LOGGED:
             if catastrophic_gap:
@@ -7284,7 +7290,7 @@ def _last_complete_minute(pd_local: Any | None = None) -> _dt.datetime:
                 ts = ts.tz_localize("UTC")
             else:
                 ts = ts.tz_convert("UTC")
-            return ts.to_pydatetime()
+            return cast(_dt.datetime, ts.to_pydatetime())
         except Exception:  # pragma: no cover - defensive
             pass
     return datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
@@ -7314,18 +7320,11 @@ def _ensure_requests():
     if getattr(requests, "get", None) is None:
         try:
             import requests as _requests_mod  # type: ignore
-            from requests.exceptions import (
-                ConnectionError as _ConnectionError,
-            )
-            from requests.exceptions import (
-                HTTPError as _HTTPError,
-            )
-            from requests.exceptions import (
-                RequestException as _RequestException,
-            )
-            from requests.exceptions import (
-                Timeout as _Timeout,
-            )
+            exceptions_mod = importlib.import_module("requests.exceptions")
+            _ConnectionError = getattr(exceptions_mod, "ConnectionError", ConnectionError)
+            _HTTPError = getattr(exceptions_mod, "HTTPError", HTTPError)
+            _RequestException = getattr(exceptions_mod, "RequestException", RequestException)
+            _Timeout = getattr(exceptions_mod, "Timeout", Timeout)
 
             requests = _requests_mod
             for placeholder, real in (
@@ -7337,14 +7336,7 @@ def _ensure_requests():
                 try:
                     placeholder.__bases__ = (real,)
                 except TypeError:  # pragma: no cover - fallback for exotic class wrappers
-
-                    class _Shim(real):  # type: ignore[misc]
-                        pass
-
-                    try:
-                        placeholder.__bases__ = (_Shim,)
-                    except TypeError:
-                        continue
+                    continue
         except Exception:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
     if _requests is None or getattr(_requests, "get", None) is None:
@@ -7506,8 +7498,21 @@ def fetch_daily_data_async(
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     urls = [_build_daily_url(sym, start_dt, end_dt) for sym in symbols]
-    timeout = clamp_request_timeout(timeout)
-    results = http.map_get(urls, timeout=timeout)
+    timeout_raw = clamp_request_timeout(timeout)
+    timeout_seconds: float | None
+    if timeout_raw is None:
+        timeout_seconds = None
+    elif isinstance(timeout_raw, tuple):
+        try:
+            timeout_seconds = float(timeout_raw[0])
+        except (TypeError, ValueError, IndexError):
+            timeout_seconds = None
+    else:
+        try:
+            timeout_seconds = float(timeout_raw)
+        except (TypeError, ValueError):
+            timeout_seconds = None
+    results = http.map_get(urls, timeout=timeout_seconds)
     out: dict[str, Any] = {}
     for sym, (res, err) in zip(symbols, results, strict=False):
         if err or res is None:
@@ -7541,7 +7546,7 @@ def build_fetcher(
 
     if prefer or force_feed:
         f = DataFetcher(prefer=prefer, force_feed=force_feed, cache_minutes=cache_minutes)
-        f.source = "directed"
+        setattr(f, "source", "directed")
         return f
 
     global _FETCHER_SINGLETON
@@ -7549,7 +7554,7 @@ def build_fetcher(
         return _FETCHER_SINGLETON
 
     _FETCHER_SINGLETON = DataFetcher(cache_minutes=cache_minutes)
-    _FETCHER_SINGLETON.source = "singleton"
+    setattr(_FETCHER_SINGLETON, "source", "singleton")
     return _FETCHER_SINGLETON
 
 
@@ -7582,7 +7587,7 @@ def retry_empty_fetch_once(
         Mapping used for structured logging of the retry.
 
     """
-    payload = {
+    payload: dict[str, Any] = {
         "retry_delay": delay,
         "delay": delay,
         "attempt": attempt,
@@ -8501,7 +8506,6 @@ def _fetch_bars(
         except Exception:
             pass
         provider_monitor.record_success("alpaca")
-        monitor_disabled_until = None
         _alpaca_disable_count = 0
         try:
             tf_key = (symbol, _interval)
@@ -9070,8 +9074,8 @@ def _fetch_bars(
             and not (_SIP_UNAUTHORIZED or _is_sip_unauthorized())
             and _sip_fallback_allowed(session, headers, _interval)
         ):
-            payload = (_interval, "sip", _start, _end)
-            result = _attempt_fallback(payload)
+            fallback_payload = (_interval, "sip", _start, _end)
+            result = _attempt_fallback(fallback_payload)
             if result is not None:
                 return result
 
@@ -9170,7 +9174,7 @@ def _fetch_bars(
                     return _depth_exit(_finalize_frame(backup_frame))
                 return _depth_exit(_empty_result())
         except Timeout as e:
-            log_extra = {
+            timeout_extra: dict[str, Any] = {
                 "url": url,
                 "symbol": symbol,
                 "feed": _feed,
@@ -9178,11 +9182,11 @@ def _fetch_bars(
                 "params": params,
             }
             if prev_corr:
-                log_extra["previous_correlation_id"] = prev_corr
+                timeout_extra["previous_correlation_id"] = prev_corr
             attempt_number = int(_state.get("retries", 0)) + 1
             remaining_retries = max(0, max_retries - attempt_number)
-            log_extra["remaining_retries"] = remaining_retries
-            _emit_fetch_attempt_log(error="timeout", exception=e, extra=log_extra)
+            timeout_extra["remaining_retries"] = remaining_retries
+            _emit_fetch_attempt_log(error="timeout", exception=e, extra=timeout_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -9230,7 +9234,7 @@ def _fetch_bars(
             result = _req(session, fallback, headers=headers, timeout=timeout)
             return _depth_exit(result)
         except ConnectionError as e:
-            log_extra = {
+            connection_extra: dict[str, Any] = {
                 "url": url,
                 "symbol": symbol,
                 "feed": _feed,
@@ -9238,11 +9242,15 @@ def _fetch_bars(
                 "params": params,
             }
             if prev_corr:
-                log_extra["previous_correlation_id"] = prev_corr
+                connection_extra["previous_correlation_id"] = prev_corr
             attempt = _state["retries"] + 1
             remaining = max_retries - attempt
-            log_extra["remaining_retries"] = remaining
-            _emit_fetch_attempt_log(error="connection_error", exception=e, extra=log_extra)
+            connection_extra["remaining_retries"] = remaining
+            _emit_fetch_attempt_log(
+                error="connection_error",
+                exception=e,
+                extra=connection_extra,
+            )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -9300,7 +9308,7 @@ def _fetch_bars(
         except (HTTPError, RequestException, ValueError, KeyError) as e:
             if isinstance(e, ValueError) and str(e) == "rate_limited" and _feed == "iex" and _is_sip_unauthorized():
                 raise
-            log_extra = {
+            request_extra: dict[str, Any] = {
                 "url": url,
                 "symbol": symbol,
                 "feed": _feed,
@@ -9308,10 +9316,10 @@ def _fetch_bars(
                 "params": params,
             }
             if prev_corr:
-                log_extra["previous_correlation_id"] = prev_corr
+                request_extra["previous_correlation_id"] = prev_corr
             attempt = _state["retries"] + 1
             remaining = max_retries - attempt
-            log_extra["remaining_retries"] = remaining
+            request_extra["remaining_retries"] = remaining
             status_hint: int | None = None
             response_obj = getattr(e, "response", None)
             if response_obj is not None:
@@ -9338,7 +9346,7 @@ def _fetch_bars(
                 status=status_hint,
                 error=error_reason,
                 exception=e,
-                extra=log_extra,
+                extra=request_extra,
             )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -9424,7 +9432,7 @@ def _fetch_bars(
             data = payload
         if data is None:
             data = []
-        log_extra = {
+        log_extra: dict[str, Any] = {
             "url": url,
             "symbol": symbol,
             "feed": _feed,
@@ -9441,7 +9449,10 @@ def _fetch_bars(
         if retry_delay is not None and "retry_delay" not in log_extra:
             log_extra["retry_delay"] = retry_delay
         if status == 400:
-            log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+            log_extra_with_remaining = {
+                "remaining_retries": max_retries - _state["retries"],
+                **log_extra,
+            }
             _emit_fetch_attempt_log(status=status, error="bad_request", extra=log_extra_with_remaining)
             if "invalid feed" in text.lower():
                 provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
@@ -9652,14 +9663,14 @@ def _fetch_bars(
                 except Exception:
                     pass
                 return _depth_exit(_req(session, fallback, headers=headers, timeout=timeout))
-            backup_frame: Any | None = None
+            rate_limit_backup_frame: Any | None = None
             if callable(_backup_get_bars):
                 try:
-                    backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
+                    rate_limit_backup_frame = _backup_get_bars(symbol, _start, _end, _interval)
                 except Exception:
-                    backup_frame = None
-            if backup_frame is not None and not getattr(backup_frame, "empty", True):
-                finalized_backup = _finalize_frame(backup_frame)
+                    rate_limit_backup_frame = None
+            if rate_limit_backup_frame is not None and not getattr(rate_limit_backup_frame, "empty", True):
+                finalized_backup = _finalize_frame(rate_limit_backup_frame)
                 try:
                     attrs = getattr(finalized_backup, "attrs", {}) or {}
                 except Exception:
@@ -10134,31 +10145,31 @@ def _fetch_bars(
                 fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
                 allowed_alpaca_feeds = {"iex", "sip", "alpaca_iex", "alpaca_sip"}
                 if intraday_session_active:
-                    filtered: list[str] = []
-                    for candidate in fallback_candidates:
+                    filtered_intraday: list[str] = []
+                    for feed_option in fallback_candidates:
                         try:
-                            normalized_candidate = _normalize_feed_value(candidate)
+                            normalized_feed_candidate = _normalize_feed_value(feed_option)
                         except ValueError:
                             try:
-                                normalized_candidate = str(candidate).strip().lower()
+                                normalized_feed_candidate = str(feed_option).strip().lower()
                             except Exception:
                                 continue
-                        if normalized_candidate in allowed_alpaca_feeds:
-                            filtered.append(normalized_candidate)
-                    fallback_candidates = filtered
+                        if normalized_feed_candidate in allowed_alpaca_feeds:
+                            filtered_intraday.append(normalized_feed_candidate)
+                    fallback_candidates = filtered_intraday
                 elif not _state.get("window_has_session", True):
-                    filtered = []
-                    for candidate in fallback_candidates:
+                    filtered_no_session: list[str] = []
+                    for feed_option in fallback_candidates:
                         try:
-                            normalized_candidate = _normalize_feed_value(candidate)
+                            normalized_feed_candidate = _normalize_feed_value(feed_option)
                         except ValueError:
                             try:
-                                normalized_candidate = str(candidate).strip().lower()
+                                normalized_feed_candidate = str(feed_option).strip().lower()
                             except Exception:
                                 continue
-                        if normalized_candidate in allowed_alpaca_feeds:
-                            filtered.append(normalized_candidate)
-                    fallback_candidates = filtered
+                        if normalized_feed_candidate in allowed_alpaca_feeds:
+                            filtered_no_session.append(normalized_feed_candidate)
+                    fallback_candidates = filtered_no_session
                 sip_allowed = _sip_configured() and not _is_sip_unauthorized()
                 if (
                     sip_allowed
@@ -11618,6 +11629,8 @@ def get_minute_df(
         skip_primary_due_to_fallback = True
 
     used_backup = False
+    primary_failure_logged = False
+    backup_attempted = False
     minute_metrics: dict[str, Any] = {
         "success_emitted": False,
         "fallback_tags": None,
@@ -11748,7 +11761,7 @@ def get_minute_df(
                     provider_tag = str(provider_attr).strip() or provider_tag
                 if feed_attr:
                     feed_tag = str(feed_attr).strip() or feed_tag
-        tags = {
+        tags: dict[str, Any] = {
             "provider": str(provider_tag or "unknown"),
             "symbol": symbol,
             "feed": str(feed_tag or provider_tag or "unknown"),
@@ -12354,12 +12367,12 @@ def get_minute_df(
                             _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
                             switch_recorded = True
                         try:
-                            payload = _format_fallback_payload_df("1Min", alt_feed, start_dt, end_dt)
+                            fallback_payload_info: list[str] | dict[str, str] = _format_fallback_payload_df("1Min", alt_feed, start_dt, end_dt)
                         except Exception:
-                            payload = {"feed": alt_feed, "timeframe": "1Min"}
+                            fallback_payload_info = {"feed": alt_feed, "timeframe": "1Min"}
                         logger.info(
                             "DATA_SOURCE_FALLBACK_ATTEMPT",
-                            extra={"provider": "alpaca", "fallback": payload},
+                            extra={"provider": "alpaca", "fallback": fallback_payload_info},
                         )
                         try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
@@ -12673,9 +12686,9 @@ def get_minute_df(
             except Exception:
                 attrs = None
             if isinstance(attrs, dict):
-                coverage_meta = attrs.get("_coverage_meta")
-                if isinstance(coverage_meta, dict):
-                    attrs["_coverage_meta"] = dict(coverage_meta)
+                existing_coverage_meta = attrs.get("_coverage_meta")
+                if isinstance(existing_coverage_meta, dict):
+                    attrs["_coverage_meta"] = dict(existing_coverage_meta)
             _set_price_reliability(df, reliable=True)
             mark_success(symbol, "1Min")
             success_marked = True
@@ -12842,8 +12855,9 @@ def get_minute_df(
 
     if isinstance(coverage_meta, dict):
         try:
-            existing = int(coverage_meta.get("last_complete_evaluations", 0))
-        except Exception:
+            raw_existing = coverage_meta.get("last_complete_evaluations", 0)
+            existing = int(raw_existing) if isinstance(raw_existing, (int, float, str, bytes)) else 0
+        except (TypeError, ValueError):
             existing = 0
         coverage_meta["last_complete_evaluations"] = max(existing, last_complete_evaluations)
 
@@ -12883,7 +12897,11 @@ def get_minute_df(
         except Exception:
             feed_hint = None
     max_gap_ratio = _resolve_gap_ratio_limit(feed=feed_hint)
-    gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
+    raw_gap_ratio = coverage_meta.get("gap_ratio", 0.0)
+    try:
+        gap_ratio = float(raw_gap_ratio if isinstance(raw_gap_ratio, (int, float, str, bytes)) else 0.0)
+    except (TypeError, ValueError):
+        gap_ratio = 0.0
     try:
         coverage_meta["gap_ratio_pct"] = gap_ratio * 100.0
         coverage_meta["gap_ratio_limit_pct"] = _resolve_gap_ratio_limit(feed=feed_hint) * 100.0
@@ -12921,7 +12939,8 @@ def get_minute_df(
             try:
                 raw_initial = coverage_meta.get("initial_gap_ratio")
                 if raw_initial is not None:
-                    initial_gap_ratio_meta = float(raw_initial)
+                    if isinstance(raw_initial, (int, float, str, bytes)):
+                        initial_gap_ratio_meta = float(raw_initial)
             except (TypeError, ValueError):
                 initial_gap_ratio_meta = None
         # Treat initial gaps as "severe" only when they exceed the effective
@@ -13733,9 +13752,7 @@ def is_market_open() -> bool:
 def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
     start_s = int(start.timestamp())
     end_s = int(end.timestamp())
-    return (
-        "https://query1.finance.yahoo.com/v8/finance/chart/" f"{symbol}?period1={start_s}&period2={end_s}&interval=1d",
-    )
+    return "https://query1.finance.yahoo.com/v8/finance/chart/" f"{symbol}?period1={start_s}&period2={end_s}&interval=1d"
 
 
 __all__ = [

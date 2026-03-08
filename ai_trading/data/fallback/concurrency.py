@@ -16,6 +16,7 @@ from collections import deque
 from collections.abc import (
     Awaitable,
     Callable,
+    Coroutine,
     Iterable,
     Mapping,
     MutableMapping,
@@ -260,7 +261,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
         if normalised is not None:
             _record_pooling_snapshot(normalised[0], normalised[1])
 
-    return semaphore
+    return cast(asyncio.Semaphore | None, semaphore)
 
 T = TypeVar("T")
 
@@ -517,54 +518,55 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
 
     if isinstance(obj, (list, tuple, set, frozenset)):
         mutated = False
-        new_items: list[object] = []
+        sequence_items: list[object] = []
         for value in obj:
             new_value = _scan(value, seen, loop)
             mutated = mutated or new_value is not value
-            new_items.append(new_value)
+            sequence_items.append(new_value)
 
         if not mutated:
             return obj
 
         if isinstance(obj, list):
-            obj[:] = new_items
+            obj[:] = sequence_items
             return obj
 
         if isinstance(obj, set):
             obj.clear()
-            obj.update(new_items)
+            obj.update(sequence_items)
             return obj
 
         if isinstance(obj, frozenset):
             try:
-                return type(obj)(new_items)
+                return type(obj)(sequence_items)
             except Exception:
                 logger.debug("FROZENSET_REBUILD_FAILED", exc_info=True)
-                return frozenset(new_items)
+                return frozenset(sequence_items)
 
         # Tuple (and tuple-like) containers should preserve their concrete type
         tuple_type = type(obj)
         if tuple_type is tuple:
-            return tuple(new_items)
+            return tuple(sequence_items)
         try:
-            return tuple_type(*new_items)
+            return tuple_type(sequence_items)
         except TypeError:
             try:
-                return tuple_type(new_items)
+                return tuple_type(sequence_items)
             except TypeError:
-                return tuple(new_items)
+                return tuple(sequence_items)
 
     if isinstance(obj, MutableSet) and not isinstance(obj, set):
         mutated = False
-        new_items: list[object] = []
+        set_items: list[object] = []
         for value in list(obj):
             new_value = _scan(value, seen, loop)
             mutated = mutated or new_value is not value
-            new_items.append(new_value)
+            set_items.append(new_value)
 
         if mutated:
             obj.clear()
-            obj.update(new_items)
+            for item in set_items:
+                obj.add(item)
         return obj
 
     if is_dataclass(obj) and not isinstance(obj, type):
@@ -873,9 +875,9 @@ async def run_with_concurrency(
             logger.debug("EVENT_LOOP_POLICY_RESET_FAILED", exc_info=True)
         # Use a minimal scheduler in test mode to avoid cross-loop deadlocks.
         symbols_list = list(symbols)
-        results: dict[str, T | None] = {}
-        succeeded: set[str] = set()
-        failed: set[str] = set()
+        test_results: dict[str, T | None] = {}
+        test_succeeded: set[str] = set()
+        test_failed: set[str] = set()
         peak_this_run = 0
         deadline = None if timeout_s is None else loop.time() + max(0.0, timeout_s)
 
@@ -884,14 +886,16 @@ async def run_with_concurrency(
         while idx < total:
             if deadline is not None and loop.time() >= deadline:
                 for sym in symbols_list[idx:]:
-                    results.setdefault(sym, None)
-                    failed.add(sym)
+                    test_results.setdefault(sym, None)
+                    test_failed.add(sym)
                 break
             batch = symbols_list[idx : idx + limit]
             idx += len(batch)
             peak_this_run = max(peak_this_run, len(batch))
-            tasks = [asyncio.create_task(worker(sym)) for sym in batch]
-            task_map = {task: sym for task, sym in zip(tasks, batch, strict=False)}
+            test_tasks: list[asyncio.Task[T]] = [
+                asyncio.create_task(cast(Coroutine[Any, Any, T], worker(sym))) for sym in batch
+            ]
+            task_map = {task: sym for task, sym in zip(test_tasks, batch, strict=False)}
             if debug_mode:
                 logger.debug(
                     "DEBUG_CONCURRENCY",
@@ -904,24 +908,27 @@ async def run_with_concurrency(
                     },
                 )
             time_left = None if deadline is None else max(0.0, deadline - loop.time())
-            outcomes: dict[asyncio.Task[object], object] = {}
-            pending: set[asyncio.Task[object]] = set()
+            test_outcomes: dict[asyncio.Task[T], T | BaseException] = {}
+            test_pending: set[asyncio.Task[T]] = set()
             if deadline is None:
-                gathered = await asyncio.gather(*tasks, return_exceptions=True)
-                outcomes = {task: outcome for task, outcome in zip(tasks, gathered, strict=False)}
+                gathered = await asyncio.gather(*test_tasks, return_exceptions=True)
+                test_outcomes = {
+                    task: cast(T | BaseException, outcome)
+                    for task, outcome in zip(test_tasks, gathered, strict=False)
+                }
             else:
-                done, pending = await asyncio.wait(
-                    tasks, timeout=time_left, return_when=asyncio.ALL_COMPLETED
+                test_done, test_pending = await asyncio.wait(
+                    test_tasks, timeout=time_left, return_when=asyncio.ALL_COMPLETED
                 )
-                for task in done:
+                for task in test_done:
                     try:
-                        outcomes[task] = task.result()
+                        test_outcomes[task] = task.result()
                     except BaseException as exc:
-                        outcomes[task] = exc
+                        test_outcomes[task] = exc
             for task, sym in task_map.items():
-                if task in pending:
-                    failed.add(sym)
-                    results.setdefault(sym, None)
+                if task in test_pending:
+                    test_failed.add(sym)
+                    test_results.setdefault(sym, None)
                     task.cancel()
                     if debug_mode:
                         logger.debug(
@@ -933,10 +940,10 @@ async def run_with_concurrency(
                             },
                         )
                     continue
-                outcome = outcomes.get(task)
+                outcome = test_outcomes.get(task)
                 if isinstance(outcome, BaseException):
-                    failed.add(sym)
-                    results.setdefault(sym, None)
+                    test_failed.add(sym)
+                    test_results.setdefault(sym, None)
                     if debug_mode:
                         logger.debug(
                             "DEBUG_CONCURRENCY",
@@ -947,8 +954,8 @@ async def run_with_concurrency(
                             },
                         )
                 else:
-                    succeeded.add(sym)
-                    results[sym] = outcome
+                    test_succeeded.add(sym)
+                    test_results[sym] = cast(T, outcome)
 
         _update_peak_counters(peak_this_run)
         if debug_mode:
@@ -956,13 +963,13 @@ async def run_with_concurrency(
                 "DEBUG_CONCURRENCY",
                 extra={
                     "event": "exit",
-                    "results": results,
-                    "succeeded": succeeded,
-                    "failed": failed,
+                    "results": test_results,
+                    "succeeded": test_succeeded,
+                    "failed": test_failed,
                     "peak": peak_this_run,
                 },
             )
-        return results, succeeded, failed
+        return test_results, test_succeeded, test_failed
     if host_semaphore is not None:
         bound_loop = getattr(host_semaphore, "_loop", None)
         if bound_loop is not None and bound_loop is not loop:
@@ -1171,7 +1178,7 @@ async def run_with_concurrency(
     tasks: list[asyncio.Task[None]] = []
     task_to_symbol: dict[asyncio.Task[None], str] = {}
     for symbol in symbols:
-        task = asyncio.create_task(_execute(symbol))
+        task = cast(asyncio.Task[None], asyncio.create_task(_execute(symbol)))
         tasks.append(task)
         task_to_symbol[task] = symbol
 
@@ -1183,7 +1190,7 @@ async def run_with_concurrency(
         # Guard against pytest hangs from foreign-loop primitives
         effective_timeout = 5.0
 
-    outcomes: list[object]
+    outcomes: list[Any]
     if effective_timeout is None:
         gather_coro = asyncio.gather(*tasks, return_exceptions=True)
         try:
@@ -1219,7 +1226,7 @@ async def run_with_concurrency(
                 else:
                     SUCCESSFUL_SYMBOLS.add(symbol)
                     results[symbol] = result
-        gather_outcomes: list[object] = []
+        gather_outcomes: list[Any] = []
         for task in done:
             try:
                 gather_outcomes.append(task.result())
@@ -1227,11 +1234,11 @@ async def run_with_concurrency(
                 gather_outcomes.append(exc)
         outcomes = gather_outcomes
 
-    for task, outcome in zip(tasks, outcomes, strict=False):
+    for task, task_outcome in zip(tasks, outcomes, strict=False):
         symbol = task_to_symbol.get(task)
         if symbol is None:
             continue
-        if isinstance(outcome, BaseException):
+        if isinstance(task_outcome, BaseException):
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 

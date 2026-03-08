@@ -4,21 +4,22 @@ from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 from unittest.mock import MagicMock
+from typing import Any, cast
 
 import pytest
 
 if "numpy" not in sys.modules:  # pragma: no cover - optional dependency shim
-    numpy_stub = types.ModuleType("numpy")
+    numpy_stub = cast(Any, types.ModuleType("numpy"))
     numpy_stub.nan = float("nan")
     numpy_stub.NaN = numpy_stub.nan
     numpy_stub.random = types.SimpleNamespace(seed=lambda *_args, **_kwargs: None)
     sys.modules["numpy"] = numpy_stub
 
 if "portalocker" not in sys.modules:  # pragma: no cover - optional dependency shim
-    sys.modules["portalocker"] = types.ModuleType("portalocker")
+    sys.modules["portalocker"] = cast(Any, types.ModuleType("portalocker"))
 
 if "bs4" not in sys.modules:  # pragma: no cover - optional dependency shim
-    bs4_stub = types.ModuleType("bs4")
+    bs4_stub = cast(Any, types.ModuleType("bs4"))
 
     class _BeautifulSoup:  # pragma: no cover - minimal placeholder
         def __init__(self, *args, **kwargs) -> None:
@@ -29,7 +30,7 @@ if "bs4" not in sys.modules:  # pragma: no cover - optional dependency shim
     sys.modules["bs4"] = bs4_stub
 
 if "flask" not in sys.modules:  # pragma: no cover - optional dependency shim
-    flask_stub = types.ModuleType("flask")
+    flask_stub = cast(Any, types.ModuleType("flask"))
 
     class _Flask:  # pragma: no cover - minimal placeholder
         def __init__(self, *args, **kwargs) -> None:
@@ -514,7 +515,7 @@ def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
     )
 
     result = bot_engine.trade_logic(
-        ctx,
+        cast(Any, ctx),
         state,
         symbol,
         balance=100000.0,
@@ -658,7 +659,7 @@ def test_enter_long_skips_when_primary_disabled(monkeypatch, caplog):
     caplog.set_level("WARNING")
 
     result = bot_engine._enter_long(
-        ctx,
+        cast(Any, ctx),
         state,
         symbol,
         balance=100000.0,
@@ -685,7 +686,7 @@ class TestBuyingPowerEnforcement:
         account = types.SimpleNamespace(buying_power="10000")
         ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
 
-        qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "buy", 100.0, 50)
+        qty, available = bot_engine._enforce_buying_power_limit(cast(Any, ctx), account, "buy", 100.0, 50)
 
         assert qty == 50
         assert available == pytest.approx(10000.0)
@@ -694,7 +695,7 @@ class TestBuyingPowerEnforcement:
         account = types.SimpleNamespace(buying_power=900)
         ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
 
-        qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "buy", 100.0, 15)
+        qty, available = bot_engine._enforce_buying_power_limit(cast(Any, ctx), account, "buy", 100.0, 15)
 
         assert qty == 9  # floor division of available // price
         assert available == pytest.approx(900.0)
@@ -703,7 +704,7 @@ class TestBuyingPowerEnforcement:
         account = types.SimpleNamespace(shorting_power=0)
         ctx = types.SimpleNamespace(api=types.SimpleNamespace(get_account=lambda: account))
 
-        qty, available = bot_engine._enforce_buying_power_limit(ctx, account, "sell_short", 50.0, 10)
+        qty, available = bot_engine._enforce_buying_power_limit(cast(Any, ctx), account, "sell_short", 50.0, 10)
 
         assert qty == 10
         assert available == 0.0
@@ -1365,7 +1366,7 @@ def test_enter_long_warns_when_fallback_quote_unavailable(monkeypatch, caplog):
     ctx.data_client = None
 
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
-    bot_engine._strict_data_gating_enabled.cache_clear()
+    cast(Any, bot_engine._strict_data_gating_enabled).cache_clear()
 
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("TESTING", raising=False)
@@ -1487,7 +1488,7 @@ def test_enter_long_blocks_on_stale_fallback_quote(monkeypatch, caplog):
     ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
 
     monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
-    bot_engine._strict_data_gating_enabled.cache_clear()
+    cast(Any, bot_engine._strict_data_gating_enabled).cache_clear()
 
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("TESTING", raising=False)

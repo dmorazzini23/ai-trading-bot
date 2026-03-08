@@ -7,6 +7,7 @@ extracted from bot_engine.py to enable standalone imports and testing.
 import time as pytime
 from datetime import datetime
 from threading import Lock
+from typing import Any, TypedDict
 
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
@@ -106,8 +107,17 @@ else:
 SENTIMENT_NEWS_WEIGHT = 0.8
 SENTIMENT_FORM4_WEIGHT = 0.2
 _sentiment_cache: dict[str, tuple[float, float]] = {}
+
+
+class _SentimentCircuitBreaker(TypedDict):
+    failures: int
+    last_failure: float
+    state: str
+    next_retry: float
+
+
 # track failures and progressive retry scheduling
-_sentiment_circuit_breaker = {
+_sentiment_circuit_breaker: _SentimentCircuitBreaker = {
     'failures': 0,
     'last_failure': 0,
     'state': 'closed',
@@ -389,13 +399,13 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
             alt_resp = _http_session.get(alt_url, timeout=clamp_request_timeout(timeout_v))
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
-                sentiment_score = data.get('sentiment_score', 0.0)
+                sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
                 if -1.0 <= sentiment_score <= 1.0:
                     logger.info(f'ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}')
                     return sentiment_score
         elif primary_resp.status_code == 200:
             data = primary_resp.json()
-            sentiment_score = data.get('sentiment_score', 0.0)
+            sentiment_score = float(data.get('sentiment_score', 0.0) or 0.0)
             if -1.0 <= sentiment_score <= 1.0:
                 return sentiment_score
     except (ValueError, TypeError) as e:
@@ -513,7 +523,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
             break
         r.raise_for_status()
         soup = soup_cls(r.content, 'lxml')
-        filings = []
+        filings: list[dict[str, Any]] = []
         table = soup.find('table', {'class': 'tableFile2'})
         if not table:
             return filings

@@ -7,7 +7,7 @@ cluster exposure caps, and turnover budget enforcement.
 from ai_trading.logging import get_logger
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, TYPE_CHECKING
 import numpy as np
 
@@ -63,7 +63,7 @@ class ClusterRisk:
 @dataclass
 class TurnoverBudget:
     """Daily turnover tracking."""
-    date: datetime = field(default_factory=lambda: datetime.now(UTC).date())
+    date: date = field(default_factory=lambda: datetime.now(UTC).date())
     used_turnover: float = 0.0
     remaining_turnover: float = 1.0
     total_budget: float = 1.0
@@ -243,7 +243,7 @@ class AdaptiveRiskController:
 
         def _new_cluster() -> dict[str, Any]:
             return {'symbols': [], 'total_risk': 0.0}
-        cluster_risks = defaultdict(_new_cluster)
+        cluster_risks: defaultdict[int, dict[str, Any]] = defaultdict(_new_cluster)
         for symbol, position in positions.items():
             cluster_id = cluster_assignments.get(symbol, 0)
             cluster_risks[cluster_id]['symbols'].append(symbol)

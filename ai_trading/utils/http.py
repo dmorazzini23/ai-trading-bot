@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover - fallback when urllib3 missing
 
 
 from contextlib import AbstractAsyncContextManager, contextmanager
-from typing import Iterator
+from typing import Any, Iterator, cast
 from ai_trading.config.management import get_env
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
 
@@ -227,9 +227,9 @@ def _get_session_timeout() -> float | int | None:
     try:
         from ai_trading.http.timeouts import get_session_timeout as _get
 
-        return _get()
+        return cast(float | int | None, _get())
     except ImportError:
-        return clamp_timeout(None)
+        return cast(float | int | None, clamp_timeout(None))
 
 
 def clamp_request_timeout(
@@ -245,62 +245,47 @@ def clamp_request_timeout(
     if timeout is None:
         return None
     if isinstance(timeout, tuple):
-        return tuple(clamp_timeout(t) for t in timeout)
-    return clamp_timeout(timeout)
+        connect, read = timeout
+        return (float(cast(float, clamp_timeout(connect))), float(cast(float, clamp_timeout(read))))
+    return float(cast(float, clamp_timeout(timeout)))
 
 
-if REQUESTS_AVAILABLE:
+class HTTPSession(requests.Session):
+    """Session with sane connection pooling and timeout defaults."""
 
-    class HTTPSession(requests.Session):
-        """Session with sane connection pooling and timeout defaults.
+    def __init__(self, timeout: float | int | None = None) -> None:
+        super().__init__()
+        if timeout is None:
+            timeout = _get_session_timeout()
+        self._timeout = clamp_request_timeout(timeout)
+        if not REQUESTS_AVAILABLE:
+            return
+        _pool_stats["per_host"] = _int_env("HTTP_MAX_PER_HOST", _pool_stats["per_host"])
+        _pool_stats["workers"] = _int_env(
+            "HTTP_POOL_WORKERS",
+            _int_env("HTTP_MAX_WORKERS", _pool_stats["workers"]),
+        )
+        retries = Retry(
+            total=3,
+            backoff_factor=0.3,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(
+            pool_connections=_pool_stats["per_host"],
+            pool_maxsize=_pool_stats["pool_maxsize"],
+            max_retries=retries,
+        )
+        self.mount("http://", adapter)
+        self.mount("https://", adapter)
 
-        Parameters
-        ----------
-        timeout:
-            Default timeout (in seconds) applied to requests that do not
-            provide a ``timeout``. The value is normalized via
-            :func:`ai_trading.utils.timing.clamp_timeout`.
-        """
-
-        def __init__(self, timeout: float | int | None = None) -> None:
-            super().__init__()
-            if timeout is None:
-                timeout = _get_session_timeout()
-            self._timeout = clamp_request_timeout(timeout)
-            _pool_stats["per_host"] = _int_env("HTTP_MAX_PER_HOST", _pool_stats["per_host"])
-            _pool_stats["workers"] = _int_env(
-                "HTTP_POOL_WORKERS",
-                _int_env("HTTP_MAX_WORKERS", _pool_stats["workers"]),
-            )
-            retries = Retry(
-                total=3,
-                backoff_factor=0.3,
-                status_forcelist=(429, 500, 502, 503, 504),
-                allowed_methods=("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"),
-                raise_on_status=False,
-            )
-            adapter = HTTPAdapter(
-                pool_connections=_pool_stats["per_host"],
-                pool_maxsize=_pool_stats["pool_maxsize"],
-                max_retries=retries,
-            )
-            self.mount("http://", adapter)
-            self.mount("https://", adapter)
-
-        def request(self, method: str, url: str, **kwargs) -> requests.Response:  # type: ignore[override]
-            timeout = kwargs.get("timeout")
-            if timeout is None:
-                timeout = self._timeout
-            kwargs["timeout"] = clamp_request_timeout(timeout)
-            return super().request(method, url, **kwargs)
-
-else:  # pragma: no cover - exercised in tests
-
-    class HTTPSession(requests.Session):
-        """Stub session used when :mod:`requests` is unavailable."""
-
-        def __init__(self, *a, **k):
-            super().__init__()
+    def request(self, method: str, url: str, **kwargs) -> requests.Response:  # type: ignore[override]
+        timeout = kwargs.get("timeout")
+        if timeout is None:
+            timeout = self._timeout
+        kwargs["timeout"] = clamp_request_timeout(timeout)
+        return super().request(method, url, **kwargs)
 
 
 def _build_session() -> HTTPSession:
@@ -391,12 +376,14 @@ async def async_request(method: str, url: str, **kwargs) -> requests.Response:
     try:
         from ai_trading.http.pooling import AsyncHostLimiter
     except ImportError:  # pragma: no cover - defensive fallback
-        AsyncHostLimiter = None  # type: ignore[assignment]
+        async_host_limiter: Any | None = None
+    else:
+        async_host_limiter = AsyncHostLimiter
 
-    if AsyncHostLimiter is None:
+    if async_host_limiter is None:
         return await asyncio.to_thread(request, method, url, **kwargs)
 
-    async with AsyncHostLimiter.from_url(url):
+    async with async_host_limiter.from_url(url):
         return await asyncio.to_thread(request, method, url, **kwargs)
 
 
@@ -413,7 +400,7 @@ def request_json(
     status_forcelist: set[int] | None = None,
     headers: dict | None = None,
     params: dict | None = None,
-) -> dict:
+) -> dict[Any, Any]:
     """Perform HTTP request and return decoded JSON with bounded retries."""
     if not REQUESTS_AVAILABLE:
         raise RuntimeError("requests library is required for HTTP operations")
@@ -433,7 +420,8 @@ def request_json(
             if resp.status_code in status_forcelist and attempt < retries:
                 raise RequestsRequestException(f"status {resp.status_code}")
             try:
-                return resp.json()
+                payload = resp.json()
+                return payload if isinstance(payload, dict) else {"data": payload}
             except ValueError:
                 text = resp.text.strip()
                 return {"text": text}
@@ -484,7 +472,10 @@ def pool_stats() -> dict:
     return dict(_pool_stats)
 
 
-def _fetch_one(url: str, timeout: float | None = None) -> tuple[str, int, bytes]:
+def _fetch_one(
+    url: str,
+    timeout: float | tuple[float, float] | None = None,
+) -> tuple[str, int, bytes]:
     r = get(url, timeout=timeout)
     return (url, r.status_code, r.content)
 
@@ -495,12 +486,15 @@ def map_get(
     """Concurrent GET for a list of URLs."""
     if not urls:
         return []
-    timeout = clamp_request_timeout(timeout)
+    normalized_timeout: float | tuple[float, float] | None = clamp_request_timeout(timeout)
     workers = _pool_stats["workers"]
     SAFE_EXC = TRANSIENT_HTTP_EXC + (ValueError, TypeError, JSONDecodeError)
     results: list[tuple[tuple[str, int, bytes] | None, Exception | None]] = [(None, None)] * len(urls)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        future_to_idx = {ex.submit(_fetch_one, url, timeout): i for i, url in enumerate(urls)}
+        future_to_idx = {
+            ex.submit(_fetch_one, url, normalized_timeout): i
+            for i, url in enumerate(urls)
+        }
         for fut in as_completed(future_to_idx):
             i = future_to_idx[fut]
             try:

@@ -7,7 +7,7 @@ institutional-grade trading strategies.
 """
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
 from ..core.enums import TimeFrame
@@ -433,7 +433,14 @@ class MultiTimeframeAnalyzer:
     ) -> dict[str, Any]:
         """Generate final trading recommendation."""
         try:
-            recommendation = {'action': 'HOLD', 'confidence': 0.0, 'risk_level': 'medium', 'position_size_multiplier': 1.0, 'reasoning': [], 'warnings': []}
+            recommendation: dict[str, Any] = {
+                'action': 'HOLD',
+                'confidence': 0.0,
+                'risk_level': 'medium',
+                'position_size_multiplier': 1.0,
+                'reasoning': [],
+                'warnings': [],
+            }
             overall_score = float(combined_analysis.get('overall_score', 0.0) or 0.0)
             alignment = float(alignment_analysis.get('overall_alignment', 0.0) or 0.0)
             avg_confidence = float(combined_analysis.get('average_confidence', 0.0) or 0.0)
@@ -467,7 +474,10 @@ class MultiTimeframeAnalyzer:
             else:
                 recommendation['risk_level'] = 'medium'
                 recommendation['position_size_multiplier'] = 1.0
-            signal_counts = combined_analysis.get('signal_counts', {})
+            signal_counts = cast(
+                dict[str, int],
+                combined_analysis.get('signal_counts', {}),
+            )
             if signal_counts.get('neutral', 0) > signal_counts.get('bullish', 0) + signal_counts.get('bearish', 0):
                 recommendation['warnings'].append('Many neutral signals indicate uncertainty')
             return recommendation

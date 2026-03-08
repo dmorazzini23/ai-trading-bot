@@ -1,6 +1,8 @@
 import os
 import sys
 import tempfile
+import types
+from typing import Any, cast
 
 # Mock the config module to avoid environment variable requirements
 # Create a simple class-based approach that avoids singleton complexity
@@ -35,14 +37,18 @@ class TradingConfig:
     take_profit_factor = 1.8
     trailing_factor = 1.2
     scaling_factor = 0.3
+    TRADE_LOG_FILE = "trades.csv"
 
     @classmethod
     def from_env(cls, mode="balanced"):
         return cls()
 
 # Replace the config module with our mock
-MockConfig = TradingConfig
-sys.modules['config'] = MockConfig
+config_stub = types.ModuleType("config")
+cast(Any, config_stub).TradingConfig = TradingConfig
+cast(Any, config_stub).TRADE_LOG_FILE = TradingConfig.TRADE_LOG_FILE
+MockConfig: Any = config_stub
+sys.modules["config"] = config_stub
 
 from ai_trading import meta_learning
 

@@ -2,10 +2,11 @@ import importlib
 import sys
 import types
 from enum import Enum
+from typing import Any, cast
 
 
 def _stub_bot_engine_heavy_deps(monkeypatch):
-    stub_numpy = types.ModuleType("numpy")
+    stub_numpy = cast(Any, types.ModuleType("numpy"))
     stub_numpy.nan = float("nan")
     stub_numpy.NaN = stub_numpy.nan
 
@@ -17,7 +18,7 @@ def _stub_bot_engine_heavy_deps(monkeypatch):
     stub_numpy.random = _RandomNS()
     monkeypatch.setitem(sys.modules, "numpy", stub_numpy)
 
-    stub_portalocker = types.ModuleType("portalocker")
+    stub_portalocker = cast(Any, types.ModuleType("portalocker"))
 
     class _DummyLock:
         def __init__(self, *a, **k):  # noqa: D401, ARG002
@@ -38,7 +39,7 @@ def _stub_bot_engine_heavy_deps(monkeypatch):
     stub_portalocker.Lock = _DummyLock
     monkeypatch.setitem(sys.modules, "portalocker", stub_portalocker)
 
-    stub_bs4 = types.ModuleType("bs4")
+    stub_bs4 = cast(Any, types.ModuleType("bs4"))
 
     class _BeautifulSoup:  # noqa: D401 - simple stub
         def __init__(self, *a, **k):  # noqa: D401, ARG002
@@ -47,7 +48,7 @@ def _stub_bot_engine_heavy_deps(monkeypatch):
     stub_bs4.BeautifulSoup = _BeautifulSoup
     monkeypatch.setitem(sys.modules, "bs4", stub_bs4)
 
-    stub_flask = types.ModuleType("flask")
+    stub_flask = cast(Any, types.ModuleType("flask"))
 
     class _Flask:  # noqa: D401 - simple stub
         def __init__(self, *a, **k):  # noqa: D401, ARG002
@@ -62,7 +63,7 @@ def _stub_bot_engine_heavy_deps(monkeypatch):
     stub_flask.Flask = _Flask
     monkeypatch.setitem(sys.modules, "flask", stub_flask)
 
-    stub_indicators = types.ModuleType("ai_trading.indicators")
+    stub_indicators = cast(Any, types.ModuleType("ai_trading.indicators"))
     stub_indicators.compute_atr = lambda *a, **k: 1.0
     stub_indicators.atr = lambda *a, **k: 1.0
     stub_indicators.mean_reversion_zscore = lambda *a, **k: 0.0
@@ -80,7 +81,7 @@ def _stub_bot_engine_heavy_deps(monkeypatch):
         def analyze_position(self, *a, **k):  # noqa: D401, ARG002
             return None
 
-    stub_ipm = types.ModuleType("ai_trading.position.intelligent_manager")
+    stub_ipm = cast(Any, types.ModuleType("ai_trading.position.intelligent_manager"))
     stub_ipm.PositionAction = _PositionAction
     stub_ipm.IntelligentPositionManager = _IntelligentPositionManager
     monkeypatch.setitem(sys.modules, "ai_trading.position.intelligent_manager", stub_ipm)

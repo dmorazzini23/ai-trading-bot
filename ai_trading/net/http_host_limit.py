@@ -7,6 +7,7 @@ import json
 from contextlib import AbstractAsyncContextManager, contextmanager
 from pathlib import Path
 import threading
+from typing import cast
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -96,7 +97,7 @@ def _normalize_host(host: str | None) -> str:
     normalizer = getattr(pooling, "_normalize_host", None)
     if callable(normalizer):
         try:
-            return normalizer(host)
+            return cast(str, normalizer(host))
         except Exception:
             logger.debug("HOST_NORMALIZER_DELEGATE_FAILED", extra={"host": host}, exc_info=True)
     normalized = (host or "").strip().lower()
@@ -129,7 +130,7 @@ def _get_sync_semaphore(host: str) -> threading.Semaphore:
             semaphore = None
         else:
             if semaphore is not None:
-                return semaphore
+                return cast(threading.Semaphore, semaphore)
 
     with _FALLBACK_LOCK:
         semaphore = _FALLBACK_SYNC_LIMITERS.get(host)
@@ -149,7 +150,7 @@ def _get_async_semaphore(host: str) -> asyncio.Semaphore:
             semaphore = None
         else:
             if semaphore is not None:
-                return semaphore
+                return cast(asyncio.Semaphore, semaphore)
 
     with _FALLBACK_LOCK:
         semaphore = _FALLBACK_ASYNC_LIMITERS.get(host)

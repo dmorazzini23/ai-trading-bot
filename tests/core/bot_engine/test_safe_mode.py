@@ -3,11 +3,16 @@ from __future__ import annotations
 import logging
 from datetime import time
 import types
+from typing import Any, cast
 
 import pytest
 
 import ai_trading.core.bot_engine as bot_engine
 from ai_trading.config.management import reload_trading_config
+
+
+def _ns(**kwargs: Any) -> Any:
+    return cast(Any, types.SimpleNamespace(**kwargs))
 
 
 def test_enter_long_blocks_when_primary_provider_disabled(monkeypatch):
@@ -17,8 +22,8 @@ def test_enter_long_blocks_when_primary_provider_disabled(monkeypatch):
         lambda: False,
         raising=False,
     )
-    state = types.SimpleNamespace(degraded_providers=set())
-    ctx = types.SimpleNamespace()
+    state = _ns(degraded_providers=set())
+    ctx = _ns()
     blocked = bot_engine._enter_long(
         ctx,
         state,
@@ -42,8 +47,8 @@ def test_enter_long_blocks_when_safe_mode_active(monkeypatch):
     monkeypatch.setattr(bot_engine, "is_safe_mode_active", lambda: True)
     monkeypatch.setattr(bot_engine, "safe_mode_reason", lambda: "provider_safe_mode")
     monkeypatch.setattr(bot_engine, "_safe_mode_blocks_trading", lambda: True)
-    state = types.SimpleNamespace(degraded_providers=set())
-    ctx = types.SimpleNamespace()
+    state = _ns(degraded_providers=set())
+    ctx = _ns()
     blocked = bot_engine._enter_long(
         ctx,
         state,
@@ -86,12 +91,12 @@ def test_trade_logic_blocks_when_safe_mode_triggers_after_fetch(monkeypatch, cap
 
     monkeypatch.setattr(bot_engine, "_fetch_feature_data", _fake_fetch)
 
-    ctx = types.SimpleNamespace(
+    ctx = _ns(
         rebalance_buys=set(),
         stop_targets={},
         take_profit_targets={},
     )
-    state = types.SimpleNamespace(
+    state = _ns(
         position_cache={},
         trade_cooldowns={},
         last_trade_direction={},
@@ -114,7 +119,7 @@ def test_trade_logic_blocks_when_safe_mode_triggers_after_fetch(monkeypatch, cap
 
 
 def test_should_skip_order_for_fallback_price(monkeypatch):
-    state = types.SimpleNamespace(auth_skipped_symbols=set())
+    state = _ns(auth_skipped_symbols=set())
     assert bot_engine._should_skip_order_for_alpaca_unavailable(state, "AAPL", "yahoo")
 
 
@@ -175,7 +180,7 @@ def test_degraded_mode_allows_trading_on_safe_mode(monkeypatch, caplog):
         }
     )
 
-    ctx = types.SimpleNamespace(
+    ctx = _ns(
         signal_manager=types.SimpleNamespace(last_components=[]),
         data_fetcher=types.SimpleNamespace(get_daily_df=lambda *_a, **_k: feat_df.copy()),
         portfolio_weights={},
@@ -319,7 +324,7 @@ def test_last_close_allowed_when_degraded(monkeypatch, caplog):
         }
     )
 
-    ctx = types.SimpleNamespace(
+    ctx = _ns(
         signal_manager=types.SimpleNamespace(last_components=[]),
         trade_logger=types.SimpleNamespace(log_entry=lambda *a, **k: None, log_exit=lambda *a, **k: None),
         take_profit_targets={},

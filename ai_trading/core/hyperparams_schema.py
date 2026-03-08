@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field, validator
 PYDANTIC_AVAILABLE = True
 logger = get_logger(__name__)
 HYPERPARAMS_SCHEMA_VERSION = '1.0.0'
-_last_missing_warning = 0
 _warning_interval = 3600
+_last_missing_warning: float = 0.0
 
 class HyperparametersSchema(BaseModel):
     """
@@ -71,7 +71,7 @@ def load_hyperparams(file_path: str='hyperparams.json') -> HyperparametersSchema
     """
     global _last_missing_warning
     if not os.path.exists(file_path):
-        current_time = datetime.now(UTC).timestamp()
+        current_time = float(datetime.now(UTC).timestamp())
         if current_time - _last_missing_warning > _warning_interval:
             logger.warning(f'Hyperparams file not found: {file_path}. Using defaults.')
             _last_missing_warning = current_time
@@ -152,7 +152,17 @@ def validate_hyperparams_file(file_path: str='hyperparams.json') -> dict[str, An
     Returns:
         Validation report dictionary
     """
-    report = {'file_exists': False, 'valid_json': False, 'valid_schema': False, 'schema_version': None, 'version_compatible': False, 'errors': [], 'warnings': []}
+    errors: list[str] = []
+    warnings: list[str] = []
+    report: dict[str, Any] = {
+        'file_exists': False,
+        'valid_json': False,
+        'valid_schema': False,
+        'schema_version': None,
+        'version_compatible': False,
+        'errors': errors,
+        'warnings': warnings,
+    }
     if os.path.exists(file_path):
         report['file_exists'] = True
         try:
@@ -166,13 +176,13 @@ def validate_hyperparams_file(file_path: str='hyperparams.json') -> dict[str, An
                 HyperparametersSchema(**data)
                 report['valid_schema'] = True
             except (ValueError, TypeError) as e:
-                report['errors'].append(f'Schema validation failed: {e}')
+                errors.append(f'Schema validation failed: {e}')
         except json.JSONDecodeError as e:
-            report['errors'].append(f'Invalid JSON: {e}')
+            errors.append(f'Invalid JSON: {e}')
         except (ValueError, TypeError) as e:
-            report['errors'].append(f'File read error: {e}')
+            errors.append(f'File read error: {e}')
     else:
-        report['warnings'].append(f'File not found: {file_path}')
+        warnings.append(f'File not found: {file_path}')
     return report
 if __name__ == '__main__':
     logger.info('Testing Hyperparameters Schema')

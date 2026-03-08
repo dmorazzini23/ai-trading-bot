@@ -2,6 +2,7 @@ import datetime as dt
 import sys
 import types
 from unittest.mock import MagicMock, patch
+from typing import Any
 
 import pytest
 
@@ -11,23 +12,26 @@ from ai_trading.alpaca_api import get_bars_df
 from tests.helpers.asserts import assert_df_like
 
 try:
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    from alpaca.data.timeframe import TimeFrame as AlpacaTimeFrame
+    from alpaca.data.timeframe import TimeFrameUnit as AlpacaTimeFrameUnit
 except Exception:  # pragma: no cover - inject stub
     mod = types.ModuleType("alpaca.data.timeframe")
+    mod_any = mod  # mypy: module attributes are dynamic in this fallback stub
 
-    class TimeFrameUnit:
+    class _FallbackTimeFrameUnit:
         Day = type("Day", (), {"name": "Day"})()
         Minute = type("Minute", (), {"name": "Minute"})()
 
-    class TimeFrame:
-        def __init__(self, amount=1, unit=TimeFrameUnit.Day):
+    class _FallbackTimeFrame:
+        def __init__(self, amount=1, unit=_FallbackTimeFrameUnit.Day):
             self.amount = amount
             self.unit = unit
 
-    mod.TimeFrame = TimeFrame
-    mod.TimeFrameUnit = TimeFrameUnit
+    setattr(mod_any, "TimeFrame", _FallbackTimeFrame)
+    setattr(mod_any, "TimeFrameUnit", _FallbackTimeFrameUnit)
     sys.modules.setdefault("alpaca.data.timeframe", mod)
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    AlpacaTimeFrame = _FallbackTimeFrame
+    AlpacaTimeFrameUnit = _FallbackTimeFrameUnit
 
 
 class _Resp:
@@ -61,7 +65,7 @@ def test_tf_zero_arg_normalized(mock_rest_cls):
     )
     mock_rest_cls.return_value = mock_rest
 
-    df = get_bars_df("SPY", TimeFrame(), feed="iex", adjustment="all")
+    df = get_bars_df("SPY", AlpacaTimeFrame(), feed="iex", adjustment="all")
     mock_rest_cls.assert_called_once_with(bars=True)
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert getattr(req.timeframe, "amount", None) == 1
@@ -115,6 +119,9 @@ def test_timeframe_coerced_to_request_runtime_class(monkeypatch):
         Day = type("Day", (), {"name": "Day"})()
 
     class _ExpectedTimeFrame:
+        Minute: "_ExpectedTimeFrame"
+        Day: "_ExpectedTimeFrame"
+
         def __init__(self, amount=1, unit=_ExpectedUnit.Day):
             self.amount = amount
             self.unit = unit
@@ -129,7 +136,7 @@ def test_timeframe_coerced_to_request_runtime_class(monkeypatch):
                 raise TypeError("timeframe_type_mismatch")
             self.__dict__.update(kwargs)
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _Rest:
         def get_stock_bars(self, req):
@@ -161,6 +168,7 @@ def test_timeframe_coerced_to_request_runtime_class(monkeypatch):
 
     request = captured.get("request")
     assert request is not None
-    assert isinstance(request.timeframe, _ExpectedTimeFrame)
-    assert request.timeframe.amount == 5
-    assert request.timeframe.unit is _ExpectedUnit.Minute
+    request_obj = request
+    assert isinstance(request_obj.timeframe, _ExpectedTimeFrame)
+    assert request_obj.timeframe.amount == 5
+    assert request_obj.timeframe.unit is _ExpectedUnit.Minute

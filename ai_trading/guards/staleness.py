@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
-from typing import Sequence
+from datetime import datetime
+from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 from ai_trading.utils.lazy_imports import load_pandas
 
 pd = load_pandas()
 logger = logging.getLogger(__name__)
+_UTC_ZONE = ZoneInfo("UTC")
 
 
 def _ensure_data_fresh(
-    df: pd.DataFrame | None,
+    df: Any | None,
     max_age_seconds: int,
     *,
     symbol: str | None = None,
@@ -40,7 +41,7 @@ def _ensure_data_fresh(
 
     # Determine "now" with timezone handling
     if tz is None:
-        tzinfo = UTC
+        tzinfo = _UTC_ZONE
     elif isinstance(tz, str):
         tzinfo = ZoneInfo(tz)
     else:
@@ -80,7 +81,7 @@ def _ensure_data_fresh(
 
 
 def ensure_data_fresh(
-    fetcher: object,
+    fetcher: Any,
     symbols: Sequence[str],
     max_age_seconds: int,
     *,
@@ -92,7 +93,7 @@ def ensure_data_fresh(
     Raises ``RuntimeError`` summarizing any stale symbols.
     """
     if tz is None:
-        tzinfo = UTC
+        tzinfo = _UTC_ZONE
     elif isinstance(tz, str):
         tzinfo = ZoneInfo(tz)
     else:

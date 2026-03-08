@@ -11,6 +11,7 @@ from functools import lru_cache
 from importlib.util import find_spec
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
@@ -62,7 +63,7 @@ class SymbolCosts:
             Slippage cost in basis points
         """
         np = _load_numpy()
-        return self.slip_k * np.sqrt(max(volume_ratio, 0.1))
+        return float(self.slip_k * np.sqrt(max(volume_ratio, 0.1)))
 
     def total_execution_cost_bps(self, volume_ratio: float=1.0) -> float:
         """
@@ -403,11 +404,17 @@ class SymbolCostModel:
                 self.logger.warning(f'Cannot short {symbol}: {reason}')
                 return (0.0, {'rejected': True, 'reason': reason})
         if holding_cost_bps <= max_holding_cost_bps_f:
-            cost_info = self.calculate_holding_cost(symbol, abs(target_size), expected_holding_days, is_short)
+            cost_info = cast(
+                dict[str, float | bool | str],
+                self.calculate_holding_cost(symbol, abs(target_size), expected_holding_days, is_short),
+            )
             return (target_size, cost_info)
         cost_ratio = max_holding_cost_bps_f / holding_cost_bps
         adjusted_size = target_size * cost_ratio
-        cost_info = self.calculate_holding_cost(symbol, abs(adjusted_size), expected_holding_days, is_short)
+        cost_info = cast(
+            dict[str, float | bool | str],
+            self.calculate_holding_cost(symbol, abs(adjusted_size), expected_holding_days, is_short),
+        )
         cost_info['original_size'] = target_size
         cost_info['scaling_factor'] = cost_ratio
         self.logger.warning(

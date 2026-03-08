@@ -7,6 +7,7 @@ import builtins
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -38,24 +39,24 @@ def _ensure_numpy_stub() -> None:
 
 def _ensure_optional_stubs() -> None:
     if "ai_trading.indicators" not in sys.modules:
-        indicators_stub = types.ModuleType("ai_trading.indicators")
+        indicators_stub = cast(Any, types.ModuleType("ai_trading.indicators"))
         _zero = lambda *args, **kwargs: 0
         indicators_stub.atr = _zero
         indicators_stub.compute_atr = _zero
         indicators_stub.mean_reversion_zscore = _zero
         indicators_stub.rsi = _zero
-        indicators_stub.__getattr__ = lambda _name: _zero  # type: ignore[attr-defined]
+        indicators_stub.__getattr__ = lambda _name: _zero
         sys.modules["ai_trading.indicators"] = indicators_stub
 
     if "portalocker" not in sys.modules:
-        portalocker_stub = types.ModuleType("portalocker")
+        portalocker_stub = cast(Any, types.ModuleType("portalocker"))
         portalocker_stub.LOCK_EX = 1
         portalocker_stub.lock = lambda *args, **kwargs: None
         portalocker_stub.unlock = lambda *args, **kwargs: None
         sys.modules["portalocker"] = portalocker_stub
 
     if "bs4" not in sys.modules:
-        bs4_stub = types.ModuleType("bs4")
+        bs4_stub = cast(Any, types.ModuleType("bs4"))
 
         class _Soup:
             def __init__(self, *_args, **_kwargs) -> None:

@@ -276,7 +276,7 @@ class AdaptivePositionSizer:
             Comprehensive position sizing recommendation
         """
         try:
-            result = {'symbol': symbol, 'recommended_size': 0, 'base_calculation': {}, 'market_adjustments': {}, 'final_multiplier': 1.0, 'risk_assessment': {}, 'warnings': [], 'metadata': {}}
+            result: dict[str, Any] = {'symbol': symbol, 'recommended_size': 0, 'base_calculation': {}, 'market_adjustments': {}, 'final_multiplier': 1.0, 'risk_assessment': {}, 'warnings': [], 'metadata': {}}
             base_result = self.dynamic_sizer.calculate_optimal_position(symbol, account_equity, entry_price, market_data, portfolio_data)
             result['base_calculation'] = base_result
             base_size = base_result.get('recommended_size', 0)
@@ -300,8 +300,9 @@ class AdaptivePositionSizer:
             final_multiplier = regime_multiplier * vol_multiplier * (1 - correlation_penalty)
             final_multiplier = max(0.1, min(2.0, final_multiplier))
             result['final_multiplier'] = final_multiplier
-            result['recommended_size'] = int(base_size * final_multiplier)
-            result['risk_assessment'] = self._assess_position_risk(result['recommended_size'], entry_price, account_equity, market_data)
+            recommended_size = int(base_size * final_multiplier)
+            result['recommended_size'] = recommended_size
+            result['risk_assessment'] = self._assess_position_risk(recommended_size, entry_price, account_equity, market_data)
             self._generate_sizing_warnings(result, market_regime, volatility_regime)
             result['metadata'] = {'calculation_timestamp': datetime.now(UTC), 'market_conditions': {'market_regime': market_regime.value, 'volatility_regime': volatility_regime.value, 'correlation_environment': 'high' if correlation_penalty > 0.3 else 'normal'}, 'sizing_rationale': self._generate_sizing_rationale(regime_multiplier, vol_multiplier, correlation_penalty)}
             logger.info(f"Adaptive sizing for {symbol}: base={base_size}, final={result['recommended_size']}, multiplier={final_multiplier:.3f}")

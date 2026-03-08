@@ -5,7 +5,8 @@ Tests cover data leakage prevention, walk-forward analysis,
 slippage calculations, and RL reward penalties.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Any, Callable, cast
 from unittest.mock import Mock
 
 import numpy as np
@@ -67,7 +68,11 @@ def test_no_leakage_validation():
 def test_slippage_calculation():
     """Test slippage calculation."""
     try:
-        from ai_trading.execution.microstructure import calculate_slippage
+        import ai_trading.execution.microstructure as microstructure
+        calculate_slippage = cast(
+            Callable[[float, float, float], float],
+            getattr(microstructure, "calculate_slippage"),
+        )
 
         # Test basic slippage calculation
         volatility = 0.02  # 2% volatility
@@ -168,7 +173,7 @@ def test_model_registry():
             assert loaded_metadata["cv_score"] == 0.85, "Metadata should be preserved"
 
             # Test listing models
-            models = registry.list_models(strategy="test_strategy")
+            models = cast(list[dict[str, Any]], registry.list_models(strategy="test_strategy"))
             assert len(models) == 1, "Should find one model"
             assert models[0]["model_id"] == model_id, "Should return correct model"
 
@@ -200,17 +205,21 @@ def test_walk_forward_monotone_timeline():
         for i in range(1, len(splits)):
             current_split = splits[i]
             previous_split = splits[i-1]
+            current_train_start = cast(datetime, current_split["train_start"])
+            previous_train_start = cast(datetime, previous_split["train_start"])
+            current_test_start = cast(datetime, current_split["test_start"])
+            current_train_end = cast(datetime, current_split["train_end"])
 
             # Current train start should be after previous train start
-            assert current_split['train_start'] >= previous_split['train_start'], \
+            assert current_train_start >= previous_train_start, \
                 "Train start dates should be monotone"
 
             # Test start should be after train end
-            assert current_split['test_start'] > current_split['train_end'], \
+            assert current_test_start > current_train_end, \
                 "Test should start after train ends"
 
             # No overlap between train and test
-            assert current_split['test_start'] >= current_split['train_end'], \
+            assert current_test_start >= current_train_end, \
                 "No overlap between train and test periods"
 
 

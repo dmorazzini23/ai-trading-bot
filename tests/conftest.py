@@ -15,6 +15,7 @@ import unittest.mock as _mock
 from datetime import datetime, timezone
 import pathlib
 import types
+from typing import Any, cast
 
 _STUB_PATH = pathlib.Path(__file__).resolve().parent / "stubs"
 _STUB_PATH_STR = str(_STUB_PATH)
@@ -28,7 +29,7 @@ if "dotenv" not in sys.modules:
     try:
         dotenv_mod = importlib.import_module("dotenv")
     except ModuleNotFoundError:
-        dotenv_stub = types.ModuleType("dotenv")
+        dotenv_stub = cast(Any, types.ModuleType("dotenv"))
         dotenv_stub.load_dotenv = lambda *args, **kwargs: None
         sys.modules["dotenv"] = dotenv_stub
     else:
@@ -98,7 +99,7 @@ for _module_name in (
         continue
 
 
-def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # pragma: no cover - test helper
+def _safe_patch_dict(in_dict: Any, values: Any = (), clear: bool = False, **kwargs: Any):  # pragma: no cover - test helper
     ctx = _ORIGINAL_PATCH_DICT(in_dict, values, clear, **kwargs)
     if clear and in_dict is sys.modules:
         original_enter = ctx.__enter__
@@ -115,17 +116,18 @@ def _safe_patch_dict(in_dict, values=(), clear: bool = False, **kwargs):  # prag
             finally:
                 sys.modules.update({name: module for name, module in _SNAPSHOT_MODULES.items() if module is not None})
 
-        ctx.__enter__ = _enter
-        ctx.__exit__ = _exit
+        ctx_any = cast(Any, ctx)
+        ctx_any.__enter__ = _enter
+        ctx_any.__exit__ = _exit
     return ctx
 
 
-_mock.patch.dict = _safe_patch_dict
+cast(Any, _mock.patch).dict = _safe_patch_dict
 
 
 if "flask" not in _sys.modules:
-    flask_mod = types.ModuleType("flask")
-    flask_app_mod = types.ModuleType("flask.app")
+    flask_mod = cast(Any, types.ModuleType("flask"))
+    flask_app_mod = cast(Any, types.ModuleType("flask.app"))
 
     class _StubFlask:
         def __init__(self, *a, **k):
@@ -646,8 +648,8 @@ def dummy_alpaca_client():
             self.calls: list[dict[str, object]] = []
             self.last_call: dict[str, object] | None = None
 
-        def submit_order(self, *args, **kwargs):
-            call = {"args": args, "kwargs": kwargs}
+        def submit_order(self, *args: Any, **kwargs: Any):
+            call: dict[str, object] = {"args": args, "kwargs": kwargs}
             self.calls.append(call)
             self.last_call = call
             return {"id": f"dummy-order-{len(self.calls)}"}

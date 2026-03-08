@@ -7,7 +7,7 @@ time series validation and comprehensive performance reporting.
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 import numpy as np
 from ai_trading.config.management import get_env
 from ai_trading.logging import logger
@@ -69,8 +69,8 @@ class WalkForwardEvaluator:
             self.output_dir = output_dir
         import pandas as pd
 
-        self.fold_results = []
-        self.aggregate_results = {}
+        self.fold_results: list[dict[str, Any]] = []
+        self.aggregate_results: dict[str, Any] = {}
         self.equity_curve = pd.Series(dtype=float)
         self.drawdown_series = pd.Series(dtype=float)
         self.trade_simulation_params = {
@@ -204,8 +204,9 @@ class WalkForwardEvaluator:
             mae = np.mean(np.abs(y_true - y_pred))
             correlation = np.corrcoef(y_true, y_pred)[0, 1] if len(y_pred) > 1 else 0.0
             directional_accuracy = np.mean(np.sign(y_pred) == np.sign(y_true))
+            information_ratio: float
             if np.std(y_pred) > 0:
-                information_ratio = np.mean(y_pred) / np.std(y_pred)
+                information_ratio = float(np.mean(y_pred) / np.std(y_pred))
             else:
                 information_ratio = 0.0
             long_signals = y_pred > 0
@@ -225,11 +226,12 @@ class WalkForwardEvaluator:
     ) -> dict[str, float]:
         """Simulate fold-level executed trades from predictions and realized returns."""
         try:
-            return simulate_executed_trades(
+            trade_summary = simulate_executed_trades(
                 y_true=y_true.values,
-                y_pred=y_pred,
+                y_pred=y_pred.tolist() if hasattr(y_pred, "tolist") else list(y_pred),
                 params=self.trade_simulation_params,
             )
+            return cast(dict[str, float], trade_summary)
         except (TypeError, ValueError) as e:
             logger.error(f'Error simulating fold trades: {e}')
             return {
@@ -406,7 +408,7 @@ class WalkForwardEvaluator:
         except (ValueError, TypeError) as e:
             logger.error(f'Error creating plots: {e}')
 
-def run_walkforward_smoke_test() -> None:
+def run_walkforward_smoke_test() -> dict[str, Any]:
     """Run a quick smoke test of walk-forward analysis."""
     try:
         import pandas as pd

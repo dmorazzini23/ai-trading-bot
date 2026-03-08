@@ -1,6 +1,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -9,8 +10,12 @@ from ai_trading.core import bot_engine
 from ai_trading.core.bot_engine import BotState
 
 
+def _ctx(**kwargs: Any) -> Any:
+    return cast(Any, SimpleNamespace(**kwargs))
+
+
 def test_meta_confidence_cap_does_not_bypass_conf_threshold(monkeypatch):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},
@@ -56,7 +61,7 @@ def test_meta_confidence_cap_does_not_bypass_conf_threshold(monkeypatch):
 
 
 def test_trade_logic_blocks_entry_on_fallback_minute_data(monkeypatch, caplog):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},
@@ -72,7 +77,7 @@ def test_trade_logic_blocks_entry_on_fallback_minute_data(monkeypatch, caplog):
     feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
 
     monkeypatch.setenv("AI_TRADING_BLOCK_ENTRIES_ON_FALLBACK_MINUTE_DATA", "1")
-    bot_engine._block_entries_on_fallback_minute_data.cache_clear()
+    cast(Any, bot_engine._block_entries_on_fallback_minute_data).cache_clear()
 
     monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
     monkeypatch.setattr(
@@ -119,7 +124,7 @@ def test_trade_logic_blocks_entry_on_fallback_minute_data(monkeypatch, caplog):
 
 
 def test_trade_logic_allows_reliable_contiguous_fallback_entry(monkeypatch):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},
@@ -137,7 +142,7 @@ def test_trade_logic_allows_reliable_contiguous_fallback_entry(monkeypatch):
     feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2]})
 
     monkeypatch.setenv("AI_TRADING_BLOCK_ENTRIES_ON_FALLBACK_MINUTE_DATA", "1")
-    bot_engine._block_entries_on_fallback_minute_data.cache_clear()
+    cast(Any, bot_engine._block_entries_on_fallback_minute_data).cache_clear()
 
     monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
     monkeypatch.setattr(
@@ -180,7 +185,7 @@ def test_trade_logic_allows_reliable_contiguous_fallback_entry(monkeypatch):
 
 
 def test_trade_logic_allows_position_management_on_fallback_data(monkeypatch):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={"TEST": SimpleNamespace(qty=5)},
         portfolio_weights={},
@@ -194,7 +199,7 @@ def test_trade_logic_allows_position_management_on_fallback_data(monkeypatch):
     feat_df = pd.DataFrame({"close": [1.0, 1.1, 1.2], "atr": [0.2, 0.2, 0.2]})
 
     monkeypatch.setenv("AI_TRADING_BLOCK_ENTRIES_ON_FALLBACK_MINUTE_DATA", "1")
-    bot_engine._block_entries_on_fallback_minute_data.cache_clear()
+    cast(Any, bot_engine._block_entries_on_fallback_minute_data).cache_clear()
 
     monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
     monkeypatch.setattr(
@@ -315,7 +320,7 @@ def test_entry_expected_edge_gate_includes_quote_cost_components(monkeypatch):
 
 
 def test_trade_logic_requires_flip_confirmation_before_entry(monkeypatch, caplog):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},
@@ -375,7 +380,7 @@ def test_trade_logic_requires_flip_confirmation_before_entry(monkeypatch, caplog
 
 
 def test_trade_logic_blocks_entry_when_expectancy_negative(monkeypatch, caplog):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},
@@ -431,7 +436,7 @@ def test_trade_logic_blocks_entry_when_expectancy_negative(monkeypatch, caplog):
 
 
 def test_trade_logic_raises_threshold_with_alpha_decay(monkeypatch, caplog):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},
@@ -496,7 +501,7 @@ def test_trade_logic_raises_threshold_with_alpha_decay(monkeypatch, caplog):
 
 
 def test_trade_logic_blocks_entry_when_alpha_decay_window_saturated(monkeypatch, caplog):
-    ctx = SimpleNamespace(
+    ctx = _ctx(
         signal_manager=SimpleNamespace(meta_confidence_capped=False),
         position_map={},
         portfolio_weights={},

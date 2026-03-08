@@ -55,14 +55,14 @@ class TradingScenarioRunner:
         """Initialize scenario runner."""
         self.execution_engine = execution_engine
         self.market_data = MockMarketDataProvider()
-        self.test_results = []
+        self.test_results: list[dict[str, Any]] = []
 
     async def run_end_to_end_test(self) -> dict[str, Any]:
         """Run comprehensive end-to-end trading test."""
         logger.info("Starting end-to-end trading test")
         start_time = time.time()
 
-        results = {
+        results: dict[str, Any] = {
             "test_name": "end_to_end_trading",
             "start_time": datetime.now(UTC),
             "scenarios": [],
@@ -115,7 +115,7 @@ class TradingScenarioRunner:
         """Run risk management scenario tests."""
         logger.info("Starting risk scenario tests")
 
-        results = {
+        results: dict[str, Any] = {
             "test_name": "risk_scenarios",
             "start_time": datetime.now(UTC),
             "scenarios": [],
@@ -158,7 +158,7 @@ class TradingScenarioRunner:
         """Run performance and latency tests."""
         logger.info("Starting performance tests")
 
-        results = {
+        results: dict[str, Any] = {
             "test_name": "performance",
             "start_time": datetime.now(UTC),
             "metrics": {},
@@ -389,13 +389,13 @@ class ComplianceTestSuite:
 
     def __init__(self):
         """Initialize compliance test suite."""
-        self.test_results = []
+        self.test_results: list[dict[str, Any]] = []
 
     async def run_compliance_tests(self) -> dict[str, Any]:
         """Run full compliance test suite."""
         logger.info("Starting compliance tests")
 
-        results = {
+        results: dict[str, Any] = {
             "test_name": "compliance",
             "start_time": datetime.now(UTC),
             "tests": [],

@@ -41,11 +41,11 @@ class UnifiedRLInference:
         self.agent = RLAgent(config.model_path)
         self.agent.load()
         self._validate_action_space()
-        self._obs_buffer = []
-        self._last_prediction = None
+        self._obs_buffer: list[np.ndarray] = []
+        self._last_prediction: TradeSignal | None = None
         self._prediction_confidence = 0.0
         self._stub_warned = False
-        self._inference_stats = {'total_predictions': 0, 'hold_predictions': 0, 'buy_predictions': 0, 'sell_predictions': 0, 'avg_confidence': 0.0}
+        self._inference_stats: dict[str, Any] = {'total_predictions': 0, 'hold_predictions': 0, 'buy_predictions': 0, 'sell_predictions': 0, 'avg_confidence': 0.0}
 
     def _validate_action_space(self) -> None:
         """Validate that model action space matches configuration."""
@@ -134,7 +134,11 @@ class UnifiedRLInference:
             action_name = action_map.get(action_int, 'hold')
             confidence = 0.8 if action_int != 0 else 0.2
         else:
-            action_float = float(raw_action) if np.isscalar(raw_action) else float(raw_action[0])
+            if np.isscalar(raw_action):
+                action_float = float(raw_action)
+            else:
+                action_array = np.asarray(raw_action, dtype=np.float32).reshape(-1)
+                action_float = float(action_array[0]) if action_array.size else 0.0
             if action_float > self.config.confidence_threshold:
                 action_name = 'buy'
                 confidence = min(abs(action_float), 1.0)
@@ -205,7 +209,7 @@ class UnifiedRLInference:
         """
         if len(observations) != len(symbols):
             raise ValueError('Observations and symbols must have same length')
-        signals = []
+        signals: list[TradeSignal | None] = []
         for obs, symbol in zip(observations, symbols, strict=False):
             signal = self.predict(obs, symbol)
             signals.append(signal)
@@ -246,7 +250,10 @@ def load_policy(model_path: str | Path) -> RLAgent:
 
 def predict_signal(agent: RLAgent, state: np.ndarray) -> TradeSignal | None:
     """Predict signal using agent (backward compatibility)."""
-    return agent.predict(state)
+    prediction = agent.predict(state)
+    if isinstance(prediction, list):
+        return prediction[0] if prediction else None
+    return prediction
 
 def create_unified_inference(model_path: str, action_type: str='discrete', discrete_actions: int=3, observation_window: int=10) -> UnifiedRLInference:
     """

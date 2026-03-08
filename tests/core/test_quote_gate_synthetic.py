@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -25,7 +26,7 @@ def test_ensure_executable_quote_requires_override_for_synthetic(monkeypatch):
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: None)
 
     decision = bot_engine._ensure_executable_quote(
-        ctx,
+        cast(Any, ctx),
         "AAPL",
         reference_price=150.0,
     )
@@ -37,7 +38,7 @@ def test_ensure_executable_quote_requires_override_for_synthetic(monkeypatch):
     assert quote_state["reason"] == "missing_bid_ask"
 
     with_override = bot_engine._ensure_executable_quote(
-        ctx,
+        cast(Any, ctx),
         "AAPL",
         reference_price=150.0,
         allow_reference_fallback=True,
@@ -64,7 +65,7 @@ def test_ensure_executable_quote_requires_bid_ask_by_default(monkeypatch):
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: None)
 
     decision = bot_engine._ensure_executable_quote(
-        ctx,
+        cast(Any, ctx),
         "MSFT",
         reference_price=200.0,
     )
@@ -84,7 +85,7 @@ def test_allow_reference_fallback_override(monkeypatch):
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: None)
 
     decision = bot_engine._ensure_executable_quote(
-        ctx,
+        cast(Any, ctx),
         "GOOG",
         reference_price=123.45,
         allow_reference_fallback=True,
@@ -103,7 +104,7 @@ def test_reference_fallback_enabled_by_config(monkeypatch):
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: None)
 
     decision = bot_engine._ensure_executable_quote(
-        ctx,
+        cast(Any, ctx),
         "IBM",
         reference_price=111.11,
     )
@@ -131,7 +132,7 @@ def test_gap_ratio_exceeded_uses_synthetic(monkeypatch):
     monkeypatch.setattr(bot_engine, "_fetch_quote", lambda *_args, **_kwargs: Quote())
 
     decision = bot_engine._ensure_executable_quote(
-        ctx,
+        cast(Any, ctx),
         "NFLX",
         reference_price=100.0,
         allow_reference_fallback=True,

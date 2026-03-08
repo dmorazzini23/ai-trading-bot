@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import sys
 import types
+from typing import Any, cast
 
 if "numpy" not in sys.modules:  # pragma: no cover - optional dependency shim
     numpy_stub = types.ModuleType("numpy")
-    numpy_stub.nan = float("nan")
-    numpy_stub.NaN = numpy_stub.nan
-    numpy_stub.random = types.SimpleNamespace(seed=lambda *_args, **_kwargs: None)
+    cast(Any, numpy_stub).nan = float("nan")
+    cast(Any, numpy_stub).NaN = cast(Any, numpy_stub).nan
+    cast(Any, numpy_stub).random = types.SimpleNamespace(seed=lambda *_args, **_kwargs: None)
     sys.modules["numpy"] = numpy_stub
 
 if "portalocker" not in sys.modules:  # pragma: no cover - optional dependency shim
@@ -22,7 +23,7 @@ if "bs4" not in sys.modules:  # pragma: no cover - optional dependency shim
             self.args = args
             self.kwargs = kwargs
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    cast(Any, bs4_stub).BeautifulSoup = _BeautifulSoup
     sys.modules["bs4"] = bs4_stub
 
 if "flask" not in sys.modules:  # pragma: no cover - optional dependency shim
@@ -39,9 +40,9 @@ if "flask" not in sys.modules:  # pragma: no cover - optional dependency shim
 
             return decorator
 
-    flask_stub.Flask = _Flask
-    flask_stub.jsonify = lambda *a, **k: None
-    flask_stub.Response = object
+    cast(Any, flask_stub).Flask = _Flask
+    cast(Any, flask_stub).jsonify = lambda *a, **k: None
+    cast(Any, flask_stub).Response = object
     sys.modules["flask"] = flask_stub
 
 import pytest

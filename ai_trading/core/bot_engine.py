@@ -16,7 +16,7 @@ import os
 import stat
 import tempfile
 import sys
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, cast
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, cast
 from types import SimpleNamespace
 from collections import Counter, OrderedDict, deque
 from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
@@ -29,21 +29,24 @@ from json import JSONDecodeError
 _REQUESTS_STUB = False
 try:  # pragma: no cover
     import requests  # type: ignore
-    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
+    _RequestExceptionBase: type[Exception] = requests.exceptions.RequestException  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
     _REQUESTS_STUB = True
-    class RequestException(Exception):
+    class _RequestExceptionFallback(Exception):
         pass
+
+    _RequestExceptionBase = _RequestExceptionFallback
 
     # Minimal stub so runtime calls fail gracefully into COMMON_EXC
     class _RequestsStub:
         class exceptions:
-            RequestException = RequestException
+            RequestException = _RequestExceptionBase
 
         def get(self, *a, **k):
-            raise RequestException("requests not installed")
+            raise _RequestExceptionBase("requests not installed")
 
     requests = _RequestsStub()  # type: ignore
+RequestException = _RequestExceptionBase
 
 # Reusable HTTP session
 _HTTP_SESSION_STUB = False
@@ -89,10 +92,12 @@ try:
     from ai_trading.capital_scaling import capital_scale, update_if_present
 except (ImportError, AttributeError):
     # Test harness may stub out module without these helpers; provide no-op fallbacks
-    def capital_scale(_ctx):
+    def capital_scale(runtime: Any) -> float:
+        _ = runtime
         return 1.0
 
-    def update_if_present(_ctx, _equity):
+    def update_if_present(runtime: Any, equity: Any) -> float:
+        _ = runtime, equity
         return 1.0
 from ai_trading.utils.datetime import ensure_datetime
 import ai_trading.data.market_calendar as market_calendar
@@ -327,15 +332,17 @@ except (ImportError, ModuleNotFoundError, AttributeError):
     from contextlib import contextmanager
     from types import SimpleNamespace as _SimpleNamespace
 
-    EXEC_GUARD_STATE = _SimpleNamespace(active=False)
+    EXEC_GUARD_STATE = cast(Any, _SimpleNamespace(active=False))
 
-    def guard_begin_cycle(*_a, **_k):
+    def guard_begin_cycle(universe_size: int, degraded: bool) -> None:
+        _ = universe_size, degraded
         return None
 
-    def guard_end_cycle(*_a, **_k):
+    def guard_end_cycle(stale_threshold_ratio: float = 0.0) -> None:
+        _ = stale_threshold_ratio
         return None
 
-    def guard_mark_symbol_stale(*_a, **_k):
+    def guard_mark_symbol_stale() -> None:
         return None
 
     def guard_shadow_active() -> bool:
@@ -345,7 +352,8 @@ except (ImportError, ModuleNotFoundError, AttributeError):
     def execution_span(*_a, **_k):
         yield
 
-    def record_cycle_wall(*_a, **_k):
+    def record_cycle_wall(elapsed: float, metadata: Mapping[str, Any] | None = None) -> None:
+        _ = elapsed, metadata
         return None
 
 from ai_trading.config import (
@@ -903,9 +911,9 @@ def ensure_alpaca_attached(ctx: Any) -> None:
         init_ok = _initialize_alpaca_clients()
     except COMMON_EXC as e:  # AI-AGENT-REF: surface init failure
         logger_once.error(
-            "ALPACA_CLIENT_INIT_FAILED - %s",
-            e,
+            "ALPACA_CLIENT_INIT_FAILED",
             key="alpaca_client_init_failed",
+            extra={"error": str(e)},
         )
         if not is_shadow_mode():
             raise RuntimeError("Alpaca client initialization failed") from e
@@ -1676,7 +1684,7 @@ class BotEngine:
             from ai_trading.ml_model import ensure_default_models
 
             ensure_default_models(self._tickers)
-        except (*COMMON_EXC, OSError, RuntimeError) as exc:  # pragma: no cover - best effort on startup
+        except Exception as exc:  # pragma: no cover - best effort on startup
             self.logger.warning(
                 "MODEL_STARTUP_CHECK_FAILED", extra={"error": str(exc)}
             )
@@ -1891,8 +1899,9 @@ class CycleBudgetContext:
     def build_summary_extra(self) -> dict[str, Any]:
         with self.lock:
             sample = list(self.skipped_samples)
+            budget_ms = float(getattr(self.budget, "budget_ms", 0.0) or 0.0)
             return {
-                "budget_ms": self.budget.budget_ms,
+                "budget_ms": budget_ms,
                 "elapsed_ms": self.budget.elapsed_ms(),
                 "interval_s": self.interval_s,
                 "fraction": self.fraction,
@@ -1921,7 +1930,8 @@ def set_cycle_budget_context(
     if budget is None:
         _cycle_budget_context = None
         return
-    guard = max(0.5, max(float(interval_s) - (budget.budget_ms / 1000.0), 0.0))
+    budget_ms = float(getattr(budget, "budget_ms", 0.0) or 0.0)
+    guard = max(0.5, max(float(interval_s) - (budget_ms / 1000.0), 0.0))
     _cycle_budget_context = CycleBudgetContext(
         budget=budget,
         interval_s=float(interval_s),
@@ -2611,8 +2621,8 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_not_found',
                     http_code=status,
                 )
-            except Exception as exc:
-                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=exc)
+            except Exception as update_exc:
+                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=update_exc)
             cache['trade_source'] = 'alpaca_trade_not_found'
             cache['trade_price'] = None
             return None, cache['trade_source']
@@ -2623,14 +2633,14 @@ def _attempt_alpaca_trade(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception as exc:
-                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=exc)
+            except Exception as import_exc:
+                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception as exc:
-                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=exc)
+                except Exception as set_exc:
+                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['trade_source'] = 'alpaca_auth_failed'
@@ -2640,8 +2650,8 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_auth_failed',
                     http_code=status,
                 )
-            except Exception as exc:
-                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=exc)
+            except Exception as update_exc:
+                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=update_exc)
         else:
             _log_price_warning(
                 'ALPACA_TRADE_HTTP_ERROR',
@@ -2656,8 +2666,8 @@ def _attempt_alpaca_trade(
                     reason='alpaca_trade_http_error',
                     http_code=status,
                 )
-            except Exception as exc:
-                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=exc)
+            except Exception as update_exc:
+                logger.debug("DATA_PROVIDER_STATE_UPDATE_FAILED", exc_info=update_exc)
         cache['trade_price'] = None
         return None, cache['trade_source']
     except COMMON_EXC as exc:  # pragma: no cover - defensive
@@ -2668,14 +2678,14 @@ def _attempt_alpaca_trade(
             )
             try:
                 from ai_trading.alpaca_api import _set_alpaca_service_available
-            except Exception as exc:
-                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=exc)
+            except Exception as import_exc:
+                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
                 _set_alpaca_service_available = None  # type: ignore[assignment]
             if callable(_set_alpaca_service_available):
                 try:
                     _set_alpaca_service_available(False)
-                except Exception as exc:
-                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=exc)
+                except Exception as set_exc:
+                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['trade_source'] = 'alpaca_auth_failed'
@@ -3147,14 +3157,16 @@ def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
 def _prefer_feed_this_cycle_helper(symbol: str | None = None) -> str | None:
     """Call :func:`_prefer_feed_this_cycle` while tolerating patched callables."""
 
-    func = globals().get("_prefer_feed_this_cycle")
-    if not callable(func):
+    func_obj = globals().get("_prefer_feed_this_cycle")
+    if not callable(func_obj):
         return None
+    func_with_symbol = cast(Callable[[str | None], str | None], func_obj)
+    func_without_symbol = cast(Callable[[], str | None], func_obj)
     try:
-        return func(symbol)
+        return func_with_symbol(symbol)
     except TypeError as exc:
         try:
-            return func()
+            return func_without_symbol()
         except TypeError:
             raise exc
 
@@ -3629,7 +3641,7 @@ def _is_market_open_now(cfg=None) -> bool:
         schedule.iloc[0]["market_open"],
         schedule.iloc[0]["market_close"],
     )
-    return open_ <= now <= close_
+    return bool(open_ <= now <= close_)
 
 
 # Import emit-once logger for startup banners
@@ -3882,7 +3894,7 @@ def _required_model_cache_matches(path: str, modname: str) -> bool:
             return False
         if str(meta.get("path") or "") != path:
             return False
-        return meta.get("signature") == _model_file_signature(path)
+        return bool(meta.get("signature") == _model_file_signature(path))
     if modname:
         return kind == "module" and str(meta.get("module") or "") == modname
     return kind == "placeholder"
@@ -4130,7 +4142,7 @@ def _shadow_model_cache_matches(path: str, modname: str) -> bool:
             return False
         if str(meta.get("path") or "") != path:
             return False
-        return meta.get("signature") == _model_file_signature(path)
+        return bool(meta.get("signature") == _model_file_signature(path))
     if modname:
         return kind == "module" and str(meta.get("module") or "") == modname
     return False
@@ -4324,7 +4336,7 @@ def _evaluate_training_serving_skew(
 _EMITTED_KEYS: set[str] = set()
 
 
-def _emit_once(logger: logging.Logger, key: str, level: int, msg: str) -> None:
+def _emit_once(logger: Any, key: str, level: int, msg: str) -> None:
     """Emit log message only once per key."""
     if key in _EMITTED_KEYS:
         return
@@ -4682,13 +4694,25 @@ import logging
 import os
 
 
+def _memory_profile_noop(func: Any) -> Any:
+    return func
+
+
+def _optimize_memory_noop() -> dict[str, Any]:
+    return {}
+
+
+def _emergency_memory_cleanup_noop() -> dict[str, Any]:
+    return {}
+
+
 # AI-AGENT-REF: Memory optimization as optional feature
 # (settings will be imported below with other config imports)
 def _get_memory_optimization():
     """Initialize memory optimization based on settings."""
-    from ai_trading.config.settings import get_settings
+    from ai_trading.config.settings import get_settings as _get_settings
 
-    S = get_settings()
+    S = _get_settings()
 
     if S.enable_memory_optimization:
         try:
@@ -4698,41 +4722,35 @@ def _get_memory_optimization():
 
         # Rate limit for Finnhub (calls/min); resolved at import time via settings
         except COMMON_EXC:
+            return (
+                False,
+                _memory_profile_noop,
+                _optimize_memory_noop,
+                _emergency_memory_cleanup_noop,
+            )
 
-            def memory_profile(func):
-                return func
+        def _optimize_memory_impl() -> dict[str, Any]:
+            report = memory_optimizer.report_memory_use()
+            return report if isinstance(report, dict) else {}
 
-            def optimize_memory():
-                return {}
-
-            def emergency_memory_cleanup():
-                return {}
-
-            return False, memory_profile, optimize_memory, emergency_memory_cleanup
-
-        def memory_profile(func):
-            return func
-
-        def optimize_memory():
-            return memory_optimizer.report_memory_use()
-
-        def emergency_memory_cleanup():
+        def _emergency_memory_cleanup_impl() -> dict[str, Any]:
             memory_optimizer.enable_low_memory_mode()
             return {}
 
-        return True, memory_profile, optimize_memory, emergency_memory_cleanup
+        return (
+            True,
+            _memory_profile_noop,
+            _optimize_memory_impl,
+            _emergency_memory_cleanup_impl,
+        )
 
     # Fallback no-op decorators when memory optimization is disabled
-    def memory_profile(func):
-        return func
-
-    def optimize_memory():
-        return {}
-
-    def emergency_memory_cleanup():
-        return {}
-
-    return False, memory_profile, optimize_memory, emergency_memory_cleanup
+    return (
+        False,
+        _memory_profile_noop,
+        _optimize_memory_noop,
+        _emergency_memory_cleanup_noop,
+    )
 
 
 (
@@ -4757,7 +4775,7 @@ from ai_trading import (
     paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
 )
 from ai_trading.config import management as config
-from ai_trading.config import get_settings
+from ai_trading.config import get_settings as get_runtime_settings
 from ai_trading.settings import (
     _secret_to_str,
     get_news_api_key,
@@ -4767,8 +4785,9 @@ from ai_trading.settings import (
 # Refresh environment variables on startup for reliability
 # Initialize settings once for global use
 _reload_env()
+CFG: Any
 try:
-    CFG = get_settings()
+    CFG = get_runtime_settings()
 except (RuntimeError, ValueError, AttributeError):  # pragma: no cover - defensive fallback
     CFG = None
 if CFG is None:
@@ -4933,23 +4952,27 @@ else:
     )
 
     # AI-AGENT-REF: test environment delegates keep pandas DataFrame pipeline intact
-    def compute_macd(df, *args, **kwargs):
-        return _delegate_compute_macd(df, *args, **kwargs)
+    def compute_macd(df: Any) -> Any:
+        return _delegate_compute_macd(df)
 
-    def compute_atr(df, *args, **kwargs):
-        return _delegate_compute_atr(df, *args, **kwargs)
+    def compute_atr(df: Any, period: int = 14) -> Any:
+        return _delegate_compute_atr(df, period=period)
 
-    def compute_sma(df, *args, **kwargs):
-        return _delegate_compute_sma(df, *args, **kwargs)
+    def compute_sma(df: Any, windows: tuple[int, int] = (20, 50)) -> Any:
+        return _delegate_compute_sma(df, windows=windows)
 
-    def compute_vwap(df, *args, **kwargs):
-        return _delegate_compute_vwap(df, *args, **kwargs)
+    def compute_vwap(df: Any) -> Any:
+        return _delegate_compute_vwap(df)
 
-    def compute_macds(df, *args, **kwargs):
-        return _delegate_compute_macds(df, *args, **kwargs)
+    def compute_macds(df: Any) -> Any:
+        return _delegate_compute_macds(df)
 
-    def ensure_columns(df, required, symbol):
-        return _delegate_ensure_columns(df, required, symbol)
+    def ensure_columns(
+        df: Any,
+        required: list[str] | None = None,
+        symbol: str | None = None,
+    ) -> Any:
+        return _delegate_ensure_columns(df, required=required, symbol=symbol)
 
 
 warnings.filterwarnings(
@@ -5531,7 +5554,10 @@ def _ensure_alpaca_classes() -> None:
     fatal_error: BaseException | None = None
 
     try:  # pragma: no cover - independent imports with fallbacks
-        from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
+        from alpaca.data.requests import (
+            StockLatestQuoteRequest as _StockLatestQuoteRequestImported,
+        )
+        _StockLatestQuoteRequestResolved = _StockLatestQuoteRequestImported
     except COMMON_EXC as exc:  # pragma: no cover - missing optional dependency
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
@@ -5539,7 +5565,7 @@ def _ensure_alpaca_classes() -> None:
         from typing import Any as _Any
 
         @dataclass(init=False)
-        class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
+        class _StockLatestQuoteRequestFallback:  # pragma: no cover - lightweight fallback
             symbol_or_symbols: _Any
             feed: _Any | None = None
             currency: _Any | None = None
@@ -5559,20 +5585,25 @@ def _ensure_alpaca_classes() -> None:
                 self._extra = dict(kwargs)
                 for key, value in kwargs.items():
                     setattr(self, key, value)
+        _StockLatestQuoteRequestResolved = _StockLatestQuoteRequestFallback
     try:
         from alpaca.trading.requests import (
-            MarketOrderRequest as _MarketOrderRequest,
-            LimitOrderRequest as _LimitOrderRequest,
-            StopOrderRequest as _StopOrderRequest,
-            StopLimitOrderRequest as _StopLimitOrderRequest,
+            MarketOrderRequest as _MarketOrderRequestImported,
+            LimitOrderRequest as _LimitOrderRequestImported,
+            StopOrderRequest as _StopOrderRequestImported,
+            StopLimitOrderRequest as _StopLimitOrderRequestImported,
         )
+        _MarketOrderRequestResolved = _MarketOrderRequestImported
+        _LimitOrderRequestResolved = _LimitOrderRequestImported
+        _StopOrderRequestResolved = _StopOrderRequestImported
+        _StopLimitOrderRequestResolved = _StopLimitOrderRequestImported
     except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass
 
         @dataclass
-        class _MarketOrderRequest:  # pragma: no cover - minimal request object
+        class _MarketOrderRequestFallback:  # pragma: no cover - minimal request object
             symbol: str
             qty: int
             side: Any
@@ -5582,7 +5613,7 @@ def _ensure_alpaca_classes() -> None:
             client_order_id: str | None = None
 
         @dataclass
-        class _LimitOrderRequest:  # pragma: no cover - minimal request object
+        class _LimitOrderRequestFallback:  # pragma: no cover - minimal request object
             symbol: str
             qty: int
             side: Any
@@ -5591,7 +5622,7 @@ def _ensure_alpaca_classes() -> None:
             client_order_id: str | None = None
 
         @dataclass
-        class _StopOrderRequest:  # pragma: no cover - minimal request object
+        class _StopOrderRequestFallback:  # pragma: no cover - minimal request object
             symbol: str
             qty: int
             side: Any
@@ -5600,7 +5631,7 @@ def _ensure_alpaca_classes() -> None:
             client_order_id: str | None = None
 
         @dataclass
-        class _StopLimitOrderRequest:  # pragma: no cover - minimal request object
+        class _StopLimitOrderRequestFallback:  # pragma: no cover - minimal request object
             symbol: str
             qty: int
             side: Any
@@ -5608,22 +5639,29 @@ def _ensure_alpaca_classes() -> None:
             limit_price: float
             stop_price: float
             client_order_id: str | None = None
+        _MarketOrderRequestResolved = _MarketOrderRequestFallback
+        _LimitOrderRequestResolved = _LimitOrderRequestFallback
+        _StopOrderRequestResolved = _StopOrderRequestFallback
+        _StopLimitOrderRequestResolved = _StopLimitOrderRequestFallback
     try:
         from alpaca.trading.enums import (
-            OrderSide as _OrderSide,
-            OrderStatus as _OrderStatus,
-            TimeInForce as _TimeInForce,
+            OrderSide as _OrderSideImported,
+            OrderStatus as _OrderStatusImported,
+            TimeInForce as _TimeInForceImported,
         )
+        _OrderSideResolved = _OrderSideImported
+        _OrderStatusResolved = _OrderStatusImported
+        _TimeInForceResolved = _TimeInForceImported
     except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from enum import Enum
 
-        class _OrderSide(str, Enum):  # pragma: no cover - fallback enum
+        class _OrderSideFallback(str, Enum):  # pragma: no cover - fallback enum
             BUY = "buy"
             SELL = "sell"
 
-        class _OrderStatus(str, Enum):  # pragma: no cover - fallback enum
+        class _OrderStatusFallback(str, Enum):  # pragma: no cover - fallback enum
             NEW = "new"
             PARTIALLY_FILLED = "partially_filled"
             FILLED = "filled"
@@ -5631,41 +5669,48 @@ def _ensure_alpaca_classes() -> None:
             REJECTED = "rejected"
             EXPIRED = "expired"
 
-        class _TimeInForce(str, Enum):  # pragma: no cover - fallback enum
+        class _TimeInForceFallback(str, Enum):  # pragma: no cover - fallback enum
             DAY = "day"
             GTC = "gtc"
+        _OrderSideResolved = _OrderSideFallback
+        _OrderStatusResolved = _OrderStatusFallback
+        _TimeInForceResolved = _TimeInForceFallback
     try:
-        from alpaca.data.models import Quote as _Quote  # type: ignore
+        from alpaca.data.models import Quote as _QuoteImported  # type: ignore
+        _QuoteResolved = _QuoteImported
     except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass
 
         @dataclass
-        class _Quote:  # pragma: no cover - minimal quote stub
+        class _QuoteFallback:  # pragma: no cover - minimal quote stub
             bid_price: float | None = None
             ask_price: float | None = None
+        _QuoteResolved = _QuoteFallback
     try:
-        from alpaca.trading.models import Order as _Order  # type: ignore
+        from alpaca.trading.models import Order as _OrderImported  # type: ignore
+        _OrderResolved = _OrderImported
     except COMMON_EXC as exc:
         if not isinstance(exc, ImportError):
             fatal_error = fatal_error or exc
         from dataclasses import dataclass
 
         @dataclass
-        class _Order:  # pragma: no cover - minimal order stub
+        class _OrderFallback:  # pragma: no cover - minimal order stub
             id: str | None = None
+        _OrderResolved = _OrderFallback
 
-    Quote = _Quote
-    Order = _Order
-    OrderSide = _OrderSide
-    OrderStatus = _OrderStatus
-    TimeInForce = _TimeInForce
-    MarketOrderRequest = _MarketOrderRequest
-    LimitOrderRequest = _LimitOrderRequest
-    StopOrderRequest = _StopOrderRequest
-    StopLimitOrderRequest = _StopLimitOrderRequest
-    StockLatestQuoteRequest = _StockLatestQuoteRequest
+    Quote = _QuoteResolved
+    Order = _OrderResolved
+    OrderSide = _OrderSideResolved
+    OrderStatus = _OrderStatusResolved
+    TimeInForce = _TimeInForceResolved
+    MarketOrderRequest = _MarketOrderRequestResolved
+    LimitOrderRequest = _LimitOrderRequestResolved
+    StopOrderRequest = _StopOrderRequestResolved
+    StopLimitOrderRequest = _StopLimitOrderRequestResolved
+    StockLatestQuoteRequest = _StockLatestQuoteRequestResolved
 
     if fatal_error is not None:
         _ALPACA_IMPORT_ERROR = fatal_error
@@ -5691,11 +5736,13 @@ if not ALPACA_AVAILABLE:
 from bs4 import BeautifulSoup
 
 # AI-AGENT-REF: flask is a hard dependency in pyproject.toml
+Flask: Any
+jsonify: Any
 try:
-    from flask import Flask, jsonify
+    from flask import Flask as _FlaskClass, jsonify as _flask_jsonify
 except ModuleNotFoundError:
     if str(get_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes"}:
-        class Flask:  # type: ignore[override]
+        class _FlaskStub:
             """Lightweight Flask stub for test environments without flask."""
 
             def __init__(self, name: str):
@@ -5717,12 +5764,24 @@ except ModuleNotFoundError:
                     extra={"args": args, "kwargs": kwargs},
                 )
 
-        def jsonify(payload: dict[str, object]) -> dict[str, object]:  # type: ignore[override]
+        def _jsonify_stub(*args: object, **kwargs: object) -> dict[str, object]:
             """Return payload unchanged when flask is unavailable."""
 
-            return payload
+            if args:
+                payload = args[0]
+                if isinstance(payload, dict):
+                    return dict(payload)
+            if "payload" in kwargs and isinstance(kwargs["payload"], dict):
+                return dict(cast(dict[str, object], kwargs["payload"]))
+            return {}
+
+        Flask = _FlaskStub
+        jsonify = _jsonify_stub
     else:
         raise
+else:
+    Flask = _FlaskClass
+    jsonify = _flask_jsonify
 
 # AI-AGENT-REF: lazy import to avoid import-time races and optional deps
 def _alpaca_symbols():
@@ -5733,13 +5792,14 @@ def _alpaca_symbols():
     return _alpaca_get, _start
 
 if ALPACA_AVAILABLE:
-    from ai_trading.rebalancer import (
-        maybe_rebalance as original_rebalance,  # type: ignore
-    )
+    from ai_trading.rebalancer import maybe_rebalance as _maybe_rebalance_impl  # type: ignore
 else:  # pragma: no cover - no rebalance without Alpaca
 
-    def original_rebalance(*args, **kwargs):
+    def _maybe_rebalance_impl(ctx: Any) -> None:
+        _ = ctx
         return None
+
+original_rebalance = _maybe_rebalance_impl
 
 
 import pickle
@@ -5747,7 +5807,7 @@ import pickle
 # AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
 if not get_env("PYTEST_RUNNING") and ALPACA_AVAILABLE:
     try:
-        from ai_trading.meta_learning import optimize_signals  # type: ignore
+        from ai_trading.meta_learning import optimize_signals as _optimize_signals_impl  # type: ignore
     except (
         FileNotFoundError,
         PermissionError,
@@ -5762,13 +5822,30 @@ if not get_env("PYTEST_RUNNING") and ALPACA_AVAILABLE:
             "Meta-learning unavailable (%s); proceeding without signal optimization", _e
         )
 
-        def optimize_signals(signals, *a, **k):  # type: ignore[no-redef]
-            return signals
+        def _optimize_signals_impl(
+            signal_data: Any,
+            cfg: Any | None = None,
+            model: Any | None = None,
+            *,
+            volatility: float = 0.0,
+        ) -> Any:
+            _ = cfg, model, volatility
+            return signal_data
 
 else:
     # AI-AGENT-REF: mock optimize_signals for test environments
-    def optimize_signals(*args, **kwargs):
-        return args[0] if args else []  # Return signals as-is
+    def _optimize_signals_impl(
+        signal_data: Any,
+        cfg: Any | None = None,
+        model: Any | None = None,
+        *,
+        volatility: float = 0.0,
+    ) -> Any:
+        _ = cfg, model, volatility
+        return signal_data
+
+
+optimize_signals = _optimize_signals_impl
 
 
 # AI-AGENT-REF: late import for model pipeline
@@ -6005,14 +6082,16 @@ def _init_metrics() -> None:
     _METRICS_READY = True
 
 
+ExecutionEngine: Any
 try:
     from ai_trading.execution import (
-        ExecutionEngine,  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
+        ExecutionEngine as _ExecutionEngineImported,  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
     )
+    ExecutionEngine = _ExecutionEngineImported
 except ImportError:  # pragma: no cover - allow tests with stubbed module
     from ai_trading.core.enums import OrderSide
 
-    class ExecutionEngine:
+    class _ExecutionEngineFallback:
         """
         Fallback execution engine used when the real trade_execution module is
         unavailable.  Many parts of the trading logic expect an execution
@@ -6069,10 +6148,14 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
         def check_stops(self) -> None:
             """Mirror the real engine safety hook with a debug no-op."""
             self.logger("check_stops")
+    ExecutionEngine = _ExecutionEngineFallback
 
-
+CapitalScalingEngine: Any
 try:
-    from ai_trading.capital_scaling import CapitalScalingEngine
+    from ai_trading.capital_scaling import (
+        CapitalScalingEngine as _CapitalScalingEngineImported,
+    )
+    CapitalScalingEngine = _CapitalScalingEngineImported
 except (
     FileNotFoundError,
     PermissionError,
@@ -6084,7 +6167,7 @@ except (
     OSError,
 ):  # pragma: no cover - allow tests with stubbed module  # AI-AGENT-REF: narrow exception
 
-    class CapitalScalingEngine:
+    class _CapitalScalingEngineFallback:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -6095,6 +6178,7 @@ except (
 
         def update(self, *args, **kwargs):  # AI-AGENT-REF: add missing update method
             """Update method for test compatibility."""
+    CapitalScalingEngine = _CapitalScalingEngineFallback
 
 
 class StrategyAllocator:
@@ -6215,7 +6299,21 @@ def load_portfolio_snapshot() -> dict[str, int]:
         return {}
     with open(PORTFOLIO_FILE) as f:
         data = json.load(f)
-    return data.get("positions", {})
+    if not isinstance(data, dict):
+        return {}
+    raw_positions = data.get("positions", {})
+    if not isinstance(raw_positions, dict):
+        return {}
+    positions: dict[str, int] = {}
+    for symbol, qty in raw_positions.items():
+        key = str(symbol).strip().upper()
+        if not key:
+            continue
+        try:
+            positions[key] = int(qty)
+        except (TypeError, ValueError):
+            positions[key] = 0
+    return positions
 
 
 def compute_current_positions(ctx: BotContext) -> dict[str, int]:
@@ -6318,7 +6416,7 @@ def _resolve_latest_close(df_obj: Any) -> float | None:
         return None
     try:
         value = get_latest_close(df_obj)
-    except (*COMMON_EXC, AttributeError, OSError):
+    except Exception:
         return None
     if value is None:
         return None
@@ -6548,11 +6646,11 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
     configured_feed: str | None = None
 
     def _minute_fetch_kwargs(
-        *, feed: str | None = None, extra: dict[str, object] | None = None
-    ) -> dict[str, object]:
+        *, feed: str | None = None, extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         nonlocal active_backfill
 
-        kwargs: dict[str, object] = {}
+        kwargs: dict[str, Any] = {}
         effective_feed = feed
         if extra and effective_feed is None and "feed" in extra:
             feed_value = extra["feed"]  # type: ignore[index]
@@ -6767,7 +6865,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
                     df.loc[:, "volume"] = volume_series
                 except COMMON_EXC:
                     df["volume"] = volume_series.to_numpy()
-        except (*COMMON_EXC, AttributeError) as exc:  # pragma: no cover - defensive
+        except Exception as exc:  # pragma: no cover - defensive
             logger.debug("minute bar filtering failed: %s", exc)
 
         if df.empty:
@@ -6935,7 +7033,7 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
     except COMMON_EXC:
         cached_feeds = None
 
-    def _initial_fetch_kwargs() -> dict[str, object]:
+    def _initial_fetch_kwargs() -> dict[str, Any]:
         target_feed = None
         if current_feed and current_feed != configured_feed:
             target_feed = current_feed
@@ -8239,14 +8337,14 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         _emit_coverage_warning(warning_extra)
 
     if low_coverage:
-        feeds_to_clear: list[str] = []
+        feeds_to_purge: list[str] = []
         if configured_feed:
-            feeds_to_clear.append(configured_feed)
+            feeds_to_purge.append(configured_feed)
         if fallback_feed_used:
-            feeds_to_clear.append(fallback_feed_used)
-        if fallback_feed and fallback_feed not in feeds_to_clear:
-            feeds_to_clear.append(str(fallback_feed))
-        _purge_minute_feed_cache(feeds_to_clear)
+            feeds_to_purge.append(fallback_feed_used)
+        if fallback_feed and fallback_feed not in feeds_to_purge:
+            feeds_to_purge.append(str(fallback_feed))
+        _purge_minute_feed_cache(feeds_to_purge)
 
         active_provider = ""
         if active_feed:
@@ -8635,7 +8733,10 @@ def load_hyperparams() -> dict:
         return {}
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            payload = json.load(f)
+        if isinstance(payload, dict):
+            return payload
+        return {}
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
         return {}
@@ -9765,7 +9866,7 @@ prediction_executor = executors.prediction_executor
 atexit.register(cleanup_executors)
 
 # EVENT cooldown
-_LAST_EVENT_TS = {}
+_LAST_EVENT_TS: dict[str, float] = {}
 EVENT_COOLDOWN = 15.0  # seconds
 # AI-AGENT-REF: minimum position hold window (seconds); 0 disables hold gating
 REBALANCE_HOLD_SECONDS = get_min_position_hold_seconds()
@@ -10006,7 +10107,7 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
         )  # AI-AGENT-REF: unify key to dedupe across call sites
         return None
     try:
-        return api.get_account()
+        return cast(object, api.get_account())
     except (
         APIError,
         TimeoutError,
@@ -10028,7 +10129,10 @@ def chunked(iterable: Sequence, n: int):
 
 def ttl_seconds() -> int:
     """Configurable TTL for minute-bar cache (default 300s)."""
-    return CFG.minute_cache_ttl
+    try:
+        return int(getattr(CFG, "minute_cache_ttl", 300))
+    except (TypeError, ValueError):
+        return 300
 
 
 def asset_class_for(symbol: str) -> str:
@@ -10564,6 +10668,7 @@ class DataFetcher:
                 def __hash__(self) -> int:
                     return id(self)
 
+            request: Any
             try:
                 request = bars.StockBarsRequest(**req_kwargs)
             except AttributeError as exc:
@@ -11101,7 +11206,7 @@ class DataFetcher:
 
         if memo_store is not None:
             memo_keys = (canonical_memo_key, memo_key, legacy_memo_key)
-            memo_payload: Any | None = None
+            cached_memo_payload: Any | None = None
             for candidate_key in memo_keys:
                 try:
                     entry = memo_store[candidate_key]
@@ -11117,10 +11222,10 @@ class DataFetcher:
                 if entry_ts and entry_ts > 0.0 and memo_ttl_limit > 0.0:
                     if (now_monotonic - float(entry_ts)) > memo_ttl_limit:
                         continue
-                memo_payload = entry_payload
+                cached_memo_payload = entry_payload
                 break
-            if memo_payload is not None:
-                normalized_pair = (now_monotonic, memo_payload)
+            if cached_memo_payload is not None:
+                normalized_pair = (now_monotonic, cached_memo_payload)
                 with cache_lock:
                     for target_key in memo_keys:
                         try:
@@ -11132,7 +11237,7 @@ class DataFetcher:
                                     setter(target_key, normalized_pair)
                                 except COMMON_EXC:
                                     continue
-                return _emit_cache_hit(memo_payload, reason="memo")
+                return _emit_cache_hit(cached_memo_payload, reason="memo")
 
         if memo_store is not None:
             fast_path_entry: Any | None = None
@@ -11247,16 +11352,16 @@ class DataFetcher:
                 first, second = entry
                 ts_first = _coerce_memo_timestamp(first)
                 if ts_first is not None:
-                    payload = second if second is not None else None
-                    normalized_pair = _memo_pair(ts_first, payload)
-                    return ts_first, payload, normalized_pair
+                    tuple_payload = second if second is not None else None
+                    normalized_pair = _memo_pair(ts_first, tuple_payload)
+                    return ts_first, tuple_payload, normalized_pair
                 ts_second = _coerce_memo_timestamp(second)
                 if ts_second is not None:
-                    payload = first if first is not None else None
-                    normalized_pair = _memo_pair(ts_second, payload)
-                    return ts_second, payload, normalized_pair
-                payload = second if second is not None else first
-                return None, payload, None
+                    tuple_payload = first if first is not None else None
+                    normalized_pair = _memo_pair(ts_second, tuple_payload)
+                    return ts_second, tuple_payload, normalized_pair
+                tuple_payload = second if second is not None else first
+                return None, tuple_payload, None
             if isinstance(entry, MappingABC):
                 ts_value: float | None = None
                 payload: Any | None = None
@@ -11484,7 +11589,7 @@ class DataFetcher:
                 setter(key, payload)
 
         memo_ready = False
-        memo_payload: Any | None = None
+        memo_payload_recent: Any | None = None
 
         # STRICT: memo must short-circuit without consulting other caches
         if memo_store is not None:
@@ -11526,23 +11631,23 @@ class DataFetcher:
                 continue
             if entry_ts is None:
                 memo_ready = True
-                memo_payload = entry_payload
+                memo_payload_recent = entry_payload
                 break
             if entry_ts <= 0.0:
                 continue
             age = now_monotonic - entry_ts
             if age <= ttl_window:
                 memo_ready = True
-                memo_payload = entry_payload
+                memo_payload_recent = entry_payload
                 break
 
-        if memo_ready and memo_payload is not None:
-            normalized_pair = (now_monotonic, memo_payload)
+        if memo_ready and memo_payload_recent is not None:
+            normalized_pair = (now_monotonic, memo_payload_recent)
             with cache_lock:
                 _memo_set_entry(canonical_memo_key, normalized_pair)
                 _memo_set_entry(memo_key, normalized_pair)
                 _memo_set_entry(legacy_memo_key, normalized_pair)
-            return _emit_cache_hit(memo_payload, reason="memo")
+            return _emit_cache_hit(memo_payload_recent, reason="memo")
 
         refresh_stamp: float | None = None
         refresh_df: Any | None = None
@@ -11600,11 +11705,11 @@ class DataFetcher:
         memo_entries: list[tuple[float | None, Any | None, tuple[float, Any] | None]] = []
         for key in combined_keys:
             memo_entries.append(_extract_memo_payload(_memo_get_entry(key)))
-        memo_payload: Any | None = None
+        memo_payload_combined: Any | None = None
         memo_timestamp: float | None = None
         for entry_ts, entry_payload, _entry_normalized in memo_entries:
-            if memo_payload is None and entry_payload is not None:
-                memo_payload = entry_payload
+            if memo_payload_combined is None and entry_payload is not None:
+                memo_payload_combined = entry_payload
             if entry_ts is None:
                 continue
             if memo_timestamp is None:
@@ -11614,7 +11719,7 @@ class DataFetcher:
                 memo_timestamp = entry_ts
             elif memo_timestamp <= 0.0 and entry_ts <= 0.0 and entry_ts > memo_timestamp:
                 memo_timestamp = entry_ts
-        if memo_payload is not None:
+        if memo_payload_combined is not None:
             fresh: bool
             if memo_timestamp is None:
                 fresh = True
@@ -11624,12 +11729,12 @@ class DataFetcher:
                 age = now_monotonic - memo_timestamp
                 fresh = age <= ttl_window
             if fresh:
-                normalized_pair = (now_monotonic, memo_payload)
+                normalized_pair = (now_monotonic, memo_payload_combined)
                 with cache_lock:
                     _memo_set_entry(canonical_memo_key, normalized_pair)
                     _memo_set_entry(memo_key, normalized_pair)
                     _memo_set_entry(legacy_memo_key, normalized_pair)
-                return _emit_cache_hit(memo_payload, reason="memo")
+                return _emit_cache_hit(memo_payload_combined, reason="memo")
 
         memo_check_pairs = (
             (memo_key, legacy_memo_key),
@@ -12965,7 +13070,7 @@ def prefetch_daily_data(
                         daily_dict[sym] = dummy_df
                 return daily_dict
         else:
-            logger.warning(f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
+            logger.warning("ALPACA BULK FETCH UNKNOWN ERROR for %s", symbols)
             daily_dict = {}
             for sym in symbols:
                 t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -14234,7 +14339,7 @@ class SignalManager:
                             df.columns.tolist(),
                         )
                         raw = {}
-                    parsed: dict[str, float] = {}
+                    parsed_fallback: dict[str, float] = {}
                     for key, weight in raw.items():
                         try:
                             name = str(key).strip().lower()
@@ -14243,12 +14348,12 @@ class SignalManager:
                             continue
                         if not name or not math.isfinite(numeric):
                             continue
-                        parsed[name] = max(0.0, min(numeric, 2.0))
-                    self._signal_weights_cache = parsed
+                        parsed_fallback[name] = max(0.0, min(numeric, 2.0))
+                    self._signal_weights_cache = parsed_fallback
                     self._signal_weights_cache_path = path
                     self._signal_weights_cache_mtime = path_mtime
                     self._signal_weights_cache_loaded_at = pytime.time()
-                    return dict(parsed)
+                    return dict(parsed_fallback)
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -14727,7 +14832,7 @@ class BotContext:
     initial_rebalance_done: bool = False
     # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
     drawdown_circuit_breaker: DrawdownCircuitBreaker | None = None
-    logger: logging.Logger = logger
+    logger: Any = logger
     liquidity_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
     allow_short_selling: bool = False
 
@@ -14864,7 +14969,7 @@ def get_trade_logger() -> TradeLogger:
     return _TRADE_LOGGER_SINGLETON
 
 
-risk_engine = None
+risk_engine: Any | None = None
 allocator = None
 strategies = None
 
@@ -15307,7 +15412,7 @@ class LazyBotContext:
             signal_manager=signal_manager,
             trade_logger=get_trade_logger(),
             sem=Semaphore(4),
-            volume_threshold=get_volume_threshold(),
+            volume_threshold=int(get_volume_threshold()),
             entry_start_offset=ENTRY_START_OFFSET,
             entry_end_offset=ENTRY_END_OFFSET,
             market_open=MARKET_OPEN,
@@ -15367,7 +15472,9 @@ class LazyBotContext:
                 self._context.model = _MODEL_CACHE
 
         # Propagate the capital_scaler to the risk engine so that position_size
-        self._context.risk_engine.capital_scaler = self._context.capital_scaler
+        risk_engine_obj = getattr(self._context, "risk_engine", None)
+        if risk_engine_obj is not None:
+            setattr(risk_engine_obj, "capital_scaler", self._context.capital_scaler)
 
         # Complete context setup (only in non-test environments)
         if not (get_env("PYTEST_RUNNING") or get_env("TESTING")):
@@ -15545,14 +15652,6 @@ class LazyBotContext:
         self._ensure_initialized()
         return self._context.params
 
-    # Allow setting attributes by delegating to context
-    def __setattr__(self, name, value):
-        if name.startswith("_") or name in ("_initialized", "_context"):
-            super().__setattr__(name, value)
-        else:
-            self._ensure_initialized()
-            setattr(self._context, name, value)
-
     def __getattr__(self, name):
         if not self._initialized and name in self._pending_attrs:
             return self._pending_attrs[name]
@@ -15623,7 +15722,9 @@ def _emit_periodic_metrics():
         if account:
             account_obj = account.get_account()
             positions = account.list_positions()
-            _metrics.emit_account_health(account_obj, positions)
+            emit_account_health = getattr(_metrics, "emit_account_health", None)
+            if callable(emit_account_health):
+                emit_account_health(account_obj, positions)
     except (
         FileNotFoundError,
         PermissionError,
@@ -15869,7 +15970,7 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
         return False
     cal = get_market_calendar()
     try:
-        return cal.open_at_time(get_market_schedule(), ts)
+        return bool(cal.open_at_time(get_market_schedule(), ts))
     except (AttributeError, ValueError) as exc:
         logger.warning(f"Invalid schedule time {ts}: {exc}; assuming market closed")
         return False
@@ -15896,9 +15997,10 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     try:
         soup = BeautifulSoup(r.content, "lxml")
         texts = []
-        for a in soup.find_all("a", string=re.compile(r"8[- ]?K")):
+        soup_obj = cast(Any, soup)
+        for a in soup_obj.find_all("a", string=re.compile(r"8[- ]?K")):
             tr = a.find_parent("tr")
-            tds = tr.find_all("td") if tr else []
+            tds = cast(Any, tr).find_all("td") if tr is not None else []
             if len(tds) >= 4:
                 texts.append(tds[-1].get_text(strip=True))
         return " ".join(texts)
@@ -16245,12 +16347,13 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     )
     r.raise_for_status()
     soup = BeautifulSoup(r.content, "lxml")
-    filings = []
+    filings: list[dict[str, Any]] = []
     # Parse table rows (approximate)
     table = soup.find("table", {"class": "tableFile2"})
     if not table:
         return filings
-    rows = table.find_all("tr")[1:]  # skip header
+    table_obj = cast(Any, table)
+    rows = table_obj.find_all("tr")[1:]  # skip header
     for row in rows:
         cols = row.find_all("td")
         if len(cols) < 6:
@@ -16992,7 +17095,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     corr_matrix = mat.corr().abs()
     avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
     limit = getattr(ctx, "correlation_limit", CORRELATION_THRESHOLD)
-    return avg_corr > limit
+    return bool(float(avg_corr) > float(limit))
 
 
 # AI-AGENT-REF: optional yfinance sector fetch
@@ -17017,12 +17120,12 @@ def _fetch_sector_via_yf(symbol: str) -> str | None:
         )
         return None
     sector = info.get("sector")
-    if not sector or sector == "Unknown":
+    if not isinstance(sector, str) or not sector or sector == "Unknown":
         logger.warning(
             "YF_SECTOR_EMPTY", extra={"provider": "yfinance", "symbol": symbol}
         )
         return None
-    return sector
+    return str(sector)
 
 
 def get_sector(symbol: str) -> str:
@@ -18405,7 +18508,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
     alpaca_classes_available = True
     try:
         _ensure_alpaca_classes()
-    except (*COMMON_EXC, AttributeError):
+    except Exception:
         alpaca_classes_available = False
         if not (getattr(CFG, "testing", False) or pytest_running):
             raise
@@ -18496,7 +18599,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
                     base_kwargs["stop_price"] = stop_price
                     return StopOrderRequest(**base_kwargs)
                 return MarketOrderRequest(**base_kwargs)
-            except (*COMMON_EXC, AttributeError):
+            except Exception:
                 pass
         return types.SimpleNamespace(**args)
 
@@ -18570,7 +18673,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> An
             from ai_trading.core.order_ids import generate_client_order_id as _gen_id
 
             client_order_id = _gen_id(prefix)
-        except (*COMMON_EXC, AttributeError):
+        except Exception:
             client_order_id = None
         if not client_order_id:
             client_order_id = _stable_client_order_id(prefix)
@@ -19902,9 +20005,11 @@ def _fetch_feature_data(
     # AI-AGENT-REF: Data sanitize integration (gated by flag)
     if hasattr(S, "data_sanitize_enabled") and CFG.data_sanitize_enabled:
         try:
-            from ai_trading.data.sanitize import clean as _clean
+            from ai_trading.data import sanitize as _sanitize_module
 
-            df = _clean(df)
+            clean_fn = getattr(_sanitize_module, "clean", None)
+            if callable(clean_fn):
+                df = clean_fn(df)
         except (
             FileNotFoundError,
             PermissionError,
@@ -19920,9 +20025,11 @@ def _fetch_feature_data(
     # AI-AGENT-REF: Corporate actions adjustment (gated by flag)
     if hasattr(S, "corp_actions_enabled") and CFG.corp_actions_enabled:
         try:
-            from ai_trading.data.corp_actions import adjust as _adjust
+            from ai_trading.data import corp_actions as _corp_actions_module
 
-            df = _adjust(df, symbol)
+            adjust_fn = getattr(_corp_actions_module, "adjust", None)
+            if callable(adjust_fn):
+                df = adjust_fn(df, symbol)
         except (
             FileNotFoundError,
             PermissionError,
@@ -20119,10 +20226,11 @@ def _should_hold_position(df: pd.DataFrame) -> bool:
 
     try:
         close = df["close"].astype(float)
-        ema_fast = close.ewm(span=20, adjust=False).mean().iloc[-1]
-        ema_slow = close.ewm(span=50, adjust=False).mean().iloc[-1]
-        rsi_val = rsi(tuple(close), 14).iloc[-1]
-        return close.iloc[-1] > ema_fast > ema_slow and rsi_val >= 55
+        ema_fast = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema_slow = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+        rsi_val = float(rsi(tuple(close), 14).iloc[-1])
+        close_last = float(close.iloc[-1])
+        return bool(close_last > ema_fast > ema_slow and rsi_val >= 55.0)
     except (
         FileNotFoundError,
         PermissionError,
@@ -20142,10 +20250,11 @@ def _should_hold_short_position(df: pd.DataFrame) -> bool:
 
     try:
         close = df["close"].astype(float)
-        ema_fast = close.ewm(span=20, adjust=False).mean().iloc[-1]
-        ema_slow = close.ewm(span=50, adjust=False).mean().iloc[-1]
-        rsi_val = rsi(tuple(close), 14).iloc[-1]
-        return close.iloc[-1] < ema_fast < ema_slow and rsi_val <= 45
+        ema_fast = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+        ema_slow = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
+        rsi_val = float(rsi(tuple(close), 14).iloc[-1])
+        close_last = float(close.iloc[-1])
+        return bool(close_last < ema_fast < ema_slow and rsi_val <= 45.0)
     except (
         FileNotFoundError,
         PermissionError,
@@ -20998,7 +21107,7 @@ def _fallback_quote_newer_than_last_close(
         close_dt = close_ts.to_pydatetime()
     except AttributeError:
         close_dt = datetime.fromtimestamp(close_ts.timestamp(), UTC)
-    return quote_ts > close_dt
+    return bool(quote_ts > close_dt)
 
 
 @functools.lru_cache(maxsize=8)
@@ -22277,6 +22386,7 @@ def _enter_long(
         _clear_cached_yahoo_fallback(symbol)
 
     fallback_gate_ok = False
+    strategy_label = str(annotations.get("strategy_label", "") or "").strip().lower()
     if fallback_used:
         if isinstance(price_source, str):
             source_label = price_source.strip().lower()
@@ -22408,13 +22518,13 @@ def _enter_long(
             target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
 
     # Use account equity for weight-based sizing to avoid multiplying by buying power
-    account_obj: Any | None = None
+    account_snapshot: Any | None = None
     try:
-        account_obj = ctx.api.get_account()
-        account_equity = float(getattr(account_obj, "equity"))
+        account_snapshot = ctx.api.get_account()
+        account_equity = float(getattr(account_snapshot, "equity"))
     except (APIError, RequestException, AttributeError, ValueError):
         account_equity = float(balance)
-        account_obj = None
+        account_snapshot = None
     raw_qty = int(account_equity * target_weight / current_price) if current_price > 0 else 0
     if gate.size_cap is not None and gate.size_cap < 1.0 and raw_qty > 0:
         capped_qty = int(math.floor(raw_qty * gate.size_cap))
@@ -22438,14 +22548,17 @@ def _enter_long(
         try:
             from ai_trading.portfolio import sizing as _sizing
 
-            sizing_account = account_obj
+            sizing_account = account_snapshot
             if sizing_account is None and ctx.api:
                 try:
                     sizing_account = ctx.api.get_account()
                 except (APIError, RequestException, AttributeError, ValueError):
                     sizing_account = None
             account_equity = float(getattr(sizing_account, "equity")) if sizing_account is not None else balance
-            optimized_qty = _sizing.position_size(
+            position_size_fn = getattr(_sizing, "position_size", None)
+            if not callable(position_size_fn):
+                raise AttributeError("position_size not available")
+            optimized_qty = position_size_fn(
                 symbol,
                 final_score,
                 account_equity,
@@ -23032,6 +23145,7 @@ def _enter_short(
         _clear_cached_yahoo_fallback(symbol)
 
     fallback_gate_ok = False
+    strategy_label = str(annotations.get("strategy_label", "") or "").strip().lower()
     if fallback_used:
         if isinstance(price_source, str):
             source_label = price_source.strip().lower()
@@ -24296,8 +24410,14 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
             model = EnsembleModel(loaded)
             logger.info("MODEL_LOADED")
             return model
+        if isinstance(loaded, dict):
+            logger.info("MODEL_LOADED")
+            return loaded
+        if isinstance(loaded, EnsembleModel):
+            logger.info("MODEL_LOADED")
+            return loaded
         logger.info("MODEL_LOADED")
-        return loaded
+        return None
     except (
         FileNotFoundError,
         PermissionError,
@@ -24459,11 +24579,13 @@ def update_signal_weights() -> None:
             old = {}
         merged: dict[str, float] = {}
         for tag, w in new_weights.items():
-            try:
-                historical_weight = float(old.get(tag, w))
-            except (TypeError, ValueError):
-                historical_weight = float(w)
-            merged[tag] = round((ALPHA * float(w)) + ((1 - ALPHA) * historical_weight), 3)
+            current_weight = _safe_float(w)
+            if current_weight is None:
+                current_weight = 0.0
+            historical_weight = _safe_float(old.get(tag, current_weight))
+            if historical_weight is None:
+                historical_weight = current_weight
+            merged[tag] = round((ALPHA * current_weight) + ((1 - ALPHA) * historical_weight), 3)
         out_df = pd.DataFrame.from_dict(
             merged, orient="index", columns=["weight"]
         ).reset_index()
@@ -25936,7 +26058,7 @@ def _screen_schema_marker(frame: Any) -> str | None:
             try:
                 iso = getattr(last_value, "isoformat", None)
                 if callable(iso):
-                    return iso()
+                    return str(iso())
             except COMMON_EXC:
                 pass
             try:
@@ -29612,14 +29734,14 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     global data_fetcher
     fetcher = getattr(runtime, "data_fetcher", None)
     if fetcher is not None:
-        return fetcher
+        return cast(DataFetcher, fetcher)
     if data_fetcher is not None:
         logger.warning(
             "DATA_FETCHER_ATTACHED_LATE",
             extra={"key": "data_fetcher_attached_late"},
         )
         runtime.data_fetcher = data_fetcher
-        return data_fetcher
+        return cast(DataFetcher, data_fetcher)
     # Do not treat a late-construction as a warning to keep startup logs clean
     logger.info("DATA_FETCHER_MISSING", extra={"key": "data_fetcher_missing"})
     try:
@@ -29632,7 +29754,7 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
         raise DataFetchError("data_fetcher not available") from exc
     runtime.data_fetcher = fetcher
     data_fetcher = fetcher
-    return fetcher
+    return cast(DataFetcher, fetcher)
 
 
 def _prepare_run(
@@ -30597,13 +30719,13 @@ def _ensure_execution_engine(runtime) -> None:
             def check_stops(self) -> None:
                 delegate = self._get_delegate()
                 if delegate is not None and hasattr(delegate, "check_stops"):
-                    return delegate.check_stops()
+                    delegate.check_stops()
                 return None
 
             def check_trailing_stops(self) -> None:
                 delegate = self._get_delegate()
                 if delegate is not None and hasattr(delegate, "check_trailing_stops"):
-                    return delegate.check_trailing_stops()
+                    delegate.check_trailing_stops()
                 return None
 
         stub_engine = _RuntimeExecutionEngineStub(runtime)
@@ -32281,7 +32403,7 @@ def _resolve_trading_config(runtime) -> TradingConfig:
     cfg = getattr(runtime, "cfg", None)
     if cfg is None or not isinstance(cfg, TradingConfig):
         cfg = get_trading_config()
-    return cfg
+    return cast(TradingConfig, cfg)
 
 
 def _netting_pipeline_enabled(runtime) -> bool:
@@ -33576,7 +33698,8 @@ def _run_tca_cost_calibration(
         str(_resolved_tca_path()),
         max_records=max(50, int(get_env("AI_TRADING_TCA_FEEDBACK_MAX_RECORDS", 1500, cast=int))),
     )
-    feedback = decompose_tca_components(recent_records)
+    feedback_records = [cast(Mapping[str, Any], record) for record in recent_records]
+    feedback = decompose_tca_components(feedback_records)
     target_total_bps = float(
         get_env("AI_TRADING_TCA_FEEDBACK_TARGET_TOTAL_BPS", 12.0, cast=float)
     )
@@ -33642,17 +33765,17 @@ def _run_tca_cost_calibration(
             "TCA_FEEDBACK_UPDATED",
             extra={
                 "path": str(feedback_path),
-                "sample_count": int(float(feedback_payload.get("sample_count", 0.0) or 0.0)),
-                "total_bps": float(feedback_payload.get("total_bps", 0.0) or 0.0),
-                "spread_bps": float(feedback_payload.get("spread_bps", 0.0) or 0.0),
-                "impact_bps": float(feedback_payload.get("impact_bps", 0.0) or 0.0),
-                "timing_bps": float(feedback_payload.get("timing_bps", 0.0) or 0.0),
-                "edge_floor_adjust_bps": float(
-                    feedback_payload.get("edge_floor_adjust_bps", 0.0) or 0.0
-                ),
-                "edge_ratio_adjust": float(
-                    feedback_payload.get("edge_ratio_adjust", 0.0) or 0.0
-                ),
+                "sample_count": int((_safe_float(feedback_payload.get("sample_count")) or 0.0)),
+                "total_bps": _safe_float(feedback_payload.get("total_bps")) or 0.0,
+                "spread_bps": _safe_float(feedback_payload.get("spread_bps")) or 0.0,
+                "impact_bps": _safe_float(feedback_payload.get("impact_bps")) or 0.0,
+                "timing_bps": _safe_float(feedback_payload.get("timing_bps")) or 0.0,
+                "edge_floor_adjust_bps": _safe_float(
+                    feedback_payload.get("edge_floor_adjust_bps")
+                )
+                or 0.0,
+                "edge_ratio_adjust": _safe_float(feedback_payload.get("edge_ratio_adjust"))
+                or 0.0,
             },
         )
     finally:
@@ -33914,7 +34037,7 @@ def _replay_schedule_due(state: BotState, *, now: datetime, market_open_now: boo
         return False
     if market_open_now:
         return False
-    return getattr(state, "last_replay_run_date", None) != now.date()
+    return bool(getattr(state, "last_replay_run_date", None) != now.date())
 
 
 def _load_replay_bars(
@@ -34109,7 +34232,7 @@ def _run_replay_governance(state: BotState, *, now: datetime, market_open_now: b
             }
         )
 
-    def _strategy(bar: dict[str, Any]) -> dict[str, Any] | None:
+    def _strategy(bar: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if not simulate_fills:
             return None
         qty = float(bar.get("qty", 0.0) or 0.0)
@@ -34252,7 +34375,7 @@ def _walk_forward_schedule_due(state: BotState, *, now: datetime, market_open_no
         return False
     if market_open_now:
         return False
-    return getattr(state, "last_walk_forward_run_date", None) != now.date()
+    return bool(getattr(state, "last_walk_forward_run_date", None) != now.date())
 
 
 def _run_walk_forward_governance(state: BotState, *, now: datetime, market_open_now: bool) -> None:
@@ -34845,7 +34968,29 @@ def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now
             jitter=0.1,
             context={"scope": "reconcile"},
         )
-        result = reconcile(internal_positions, broker_positions, tolerance_shares=0.0)
+        internal_positions_float: dict[str, float] = {}
+        for key, value in dict(internal_positions or {}).items():
+            symbol_key = str(key).strip().upper()
+            if not symbol_key:
+                continue
+            try:
+                internal_positions_float[symbol_key] = float(value or 0.0)
+            except (TypeError, ValueError):
+                internal_positions_float[symbol_key] = 0.0
+        broker_positions_float: dict[str, float] = {}
+        for broker_key, broker_value in dict(broker_positions or {}).items():
+            symbol_key = str(broker_key).strip().upper()
+            if not symbol_key:
+                continue
+            try:
+                broker_positions_float[symbol_key] = float(broker_value or 0.0)
+            except (TypeError, ValueError):
+                broker_positions_float[symbol_key] = 0.0
+        result = reconcile(
+            internal_positions_float,
+            broker_positions_float,
+            tolerance_shares=0.0,
+        )
         state.last_recon_ts = now
         if not result.ok:
             state.recon_halt = True
@@ -35236,7 +35381,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
 
     ensure_data_fetcher(runtime)
     try:
-        positions = retry_idempotent(
+        positions_raw = retry_idempotent(
             lambda: compute_current_positions(runtime),
             dep="broker_positions",
             breakers=breakers,
@@ -35269,16 +35414,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         _write_decision_record(record, decision_path)
         return
 
-    normalized_positions: dict[str, float] = {}
-    for raw_symbol, raw_position in dict(positions or {}).items():
+    positions: dict[str, float] = {}
+    for raw_symbol, raw_position in dict(positions_raw or {}).items():
         symbol_key = str(raw_symbol).strip().upper()
         if not symbol_key:
             continue
         try:
-            normalized_positions[symbol_key] = float(raw_position or 0.0)
+            positions[symbol_key] = float(raw_position or 0.0)
         except (TypeError, ValueError):
-            normalized_positions[symbol_key] = 0.0
-    positions = normalized_positions
+            positions[symbol_key] = 0.0
 
     blocked_symbols = {
         str(sym).strip().upper()
@@ -35481,10 +35625,15 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 return
             continue
         for symbol, df in bars_map.items():
-            df = normalize_bars(df, sleeve.timeframe, tz=UTC, rth_only=rth_only)
+            df = normalize_bars(df, sleeve.timeframe, tz=ZoneInfo("UTC"), rth_only=rth_only)
             if bool(getattr(cfg, "data_contract_enabled", True)):
-                result = validate_bars(df, sleeve.timeframe, _freshness_seconds_for_timeframe(sleeve.timeframe), rth_only=rth_only)
-                if not result.ok:
+                contract_result = validate_bars(
+                    df,
+                    sleeve.timeframe,
+                    _freshness_seconds_for_timeframe(sleeve.timeframe),
+                    rth_only=rth_only,
+                )
+                if not contract_result.ok:
                     proposals_by_symbol[symbol].append(
                         SleeveProposal(
                             symbol=symbol,
@@ -35497,7 +35646,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             confidence=0.0,
                             blocked=True,
                             reason_code="BAD_DATA_CONTRACT",
-                            debug={"reason": result.reason, "detail": result.detail},
+                            debug={
+                                "reason": contract_result.reason,
+                                "detail": contract_result.detail,
+                            },
                         )
                     )
                     skip_reasons[symbol].append("BAD_DATA_CONTRACT")
@@ -37982,7 +38134,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     "WARMUP_DATA_ONLY_RETRY_BYPASS",
                     extra={"attempts": attempts_limit},
                 )
-            processed, row_counts = [], {}
+            processed: list[str] = []
+            row_counts: dict[str, int] = {}
             attempts_used = 0
             fetch_attempts_total = 0
             for attempt in range(attempts_limit):
@@ -39292,6 +39445,8 @@ def get_latest_price(
     primary_failure_labels: set[str] = set()
 
     pytest_running = _pytest_running()
+    last_source = price_source
+    prev_source = price_source
 
     provider_disabled = False
     primary_provider_fn = getattr(
@@ -40124,7 +40279,7 @@ def get_price_source(symbol: str) -> str:
 def initialize_bot(api=None, data_loader=None):
     """Return a minimal context and state for unit tests."""
     ctx = types.SimpleNamespace(api=api, data_loader=data_loader)
-    state = {"positions": {}}
+    state: dict[str, dict[str, int]] = {"positions": {}}
     return ctx, state
 
 

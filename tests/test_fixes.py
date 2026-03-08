@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pandas as pandas_types
@@ -120,14 +120,14 @@ def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest
             return pd.Series([1.0] * len(close))
 
     class DummyFetcher:
-        def __init__(self, frames: dict[str, "pd.DataFrame"]):
+        def __init__(self, frames: dict[str, Any]):
             self.frames = frames
 
         def get_daily_df(self, runtime, symbol: str):  # noqa: D401, ANN001
             return self.frames.get(symbol)
 
     class DummyRuntime:
-        def __init__(self, frames: dict[str, "pd.DataFrame"]):
+        def __init__(self, frames: dict[str, Any]):
             self.data_fetcher = DummyFetcher(frames)
 
     frames = {
@@ -159,10 +159,10 @@ def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest
     assert summary_records, "Expected SCREEN_SUMMARY log entry"
     summary = summary_records[-1]
 
-    assert summary.tried == 3
-    assert summary.valid == 1
-    assert summary.empty == 1
-    assert summary.failed == 1
+    assert getattr(summary, "tried", None) == 3
+    assert getattr(summary, "valid", None) == 1
+    assert getattr(summary, "empty", None) == 1
+    assert getattr(summary, "failed", None) == 1
 
     assert (
         summary.getMessage()
@@ -175,10 +175,9 @@ def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest
 def main():
     """Run all tests."""
 
-    tests = [
+    tests: list[Callable[[], bool]] = [
         test_tickers_csv,
         test_talib_imports,
-        test_screen_universe_logging,
     ]
 
     results = []

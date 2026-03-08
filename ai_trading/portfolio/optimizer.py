@@ -17,12 +17,21 @@ def optimize_equal_weight(symbols):
         return {}
     w = 1.0 / float(len(symbols))
     return {s: w for s in symbols}
+
+
+AdaptivePositionSizer: type[Any]
+MarketRegime: type[Any]
+KellyCriterion: type[Any]
+KellyCalculator: type[Any]
+
 try:
-    from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
-    from ai_trading.risk.kelly import KellyCalculator, KellyCriterion
+    from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer as _ImportedAdaptivePositionSizer
+    from ai_trading.risk.adaptive_sizing import MarketRegime as _ImportedMarketRegime
+    from ai_trading.risk.kelly import KellyCalculator as _ImportedKellyCalculator
+    from ai_trading.risk.kelly import KellyCriterion as _ImportedKellyCriterion
 except ImportError:
     @dataclass
-    class AdaptivePositionSizer:
+    class _FallbackAdaptivePositionSizer:
         """Lightweight fallback when risk modules are unavailable."""
         risk_level: Any | None = None
 
@@ -31,11 +40,11 @@ except ImportError:
             self.regime_multipliers = {}
             self.volatility_adjustments = {}
 
-    class MarketRegime(Enum):
+    class _FallbackMarketRegime(Enum):
         """Minimal market regime enum used in tests."""
         NORMAL = "normal"
 
-    class KellyCriterion:
+    class _FallbackKellyCriterion:
         """Simplified Kelly calculator for environments without full dependency tree."""
 
         def __init__(self, max_fraction: float = 1.0, *args: Any, **kwargs: Any):
@@ -44,9 +53,18 @@ except ImportError:
         def calculate_kelly_fraction(self, *args: Any, **kwargs: Any) -> float:
             return 0.0
 
-    class KellyCalculator(KellyCriterion):
+    class _FallbackKellyCalculator(_FallbackKellyCriterion):
         """Reuse minimal KellyCriterion implementation."""
         pass
+    AdaptivePositionSizer = _FallbackAdaptivePositionSizer
+    MarketRegime = _FallbackMarketRegime
+    KellyCriterion = _FallbackKellyCriterion
+    KellyCalculator = _FallbackKellyCalculator
+else:
+    AdaptivePositionSizer = _ImportedAdaptivePositionSizer
+    MarketRegime = _ImportedMarketRegime
+    KellyCriterion = _ImportedKellyCriterion
+    KellyCalculator = _ImportedKellyCalculator
 
 class PortfolioDecision(Enum):
     """Portfolio-level decision outcomes."""
@@ -349,7 +367,7 @@ class PortfolioOptimizer:
                 return 0.0
             recent_returns = returns_data[symbol][-10:]
             avg_return = statistics.mean(recent_returns)
-            return position_change * avg_return
+            return float(position_change * avg_return)
         except (KeyError, statistics.StatisticsError, ValueError) as e:
             logger.error(f'Return change estimate failed for {symbol}: {e}')
             return 0.0
@@ -370,7 +388,7 @@ class PortfolioOptimizer:
                 r = returns_data.get(symbol, [])
                 if len(r) < 10:
                     return 0.0
-                return abs(position_change) * max(1e-6, statistics.stdev(r))
+                return float(abs(position_change) * max(1e-6, statistics.stdev(r)))
             try:
                 import numpy as _np
             except ImportError:
@@ -388,7 +406,7 @@ class PortfolioOptimizer:
                 lin_alg_err = getattr(getattr(_np, "linalg", None), "LinAlgError", RuntimeError)
                 try:
                     cov = LedoitWolf().fit(R.T).covariance_
-                except (ValueError, RuntimeError, lin_alg_err):
+                except Exception:
                     cov = _np.cov(R)
             def _weights(pos: dict[str, float]) -> _np.ndarray:
                 vals = _np.array([abs(pos.get(s, 0.0)) * float(prices.get(s, 1.0)) for s in symbols], dtype=float)

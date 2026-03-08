@@ -1,5 +1,6 @@
 import warnings
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -74,7 +75,7 @@ def test_fetch_minute_df_safe_gap_fill(monkeypatch, caplog):
 
     calls: list[dict[str, object]] = []
 
-    def _make_df(ts_values: list[pd.Timestamp]) -> pd.DataFrame:
+    def _make_df(ts_values: list[Any]) -> Any:
         return pd.DataFrame(
             {
                 "timestamp": ts_values,
@@ -86,7 +87,7 @@ def test_fetch_minute_df_safe_gap_fill(monkeypatch, caplog):
             }
         )
 
-    def _normalize_start(value: object) -> pd.Timestamp:
+    def _normalize_start(value: object) -> Any:
         ts = pd.Timestamp(value)
         if ts.tzinfo is None:
             ts = ts.tz_localize("UTC")

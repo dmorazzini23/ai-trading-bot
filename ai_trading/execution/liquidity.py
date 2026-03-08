@@ -271,7 +271,13 @@ class LiquidityAnalyzer:
     def _generate_execution_recommendations(self, liquidity_level: LiquidityLevel, volume_analysis: dict, market_hours_analysis: dict) -> dict[str, Any]:
         """Generate execution recommendations based on liquidity analysis."""
         try:
-            recommendations = {'recommended_order_type': OrderType.MARKET, 'max_participation_rate': 0.1, 'execution_strategy': 'standard', 'timing_recommendations': [], 'risk_warnings': []}
+            recommendations: dict[str, Any] = {
+                'recommended_order_type': OrderType.MARKET,
+                'max_participation_rate': 0.1,
+                'execution_strategy': 'standard',
+                'timing_recommendations': [],
+                'risk_warnings': [],
+            }
             if liquidity_level == LiquidityLevel.VERY_HIGH:
                 recommendations.update({'recommended_order_type': OrderType.MARKET, 'max_participation_rate': 0.2, 'execution_strategy': 'aggressive', 'timing_recommendations': ['Can execute large orders immediately']})
             elif liquidity_level == LiquidityLevel.HIGH:
@@ -432,7 +438,7 @@ class LiquidityManager:
         try:
             if not self.symbol_liquidity:
                 return {'error': 'No liquidity data available'}
-            liquidity_distribution = {}
+            liquidity_distribution: dict[str, int] = {}
             total_symbols = len(self.symbol_liquidity)
             for _symbol, analysis in self.symbol_liquidity.items():
                 level = analysis.get('liquidity_level', LiquidityLevel.NORMAL)

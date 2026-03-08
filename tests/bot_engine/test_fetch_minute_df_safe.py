@@ -2,7 +2,7 @@ import logging
 import sys
 import types
 from datetime import UTC, date, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -206,18 +206,23 @@ def test_repair_rth_minute_gaps_recovers_truncated_primary_frame(monkeypatch):
         end=end,
         tz=tz,
     )
+    expected_count = cast(int, meta["expected"])
+    gap_ratio = cast(float, meta["gap_ratio"])
+    missing_after = cast(int, meta["missing_after"])
+    residual_gap = cast(bool, meta["residual_gap"])
+    primary_feed_gap = cast(bool, meta["primary_feed_gap"])
 
     assert used_backup is True
-    assert meta["expected"] == len(expected_index)
-    assert meta["gap_ratio"] <= 0.05
-    assert meta["missing_after"] == 0
-    assert meta["residual_gap"] is False
-    assert meta["primary_feed_gap"] is True
+    assert expected_count == len(expected_index)
+    assert gap_ratio <= 0.05
+    assert missing_after == 0
+    assert residual_gap is False
+    assert primary_feed_gap is True
     assert meta.get("using_fallback_provider") is True
     assert events == []
 
     assert isinstance(repaired, pd.DataFrame)
-    assert len(repaired) == meta["expected"]
+    assert len(repaired) == expected_count
     assert meta.get("fallback_provider") == "yahoo"
 
 
@@ -516,7 +521,7 @@ def test_fetch_minute_df_safe_recovers_from_single_stale(monkeypatch, caplog):
             return stale_df.copy()
         return fresh_df.copy()
 
-    ensure_calls: list[pd.Index] = []
+    ensure_calls: list[Any] = []
 
     def fake_ensure(df, max_age_seconds, *, symbol=None, now=None, tz=None):
         ensure_calls.append(df.index)
@@ -1897,7 +1902,7 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     fetcher = bot_engine.DataFetcher()
     ctx = types.SimpleNamespace()
 
-    result = fetcher.get_minute_df(ctx, "AAPL", lookback_minutes=5)
+    result = fetcher.get_minute_df(cast(Any, ctx), "AAPL", lookback_minutes=5)
 
     assert feeds == ["iex", "sip"]
     assert "df" in captured
@@ -1983,7 +1988,7 @@ def test_get_minute_df_handles_missing_safe_get(monkeypatch):
     fetcher = bot_engine.DataFetcher()
     ctx = types.SimpleNamespace()
 
-    result = fetcher.get_minute_df(ctx, "AAPL", lookback_minutes=2)
+    result = fetcher.get_minute_df(cast(Any, ctx), "AAPL", lookback_minutes=2)
 
     assert isinstance(result, pd.DataFrame)
     assert isinstance(result.index, pd.DatetimeIndex)
@@ -2140,7 +2145,7 @@ def test_fetch_minute_df_safe_market_cache_hit(monkeypatch, tmp_path):
 
     from ai_trading.market import cache as market_cache
 
-    cached_df: pd.DataFrame | None = None
+    cached_df: Any = None
     load_keys: list[str] = []
     loader_calls = 0
 
@@ -2275,7 +2280,7 @@ def test_signal_manager_evaluate_with_shorter_history(monkeypatch):
     state = bot_engine.BotState()
 
     signal, confidence, label = manager.evaluate(
-        object(), state, df.copy(), "AAPL", model=None
+        cast(Any, object()), state, df.copy(), "AAPL", model=None
     )
 
     assert label != "no_data"
@@ -2305,7 +2310,7 @@ def test_fetch_feature_data_skips_when_minute_stale(monkeypatch):
         data_fetcher=types.SimpleNamespace(get_daily_df=lambda *_: _sample_df()),
     )
 
-    raw_df, feat_df, skip_flag = bot_engine._fetch_feature_data(ctx, None, "AAPL")
+    raw_df, feat_df, skip_flag = bot_engine._fetch_feature_data(cast(Any, ctx), None, "AAPL")
 
     assert raw_df is None
     assert feat_df is None

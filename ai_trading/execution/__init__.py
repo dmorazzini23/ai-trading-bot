@@ -255,6 +255,21 @@ def get_execution_runtime_status() -> ExecutionEngineStatus:
 
     return _RUNTIME_STATUS
 
+# Optional exports are dynamically imported; predeclare to keep fallback
+# assignments type-safe when dependencies are unavailable.
+ExecutionPhase: Any
+OrderStatus: Any
+LiquidityAnalyzer: Any
+LiquidityLevel: Any
+LiquidityManager: Any
+MarketHours: Any
+PnLEvent: Any
+PnLSource: Any
+PositionDiscrepancy: Any
+ProductionExecutionCoordinator: Any
+PDTManager: Any
+SwingTradingMode: Any
+
 # Optional submodule: algorithms
 try:  # pragma: no cover - optional dependency
     from . import algorithms
@@ -397,4 +412,3 @@ __all__ = [
     "enable_swing_mode",
     "disable_swing_mode",
 ]
-

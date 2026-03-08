@@ -8,6 +8,14 @@ import uuid
 from datetime import UTC, datetime
 from datetime import datetime as dt_datetime
 from decimal import Decimal
+from typing import Any
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 class DeclarativeBase:
     """Base class for database models."""
@@ -65,20 +73,20 @@ class Trade(Base):
         if not self.executed_price or self.status != 'filled':
             return 0.0
         if self.side == 'buy':
-            return self.quantity * (self.executed_price - self.price)
+            return _as_float(self.quantity) * (_as_float(self.executed_price) - _as_float(self.price))
         else:
-            return self.quantity * (self.price - self.executed_price)
+            return _as_float(self.quantity) * (_as_float(self.price) - _as_float(self.executed_price))
 
     @property
     def net_pnl(self) -> float:
         """Calculate net P&L after commissions."""
-        return self.gross_pnl - self.commission
+        return _as_float(self.gross_pnl) - _as_float(self.commission)
 
     @property
     def notional_value(self) -> float:
         """Calculate notional value of the trade."""
         price = self.executed_price or self.price
-        return abs(self.quantity * price)
+        return abs(_as_float(self.quantity) * _as_float(price))
 
 class Portfolio(Base):
     """
@@ -108,26 +116,29 @@ class Portfolio(Base):
     @property
     def total_cost(self) -> float:
         """Calculate total cost basis of position."""
-        return abs(self.quantity * self.average_cost)
+        return abs(_as_float(self.quantity) * _as_float(self.average_cost))
 
     @property
     def current_market_value(self) -> float:
         """Calculate current market value of position."""
-        return abs(self.quantity * self.current_price)
+        return abs(_as_float(self.quantity) * _as_float(self.current_price))
 
     @property
     def position_pnl(self) -> float:
         """Calculate unrealized P&L of position."""
         if self.quantity == 0:
             return 0.0
-        return (self.current_price - self.average_cost) * self.quantity
+        return (_as_float(self.current_price) - _as_float(self.average_cost)) * _as_float(self.quantity)
 
     @property
     def position_pnl_percent(self) -> float:
         """Calculate unrealized P&L percentage."""
         if self.average_cost == 0:
             return 0.0
-        return (self.current_price - self.average_cost) / self.average_cost * 100
+        avg_cost = _as_float(self.average_cost)
+        if avg_cost == 0.0:
+            return 0.0
+        return (_as_float(self.current_price) - avg_cost) / avg_cost * 100
 
 class RiskMetric(Base):
     """
@@ -158,9 +169,9 @@ class RiskMetric(Base):
     @property
     def risk_score(self) -> float:
         """Calculate composite risk score (0-100)."""
-        var_score = min(abs(self.var_95) * 1000, 50)
-        drawdown_score = min(abs(self.max_drawdown) * 100, 30)
-        vol_score = min(self.volatility * 100, 20)
+        var_score = min(abs(_as_float(self.var_95)) * 1000, 50)
+        drawdown_score = min(abs(_as_float(self.max_drawdown)) * 100, 30)
+        vol_score = min(_as_float(self.volatility) * 100, 20)
         return var_score + drawdown_score + vol_score
 
     @property
@@ -216,23 +227,23 @@ class PerformanceMetric(Base):
     def avg_win_loss_ratio(self) -> float:
         """Calculate average win to loss ratio."""
         if self.average_loss == 0:
-            return float('inf') if self.average_win > 0 else 0.0
-        return abs(self.average_win / self.average_loss)
+            return float('inf') if _as_float(self.average_win) > 0 else 0.0
+        return abs(_as_float(self.average_win) / _as_float(self.average_loss))
 
     @property
     def expectancy(self) -> float:
         """Calculate trade expectancy."""
         if self.total_trades == 0:
             return 0.0
-        win_prob = self.win_rate
-        loss_prob = self.loss_rate
-        avg_win = self.average_win
-        avg_loss = abs(self.average_loss)
+        win_prob = _as_float(self.win_rate)
+        loss_prob = _as_float(self.loss_rate)
+        avg_win = _as_float(self.average_win)
+        avg_loss = abs(_as_float(self.average_loss))
         return win_prob * avg_win - loss_prob * avg_loss
 
     @property
     def calmar_ratio(self) -> float:
         """Calculate Calmar ratio (annual return / max drawdown)."""
         if hasattr(self, 'max_drawdown') and self.max_drawdown != 0:
-            return self.annualized_return / abs(self.max_drawdown)
+            return _as_float(self.annualized_return) / abs(_as_float(self.max_drawdown))
         return 0.0

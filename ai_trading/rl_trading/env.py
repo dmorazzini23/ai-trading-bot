@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 try:  # optional dependency
     import numpy as np
@@ -62,7 +62,7 @@ class RunningStats:
 
     def __init__(self, window: int = 100) -> None:
         self.window = window
-        self.values = deque(maxlen=window)
+        self.values: deque[float] = deque(maxlen=window)
         self._mean = 0.0
         self._std = 1.0
 
@@ -70,8 +70,8 @@ class RunningStats:
         """Update running statistics with new value."""
         self.values.append(value)
         if len(self.values) > 1:
-            self._mean = np.mean(self.values)
-            self._std = max(np.std(self.values), 1e-08)
+            self._mean = float(np.mean(self.values))
+            self._std = max(float(np.std(self.values)), 1e-08)
 
     def normalize(self, value: float) -> float:
         """Normalize value using running statistics."""
@@ -152,16 +152,16 @@ class TradingEnv:
         self.slippage = max(slippage, 0.0)
         self.half_spread = max(half_spread, 0.0)
         self._last_net_worth = self.cash
-        self._position_history = deque(maxlen=50)
-        self._turnover_history = deque(maxlen=50)
+        self._position_history: deque[float] = deque(maxlen=50)
+        self._turnover_history: deque[float] = deque(maxlen=50)
         self._drawdown_peak = self.cash
-        self._returns_history = deque(maxlen=50)
+        self._returns_history: deque[float] = deque(maxlen=50)
         self._reward_stats = (
             RunningStats(self.reward_config.reward_window)
             if self.reward_config.normalize_rewards
             else None
         )
-        self._action_entropy_history = deque(maxlen=100)
+        self._action_entropy_history: deque[float] = deque(maxlen=100)
         self._episode_stats = {
             "total_return": 0.0,
             "max_drawdown": 0.0,
@@ -352,7 +352,11 @@ class TradingEnv:
             action_probs[action_int] = 1.0
             entropy = -np.sum(action_probs * np.log(action_probs + 1e-08))
         else:
-            action_float = float(action) if np.isscalar(action) else float(action[0])
+            if isinstance(action, np.ndarray):
+                action_array = np.asarray(action, dtype=np.float32).reshape(-1)
+                action_float = float(cast(Any, action_array[0])) if action_array.size else 0.0
+            else:
+                action_float = float(action)
             target_exposure = self._target_exposure_from_continuous(action_float)
             trade_size, trade_units, constraint_adjusted = (
                 self._execute_target_exposure(target_exposure, price)
@@ -378,16 +382,18 @@ class TradingEnv:
             net_worth / self._last_net_worth - 1 if self._last_net_worth > 0 else 0
         )
         self._returns_history.append(returns)
+        variance_penalty: float
         if len(self._returns_history) > 5:
-            rolling_variance = np.var(self._returns_history)
-            variance_penalty = (
+            rolling_variance = float(np.var(self._returns_history))
+            variance_penalty = float(
                 self.reward_config.variance_penalty * rolling_variance
             )
         else:
             variance_penalty = 0.0
+        sharpe_bonus: float
         if len(self._returns_history) > 10:
             returns_array = np.array(self._returns_history)
-            sharpe_ratio = np.mean(returns_array) / (np.std(returns_array) + 1e-08)
+            sharpe_ratio = float(np.mean(returns_array) / (np.std(returns_array) + 1e-08))
             sharpe_bonus = self.reward_config.sharpe_bonus * max(0, sharpe_ratio)
         else:
             sharpe_bonus = 0.0
@@ -416,10 +422,10 @@ class TradingEnv:
             raw_reward -= float(self.constraint_config.violation_penalty) * len(violations)
 
         if self._reward_stats is not None:
-            self._reward_stats.update(raw_reward)
-            reward = self._reward_stats.normalize(raw_reward)
+            self._reward_stats.update(float(raw_reward))
+            reward = float(self._reward_stats.normalize(float(raw_reward)))
         else:
-            reward = raw_reward
+            reward = float(raw_reward)
         self._last_net_worth = net_worth
         self._position_history.append(self.position)
         self._turnover_history.append(trade_size)

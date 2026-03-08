@@ -43,12 +43,12 @@ class SignalAggregator:
         self.min_performance_window = min_performance_window
         self.turnover_penalty = turnover_penalty
         self.conflict_resolution = conflict_resolution
-        self.meta_model = None
-        self.signal_performance_history = []
-        self.recent_weights = {}
-        self.signal_decay_factors = {}
-        self.signal_metrics = {}
-        self.ensemble_history = []
+        self.meta_model: Any | None = None
+        self.signal_performance_history: list[dict[str, Any]] = []
+        self.recent_weights: dict[str, float] = {}
+        self.signal_decay_factors: dict[str, float] = {}
+        self.signal_metrics: dict[str, dict[str, Any]] = {}
+        self.ensemble_history: list[dict[str, Any]] = []
         logger.info('SignalAggregator initialized with meta-learning capabilities')
 
     def aggregate_signals(self, signals: list[StrategySignal], method: str='stacking', market_data: dict | None=None, timestamp: datetime | None=None) -> StrategySignal | None:
@@ -90,7 +90,7 @@ class SignalAggregator:
 
     def _weighted_average_aggregation(self, signals: list[StrategySignal]) -> StrategySignal:
         """Aggregate signals using weighted average."""
-        signal_groups = {}
+        signal_groups: dict[tuple[str, Any], list[StrategySignal]] = {}
         for signal in signals:
             key = (signal.symbol, signal.side)
             if key not in signal_groups:
@@ -113,7 +113,7 @@ class SignalAggregator:
 
     def _consensus_aggregation(self, signals: list[StrategySignal]) -> StrategySignal | None:
         """Aggregate signals using consensus method."""
-        signal_counts = {}
+        signal_counts: dict[tuple[str, Any], list[StrategySignal]] = {}
         for signal in signals:
             key = (signal.symbol, signal.side)
             if key not in signal_counts:
@@ -211,7 +211,7 @@ class SignalAggregator:
         try:
             if len(signals) <= 1:
                 return signals
-            signal_groups = {}
+            signal_groups: dict[str, dict[str, list[StrategySignal]]] = {}
             for signal in signals:
                 key = signal.symbol
                 if key not in signal_groups:
@@ -272,24 +272,36 @@ class SignalAggregator:
     def _prepare_meta_features(self, signals: list[StrategySignal], market_data: dict | None=None) -> list[float] | None:
         """Prepare features for meta-learning model."""
         try:
-            features = []
+            features: list[float] = []
             if signals:
                 strengths = [s.strength for s in signals]
                 confidences = [s.confidence for s in signals]
-                features.extend([len(signals), np.mean(strengths), np.std(strengths) if len(strengths) > 1 else 0, np.mean(confidences), np.max(strengths), np.min(strengths)])
+                features.extend([
+                    float(len(signals)),
+                    float(np.mean(strengths)),
+                    float(np.std(strengths)) if len(strengths) > 1 else 0.0,
+                    float(np.mean(confidences)),
+                    float(np.max(strengths)),
+                    float(np.min(strengths)),
+                ])
                 buy_signals = sum((1 for s in signals if s.is_buy))
                 sell_signals = len(signals) - buy_signals
                 agreement = abs(buy_signals - sell_signals) / len(signals)
-                features.append(agreement)
+                features.append(float(agreement))
             else:
-                features.extend([0, 0, 0, 0, 0, 0, 0])
+                features.extend([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             if market_data:
-                features.extend([market_data.get('volatility', 0.0), market_data.get('volume_ratio', 1.0), market_data.get('spread_bps', 10.0), market_data.get('momentum', 0.0)])
+                features.extend([
+                    float(market_data.get('volatility', 0.0) or 0.0),
+                    float(market_data.get('volume_ratio', 1.0) or 1.0),
+                    float(market_data.get('spread_bps', 10.0) or 10.0),
+                    float(market_data.get('momentum', 0.0) or 0.0),
+                ])
             else:
                 features.extend([0.0, 1.0, 10.0, 0.0])
             if self.signal_metrics:
                 avg_performance = np.mean([metrics.get('recent_performance', 0.5) for metrics in self.signal_metrics.values()])
-                features.append(avg_performance)
+                features.append(float(avg_performance))
             else:
                 features.append(0.5)
             return features
@@ -308,8 +320,9 @@ class SignalAggregator:
             Ridge = load_sklearn_linear_model().Ridge if sklearn_available else None
             if Ridge is None:
                 return
-            self.meta_model = Ridge(alpha=1.0, random_state=42)
-            self.meta_model.fit(X, y)
+            model = Ridge(alpha=1.0, random_state=42)
+            model.fit(X, y)
+            self.meta_model = model
             logger.debug(f'Meta-model trained with {len(X)} samples')
         except COMMON_EXC as e:
             logger.error(f'Error training meta-model: {e}')
@@ -372,12 +385,12 @@ class SignalAggregator:
             returns = self.signal_metrics[signal_id]['returns']
             if len(returns) > 5:
                 if np.std(returns) > 0:
-                    sharpe = np.mean(returns) / np.std(returns) * np.sqrt(252)
+                    sharpe = float(np.mean(returns) / np.std(returns) * np.sqrt(252))
                     self.signal_metrics[signal_id]['sharpe_ratio'] = sharpe
-                hit_rate = np.mean([1 if r > 0 else 0 for r in returns])
+                hit_rate = float(np.mean([1 if r > 0 else 0 for r in returns]))
                 self.signal_metrics[signal_id]['hit_rate'] = hit_rate
                 recent_returns = returns[-20:]
-                recent_perf = np.mean(recent_returns) if recent_returns else 0.0
+                recent_perf = float(np.mean(recent_returns)) if recent_returns else 0.0
                 recent_perf = max(0.0, min(1.0, (recent_perf + 0.02) / 0.04))
                 self.signal_metrics[signal_id]['recent_performance'] = recent_perf
             self._add_performance_observation(signal_id, actual_return)
@@ -403,8 +416,8 @@ class SignalAggregator:
             stats = {'total_signals_processed': len(self.ensemble_history), 'meta_model_trained': self.meta_model is not None, 'signal_performance_samples': len(self.signal_performance_history), 'tracked_signal_sources': len(self.signal_metrics), 'recent_turnover': 0.0}
             if self.signal_metrics:
                 recent_performances = [metrics['recent_performance'] for metrics in self.signal_metrics.values()]
-                stats['avg_recent_performance'] = np.mean(recent_performances)
-                stats['signal_performance_std'] = np.std(recent_performances)
+                stats['avg_recent_performance'] = float(np.mean(recent_performances))
+                stats['signal_performance_std'] = float(np.std(recent_performances))
             if len(self.ensemble_history) > 10:
                 recent_symbols = set()
                 for entry in self.ensemble_history[-10:]:

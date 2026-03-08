@@ -9,6 +9,7 @@ only need a handful of default attributes.
 """
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 try:  # pragma: no cover - bot_engine may pull in optional heavy deps
     from .bot_engine import (
@@ -20,19 +21,16 @@ try:  # pragma: no cover - bot_engine may pull in optional heavy deps
         init_alpaca_clients,
     )
 except Exception:  # pragma: no cover - provide fallbacks when bot_engine unavailable
-    BotContext = LazyBotContext = object  # type: ignore[assignment]
+    BotContext = cast(Any, object)
+    LazyBotContext = cast(Any, object)
 
-    def get_ctx():  # type: ignore[no-redef]
+    def _unavailable(*_a: Any, **_k: Any) -> Any:
         raise RuntimeError("bot_engine unavailable")
 
-    def ensure_alpaca_attached(*_a, **_k):  # type: ignore[no-redef]
-        raise RuntimeError("bot_engine unavailable")
-
-    def maybe_init_brokers(*_a, **_k):  # type: ignore[no-redef]
-        raise RuntimeError("bot_engine unavailable")
-
-    def init_alpaca_clients(*_a, **_k):  # type: ignore[no-redef]
-        raise RuntimeError("bot_engine unavailable")
+    get_ctx = cast(Any, _unavailable)
+    ensure_alpaca_attached = cast(Any, _unavailable)
+    maybe_init_brokers = cast(Any, _unavailable)
+    init_alpaca_clients = cast(Any, _unavailable)
 
 
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain

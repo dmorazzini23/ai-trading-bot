@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any
 from ai_trading.logging import get_logger
 
-def get_phase_logger(name: str, phase: str) -> logging.Logger:
+def get_phase_logger(name: str, phase: str) -> Any:
     """Get a logger for a specific phase - fallback implementation."""
     logger_name = f'{name}.{phase}' if phase else name
     return get_logger(logger_name)
@@ -137,15 +137,14 @@ class PnLAttributor:
     def get_pnl_by_symbol(self, symbol: str, sources: list[PnLSource] | None=None) -> dict[str, float]:
         """Get cumulative PnL for a symbol, optionally filtered by sources."""
         with self._lock:
-            symbol_pnl = self._cumulative_pnl[symbol].copy()
+            symbol_pnl: dict[PnLSource, float] = dict(self._cumulative_pnl[symbol])
             if sources:
-                symbol_pnl = {source.value: symbol_pnl.get(source, 0) for source in sources}
-            else:
-                symbol_pnl = {source.value: amount for source, amount in symbol_pnl.items()}
+                symbol_pnl = {source: symbol_pnl.get(source, 0.0) for source in sources}
+            result = {source.value: amount for source, amount in symbol_pnl.items()}
             if symbol in self._position_snapshots:
                 snapshot = self._position_snapshots[symbol]
-                symbol_pnl['unrealized'] = snapshot.unrealized_pnl
-            return symbol_pnl
+                result['unrealized'] = snapshot.unrealized_pnl
+            return result
 
     def get_daily_pnl(self, date: str | None=None) -> dict[str, float]:
         """Get PnL for a specific date, defaults to today."""
@@ -159,7 +158,7 @@ class PnLAttributor:
         """Get comprehensive PnL summary."""
         with self._lock:
             total_unrealized = sum((snapshot.unrealized_pnl for snapshot in self._position_snapshots.values()))
-            total_by_source = defaultdict(float)
+            total_by_source: defaultdict[PnLSource, float] = defaultdict(float)
             for symbol_pnl in self._cumulative_pnl.values():
                 for source, amount in symbol_pnl.items():
                     total_by_source[source] += amount
@@ -184,7 +183,7 @@ class PnLAttributor:
             recent_events = [e for e in self._pnl_events if e.symbol == symbol and e.timestamp.timestamp() > cutoff_time]
         if not recent_events:
             return {'symbol': symbol, 'time_window_minutes': time_window_minutes, 'explanation': 'No PnL events in the specified time window', 'total_change': 0, 'events': []}
-        pnl_by_source = defaultdict(float)
+        pnl_by_source: defaultdict[PnLSource, float] = defaultdict(float)
         for event in recent_events:
             pnl_by_source[event.source] += event.pnl_amount
         total_change = sum(pnl_by_source.values())
@@ -205,8 +204,8 @@ class PnLAttributor:
         with self._lock:
             if not self._pnl_events:
                 return {'message': 'No PnL events to analyze'}
-            source_counts = defaultdict(int)
-            source_amounts = defaultdict(float)
+            source_counts: defaultdict[PnLSource, int] = defaultdict(int)
+            source_amounts: defaultdict[PnLSource, float] = defaultdict(float)
             for event in self._pnl_events:
                 source_counts[event.source] += 1
                 source_amounts[event.source] += event.pnl_amount

@@ -1,25 +1,26 @@
 import logging
 import types
 import sys
+from typing import Any, cast
 
 
-numpy_stub = types.ModuleType("numpy")
+numpy_stub = cast(Any, types.ModuleType("numpy"))
 numpy_stub.nan = float("nan")
 numpy_stub.NaN = numpy_stub.nan
 numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
 sys.modules.setdefault("numpy", numpy_stub)
 
-portalocker_stub = types.ModuleType("portalocker")
+portalocker_stub = cast(Any, types.ModuleType("portalocker"))
 portalocker_stub.LOCK_EX = 1
 portalocker_stub.lock = lambda *_a, **_k: None
 portalocker_stub.unlock = lambda *_a, **_k: None
 sys.modules.setdefault("portalocker", portalocker_stub)
 
-bs4_stub = types.ModuleType("bs4")
+bs4_stub = cast(Any, types.ModuleType("bs4"))
 bs4_stub.BeautifulSoup = object
 sys.modules.setdefault("bs4", bs4_stub)
 
-flask_stub = types.ModuleType("flask")
+flask_stub = cast(Any, types.ModuleType("flask"))
 class _Flask:
     def __init__(self, *args, **kwargs):
         pass
@@ -53,8 +54,8 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     """run_all_trades_worker should invoke check_trailing_stops and suppress errors."""
 
     # Stub Alpaca modules so _validate_trading_api works
-    enums_mod = types.ModuleType("alpaca.trading.enums")
-    requests_mod = types.ModuleType("alpaca.trading.requests")
+    enums_mod = cast(Any, types.ModuleType("alpaca.trading.enums"))
+    requests_mod = cast(Any, types.ModuleType("alpaca.trading.requests"))
 
     class OrderStatus:
         OPEN = "open"

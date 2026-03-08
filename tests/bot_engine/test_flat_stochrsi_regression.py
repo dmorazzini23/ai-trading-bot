@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -12,7 +13,7 @@ pd = pytest.importorskip("pandas")
 from ai_trading.core import bot_engine
 
 
-def _constant_minute_frame(rows: int = 300) -> pd.DataFrame:
+def _constant_minute_frame(rows: int = 300) -> Any:
     """Return a minute-level OHLCV frame with flat prices."""
 
     idx = pd.date_range("2024-01-01", periods=rows, freq="min")
@@ -100,7 +101,7 @@ def test_fetch_feature_data_constant_series(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     df = _constant_minute_frame()
 
-    def _assign(df: pd.DataFrame, **cols: float) -> pd.DataFrame:
+    def _assign(df: Any, **cols: float) -> Any:
         out = df.copy()
         for name, value in cols.items():
             out[name] = value
@@ -122,7 +123,12 @@ def test_fetch_feature_data_constant_series(monkeypatch: pytest.MonkeyPatch) -> 
         data_fetcher=SimpleNamespace(get_daily_df=lambda _ctx, _symbol: None),
     )
 
-    raw_df, feat_df, skip = bot_engine._fetch_feature_data(ctx, object(), "FLAT", price_df=df)
+    raw_df, feat_df, skip = bot_engine._fetch_feature_data(
+        cast(Any, ctx),
+        cast(Any, object()),
+        "FLAT",
+        price_df=df,
+    )
 
     assert raw_df is not None
     assert skip is None
@@ -141,7 +147,7 @@ def test_fetch_feature_data_empty_prepare_uses_enriched_fallback(
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     df = _constant_minute_frame(80)
 
-    def _assign(frame: pd.DataFrame, **cols: float) -> pd.DataFrame:
+    def _assign(frame: Any, **cols: float) -> Any:
         out = frame.copy()
         for name, value in cols.items():
             out[name] = value
@@ -164,7 +170,12 @@ def test_fetch_feature_data_empty_prepare_uses_enriched_fallback(
         data_fetcher=SimpleNamespace(get_daily_df=lambda _ctx, _symbol: None),
     )
 
-    raw_df, feat_df, skip = bot_engine._fetch_feature_data(ctx, object(), "FALLBACK", price_df=df)
+    raw_df, feat_df, skip = bot_engine._fetch_feature_data(
+        cast(Any, ctx),
+        cast(Any, object()),
+        "FALLBACK",
+        price_df=df,
+    )
 
     assert raw_df is not None and not raw_df.empty
     assert skip is None

@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -377,7 +377,7 @@ def _normalize_bar_ts(value: Any, fallback_index: int) -> str:
     ts = pd.to_datetime(value, errors="coerce", utc=True)
     if pd.isna(ts):
         ts = pd.Timestamp("1970-01-01T00:00:00Z") + pd.Timedelta(minutes=fallback_index)
-    return ts.isoformat()
+    return str(ts.isoformat())
 
 
 def _run_parity_simulation(
@@ -414,7 +414,7 @@ def _run_parity_simulation(
                 }
             )
 
-    def strategy(bar: dict[str, Any]) -> dict[str, Any] | None:
+    def strategy(bar: Mapping[str, Any]) -> Mapping[str, Any] | None:
         symbol = str(bar.get("symbol", "")).upper()
         ts_iso = str(bar.get("ts", ""))
         score, confidence = signal_lookup.get((symbol, ts_iso), (0.0, 0.0))
@@ -647,7 +647,7 @@ def _persist_replay_to_oms(
         )
         closed_without_fill += 1
 
-    summary = {
+    summary: dict[str, Any] = {
         "persisted": True,
         "database_url_configured": bool(getattr(store, "database_url", "")),
         "created_intents": created_count,

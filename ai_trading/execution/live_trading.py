@@ -1769,7 +1769,7 @@ def _stable_order_id(symbol: str, side: str) -> str:
     """Return a stable client order id for the current trading minute."""
 
     epoch_min = int(datetime.now(UTC).timestamp() // 60)
-    return stable_client_order_id(str(symbol), str(side).lower(), epoch_min)
+    return str(stable_client_order_id(str(symbol), str(side).lower(), epoch_min))
 
 
 @lru_cache(maxsize=1)
@@ -4739,8 +4739,12 @@ class ExecutionEngine:
         failure_exc: Exception | None = None
         failure_status: int | None = None
         error_meta: dict[str, Any] = {}
+        result: dict[Any, Any] | None
         try:
-            result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+            result = cast(
+                dict[Any, Any] | None,
+                self._execute_with_retry(self._submit_order_to_alpaca, order_data),
+            )
         except NonRetryableBrokerError as exc:
             metadata_raw = _extract_api_error_metadata(exc)
             metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
@@ -4807,7 +4811,7 @@ class ExecutionEngine:
                 logger.error("ORDER_SUBMIT_RETRIES_EXHAUSTED", extra=extra)
             else:
                 logger.error("FAILED_MARKET_ORDER", extra=extra)
-        return result
+        return cast(dict[Any, Any] | None, result)
 
     def submit_limit_order(self, symbol: str, side: str, quantity: int, limit_price: float, **kwargs) -> dict | None:
         """
@@ -7956,7 +7960,7 @@ class ExecutionEngine:
             return None
         try:
             result = self._execute_with_retry(self._get_order_status_alpaca, order_id)
-            return result
+            return cast(dict[Any, Any] | None, result)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
                 "ORDER_STATUS_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e), "order_id": order_id}
@@ -7974,7 +7978,7 @@ class ExecutionEngine:
             return None
         try:
             result = self._execute_with_retry(self._get_account_alpaca)
-            return result
+            return cast(dict[Any, Any] | None, result)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error("ACCOUNT_INFO_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return None
@@ -7990,7 +7994,7 @@ class ExecutionEngine:
             return None
         try:
             result = self._execute_with_retry(self._get_positions_alpaca)
-            return result
+            return cast(list[dict[str, Any]] | None, result)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error("POSITIONS_FETCH_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return None
@@ -8946,7 +8950,7 @@ class ExecutionEngine:
         order_data_snapshot: Mapping[str, Any],
         limit_price: float | None,
         slippage_bps: int | None = None,
-    ) -> tuple[Any, str, float, int, Any, Any] | None:
+    ) -> tuple[Any, str, float, float, Any, Any] | None:
         """Cancel an idle limit order and replace it with a marketable limit."""
 
         if limit_price is None:
@@ -9222,7 +9226,7 @@ class ExecutionEngine:
         index = getattr(self, "_open_order_qty_index", None)
         if not isinstance(index, Mapping):
             return (0.0, 0.0)
-        return index.get(key, (0.0, 0.0))
+        return cast(tuple[float, float], index.get(key, (0.0, 0.0)))
 
     def _fetch_broker_state(self) -> tuple[list[Any], list[Any]]:
         """Return broker state when no live client helper is available."""

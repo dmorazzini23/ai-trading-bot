@@ -5,7 +5,8 @@ import time
 from dataclasses import dataclass
 import hashlib
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Iterable, Mapping
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
@@ -31,9 +32,14 @@ from .fetch.sip_disallowed import sip_disallowed, sip_credentials_missing  # noq
 from .models import StockBarsRequest, TimeFrame
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
 
+if TYPE_CHECKING:
+    from pandas import DataFrame
+else:  # pragma: no cover - annotations only
+    DataFrame = Any
+
 try:  # pragma: no cover - requests optional
-    from requests import exceptions as _requests_exceptions
-except ImportError:  # pragma: no cover - dependency optional
+    _requests_exceptions = import_module("requests.exceptions")
+except Exception:
     _requests_exceptions = None
 
 
@@ -41,7 +47,7 @@ class _FallbackAPIError(Exception):
     """Fallback APIError when Alpaca SDK is unavailable."""
 
 
-APIError = _FallbackAPIError
+APIError: type[BaseException] = _FallbackAPIError
 
 if should_import_alpaca_sdk():  # pragma: no cover - alpaca optional
     try:
@@ -138,7 +144,7 @@ def http_get_bars(
     *,
     feed: str | None = None,
     **kwargs: Any,
-) -> pd.DataFrame | BarsFetchFailed | Any:
+) -> DataFrame | BarsFetchFailed | Any:
     """Wrapper around :mod:`ai_trading.data.fetch.get_bars` with failure sentinel."""
 
     status: int | None = None
@@ -247,7 +253,7 @@ def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_ut
 # Fallback adapters removed: TimeFrame and StockBarsRequest now come from alpaca.data
 COMMON_EXC = (ValueError, KeyError, AttributeError, TypeError, RuntimeError, ImportError, OSError, ConnectionError, TimeoutError)
 
-def _ensure_df(obj: Any) -> pd.DataFrame:
+def _ensure_df(obj: Any) -> DataFrame:
     """Best-effort conversion to DataFrame, never raises."""
     try:
         if obj is None:
@@ -261,18 +267,18 @@ def _ensure_df(obj: Any) -> pd.DataFrame:
     except (ValueError, TypeError):
         return pd.DataFrame()
 
-def empty_bars_dataframe() -> pd.DataFrame:
+def empty_bars_dataframe() -> DataFrame:
     cols = ["timestamp", *_OHLCV_REQUIRED]
     base = pd.DataFrame({col: [] for col in cols})
     return normalize_ohlcv_df(base, include_columns=("timestamp",))
 
-def _create_empty_bars_dataframe(timeframe: str | None = None) -> pd.DataFrame:
+def _create_empty_bars_dataframe(timeframe: str | None = None) -> DataFrame:
     """Return an empty OHLCV DataFrame including a timestamp column."""
 
     return empty_bars_dataframe()
 
 
-def _normalize_bars_frame(df: Any) -> pd.DataFrame:
+def _normalize_bars_frame(df: Any) -> DataFrame:
     """Return ``df`` normalized to the canonical OHLCV schema."""
 
     if isinstance(df, BarsFetchFailed):
@@ -295,7 +301,7 @@ def _normalize_bars_frame(df: Any) -> pd.DataFrame:
     return normalized
 
 
-def _coerce_http_bars(obj: Any) -> pd.DataFrame:
+def _coerce_http_bars(obj: Any) -> DataFrame:
     """Normalize HTTP bar results, returning an empty frame on sentinel."""
 
     if isinstance(obj, BarsFetchFailed):
@@ -589,7 +595,7 @@ def _coerce_generation(value: Any) -> float | None:
         try:
             if value.tzinfo is None:
                 value = value.replace(tzinfo=UTC)
-            return value.astimezone(UTC).timestamp()
+            return float(value.astimezone(UTC).timestamp())
         except (AttributeError, OSError, ValueError):  # pragma: no cover - defensive
             return None
     if isinstance(value, str):
@@ -755,7 +761,7 @@ def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
         params["feed"] = request.feed
     return get_bars_fn(request.symbol_or_symbols, request.timeframe, **params)
 
-def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, context: str='') -> pd.DataFrame:
+def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, context: str='') -> DataFrame:
     """
     Safely fetch stock bars via Alpaca client and always return a DataFrame.
     This is a faithful move of the original implementation from bot_engine,
@@ -988,7 +994,7 @@ def _get_minute_bars(
     end_dt: datetime,
     feed: str,
     adjustment: str | None = None,
-) -> pd.DataFrame:
+) -> DataFrame:
     symbol = _canon_symbol(symbol)
     try:
         df = get_bars(
@@ -1074,7 +1080,7 @@ def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
             start_u = end_u - timedelta(minutes=20)
     return (start_u, end_u)
 
-def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
+def fetch_minute_fallback(client, symbol, now_utc: datetime) -> DataFrame:
     symbol = _canon_symbol(symbol)
     now_utc = ensure_utc_datetime(now_utc)
     try:
@@ -1106,7 +1112,7 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
         _log.info('DATA_HEALTH: minute fallback ok', extra={'rows': rows})
     return _normalize_bars_frame(df)
 
-def _parse_bars(payload: Any, symbol: str, tz: str) -> pd.DataFrame:
+def _parse_bars(payload: Any, symbol: str, tz: str) -> DataFrame:
     if not payload:
         return empty_bars_dataframe()
     if isinstance(payload, dict):
@@ -1136,15 +1142,15 @@ except NameError:
     _ensure_entitled_feed_orig = None
 
 
-def _ensure_entitled_feed(client, feed):  # type: ignore[override]
+def _ensure_entitled_feed_test_aware(client: Any, requested: str | None) -> str:
     """
     If tests simulate SIP entitlement and SIP isn't explicitly forbidden via env,
     choose 'sip'. Otherwise, delegate to original.
     """
 
-    resolved = feed
+    resolved = requested or "iex"
     if _ensure_entitled_feed_orig:
-        resolved = _ensure_entitled_feed_orig(client, feed)  # type: ignore[misc]
+        resolved = _ensure_entitled_feed_orig(client, requested)  # type: ignore[misc]
 
     if not _is_test_mode():
         return resolved
@@ -1183,3 +1189,6 @@ def _ensure_entitled_feed(client, feed):  # type: ignore[override]
     else:
         _ENTITLE_CACHE[cache_key] = _EntitlementCacheEntry(set(feeds), None, "sip")
     return "sip"
+
+
+_ensure_entitled_feed = _ensure_entitled_feed_test_aware

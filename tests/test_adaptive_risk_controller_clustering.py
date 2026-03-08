@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 import builtins
 import importlib.util
 import sys
+from typing import Any, cast
 
 
 try:  # pragma: no cover - optional dependency for production
@@ -25,7 +26,7 @@ sys.modules.setdefault("pandas", ModuleType("pandas"))
 import ai_trading  # noqa: F401 - ensure base package loaded
 
 portfolio_stub = ModuleType("ai_trading.portfolio")
-portfolio_stub.__path__ = [
+cast(Any, portfolio_stub).__path__ = [
     str(Path(__file__).resolve().parent.parent / "ai_trading" / "portfolio"),
 ]
 sys.modules.setdefault("ai_trading.portfolio", portfolio_stub)
@@ -38,7 +39,7 @@ risk_controls = importlib.util.module_from_spec(spec)
 sys.modules["ai_trading.portfolio.risk_controls"] = risk_controls
 assert spec.loader is not None
 spec.loader.exec_module(risk_controls)
-portfolio_stub.risk_controls = risk_controls
+cast(Any, portfolio_stub).risk_controls = risk_controls
 
 
 class FakeCorrelationMatrix:
@@ -88,20 +89,20 @@ def _install_fake_scipy(monkeypatch, *, fcluster, linkage, squareform) -> None:
     scipy_pkg.__path__ = []  # mark as package
 
     cluster_pkg = ModuleType("scipy.cluster")
-    cluster_pkg.__path__ = []
+    cast(Any, cluster_pkg).__path__ = []
     hierarchy_pkg = ModuleType("scipy.cluster.hierarchy")
-    hierarchy_pkg.fcluster = fcluster
-    hierarchy_pkg.linkage = linkage
-    cluster_pkg.hierarchy = hierarchy_pkg
+    cast(Any, hierarchy_pkg).fcluster = fcluster
+    cast(Any, hierarchy_pkg).linkage = linkage
+    cast(Any, cluster_pkg).hierarchy = hierarchy_pkg
 
     spatial_pkg = ModuleType("scipy.spatial")
-    spatial_pkg.__path__ = []
+    cast(Any, spatial_pkg).__path__ = []
     distance_pkg = ModuleType("scipy.spatial.distance")
-    distance_pkg.squareform = squareform
-    spatial_pkg.distance = distance_pkg
+    cast(Any, distance_pkg).squareform = squareform
+    cast(Any, spatial_pkg).distance = distance_pkg
 
-    scipy_pkg.cluster = cluster_pkg
-    scipy_pkg.spatial = spatial_pkg
+    cast(Any, scipy_pkg).cluster = cluster_pkg
+    cast(Any, scipy_pkg).spatial = spatial_pkg
 
     monkeypatch.setitem(sys.modules, "scipy", scipy_pkg)
     monkeypatch.setitem(sys.modules, "scipy.cluster", cluster_pkg)

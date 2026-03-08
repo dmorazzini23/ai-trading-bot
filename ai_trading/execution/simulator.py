@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import random
+from typing import Any
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import logger
@@ -58,7 +59,7 @@ class SlippageModel:
     ) -> None:
         """Initialize slippage model."""
         self._rng = _resolve_rng(seed=seed, rng=rng, component=self.__class__.__name__)
-        self.base_slippage_bps = 5
+        self.base_slippage_bps = 5.0
         self.market_impact_factor = 0.1
         self.volatility_factor = 1.0
         logger.info('SlippageModel initialized')
@@ -155,7 +156,7 @@ class FillSimulator:
             Fill simulation result dictionary
         """
         try:
-            result = {'filled': False, 'fill_quantity': 0, 'fill_price': price, 'slippage': 0.0, 'fill_time': 0, 'partial_fills': [], 'rejection_reason': None}
+            result: dict[str, Any] = {'filled': False, 'fill_quantity': 0, 'fill_price': price, 'slippage': 0.0, 'fill_time': 0, 'partial_fills': [], 'rejection_reason': None}
             if not self._should_fill(order_type, price):
                 result['rejection_reason'] = 'Price limit not met'
                 return result
@@ -194,7 +195,7 @@ class FillSimulator:
 
     def _simulate_partial_fills(self, total_quantity: int, fill_price: float) -> list[dict]:
         """Simulate sequence of partial fills."""
-        fills = []
+        fills: list[dict[str, float | int]] = []
         remaining = total_quantity
         fill_time = 0
         while remaining > 0 and len(fills) < 5:

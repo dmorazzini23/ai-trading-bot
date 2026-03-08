@@ -52,9 +52,9 @@ class Alert:
         self.metadata = kwargs.get('metadata', {})
         self.acknowledged = False
         self.resolved = False
-        self.acknowledged_by = None
-        self.acknowledged_at = None
-        self.resolved_at = None
+        self.acknowledged_by: str | None = None
+        self.acknowledged_at: datetime | None = None
+        self.resolved_at: datetime | None = None
 
     def acknowledge(self, user: str='system'):
         """Acknowledge the alert."""
@@ -220,7 +220,7 @@ class RiskAlertEngine:
         self.alert_manager = alert_manager
         self.thresholds = PERFORMANCE_THRESHOLDS
         self.risk_params = RISK_PARAMETERS
-        self.last_alert_times = {}
+        self.last_alert_times: dict[str, datetime] = {}
         self.alert_cooldown = 300
         logger.info('RiskAlertEngine initialized')
 

@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import types
+from typing import Any, cast
 
 import pytest
 
@@ -15,10 +16,11 @@ sys.modules.pop("risk_engine", None)
 import ai_trading.config.management as config_management
 import ai_trading.config.settings as config_settings
 
-config_pkg = sys.modules.get("ai_trading.config")
-if config_pkg is None:
-    config_pkg = types.ModuleType("ai_trading.config")
-    sys.modules["ai_trading.config"] = config_pkg
+config_pkg_obj = sys.modules.get("ai_trading.config")
+if config_pkg_obj is None:
+    config_pkg_obj = types.ModuleType("ai_trading.config")
+    sys.modules["ai_trading.config"] = config_pkg_obj
+config_pkg = cast(Any, config_pkg_obj)
 
 config_pkg.get_settings = config_settings.get_settings
 config_pkg.Settings = config_settings.Settings
@@ -29,7 +31,7 @@ if not hasattr(config_management, "from_env_relaxed"):
     def _from_env_relaxed() -> config_management.TradingConfig:  # pragma: no cover - legacy shim
         return config_management.TradingConfig.from_env()
 
-    config_management.from_env_relaxed = _from_env_relaxed  # type: ignore[attr-defined]
+    cast(Any, config_management).from_env_relaxed = _from_env_relaxed
 from ai_trading.risk.engine import RiskEngine, TradeSignal  # AI-AGENT-REF: normalized import
 
 
@@ -97,7 +99,7 @@ def test_register_and_position_size(monkeypatch):
     sig.weight = 0.1  # Set weight to avoid exposure cap breach
     eng.asset_limits["equity"] = 1.0
     eng.strategy_limits["s"] = 1.0
-    eng.config = types.SimpleNamespace(position_size_min_usd=1, atr_multiplier=1.0)
+    eng.config = cast(Any, types.SimpleNamespace(position_size_min_usd=1, atr_multiplier=1.0))
     qty = eng.position_size(sig, cash=100, price=10)
     # Position size may be influenced by multiple factors, just ensure it's positive
     assert qty > 0
@@ -148,7 +150,7 @@ def test_position_size_zero_raw_qty_defaults_to_min(caplog):
     sig.weight = 0.0
     eng.asset_limits["equity"] = 1.0
     eng.strategy_limits["s"] = 1.0
-    eng.config = types.SimpleNamespace(position_size_min_usd=100, atr_multiplier=1.0)
+    eng.config = cast(Any, types.SimpleNamespace(position_size_min_usd=100, atr_multiplier=1.0))
     with caplog.at_level(logging.WARNING):
         qty = eng.position_size(sig, cash=1000, price=10)
     assert qty == 10
@@ -161,7 +163,7 @@ def test_position_size_invalid_min_usd_falls_back_once(caplog):
     sig.weight = 0.1
     eng.asset_limits["equity"] = 1.0
     eng.strategy_limits["s"] = 1.0
-    eng.config = types.SimpleNamespace(position_size_min_usd=0.0, atr_multiplier=1.0)
+    eng.config = cast(Any, types.SimpleNamespace(position_size_min_usd=0.0, atr_multiplier=1.0))
     with caplog.at_level(logging.WARNING):
         qty1 = eng.position_size(sig, cash=100, price=30)
         qty2 = eng.position_size(sig, cash=100, price=30)

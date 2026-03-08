@@ -4,34 +4,47 @@ import json
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, cast
 from types import SimpleNamespace
 import sys
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator
 try:  # Prefer pydantic-settings v2 API
-    from pydantic_settings import BaseSettings, SettingsConfigDict
+    import pydantic_settings as _pydantic_settings
 except Exception:  # pragma: no cover - fallback to pydantic v1 style
-    from pydantic import BaseSettings
+    from pydantic import BaseSettings as _BaseSettings
 
-    SettingsConfigDict = None
+    _SettingsConfigDict: Any = None
+    _NoDecode: Any = None
+else:
+    _BaseSettings = _pydantic_settings.BaseSettings
+    _SettingsConfigDict = _pydantic_settings.SettingsConfigDict
+    _NoDecode = getattr(_pydantic_settings, "NoDecode", None)
 
-try:
-    from pydantic_settings import NoDecode
-except Exception:  # pragma: no cover - compatibility with lean pydantic-settings stubs
-    NoDecode = object
+if TYPE_CHECKING:
+    from pydantic_settings import BaseSettings as _SettingsBase
+else:
+    _SettingsBase = _BaseSettings
 from ai_trading.logging import logger
 
 
 POSITION_SIZE_MIN_USD_DEFAULT = 25.0
 try:
-    from pydantic.fields import FieldInfo
+    from pydantic.fields import FieldInfo as _FieldInfo
 except Exception:  # pragma: no cover - pydantic may be missing in tests
-    FieldInfo = object
+    _FIELD_INFO_TYPES: tuple[type[Any], ...] = ()
+else:
+    _FIELD_INFO_TYPES = (_FieldInfo,)
+
+_NO_DECODE_ANNOTATION: Any = _NoDecode if _NoDecode is not None else object
+
+
+def _is_field_info(value: Any) -> bool:
+    return bool(_FIELD_INFO_TYPES) and isinstance(value, _FIELD_INFO_TYPES)
 
 
 def _secret_to_str(val: Any) -> str | None:
     """Return a plain string for SecretStr or str; None if unset."""
-    if val is None or isinstance(val, FieldInfo):
+    if val is None or _is_field_info(val):
         return None
     if isinstance(val, SecretStr):
         return cast(str, val.get_secret_value())
@@ -42,7 +55,7 @@ def _secret_to_str(val: Any) -> str | None:
 
 def _to_int(val: Any, default: int | None = None) -> int:
     """Robust int conversion handling FieldInfo and bool."""
-    if isinstance(val, FieldInfo) or val is None:
+    if _is_field_info(val) or val is None:
         if default is None:
             raise ValueError("int value missing")
         return int(default)
@@ -58,7 +71,7 @@ def _to_int(val: Any, default: int | None = None) -> int:
 
 def _to_float(val: Any, default: float | None = None) -> float:
     """Robust float conversion handling FieldInfo."""
-    if isinstance(val, FieldInfo) or val is None:
+    if _is_field_info(val) or val is None:
         if default is None:
             raise ValueError("float value missing")
         return float(default)
@@ -72,7 +85,7 @@ def _to_float(val: Any, default: float | None = None) -> float:
 
 def _to_bool(val: Any, default: bool | None = None) -> bool:
     """Best effort bool conversion."""
-    if isinstance(val, FieldInfo) or val is None:
+    if _is_field_info(val) or val is None:
         return bool(default) if default is not None else False
     if isinstance(val, str):
         return val.strip().lower() not in ("0", "false", "no", "")
@@ -107,7 +120,7 @@ def _propagate_default_feed(feed: str) -> None:
                 break
 
 
-_HAS_SETTINGS_CONFIG_DICT = SettingsConfigDict is not None and hasattr(BaseSettings, "model_config")
+_HAS_SETTINGS_CONFIG_DICT = _SettingsConfigDict is not None and hasattr(_BaseSettings, "model_config")
 
 
 class _ModelConfigCompatMixin:
@@ -136,7 +149,7 @@ class _ModelConfigCompatMixin:
             super().__init_subclass__()
 
 
-class Settings(_ModelConfigCompatMixin, BaseSettings):
+class Settings(_ModelConfigCompatMixin, _SettingsBase):
     env: str = Field(default="test", alias="APP_ENV")
     market_calendar: str = Field(default="XNYS", alias="MARKET_CALENDAR")
     data_provider: str = Field(default="mock", alias="DATA_PROVIDER")
@@ -397,6 +410,12 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         ),
     )
     conf_threshold: float = Field(default=0.75, validation_alias="AI_TRADING_CONF_THRESHOLD")
+    ml_confidence_threshold: float = Field(0.75, validation_alias="ML_CONFIDENCE_THRESHOLD")
+    volume_spike_threshold: float = Field(1.0, validation_alias="VOLUME_SPIKE_THRESHOLD")
+    pyramid_levels: dict[str, int] = Field(
+        default_factory=lambda: {"low": 1, "medium": 2, "high": 3},
+        validation_alias="PYRAMID_LEVELS",
+    )
     score_confidence_min: float | None = Field(default=None, alias="SCORE_CONFIDENCE_MIN")
     score_size_max_boost: float = Field(
         1.0, alias="SCORE_SIZE_MAX_BOOST", description="Upper bound of raw size multiplier at confidence=1.0"
@@ -479,13 +498,13 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         "iex",
         validation_alias=AliasChoices("ALPACA_DATA_FEED", "DATA_FEED", "data_feed"),
     )
-    alpaca_feed_failover: Annotated[tuple[str, ...], NoDecode] = Field(
+    alpaca_feed_failover: Annotated[tuple[str, ...], _NO_DECODE_ANNOTATION] = Field(
         ("sip",),
         validation_alias="ALPACA_FEED_FAILOVER",
     )
     alpaca_empty_to_backup: bool = Field(True, validation_alias="ALPACA_EMPTY_TO_BACKUP")
     alpaca_adjustment: Literal["all", "raw"] = Field("all", validation_alias="ALPACA_ADJUSTMENT")
-    data_provider_priority: Annotated[tuple[str, ...], NoDecode] = Field(
+    data_provider_priority: Annotated[tuple[str, ...], _NO_DECODE_ANNOTATION] = Field(
         ("alpaca_iex", "yahoo"),
         validation_alias="DATA_PROVIDER_PRIORITY",
     )
@@ -532,6 +551,15 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     iterations: int = Field(0, alias="AI_TRADING_ITERATIONS")
     scheduler_iterations: int = Field(0, validation_alias="SCHEDULER_ITERATIONS")
     scheduler_sleep_seconds: int = Field(60, validation_alias="SCHEDULER_SLEEP_SECONDS")
+    rebalance_sleep_seconds: int = Field(60, validation_alias="REBALANCE_SLEEP_SECONDS")
+    data_warmup_lookback_days: int = Field(120, validation_alias="DATA_WARMUP_LOOKBACK_DAYS")
+    enable_sklearn: bool = Field(False, validation_alias="ENABLE_SKLEARN")
+    metrics_enabled: bool = Field(False, validation_alias="METRICS_ENABLED")
+    data_sanitize_enabled: bool = Field(False, validation_alias="DATA_SANITIZE_ENABLED")
+    corp_actions_enabled: bool = Field(False, validation_alias="CORP_ACTIONS_ENABLED")
+    sizing_enabled: bool = Field(False, validation_alias="SIZING_ENABLED")
+    regime_min_rows: int = Field(100, validation_alias="REGIME_MIN_ROWS")
+    sgd_params: dict[str, float] = Field(default_factory=dict, validation_alias="SGD_PARAMS")
     ai_trading_seed: int = Field(42, alias="AI_TRADING_SEED")
     model_path: str = Field("trained_model.pkl", alias="AI_TRADING_MODEL_PATH")
     halt_flag_path: str = Field("halt.flag", alias="HALT_FLAG_PATH")
@@ -627,7 +655,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     @field_validator("alpaca_feed_failover", mode="before")
     @classmethod
     def _split_feed_failover(cls, v, info):
-        if isinstance(v, FieldInfo) or v is None:
+        if _is_field_info(v) or v is None:
             try:
                 default = cls.model_fields[info.field_name].default
             except Exception:
@@ -667,7 +695,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     @field_validator("data_provider_priority", mode="before")
     @classmethod
     def _split_priority(cls, v, info):
-        if isinstance(v, FieldInfo) or v is None:
+        if _is_field_info(v) or v is None:
             try:
                 default = cls.model_fields[info.field_name].default
             except Exception:
@@ -766,22 +794,23 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         raise ValueError(guidance)
 
     @computed_field
-    @property
     def alpaca_secret_key_plain(self) -> str | None:
         """Return the Alpaca secret key as a plain string."""
         return _secret_to_str(self.alpaca_secret_key)
 
     @computed_field
-    @property
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=_to_int(getattr(self, "trade_cooldown_min", 15), 15))
 
     @computed_field
-    @property
     def data(self) -> SimpleNamespace:
         ratio_bps = _to_float(getattr(self, "data_max_gap_ratio_bps", 50.0), 50.0)
         ratio = max(float(ratio_bps) / 10000.0, 0.0)
         return SimpleNamespace(max_gap_ratio_intraday=ratio)
+
+    @property
+    def REGIME_MIN_ROWS(self) -> int:
+        return int(self.regime_min_rows)
 
     @property
     def data_feed(self) -> Literal["iex", "sip"]:
@@ -801,7 +830,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     if _HAS_SETTINGS_CONFIG_DICT:
         _model_config_candidate = None
         try:
-            _model_config_candidate = SettingsConfigDict(
+            _model_config_candidate = cast(Any, _SettingsConfigDict)(
                 env_prefix="AI_TRADING_",
                 extra="ignore",
                 case_sensitive=False,

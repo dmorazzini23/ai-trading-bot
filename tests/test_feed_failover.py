@@ -324,20 +324,16 @@ def test_cached_override_respects_ttl(monkeypatch):
     _reset_state()
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     base_time = 1_000.0
-
-    def faux_time():
-        return faux_time.current
-
-    faux_time.current = base_time
-    monkeypatch.setattr(fetch.time, "time", lambda: faux_time())
+    clock = {"current": base_time}
+    monkeypatch.setattr(fetch.time, "time", lambda: clock["current"])
     monkeypatch.setattr(fetch, "_OVERRIDE_TTL_S", 10.0, raising=False)
 
     fetch._record_feed_switch("AAPL", "1Min", "iex", "sip")
 
     assert fetch._get_cached_or_primary("AAPL", "iex") == "sip"
-    faux_time.current = base_time + 5
+    clock["current"] = base_time + 5
     assert fetch._get_cached_or_primary("AAPL", "iex") == "sip"
-    faux_time.current = base_time + 15
+    clock["current"] = base_time + 15
     assert fetch._get_cached_or_primary("AAPL", "iex") == "iex"
 
 

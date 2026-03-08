@@ -29,7 +29,7 @@ class ParameterValidator:
         Returns:
             Dictionary containing validation results
         """
-        validation_result = {'timestamp': datetime.now(UTC), 'overall_status': 'PASS', 'violations': [], 'warnings': [], 'parameter_summary': {}, 'optimization_summary': {}}
+        validation_result: dict[str, Any] = {'timestamp': datetime.now(UTC), 'overall_status': 'PASS', 'violations': [], 'warnings': [], 'parameter_summary': {}, 'optimization_summary': {}}
         try:
             kelly_result = self._validate_parameter_group(KELLY_PARAMETERS, 'KELLY_PARAMETERS')
             validation_result['parameter_summary']['kelly'] = kelly_result
@@ -68,7 +68,7 @@ class ParameterValidator:
         Returns:
             Validation result for the parameter change
         """
-        result = {'parameter': parameter_name, 'old_value': old_value, 'new_value': new_value, 'status': 'PASS', 'violations': [], 'warnings': [], 'change_impact': {}}
+        result: dict[str, Any] = {'parameter': parameter_name, 'old_value': old_value, 'new_value': new_value, 'status': 'PASS', 'violations': [], 'warnings': [], 'change_impact': {}}
         try:
             if parameter_name in self.safety_bounds:
                 min_bound, max_bound = self.safety_bounds[parameter_name]
@@ -90,7 +90,7 @@ class ParameterValidator:
 
     def _validate_parameter_group(self, parameters: dict[str, Any], group_name: str) -> dict[str, Any]:
         """Validate a group of parameters."""
-        result = {'group': group_name, 'status': 'PASS', 'violations': [], 'warnings': [], 'parameters_checked': len(parameters)}
+        result: dict[str, Any] = {'group': group_name, 'status': 'PASS', 'violations': [], 'warnings': [], 'parameters_checked': len(parameters)}
         for param_name, param_value in parameters.items():
             if param_value is None:
                 result['status'] = 'FAIL'

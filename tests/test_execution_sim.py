@@ -6,8 +6,8 @@ from ai_trading.evaluation.execution_sim import simulate_executed_trades
 
 
 def test_simulate_executed_trades_applies_costs() -> None:
-    y_true = np.array([0.010, -0.015, 0.012, -0.006], dtype=float)
-    y_pred = np.array([0.2, -0.4, 0.7, -0.3], dtype=float)
+    y_true = np.array([0.010, -0.015, 0.012, -0.006], dtype=float).tolist()
+    y_pred = np.array([0.2, -0.4, 0.7, -0.3], dtype=float).tolist()
     metrics = simulate_executed_trades(
         y_true=y_true,
         y_pred=y_pred,
@@ -26,8 +26,8 @@ def test_simulate_executed_trades_applies_costs() -> None:
 
 
 def test_simulate_executed_trades_respects_no_short_mode() -> None:
-    y_true = np.array([-0.01, -0.02, -0.03], dtype=float)
-    y_pred = np.array([-0.5, -0.6, -0.7], dtype=float)
+    y_true = np.array([-0.01, -0.02, -0.03], dtype=float).tolist()
+    y_pred = np.array([-0.5, -0.6, -0.7], dtype=float).tolist()
     metrics = simulate_executed_trades(
         y_true=y_true,
         y_pred=y_pred,

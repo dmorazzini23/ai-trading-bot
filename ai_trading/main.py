@@ -16,7 +16,7 @@ from datetime import date as dt_date, datetime, UTC, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import importlib.util
-from typing import Any, Callable, Mapping, Tuple
+from typing import Any, Callable, Mapping, Tuple, cast
 from types import SimpleNamespace
 from ai_trading.env import ensure_dotenv_loaded
 
@@ -298,10 +298,11 @@ try:
     )
 except Exception:  # pragma: no cover - fallback when bot engine unavailable
 
-    def emit_cycle_budget_summary(*args, **kwargs):
+    def emit_cycle_budget_summary(logger: logging.Logger) -> None:
+        _ = logger
         return None
 
-    def clear_cycle_budget_context(*args, **kwargs):
+    def clear_cycle_budget_context() -> None:
         return None
 from ai_trading.config.management import (
     get_env,
@@ -2901,6 +2902,12 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
         api_error.set()
 
 
+def _timeout_seconds(value: float | tuple[float, float]) -> float:
+    if isinstance(value, tuple):
+        return float(value[0])
+    return float(value)
+
+
 def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
     """Initialize the global HTTP client session with retry logic."""
     for attempt in range(1, retries + 1):
@@ -2908,12 +2915,12 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
             logger.info("HTTP_SESSION_INIT_ABORT", extra={"attempt": attempt})
             return False
         try:
-            connect_timeout = clamp_request_timeout(
+            connect_timeout = _timeout_seconds(clamp_request_timeout(
                 float(getattr(cfg, "http_connect_timeout", 5.0))
-            )
-            read_timeout = clamp_request_timeout(
+            ))
+            read_timeout = _timeout_seconds(clamp_request_timeout(
                 float(getattr(cfg, "http_read_timeout", 10.0))
-            )
+            ))
             session = build_retrying_session(
                 pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)),
                 total_retries=int(getattr(cfg, "http_total_retries", 3)),
@@ -3286,8 +3293,8 @@ def main(argv: list[str] | None = None) -> None:
             if _http_closed_profile is None or closed != _http_closed_profile:
                 try:
                     if closed:
-                        connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout_closed", getattr(S, "http_connect_timeout", 5.0)) or getattr(S, "http_connect_timeout", 5.0)))
-                        read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout_closed", getattr(S, "http_read_timeout", 10.0)) or getattr(S, "http_read_timeout", 10.0)))
+                        connect_timeout = _timeout_seconds(clamp_request_timeout(float(getattr(S, "http_connect_timeout_closed", getattr(S, "http_connect_timeout", 5.0)) or getattr(S, "http_connect_timeout", 5.0))))
+                        read_timeout = _timeout_seconds(clamp_request_timeout(float(getattr(S, "http_read_timeout_closed", getattr(S, "http_read_timeout", 10.0)) or getattr(S, "http_read_timeout", 10.0))))
                         # Optional hint for executors to downsize when closed
                         try:
                             _ewc = _managed_env("EXEC_WORKERS_WHEN_CLOSED")
@@ -3323,8 +3330,8 @@ def main(argv: list[str] | None = None) -> None:
                             )
                     else:
                         # Restore configured profile
-                        connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
-                        read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0)))
+                        connect_timeout = _timeout_seconds(clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0))))
+                        read_timeout = _timeout_seconds(clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0))))
                         try:
                             if _managed_env("EXEC_WORKERS_WHEN_CLOSED"):
                                 # Clear only process-local closed-session hints.
@@ -3427,7 +3434,7 @@ def main(argv: list[str] | None = None) -> None:
                             run_cycle()
                     finally:
                         if budget is not None:
-                            emit_cycle_budget_summary(logger)
+                            emit_cycle_budget_summary(cast(logging.Logger, logger))
                             clear_cycle_budget_context()
                     compute_elapsed_ms = max(0.0, (monotonic_time() - _t1) * 1000.0)
                     try:

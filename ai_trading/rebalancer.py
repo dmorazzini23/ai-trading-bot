@@ -7,10 +7,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 import numpy as np
 try:  # pragma: no cover - Alpaca optional
-    from alpaca.common.exceptions import APIError
+    from alpaca.common.exceptions import APIError as _ImportedAlpacaAPIError
 except Exception:  # ImportError
-    class APIError(Exception):
+    class _FallbackAlpacaAPIError(Exception):
         """Fallback when Alpaca SDK is absent."""
+    APIError: type[Exception] = _FallbackAlpacaAPIError
+else:
+    APIError = _ImportedAlpacaAPIError
 from ai_trading.config import get_settings
 import importlib
 
@@ -75,7 +78,7 @@ from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
 from ai_trading.strategies.regime_detector import create_regime_detector
 
 def rebalance_interval_min() -> int:
-    return get_rebalance_interval_min()
+    return int(get_rebalance_interval_min())
 
 _last_rebalance = safe_utcnow()
 _rebalancer: "TaxAwareRebalancer | None" = None
@@ -107,8 +110,8 @@ class TaxAwareRebalancer:
             self.adaptive_sizer = AdaptivePositionSizer()
             self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.holding_period_long = 365
-        self._portfolio_optimizer = None
-        self._regime_detector = None
+        self._portfolio_optimizer: Any | None = None
+        self._regime_detector: Any | None = None
         logger.info(
             f'TaxAwareRebalancer initialized with tax rates: short={tax_rate_short:.1%}, long={tax_rate_long:.1%}'
         )
@@ -297,9 +300,9 @@ class TaxAwareRebalancer:
             deviation_score = abs(weight_diff) * 100
             tax_liability = tax_impact.get('tax_liability', 0)
             is_optimal_timing = tax_impact.get('is_optimal_timing', True)
-            tax_penalty = tax_liability * 0.1
-            timing_bonus = 20 if is_optimal_timing else -50
-            return deviation_score - tax_penalty + timing_bonus
+            tax_penalty = float(tax_liability) * 0.1
+            timing_bonus = 20.0 if bool(is_optimal_timing) else -50.0
+            return float(deviation_score - tax_penalty + timing_bonus)
         except (KeyError, ValueError, TypeError) as e:
             logger.error('REBALANCE_PRIORITY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0
@@ -307,13 +310,13 @@ class TaxAwareRebalancer:
     def _calculate_portfolio_drift(self, current_weights: dict[str, float], target_weights: dict[str, float]) -> float:
         """Calculate overall portfolio drift from target."""
         try:
-            total_drift = 0
+            total_drift = 0.0
             all_symbols = set(list(current_weights.keys()) + list(target_weights.keys()))
             for symbol in all_symbols:
-                current = current_weights.get(symbol, 0)
-                target = target_weights.get(symbol, 0)
+                current = current_weights.get(symbol, 0.0)
+                target = target_weights.get(symbol, 0.0)
                 total_drift += abs(current - target)
-            return total_drift / 2
+            return float(total_drift / 2.0)
         except (KeyError, ValueError, TypeError) as e:
             logger.error('PORTFOLIO_DRIFT_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0
@@ -549,7 +552,10 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
     """Get target portfolio weights for rebalancing."""
     try:
         if hasattr(ctx, 'target_weights'):
-            return ctx.target_weights.copy()
+            target_weights = getattr(ctx, 'target_weights', {})
+            if isinstance(target_weights, dict):
+                return {str(sym): float(weight) for sym, weight in target_weights.items()}
+            return {}
         current_positions = _get_current_positions_for_rebalancing(ctx)
         if current_positions:
             num_positions = len(current_positions)
@@ -563,7 +569,13 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
 def _prepare_rebalancing_market_data(ctx) -> dict:
     """Prepare market data for rebalancing analysis."""
     try:
-        market_data = {'prices': {}, 'returns': {}, 'volumes': {}, 'correlations': {}, 'volatility': {}}
+        market_data: dict[str, dict[str, Any]] = {
+            'prices': {},
+            'returns': {},
+            'volumes': {},
+            'correlations': {},
+            'volatility': {},
+        }
         current_positions = _get_current_positions_for_rebalancing(ctx)
         symbols = set(current_positions.keys())
         symbols.add('SPY')

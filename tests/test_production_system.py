@@ -21,18 +21,19 @@ try:
     from ai_trading.risk.position_sizing import ATRPositionSizer, DynamicPositionSizer
 except ImportError:
     # Create mock classes for testing
-    class RiskLevel:
+    class _RiskLevel:
         CONSERVATIVE = "conservative"
         MODERATE = "moderate"
         AGGRESSIVE = "aggressive"
 
-    class OrderSide:
+    class _OrderSide:
         BUY = "buy"
         SELL = "sell"
 
-    class OrderType:
+    class _OrderType:
         MARKET = "market"
         LIMIT = "limit"
+
 
 
 def test_atr_position_sizer():

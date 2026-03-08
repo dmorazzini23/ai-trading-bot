@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 import sys
 import types
 
@@ -65,15 +65,15 @@ if "numpy" not in sys.modules:  # pragma: no cover - optional dependency stub
 
 if "portalocker" not in sys.modules:  # pragma: no cover - optional dependency stub
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
-    portalocker_stub.LockException = RuntimeError
-    portalocker_stub.AlreadyLocked = RuntimeError
+    cast(Any, portalocker_stub).LOCK_EX = 1
+    cast(Any, portalocker_stub).LockException = RuntimeError
+    cast(Any, portalocker_stub).AlreadyLocked = RuntimeError
 
     def _noop_lock(*args, **kwargs):  # noqa: D401 - stub
         return None
 
-    portalocker_stub.lock = _noop_lock
-    portalocker_stub.unlock = _noop_lock
+    cast(Any, portalocker_stub).lock = _noop_lock
+    cast(Any, portalocker_stub).unlock = _noop_lock
     sys.modules["portalocker"] = portalocker_stub
 
 
@@ -84,7 +84,7 @@ if "bs4" not in sys.modules:  # pragma: no cover - optional dependency stub
         def __init__(self, *args, **kwargs) -> None:  # noqa: D401 - stub
             raise NotImplementedError("BeautifulSoup stub invoked")
 
-    bs4_stub.BeautifulSoup = _BeautifulSoup
+    cast(Any, bs4_stub).BeautifulSoup = _BeautifulSoup
     sys.modules["bs4"] = bs4_stub
 
 
@@ -382,4 +382,3 @@ def test_resolve_trade_quote_prefers_backup_when_primary_zero(monkeypatch):
 
     assert quote.price == 102.5
     assert quote.source == "yahoo"
-

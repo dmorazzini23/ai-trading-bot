@@ -97,6 +97,10 @@ class PortfolioCorrelationAnalyzer:
         self.last_analysis: PortfolioAnalysis | None = None
         self.correlation_cache: dict[tuple[str, str], PositionCorrelation] = {}
 
+    @staticmethod
+    def _pair_key(symbol1: str, symbol2: str) -> tuple[str, str]:
+        return (symbol1, symbol2) if symbol1 <= symbol2 else (symbol2, symbol1)
+
     def analyze_portfolio(self, positions: list[Any]) -> PortfolioAnalysis:
         """
         Perform comprehensive portfolio correlation analysis.
@@ -127,7 +131,7 @@ class PortfolioCorrelationAnalyzer:
 
     def get_position_correlation(self, symbol1: str, symbol2: str) -> PositionCorrelation | None:
         """Get correlation between two specific positions."""
-        cache_key = tuple(sorted([symbol1, symbol2]))
+        cache_key = self._pair_key(symbol1, symbol2)
         return self.correlation_cache.get(cache_key)
 
     def should_reduce_position(self, symbol: str, current_positions: list[Any]) -> tuple[bool, str]:
@@ -297,11 +301,11 @@ class PortfolioCorrelationAnalyzer:
                 return None
             return {'symbol': symbol_hint, 'qty': qty}
 
-        data: dict[str, Any] = {}
+        obj_data: dict[str, Any] = {}
         symbol = getattr(payload, 'symbol', None) or symbol_hint
         if symbol is None or self._is_mock(symbol):
             return None
-        data['symbol'] = symbol
+        obj_data['symbol'] = symbol
 
         for attr in (
             'qty',
@@ -324,9 +328,9 @@ class PortfolioCorrelationAnalyzer:
             if hasattr(payload, attr):
                 attr_value = getattr(payload, attr)
                 if not self._is_mock(attr_value):
-                    data[attr] = attr_value
+                    obj_data[attr] = attr_value
 
-        return data
+        return obj_data
 
     def _build_position_record(self, pos: Any) -> dict[str, Any] | None:
         """Create a standardized record from a position-like object."""
@@ -422,7 +426,7 @@ class PortfolioCorrelationAnalyzer:
                     correlation = self._calculate_pair_correlation(symbol1, symbol2)
                     if correlation is not None:
                         correlations.append(correlation)
-                        cache_key = tuple(sorted([symbol1, symbol2]))
+                        cache_key = self._pair_key(symbol1, symbol2)
                         self.correlation_cache[cache_key] = correlation
             return correlations
         except COMMON_EXC as exc:
@@ -465,7 +469,7 @@ class PortfolioCorrelationAnalyzer:
                     if len(recent_data) >= self.min_data_points:
                         closes = recent_data['close']
                         returns = closes.pct_change().dropna()
-                        return returns.tolist()
+                        return [float(value) for value in returns.tolist()]
             return None
         except COMMON_EXC:
             return None
@@ -537,7 +541,7 @@ class PortfolioCorrelationAnalyzer:
             correlations = []
             for i, symbol1 in enumerate(symbols):
                 for symbol2 in symbols[i + 1:]:
-                    cache_key = tuple(sorted([symbol1, symbol2]))
+                    cache_key = self._pair_key(symbol1, symbol2)
                     if cache_key in self.correlation_cache:
                         corr = self.correlation_cache[cache_key].correlation
                         correlations.append(abs(corr))

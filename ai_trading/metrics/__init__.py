@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 
 class _FallbackRegistry:
@@ -76,10 +77,11 @@ except (ImportError, KeyError, ValueError, TypeError):
     PROMETHEUS_AVAILABLE = False
     REGISTRY = _NoopRegistry()
 
-    class CollectorRegistry:
+    class _NoopCollectorRegistry:
 
         def __init__(self, *_, **__):
             self._names_to_collectors: dict[str, object] = {}
+    CollectorRegistry = _NoopCollectorRegistry
     Gauge = Counter = Histogram = Summary = _NoopMetric
     start_http_server = _noop_start_http_server
 
@@ -103,7 +105,7 @@ REGISTRY = _ensure_names_map(REGISTRY)
 _calculate_atr = None
 _safe_divide = None
 
-_RESET_HOOKS: list[Callable[[CollectorRegistry], None]] = []
+_RESET_HOOKS: list[Callable[[Any], None]] = []
 
 
 def calculate_atr(*args, **kwargs):
@@ -134,7 +136,7 @@ def compute_basic_metrics(data):
     return {'sharpe': 0.0, 'max_drawdown': 0.0}
 
 
-def reset_registry(registry: CollectorRegistry | None = None) -> CollectorRegistry:
+def reset_registry(registry: Any | None = None) -> Any:
     """Replace and return the active metrics registry.
 
     Tests may call this helper to ensure a clean registry between runs.
@@ -150,13 +152,13 @@ def reset_registry(registry: CollectorRegistry | None = None) -> CollectorRegist
     return REGISTRY
 
 
-def get_registry() -> CollectorRegistry:
+def get_registry() -> Any:
     """Return the active metrics registry."""
 
-    return REGISTRY  # type: ignore[return-value]
+    return REGISTRY
 
 
-def register_reset_hook(callback: Callable[[CollectorRegistry], None]) -> None:
+def register_reset_hook(callback: Callable[[Any], None]) -> None:
     """Register ``callback`` to run whenever the metrics registry resets."""
 
     if callback not in _RESET_HOOKS:

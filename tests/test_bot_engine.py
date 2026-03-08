@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+from typing import Any, cast
 
 os.environ.setdefault("PYDANTIC_V1_MODE", "1")
 
@@ -13,14 +14,14 @@ from ai_trading.core import bot_engine
 
 
 def _install_alpaca_stub() -> types.ModuleType:
-    alpaca_stub = types.ModuleType("alpaca")
+    alpaca_stub = cast(Any, types.ModuleType("alpaca"))
 
-    trading_mod = types.ModuleType("alpaca.trading")
+    trading_mod = cast(Any, types.ModuleType("alpaca.trading"))
     alpaca_stub.trading = trading_mod
 
-    data_mod = types.ModuleType("alpaca.data")
-    historical_mod = types.ModuleType("alpaca.data.historical")
-    stock_mod = types.ModuleType("alpaca.data.historical.stock")
+    data_mod = cast(Any, types.ModuleType("alpaca.data"))
+    historical_mod = cast(Any, types.ModuleType("alpaca.data.historical"))
+    stock_mod = cast(Any, types.ModuleType("alpaca.data.historical.stock"))
 
     class TimeFrameUnit:
         Minute = "Minute"
@@ -48,8 +49,8 @@ def _install_alpaca_stub() -> types.ModuleType:
     data_mod.historical = historical_mod
     alpaca_stub.data = data_mod
 
-    common_mod = types.ModuleType("alpaca.common")
-    exceptions_mod = types.ModuleType("alpaca.common.exceptions")
+    common_mod = cast(Any, types.ModuleType("alpaca.common"))
+    exceptions_mod = cast(Any, types.ModuleType("alpaca.common.exceptions"))
 
     class APIError(Exception):
         """Stub Alpaca APIError."""
@@ -85,6 +86,7 @@ os.environ.setdefault("ALPACA_TRADING_BASE_URL", "https://example.com")
 os.environ.setdefault("WEBHOOK_SECRET", "x")
 
 import alpaca.trading as _alpaca_trading
+_alpaca_trading = cast(Any, _alpaca_trading)
 
 _MISSING = [
     "StockLatestQuoteRequest",
@@ -163,7 +165,7 @@ def test_prepare_indicators_ignores_non_indicator_nans():
 
 def test_safe_trade_handles_auth_failure(monkeypatch):
     state = bot_engine.BotState()
-    ctx = types.SimpleNamespace(api=types.SimpleNamespace(list_positions=lambda: []))
+    ctx = cast(Any, types.SimpleNamespace(api=types.SimpleNamespace(list_positions=lambda: [])))
 
     def raise_auth(*_a, **_k):
         raise AlpacaAuthenticationError("Unauthorized")
@@ -269,12 +271,13 @@ def test_prepare_indicators_all_nan_columns():
 
     from ai_trading.core import bot_engine
 
-    original_rsi = bot_engine.ta.rsi
-    bot_engine.ta.rsi = lambda close, length=14: pd.Series([np.nan] * len(close))
+    ta_module = cast(Any, bot_engine.ta)
+    original_rsi = ta_module.rsi
+    ta_module.rsi = lambda close, length=14: pd.Series([np.nan] * len(close))
     try:
         result = prepare_indicators(df.copy())
     finally:
-        bot_engine.ta.rsi = original_rsi
+        ta_module.rsi = original_rsi
 
     assert isinstance(result, pd.DataFrame)
     assert result.empty

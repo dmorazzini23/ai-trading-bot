@@ -19,7 +19,7 @@ import random
 from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple
+from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
@@ -477,7 +477,7 @@ def _current_intraday_feed() -> str:
     if env_feed not in (None, ""):
         normalized = env_feed.strip().lower()
         if normalized:
-            return normalized
+            return str(normalized)
     try:
         from ai_trading.config import DATA_FEED_INTRADAY as _CFG_FEED  # local import to avoid cycles
     except Exception:
@@ -638,7 +638,7 @@ def _resolve_halt_flag_path() -> str:
             return path
     env_path = _env_value("AI_TRADING_HALT_FLAG_PATH")
     if env_path:
-        return env_path
+        return str(env_path)
     return "halt.flag"
 
 
@@ -733,7 +733,7 @@ def activate_data_kill_switch(
         )
         return
     dedupe_key = f"kill_switch:{provider}:{reason}"
-    if provider_log_deduper.should_log(dedupe_key, _DEFAULT_SWITCH_QUIET_SECONDS):
+    if provider_log_deduper.should_log(dedupe_key, int(_DEFAULT_SWITCH_QUIET_SECONDS)):
         log_data_quality_event(
             "kill_switch",
             provider=provider,
@@ -1811,10 +1811,11 @@ class ProviderMonitor:
             self.disabled_since,
             self.disabled_until,
         ):
-            if old in mapping and new not in mapping:
-                mapping[new] = mapping.pop(old)
-            elif old in mapping:
-                mapping.pop(old)
+            mapping_obj = cast(dict[str, Any], mapping)
+            if old in mapping_obj and new not in mapping_obj:
+                mapping_obj[new] = mapping_obj.pop(old)
+            elif old in mapping_obj:
+                mapping_obj.pop(old)
 
     def _enforce_switchover_quiet_period(
         self,
@@ -1898,7 +1899,7 @@ class ProviderMonitor:
                 "redundant_request",
                 self.cooldown,
             )
-            return
+            return None
         now_dt = datetime.now(UTC)
         disabled_until = self.disabled_until.get(from_key)
         if disabled_until and now_dt < disabled_until:
@@ -1911,7 +1912,7 @@ class ProviderMonitor:
                 reason="from_provider_disabled",
                 cooldown=remaining,
             )
-            return
+            return None
         now_wall = time.time()
         if self._last_switchover_provider == from_key:
             elapsed = (
@@ -1930,7 +1931,7 @@ class ProviderMonitor:
                     reason,
                     int(max(self.cooldown, required_seconds)),
                 )
-                return
+                return None
         pytest_active = _detect_pytest_env()
         relaxed_pytest = pytest_active and _pytest_relaxed_switchovers_enabled()
         now = now_dt

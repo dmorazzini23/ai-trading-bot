@@ -14,7 +14,7 @@ from typing import Any
 from ai_trading.logging import get_logger
 from ai_trading.utils.time import safe_utcnow
 
-def get_phase_logger(name: str, phase: str) -> logging.Logger:
+def get_phase_logger(name: str, phase: str) -> Any:
     """Get a logger for a specific phase - fallback implementation."""
     logger_name = f'{name}.{phase}' if phase else name
     return get_logger(logger_name)
@@ -79,7 +79,7 @@ class PositionReconciler:
             self.logger.warning('NO_API_CLIENT', extra={'message': 'Cannot fetch broker positions without API client'})
             return {}
         try:
-            broker_positions = {}
+            broker_positions: dict[str, float] = {}
             with self._lock:
                 self._broker_positions = broker_positions.copy()
             self.logger.debug('BROKER_POSITIONS_FETCHED', extra={'positions_count': len(broker_positions), 'timestamp': safe_utcnow().isoformat()})
@@ -218,7 +218,7 @@ class PositionReconciler:
         with self._lock:
             current_discrepancies = len(self._current_discrepancies)
             total_historical_discrepancies = len(self._discrepancy_history)
-            severity_counts = defaultdict(int)
+            severity_counts: defaultdict[str, int] = defaultdict(int)
             for discrepancy in self._discrepancy_history[-100:]:
                 severity_counts[discrepancy.severity] += 1
             recent_reconciliations = self._reconciliation_history[-10:]

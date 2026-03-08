@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping
 from copy import deepcopy
 import re
-from typing import Any
+from typing import Any, cast
 
 _RE_KEYS = re.compile("(key|secret|token|password)", re.IGNORECASE)
 _MASK = "***REDACTED***"
@@ -70,8 +70,8 @@ def _redact_inplace(obj: Any) -> Any:
 def redact(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return a redacted copy of *payload*."""
 
-    dup: MutableMapping[str, Any] = deepcopy(payload)
-    return _redact_inplace(dup)
+    dup: MutableMapping[str, Any] = deepcopy(dict(payload))
+    return cast(Mapping[str, Any], _redact_inplace(dup))
 
 
 def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, Any]:

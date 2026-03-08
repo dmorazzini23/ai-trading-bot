@@ -83,7 +83,7 @@ class RiskMetricsCalculator:
             if std_excess == 0:
                 return 0.0
             sharpe = mean_excess / std_excess * 252 ** 0.5
-            return sharpe
+            return float(sharpe)
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, statistics.StatisticsError) as e:
             logger.error(f'Error calculating Sharpe ratio: {e}')
             return 0.0
@@ -102,7 +102,7 @@ class RiskMetricsCalculator:
             if downside_deviation == 0:
                 return 0.0
             sortino = mean_excess / downside_deviation * 252 ** 0.5
-            return sortino
+            return float(sortino)
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, statistics.StatisticsError) as e:
             logger.error(f'Error calculating Sortino ratio: {e}')
             return 0.0

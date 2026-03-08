@@ -7,7 +7,7 @@ import uuid
 import inspect
 import types
 from dataclasses import dataclass
-from typing import Any, Optional, TYPE_CHECKING, Type
+from typing import Any, Optional, TYPE_CHECKING, Type, cast
 from threading import RLock
 
 try:
@@ -28,9 +28,15 @@ except Exception:
     _MarketOrderRequest = _LimitOrderRequest = _StopOrderRequest = _StopLimitOrderRequest = None  # type: ignore[assignment]
 
 
+_fallback_market_order_request_cls: type[Any] | None = None
+_fallback_limit_order_request_cls: type[Any] | None = None
+_fallback_stop_order_request_cls: type[Any] | None = None
+_fallback_stop_limit_order_request_cls: type[Any] | None = None
+
+
 if _MarketOrderRequest is None:  # pragma: no cover - fallback when SDK unavailable
     @dataclass
-    class _OrderRequest:
+    class _FallbackOrderRequest:
         symbol: Any
         qty: Any
         side: Any
@@ -40,26 +46,31 @@ if _MarketOrderRequest is None:  # pragma: no cover - fallback when SDK unavaila
         client_order_id: str | None = None
 
 
-    class _MarketOrderRequest(_OrderRequest):
+    class _FallbackMarketOrderRequest(_FallbackOrderRequest):
         pass
 
 
-    class _LimitOrderRequest(_OrderRequest):
+    class _FallbackLimitOrderRequest(_FallbackOrderRequest):
         pass
 
 
-    class _StopOrderRequest(_OrderRequest):
+    class _FallbackStopOrderRequest(_FallbackOrderRequest):
         pass
 
 
-    class _StopLimitOrderRequest(_OrderRequest):
+    class _FallbackStopLimitOrderRequest(_FallbackOrderRequest):
         pass
 
+    _fallback_market_order_request_cls = _FallbackMarketOrderRequest
+    _fallback_limit_order_request_cls = _FallbackLimitOrderRequest
+    _fallback_stop_order_request_cls = _FallbackStopOrderRequest
+    _fallback_stop_limit_order_request_cls = _FallbackStopLimitOrderRequest
 
-MarketOrderRequest = _MarketOrderRequest
-LimitOrderRequest = _LimitOrderRequest
-StopOrderRequest = _StopOrderRequest
-StopLimitOrderRequest = _StopLimitOrderRequest
+
+MarketOrderRequest = _MarketOrderRequest or _fallback_market_order_request_cls
+LimitOrderRequest = _LimitOrderRequest or _fallback_limit_order_request_cls
+StopOrderRequest = _StopOrderRequest or _fallback_stop_order_request_cls
+StopLimitOrderRequest = _StopLimitOrderRequest or _fallback_stop_limit_order_request_cls
 
 # Only used for type hints; does NOT run at import time.
 if TYPE_CHECKING:
@@ -192,7 +203,9 @@ def _resolve_alpaca_env() -> tuple[Any | None, Any | None, str]:
 
     env_resolver = getattr(config_management, "_resolve_alpaca_env", None)
     if callable(env_resolver):
-        return env_resolver()
+        resolved = env_resolver()
+        if isinstance(resolved, tuple) and len(resolved) == 3:
+            return cast(tuple[Any | None, Any | None, str], resolved)
     return _default_resolve_alpaca_env()
 
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
@@ -481,11 +494,12 @@ def get_api_error_cls():
     try:
         from alpaca.common.exceptions import APIError  # type: ignore
     except Exception:
-        class APIError(Exception):
+        class _FallbackAPIError(Exception):
             """Fallback APIError when alpaca-py is unavailable."""
 
             pass
 
+        return _FallbackAPIError
     return APIError
 
 
@@ -821,7 +835,7 @@ def _require_pandas(consumer: str = "this function"):
 
 # Optional retry/backoff support using tenacity
 if missing("tenacity", "retry"):
-    retry = object()  # type: ignore[assignment]
+    retry: Any | None = None
 
     def _with_retry(callable_):  # type: ignore
         def _wrapper(*args, **kwargs):
@@ -838,14 +852,15 @@ if missing("tenacity", "retry"):
 
 else:  # pragma: no cover - optional dependency wrapper
     from tenacity import (
-        retry,
+        retry as _tenacity_retry,
         stop_after_attempt,
         wait_exponential,
         retry_if_exception_type,
     )
+    retry = _tenacity_retry
 
     def _with_retry(callable_):
-        return retry(
+        return _tenacity_retry(
             reraise=True,
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.25, max=2.0),
@@ -997,7 +1012,7 @@ def get_bars_df(
         max_attempts = 3
         base_delay = 0.5
         attempt = 0
-        last_error: Exception | None = None
+        submit_last_error: Exception | None = None
         while attempt < max_attempts:
             attempt += 1
             _start_t = monotonic_time()
@@ -1005,11 +1020,11 @@ def get_bars_df(
             try:
                 response = rest.get_stock_bars(req)
                 df = response.df
-                last_error = None
+                submit_last_error = None
                 break
             except APIError as api_exc:
                 error = api_exc
-                last_error = api_exc
+                submit_last_error = api_exc
                 status_code = getattr(api_exc, "status_code", None)
                 should_retry = bool(
                     status_code in RETRY_HTTP_CODES and attempt < max_attempts
@@ -1034,7 +1049,7 @@ def get_bars_df(
                 raise
             except RequestException as req_exc:
                 error = req_exc
-                last_error = req_exc
+                submit_last_error = req_exc
                 if attempt < max_attempts:
                     delay = min(base_delay * (2 ** (attempt - 1)), 4.0)
                     _log.warning(
@@ -1055,7 +1070,7 @@ def get_bars_df(
                 raise
             except Exception as exc:
                 error = exc
-                last_error = exc
+                submit_last_error = exc
                 raise
             finally:
                 try:
@@ -1068,8 +1083,8 @@ def get_bars_df(
                 except Exception:
                     _log.debug("ALPACA_FETCH_METRICS_RECORD_FAILED", exc_info=True)
         else:
-            if last_error is not None:
-                raise last_error
+            if submit_last_error is not None:
+                raise submit_last_error
             return _pd.DataFrame()
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
@@ -1224,7 +1239,9 @@ def _sdk_submit(
     except (TypeError, ValueError):  # pragma: no cover - builtin/descriptor
         sig = None
 
-    params: dict[str, inspect.Parameter] = sig.parameters if sig is not None else {}
+    params: dict[str, inspect.Parameter] = (
+        dict(sig.parameters) if sig is not None else {}
+    )
     has_var_kw = any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
     ) if params else True
@@ -1550,7 +1567,7 @@ def submit_order(
             timeout=timeout,
         )
         _record_client_order_id(client, idempotency_key)
-        return _ensure_client_order_id(order)
+        return cast(dict[str, Any], _ensure_client_order_id(order))
 
     try:
         from alpaca.trading.client import TradingClient as _REST
@@ -1560,9 +1577,31 @@ def submit_order(
             secret_key=cfg.secret_key,
             url_override=cfg.base_url,
         )
-        return _ensure_client_order_id(
-            _sdk_submit(
-                rest,
+        return cast(
+            dict[str, Any],
+            _ensure_client_order_id(
+                _sdk_submit(
+                    rest,
+                    symbol=symbol,
+                    qty=q_int,
+                    side=side,
+                    type=type,
+                    time_in_force=time_in_force,
+                    limit_price=limit_price,
+                    stop_price=stop_price,
+                    idempotency_key=idempotency_key,
+                    timeout=timeout,
+                )
+            ),
+        )
+    except ModuleNotFoundError:
+        pass
+
+    return cast(
+        dict[str, Any],
+        _ensure_client_order_id(
+            _http_submit(
+                cfg,
                 symbol=symbol,
                 qty=q_int,
                 side=side,
@@ -1573,23 +1612,8 @@ def submit_order(
                 idempotency_key=idempotency_key,
                 timeout=timeout,
             )
-        )
-    except ModuleNotFoundError:
-        pass
-
-    return _ensure_client_order_id(
-        _http_submit(
-        cfg,
-        symbol=symbol,
-        qty=q_int,
-        side=side,
-        type=type,
-        time_in_force=time_in_force,
-        limit_price=limit_price,
-        stop_price=stop_price,
-        idempotency_key=idempotency_key,
-        timeout=timeout,
-    ))
+        ),
+    )
 
 
 def alpaca_get(

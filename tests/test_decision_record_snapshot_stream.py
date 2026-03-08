@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from ai_trading.core import bot_engine
 
@@ -29,9 +30,9 @@ class _TimestampDecisionRecord:
         }
 
 
-def _read_single_json(path: Path) -> dict[str, object]:
+def _read_single_json(path: Path) -> dict[str, Any]:
     lines = path.read_text(encoding="utf-8").strip().splitlines()
-    return json.loads(lines[-1])
+    return cast(dict[str, Any], json.loads(lines[-1]))
 
 
 def test_write_decision_record_writes_secondary_snapshot_and_redacts(

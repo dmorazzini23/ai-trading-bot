@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from typing import Any, cast
 
 
 def test_get_test_client_handles_missing_flask_testing(monkeypatch):
@@ -15,9 +16,9 @@ def test_get_test_client_handles_missing_flask_testing(monkeypatch):
         def __init__(self, *a, **k):
             pass
 
-    flask_app_stub.Flask = Flask
-    flask_stub.Flask = Flask
-    flask_stub.jsonify = lambda *a, **k: {}
+    cast(Any, flask_app_stub).Flask = Flask
+    cast(Any, flask_stub).Flask = Flask
+    cast(Any, flask_stub).jsonify = lambda *a, **k: {}
 
     monkeypatch.setitem(sys.modules, "flask", flask_stub)
     monkeypatch.setitem(sys.modules, "flask.app", flask_app_stub)

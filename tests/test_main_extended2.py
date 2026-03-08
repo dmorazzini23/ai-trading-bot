@@ -2,7 +2,7 @@ import os
 import sys
 import types
 import time
-from typing import Any
+from typing import Any, cast
 import threading
 
 import errno
@@ -36,9 +36,9 @@ if "numpy" not in sys.modules:
 
 if "portalocker" not in sys.modules:
     portalocker_stub = types.ModuleType("portalocker")
-    portalocker_stub.LOCK_EX = 1
-    portalocker_stub.lock = lambda *_args, **_kwargs: None
-    portalocker_stub.unlock = lambda *_args, **_kwargs: None
+    cast(Any, portalocker_stub).LOCK_EX = 1
+    cast(Any, portalocker_stub).lock = lambda *_args, **_kwargs: None
+    cast(Any, portalocker_stub).unlock = lambda *_args, **_kwargs: None
     sys.modules["portalocker"] = portalocker_stub
 
 if "bs4" not in sys.modules:
@@ -57,7 +57,7 @@ if "bs4" not in sys.modules:
         def get_text(self, *_args, **_kwargs):
             return ""
 
-    bs4_stub.BeautifulSoup = lambda *_args, **_kwargs: _Soup()
+    cast(Any, bs4_stub).BeautifulSoup = lambda *_args, **_kwargs: _Soup()
     sys.modules["bs4"] = bs4_stub
 
 flask_mod: Any = types.ModuleType("flask")
@@ -85,7 +85,7 @@ from ai_trading import app, main
 
 def test_run_flask_app(monkeypatch):
     """Flask app runs on provided port and forwards kwargs."""
-    called = {}
+    called: dict[str, Any] = {}
 
     class App:
         def run(self, host, port, debug=False, **kwargs):
@@ -181,7 +181,7 @@ def test_run_flask_app_skips_ipv6_port(monkeypatch):
 
 def test_run_bot_calls_cycle(monkeypatch):
     """run_bot executes a trading cycle in-process."""
-    called = {}
+    called: dict[str, Any] = {}
     trade_log_calls = {"count": 0}
 
     def _fake_ensure():
@@ -208,7 +208,7 @@ def test_validate_environment_missing(monkeypatch):
 def test_main_runs_once(monkeypatch):
     """main executes a single cycle when configured."""
     monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
-    called = {}
+    called: dict[str, Any] = {}
 
     # AI-AGENT-REF: Fix lambda signature to accept ready_signal parameter and set it
     def mock_start_api(ready_signal=None):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 import sys
+from typing import Any, cast
 
 sklearn_stub = types.ModuleType("sklearn")
 ensemble_stub = types.ModuleType("sklearn.ensemble")
@@ -14,18 +15,18 @@ class _RF:  # noqa: D401 - placeholder
     pass
 
 
-ensemble_stub.GradientBoostingClassifier = _GB
-ensemble_stub.RandomForestClassifier = _RF
+cast(Any, ensemble_stub).GradientBoostingClassifier = _GB
+cast(Any, ensemble_stub).RandomForestClassifier = _RF
 sys.modules.setdefault("sklearn", sklearn_stub)
 sys.modules.setdefault("sklearn.ensemble", ensemble_stub)
 metrics_stub = types.ModuleType("sklearn.metrics")
-metrics_stub.accuracy_score = lambda *a, **k: 0.0
+cast(Any, metrics_stub).accuracy_score = lambda *a, **k: 0.0
 sys.modules.setdefault("sklearn.metrics", metrics_stub)
 model_selection_stub = types.ModuleType("sklearn.model_selection")
-model_selection_stub.train_test_split = lambda *a, **k: ([], [])
+cast(Any, model_selection_stub).train_test_split = lambda *a, **k: ([], [])
 sys.modules.setdefault("sklearn.model_selection", model_selection_stub)
 preproc_stub = types.ModuleType("sklearn.preprocessing")
-preproc_stub.StandardScaler = type("StandardScaler", (), {})
+cast(Any, preproc_stub).StandardScaler = type("StandardScaler", (), {})
 sys.modules.setdefault("sklearn.preprocessing", preproc_stub)
 
 import ai_trading.core.bot_engine as eng
@@ -43,8 +44,8 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
         def __init__(self, *, statuses=None):
             self.statuses = statuses
 
-    enums_mod.OrderStatus = OrderStatus
-    requests_mod.GetOrdersRequest = GetOrdersRequest
+    cast(Any, enums_mod).OrderStatus = OrderStatus
+    cast(Any, requests_mod).GetOrdersRequest = GetOrdersRequest
     monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
     monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
     monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 from json import JSONDecodeError
 from ai_trading.utils.lazy_imports import load_pandas
@@ -115,9 +115,9 @@ class VolatilityTargetingSizer:
         self.min_weight = min_weight
         self.max_weight = max_weight
         self.rebalance_threshold = rebalance_threshold
-        self.price_history = {}
-        self.volatility_estimates = {}
-        self.correlation_matrix = None
+        self.price_history: dict[str, pd.Series] = {}
+        self.volatility_estimates: dict[str, float] = {}
+        self.correlation_matrix: np.ndarray | None = None
         logger.info(f'VolatilityTargetingSizer initialized with {target_vol:.1%} target volatility')
 
     def calculate_position_sizes(self, signals: dict[str, float], current_prices: dict[str, float], portfolio_value: float, price_history: dict[str, pd.Series] | None=None) -> dict[str, dict[str, float]]:
@@ -348,7 +348,7 @@ class RiskParitySizer:
             if len(df) < 10:
                 return None
             cov_matrix = df.cov().values * 252
-            return cov_matrix
+            return cast(np.ndarray, cov_matrix)
         except COMMON_EXC as e:
             logger.error(f'Error calculating covariance matrix: {e}')
             return None
@@ -444,7 +444,7 @@ class CorrelationClusterSizer:
             if len(df) < 10:
                 return None
             correlation_matrix = df.corr().values
-            return correlation_matrix
+            return cast(np.ndarray, correlation_matrix)
         except COMMON_EXC as e:
             logger.error(f'Error calculating correlation matrix: {e}')
             return None
@@ -455,7 +455,7 @@ class CorrelationClusterSizer:
             fcluster, linkage, squareform, clustering_available = _import_clustering()
             if not clustering_available:
                 n = len(symbols)
-                clusters = {}
+                clusters: dict[int, list[str]] = {}
                 cluster_size = max(1, n // 3)
                 for i, symbol in enumerate(symbols):
                     cluster_id = i // cluster_size
@@ -520,7 +520,7 @@ class TurnoverPenaltySizer:
         self.turnover_penalty = turnover_penalty
         self.max_turnover = max_turnover
         self.lookback_periods = lookback_periods
-        self.position_history = []
+        self.position_history: list[dict[str, Any]] = []
         logger.info('TurnoverPenaltySizer initialized')
 
     def apply_turnover_penalty(self, proposed_weights: dict[str, float], current_weights: dict[str, float]) -> dict[str, float]:
@@ -600,8 +600,8 @@ class TurnoverPenaltySizer:
                 return []
             turnovers = []
             for i in range(1, len(self.position_history)):
-                current = self.position_history[i]['weights']
-                previous = self.position_history[i - 1]['weights']
+                current = cast(dict[str, float], self.position_history[i]['weights'])
+                previous = cast(dict[str, float], self.position_history[i - 1]['weights'])
                 turnover = self._calculate_turnover(current, previous)
                 turnovers.append(turnover)
             return turnovers

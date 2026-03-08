@@ -47,7 +47,7 @@ class Alert:
         self.source = source
         self.metadata = metadata or {}
         self.timestamp = datetime.now(UTC)
-        self.channels_sent = []
+        self.channels_sent: list[AlertChannel] = []
         self.delivery_attempts = 0
         self.max_attempts = 3
 
@@ -150,10 +150,14 @@ class SlackAlerter:
                 return False
             color_map = {AlertSeverity.INFO: '#36a64f', AlertSeverity.WARNING: '#ff9500', AlertSeverity.CRITICAL: '#ff0000', AlertSeverity.EMERGENCY: '#8b0000'}
             color = color_map.get(alert.severity, '#808080')
-            payload = {'channel': self.channel, 'username': 'Trading Bot', 'icon_emoji': ':robot_face:', 'attachments': [{'color': color, 'title': f'[{alert.severity.value.upper()}] {alert.title}', 'text': alert.message, 'fields': [{'title': 'Source', 'value': alert.source, 'short': True}, {'title': 'Time', 'value': alert.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC'), 'short': True}], 'footer': 'AI Trading Bot', 'ts': int(alert.timestamp.timestamp())}]}
+            payload: dict[str, Any] = {'channel': self.channel, 'username': 'Trading Bot', 'icon_emoji': ':robot_face:', 'attachments': [{'color': color, 'title': f'[{alert.severity.value.upper()}] {alert.title}', 'text': alert.message, 'fields': [{'title': 'Source', 'value': alert.source, 'short': True}, {'title': 'Time', 'value': alert.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC'), 'short': True}], 'footer': 'AI Trading Bot', 'ts': int(alert.timestamp.timestamp())}]}
             if alert.metadata:
+                attachments = payload.get('attachments', [])
+                first_attachment = attachments[0] if isinstance(attachments, list) and attachments else None
+                fields = first_attachment.get('fields') if isinstance(first_attachment, dict) else None
                 for key, value in alert.metadata.items():
-                    payload['attachments'][0]['fields'].append({'title': key, 'value': str(value), 'short': True})
+                    if isinstance(fields, list):
+                        fields.append({'title': key, 'value': str(value), 'short': True})
             response = http.post(
                 self.webhook_url, json=payload, timeout=clamp_request_timeout(HTTP_TIMEOUT)
             )
@@ -182,7 +186,7 @@ class AlertManager:
         self.max_history_size = 1000
         self.email_recipients = []
         self.escalation_recipients = []
-        self.alert_queue = queue.Queue()
+        self.alert_queue: queue.Queue[Alert] = queue.Queue()
         self.processing_thread = None
         self.is_running = False
         self.custom_handlers = {}
@@ -377,10 +381,11 @@ class AlertManager:
             last_day = now - timedelta(days=1)
             recent_alerts_hour = [a for a in self.alert_history if a.timestamp >= last_hour]
             recent_alerts_day = [a for a in self.alert_history if a.timestamp >= last_day]
-            stats = {'total_alerts': len(self.alert_history), 'alerts_last_hour': len(recent_alerts_hour), 'alerts_last_day': len(recent_alerts_day), 'queue_size': self.alert_queue.qsize(), 'processing_active': self.is_running, 'severity_counts': {}}
+            severity_counts: dict[str, int] = {}
+            stats: dict[str, Any] = {'total_alerts': len(self.alert_history), 'alerts_last_hour': len(recent_alerts_hour), 'alerts_last_day': len(recent_alerts_day), 'queue_size': self.alert_queue.qsize(), 'processing_active': self.is_running, 'severity_counts': severity_counts}
             for severity in AlertSeverity:
                 count = len([a for a in recent_alerts_day if a.severity == severity])
-                stats['severity_counts'][severity.value] = count
+                severity_counts[severity.value] = count
             return stats
         except (ValueError, TypeError, AttributeError, OSError) as e:
             logger.error(f'Error getting alert stats: {e}')

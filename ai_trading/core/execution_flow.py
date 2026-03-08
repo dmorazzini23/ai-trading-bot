@@ -101,8 +101,8 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int | float = 120) 
                     extra={
                         "order_id": order_id,
                         "status": last_status,
-                        "filled_qty": filled if filled is not None else getattr(od, "filled_qty", "0"),
-                        "qty": qty if qty is not None else getattr(od, "qty", getattr(od, "quantity", "0")),
+                        "filled_qty": filled if filled is not None else getattr(od, "filled_qty", 0.0),
+                        "qty": qty if qty is not None else getattr(od, "qty", getattr(od, "quantity", 0.0)),
                     },
                 )
                 return
@@ -314,7 +314,6 @@ def vwap_pegged_submit(
 # Re-export for backwards compatibility
 from .bot_engine import submit_order as submit_order  # noqa: E402,F401
 from .bot_engine import safe_submit_order as safe_submit_order  # noqa: E402,F401
-from .bot_engine import execute_exit as execute_exit  # noqa: E402,F401
 
 __all__ = [
     "submit_order",

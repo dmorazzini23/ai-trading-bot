@@ -7,7 +7,7 @@ import threading
 from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Final, NamedTuple
+from typing import Final, NamedTuple, cast
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
@@ -186,10 +186,15 @@ def _set_pooling_limit_state(limit: int, version: int) -> None:
             logger.debug("FALLBACK_POOLING_LOCAL_VERSION_SET_FAILED", exc_info=True)
 
 
+def _current_env_snapshot() -> tuple[str | None, str | None, str | None]:
+    snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
+    return cast(tuple[str | None, str | None, str | None], snapshot)
+
+
 def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapshot:
     global _LIMIT_CACHE, _LIMIT_VERSION
 
-    env_snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
+    env_snapshot = _current_env_snapshot()
     cache = _LIMIT_CACHE
     limit = max(1, int(limit))
     version = int(version)
@@ -269,7 +274,7 @@ def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
     else:
         semaphore = asyncio.Semaphore(limit)
     _annotate_semaphore_metadata(semaphore, limit, version)
-    return semaphore
+    return cast(asyncio.Semaphore, semaphore)
 
 
 def _clear_all_loop_semaphores() -> None:
@@ -443,7 +448,7 @@ def _resolve_limit() -> tuple[int, int]:
 
     global _LIMIT_CACHE, _LIMIT_VERSION, _LAST_LIMIT_ENV_SNAPSHOT, _HOST_LIMIT, _ENV_SNAPSHOT
 
-    env_snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
+    env_snapshot = _current_env_snapshot()
     prior_cache = _LIMIT_CACHE
     env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
     if env_changed:
@@ -474,7 +479,7 @@ def _resolve_limit() -> tuple[int, int]:
         limit=limit,
         version=version,
         config_id=config_id,
-        env_snapshot=env_snapshot,
+            env_snapshot=env_snapshot,
     )
     snapshot = HostLimitSnapshot(limit, version)
     _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
@@ -513,7 +518,7 @@ def _ensure_limit_cache() -> _ResolvedLimitCache:
             limit=limit,
             version=version,
             config_id=None,
-            env_snapshot=tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS),
+            env_snapshot=_current_env_snapshot(),
         )
         _LIMIT_CACHE = cache
     return cache
@@ -553,7 +558,7 @@ def reload_host_limit_if_env_changed(_session: object | None = None) -> HostLimi
     global _LAST_LIMIT_ENV_SNAPSHOT, _LIMIT_CACHE, _RETIRED_SEMAPHORES, _HOST_SEMAPHORES, _HOST_LIMIT, _ENV_SNAPSHOT
 
     with _reload_lock:
-        env_snapshot = tuple(_env_raw(key) for key in _ENV_LIMIT_KEYS)
+        env_snapshot = _current_env_snapshot()
         env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
         if env_changed:
             reset_host_semaphores(clear_limit_cache=True, bump_version=False)

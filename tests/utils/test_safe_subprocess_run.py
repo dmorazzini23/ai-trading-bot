@@ -125,7 +125,7 @@ def test_safe_subprocess_run_missing_command(caplog):
 
 
 def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_run(*args, **kwargs):
         captured["args"] = args
@@ -157,7 +157,7 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
 
 
 def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_run(*args, **kwargs):
         captured["args"] = args
@@ -186,7 +186,7 @@ def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
 
 
 def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_run(*args, **kwargs):
         captured["args"] = args
@@ -215,7 +215,7 @@ def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
 
 
 def test_safe_subprocess_run_timeout_cleanup_timeout(monkeypatch, caplog):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_run(*args, **kwargs):
         captured["args"] = args
@@ -251,7 +251,7 @@ def test_safe_subprocess_run_timeout_cleanup_timeout(monkeypatch, caplog):
 
 
 def test_safe_subprocess_run_timeout_populates_result_and_returncode(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_run(*args, **kwargs):
         captured["args"] = args

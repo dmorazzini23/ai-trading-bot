@@ -13,7 +13,7 @@ import warnings
 from datetime import date, datetime
 from datetime import time as dt_time
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -49,7 +49,13 @@ except ImportError:  # pragma: no cover - fallback when Alpaca API unavailable
             self.status_code = status_code
             self.payload = payload or {}
 
-    def _alpaca_get(*args: Any, **kwargs: Any):  # type: ignore[no-redef]
+    def _alpaca_get(
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        timeout: float | int | tuple[float | int, float | int] | None = None,
+    ) -> dict[str, Any]:  # type: ignore[no-redef]
+        _ = (path, params, timeout)
         raise ImportError("alpaca API unavailable")
 
 alpaca_get = _alpaca_get
@@ -118,7 +124,7 @@ class PhaseLoggerAdapter(logging.LoggerAdapter):
         return (msg, kwargs)
 
 
-def get_phase_logger(name: str, phase: str) -> logging.Logger:
+def get_phase_logger(name: str, phase: str) -> PhaseLoggerAdapter:
     """Return logger with ``bot_phase`` context."""
     base = get_logger(name)
     return PhaseLoggerAdapter(base, {"bot_phase": phase})
@@ -198,7 +204,7 @@ def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: fl
     if jitter > 0:
         jitter_amt = random.uniform(-jitter * delay, jitter * delay)
         delay = max(0.0, delay + jitter_amt)
-    return delay
+    return float(delay)
 
 
 def format_order_for_log(order: Any) -> str:
@@ -207,6 +213,7 @@ def format_order_for_log(order: Any) -> str:
         return ""
     parts = []
     for k, v in vars(order).items():
+        val: Any
         if isinstance(v, dt.datetime | date):
             val = v.isoformat()
         elif isinstance(v, Enum):
@@ -428,7 +435,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         )
         current = check_time.time()
         _LAST_MARKET_CLOSED_DATE = None
-        return market_open <= current <= market_close
+        return bool(market_open <= current <= market_close)
     except COMMON_EXC as exc:
         logger.debug("market calendar unavailable: %s", exc)
         now_et = check_time
@@ -444,7 +451,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             log_date=now_et.date(),
         )
         _LAST_MARKET_CLOSED_DATE = None
-        return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
+        return bool(MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME)
 
 
 def next_market_open(now: dt.datetime | None = None) -> dt.datetime:
@@ -465,7 +472,10 @@ def next_market_open(now: dt.datetime | None = None) -> dt.datetime:
         else:
             future = sched[sched["market_open"] > check_time]
             if not future.empty:
-                return future.iloc[0]["market_open"].tz_convert(EASTERN_TZ).to_pydatetime()
+                return cast(
+                    datetime,
+                    future.iloc[0]["market_open"].tz_convert(EASTERN_TZ).to_pydatetime(),
+                )
     except (ImportError, ValueError, TypeError, KeyError) as exc:  # pragma: no cover - best effort
         logger.debug("next_market_open calendar lookup failed: %s", exc)
 
@@ -569,7 +579,7 @@ def get_free_port(start: int | None = None, end: int | None = None) -> int | Non
         return None
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("", 0))
-        return sock.getsockname()[1]
+        return int(sock.getsockname()[1])
 
 
 def _pid_from_inode(inode: str) -> int | None:
@@ -789,9 +799,12 @@ def safe_to_datetime(
     if coerced:
         warn_key = _warn_key or (f"SAFE_TO_DATETIME:{context}" if context else "SAFE_TO_DATETIME")
         try:
-            from ai_trading.logging import log_once
+            from ai_trading.logging import logger_once
 
-            log_once(warn_key, f"safe_to_datetime coerced {coerced} values to NaT")
+            logger_once.warning(
+                f"safe_to_datetime coerced {coerced} values to NaT",
+                key=warn_key,
+            )
         except (ImportError, AttributeError, RuntimeError):  # pragma: no cover - warning best effort
             pass
 

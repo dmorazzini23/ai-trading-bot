@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+from typing import Any, cast
 
 
 def test_disable_warnings_handles_missing_httpwarning():
@@ -17,8 +18,8 @@ def test_disable_warnings_handles_missing_httpwarning():
     def _disable_warnings(category=None):
         recorded_categories.append(category)
 
-    stub.disable_warnings = _disable_warnings
-    stub.exceptions = types.SimpleNamespace(SystemTimeWarning=_SystemTimeWarning)
+    cast(Any, stub).disable_warnings = _disable_warnings
+    cast(Any, stub).exceptions = types.SimpleNamespace(SystemTimeWarning=_SystemTimeWarning)
 
     sys.modules["urllib3"] = stub
     try:
@@ -41,7 +42,7 @@ def test_disable_warnings_missing_attribute_can_be_monkeypatched():
     original_urllib3 = sys.modules.get("urllib3")
 
     stub = types.ModuleType("urllib3")
-    stub.exceptions = types.SimpleNamespace(SystemTimeWarning=Warning)
+    cast(Any, stub).exceptions = types.SimpleNamespace(SystemTimeWarning=Warning)
     # Explicitly omit disable_warnings to simulate an older/broken urllib3.
 
     sys.modules["urllib3"] = stub
@@ -49,14 +50,14 @@ def test_disable_warnings_missing_attribute_can_be_monkeypatched():
         # Initial reload should populate the shim without raising.
         importlib.reload(http)
         assert hasattr(stub, "disable_warnings")
-        assert callable(stub.disable_warnings)
+        assert callable(getattr(stub, "disable_warnings"))
 
         recorded_categories: list[type[Warning] | None] = []
 
         def _patched_disable_warnings(category=None, *args, **kwargs):
             recorded_categories.append(category)
 
-        stub.disable_warnings = _patched_disable_warnings
+        cast(Any, stub).disable_warnings = _patched_disable_warnings
 
         importlib.reload(http)
         assert recorded_categories, "patched disable_warnings should be invoked"

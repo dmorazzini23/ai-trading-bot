@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -449,7 +449,7 @@ def test_ensure_ohlcv_schema_handles_nested_bar_payload(caplog: pytest.LogCaptur
     ]
     assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
     first = normalized.iloc[0]
-    minute_bar = payload[0]["minuteBar"]
+    minute_bar = cast(dict[str, float], payload[0]["minuteBar"])
     assert pytest.approx(first["open"]) == minute_bar["openPrice"]
     assert pytest.approx(first["high"]) == minute_bar["highPrice"]
     assert pytest.approx(first["low"]) == minute_bar["lowPrice"]
@@ -495,7 +495,9 @@ def test_ensure_ohlcv_schema_handles_official_nested_payload(caplog: pytest.LogC
     ]
     assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
     first = normalized.iloc[0]
-    official = payload[0]["latestBar"]["official"]
+    payload_row = cast(dict[str, Any], payload[0])
+    latest_bar = cast(dict[str, Any], payload_row["latestBar"])
+    official = cast(dict[str, float], latest_bar["official"])
     assert pytest.approx(first["open"]) == official["officialOpenPrice"]
     assert pytest.approx(first["high"]) == official["officialHighPrice"]
     assert pytest.approx(first["low"]) == official["officialLowPrice"]
