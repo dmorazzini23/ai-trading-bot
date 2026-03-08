@@ -325,7 +325,12 @@ def test_ensure_initialized_uses_existing_client_validation(monkeypatch):
     engine.is_initialized = False
     init_calls: list[bool] = []
     monkeypatch.setattr(engine, "_validate_connection", lambda: True)
-    monkeypatch.setattr(engine, "initialize", lambda: init_calls.append(True) or False)
+
+    def _initialize() -> bool:
+        init_calls.append(True)
+        return False
+
+    monkeypatch.setattr(engine, "initialize", _initialize)
 
     assert engine._ensure_initialized() is True
     assert engine.is_initialized is True

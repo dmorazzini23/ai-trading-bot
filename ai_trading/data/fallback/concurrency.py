@@ -384,7 +384,12 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
 def _normalise_positive_int(value: object) -> int | None:
     """Best-effort coercion of ``value`` to a positive integer."""
     try:
-        candidate = int(value)
+        if isinstance(value, (int, float)):
+            candidate = int(value)
+        elif isinstance(value, (str, bytes, bytearray)):
+            candidate = int(value)
+        else:
+            candidate = int(str(value))
     except (TypeError, ValueError):
         return None
     if candidate < 1:
@@ -482,7 +487,8 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
             return MappingProxyType(dict(updates))
 
         try:
-            return type(obj)(updates)
+            mapping_factory = cast(Callable[[Iterable[tuple[object, object]]], object], type(obj))
+            return mapping_factory(updates)
         except Exception:
             logger.debug("MAPPING_REBUILD_FAILED", exc_info=True)
             return dict(updates)

@@ -2302,12 +2302,23 @@ class ProviderMonitor:
             quote_timestamp_present=quote_timestamp_present,
             quote_age_ms=quote_age_ms,
         )
+
+        def _as_int(value: object, default: int = 0) -> int:
+            try:
+                if isinstance(value, (int, float)):
+                    return int(value)
+                if isinstance(value, (str, bytes, bytearray)):
+                    return int(value)
+                return int(str(value))
+            except (TypeError, ValueError):
+                return default
+
         last_switch = state.get("last_switch")
-        consecutive = int(state.get("consecutive_passes", 0))
+        consecutive = _as_int(state.get("consecutive_passes", 0), 0)
         decision_until = state.get("decision_until")
         decision_provider = str(state.get("decision_provider", active))
         decision_severity = str(state.get("decision_severity", "good"))
-        window_seconds = max(int(self.decision_window_seconds), 0)
+        window_seconds = max(_as_int(self.decision_window_seconds, 0), 0)
         window_active = False
         if isinstance(decision_until, datetime) and window_seconds > 0:
             if now < decision_until:
@@ -2327,7 +2338,10 @@ class ProviderMonitor:
             normalized_severity = "hard_fail"
 
         using_backup = active == backup
-        cooldown_seconds = max(0, int(state.get("cooldown", cooldown_default)))
+        cooldown_seconds = max(
+            0,
+            _as_int(state.get("cooldown", cooldown_default), cooldown_default),
+        )
         last_switch_dt = last_switch if isinstance(last_switch, datetime) else now
         allow_recovery = False
         cooldown_ok = False

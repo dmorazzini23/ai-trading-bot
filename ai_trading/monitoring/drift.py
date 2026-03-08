@@ -184,7 +184,7 @@ class DriftMonitor:
                 continue
             baseline_mean = baseline_stats['mean']
             baseline_std = baseline_stats['std']
-            baseline_count = min(baseline_stats['count'], 10000)
+            baseline_count = int(min(baseline_stats['count'], 10000))
             np.random.seed(42)
             baseline_sample = np.random.normal(baseline_mean, baseline_std, baseline_count)
             psi_score = self.calculate_psi(baseline_sample, current_values.values)

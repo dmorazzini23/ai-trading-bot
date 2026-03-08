@@ -309,7 +309,7 @@ class Order:
         side: OrderSide,
         quantity: int,
         order_type: OrderType = OrderType.MARKET,
-        price: Money = None,
+        price: Money | None = None,
         **kwargs,
     ):
         """Initialize order with institutional parameters."""
@@ -329,7 +329,7 @@ class Order:
         self.created_at = safe_utcnow()
         self._created_monotonic = kwargs.get("created_monotonic", monotonic_time())
         self.updated_at = self.created_at
-        self.executed_at = None
+        self.executed_at: datetime | None = None
         self.client_order_id = kwargs.get("client_order_id", f"ord_{int(time.time())}")
         self.strategy_id = kwargs.get("strategy_id")
         self.execution_algorithm = kwargs.get("execution_algorithm", ExecutionAlgorithm.MARKET)
@@ -374,7 +374,7 @@ class Order:
         price = self.price or self.average_fill_price or Money(0)
         return Money(abs(self.quantity)) * price
 
-    def add_fill(self, quantity: int, price: Money, timestamp: datetime = None):
+    def add_fill(self, quantity: int, price: Money, timestamp: datetime | None = None):
         """Add a fill to the order with precise money math."""
         if timestamp is None:
             timestamp = datetime.now(UTC)

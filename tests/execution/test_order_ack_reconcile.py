@@ -233,10 +233,15 @@ def test_ack_timeout_pending_no_cancel(monkeypatch, caplog):
     engine = _build_engine(_NoFillStubClient())
     _prime_engine(engine, monkeypatch)
     cancel_calls: list[str] = []
+
+    def _cancel_order(order_id: str) -> bool:
+        cancel_calls.append(order_id)
+        return True
+
     monkeypatch.setattr(
         engine,
         "_cancel_order_alpaca",
-        lambda order_id: cancel_calls.append(order_id) or True,
+        _cancel_order,
     )
     caplog.set_level(logging.INFO)
 

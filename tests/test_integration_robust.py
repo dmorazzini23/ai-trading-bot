@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+from typing import Callable, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -386,10 +387,8 @@ def test_bot_main_normal(monkeypatch):
     ):
         from ai_trading.core import bot_engine as bot
 
-        setattr(bot, "main", lambda: True)
-
         monkeypatch.setattr(bot, "main", lambda: True)
-        assert bot.main() is True
+        assert cast(Callable[[], bool], bot.main)() is True
 
 
 def test_bot_main_data_fetch_error(monkeypatch):

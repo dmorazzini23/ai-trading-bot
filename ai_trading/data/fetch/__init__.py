@@ -16,7 +16,7 @@ import time
 import warnings
 import weakref
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -1512,6 +1512,16 @@ def _to_feed_str(feed: object) -> str:
 class DataFetchError(Exception):
     """Error raised when market data retrieval fails."""  # AI-AGENT-REF: stable public symbol
 
+    fetch_reason: str | None
+    symbol: str | None
+    timeframe: str | None
+
+    def __init__(self, message: str = "", *args: Any) -> None:
+        super().__init__(message, *args)
+        self.fetch_reason = None
+        self.symbol = None
+        self.timeframe = None
+
 
 class MissingOHLCVColumnsError(DataFetchError):
     """Raised when a provider omits required OHLCV columns."""
@@ -1642,6 +1652,7 @@ _HOST_LIMIT_DEFAULT = 4
 _HOST_LIMIT_LOCK = Lock()
 _HOST_LIMIT_STATE: dict[str, Any] = {"env": None, "value": _HOST_LIMIT_DEFAULT}
 _HOST_SEMAPHORES: dict[str, Semaphore] = {}
+_HOST_SEMAPHORE_LIMITS: dict[str, int] = {}
 
 # Runtime tuning knobs that tests and ops tooling may monkeypatch directly.
 _ALPACA_EMPTY_ERROR_THRESHOLD = max(1, _env_int("ALPACA_EMPTY_ERROR_THRESHOLD", 2))
@@ -1952,6 +1963,18 @@ def _build_backup_usage_extra(
     if reason_hint and "detail" not in payload and reason_hint != payload["reason"]:
         payload["detail"] = reason_hint
     return payload
+
+
+def _coerce_reason_text(value: Any | None) -> str | None:
+    """Return normalized fallback reason text or ``None`` when unavailable."""
+
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    return text or None
 
 
 def _safe_exception_message(exc: Exception | None, *, limit: int = 200) -> str | None:
@@ -2651,7 +2674,7 @@ def _mark_fallback(
                 attrs.get("data_provider") or attrs.get("fallback_provider"),
             )
             feed_from_df = _normalize(attrs.get("data_feed") or attrs.get("fallback_feed"))
-            if reason:
+            if reason and isinstance(attrs, MutableMapping):
                 try:
                     normalized_reason = str(reason).strip()
                 except Exception:
@@ -2720,11 +2743,11 @@ def _mark_fallback(
     fetch_state = _get_fetch_state()
     coverage_meta = fetch_state.get("coverage_meta")
     if isinstance(coverage_meta, Mapping):
-        for key in ("gap_ratio", "gap_ratio_pct", "gap_ratio_limit_pct", "gap_over_limit"):
-            value = coverage_meta.get(key)
-            if value is not None and key not in metadata:
-                metadata[key] = value
-                log_extra.setdefault(key, value)
+        for meta_key in ("gap_ratio", "gap_ratio_pct", "gap_ratio_limit_pct", "gap_over_limit"):
+            value = coverage_meta.get(meta_key)
+            if value is not None and meta_key not in metadata:
+                metadata[meta_key] = value
+                log_extra.setdefault(meta_key, value)
     if reason:
         try:
             normalized_reason = str(reason).strip()
@@ -5994,7 +6017,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             interval_norm in {"1m", "1min", "1minute"}
             and end_dt - start_dt > chunk_span
         )
-        frames: list[pd.DataFrame] = []  # type: ignore[var-annotated]
+        frames: list[Any] = []
         if needs_chunk:
             _log_yf_warning(
                 "YF_1M_RANGE_SPLIT",
@@ -6020,12 +6043,12 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             normalized_interval = str(interval)
         key = (str(symbol).upper(), normalized_interval)
         reason_extra = _consume_bootstrap_backup_reason()
-        reason_text = None
+        reason_text: str | None = None
         if isinstance(reason_extra, Mapping):
-            reason_text = (
+            reason_text = _coerce_reason_text(
                 reason_extra.get("reason")
                 or reason_extra.get("fallback_reason")
-                or reason_extra.get("trigger")
+                or reason_extra.get("trigger"),
             )
         usage_extra = _build_backup_usage_extra(
             provider,
@@ -6092,11 +6115,11 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             first = frames[0]
             if isinstance(first, list):  # pragma: no cover - pandas unavailable path
                 return first  # type: ignore[return-value]
-            if isinstance(first, pd_local.DataFrame):
+            if pd_local is not None and isinstance(first, pd_local.DataFrame):
                 first = _normalize_with_attrs(first)
             return _annotate_df_source(first, provider=normalized, feed=normalized)
         df = _yahoo_get_bars(symbol, start_dt, end_dt, interval)
-        if isinstance(df, pd_local.DataFrame):
+        if pd_local is not None and isinstance(df, pd_local.DataFrame):
             df = _normalize_with_attrs(df)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     pd_local = _ensure_pandas()
@@ -7201,6 +7224,7 @@ def _current_host_limit() -> int:
             _HOST_LIMIT_STATE["env"] = signature
             _HOST_LIMIT_STATE["value"] = limit
             _HOST_SEMAPHORES.clear()
+            _HOST_SEMAPHORE_LIMITS.clear()
         return int(_HOST_LIMIT_STATE["value"])
 
 
@@ -7232,11 +7256,12 @@ def _host_semaphore_for_url(url: str) -> Semaphore | None:
         semaphore = _HOST_SEMAPHORES.get(host_key)
         if not isinstance(semaphore, Semaphore):
             semaphore = None
-        current_limit = getattr(semaphore, "_ai_trading_limit", None) if semaphore is not None else None
+            _HOST_SEMAPHORE_LIMITS.pop(host_key, None)
+        current_limit = _HOST_SEMAPHORE_LIMITS.get(host_key)
         if semaphore is None or current_limit != limit:
             semaphore = Semaphore(limit)
-            semaphore._ai_trading_limit = limit
             _HOST_SEMAPHORES[host_key] = semaphore
+            _HOST_SEMAPHORE_LIMITS[host_key] = limit
         return semaphore
 
 
@@ -10055,7 +10080,7 @@ def _fetch_bars(
                         _push_to_caplog("EMPTY_DATA", level=lvl)
                         _state["empty_data_logged"] = True
                 if remaining_retries > 0:
-                    payload = {
+                    abort_payload = {
                         "provider": "alpaca",
                         "status": "empty",
                         "feed": _feed,
@@ -10069,9 +10094,9 @@ def _fetch_bars(
                     }
                     logger.warning(
                         "ALPACA_FETCH_ABORTED",
-                        extra=_norm_extra(payload),
+                        extra=_norm_extra(abort_payload),
                     )
-                    _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING, extra=payload)
+                    _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING, extra=abort_payload)
                     _state["abort_logged"] = True
             if not skip_empty_metrics:
                 metrics.empty_payload += 1
@@ -11438,7 +11463,7 @@ def get_minute_df(
         except Exception:
             logger.info("DATA_WINDOW_NO_SESSION")
     global _GLOBAL_RETRY_LIMIT_LOGGED
-    _state = {
+    _state: dict[str, Any] = {
         "window_has_session": bool(window_has_session),
         "no_session_forced": bool(not window_has_session),
         "retry_limit_logged": False,
@@ -11790,7 +11815,7 @@ def get_minute_df(
             fallback_df=frame,
             resolved_provider=resolved_backup_provider,
             resolved_feed=resolved_backup_feed,
-            reason=_state.get("fallback_reason"),
+            reason=_coerce_reason_text(_state.get("fallback_reason")),
         )
         _state["fallback_reason"] = None
         _state.pop("last_fetch_attempt", None)
@@ -12015,7 +12040,7 @@ def get_minute_df(
                 fallback_df=finnhub_processed,
                 resolved_provider="finnhub",
                 resolved_feed="finnhub",
-                reason=_state.get("fallback_reason"),
+                reason=_coerce_reason_text(_state.get("fallback_reason")),
             )
             _state["fallback_reason"] = None
             return finnhub_processed

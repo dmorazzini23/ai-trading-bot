@@ -67,6 +67,14 @@ class DummyContext:
         self.halt_manager = halt_manager
 
 
+def _record_submit_order(orders):
+    def _submit_order(_ctx, sym, qty, side, price=None):
+        orders.append((sym, qty, side, price))
+        return types.SimpleNamespace(id="order-1")
+
+    return _submit_order
+
+
 class TestProcessSymbol:
     @pytest.fixture(autouse=True)
     def _patch_env(self, monkeypatch):
@@ -633,7 +641,7 @@ def test_enter_long_skips_when_primary_disabled(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "is_high_vol_regime", lambda: False)
     monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
     monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine, "submit_order", lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price)) or types.SimpleNamespace(id="order-1"))
+    monkeypatch.setattr(bot_engine, "submit_order", _record_submit_order(orders))
     def _fake_latest_price(_symbol, *, prefer_backup=False):
         bot_engine._PRICE_SOURCE[_symbol] = bot_engine._ALPACA_DISABLED_SENTINEL
         return None
@@ -715,10 +723,7 @@ def test_enter_long_skips_when_alpaca_auth_failed(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append(
-            (sym, qty, side, price)
-        )
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -761,16 +766,16 @@ def test_enter_long_skips_when_backup_quote_degraded(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
+    def _resolve_invalid_quote(*_a, **_k):
+        bot_engine._PRICE_SOURCE[symbol] = "yahoo_invalid"
+        return None, "yahoo_invalid"
+
     monkeypatch.setattr(
         bot_engine,
         "_resolve_order_quote",
-        lambda *_a, **_k: bot_engine._PRICE_SOURCE.__setitem__(
-            symbol, "yahoo_invalid"
-        )
-        or (None, "yahoo_invalid"),
+        _resolve_invalid_quote,
     )
     monkeypatch.setattr(
         bot_engine.data_fetcher_module,
@@ -1209,8 +1214,7 @@ def test_enter_long_skips_fallback_log_for_alpaca_sources(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1265,8 +1269,7 @@ def test_enter_long_logs_fallback_for_non_alpaca_sources(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1322,8 +1325,7 @@ def test_enter_long_uses_fallback_when_env_flag_unset(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1385,8 +1387,7 @@ def test_enter_long_warns_when_fallback_quote_unavailable(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1508,8 +1509,7 @@ def test_enter_long_blocks_on_stale_fallback_quote(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1575,8 +1575,7 @@ def test_enter_short_skips_fallback_log_for_alpaca_sources(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1623,8 +1622,7 @@ def test_enter_short_logs_fallback_for_non_alpaca_sources(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1672,8 +1670,7 @@ def test_enter_short_uses_fallback_when_env_flag_unset(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -1780,8 +1777,7 @@ def test_enter_short_skips_when_primary_disabled(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "submit_order",
-        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
-        or types.SimpleNamespace(id="order-1"),
+        _record_submit_order(orders),
     )
     monkeypatch.setattr(
         bot_engine,

@@ -751,7 +751,7 @@ def _parse_timeframe(tf: Any) -> bars.TimeFrame:
         return canonicalize_timeframe(tf)
     raise ValueError(f"Unsupported timeframe: {tf}")
 # One place to define the common exception family (module-scoped)
-COMMON_EXC = (
+COMMON_EXC: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
     KeyError,
@@ -2061,15 +2061,18 @@ def _sanitize_alpaca_feed(feed: str | None) -> str | None:
 def _canonicalize_fallback_feed(feed: object | None) -> str | None:
     """Return canonical fallback feed name when *feed* is recognized."""
 
-    sanitized = _sanitize_alpaca_feed(feed) if feed is not None else None
+    feed_text: str | None = None
+    if feed is not None:
+        try:
+            feed_text = str(feed)
+        except COMMON_EXC:
+            feed_text = None
+    sanitized = _sanitize_alpaca_feed(feed_text)
     if sanitized in _CANONICAL_FALLBACK_FEEDS:
         return sanitized
-    if feed is None:
+    if feed_text is None:
         return None
-    try:
-        normalized = str(feed).strip().lower()
-    except COMMON_EXC:
-        return None
+    normalized = feed_text.strip().lower()
     if normalized in _CANONICAL_FALLBACK_FEEDS:
         return normalized
     if normalized.startswith("alpaca_"):
@@ -3325,12 +3328,13 @@ def _sip_authorized() -> bool:
         if cfg_allow and cfg_entitled in (None, True):
             return True
 
+    candidates: tuple[str, ...]
     try:
         failover = getattr(CFG, "alpaca_feed_failover", ())
         if isinstance(failover, str):
             candidates = (failover,)
         else:
-            candidates = tuple(failover or ())  # type: ignore[arg-type]
+            candidates = tuple(str(feed) for feed in (failover or ()))
     except COMMON_EXC:  # pragma: no cover - defensive
         candidates = ()
 
@@ -4963,15 +4967,15 @@ warnings.filterwarnings(
 import os
 
 
-# Define BotMode and an import-safe default. Runtime config resolves the active mode.
-class BotMode(str, Enum):
+# Define import-safe mode labels. Runtime mode config is declared later.
+class BotModeName(str, Enum):
     AGGRESSIVE = "aggressive"
     BALANCED = "balanced"
     CONSERVATIVE = "conservative"
 
 
 # Import-time safe default used only as last-resort fallback.
-DEFAULT_TRADING_MODE = BotMode.BALANCED.value
+DEFAULT_TRADING_MODE = BotModeName.BALANCED.value
 
 import csv
 import json
@@ -5184,7 +5188,7 @@ def get_default_feed() -> str:
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
 if hasattr(np, "nan"):
-    np.NaN = np.nan
+    setattr(np, "NaN", np.nan)
 
 import pkgutil
 from functools import cache
@@ -5192,9 +5196,11 @@ from functools import cache
 
 # AI-AGENT-REF: lazy load heavy modules when first accessed
 class _LazyModule(types.ModuleType):
+    ichimoku: Any
+
     def __init__(self, name: str) -> None:
         super().__init__(name)
-        self._module = None
+        self._module: types.ModuleType | None = None
         self.__name__ = name
         self._failed = False
 
@@ -5500,7 +5506,7 @@ LimitOrderRequest: Any | None = None
 StopOrderRequest: Any | None = None
 StopLimitOrderRequest: Any | None = None
 StockLatestQuoteRequest: Any | None = None
-_ALPACA_IMPORT_ERROR: Exception | None = None
+_ALPACA_IMPORT_ERROR: BaseException | None = None
 
 
 def _ensure_alpaca_classes() -> None:
@@ -5522,7 +5528,7 @@ def _ensure_alpaca_classes() -> None:
     if all(item is not None for item in assigned) and _ALPACA_IMPORT_ERROR is None:
         return
     _ALPACA_IMPORT_ERROR = None
-    fatal_error: Exception | None = None
+    fatal_error: BaseException | None = None
 
     try:  # pragma: no cover - independent imports with fallbacks
         from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
@@ -6134,14 +6140,24 @@ logger = get_logger(__name__)
 
 # AI-AGENT-REF: helper for throttled SKIP_COOLDOWN logging
 def log_skip_cooldown(
-    symbols: Sequence[str] | str, state: BotState | None = None
+    symbols: Sequence[str] | str,
+    state: BotState | None = None,
+    *,
+    reason: str | None = None,
 ) -> None:
     """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
     global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
     now = monotonic_time()
     sym_set = frozenset([symbols]) if isinstance(symbols, str) else frozenset(symbols)
     if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
-        logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
+        if reason:
+            logger.info(
+                "SKIP_COOLDOWN | %s",
+                ", ".join(sorted(sym_set)),
+                extra={"reason": reason},
+            )
+        else:
+            logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
         _LAST_SKIP_CD_TIME = now
         _LAST_SKIP_SYMBOLS = sym_set
 
@@ -6493,7 +6509,11 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
 
     def _coerce_int(value: object, default: int = 0) -> int:
         try:
-            return int(value)
+            if isinstance(value, (int, float)):
+                return int(value)
+            if isinstance(value, (str, bytes, bytearray)):
+                return int(value)
+            return int(str(value))
         except (TypeError, ValueError):
             return default
 
@@ -6535,7 +6555,14 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         kwargs: dict[str, object] = {}
         effective_feed = feed
         if extra and effective_feed is None and "feed" in extra:
-            effective_feed = extra["feed"]  # type: ignore[index]
+            feed_value = extra["feed"]  # type: ignore[index]
+            if isinstance(feed_value, str):
+                effective_feed = feed_value
+            elif feed_value is not None:
+                try:
+                    effective_feed = str(feed_value)
+                except COMMON_EXC:
+                    effective_feed = None
 
         normalized_feed: str | None = None
         if effective_feed is not None:
@@ -7242,9 +7269,9 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         feed=active_feed,
         window_minutes=primary_window_minutes,
     )
-    actual_bars = int(coverage["actual"])
-    coverage_threshold = int(coverage["threshold"])
-    coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
+    actual_bars = _coerce_int(coverage["actual"], 0)
+    coverage_threshold = _coerce_int(coverage["threshold"], 0)
+    coverage_cutoff = _coerce_int(coverage.get("cutoff", intraday_lookback), intraday_lookback)
     materially_short = bool(coverage["materially_short"])
     insufficient_intraday = bool(coverage["insufficient_intraday"])
     low_coverage = bool(coverage["low_coverage"])
@@ -7565,9 +7592,12 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
                     feed=resolved_feed,
                     window_minutes=fallback_window_minutes,
                 )
-                actual_bars = int(coverage["actual"])
-                coverage_threshold = int(coverage["threshold"])
-                coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
+                actual_bars = _coerce_int(coverage["actual"], 0)
+                coverage_threshold = _coerce_int(coverage["threshold"], 0)
+                coverage_cutoff = _coerce_int(
+                    coverage.get("cutoff", intraday_lookback),
+                    intraday_lookback,
+                )
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
@@ -7725,9 +7755,12 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
                     feed="yahoo",
                     window_minutes=fallback_window_minutes,
                 )
-                actual_bars = int(coverage["actual"])
-                coverage_threshold = int(coverage["threshold"])
-                coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
+                actual_bars = _coerce_int(coverage["actual"], 0)
+                coverage_threshold = _coerce_int(coverage["threshold"], 0)
+                coverage_cutoff = _coerce_int(
+                    coverage.get("cutoff", intraday_lookback),
+                    intraday_lookback,
+                )
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
@@ -8042,9 +8075,9 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
         feed=active_feed,
         window_minutes=window_minutes_current,
     )
-    actual_bars = int(coverage["actual"])
-    coverage_threshold = int(coverage["threshold"])
-    coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
+    actual_bars = _coerce_int(coverage["actual"], 0)
+    coverage_threshold = _coerce_int(coverage["threshold"], 0)
+    coverage_cutoff = _coerce_int(coverage.get("cutoff", intraday_lookback), intraday_lookback)
     materially_short = bool(coverage["materially_short"])
     insufficient_intraday = bool(coverage["insufficient_intraday"])
     low_coverage = bool(coverage["low_coverage"])
@@ -8131,9 +8164,12 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
                 feed=active_feed,
                 window_minutes=recovery_window_minutes,
             )
-            actual_bars = int(coverage["actual"])
-            coverage_threshold = int(coverage["threshold"])
-            coverage_cutoff = int(coverage.get("cutoff", intraday_lookback))
+            actual_bars = _coerce_int(coverage["actual"], 0)
+            coverage_threshold = _coerce_int(coverage["threshold"], 0)
+            coverage_cutoff = _coerce_int(
+                coverage.get("cutoff", intraday_lookback),
+                intraday_lookback,
+            )
             materially_short = bool(coverage["materially_short"])
             insufficient_intraday = bool(coverage["insufficient_intraday"])
             low_coverage = bool(coverage["low_coverage"])
@@ -8902,7 +8938,7 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
                 "Regime dataset empty after normalization; attempting SPY-only fallback"
             )
             try:
-                spy_df = ctx.data_fetcher.fetch_bars("SPY", timeframe="1D", limit=180)
+                spy_df = ctx.data_fetcher.get_daily_df(ctx, "SPY")
                 if spy_df is not None and not getattr(spy_df, "empty", False):
                     s = (
                         spy_df[["timestamp", "close"]]
@@ -9105,6 +9141,7 @@ class BotState:
     day_start_equity: tuple[date, float] | None = None
     week_start_equity: tuple[date, float] | None = None
     last_drawdown: float = 0.0
+    capital_band: str = "small"
 
     # Operational State
     updates_halted: bool = False
@@ -9182,6 +9219,8 @@ class BotState:
     minute_feed_cache: dict[str, str] = field(default_factory=dict)
     coverage_recovery_providers: list[str] = field(default_factory=list)
     execution_metrics: "ExecutionCycleMetrics" = field(default_factory=ExecutionCycleMetrics)
+    _last_adaptive_order_cap_signature: tuple[int | None, str, float] | None = None
+    _strategies_loaded: bool = False
 
     # Intraday price reliability metadata populated from fetch_minute_df_safe
     price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
@@ -9216,7 +9255,7 @@ class _LazyState:
         return f"<Lazy(BotState) initialized={object.__getattribute__(self, '_inst') is not None}>"
 
 
-state = _LazyState()
+state: BotState = cast(BotState, _LazyState())
 _mode_effective_snapshot: dict[str, Any] = {}
 try:
     _mode_cfg = _get_trading_config()
@@ -9744,7 +9783,12 @@ TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 # Loss streak kill-switch (managed via BotState)
 
 # Volatility stats (for SPY ATR mean/std)
-_VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
+_VOL_STATS: dict[str, float | date | None] = {
+    "mean": None,
+    "std": None,
+    "last_update": None,
+    "last": None,
+}
 
 # Slippage logs (in-memory for quick access)
 _slippage_log: list[tuple[str, float, float, datetime]] = (
@@ -10509,8 +10553,12 @@ class DataFetcher:
                 req_kwargs["limit"] = limit
             if adjustment:
                 req_kwargs["adjustment"] = adjustment
-            class _HashableRequest(SimpleNamespace):
-                __hash__ = object.__hash__
+            class _HashableRequest:
+                def __init__(self, **kwargs: Any) -> None:
+                    self.__dict__.update(kwargs)
+
+                def __hash__(self) -> int:
+                    return id(self)
 
             try:
                 request = bars.StockBarsRequest(**req_kwargs)
@@ -11354,16 +11402,16 @@ class DataFetcher:
                 if entry_ts is not None and entry_ts <= 0.0:
                     continue
                 normalized_pair = (now_monotonic, entry_payload)
-                target_keys = {
+                target_key_set = {
                     canonical_lookup,
                     range_lookup,
                     legacy_lookup,
                     lookup_key,
                 }
                 with cache_lock:
-                    for target_key in target_keys:
+                    for memo_target_key in target_key_set:
                         try:
-                            memo_store[target_key] = normalized_pair
+                            memo_store[memo_target_key] = normalized_pair
                         except COMMON_EXC:
                             continue
                 return _emit_cache_hit(entry_payload, reason="memo")
@@ -13077,27 +13125,28 @@ class TradeLogger:
                     pnl = 0.0
                     conf = 0.0
                     for row in data:
-                        if row[0] == symbol and row[3] == "":
-                            entry_t = datetime.fromisoformat(row[1])
+                        row_any = cast(list[Any], row)
+                        if row_any[0] == symbol and row_any[3] == "":
+                            entry_t = datetime.fromisoformat(str(row_any[1]))
                             days = (datetime.now(UTC) - entry_t).days
                             cls = (
                                 "day_trade"
                                 if days == 0
                                 else "swing_trade" if days < 5 else "long_trade"
                             )
-                            row[3], row[4], row[8] = (
+                            row_any[3], row_any[4], row_any[8] = (
                                 utc_now_iso(),
                                 exit_price,
                                 cls,
                             )
                             # Compute PnL
-                            entry_price = float(row[2])
+                            entry_price = float(row_any[2])
                             pnl = (exit_price - entry_price) * (
-                                1 if row[6] == "buy" else -1
+                                1 if row_any[6] == "buy" else -1
                             )
-                            if len(row) >= 11:
+                            if len(row_any) >= 11:
                                 try:
-                                    conf = float(row[10])
+                                    conf = float(row_any[10])
                                 except (
                                     FileNotFoundError,
                                     PermissionError,
@@ -13109,12 +13158,12 @@ class TradeLogger:
                                     OSError,
                                 ):  # AI-AGENT-REF: narrow exception
                                     conf = 0.0
-                            if len(row) >= 12:
-                                row[11] = pnl * conf
+                            if len(row_any) >= 12:
+                                row_any[11] = pnl * conf
                             else:
-                                row.append(conf)
-                                row.append(pnl * conf)
-                            updated_row = list(row)
+                                row_any.append(conf)
+                                row_any.append(pnl * conf)
+                            updated_row = list(row_any)
                             break
                     f.seek(0)
                     f.truncate()
@@ -13208,7 +13257,7 @@ class TradeLogger:
 def _read_trade_log(
     path: str = TRADE_LOG_FILE,
     usecols: list[str] | None = None,
-    dtype: dict | str | None = None,
+    dtype: dict[str, Any] | str | type[str] | None = None,
     sync_from_broker: bool = False,
     broker: Any | None = None,
     *,
@@ -14649,6 +14698,7 @@ class BotContext:
     stop_targets: dict[str, float] = field(default_factory=dict)
     portfolio_weights: dict[str, float] = field(default_factory=dict)
     tickers: list[str] = field(default_factory=list)
+    symbols: list[str] = field(default_factory=list)
     rebalance_buys: dict[str, datetime] = field(default_factory=dict)
     # AI-AGENT-REF: track client_order_id base for INITIAL_REBALANCE orders
     rebalance_ids: dict[str, str] = field(default_factory=dict)
@@ -14658,6 +14708,9 @@ class BotContext:
     allocator: StrategyAllocator | None = None
     strategies: list[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
+    exec_engine: ExecutionEngine | None = None
+    model: Any | None = None
+    initial_rebalance_done: bool = False
     # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
     drawdown_circuit_breaker: DrawdownCircuitBreaker | None = None
     logger: logging.Logger = logger
@@ -14781,8 +14834,14 @@ def get_trade_logger() -> TradeLogger:
                 extra={"dir": log_dir, "detail": str(exc)},
             )
     if fallback_payload:
-        fallback_reason = fallback_payload.get("reason")
-        fallback_target = fallback_payload.get("fallback_path")
+        fallback_reason_obj = fallback_payload.get("reason")
+        fallback_target_obj = fallback_payload.get("fallback_path")
+        fallback_reason = (
+            str(fallback_reason_obj) if fallback_reason_obj is not None else None
+        )
+        fallback_target = (
+            str(fallback_target_obj) if fallback_target_obj is not None else None
+        )
         logger_once.warning(
             "TRADE_LOGGER_FALLBACK_ACTIVE",
             key=f"trade_logger_fallback_active::{fallback_reason}::{fallback_target}",
@@ -15665,7 +15724,7 @@ def pre_trade_health_check(
         min_rows = getattr(ctx, "min_rows", 120)
     min_rows = int(min_rows)
 
-    results = {
+    results: dict[str, Any] = {
         "checked": 0,
         "failures": [],
         "insufficient_rows": [],
@@ -15700,7 +15759,7 @@ def pre_trade_health_check(
             if frames is None:
                 try:
                     frames = _fetch_universe_bars_chunked(
-                        symbols=symbols,
+                        symbols=list(symbols),
                         timeframe="1D",
                         start=_start,
                         end=_end,
@@ -16438,7 +16497,11 @@ def check_pdt_rule(ctx) -> bool:
         try:
             if value in (None, ""):
                 return default
-            return int(value)
+            if isinstance(value, (int, float)):
+                return int(value)
+            if isinstance(value, (str, bytes, bytearray)):
+                return int(value)
+            return int(str(value))
         except (TypeError, ValueError):
             return default
 
@@ -16446,7 +16509,9 @@ def check_pdt_rule(ctx) -> bool:
         try:
             if value in (None, ""):
                 return float(default)
-            return float(value)
+            if isinstance(value, (int, float, str, bytes, bytearray)):
+                return float(value)
+            return float(str(value))
         except (TypeError, ValueError):
             return float(default)
 
@@ -16582,7 +16647,7 @@ def check_pdt_rule(ctx) -> bool:
         getattr(ctx, "enforce_daytrade_limit", explicit_account_provided)
     )
 
-    context = {
+    context: dict[str, Any] = {
         "pattern_day_trader": bool(pattern_day_trader),
         "daytrade_count": daytrade_count,
         "daytrade_limit": limit_to_use,
@@ -17915,8 +17980,8 @@ def fractional_kelly_size(
                 "Invalid payoff_ratio %s for Kelly calculation, using zero position",
                 payoff_ratio,
             )
-            edge = 0
-            kelly = 0
+            edge = 0.0
+            kelly = 0.0
         else:
             edge = win_prob - (1 - win_prob) / payoff_ratio
             kelly = max(edge / payoff_ratio, 0) * frac
@@ -17959,7 +18024,7 @@ def fractional_kelly_size(
         # Validate final size is reasonable
         if size > MAX_POSITION_SIZE:
             logger.warning("Position size %s exceeds maximum, capping", size)
-            size = MAX_POSITION_SIZE
+            size = int(MAX_POSITION_SIZE)
 
         # Update peak equity
         try:
@@ -26552,7 +26617,8 @@ def update_bot_mode(state: BotState) -> None:
             return
 
         state.mode_obj = BotMode(new_mode)
-        params.update(state.mode_obj.get_config())
+        mode_obj = cast(Any, state.mode_obj)
+        params.update(mode_obj.get_config())
         runtime_ctx = globals().get("ctx")
         if runtime_ctx is not None and hasattr(runtime_ctx, "kelly_fraction"):
             try:
@@ -26838,13 +26904,13 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         atomic_joblib_dump(mp, path)
         logger.info(f"Model checkpoint saved: {path}")
 
-        for f in os.listdir("models"):
-            if f.endswith(".pkl"):
-                dt = datetime.strptime(f.split("_")[1].split(".")[0], "%Y%m%d").replace(
+        for model_file in os.listdir("models"):
+            if model_file.endswith(".pkl"):
+                dt = datetime.strptime(model_file.split("_")[1].split(".")[0], "%Y%m%d").replace(
                     tzinfo=UTC
                 )
                 if datetime.now(UTC) - dt > timedelta(days=30):
-                    os.remove(os.path.join("models", f))
+                    os.remove(os.path.join("models", model_file))
 
         batch_mse = float(np.mean((mp.predict(X_train) - y_train) ** 2))
         _get_metrics_logger().log_metrics(  # AI-AGENT-REF: lazy metrics import
@@ -33033,7 +33099,7 @@ def _update_gate_effectiveness_analytics(
                         expected_net_edge_bps=expected_net_edge_bps,
                         edge_proxy_bps=edge_proxy_bps,
                     )
-    cycle_payload = {
+    cycle_payload: dict[str, Any] = {
         "ts": datetime.now(UTC).isoformat(),
         "records_total": int(max(0, records_total)),
         "accepted_records": int(max(0, accepted_records)),

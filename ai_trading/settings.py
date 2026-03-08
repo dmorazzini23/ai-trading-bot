@@ -10,9 +10,9 @@ from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, 
 try:  # Prefer pydantic-settings v2 API
     from pydantic_settings import BaseSettings, SettingsConfigDict
 except Exception:  # pragma: no cover - fallback to pydantic v1 style
-    from pydantic import BaseSettings  # type: ignore
+    from pydantic import BaseSettings
 
-    SettingsConfigDict = None  # type: ignore[assignment]
+    SettingsConfigDict = None
 from ai_trading.logging import logger
 
 
@@ -123,7 +123,7 @@ class _ModelConfigCompatMixin:
                 BaseModel.__init_subclass__(**config)
             except TypeError:
                 BaseModel.__init_subclass__()
-            cls.model_config = model_config  # type: ignore[assignment]
+            cls.model_config = model_config
         try:
             super().__init_subclass__(**config)
         except TypeError:
@@ -589,7 +589,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         if v in (None, "", "None"):
             try:
                 # Pydantic v2: defaults are stored on model_fields
-                return cls.model_fields[info.field_name].default  # type: ignore[index]
+                return cls.model_fields[info.field_name].default
             except Exception:
                 return v
         return v
@@ -606,7 +606,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
         try:
             from ai_trading.utils.env import resolve_alpaca_feed
         except Exception:
-            resolve_alpaca_feed = None  # type: ignore[assignment]
+            resolve_alpaca_feed = None
         sip_allowed = False
         if callable(resolve_alpaca_feed):
             try:
@@ -623,7 +623,7 @@ class Settings(_ModelConfigCompatMixin, BaseSettings):
     def _split_feed_failover(cls, v, info):
         if isinstance(v, FieldInfo) or v is None:
             try:
-                default = cls.model_fields[info.field_name].default  # type: ignore[index]
+                default = cls.model_fields[info.field_name].default
             except Exception:
                 default = ("sip",)
             return tuple(default or ())

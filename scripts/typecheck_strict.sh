@@ -28,6 +28,8 @@ python3 -m mypy --config-file mypy.ini \
   ai_trading/data/fetch/fallback_concurrency.py \
   ai_trading/data/universe.py \
   ai_trading/data/provider_monitor.py \
+  ai_trading/execution/engine.py \
+  ai_trading/execution/live_trading.py \
   ai_trading/main.py \
   ai_trading/model_loader.py \
   ai_trading/logging/__init__.py \

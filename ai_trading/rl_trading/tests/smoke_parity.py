@@ -214,13 +214,13 @@ def main():
     if not test_action_space_parity():
         success = False
 
-    logger.info()
+    logger.info("")
 
     # Test reward normalization
     if not test_reward_normalization():
         success = False
 
-    logger.info()
+    logger.info("")
 
     if success:
         logger.info("✓ All RL smoke tests passed!")

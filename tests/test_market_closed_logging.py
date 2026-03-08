@@ -107,7 +107,7 @@ def test_market_closed_sleep_is_capped(monkeypatch, caplog):
     def fake_sleep(duration):
         sleep_calls.append(duration)
 
-    monkeypatch.setattr(main_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(main_module, "_interruptible_sleep", fake_sleep)
     monkeypatch.setattr(main_module, "config", None, raising=False)
 
     delta = timedelta(hours=10)
@@ -115,7 +115,8 @@ def test_market_closed_sleep_is_capped(monkeypatch, caplog):
 
     main_module.main([])
 
-    assert sleep_calls == [pytest.approx(120.0)]
+    assert sleep_calls
+    assert sleep_calls[0] == pytest.approx(120.0)
 
     records = [r for r in caplog.records if r.msg == "MARKET_CLOSED_SLEEP"]
     assert records, "expected MARKET_CLOSED_SLEEP info log"

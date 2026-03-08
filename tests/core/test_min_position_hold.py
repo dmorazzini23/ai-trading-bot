@@ -320,10 +320,15 @@ def test_should_exit_sets_break_even_stop_for_winner(monkeypatch):
     monkeypatch.setattr(bot_engine, "get_winner_break_even_r", lambda: 1.0)
     monkeypatch.setattr(bot_engine, "get_winner_trailing_tighten_r", lambda: 2.0)
     monkeypatch.setattr(bot_engine, "get_winner_trailing_atr_factor", lambda: 0.5)
+
+    def _update_trailing_stop(*_a, **_k):
+        seen["atr"] = float(_a[4])
+        return "hold"
+
     monkeypatch.setattr(
         bot_engine,
         "update_trailing_stop",
-        lambda *_a, **_k: seen.__setitem__("atr", float(_a[4])) or "hold",
+        _update_trailing_stop,
     )
 
     should_exit, exit_qty, reason = bot_engine.should_exit(
@@ -357,10 +362,15 @@ def test_should_exit_tightens_trailing_atr_for_winner(monkeypatch):
     monkeypatch.setattr(bot_engine, "get_winner_break_even_r", lambda: 1.0)
     monkeypatch.setattr(bot_engine, "get_winner_trailing_tighten_r", lambda: 1.5)
     monkeypatch.setattr(bot_engine, "get_winner_trailing_atr_factor", lambda: 0.5)
+
+    def _update_trailing_stop(*_a, **_k):
+        seen["atr"] = float(_a[4])
+        return "hold"
+
     monkeypatch.setattr(
         bot_engine,
         "update_trailing_stop",
-        lambda *_a, **_k: seen.__setitem__("atr", float(_a[4])) or "hold",
+        _update_trailing_stop,
     )
 
     should_exit, exit_qty, reason = bot_engine.should_exit(

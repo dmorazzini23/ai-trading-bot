@@ -1350,11 +1350,14 @@ def test_on_market_close_runs_after_hours_pipeline(
         "load_or_retrain_daily",
         lambda *_args, **_kwargs: calls.__setitem__("legacy", calls["legacy"] + 1),
     )
+    def _run_after_hours_training(**_kwargs):
+        calls["after_hours"] += 1
+        return {"status": "trained", "model_id": "m-1", "model_name": "logreg"}
+
     monkeypatch.setattr(
         after_hours,
         "run_after_hours_training",
-        lambda **_kwargs: calls.__setitem__("after_hours", calls["after_hours"] + 1)
-        or {"status": "trained", "model_id": "m-1", "model_name": "logreg"},
+        _run_after_hours_training,
     )
 
     bot_engine.on_market_close()
@@ -1385,11 +1388,14 @@ def test_on_market_close_skips_after_hours_pipeline_when_marker_exists(
     monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
     monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
     monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+    def _run_after_hours_training(**_kwargs):
+        calls["after_hours"] += 1
+        return {"status": "trained"}
+
     monkeypatch.setattr(
         after_hours,
         "run_after_hours_training",
-        lambda **_kwargs: calls.__setitem__("after_hours", calls["after_hours"] + 1)
-        or {"status": "trained"},
+        _run_after_hours_training,
     )
 
     bot_engine.on_market_close()
@@ -1988,20 +1994,17 @@ def test_on_market_close_applies_promoted_model_artifacts(
     monkeypatch.setenv("AI_TRADING_LEGACY_DAILY_RETRAIN_ENABLED", "0")
     monkeypatch.setattr(bot_engine, "dt_", _FixedDateTime)
     monkeypatch.setattr(bot_engine, "market_is_open", lambda *_args, **_kwargs: False)
+    def _refresh_required_model_cache(path, manifest_path=None, reason="runtime"):
+        calls["ml"].append({"path": path, "manifest_path": manifest_path, "reason": reason})
+        return True
+
     monkeypatch.setattr(
         bot_engine,
         "_refresh_required_model_cache_from_path",
-        lambda path, manifest_path=None, reason="runtime": calls["ml"].append(
-            {"path": path, "manifest_path": manifest_path, "reason": reason}
-        )
-        or True,
+        _refresh_required_model_cache,
     )
-    monkeypatch.setattr(
-        bot_engine,
-        "_reload_rl_agent_from_runtime_path",
-        lambda model_path=None, reason="runtime", force=False, use_rl_enabled=None: calls[
-            "rl"
-        ].append(
+    def _reload_rl_agent(model_path=None, reason="runtime", force=False, use_rl_enabled=None):
+        calls["rl"].append(
             {
                 "model_path": model_path,
                 "reason": reason,
@@ -2009,7 +2012,12 @@ def test_on_market_close_applies_promoted_model_artifacts(
                 "use_rl_enabled": use_rl_enabled,
             }
         )
-        or True,
+        return True
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_reload_rl_agent_from_runtime_path",
+        _reload_rl_agent,
     )
     monkeypatch.setattr(
         after_hours,

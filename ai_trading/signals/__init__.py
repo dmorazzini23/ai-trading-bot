@@ -1249,7 +1249,7 @@ class SignalDecisionPipeline:
         try:
             if len(df) < period:
                 return df["close"].iloc[-1] * 0.02
-            atr_values = atr(df, period)
+            atr_values = atr(df["high"], df["low"], df["close"], period)
             return atr_values.iloc[-1] if not atr_values.empty else df["close"].iloc[-1] * 0.02
         except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
             logger.warning("DATA_MUNGING_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})

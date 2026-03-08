@@ -1917,7 +1917,7 @@ class ExecutionEngine:
         self.data_feed_intraday = "iex"
         self.is_initialized = False
         self._asset_class_support: bool | None = None
-        self.circuit_breaker = {
+        self.circuit_breaker: dict[str, int | bool | datetime | None] = {
             "failure_count": 0,
             "max_failures": 5,
             "reset_time": 300,
@@ -5374,7 +5374,7 @@ class ExecutionEngine:
         if not hasattr(self, "stats"):
             self.stats = {}
         if not hasattr(self, "order_manager"):
-            self.order_manager = getattr(self, "order_manager", None) or object()
+            self.order_manager = OrderManager()
         pytest_mode = _pytest_mode_active()
         closing_position = bool(
             kwargs.get("closing_position")
