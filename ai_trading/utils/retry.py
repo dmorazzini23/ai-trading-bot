@@ -62,7 +62,7 @@ except (ImportError, TypeError):  # pragma: no cover - fallback path when tenaci
             delay = builtins.max(delay, min)
             if max is not None:
                 delay = builtins.min(delay, max)
-            return delay
+            return float(delay)
         return _Wait(fn)
 
     def wait_random(min: float = 0.0, max: float = 1.0) -> _Wait:

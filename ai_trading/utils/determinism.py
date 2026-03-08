@@ -217,7 +217,7 @@ class ModelSpecification:
         """
         if self._is_locked and (not force):
             self.logger.warning("Specification is locked, use force=True to override")
-            return self._spec.get("spec_hash", "")
+            return str(self._spec.get("spec_hash", ""))
         feature_hash = hash_features(feature_data) if feature_data is not None else self._spec.get("feature_hash", "")
         label_hash = hash_labels(label_data) if label_data is not None else self._spec.get("label_hash", "")
         if data_window is None:

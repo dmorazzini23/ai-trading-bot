@@ -85,7 +85,7 @@ def _ensure_parent(path: Path) -> None:
 def _coerce_mapping(record: Mapping[str, Any] | Any) -> dict[str, Any]:
     if isinstance(record, Mapping):
         return dict(record)
-    if is_dataclass(record):
+    if is_dataclass(record) and not isinstance(record, type):
         return asdict(record)
     return dict(getattr(record, "__dict__", {}))
 

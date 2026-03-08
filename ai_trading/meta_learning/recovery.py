@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import UTC, datetime
-from typing import Iterable
+from typing import Any, Iterable
 from types import ModuleType
 
 from ai_trading.utils.lazy_imports import load_pandas
@@ -29,7 +29,7 @@ def _require_pandas() -> ModuleType:
     return pd
 
 
-def recover_dataframe(path: str | Path) -> "pd.DataFrame":
+def recover_dataframe(path: str | Path) -> Any:
     """Load a DataFrame from ``path`` ensuring pandas is available."""
     pandas = _require_pandas()
     return pandas.read_csv(path)
@@ -73,4 +73,3 @@ def _implement_fallback_data_recovery(path: str | Path, min_samples: int = 0) ->
 
 
 __all__ = ["recover_dataframe", "_implement_fallback_data_recovery"]
-

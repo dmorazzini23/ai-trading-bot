@@ -31,7 +31,8 @@ class LowBetaDefensiveStrategy(BaseStrategy):
         arr = np.asarray(series.dropna().tail(lookback + 1).values, dtype=float)
         if arr.size <= lookback:
             return np.asarray([], dtype=float)
-        return np.diff(arr) / np.maximum(arr[:-1], 1e-9)
+        rel = np.diff(arr) / np.maximum(arr[:-1], 1e-9)
+        return np.asarray(rel, dtype=float)
 
     def _load_daily(self, ctx: Any) -> tuple[dict[str, Any], Any | None]:
         fetcher = getattr(ctx, "data_fetcher", None)

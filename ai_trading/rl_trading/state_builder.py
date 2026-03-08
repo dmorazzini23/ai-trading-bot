@@ -6,7 +6,7 @@ train-split normalization so train/eval transformations stay leakage-safe.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 try:  # optional dependency
     import numpy as np
@@ -111,7 +111,7 @@ class MarketStateBuilder:
                 obv_z.to_numpy(dtype=np.float32),
             ]
         )
-        return np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+        return cast(np.ndarray, np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0))
 
     def _build_features(
         self,
@@ -147,7 +147,7 @@ class MarketStateBuilder:
         clip = float(self.config.clip_zscore)
         if clip > 0:
             scaled = np.clip(scaled, -clip, clip)
-        return scaled.astype(np.float32, copy=False)
+        return cast(np.ndarray, scaled.astype(np.float32, copy=False))
 
     def fit_transform(self, data: Any) -> np.ndarray:
         matrix = self._as_matrix(data)

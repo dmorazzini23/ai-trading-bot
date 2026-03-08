@@ -61,8 +61,15 @@ def test_safe_subprocess_run_timeout(caplog):
     assert exc_obj.result.stderr == _as_text(exc_obj.stderr)
     assert exc_obj.__cause__ is None
     assert caplog.records
-    record = caplog.records[0]
-    assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
+    record = next(
+        (
+            rec
+            for rec in caplog.records
+            if rec.name == "ai_trading.utils.safe_subprocess" and rec.message == "SAFE_SUBPROCESS_TIMEOUT"
+        ),
+        None,
+    )
+    assert record is not None
     assert record.cmd == cmd
     assert record.timeout == pytest.approx(0.5)
 
@@ -80,8 +87,15 @@ def test_safe_subprocess_run_default_timeout(caplog):
     assert _as_text(exc_obj.stdout) == ""
     assert _as_text(exc_obj.stderr) == ""
     assert caplog.records
-    record = caplog.records[0]
-    assert record.message == "SAFE_SUBPROCESS_TIMEOUT"
+    record = next(
+        (
+            rec
+            for rec in caplog.records
+            if rec.name == "ai_trading.utils.safe_subprocess" and rec.message == "SAFE_SUBPROCESS_TIMEOUT"
+        ),
+        None,
+    )
+    assert record is not None
     assert record.cmd == cmd
     assert record.timeout == pytest.approx(SUBPROCESS_TIMEOUT_DEFAULT)
 

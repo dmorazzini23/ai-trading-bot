@@ -39,7 +39,7 @@ else:  # pragma: no cover - annotations only
 
 try:  # pragma: no cover - requests optional
     _requests_exceptions = import_module("requests.exceptions")
-except Exception:
+except (ImportError, ModuleNotFoundError):
     _requests_exceptions = None
 
 

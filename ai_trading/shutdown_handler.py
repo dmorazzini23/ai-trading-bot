@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -19,7 +19,7 @@ from typing import Any
 from alpaca.common.exceptions import APIError
 from ai_trading.logging import logger
 
-Hook = Callable[[], None]
+Hook = Callable[[], None | Awaitable[None]]
 PositionsHandler = Callable[[], list[dict[str, Any]]]
 
 class ShutdownReason(Enum):
@@ -66,7 +66,7 @@ class ShutdownHandler:
         self.logger = logger
         self._status = ShutdownStatus(is_shutting_down=False, reason=None, phase=ShutdownPhase.INITIATED, started_at=None, estimated_completion=None, progress_percent=0.0, current_action='System running normally')
         self.config = {'max_shutdown_time_minutes': 15, 'position_close_timeout_minutes': 10, 'order_cancel_timeout_minutes': 3, 'emergency_shutdown_seconds': 30, 'save_state_on_shutdown': True, 'force_close_positions': False}
-        self._pre_shutdown_hooks: list[Callable[[], None]] = list()
+        self._pre_shutdown_hooks: list[Hook] = list()
         self._position_handlers: list[Callable] = []
         self._order_handlers: list[Callable] = []
         self._cleanup_hooks: list[Callable] = []

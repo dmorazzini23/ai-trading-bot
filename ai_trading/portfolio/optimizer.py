@@ -157,7 +157,9 @@ class PortfolioOptimizer:
             win_rate = len(positive_returns) / len(portfolio_returns)
             avg_win = statistics.mean(positive_returns)
             avg_loss = statistics.mean(negative_returns)
-            optimal_fraction = self.kelly_calculator.calculate_kelly_fraction(win_rate, avg_win, avg_loss)
+            optimal_fraction = float(
+                self.kelly_calculator.calculate_kelly_fraction(win_rate, avg_win, avg_loss)
+            )
             current_leverage = sum((abs(pos) for pos in positions.values()))
             efficiency = min(1.0, optimal_fraction / max(0.01, current_leverage))
             logger.debug(f'Portfolio Kelly efficiency: {efficiency:.3f} (optimal_fraction={optimal_fraction:.3f})')
@@ -404,9 +406,11 @@ class PortfolioOptimizer:
                 cov = _np.cov(R)
             else:
                 lin_alg_err = getattr(getattr(_np, "linalg", None), "LinAlgError", RuntimeError)
+                if not isinstance(lin_alg_err, type) or not issubclass(lin_alg_err, BaseException):
+                    lin_alg_err = RuntimeError
                 try:
                     cov = LedoitWolf().fit(R.T).covariance_
-                except Exception:
+                except (ValueError, TypeError, RuntimeError, lin_alg_err):
                     cov = _np.cov(R)
             def _weights(pos: dict[str, float]) -> _np.ndarray:
                 vals = _np.array([abs(pos.get(s, 0.0)) * float(prices.get(s, 1.0)) for s in symbols], dtype=float)

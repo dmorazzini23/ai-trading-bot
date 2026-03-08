@@ -30,7 +30,7 @@ def _load_bot_engine():
 def detect_regime(df: "pd.DataFrame") -> str:
     """Delegate market regime detection to the bot engine implementation."""
 
-    return _load_bot_engine().detect_regime(df)
+    return str(_load_bot_engine().detect_regime(df))
 
 
 def atomic_joblib_dump(obj: object, path: Path | str) -> None:

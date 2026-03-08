@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Mapping, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.execution.cost_model import CostModel
@@ -238,8 +238,9 @@ def calibrate_cost_model_from_tca(
     summary = summarize_tca_records(records)
     model = CostModel.load(model_target)
     before = model.to_dict()
+    calibration_records = cast(list[Mapping[str, Any]], records)
     updated = model.calibrate(
-        records,
+        calibration_records,
         min_samples=min_samples,
         quantile=quantile,
         outlier_bps=outlier_bps,

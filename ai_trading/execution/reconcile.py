@@ -391,7 +391,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
 
     # Apply position drift fixes locally
     for drift in result.position_drifts:
-        local_positions[drift.symbol] = drift.broker_qty
+        local_positions[drift.symbol] = _coerce_quantity(drift.broker_qty)
 
     # Persist updated state back to context
     ctx.positions = local_positions

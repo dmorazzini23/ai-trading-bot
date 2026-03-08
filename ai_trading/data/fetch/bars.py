@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Set
+from typing import Any, Set, cast
 
 _ENTITLE_CACHE: dict[int, dict[str, Any]] = {}
 
@@ -30,7 +30,10 @@ def _get_entitled_feeds_cached(client: Any) -> Set[str]:
         feeds = _get_entitled_feeds(client)
         _ENTITLE_CACHE[key] = {"feeds": feeds, "generation": generation}
         return feeds
-    return cached["feeds"]
+    cached_feeds = cached.get("feeds")
+    if isinstance(cached_feeds, set):
+        return cast(Set[str], cached_feeds)
+    return {"iex"}
 
 
 def _ensure_entitled_feed(client: Any, preferred: str) -> str:
@@ -53,4 +56,3 @@ __all__ = [
     "_get_entitled_feeds_cached",
     "_ensure_entitled_feed",
 ]
-

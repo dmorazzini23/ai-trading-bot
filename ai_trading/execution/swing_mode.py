@@ -79,7 +79,7 @@ class SwingTradingMode:
     """
     
     def __init__(self):
-        self.position_entry_times = {}  # symbol -> entry datetime
+        self.position_entry_times: dict[str, datetime] = {}  # symbol -> entry datetime
         self._entries = self.position_entry_times
         self.enabled = False
     

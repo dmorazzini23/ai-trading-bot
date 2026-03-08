@@ -164,7 +164,7 @@ class MetricsCollector:
         """Get a summary of all collected metrics."""
         import numpy as np
 
-        summary = {
+        summary: dict[str, Any] = {
             'counters': dict(self.counters),
             'gauges': dict(self.gauges),
             'histograms_stats': {},
@@ -196,7 +196,7 @@ class PerformanceMonitor:
         self.metrics_collector = MetricsCollector()
         self.trade_history: list = []
         self.performance_cache: dict[str, Any] = {}
-        self.last_cache_update = 0
+        self.last_cache_update = 0.0
         self.cache_ttl = 60
         logger.info('PerformanceMonitor initialized')
 

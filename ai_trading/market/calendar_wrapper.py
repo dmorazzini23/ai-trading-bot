@@ -188,8 +188,15 @@ def previous_trading_session(d: date) -> date:
     if _CAL is not None:
         try:
             prev = _CAL.previous_session(d)
-            if hasattr(prev, "date"):
+            if isinstance(prev, datetime):
                 return prev.date()
+            if hasattr(prev, "date"):
+                prev_date = prev.date()
+                if isinstance(prev_date, date):
+                    return prev_date
+                return d
+            if isinstance(prev, date):
+                return prev
             return prev
         except Exception:  # pragma: no cover - fall back
             logger.debug("CALENDAR_PREVIOUS_SESSION_FAILED", extra={"date": d.isoformat()}, exc_info=True)

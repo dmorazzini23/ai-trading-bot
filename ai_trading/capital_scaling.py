@@ -237,7 +237,11 @@ def volatility_parity(weights: np.ndarray, volatilities: np.ndarray) -> np.ndarr
     import numpy as np  # local import to avoid hard dependency at module import
     inv_vol = 1 / (volatilities + 1e-09)
     scaled = weights * inv_vol
-    return scaled / np.sum(scaled) * np.sum(weights)
+    total_scaled = float(np.sum(scaled))
+    total_weights = float(np.sum(weights))
+    if total_scaled <= 0:
+        return np.zeros_like(weights, dtype=float)
+    return (scaled / total_scaled) * total_weights
 
 def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
     """Return scaling factor based on CVaR at ``alpha`` level."""

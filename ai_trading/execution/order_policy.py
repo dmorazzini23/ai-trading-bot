@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 import math
+from typing import Any, cast
 from ai_trading.execution.costs import get_symbol_costs
 logger = get_logger(__name__)
 
@@ -79,7 +80,7 @@ class SmartOrderRouter:
     def _coerce_numeric(value: object, default: float) -> float:
         """Return finite numeric values with defensive fallback."""
         try:
-            number = float(value)
+            number = float(cast(Any, value))
         except (TypeError, ValueError):
             return float(default)
         if not math.isfinite(number):

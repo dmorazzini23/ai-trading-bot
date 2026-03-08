@@ -10,6 +10,7 @@ configured limit is exceeded.
 from __future__ import annotations
 
 import sys
+from typing import cast
 
 from ai_trading.config.management import MAX_EMPTY_RETRIES
 
@@ -36,7 +37,7 @@ def _get_empty_bars_error() -> type[Exception]:
         _EMPTY_BARS_ERROR_CLASS = cls
     if cls not in _EMPTY_BARS_ERROR_HISTORY:
         _EMPTY_BARS_ERROR_HISTORY.append(cls)
-    return cls
+    return cast(type[Exception], cls)
 
 
 def _raise_empty_bars_error(message: str) -> None:

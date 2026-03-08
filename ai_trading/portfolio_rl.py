@@ -72,8 +72,8 @@ class PortfolioReinforcementLearner:
         with torch_mod.no_grad():
             weights = self.actor(state_tensor).numpy()
         total = float(weights.sum())
-        return weights / total if total else weights
+        normalized = (weights / total) if total else weights
+        return np.asarray(normalized, dtype=np.float32)
 
 
 __all__ = ["PortfolioReinforcementLearner", "Actor"]
-

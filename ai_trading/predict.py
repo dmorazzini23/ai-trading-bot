@@ -1,9 +1,12 @@
 from __future__ import annotations
 import importlib
 from functools import lru_cache
+from typing import MutableMapping, cast
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
+
+_sentiment_cache: MutableMapping[str, float]
 
 try:
     from cachetools import TTLCache as _BaseTTLCache
@@ -32,7 +35,7 @@ try:
     _sentiment_cache = _SentimentTTLCache(maxsize=1000, ttl=3600)
 except ImportError:
     _CACHETOOLS_AVAILABLE = False
-    _sentiment_cache: dict[str, float] = {}
+    _sentiment_cache = {}
 
 _HTTP: HTTPSession = get_http_session()
 
@@ -57,7 +60,7 @@ def load_model(regime: str):
 def fetch_sentiment(symbol: str) -> float:
     """Fetch sentiment score with simple caching."""
     if symbol in _sentiment_cache:
-        return _sentiment_cache[symbol]
+        return float(_sentiment_cache[symbol])
     score = 0.0
     try:
         resp = _HTTP.get(
@@ -68,7 +71,7 @@ def fetch_sentiment(symbol: str) -> float:
         score = float(data.get("score", 0.0))
     except (RequestException, TimeoutError):
         score = 0.0
-    target_cache = _sentiment_cache
+    target_cache = cast(MutableMapping[str, float], _sentiment_cache)
     target_cache[symbol] = score
     if len(target_cache) > 1000:
         try:

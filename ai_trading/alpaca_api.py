@@ -1436,7 +1436,7 @@ def _http_submit(
         timeout_v = timeout_clamper(timeout or 10)
         session = get_session()
         call = session.post
-        if retry is not None:
+        if callable(retry_wrapper):
             call = retry_wrapper(call)
         resp = call(url, headers=headers, json=payload, timeout=timeout_v)
     except RequestException as e:  # pragma: no cover - network error path
@@ -1521,7 +1521,8 @@ def submit_order(
     # AI-AGENT-REF: Add quantity validation before submission
     if q_int <= 0:
         raise ValueError(f"Invalid quantity: {qty}. Must be a positive integer.")
-    timeout = clamp_request_timeout(timeout)
+    timeout_raw = clamp_request_timeout(float(timeout) if timeout is not None else 10.0)
+    timeout_value = float(timeout_raw[0] if isinstance(timeout_raw, tuple) else timeout_raw)
     symbol_part = str(symbol or "").strip().upper() or "UNKNOWN"
     side_part = str(side or "").strip().lower() or "buy"
     prefix = f"{symbol_part}-{side_part}"
@@ -1564,7 +1565,7 @@ def submit_order(
             limit_price=limit_price,
             stop_price=stop_price,
             idempotency_key=idempotency_key,
-            timeout=timeout,
+            timeout=timeout_value,
         )
         _record_client_order_id(client, idempotency_key)
         return cast(dict[str, Any], _ensure_client_order_id(order))
@@ -1590,7 +1591,7 @@ def submit_order(
                     limit_price=limit_price,
                     stop_price=stop_price,
                     idempotency_key=idempotency_key,
-                    timeout=timeout,
+                    timeout=timeout_value,
                 )
             ),
         )
@@ -1610,7 +1611,7 @@ def submit_order(
                 limit_price=limit_price,
                 stop_price=stop_price,
                 idempotency_key=idempotency_key,
-                timeout=timeout,
+                timeout=timeout_value,
             )
         ),
     )
@@ -1665,7 +1666,7 @@ def alpaca_get(
         timeout_v = timeout_clamper(timeout or 10)
         session = get_session()
         call = session.get
-        if retry is not None:
+        if callable(retry_wrapper):
             call = retry_wrapper(call)
         resp = call(url, headers=headers, params=params, timeout=timeout_v)
     except RequestException as exc:  # pragma: no cover - network error path

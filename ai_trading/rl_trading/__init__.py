@@ -143,7 +143,14 @@ class RLAgent:
         from ai_trading.strategies.base import StrategySignal  # noqa: E402
 
         try:
-            if symbols is not None and hasattr(state, "__len__") and len(state) == len(symbols):
+            state_len: int | None = None
+            if symbols is not None:
+                length_getter = getattr(state, "__len__", None)
+                try:
+                    state_len = int(length_getter()) if callable(length_getter) else None
+                except (TypeError, ValueError):
+                    state_len = None
+            if symbols is not None and state_len == len(symbols):
                 actions, _ = self.model.predict(state, deterministic=True)
                 signals: list[StrategySignal] = []
                 for sym, act in zip(symbols, actions, strict=False):

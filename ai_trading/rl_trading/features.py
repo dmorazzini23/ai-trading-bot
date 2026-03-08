@@ -115,4 +115,4 @@ def compute_features(
     ).fillna(0.0).clip(-1.0, 1.0).tail(w)
     parts = [rets, rsi_s, atr_s, vwapb, bbpos, obv_s]
     vec = np.concatenate([p.to_numpy(dtype=np.float32) for p in parts], axis=0)
-    return vec
+    return np.asarray(vec, dtype=np.float32)

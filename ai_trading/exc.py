@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from json import JSONDecodeError
-from requests.exceptions import HTTPError, RequestException
+from requests.exceptions import HTTPError, RequestException  # type: ignore[import-untyped]
 
 COMMON_EXC = (
     TypeError,

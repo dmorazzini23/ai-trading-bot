@@ -15,7 +15,7 @@ from threading import Lock
 from typing import Any
 from ai_trading.logging import get_logger
 
-def get_phase_logger(name: str, phase: str) -> logging.Logger:
+def get_phase_logger(name: str, phase: str) -> logging.LoggerAdapter[Any] | logging.Logger:
     """Get a logger for a specific phase - fallback implementation."""
     logger_name = f'{name}.{phase}' if phase else name
     return get_logger(logger_name)
@@ -207,7 +207,7 @@ class ExecutionDebugTracker:
             recent_failure_count = len(self._failed_executions)
             total_recent = recent_success_count + recent_failure_count
             success_rate = recent_success_count / total_recent if total_recent > 0 else 0
-            status_breakdown = {}
+            status_breakdown: dict[str, int] = {}
             for order in self._active_orders.values():
                 status = order.get('status', 'unknown')
                 status_breakdown[status] = status_breakdown.get(status, 0) + 1

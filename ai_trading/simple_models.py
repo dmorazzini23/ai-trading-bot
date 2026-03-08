@@ -38,7 +38,7 @@ class HeuristicModel:
         score += 0.3 if vwap > sma200 else -0.3
         # Higher ATR -> lower confidence; dampen score slightly
         score -= 0.1 * np.tanh(atr)
-        return score
+        return float(score)
 
     def predict(self, X: Any) -> np.ndarray:
         X = np.asarray(X)
@@ -63,4 +63,3 @@ def get_model() -> HeuristicModel:
 
 
 __all__ = ["HeuristicModel", "get_model"]
-

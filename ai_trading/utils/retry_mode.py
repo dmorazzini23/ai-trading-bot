@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from importlib import metadata
 import types
-from typing import TypeVar
+from typing import TypeVar, cast
 
 T = TypeVar("T")
 
@@ -100,7 +100,7 @@ def retry_mode(
 
         def tenacity_decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
-            return wrapped
+            return cast(Callable[..., T], wrapped)
 
         return tenacity_decorator
 

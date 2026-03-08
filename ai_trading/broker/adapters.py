@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol
 
 try:
-    import requests
+    import requests  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - requests is a runtime dependency
     requests = None  # type: ignore[assignment]
 

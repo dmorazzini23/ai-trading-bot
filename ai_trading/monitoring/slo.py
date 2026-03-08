@@ -237,7 +237,7 @@ class SLOMonitor:
     def get_health_summary(self) -> dict[str, Any]:
         """Get overall system health summary."""
         with self._lock:
-            status_counts = defaultdict(int)
+            status_counts: defaultdict[str, int] = defaultdict(int)
             for status in self._slo_status.values():
                 status_counts[status.value] += 1
             if status_counts['breached'] > 0:

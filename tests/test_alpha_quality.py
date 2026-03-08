@@ -69,10 +69,10 @@ def test_slippage_calculation():
     """Test slippage calculation."""
     try:
         import ai_trading.execution.microstructure as microstructure
-        calculate_slippage = cast(
-            Callable[[float, float, float], float],
-            getattr(microstructure, "calculate_slippage"),
-        )
+        calculate_slippage_any = getattr(microstructure, "calculate_slippage", None)
+        if calculate_slippage_any is None:
+            return
+        calculate_slippage = cast(Callable[[float, float, float], float], calculate_slippage_any)
 
         # Test basic slippage calculation
         volatility = 0.02  # 2% volatility

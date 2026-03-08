@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import importlib
+import importlib.abc
 import importlib.util
 import sys
 from importlib.machinery import ModuleSpec
 from types import ModuleType
 
 
-class _LazyLoader:
+class _LazyLoader(importlib.abc.Loader):
     """Minimal loader that keeps the placeholder stable for ``importlib.reload``."""
 
     def __init__(self, module: "_LazyModule") -> None:

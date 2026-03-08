@@ -7167,12 +7167,12 @@ def should_skip_symbol(
                 )
             _SKIP_LOGGED.add(key)
     else:
-        if isinstance(coverage_meta, dict):
-            coverage_meta.pop("skip_flagged", None)
-        if gap_ratio > max_gap_ratio and isinstance(coverage_meta, dict):
-            coverage_meta["gap_ratio"] = gap_ratio
-            coverage_meta["missing_after"] = missing_after
-            coverage_meta["expected"] = expected_count
+        if isinstance(coverage_meta_info, dict):
+            coverage_meta_info.pop("skip_flagged", None)
+        if gap_ratio > max_gap_ratio and isinstance(coverage_meta_info, dict):
+            coverage_meta_info["gap_ratio"] = gap_ratio
+            coverage_meta_info["missing_after"] = missing_after
+            coverage_meta_info["expected"] = expected_count
     return skip
 
 

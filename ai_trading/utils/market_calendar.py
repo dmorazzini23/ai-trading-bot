@@ -17,6 +17,7 @@ shifts and early-close handling.
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_market_calendars
@@ -190,18 +191,30 @@ def previous_trading_session(d: date) -> date:
 
     cal = _get_calendar()
     if cal is not None:
-        valid_days = getattr(cal, "valid_days", lambda *a, **k: [])
-        days = valid_days(start_date=d.replace(day=1), end_date=d)
+        valid_days = getattr(cal, "valid_days", None)
+        days: list[Any] = []
+        if callable(valid_days):
+            days = list(valid_days(start_date=d.replace(day=1), end_date=d))
         if len(days) == 0:
             back = d.replace(day=1) - timedelta(days=1)
-            days = valid_days(start_date=back.replace(day=1), end_date=back)
+            if callable(valid_days):
+                days = list(valid_days(start_date=back.replace(day=1), end_date=back))
         if len(days) == 0:
             dd = d
             while True:
                 dd = dd - timedelta(days=1)
                 if dd.weekday() < 5:
                     return dd
-        return days[-1].date()
+        last_day = days[-1]
+        if isinstance(last_day, datetime):
+            return last_day.date()
+        if hasattr(last_day, "date"):
+            candidate_date = last_day.date()
+            if isinstance(candidate_date, date):
+                return candidate_date
+        if isinstance(last_day, date):
+            return last_day
+        return d
     dd = d
     while True:
         dd = dd - timedelta(days=1)

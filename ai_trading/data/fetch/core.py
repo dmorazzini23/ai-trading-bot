@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING, cast
 
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from ai_trading.data.bars import BarsFetchFailed
@@ -50,13 +49,16 @@ def fetch(
 
     response = session.get(url, **kwargs)
 
+    bars_fetch_failed_cls: type[BaseException] | None = None
+
     # Import lazily to avoid circular dependencies during module import.
     try:  # pragma: no cover - fast path when bars available
-        from ai_trading.data.bars import BarsFetchFailed  # type: ignore
+        from ai_trading.data.bars import BarsFetchFailed as _bars_fetch_failed_cls
+        bars_fetch_failed_cls = cast(type[BaseException], _bars_fetch_failed_cls)
     except Exception:  # pragma: no cover - defensive guard
-        BarsFetchFailed = None  # type: ignore[assignment]
+        bars_fetch_failed_cls = None
 
-    if BarsFetchFailed is not None and isinstance(response, BarsFetchFailed):
+    if bars_fetch_failed_cls is not None and isinstance(response, bars_fetch_failed_cls):
         return response
 
     return response

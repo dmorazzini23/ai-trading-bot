@@ -336,7 +336,12 @@ class PortfolioRiskAssessor:
             Stress test results
         """
         try:
-            results = {'scenarios': {}, 'worst_case_loss': 0.0, 'best_case_gain': 0.0, 'scenario_count': 0}
+            results: dict[str, Any] = {
+                'scenarios': {},
+                'worst_case_loss': 0.0,
+                'best_case_gain': 0.0,
+                'scenario_count': 0,
+            }
             total_value = sum((pos.get('market_value', 0) for pos in positions))
             if total_value == 0:
                 return results

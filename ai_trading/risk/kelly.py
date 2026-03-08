@@ -100,7 +100,7 @@ def institutional_kelly(p: KellyParams) -> float:
     raw = p.win_prob - (1.0 - p.win_prob) / max(p.win_loss_ratio, 1e-09)
     frac = max(0.0, raw)
     kelly = p.cap * frac
-    return max(0.0, min(kelly, p.cap, get_default_config().kelly_fraction_max))
+    return float(max(0.0, min(kelly, p.cap, get_default_config().kelly_fraction_max)))
 
 class InstitutionalKelly:
     """Callable wrapper around :func:`institutional_kelly`."""
@@ -387,4 +387,3 @@ class KellyCalculator:
         if symbol:
             return [r for r in self.calculation_history if r['symbol'] == symbol]
         return self.calculation_history.copy()
-

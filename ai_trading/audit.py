@@ -26,7 +26,7 @@ def _resolve_log_path() -> str:
         "AI_TRADING_TRADE_LOG_FILE", None, cast=str, resolve_aliases=False
     )
     if env_path:
-        return env_path
+        return str(env_path)
     # Otherwise consult a lightweight config module if available
     try:
         import sys as _sys
@@ -35,7 +35,7 @@ def _resolve_log_path() -> str:
         if cfg is not None:
             cfg_path = getattr(cfg, "TRADE_LOG_FILE", None)
             if cfg_path:
-                return cfg_path
+                return str(cfg_path)
             # Provide a conventional default when config exists but lacks the attribute
             return os.path.join("data", DEFAULT_LOG_FILE)
     except Exception:

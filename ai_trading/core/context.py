@@ -11,18 +11,29 @@ only need a handful of default attributes.
 from types import SimpleNamespace
 from typing import Any, cast
 
+BotContext: type[Any]
+LazyBotContext: type[Any]
+
 try:  # pragma: no cover - bot_engine may pull in optional heavy deps
     from .bot_engine import (
-        BotContext,
-        LazyBotContext,
+        BotContext as _BotContext,
+        LazyBotContext as _LazyBotContext,
         get_ctx,
         ensure_alpaca_attached,
         maybe_init_brokers,
         init_alpaca_clients,
     )
+    BotContext = _BotContext
+    LazyBotContext = _LazyBotContext
 except Exception:  # pragma: no cover - provide fallbacks when bot_engine unavailable
-    BotContext = cast(Any, object)
-    LazyBotContext = cast(Any, object)
+    class _FallbackBotContext(SimpleNamespace):
+        """Fallback BotContext used when bot_engine import fails."""
+
+    class _FallbackLazyBotContext(SimpleNamespace):
+        """Fallback LazyBotContext used when bot_engine import fails."""
+
+    BotContext = _FallbackBotContext
+    LazyBotContext = _FallbackLazyBotContext
 
     def _unavailable(*_a: Any, **_k: Any) -> Any:
         raise RuntimeError("bot_engine unavailable")

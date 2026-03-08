@@ -10,7 +10,7 @@ the loader. This keeps production defaults unchanged, per AGENTS.md.
 
 import json
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 from ai_trading.config.management import get_env
 
@@ -18,7 +18,10 @@ from ai_trading.config.management import get_env
 @lru_cache(maxsize=1)
 def _load_profile_cached(path: str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        loaded = json.load(f)
+    if isinstance(loaded, dict):
+        return cast(dict[str, Any], loaded)
+    return {}
 
 
 def load_strategy_profile(path_or_env: str | None = None) -> dict[str, Any] | None:

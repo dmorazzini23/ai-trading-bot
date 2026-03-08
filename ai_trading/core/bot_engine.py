@@ -27745,7 +27745,12 @@ def _evaluate_quote_gate(
 
     age = _quote_age_seconds(quote)
     if max_age_sec > 0 and age > max_age_sec:
-        return QuoteGateDecision(False, "stale_quote", {"age_sec": age})
+        stale_details: dict[str, Any] = {"age_sec": age}
+        if bid is not None:
+            stale_details["bid"] = bid
+        if ask is not None:
+            stale_details["ask"] = ask
+        return QuoteGateDecision(False, "stale_quote", stale_details)
 
     details: dict[str, Any] = {}
     if bid is not None:

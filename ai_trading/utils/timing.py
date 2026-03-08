@@ -38,7 +38,7 @@ def clamp_timeout(value: Optional[float]) -> float:
         return HTTP_TIMEOUT
 
 
-def _robust_sleep(seconds: Union[int, float]) -> None:
+def _robust_sleep(seconds: Union[int, float]) -> float:
     """Block for at least ~10ms even under monkeypatched time.sleep.
 
     Uses the original OS sleep captured at import time and a short
@@ -57,6 +57,19 @@ def _robust_sleep(seconds: Union[int, float]) -> None:
     while (_perf() - start) < 0.01 and _tries < 5:
         _real_sleep(0.005)
         _tries += 1
+    return _perf() - start
+
+
+def _system_sleep(seconds: Union[int, float]) -> float:
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        s = 0.0
+    if s <= 0:
+        return 0.0
+    start = _perf()
+    _time.sleep(s)
+    return _perf() - start
 
 
 _force_local_sleep = str(
@@ -65,7 +78,7 @@ _force_local_sleep = str(
 if _force_local_sleep:
     sleep = _robust_sleep  # type: ignore[assignment]
 else:  # pragma: no cover
-    sleep = _time.sleep
+    sleep = _system_sleep
 
 
 __all__ = ["HTTP_TIMEOUT", "clamp_timeout", "sleep"]

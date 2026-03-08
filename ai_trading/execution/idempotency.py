@@ -8,10 +8,12 @@ import hashlib
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+_TTLCacheCls: Any
 
 try:
-    from cachetools import TTLCache  # type: ignore
+    from cachetools import TTLCache as _CachetoolsTTLCache  # type: ignore
 except ImportError:  # pragma: no cover - exercised via explicit fallback tests
     import logging
     from collections import OrderedDict
@@ -22,7 +24,7 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
         "cachetools not available; using fallback TTL cache implementation (degraded idempotency cache performance)"
     )
 
-    class TTLCache:  # type: ignore[override]
+    class _FallbackTTLCache:  # type: ignore[override]
         """Lightweight TTL cache fallback with basic eviction semantics."""
 
         def __init__(self, maxsize: int, ttl: float) -> None:
@@ -72,6 +74,9 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
 
             self._store[key] = (value, now + self.ttl)
 
+        def __delitem__(self, key: str) -> None:
+            del self._store[key]
+
         def get(self, key: str, default: object | None=None) -> object | None:
             now = monotonic_time()
             self._expire(now=now)
@@ -95,6 +100,11 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
 
         def __repr__(self) -> str:  # pragma: no cover - diagnostic helper
             return f"TTLCache(maxsize={self.maxsize}, ttl={self.ttl}, size={len(self)})"
+    _TTLCacheCls = _FallbackTTLCache
+else:
+    _TTLCacheCls = _CachetoolsTTLCache
+
+TTLCache: type[Any] = cast(type[Any], _TTLCacheCls)
 
 from ai_trading.core.interfaces import OrderSide
 from ai_trading.config.management import get_env
@@ -140,7 +150,7 @@ class OrderIdempotencyCache:
             ttl_seconds: Time-to-live for cache entries (default 5 minutes)
             max_size: Maximum cache size
         """
-        self._cache: TTLCache = TTLCache(maxsize=max_size, ttl=ttl_seconds)
+        self._cache: Any = TTLCache(maxsize=max_size, ttl=ttl_seconds)
         self._lock = threading.RLock()
         self._intent_store = intent_store
 
@@ -273,7 +283,9 @@ class OrderIdempotencyCache:
                         except Exception:
                             pass
                     return None
-            return entry
+            if isinstance(entry, dict):
+                return cast(dict[Any, Any], entry)
+            return None
 
     def clear_expired(self) -> int:
         """

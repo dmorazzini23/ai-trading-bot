@@ -11,7 +11,7 @@ from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     import pandas as pd
@@ -101,7 +101,7 @@ class CorporateActionRegistry:
         """Save corporate actions to disk."""
         actions_file = self.data_path / 'corp_actions.json'
         try:
-            data = {}
+            data: dict[str, list[dict[str, Any]]] = {}
             for symbol, action_list in self._actions.items():
                 data[symbol] = []
                 for action in action_list:

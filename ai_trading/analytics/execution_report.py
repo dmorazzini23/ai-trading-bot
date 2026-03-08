@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import json
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -144,7 +144,7 @@ def write_daily_execution_report(
     out_dir.mkdir(parents=True, exist_ok=True)
     tz_name = str(rollup_tz or "UTC").strip() or "UTC"
     try:
-        rollup_zone = ZoneInfo(tz_name)
+        rollup_zone: tzinfo = ZoneInfo(tz_name)
     except ZoneInfoNotFoundError:
         logger.warning("EXECUTION_REPORT_INVALID_ROLLUP_TZ", extra={"rollup_tz": tz_name})
         rollup_zone = UTC
