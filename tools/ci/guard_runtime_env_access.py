@@ -7,22 +7,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PATTERN = re.compile(r"\bos\.(?:getenv|environ)\b")
+PATTERN = re.compile(r"\bos\.(?:getenv|environ)\b|\bgetenv\s*\(")
 
-# Tiny allowlist for config/bootstrap and operator tooling.
-ALLOWLIST_PREFIXES = (
-    "ai_trading/config/",
-    "ai_trading/scripts/",
-    "ai_trading/tools/",
-    "ai_trading/validation/",
-)
-ALLOWLIST_FILES: set[str] = set()
+# Runtime env reads must be centralized in ai_trading.config.management.
+# Keep this allowlist minimal and explicit.
+ALLOWLIST_FILES: set[str] = {
+    "ai_trading/config/management.py",
+}
 
 
 def _is_allowlisted(rel_path: str) -> bool:
-    if rel_path in ALLOWLIST_FILES:
-        return True
-    return rel_path.startswith(ALLOWLIST_PREFIXES)
+    return rel_path in ALLOWLIST_FILES
 
 
 def main() -> int:

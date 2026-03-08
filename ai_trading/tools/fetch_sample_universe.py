@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Iterable
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.utils import http
 from ai_trading.utils.http import clamp_request_timeout
@@ -74,7 +74,13 @@ def parse_cli_and_run() -> int:
     if args.symbols:
         raw_syms = [s.strip() for s in args.symbols.split(",") if s.strip()]
     else:
-        env_syms = os.getenv("SAMPLE_UNIVERSE", "AAPL,MSFT,GOOGL")
+        env_syms_raw = get_env(
+            "SAMPLE_UNIVERSE",
+            "AAPL,MSFT,GOOGL",
+            cast=str,
+            resolve_aliases=False,
+        )
+        env_syms = "AAPL,MSFT,GOOGL" if env_syms_raw is None else str(env_syms_raw)
         raw_syms = [s.strip() for s in env_syms.split(",") if s.strip()]
 
     symbols = _parse_symbols(raw_syms)

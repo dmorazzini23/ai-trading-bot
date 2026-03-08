@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Sequence
+from typing import Any, Sequence, cast
 
 from ai_trading.util.env_check import assert_dotenv_not_shadowed
 
@@ -25,6 +24,7 @@ from .runtime import (
 )
 from .management import (
     get_env,
+    merged_env_snapshot,
     reload_env,
     is_shadow_mode,
     validate_required_env,
@@ -52,15 +52,16 @@ from ai_trading.validation.require_env import (
 
 _CFG = get_trading_config()
 _CONFIG_LOGGED = False
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
-_LOCK_TIMEOUT = int(os.getenv("CONFIG_LOCK_TIMEOUT", "30"))
+_LOCK_TIMEOUT = int(get_env("CONFIG_LOCK_TIMEOUT", 30, cast=int, resolve_aliases=False))
 _VALIDATION_LOCK = threading.Lock()
 _LOCK_STATE = threading.local()
 
 logger = logging.getLogger(__name__)
 
 
-_CACHED_SETTINGS: object | None = None
+_CACHED_SETTINGS: Settings | None = None
 
 
 def _reset_cached_settings() -> None:
@@ -68,49 +69,57 @@ def _reset_cached_settings() -> None:
 
     global _CACHED_SETTINGS
     _CACHED_SETTINGS = None
-    try:
-        _settings_get_settings.cache_clear()  # type: ignore[attr-defined]
-    except AttributeError:
-        pass
+    clear_cache = getattr(_settings_get_settings, "cache_clear", None)
+    if callable(clear_cache):
+        clear_cache()
 
 
-def _default_test_settings() -> SimpleNamespace:
+def _env_is_truthy(name: str) -> bool:
+    value = str(get_env(name, "", cast=str, resolve_aliases=False) or "").strip().lower()
+    return value in _TRUTHY_ENV_VALUES
+
+
+def _default_test_settings() -> Settings:
     """Return minimal settings stub suitable for tests."""
 
-    return SimpleNamespace(
+    pytest_running = _env_is_truthy("PYTEST_RUNNING")
+    return cast(Settings, SimpleNamespace(
         ENABLE_PORTFOLIO_FEATURES=False,
         enable_memory_optimization=False,
-        env="test" if os.getenv("PYTEST_RUNNING") else "dev",
+        env="test" if pytest_running else "dev",
         api_port=9001,
-        alpaca_data_feed=os.getenv("ALPACA_DATA_FEED", "iex"),
-        alpaca_adjustment=os.getenv("ALPACA_ADJUSTMENT", "raw"),
-    )
+        alpaca_data_feed=str(
+            get_env("ALPACA_DATA_FEED", "iex", cast=str, resolve_aliases=False) or "iex"
+        ),
+        alpaca_adjustment=str(
+            get_env("ALPACA_ADJUSTMENT", "raw", cast=str, resolve_aliases=False) or "raw"
+        ),
+    ))
 
 
-def get_settings():
+def get_settings() -> Settings:
     """Return cached Settings object with test-friendly fallback."""
 
     global _CACHED_SETTINGS
     if _CACHED_SETTINGS is not None:
         return _CACHED_SETTINGS
+    settings_obj: Settings
     try:
         settings_obj = _settings_get_settings()
-    except Exception as exc:
-        if os.getenv("PYTEST_RUNNING"):
+    except Exception:
+        if _env_is_truthy("PYTEST_RUNNING"):
             settings_obj = _default_test_settings()
         else:
             raise
     else:
-        if settings_obj is None:
-            if os.getenv("PYTEST_RUNNING"):
-                settings_obj = _default_test_settings()
-            else:
-                raise RuntimeError("settings unavailable")
+        maybe_settings: Any = settings_obj
+        if maybe_settings is None:
+            raise RuntimeError("settings unavailable")
     _CACHED_SETTINGS = settings_obj
-    return _CACHED_SETTINGS
+    return settings_obj
 
 
-def safe_settings():
+def safe_settings() -> Settings:
     """Return settings with conservative defaults when unavailable."""
 
     try:
@@ -228,9 +237,9 @@ PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", (
 
 def _env_value(*names: str) -> str | None:
     for name in names:
-        value = os.getenv(name)
+        value = get_env(name, None, cast=str, resolve_aliases=False)
         if value not in (None, ""):
-            return value
+            return str(value)
     return None
 
 
@@ -240,8 +249,12 @@ if TRADING_MODE not in MODE_PARAMETERS:
 
 
 def _cfg_float(field: str, fallback: float) -> float:
-    value = getattr(_CFG, field, None)
+    value: Any = getattr(_CFG, field, None)
     if value in (None, ""):
+        return float(fallback)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
         return float(fallback)
     try:
         return float(value)
@@ -301,15 +314,18 @@ def get_execution_settings() -> ExecutionSettingsSnapshot:
 
     cfg = get_trading_config()
     provider_order = tuple(getattr(cfg, "price_provider_order", ()) or PRICE_PROVIDER_ORDER)
-    raw_participation_cap = getattr(cfg, "exec_max_participation_rate", None)
+    raw_participation_cap: Any = getattr(cfg, "exec_max_participation_rate", None)
     if raw_participation_cap in (None, ""):
         raw_participation_cap = getattr(cfg, "participation_rate", None)
     participation_cap: float | None
-    try:
-        participation_cap = float(raw_participation_cap)
-    except (TypeError, ValueError):
-        participation_cap = None
+    if isinstance(raw_participation_cap, (int, float, str)):
+        try:
+            participation_cap = float(raw_participation_cap)
+        except (TypeError, ValueError):
+            participation_cap = None
     else:
+        participation_cap = None
+    if participation_cap is not None:
         if not (0.0 < participation_cap <= 1.0):
             participation_cap = None
     return ExecutionSettingsSnapshot(
@@ -341,7 +357,7 @@ def validate_environment() -> None:
         if _env_value("MAX_DRAWDOWN_THRESHOLD") is None:
             logger.error("CONFIG_ENV_MISSING_DRAWDOWN")
             raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
-        snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        snapshot = merged_env_snapshot()
         try:
             validate_required_env(env=snapshot)
         except Exception as exc:

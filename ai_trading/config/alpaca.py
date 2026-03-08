@@ -3,9 +3,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 import logging
-import os
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
+from ai_trading.config.management import get_env
 from .settings import broker_keys, get_settings
 
 @dataclass(frozen=True)
@@ -73,7 +73,10 @@ def get_alpaca_config() -> AlpacaConfig:
     if not base_url:
         base_url = 'https://paper-api.alpaca.markets' if use_paper else 'https://api.alpaca.markets'
     rate_limit = getattr(s, 'alpaca_rate_limit_per_min', None)
-    feed = (os.getenv('ALPACA_DATA_FEED') or getattr(s, 'alpaca_data_feed', 'iex')).lower()
+    feed = str(
+        get_env("ALPACA_DATA_FEED", getattr(s, "alpaca_data_feed", "iex"), cast=str, resolve_aliases=False)
+        or getattr(s, "alpaca_data_feed", "iex")
+    ).lower()
     if not key_id or not secret:
         raise RuntimeError('Missing Alpaca credentials in broker_keys() (ALPACA_KEY_ID/ALPACA_SECRET_KEY)')
     if ALPACA_AVAILABLE:

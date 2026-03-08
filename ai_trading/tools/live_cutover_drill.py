@@ -3,12 +3,16 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime
 import json
-import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 import uuid
 
+from ai_trading.config.management import (
+    clear_runtime_env_override,
+    get_env,
+    set_runtime_env_override,
+)
 from ai_trading.logging import get_logger
 from ai_trading.oms.intent_store import IntentStore
 
@@ -82,18 +86,18 @@ def _normalize_database_url(raw: str) -> str:
 def _run_startup_validation(execution_mode: str) -> tuple[bool, str | None]:
     from ai_trading.__main__ import _validate_startup_config
 
-    prior_mode = os.environ.get("EXECUTION_MODE")
-    os.environ["EXECUTION_MODE"] = execution_mode
+    prior_mode = get_env("EXECUTION_MODE", None, cast=str, resolve_aliases=False)
+    set_runtime_env_override("EXECUTION_MODE", execution_mode)
     try:
         _validate_startup_config()
         return True, None
     except SystemExit as exc:
         return False, str(exc)
     finally:
-        if prior_mode is None:
-            os.environ.pop("EXECUTION_MODE", None)
+        if prior_mode in (None, ""):
+            clear_runtime_env_override("EXECUTION_MODE")
         else:
-            os.environ["EXECUTION_MODE"] = prior_mode
+            set_runtime_env_override("EXECUTION_MODE", prior_mode)
 
 
 def _run_oms_durability_drill(
@@ -155,7 +159,10 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     startup_ok, startup_error = _run_startup_validation(execution_mode)
 
     effective_database_url = _normalize_database_url(
-        str(args.database_url or os.getenv("DATABASE_URL", ""))
+        str(
+            args.database_url
+            or get_env("DATABASE_URL", "", cast=str, resolve_aliases=False)
+        )
     )
     parsed_database_url = urlparse(effective_database_url) if effective_database_url else None
     non_sqlite_database = bool(

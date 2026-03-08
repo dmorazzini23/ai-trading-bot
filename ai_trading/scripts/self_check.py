@@ -1,5 +1,4 @@
 import datetime as dt
-import os
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 
@@ -20,9 +19,9 @@ def _bars_time_window(timeframe: "TimeFrame") -> tuple[dt.datetime, dt.datetime]
     now = dt.datetime.now(tz=ZoneInfo("UTC"))
     end = now - dt.timedelta(minutes=1)
     if timeframe == TimeFrame.Day:
-        days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", 200))
+        days = int(get_env("DATA_LOOKBACK_DAYS_DAILY", 200, cast=int))
     else:
-        days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
+        days = int(get_env("DATA_LOOKBACK_DAYS_MINUTE", 5, cast=int))
     start = end - dt.timedelta(days=days)
     return start, end
 

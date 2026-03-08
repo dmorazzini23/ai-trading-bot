@@ -1,30 +1,48 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime
 
 from pydantic import BaseModel
 from pydantic import field_validator, Field
 
-from ai_trading.config.management import validate_no_deprecated_env
+from ai_trading.config.management import (
+    get_env,
+    merged_env_snapshot,
+    validate_no_deprecated_env,
+)
 from ai_trading.logging import get_logger
 from ai_trading.logging.redact import redact_env
 
 logger = get_logger(__name__)
 
+
+def _required_env(name: str) -> str:
+    value = get_env(name, None, cast=str, resolve_aliases=False)
+    if value in (None, ""):
+        raise KeyError(name)
+    return str(value)
+
+
+def _optional_env(name: str, default: str) -> str:
+    value = get_env(name, default, cast=str, resolve_aliases=False)
+    return str(value or default)
+
+
 class Settings(BaseModel):
-    ALPACA_API_KEY: str = Field(default_factory=lambda: os.environ["ALPACA_API_KEY"])
-    ALPACA_SECRET_KEY: str = Field(default_factory=lambda: os.environ["ALPACA_SECRET_KEY"])
+    ALPACA_API_KEY: str = Field(default_factory=lambda: _required_env("ALPACA_API_KEY"))
+    ALPACA_SECRET_KEY: str = Field(default_factory=lambda: _required_env("ALPACA_SECRET_KEY"))
     ALPACA_TRADING_BASE_URL: str = Field(
-        default_factory=lambda: os.environ["ALPACA_TRADING_BASE_URL"]
+        default_factory=lambda: _required_env("ALPACA_TRADING_BASE_URL")
     )
     ALPACA_DATA_BASE_URL: str = Field(
-        default_factory=lambda: os.environ.get("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
+        default_factory=lambda: _optional_env("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets")
     )
     AI_TRADING_TRADING_MODE: str = Field(
-        default_factory=lambda: os.environ.get("AI_TRADING_TRADING_MODE", "balanced")
+        default_factory=lambda: _optional_env("AI_TRADING_TRADING_MODE", "balanced")
     )
-    FORCE_TRADES: bool = Field(default_factory=lambda: os.environ.get("FORCE_TRADES", False))
+    FORCE_TRADES: bool = Field(
+        default_factory=lambda: bool(get_env("FORCE_TRADES", False, cast=bool, resolve_aliases=False))
+    )
 
     @field_validator('ALPACA_API_KEY')
     @classmethod
@@ -78,14 +96,15 @@ def debug_environment() -> dict:
     :func:`redact_env` to avoid leaking secrets.
     """
 
-    masked = redact_env(os.environ)
+    env_snapshot = merged_env_snapshot()
+    masked = redact_env(env_snapshot)
     env_vars = {
         name: {
             "status": "set",
             "value": masked.get(name, "<redacted>"),
-            "length": len(str(os.environ[name])),
+            "length": len(str(env_snapshot[name])),
         }
-        for name in os.environ
+        for name in env_snapshot
     }
 
     return {
@@ -101,7 +120,7 @@ def debug_environment() -> dict:
 def validate_specific_env_var(name: str, required: bool = False) -> dict:
     """Validate and report on a specific environment variable."""
 
-    val = os.environ.get(name)
+    val = get_env(name, None, cast=str, resolve_aliases=False)
     if val is None:
         result = {
             "variable": name,

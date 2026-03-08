@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from typing import Any, Mapping
+
+from ai_trading.config.management import merged_env_snapshot
 
 # Default maximum factor applied to ATR-based scaling.  Deployments may
 # override via the ``AI_TRADING_TAKE_PROFIT_FACTOR`` environment variable.
@@ -50,7 +51,8 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
     it is initialised to an empty dict rather than ``None``.  Numeric values
     within ``extras`` are coerced to ``int`` or ``float`` for convenience.
     """
-    env_map = {k.upper(): v for k, v in (env or os.environ).items()}
+    source_env = env or merged_env_snapshot()
+    env_map = {k.upper(): v for k, v in source_env.items()}
 
     legacy_used = [
         f"{legacy}->{canonical}"

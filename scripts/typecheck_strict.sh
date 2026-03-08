@@ -4,6 +4,12 @@ set -euo pipefail
 # High-signal strict type checks for critical runtime paths.
 python3 -m mypy --config-file mypy_strict.ini \
   ai_trading/config/management.py \
+  ai_trading/config/alpaca.py \
+  ai_trading/config/__init__.py \
+  ai_trading/config/settings.py \
+  ai_trading/config/runtime.py \
+  ai_trading/validation/validate_env.py \
+  ai_trading/validation/require_env.py \
   ai_trading/health_payload.py \
   ai_trading/health.py \
   ai_trading/logging/emit_once.py \

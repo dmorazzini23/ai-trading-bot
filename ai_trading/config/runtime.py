@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
 import logging
-import os
+import sys
 import threading
 from dataclasses import dataclass, field as dataclass_field
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence, cast
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,50 @@ _FEED_IGNORE_LOGGED = False
 _FEED_IGNORE_LOCK = threading.Lock()
 
 
-def _reject_legacy_apca_env() -> None:
-    """Abort startup when unsupported AP""" "CA_* environment variables are present."""
+def _management_module() -> Any | None:
+    module = sys.modules.get("ai_trading.config.management")
+    if module is not None:
+        return module
+    try:
+        return importlib.import_module("ai_trading.config.management")
+    except Exception:
+        return None
 
-    legacy_keys = [key for key in os.environ if key.startswith(_LEGACY_BROKER_PREFIX)]
+
+def _managed_env_snapshot() -> dict[str, str]:
+    module = _management_module()
+    getter = getattr(module, "merged_env_snapshot", None) if module is not None else None
+    if not callable(getter):
+        return {}
+    try:
+        raw_snapshot = getter()
+    except Exception:
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in raw_snapshot.items()
+        if value is not None
+    }
+
+
+def _managed_env_value(key: str) -> str | None:
+    module = _management_module()
+    getter = getattr(module, "get_env", None) if module is not None else None
+    if callable(getter):
+        try:
+            value = getter(key, None, cast=str, resolve_aliases=False)
+        except Exception:
+            value = None
+        if value not in (None, ""):
+            return str(value)
+    return _managed_env_snapshot().get(key)
+
+
+def _reject_legacy_apca_env() -> None:
+    """Abort startup when unsupported legacy broker-prefixed env vars are present."""
+
+    snapshot = _managed_env_snapshot()
+    legacy_keys = [key for key in snapshot if key.startswith(_LEGACY_BROKER_PREFIX)]
     if not legacy_keys:
         return
 
@@ -45,10 +86,6 @@ def _reject_legacy_apca_env() -> None:
         f"{_LEGACY_BROKER_PREFIX}API_SECRET_KEY→ALPACA_SECRET_KEY). "
         "After updating your environment (.env/systemd), run 'make doctor' to verify."
     )
-
-
-_reject_legacy_apca_env()
-
 
 def _to_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
@@ -2094,7 +2131,7 @@ def _resolve_mode_precedence(env_map: Mapping[str, Any] | None = None) -> str:
             if normalized in {"strict_mode", "env_wins"}:
                 return normalized
     for key in candidates:
-        raw = os.environ.get(key)
+        raw = _managed_env_value(key)
         if raw in (None, ""):
             continue
         normalized = str(raw).strip().lower()
@@ -2122,7 +2159,7 @@ def _resolve_mode_selection(
                 break
     else:
         for key in mode_candidates:
-            normalized = _normalize_mode_name(os.environ.get(key))
+            normalized = _normalize_mode_name(_managed_env_value(key))
             if normalized is not None:
                 env_mode = normalized
                 env_source = key
@@ -2262,7 +2299,7 @@ def ensure_trading_config_current(keys: Iterable[str] | None = None) -> TradingC
     if not normalized_keys:
         return get_trading_config()
 
-    current_values = {key: os.environ.get(key) for key in normalized_keys}
+    current_values = {key: _managed_env_value(key) for key in normalized_keys}
 
     refresh_side_effects = False
     with _CACHE_LOCK:
@@ -2339,7 +2376,7 @@ def _validate_override_keys(overrides: Mapping[str, Any]) -> None:
         )
 
 
-class _EnvSnapshotDict(dict):
+class _EnvSnapshotDict(dict[str, str]):
     """Dictionary subclass tagging mappings produced by :func:`_env_snapshot`."""
 
     __slots__ = ("is_snapshot", "override_keys")
@@ -2505,7 +2542,7 @@ class TradingConfig:
         if _env_map is not None:
             env_snapshot: Mapping[str, Any] | None = _env_map
         else:
-            env_snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+            env_snapshot = _managed_env_snapshot()
 
         normalized.update(values)
         for spec in CONFIG_SPECS:
@@ -2670,7 +2707,8 @@ class TradingConfig:
             raw_alias = env_map.get("AI_TRADING_DAILY_LOSS_LIMIT")
             if raw_alias not in (None, ""):
                 spec = SPEC_BY_FIELD["dollar_risk_limit"]
-                values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
+                alias_value = str(raw_alias)
+                values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, alias_value))
 
         mode_effective = _apply_mode_overlays(values, env_map, explicit_fields=provided_fields)
 
@@ -2767,9 +2805,9 @@ def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
     return _validate_bounds(spec, value)
 
 
-def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str, str]:
+def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> _EnvSnapshotDict:
     snap: _EnvSnapshotDict = _EnvSnapshotDict(
-        {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        _managed_env_snapshot()
     )
     base_mode_value: str | None = None
     base_mode_source: str | None = None
@@ -2802,11 +2840,11 @@ def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str,
                     )
             else:
                 _validate_override_keys(overrides)
-                normalized = {k.upper(): str(v) for k, v in overrides.items()}
-                snap.update(normalized)
-                override_keys.update(normalized.keys())
+                normalized_overrides = {k.upper(): str(v) for k, v in overrides.items()}
+                snap.update(normalized_overrides)
+                override_keys.update(normalized_overrides.keys())
                 for mode_key in ("AI_TRADING_TRADING_MODE",):
-                    raw_override_mode = normalized.get(mode_key)
+                    raw_override_mode = normalized_overrides.get(mode_key)
                     if raw_override_mode not in (None, ""):
                         override_mode_value = str(raw_override_mode)
                         override_mode_source = mode_key
@@ -2816,13 +2854,13 @@ def _env_snapshot(overrides: Mapping[str, Any] | str | None = None) -> dict[str,
         if raw_value in (None, ""):
             continue
         if canonical_key == "EXECUTION_MODE":
-            normalized = str(raw_value).strip().lower()
-            if normalized in {"1", "true", "yes", "on", "paper"}:
+            normalized_mode = str(raw_value).strip().lower()
+            if normalized_mode in {"1", "true", "yes", "on", "paper"}:
                 if alias_key in override_keys:
                     snap[canonical_key] = "paper"
                 else:
                     snap.setdefault(canonical_key, "paper")
-            elif normalized in {"0", "false", "no", "off", "live"}:
+            elif normalized_mode in {"0", "false", "no", "off", "live"}:
                 if alias_key in override_keys:
                     snap[canonical_key] = snap.get(canonical_key, "sim")
                 else:
@@ -2847,6 +2885,7 @@ def get_trading_config() -> TradingConfig:
     """Return cached trading configuration that reflects current environment."""
 
     global _CACHED_CONFIG, _CACHED_SIGNATURE
+    _reject_legacy_apca_env()
     snap = _env_snapshot()
     signature = _signature_from_snapshot(snap)
     with _CACHE_LOCK:
@@ -2867,7 +2906,7 @@ def _clear_trading_config_cache() -> None:
         _CACHED_SIGNATURE = None
 
 
-get_trading_config.cache_clear = _clear_trading_config_cache  # type: ignore[attr-defined]
+cast(Any, get_trading_config).cache_clear = _clear_trading_config_cache
 
 
 def reload_trading_config(
@@ -2881,6 +2920,7 @@ def reload_trading_config(
     ``allow_missing_drawdown`` to ``False``.
     """
 
+    _reject_legacy_apca_env()
     snap = _env_snapshot(env_overrides)
     cfg = TradingConfig.from_env(snap, allow_missing_drawdown=allow_missing_drawdown)
     _clear_trading_config_cache()
@@ -2936,6 +2976,9 @@ def config_snapshot_hash(cfg: TradingConfig | Mapping[str, Any]) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+_reject_legacy_apca_env()
 
 
 __all__ = [

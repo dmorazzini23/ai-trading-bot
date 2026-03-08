@@ -9,9 +9,10 @@ the loader. This keeps production defaults unchanged, per AGENTS.md.
 """
 
 import json
-import os
 from functools import lru_cache
 from typing import Any
+
+from ai_trading.config.management import get_env
 
 
 @lru_cache(maxsize=1)
@@ -22,7 +23,11 @@ def _load_profile_cached(path: str) -> dict[str, Any]:
 
 def load_strategy_profile(path_or_env: str | None = None) -> dict[str, Any] | None:
     """Load a strategy profile JSON if configured; otherwise return None."""
-    path = path_or_env or os.getenv("STRATEGY_PROFILE") or os.getenv("AI_TRADING_STRATEGY_PROFILE")
+    path = (
+        path_or_env
+        or get_env("STRATEGY_PROFILE", None, cast=str, resolve_aliases=False)
+        or get_env("AI_TRADING_STRATEGY_PROFILE", None, cast=str, resolve_aliases=False)
+    )
     if not path:
         return None
     try:
@@ -43,4 +48,3 @@ def lookup_overrides(profile: dict[str, Any] | None, symbol: str, strategy: str)
 
 
 __all__ = ["load_strategy_profile", "lookup_overrides"]
-

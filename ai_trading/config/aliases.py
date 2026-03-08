@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger, logger_once
 
 _log = get_logger(__name__)
@@ -15,7 +15,10 @@ def resolve_trading_mode(default: str, *, skip_env: bool = False) -> str:
     """
     if skip_env:
         return default
-    values = {k: os.getenv(k) for k in _ALIASES}
+    values = {
+        k: get_env(k, None, cast=str, resolve_aliases=False)
+        for k in _ALIASES
+    }
     chosen: tuple[str, str] | None = None
     for key in (_CANON, 'bot_mode'):
         v = values.get(key)

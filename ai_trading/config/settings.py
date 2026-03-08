@@ -1,10 +1,42 @@
-import os
+import sys
 from functools import lru_cache
+from typing import Any, cast
 from ai_trading.settings import Settings, _secret_to_str, _to_bool, _to_float, _to_int
 from ai_trading.settings import get_settings as _base_get_settings
 
-TICKERS_FILE = os.getenv('AI_TRADING_TICKERS_FILE', 'tickers.csv')
-MODEL_PATH = os.getenv('AI_TRADING_MODEL_PATH')
+_SETTINGS_FALLBACK_FIELDS: dict[str, str] = {
+    "AI_TRADING_TICKERS_FILE": "tickers_file",
+    "AI_TRADING_MODEL_PATH": "model_path",
+}
+
+
+def _managed_env(name: str, default: str | None = None) -> str | None:
+    management_module = sys.modules.get("ai_trading.config.management")
+    getter = (
+        getattr(management_module, "get_env", None)
+        if management_module is not None
+        else None
+    )
+    if callable(getter):
+        try:
+            value = getter(name, default, cast=str, resolve_aliases=False)
+        except Exception:
+            value = default
+        return None if value is None else str(value)
+
+    fallback_field = _SETTINGS_FALLBACK_FIELDS.get(name)
+    if fallback_field:
+        try:
+            settings_obj = _base_get_settings()
+        except Exception:
+            return default
+        candidate = getattr(settings_obj, fallback_field, default)
+        return None if candidate is None else str(candidate)
+    return default
+
+
+TICKERS_FILE = str(_managed_env("AI_TRADING_TICKERS_FILE", "tickers.csv") or "tickers.csv")
+MODEL_PATH = _managed_env("AI_TRADING_MODEL_PATH")
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -19,13 +51,12 @@ def _cache_clear() -> None:
     """Clear cached settings, including the base Settings singleton."""
 
     _original_cache_clear()
-    try:
-        _base_get_settings.cache_clear()  # type: ignore[attr-defined]
-    except AttributeError:
-        pass
+    base_cache_clear = getattr(_base_get_settings, "cache_clear", None)
+    if callable(base_cache_clear):
+        base_cache_clear()
 
 
-get_settings.cache_clear = _cache_clear  # type: ignore[assignment]
+cast(Any, get_settings).cache_clear = _cache_clear
 
 def broker_keys(s: Settings | None=None) -> dict[str, str]:
     """Return broker credential mapping."""

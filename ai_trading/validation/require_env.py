@@ -9,8 +9,8 @@ lightweight to keep startup costs minimal.
 """
 
 from collections.abc import Mapping
-import os
 from ai_trading.logging import get_logger
+from ai_trading.config.management import merged_env_snapshot
 
 logger = get_logger(__name__)
 
@@ -23,10 +23,9 @@ def _require_env_vars(*names: str, env: Mapping[str, str] | None = None) -> None
     names:
         Environment variable names that must be present.
     env:
-        Optional mapping to check instead of ``os.environ``.  The tests use the
-        default which reads from the real environment.
+        Optional mapping to check instead of the managed environment snapshot.
     """
-    env_map = env or os.environ
+    env_map = env or merged_env_snapshot()
     missing = [n for n in names if not env_map.get(n)]
     if missing:
         msg = f"Missing required environment variables: {', '.join(missing)}"

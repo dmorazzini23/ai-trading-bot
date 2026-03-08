@@ -1,8 +1,8 @@
 from __future__ import annotations
-import os
 import sys
 import importlib.util
 from collections.abc import Iterable, Mapping
+from ai_trading.config.management import merged_env_snapshot
 from ai_trading.logging import get_logger
 logger = get_logger(__name__)
 REQUIRED_KEYS: tuple[str, ...] = (
@@ -19,7 +19,7 @@ REQUIRED_PACKAGES: tuple[str, ...] = ('hmmlearn',)
 
 def validate_env(env: Mapping[str, str] | None=None) -> list[str]:
     """Return list of missing required environment keys or packages."""
-    env = env or os.environ
+    env = env or merged_env_snapshot()
     missing: list[str] = []
     for key in DEPRECATED_URL_KEYS:
         if env.get(key):
