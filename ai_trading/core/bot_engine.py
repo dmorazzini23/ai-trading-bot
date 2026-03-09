@@ -7070,6 +7070,11 @@ def _fetch_minute_df_safe_uncached(symbol: str) -> pd.DataFrame:
     expected_bars = _count_trading_minutes(start_dt, end_dt)
     if expected_bars <= 0:
         expected_bars = _expected_minute_bars_window(start_dt, end_dt)
+    if indicator_backfill_applied:
+        # When we expand the fetch window to preserve indicator history, coverage
+        # must be evaluated against that wider requirement rather than only the
+        # currently elapsed session minutes.
+        expected_bars = max(expected_bars, longest_indicator_minutes)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
     primary_expected_bars = expected_bars
 

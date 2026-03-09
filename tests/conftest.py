@@ -19,6 +19,7 @@ from typing import Any, cast
 
 _STUB_PATH = pathlib.Path(__file__).resolve().parent / "stubs"
 _STUB_PATH_STR = str(_STUB_PATH)
+_REAL_DATETIME = datetime
 
 if "dotenv" not in sys.modules:
     removed_stub_for_dotenv = False
@@ -559,6 +560,8 @@ def _reset_bot_engine_state():
             bot_engine.stream = None
         if hasattr(bot_engine, "time") and hasattr(bot_engine.time, "sleep"):
             bot_engine.time.sleep = _time.sleep
+        if hasattr(bot_engine, "datetime"):
+            bot_engine.datetime = _REAL_DATETIME
         if hasattr(bot_engine, "_ctx"):
             bot_engine._ctx = None
         lazy_cls = getattr(bot_engine, "LazyBotContext", None)

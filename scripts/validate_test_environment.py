@@ -1,36 +1,59 @@
-"""
-Validate that all required test dependencies are available.
-This script helps identify missing dependencies before running tests.
-"""
+"""Validate the local environment needed for the full test suite."""
+
+from __future__ import annotations
+
 import importlib
 import sys
-REQUIRED_PACKAGES = [('pytest', 'pytest'), ('pytest_cov', 'pytest-cov'), ('xdist', 'pytest-xdist'), ('pytest_benchmark', 'pytest-benchmark'), ('pytest_asyncio', 'pytest-asyncio'), ('hypothesis', 'hypothesis'), ('numpy', 'numpy'), ('pandas', 'pandas'), ('sklearn', 'scikit-learn'), ('joblib', 'joblib'), ('pyarrow', 'pyarrow'), ('stable_baselines3', 'stable-baselines3'), ('gymnasium', 'gymnasium'), ('flake8', 'flake8'), ('mypy', 'mypy')]
+
+FULL_TEST_INSTALL_HINT = "make install-dev"
+
+REQUIRED_PACKAGES = [
+    ("pytest", "pytest"),
+    ("pytest_asyncio", "pytest-asyncio"),
+    ("hypothesis", "hypothesis"),
+    ("freezegun", "freezegun"),
+    ("sqlalchemy", "SQLAlchemy"),
+    ("psycopg", "psycopg[binary]"),
+    ("tenacity", "tenacity"),
+    ("psutil", "psutil"),
+    ("hmmlearn", "hmmlearn"),
+    ("numpy", "numpy"),
+    ("pandas", "pandas"),
+    ("sklearn", "scikit-learn"),
+    ("joblib", "joblib"),
+]
+
 
 def check_package(import_name: str, package_name: str) -> tuple[bool, str]:
-    """Check if a package can be imported."""
+    """Check whether *import_name* is importable."""
+
     try:
         module = importlib.import_module(import_name)
-        version = getattr(module, '__version__', 'unknown')
-        return (True, version)
-    except ImportError as e:
-        return (False, str(e))
+    except ImportError as exc:
+        return False, str(exc)
+    return True, getattr(module, "__version__", "unknown")
 
-def main():
-    """Main validation function."""
-    missing_packages = []
-    available_packages = []
+
+def main() -> int:
+    """Return 0 when the full test environment is available."""
+
+    missing_packages: list[tuple[str, str]] = []
+
     for import_name, package_name in REQUIRED_PACKAGES:
         success, info = check_package(import_name, package_name)
-        if success:
-            available_packages.append((package_name, info))
-        else:
+        if not success:
             missing_packages.append((package_name, info))
-    if missing_packages:
-        for package_name, error in missing_packages:
-            pass
-        return 1
-    else:
+
+    if not missing_packages:
+        print("FULL_TEST_ENVIRONMENT_OK")
         return 0
-if __name__ == '__main__':
-    exit_code = main()
-    sys.exit(exit_code)
+
+    print("FULL_TEST_ENVIRONMENT_MISSING")
+    for package_name, error in missing_packages:
+        print(f"- {package_name}: {error}")
+    print(f"Install with: {FULL_TEST_INSTALL_HINT}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

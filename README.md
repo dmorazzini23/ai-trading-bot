@@ -1669,7 +1669,7 @@ Environment variables controlling startup import checks:
 ## Development quick start
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
+python3 -m venv venv && . venv/bin/activate
 bash scripts/bootstrap.sh
 python3 -m compileall ai_trading
 pytest -q

@@ -33,7 +33,7 @@ except Exception:  # ImportError
 
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import CollectorRegistry, get_counter, get_registry, register_reset_hook
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.oms.intent_store import IntentStore
 from ai_trading.oms.statuses import TERMINAL_INTENT_STATUSES
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
@@ -601,7 +601,7 @@ class OrderManager:
         self._intent_store: IntentStore | None = None
         self._intent_by_order_id: dict[str, str] = {}
         self._intent_reported_fill_qty: dict[str, float] = {}
-        self._test_mode = bool(get_env("PYTEST_RUNNING", default=""))
+        self._test_mode = is_test_runtime()
         self._init_intent_store()
         emit_once(logger, "ORDER_MANAGER_INIT", "info", "OrderManager initialized")
 
@@ -1042,8 +1042,7 @@ class OrderManager:
                 # Avoid starting background monitor threads automatically during
                 # unit tests. Tests that need the thread can call
                 # ``start_monitoring()`` explicitly.
-                pytest_running = _env_bool("PYTEST_RUNNING", False)
-                if not pytest_running:
+                if not self._test_mode:
                     self.start_monitoring()
             logger.info(f"Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}")
             if getattr(order, "expected_price", None) is not None:

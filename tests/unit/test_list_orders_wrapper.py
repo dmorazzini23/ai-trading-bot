@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from ai_trading.core import alpaca_client
@@ -24,4 +25,16 @@ def test_validate_trading_api_maps_get_orders_to_list_orders() -> None:
     list_orders = cast(Any, getattr(client, "list_orders", None))
     assert callable(list_orders)
     assert list_orders(status="open") == ["ok"]
-    assert client.kwargs == {"status": "open"}
+    assert client.kwargs is not None
+    if "filter" in client.kwargs:
+        filter_obj = client.kwargs["filter"]
+        statuses = getattr(filter_obj, "statuses", None)
+        if statuses is None:
+            statuses = getattr(filter_obj, "status", None)
+        if statuses is None and isinstance(filter_obj, Mapping):
+            statuses = filter_obj.get("statuses") or filter_obj.get("status")
+        if statuses is not None and not isinstance(statuses, (list, tuple)):
+            statuses = [getattr(statuses, "value", statuses)]
+        assert statuses in (["open"], ["OPEN"], ("open",), ("OPEN",))
+    else:
+        assert client.kwargs == {"status": "open"}

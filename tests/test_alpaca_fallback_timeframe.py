@@ -30,6 +30,11 @@ def test_stock_bars_request_accepts_mutable_timeframe(monkeypatch, request):
 
     stub_config_management = cast(Any, types.ModuleType("ai_trading.config.management"))
     stub_config_management.is_shadow_mode = lambda: False
+    stub_config_management.get_env = (
+        lambda key, default=None, **_kwargs: "1"
+        if key == "AI_TRADING_FORCE_ALPACA_UNAVAILABLE"
+        else default
+    )
     monkeypatch.setitem(sys.modules, "ai_trading.config.management", stub_config_management)
 
     stub_config_pkg = cast(Any, types.ModuleType("ai_trading.config"))

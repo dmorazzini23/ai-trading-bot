@@ -207,9 +207,14 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     monkeypatch.setenv("AI_TRADING_WARMUP_MODE", "0")
     monkeypatch.setenv("AI_TRADING_EVENT_DRIVEN_NEW_BAR_ONLY", "0")
     monkeypatch.setenv("AI_TRADING_NETTING_CYCLE_SLO_LOG_TTL_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_LIQ_REGIME_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_CAPACITY_AWARE_THROTTLE_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_EVENT_RISK_BLACKOUT_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_QUARANTINE_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PARTICIPATION_CAP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_ALPHA_DECAY_DEWEIGHT_ENABLED", "0")
     monkeypatch.setattr(
         "ai_trading.data.fetch.get_bars_batch",
         lambda symbols, timeframe, start, end: {str(sym).upper(): df for sym in symbols},
@@ -251,6 +256,8 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     )
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda _now=None: True)
+    monkeypatch.setattr(bot_engine, "retry_idempotent", lambda fn, **_kwargs: fn())
     monkeypatch.setattr(bot_engine, "ensure_data_fetcher", lambda runtime_obj: None)
     monkeypatch.setattr(bot_engine, "compute_current_positions", lambda runtime_obj: {})
     monkeypatch.setattr(bot_engine, "check_daily_loss", lambda runtime_obj, state_obj: False)
@@ -275,11 +282,29 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     monkeypatch.setattr(bot_engine, "_run_tca_cost_calibration", lambda *args, **kwargs: None)
     monkeypatch.setattr(bot_engine, "_run_replay_governance", lambda *args, **kwargs: None)
     monkeypatch.setattr(bot_engine, "_run_walk_forward_governance", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot_engine, "_update_rollout_governance_state", lambda *args, **kwargs: {"capital_ramp": {}})
+    monkeypatch.setattr(bot_engine, "_resolve_primary_feed_derisk_state", lambda _runtime: {})
+    monkeypatch.setattr(
+        bot_engine,
+        "enforce_participation_cap",
+        lambda **kwargs: (True, float(kwargs["order_qty"]), None),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_alpha_decay_entry_guard",
+        lambda *args, **kwargs: {"blocked": False, "trades_in_window": 0, "start_trades": 0},
+    )
+    monkeypatch.setattr(bot_engine, "is_near_event", lambda _symbol, days=0: False)
     monkeypatch.setattr(bot_engine, "_tca_stale_block_reason", lambda _now: None)
     monkeypatch.setattr(
         bot_engine,
         "safe_validate_pretrade",
         lambda *args, **kwargs: (True, "OK", {}),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_submit_none_reason",
+        lambda _runtime: "CYCLE_DUPLICATE_INTENT",
     )
     monkeypatch.setattr(bot_engine, "submit_order", _fake_submit)
 
@@ -302,7 +327,7 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
 
     aapl_records = [record for record in written_records if str(record.symbol).upper() == "AAPL"]
     msft_records = [record for record in written_records if str(record.symbol).upper() == "MSFT"]
-    assert any("CYCLE_DUPLICATE_INTENT" in list(record.gates or []) for record in aapl_records)
-    assert any("OK_TRADE" in list(record.gates or []) for record in msft_records)
+    assert any("CYCLE_DUPLICATE_INTENT" in list(record.gates or []) for record in aapl_records), written_records
+    assert any("OK_TRADE" in list(record.gates or []) for record in msft_records), written_records
     assert int(cast(int, captured_slo.get("orders_attempted", -1))) == 1
     assert int(cast(int, captured_slo.get("orders_submitted", -1))) == 1

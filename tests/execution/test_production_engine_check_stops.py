@@ -14,7 +14,7 @@ def _set_module_attr(module: types.ModuleType, name: str, value: Any) -> None:
 
 if "dotenv" not in sys.modules:
     repo_root = pathlib.Path(__file__).resolve().parents[2]
-    stub_origin = repo_root / ".venv" / "lib" / "python3.11" / "site-packages" / "dotenv" / "__init__.py"
+    stub_origin = repo_root / "venv" / "lib" / "python3.12" / "site-packages" / "dotenv" / "__init__.py"
     dotenv_stub = types.ModuleType("dotenv")
     dotenv_stub.__spec__ = importlib.machinery.ModuleSpec("dotenv", loader=None, origin=str(stub_origin))
     _set_module_attr(dotenv_stub, "load_dotenv", lambda *a, **k: None)

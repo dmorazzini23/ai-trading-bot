@@ -24,7 +24,7 @@ All notable changes to this project will be documented in this file.
   avoids test/CI hangs; production runs continue to use infinite iterations.
 - Makefile: add `PYTHON ?= python3` and route all invocations through
   `$(PYTHON)` for compatibility on Debian/Ubuntu where `python` shim is
-  absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
+  absent. Supports using a venv via `make ... PYTHON=venv/bin/python`.
 - Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
 - Core: gate `ML_MODEL_MISSING` warning behind `AI_TRADING_WARN_IF_MODEL_MISSING` flag.
 - Data fetch: enforce rate limiter in `fetch.core` to comply with Alpaca quotas.

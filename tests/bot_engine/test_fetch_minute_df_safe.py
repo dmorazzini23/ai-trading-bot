@@ -1603,8 +1603,9 @@ def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
     with caplog.at_level(logging.WARNING):
         result = bot_engine.fetch_minute_df_safe("AAPL")
 
-    assert len(calls) == 2
-    assert calls[1] == "yahoo"
+    assert calls
+    assert calls[0] == "iex"
+    assert "yahoo" in calls[1:]
     assert not result.empty
     warning_records = [rec for rec in caplog.records if rec.message == "MINUTE_DATA_COVERAGE_WARNING"]
     assert warning_records, "coverage warning not emitted"

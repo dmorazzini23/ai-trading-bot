@@ -1,0 +1,1 @@
+{"bar_ts": "2024-01-02T15:04:05+00:00", "broker_order_id": "order-MSFT", "client_order_id": "1eb06dbf8a10f41a", "limit_price": 101.0, "qty": 1.0, "side": "buy", "status": "submitted", "symbol": "MSFT", "ts": "2024-01-02T15:04:05+00:00"}

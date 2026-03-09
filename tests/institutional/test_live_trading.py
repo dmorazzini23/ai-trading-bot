@@ -380,9 +380,9 @@ def test_initialize_sets_paper_flag(monkeypatch, mode, base_url, expected_paper)
         "ai_trading.execution.live_trading.ExecutionEngine._validate_connection",
         lambda self: True,
     )
+    monkeypatch.setattr("ai_trading.execution.live_trading._pytest_mode_active", lambda: False)
 
     engine = AlpacaExecutionEngine(execution_mode=mode)
     assert engine.initialize() is True
     assert captured_kwargs["paper"] is expected_paper
     assert captured_kwargs["url_override"] == base_url
-

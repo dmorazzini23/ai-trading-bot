@@ -142,7 +142,10 @@ def _validate_trading_api(api: Any) -> bool:
                         "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
                     )
                     GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
-                    filter_obj = GetOrdersRequest(statuses=[enum_val])
+                    try:
+                        filter_obj = GetOrdersRequest(status=enum_val)
+                    except TypeError:
+                        filter_obj = GetOrdersRequest(statuses=[enum_val])
                     return api.get_orders(
                         *args, filter=filter_obj, **kwargs
                     )  # type: ignore[attr-defined]

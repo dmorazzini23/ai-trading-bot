@@ -1,7 +1,5 @@
 		# ==== knobs with safe defaults ====
-ifneq ("$(wildcard .venv/bin/python)","")
-PYTHON ?= .venv/bin/python
-else ifneq ("$(wildcard venv/bin/python)","")
+ifneq ("$(wildcard venv/bin/python)","")
 PYTHON ?= venv/bin/python
 else
 PYTHON ?= python3
@@ -15,13 +13,22 @@ SKIP_INSTALL ?= 0
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
 
-.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy test-after-hours-pipeline lint tests-self lint-core institutional-gates secret-scan
+.PHONY: ensure-runtime install-dev validate-env test-collect-report ci-smoke smoke test test-all test-all-heavy test-after-hours-pipeline lint tests-self lint-core institutional-gates secret-scan
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
 	$(PYTHON) -m pip install -r requirements.txt -c constraints.txt
 	$(PYTHON) -m pip install -r requirements-dev.txt --no-deps -c constraints.txt
 endif
+
+install-dev:
+	@if [ ! -x venv/bin/python ]; then python3 -m venv venv --system-site-packages; fi
+	@venv/bin/python -m pip install --upgrade pip
+	@venv/bin/python -m pip install -r requirements-dev.txt -r requirements-test.txt
+	@venv/bin/python -m pip install -e . --no-deps
+
+validate-env:
+	@$(PYTHON) scripts/validate_test_environment.py
 
 # Collect only + harvest into artifact (always writes report)
 test-collect-report: ensure-runtime

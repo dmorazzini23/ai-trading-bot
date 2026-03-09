@@ -1344,7 +1344,9 @@ def _sdk_submit(
     # Optional retry wrapper for SDK submit
     disable_retry = client is None
     try:
-        if _managed_env("PYTEST_RUNNING", False, cast=bool, resolve_aliases=False):
+        from ai_trading.config.management import is_test_runtime
+
+        if is_test_runtime():
             disable_retry = True
     except Exception:
         _log.debug("PYTEST_MODE_DETECT_FAILED", exc_info=True)
