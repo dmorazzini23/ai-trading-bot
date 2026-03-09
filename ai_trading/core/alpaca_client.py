@@ -137,6 +137,7 @@ def _validate_trading_api(api: Any) -> bool:
 
                 # Prefer building a filter object when available to be compatible
                 # with newer alpaca-py signatures and tests that assert this path.
+                filter_obj: Any | None = None
                 try:
                     requests_mod = __import__(
                         "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
@@ -146,16 +147,28 @@ def _validate_trading_api(api: Any) -> bool:
                         filter_obj = GetOrdersRequest(status=enum_val)
                     except TypeError:
                         filter_obj = GetOrdersRequest(statuses=[enum_val])
-                    return api.get_orders(
-                        *args, filter=filter_obj, **kwargs
-                    )  # type: ignore[attr-defined]
                 except Exception:
                     if accepts_status:
-                        kwargs["status"] = enum_val
-                        return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-                    # Last resort: pass through status kwarg
+                        filter_obj = None
+                    logger.debug("LIST_ORDERS_FILTER_BUILD_FAILED", exc_info=True)
+
+                if filter_obj is not None:
+                    try:
+                        return api.get_orders(
+                            *args, filter=filter_obj, **kwargs
+                        )  # type: ignore[attr-defined]
+                    except TypeError:
+                        logger.debug(
+                            "LIST_ORDERS_FILTER_CALL_TYPE_ERROR",
+                            exc_info=True,
+                        )
+                    except Exception:
+                        raise
+
+                if accepts_status:
                     kwargs["status"] = enum_val
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+                return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             if _try_setattr(api, "list_orders", _list_orders_via_get_orders):
                 log_once.info(

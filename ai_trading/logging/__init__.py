@@ -1290,6 +1290,104 @@ def _safe_context_payload(context: Mapping[str, Any] | None) -> Mapping[str, Any
         return {}
 
 
+def _pdt_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return int(default)
+        return int(value)
+    except COMMON_EXC:
+        return int(default)
+
+
+def _pdt_float(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except COMMON_EXC:
+        return None
+
+
+def _pdt_bool(value: Any, default: bool = False) -> bool:
+    if value in (None, ""):
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    try:
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    except COMMON_EXC:
+        return bool(default)
+
+
+def _normalize_pdt_context_payload(
+    *,
+    reason: str | None,
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return normalized PDT context with aligned status semantics."""
+
+    raw_context = dict(_safe_context_payload(context))
+    pattern_day_trader = _pdt_bool(
+        raw_context.get("pattern_day_trader", raw_context.get("is_pdt")),
+        False,
+    )
+    daytrade_limit = _pdt_int(raw_context.get("daytrade_limit"), 0)
+    daytrade_count = _pdt_int(raw_context.get("daytrade_count"), 0)
+    remaining_daytrades = _pdt_int(
+        raw_context.get("remaining_daytrades", raw_context.get("remaining")),
+        max(daytrade_limit - daytrade_count, 0),
+    )
+    pdt_equity_exempt = _pdt_bool(raw_context.get("pdt_equity_exempt"), False)
+    if reason == "pdt_equity_exempt":
+        pdt_equity_exempt = True
+
+    if "pdt_limit_applicable" in raw_context:
+        pdt_limit_applicable = _pdt_bool(raw_context.get("pdt_limit_applicable"), False)
+    else:
+        pdt_limit_applicable = bool(pattern_day_trader and not pdt_equity_exempt)
+    if not pattern_day_trader:
+        pdt_limit_applicable = False
+        pdt_equity_exempt = False
+    elif not pdt_limit_applicable:
+        pdt_equity_exempt = True
+
+    can_daytrade = _pdt_bool(
+        raw_context.get("can_daytrade"),
+        (not pattern_day_trader)
+        or (not pdt_limit_applicable)
+        or daytrade_count < daytrade_limit,
+    )
+
+    strategy_raw = raw_context.get("strategy", raw_context.get("strategy_recommendation"))
+    strategy = str(strategy_raw).strip() if strategy_raw not in (None, "") else None
+
+    normalized: dict[str, Any] = {
+        "pattern_day_trader": pattern_day_trader,
+        "is_pdt": pattern_day_trader,
+        "daytrade_limit": daytrade_limit,
+        "daytrade_count": daytrade_count,
+        "remaining_daytrades": remaining_daytrades,
+        "remaining": remaining_daytrades,
+        "can_daytrade": can_daytrade,
+        "equity": _pdt_float(raw_context.get("equity")),
+        "pdt_limit_applicable": pdt_limit_applicable,
+        "pdt_equity_exempt": pdt_equity_exempt,
+    }
+    if strategy is not None:
+        normalized["strategy"] = strategy
+        normalized["strategy_recommendation"] = strategy
+
+    for key in ("symbol", "side", "closing_position", "current_position", "swing_mode_enabled"):
+        if key in raw_context:
+            normalized[key] = raw_context.get(key)
+    for key in ("active", "limit", "count", "block_enforced"):
+        if key in raw_context:
+            normalized[key] = raw_context.get(key)
+    return normalized
+
+
 def log_pdt_enforcement(
     *,
     blocked: bool,
@@ -1301,9 +1399,21 @@ def log_pdt_enforcement(
     payload: dict[str, Any] = {"blocked": bool(blocked)}
     if reason:
         payload["reason"] = reason
-    safe_context = _safe_context_payload(context)
-    if safe_context:
-        payload["context"] = safe_context
+    normalized_context = _normalize_pdt_context_payload(reason=reason, context=context)
+    if normalized_context:
+        payload["context"] = normalized_context
+        for key in (
+            "is_pdt",
+            "daytrade_count",
+            "daytrade_limit",
+            "remaining",
+            "can_daytrade",
+            "pdt_equity_exempt",
+            "pdt_limit_applicable",
+            "strategy",
+        ):
+            if key in normalized_context:
+                payload[key] = normalized_context[key]
     level = logging.WARNING if blocked else logging.INFO
     event = "PDT_ENFORCEMENT_BLOCKED" if blocked else "PDT_CHECK_OK"
     get_logger("ai_trading.execution.pdt").log(level, event, extra=payload)

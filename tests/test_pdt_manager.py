@@ -1,9 +1,11 @@
 """Tests for PDT Manager."""
 
+import logging
 from datetime import datetime
 import pytest
 from types import SimpleNamespace
 from ai_trading.execution.pdt_manager import PDTManager, PDTStatus
+from ai_trading.logging import log_pdt_enforcement
 
 
 class TestPDTManager:
@@ -183,6 +185,29 @@ class TestPDTManager:
         assert allow is True
         assert reason == "pdt_equity_exempt"
         assert context["pdt_limit_applicable"] is False
+        assert context["pdt_equity_exempt"] is True
+
+    def test_log_pdt_enforcement_normalizes_equity_exempt_context(self, caplog):
+        with caplog.at_level(logging.INFO, logger="ai_trading.execution.pdt"):
+            log_pdt_enforcement(
+                blocked=False,
+                reason="pdt_equity_exempt",
+                context={
+                    "pattern_day_trader": True,
+                    "daytrade_count": 2,
+                    "daytrade_limit": 3,
+                    "pdt_equity_exempt": False,
+                },
+            )
+
+        record = next(
+            rec for rec in caplog.records if rec.getMessage() == "PDT_CHECK_OK"
+        )
+        assert getattr(record, "pdt_equity_exempt", None) is True
+        payload_context = getattr(record, "context", {})
+        assert isinstance(payload_context, dict)
+        assert payload_context.get("pdt_equity_exempt") is True
+        assert payload_context.get("is_pdt") is True
 
     def test_reset_cache_clears_cached_status(self):
         """Resetting the cache removes the cached status and timestamp."""

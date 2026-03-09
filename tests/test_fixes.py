@@ -23,9 +23,9 @@ from ai_trading.core import bot_engine
 
 
 def test_tickers_csv():
-    """Test that tickers.csv has been expanded correctly."""
+    """Test that the packaged universe CSV has been expanded correctly."""
 
-    tickers_file = Path("tickers.csv")
+    tickers_file = Path("ai_trading/data/tickers.csv")
     if not tickers_file.exists():
         return False
 

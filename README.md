@@ -1610,13 +1610,13 @@ and falls back to a lightweight volume-spread-analysis heuristic. Repeated
 calls suppress further warnings to avoid log spam.
 
 ### Universe CSV
-- `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv` — explicit override, highest priority.
-- `TICKERS_FILE_PATH=/abs/path/to/tickers.csv` — used when the above is unset; defaults to `$AI_TRADING_DATA_DIR/tickers.csv`.
+- `AI_TRADING_TICKERS_FILE=/abs/path/to/tickers.csv` — explicit override, highest priority.
+- `TICKERS_FILE_PATH=/abs/path/to/tickers.csv` — fallback when the above is unset; defaults to `$AI_TRADING_DATA_DIR/tickers.csv`.
 - Default: packaged `ai_trading/data/tickers.csv` (S&P-100).
 - Symbols are uppercased and normalized for provider quirks.
 - Missing file: logs an error and falls back to `['SPY', 'AAPL', 'MSFT', 'AMZN', 'GOOGL']`.
 - Sector classifications follow the Global Industry Classification Standard (GICS).
-- To add a symbol, append it to `tickers.csv` **and** extend `SECTOR_MAPPINGS` in `ai_trading/core/bot_engine.py` with the verified sector.
+- To add a symbol, append it to `ai_trading/data/tickers.csv` **and** extend `SECTOR_MAPPINGS` in `ai_trading/core/bot_engine.py` with the verified sector.
 
 Example systemd unit override:
 
@@ -1624,7 +1624,7 @@ Example systemd unit override:
 [Service]
 Environment="TICKERS_FILE_PATH=/var/lib/ai-trading-bot/tickers.csv"
 # or
-Environment="AI_TRADING_TICKERS_CSV=/etc/ai-trading-bot/tickers.csv"
+Environment="AI_TRADING_TICKERS_FILE=/etc/ai-trading-bot/tickers.csv"
 ```
 
 ## Agent & Dev Quickstart
@@ -1647,7 +1647,7 @@ Conventions (must follow)
 • Models: configure via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE; cached at runtime.model.
 
 Common Pitfalls
-• tickers.csv missing → a single warning per process (fallback list is used: SPY, AAPL, MSFT, AMZN, GOOGL).
+• Universe CSV missing → a single warning per process (fallback list is used: SPY, AAPL, MSFT, AMZN, GOOGL).
 • Off-hours data empties are expected; don’t escalate severity.
 
 *(If `README.md` is long, add this as a new section without removing existing content.)*

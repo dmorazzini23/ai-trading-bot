@@ -11,6 +11,7 @@ import pytest
 from typing import Any, Mapping
 
 from ai_trading.execution import live_trading
+from ai_trading.telemetry import runtime_state
 
 
 def _resolve_live_trading_modules() -> list[object]:
@@ -63,9 +64,13 @@ class DummyLiveEngine(live_trading.LiveTradingExecutionEngine):
     def _pre_execution_checks(self) -> bool:  # pragma: no cover - deterministic
         return True
 
-    def _execute_with_retry(self, submit_fn, order: dict):  # pragma: no cover - deterministic
+    # Test double keeps a narrower semantic contract than the runtime engine.
+    def _execute_with_retry(  # type: ignore[override]
+        self, submit_fn: Any, *args: Any, **kwargs: Any
+    ) -> Any:  # pragma: no cover - deterministic
         """Capture submitted order payload and return stub response."""
 
+        order = args[0] if args else kwargs.get("order", {})
         self.last_submitted = dict(order)
         return {
             "status": "accepted",
@@ -117,6 +122,12 @@ def patch_shared_guards(monkeypatch):
         )
         monkeypatch.setitem(globals_ns, "pdt_guard", lambda *a, **k: True)
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def reset_runtime_state():
+    runtime_state.reset_data_provider_state()
+    runtime_state.reset_quote_status()
 
 
 def _quote_payload() -> dict:
@@ -238,7 +249,41 @@ def test_nbbo_required_blocks_degraded_quotes(monkeypatch, caplog) -> None:
 
     monkeypatch.delenv("TRADING__DEGRADED_FEED_MODE", raising=False)
     monkeypatch.delenv("NBBO_REQUIRED_FOR_LIMIT", raising=False)
-    reload_trading_config()
+
+
+def test_limit_basis_omits_negative_age_and_updates_runtime_state(monkeypatch, caplog) -> None:
+    engine = DummyLiveEngine()
+    config = SimpleNamespace(
+        min_quote_freshness_ms=1500,
+        degraded_feed_mode="widen",
+        degraded_feed_limit_widen_bps=12,
+        execution_require_realtime_nbbo=False,
+    )
+    _patch_config_getter(monkeypatch, config)
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        10,
+        order_type="limit",
+        limit_price=100.0,
+        quote={"bid": 99.0, "ask": 101.0},
+    )
+
+    assert result is not None
+    limit_record = next(rec for rec in caplog.records if rec.msg == "LIMIT_BASIS")
+    assert getattr(limit_record, "age_ms", "sentinel") is None
+
+    quote_state = runtime_state.observe_quote_status()
+    provider_state = runtime_state.observe_data_provider_state()
+    assert quote_state["allowed"] is True
+    assert quote_state["status"] != "unknown"
+    assert provider_state["status"] != "unknown"
+    assert provider_state["active"] == "alpaca"
+    assert provider_state["using_backup"] is False
 
 
 def test_broker_kwargs_preserve_degraded_hints() -> None:

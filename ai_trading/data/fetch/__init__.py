@@ -4415,15 +4415,17 @@ def _symbol_exists(symbol: str) -> bool:
             return False
     except Exception:
         pass
-    path = get_env("AI_TRADING_TICKERS_CSV") or get_env("TICKERS_FILE_PATH")
+    path = get_env("AI_TRADING_TICKERS_FILE") or get_env("TICKERS_FILE_PATH")
     if not path:
         try:
             from importlib.resources import files as pkg_files
 
             p = pkg_files("ai_trading.data").joinpath("tickers.csv")
-            path = str(p) if p.is_file() else os.path.join(os.getcwd(), "tickers.csv")
+            path = str(p) if p.is_file() else None
         except Exception:
-            path = os.path.join(os.getcwd(), "tickers.csv")
+            path = None
+    if not path:
+        return False
     try:
         with open(path, encoding="utf-8") as fh:
             return any(line.strip().upper() == symbol.upper() for line in fh)

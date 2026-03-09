@@ -333,3 +333,31 @@ def test_list_open_orders_returns_open_when_all_not_supported() -> None:
 
     assert orders == []
     assert api.calls == ["open", "all"]
+
+
+def test_get_orders_network_error_does_not_fallback_to_invalid_status_kwarg() -> None:
+    class _NetworkError(RuntimeError):
+        pass
+
+    class _Api:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def get_orders(self, *args: Any, **kwargs: Any) -> list[Any]:
+            self.calls.append(dict(kwargs))
+            if "status" in kwargs:
+                raise AssertionError("unexpected status kwarg fallback")
+            raise _NetworkError("connection aborted")
+
+        def get_all_positions(self) -> list[Any]:
+            return []
+
+        def cancel_order_by_id(self, order_id: Any) -> Any:
+            return order_id
+
+    api = _Api()
+    assert alpaca_client._validate_trading_api(api) is True
+    list_orders = getattr(api, "list_orders")
+    with pytest.raises(_NetworkError):
+        list_orders(status="open")
+    assert api.calls

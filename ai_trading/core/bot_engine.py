@@ -1406,6 +1406,92 @@ def _pre_rank_execution_candidates(
     return selected
 
 
+def _merge_managed_position_symbols(
+    symbols: Sequence[str],
+    positions: Mapping[str, Any],
+) -> list[str]:
+    """Ensure non-zero held positions remain actionable for risk management."""
+
+    merged: list[str] = []
+    seen_symbols: set[str] = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        merged.append(symbol)
+
+    for raw_symbol, raw_position in positions.items():
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol or symbol in seen_symbols:
+            continue
+        try:
+            quantity = float(raw_position or 0.0)
+        except (TypeError, ValueError):
+            quantity = 0.0
+        if not math.isfinite(quantity) or quantity == 0.0:
+            continue
+        seen_symbols.add(symbol)
+        merged.append(symbol)
+    return merged
+
+
+def _select_symbols_with_budget_rotation(
+    symbols: Sequence[str],
+    positions: Mapping[str, Any],
+    *,
+    symbol_budget: int,
+    state: "BotState",
+) -> tuple[list[str], int, int]:
+    """Cap symbols while rotating held positions so the same subset is not starved."""
+
+    if symbol_budget <= 0 or len(symbols) <= symbol_budget:
+        return list(symbols), 0, 0
+
+    held_symbols_unrotated = [
+        sym
+        for sym in symbols
+        if abs(float(positions.get(sym, 0.0) or 0.0)) > 0.0
+    ]
+    held_symbols = list(held_symbols_unrotated)
+    held_cursor_start = 0
+    if held_symbols:
+        try:
+            held_cursor_start = int(max(getattr(state, "netting_symbol_budget_cursor", 0), 0))
+        except (TypeError, ValueError):
+            held_cursor_start = 0
+        held_cursor_start = held_cursor_start % len(held_symbols)
+        if held_cursor_start > 0:
+            held_symbols = held_symbols[held_cursor_start:] + held_symbols[:held_cursor_start]
+
+    selected_symbols: list[str] = []
+    selected_set: set[str] = set()
+    for sym in held_symbols:
+        if sym in selected_set:
+            continue
+        selected_symbols.append(sym)
+        selected_set.add(sym)
+        if len(selected_symbols) >= symbol_budget:
+            break
+    for sym in symbols:
+        if sym in selected_set:
+            continue
+        if len(selected_symbols) >= symbol_budget:
+            break
+        selected_symbols.append(sym)
+        selected_set.add(sym)
+
+    if held_symbols_unrotated:
+        if len(held_symbols_unrotated) <= symbol_budget:
+            state.netting_symbol_budget_cursor = 0
+        else:
+            state.netting_symbol_budget_cursor = (
+                held_cursor_start + symbol_budget
+            ) % len(held_symbols_unrotated)
+
+    return selected_symbols, held_cursor_start, len(held_symbols_unrotated)
+
+
 def _resolve_data_retry_settings() -> tuple[int, float]:
     """Resolve retry attempts and delay from environment with clamping."""
 
@@ -4652,7 +4738,7 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
             backup_delta = max(0, int(backup_after - backup_before))
             backup_alert_threshold = max(
                 1,
-                int(get_env("AI_TRADING_STARTUP_BACKUP_ALERT_THRESHOLD", 1, cast=int)),
+                int(get_env("AI_TRADING_STARTUP_BACKUP_ALERT_THRESHOLD", 2, cast=int)),
             )
             if backup_delta >= backup_alert_threshold:
                 logger.warning(
@@ -9287,6 +9373,7 @@ class BotState:
     last_eval_bar_ts: dict[tuple[str, str], datetime] = field(default_factory=dict)
     last_order_bar_ts: dict[str, datetime] = field(default_factory=dict)
     last_order_client_id: dict[str, str] = field(default_factory=dict)
+    netting_symbol_budget_cursor: int = 0
     turnover_dollars: dict[tuple[date, str, str], float] = field(default_factory=dict)
     stop_lock: dict[str, dict[str, Any]] = field(default_factory=dict)
     recon_halt: bool = False
@@ -11022,25 +11109,21 @@ class DataFetcher:
                         if ref_date.weekday() < 5:
                             break
 
+        def _daily_fetch_end_ts(target_date: date) -> datetime:
+            day_end = datetime.combine(target_date, dt_time.max, tzinfo=UTC)
+            if target_date >= now_utc.date():
+                return min(day_end, now_utc)
+            return day_end
+
         fetch_date = ref_date
-        end_ts = datetime(
-            fetch_date.year,
-            fetch_date.month,
-            fetch_date.day,
-            23,
-            59,
-            59,
-            999999,
-            tzinfo=UTC,
-        )
-        today = date.today()
-        if end_ts.date() > today:
+        today = now_utc.date()
+        if fetch_date > today:
             self._warn_once(
                 "daily_end_future",
-                f"[get_daily_df] end {end_ts.date().isoformat()} exceeds today {today.isoformat()}",
+                f"[get_daily_df] end {fetch_date.isoformat()} exceeds today {today.isoformat()}",
             )
-            end_ts = datetime.combine(today, dt_time.max, tzinfo=UTC)
-            fetch_date = end_ts.date()
+            fetch_date = today
+        end_ts = _daily_fetch_end_ts(fetch_date)
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
         timeframe_key = "1Day"
         start_iso = start_ts.isoformat()
@@ -11084,16 +11167,9 @@ class DataFetcher:
                         continue
                     if memo_date != fetch_date:
                         fetch_date = memo_date
-                        end_ts = datetime(
-                            fetch_date.year,
-                            fetch_date.month,
-                            fetch_date.day,
-                            23,
-                            59,
-                            59,
-                            999999,
-                            tzinfo=UTC,
-                        )
+                        if fetch_date > today:
+                            fetch_date = today
+                        end_ts = _daily_fetch_end_ts(fetch_date)
                         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
                         start_iso = start_ts.isoformat()
                         end_iso = end_ts.isoformat()
@@ -12148,9 +12224,25 @@ class DataFetcher:
                 last_fetch_error = exc
                 df = None
             except data_fetcher_module.DataFetchError as exc:
+                fetch_reason_value = getattr(exc, "fetch_reason", None)
+                fetch_reason = (
+                    str(fetch_reason_value).strip()
+                    if fetch_reason_value not in (None, "")
+                    else None
+                )
                 logger.warning(
                     "DAILY_FETCH_PROVIDER_ERROR",
-                    extra={"symbol": symbol, "error": str(exc)},
+                    extra={
+                        "symbol": symbol,
+                        "provider": planned_provider,
+                        "feed": effective_feed,
+                        "error": str(exc),
+                        "error_type": exc.__class__.__name__,
+                        "fetch_reason": fetch_reason,
+                        "start": start_ts.isoformat(),
+                        "end": end_ts.isoformat(),
+                        "fallback_target": "backup_provider",
+                    },
                 )
                 last_fetch_error = exc
             backup_get_bars = getattr(data_fetcher_module, "_backup_get_bars", None)
@@ -17193,6 +17285,7 @@ def get_sector(symbol: str) -> str:
         "SCHW": "Financial Services",
         "TRV": "Financial Services",
         "USB": "Financial Services",
+        "BRK.B": "Financial Services",
         # Healthcare
         "JNJ": "Healthcare",
         "PFE": "Healthcare",
@@ -26529,8 +26622,16 @@ def get_stock_bars_safe(api, symbol, timeframe):
 
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
-    """Load tickers from file or CSV list; no fallback."""
-    return load_universe_from_path(path)
+    """Load tickers from configured file/CSV, falling back to packaged universe."""
+
+    path_text = str(path or "").strip()
+    if path_text:
+        candidate = Path(path_text).expanduser()
+        if candidate.is_file():
+            return load_universe_from_path(str(candidate))
+        if "," in path_text or "\n" in path_text:
+            return load_universe_from_path(path_text)
+    return load_universe()
 
 
 def load_candidate_universe(runtime, tickers: list[str] | None = None) -> list[str]:
@@ -31351,18 +31452,19 @@ def _pending_stale_sweep_enabled() -> bool:
 def _pending_stale_sweep_age_seconds() -> float:
     """Return minimum broker age required for stale-sweep cancellation."""
 
+    default_value = _startup_cancel_stale_seconds()
     try:
         value = float(
             get_env(
                 "AI_TRADING_PENDING_STALE_SWEEP_SEC",
-                60.0,
+                default_value,
                 cast=float,
             )
         )
     except COMMON_EXC:
-        value = 60.0
+        value = default_value
     if not math.isfinite(value):
-        value = 60.0
+        value = default_value
     return max(10.0, min(value, 7200.0))
 
 
@@ -35433,6 +35535,19 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             positions[symbol_key] = float(raw_position or 0.0)
         except (TypeError, ValueError):
             positions[symbol_key] = 0.0
+    baseline_symbols = {str(sym).strip().upper() for sym in symbols if str(sym).strip()}
+    symbols = _merge_managed_position_symbols(symbols, positions)
+    managed_symbols_added = [sym for sym in symbols if sym not in baseline_symbols]
+    if managed_symbols_added:
+        logger.info(
+            "NETTING_MANAGED_POSITIONS_INCLUDED",
+            extra={
+                "added": len(managed_symbols_added),
+                "sample": managed_symbols_added[:10],
+                "positions_total": len(positions),
+                "symbols_total": len(symbols),
+            },
+        )
 
     blocked_symbols = {
         str(sym).strip().upper()
@@ -35527,25 +35642,14 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         symbol_budget_target = order_cap_value * symbols_per_order
         symbol_budget = max(symbol_budget_min, min(symbol_budget_target, symbol_budget_max))
         if len(symbols) > symbol_budget:
-            held_symbols = [
-                sym
-                for sym in symbols
-                if abs(float(positions.get(sym, 0.0) or 0.0)) > 0.0
-            ]
-            selected_symbols: list[str] = []
-            selected_set: set[str] = set()
-            for sym in held_symbols:
-                if sym in selected_set:
-                    continue
-                selected_symbols.append(sym)
-                selected_set.add(sym)
-            for sym in symbols:
-                if sym in selected_set:
-                    continue
-                if len(selected_symbols) >= symbol_budget:
-                    break
-                selected_symbols.append(sym)
-                selected_set.add(sym)
+            selected_symbols, held_cursor_start, held_symbols_kept = (
+                _select_symbols_with_budget_rotation(
+                    symbols,
+                    positions,
+                    symbol_budget=symbol_budget,
+                    state=state,
+                )
+            )
             dropped_count = max(0, len(symbols) - len(selected_symbols))
             if dropped_count > 0:
                 logger.info(
@@ -35558,7 +35662,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "order_cap": order_cap_value,
                         "symbols_per_order": symbols_per_order,
                         "cap_source": cap_source,
-                        "held_symbols_kept": len(held_symbols),
+                        "held_symbols_kept": held_symbols_kept,
+                        "held_cursor_start": held_cursor_start,
+                        "held_cursor_next": int(getattr(state, "netting_symbol_budget_cursor", 0)),
                         "selected_sample": selected_symbols[:10],
                     },
                 )
@@ -36796,6 +36902,32 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "slo_derisk": slo_derisk_details,
                         "primary_feed_derisk": primary_feed_derisk,
                     }
+
+        requested_delta_shares = int(delta_shares)
+        reversal_clamp_reason: str | None = None
+        if current_shares > 0 and delta_shares < 0 and abs(delta_shares) > current_shares:
+            delta_shares = -current_shares
+            net_target.target_shares = 0
+            net_target.target_dollars = 0.0
+            reversal_clamp_reason = "FLAT_BEFORE_REVERSAL"
+        elif current_shares < 0 and delta_shares > 0 and abs(delta_shares) > abs(current_shares):
+            delta_shares = abs(current_shares)
+            net_target.target_shares = 0
+            net_target.target_dollars = 0.0
+            reversal_clamp_reason = "FLAT_BEFORE_REVERSAL"
+        if reversal_clamp_reason:
+            gates.append(reversal_clamp_reason)
+            logger.info(
+                "POSITION_REVERSAL_CLAMP",
+                extra={
+                    "symbol": symbol,
+                    "current_shares": int(current_shares),
+                    "requested_delta_shares": requested_delta_shares,
+                    "adjusted_delta_shares": int(delta_shares),
+                    "target_shares": int(net_target.target_shares),
+                    "reason": reversal_clamp_reason,
+                },
+            )
 
         min_qty = int(getattr(cfg, "execution_min_qty", 1))
         min_notional = float(getattr(cfg, "execution_min_notional", 1.0))

@@ -137,17 +137,22 @@ class PDTManager:
         status = self.get_pdt_status(account)
         
         # Build context for logging
-        context = {
+        pdt_equity_exempt = bool(status.is_pattern_day_trader and not status.pdt_limit_applicable)
+        context: dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "pattern_day_trader": status.is_pattern_day_trader,
+            "is_pdt": status.is_pattern_day_trader,
             "daytrade_count": status.daytrade_count,
             "daytrade_limit": status.daytrade_limit,
             "remaining_daytrades": status.remaining_daytrades,
+            "remaining": status.remaining_daytrades,
+            "can_daytrade": status.can_daytrade,
             "strategy": status.strategy_recommendation,
             "equity": status.equity,
             "min_equity": status.min_equity,
             "pdt_limit_applicable": status.pdt_limit_applicable,
+            "pdt_equity_exempt": pdt_equity_exempt,
         }
         
         # Not a PDT account - allow all trades

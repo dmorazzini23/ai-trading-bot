@@ -9,14 +9,14 @@ def test_get_sector_known_symbols():
 
 
 def test_all_core_symbols_have_explicit_sector(monkeypatch):
-    """All symbols in tickers.csv should resolve without external lookups."""
+    """All symbols in packaged universe CSV should resolve without external lookups."""
 
     monkeypatch.setattr(
         bot_engine,
         "_fetch_sector_via_yf",
         lambda symbol: (_ for _ in ()).throw(AssertionError("unexpected yfinance call")),
     )
-    tickers_path = Path(__file__).resolve().parent.parent / "tickers.csv"
+    tickers_path = Path(__file__).resolve().parent.parent / "ai_trading" / "data" / "tickers.csv"
     symbols = [s.strip() for s in tickers_path.read_text().splitlines() if s.strip()]
     for symbol in symbols:
         assert bot_engine.get_sector(symbol) != "Unknown"

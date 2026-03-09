@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, datetime, time as dt_time, timedelta
+import logging
 import sys
 import types
 from typing import Any
@@ -114,6 +115,14 @@ class FixedDateTime(datetime):
         return base.astimezone(tz)
 
 
+def _expected_end_ts(fetch_date) -> datetime:
+    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    now_utc = FixedDateTime.now(UTC)
+    if fetch_date >= now_utc.date():
+        return min(end_ts, now_utc)
+    return end_ts
+
+
 def _ctx() -> Any:
     return types.SimpleNamespace()
 
@@ -183,7 +192,7 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     assert first_stamp > 5.0
 
     # Simulate memo expiry and verify the cached entry refreshes memo storage
-    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    end_ts = _expected_end_ts(fetch_date)
     start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
     canonical_key = (
         symbol,
@@ -226,7 +235,7 @@ def test_daily_fetch_memo_primary_lookup_uses_helpers(monkeypatch):
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
 
     fetch_date = FixedDateTime.now(UTC).date()
-    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    end_ts = _expected_end_ts(fetch_date)
     start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
     canonical_key = (symbol, "1Day", start_ts.isoformat(), end_ts.isoformat())
     memo_payload = {"memo": "payload"}
@@ -329,7 +338,7 @@ def test_daily_fetch_legacy_tuple_normalizes_and_skips_daily_cache(monkeypatch):
 
     fetch_date = FixedDateTime.now(UTC).date()
     legacy_key = (symbol, fetch_date.isoformat())
-    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    end_ts = _expected_end_ts(fetch_date)
     start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
     canonical_key = (
         symbol,
@@ -411,7 +420,7 @@ def test_daily_fetch_canonical_and_legacy_memo_bypass_daily_cache(monkeypatch):
     monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
 
     fetch_date = FixedDateTime.now(UTC).date()
-    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    end_ts = _expected_end_ts(fetch_date)
     start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
 
     canonical_key = (
@@ -543,7 +552,7 @@ def test_daily_fetch_fresh_memo_skips_cache_and_provider(
     monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
 
     fetch_date = FixedDateTime.now(UTC).date()
-    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    end_ts = _expected_end_ts(fetch_date)
     start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
     canonical_key = (symbol, "1Day", start_ts.isoformat(), end_ts.isoformat())
     legacy_key = (symbol, fetch_date.isoformat())
@@ -996,6 +1005,7 @@ def test_daily_fetch_skips_direct_when_safe_missing(monkeypatch):
     def fake_get_daily_df(symbol_arg, start, end, *, feed=None, adjustment=None):
         captured["symbol"] = symbol_arg
         captured["start"] = start
+        captured["end"] = end
         captured["feed"] = feed
         idx = pd.to_datetime([start, end])
         return pd.DataFrame(
@@ -1016,4 +1026,64 @@ def test_daily_fetch_skips_direct_when_safe_missing(monkeypatch):
 
     assert isinstance(result, pd.DataFrame)
     assert captured["symbol"] == symbol
+    assert captured["end"] == FixedDateTime.now(UTC)
     assert not hasattr(be.bars, "safe_get_stock_bars")
+
+
+def test_daily_fetch_provider_error_logs_actionable_diagnostics(monkeypatch, caplog):
+    pd = load_pandas()
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    be._DAILY_FETCH_MEMO.clear()
+    fetcher._daily_cache.clear()
+    fetcher._daily_error_state.clear()
+
+    bars_stub = types.SimpleNamespace(
+        TimeFrame=types.SimpleNamespace(Day="Day"),
+        _create_empty_bars_dataframe=lambda _tf: pd.DataFrame(),
+    )
+    monkeypatch.setattr(be, "bars", bars_stub, raising=False)
+
+    def _raise_fetch_error(*_args, **_kwargs):
+        err = be.data_fetcher_module.DataFetchError("upstream timeout")
+        err.fetch_reason = "timeout"
+        raise err
+
+    backup_call: dict[str, Any] = {}
+
+    def _backup_get_bars(symbol_arg, start_arg, end_arg, interval="1d"):
+        backup_call["symbol"] = symbol_arg
+        backup_call["start"] = start_arg
+        backup_call["end"] = end_arg
+        idx = pd.to_datetime([start_arg, end_arg])
+        return pd.DataFrame(
+            {
+                "open": [1.0, 1.1],
+                "high": [1.2, 1.3],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100, 110],
+            },
+            index=idx,
+        )
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", _raise_fetch_error)
+    monkeypatch.setattr(be.data_fetcher_module, "_backup_get_bars", _backup_get_bars)
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+
+    caplog.set_level(logging.WARNING)
+    result = fetcher.get_daily_df(_ctx(), symbol)
+
+    assert isinstance(result, pd.DataFrame)
+    provider_error_record = next(
+        rec for rec in caplog.records if rec.message == "DAILY_FETCH_PROVIDER_ERROR"
+    )
+    assert getattr(provider_error_record, "fetch_reason", None) == "timeout"
+    assert getattr(provider_error_record, "fallback_target", None) == "backup_provider"
+    assert getattr(provider_error_record, "start", None) == backup_call["start"].isoformat()
+    assert getattr(provider_error_record, "end", None) == backup_call["end"].isoformat()

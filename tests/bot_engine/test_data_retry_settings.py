@@ -138,3 +138,26 @@ def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monk
     assert latest["selected"] == 2
     assert latest["top_n"] == 2
     assert [entry["symbol"] for entry in latest["ranked"]] == ["AAPL", "GOOG"]
+
+
+def test_merge_managed_position_symbols_includes_nonzero_positions() -> None:
+    merged = bot_engine._merge_managed_position_symbols(
+        ["AAPL", "ABBV"],
+        {
+            "AAPL": 10,
+            "MSFT": 5,
+            "TSLA": 0,
+            "NVDA": float("nan"),
+            "AMZN": "3",
+        },
+    )
+
+    assert merged == ["AAPL", "ABBV", "MSFT", "AMZN"]
+
+
+def test_load_tickers_falls_back_to_packaged_universe_when_path_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bot_engine, "load_universe", lambda: ["AAPL", "MSFT"])
+    symbols = bot_engine.load_tickers("/tmp/does-not-exist.csv")
+    assert symbols == ["AAPL", "MSFT"]

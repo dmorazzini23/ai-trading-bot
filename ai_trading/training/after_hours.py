@@ -319,7 +319,7 @@ def _fetch_daily_bars(symbol: str, start_dt: datetime, end_dt: datetime):
 def _load_symbols() -> list[str]:
     path_raw = str(get_env("AI_TRADING_AFTER_HOURS_TICKERS_CSV", "") or "").strip()
     if not path_raw:
-        path_raw = str(get_env("AI_TRADING_TICKERS_CSV", "") or "").strip()
+        path_raw = str(get_env("AI_TRADING_TICKERS_FILE", "") or "").strip()
     path = Path(path_raw) if path_raw else None
     symbols: list[str] = []
     if path is not None and path.exists():

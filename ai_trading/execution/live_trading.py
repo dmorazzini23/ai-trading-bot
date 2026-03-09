@@ -723,13 +723,62 @@ def _sanitize_pdt_context(raw_context: Mapping[str, Any] | None) -> dict[str, An
     if raw_context:
         context.update({k: raw_context.get(k) for k in raw_context.keys()})
 
+    pattern_day_trader = bool(context.get("pattern_day_trader", context.get("is_pdt", False)))
+    daytrade_limit = _safe_int(context.get("daytrade_limit"), 0)
+    daytrade_count = _safe_int(context.get("daytrade_count"), 0)
+    remaining_daytrades = _safe_int(
+        context.get("remaining_daytrades", context.get("remaining")),
+        max(daytrade_limit - daytrade_count, 0),
+    )
+    pdt_equity_exempt = bool(context.get("pdt_equity_exempt", False))
+    if "pdt_limit_applicable" in context:
+        pdt_limit_applicable = bool(context.get("pdt_limit_applicable"))
+    else:
+        pdt_limit_applicable = bool(pattern_day_trader and not pdt_equity_exempt)
+    if not pattern_day_trader:
+        pdt_limit_applicable = False
+        pdt_equity_exempt = False
+    elif not pdt_limit_applicable:
+        pdt_equity_exempt = True
+    can_daytrade = bool(
+        context.get(
+            "can_daytrade",
+            (not pattern_day_trader)
+            or (not pdt_limit_applicable)
+            or daytrade_count < daytrade_limit,
+        )
+    )
+
+    strategy_raw = context.get("strategy")
+    if strategy_raw in (None, ""):
+        strategy_raw = context.get("strategy_recommendation")
+    strategy = str(strategy_raw).strip() if strategy_raw not in (None, "") else None
+
     sanitized: dict[str, Any] = {
-        "pattern_day_trader": bool(context.get("pattern_day_trader", False)),
-        "daytrade_limit": _safe_int(context.get("daytrade_limit"), 0),
-        "daytrade_count": _safe_int(context.get("daytrade_count"), 0),
+        "pattern_day_trader": pattern_day_trader,
+        "is_pdt": pattern_day_trader,
+        "daytrade_limit": daytrade_limit,
+        "daytrade_count": daytrade_count,
+        "remaining_daytrades": remaining_daytrades,
+        "remaining": remaining_daytrades,
+        "can_daytrade": can_daytrade,
         "equity": _safe_float(context.get("equity")),
-        "pdt_equity_exempt": bool(context.get("pdt_equity_exempt", False)),
+        "pdt_limit_applicable": pdt_limit_applicable,
+        "pdt_equity_exempt": pdt_equity_exempt,
     }
+    if strategy is not None:
+        sanitized["strategy"] = strategy
+        sanitized["strategy_recommendation"] = strategy
+    for key in (
+        "symbol",
+        "side",
+        "closing_position",
+        "current_position",
+        "swing_mode_enabled",
+        "block_enforced",
+    ):
+        if key in context:
+            sanitized[key] = context.get(key)
 
     lock_info = pdt_lockout_info()
     if "active" in context:
@@ -2073,22 +2122,30 @@ class ExecutionEngine:
         if account is not None:
             from ai_trading.execution.pdt_manager import PDTManager
             from ai_trading.execution.swing_mode import get_swing_mode, enable_swing_mode
-            
+
             pdt_manager = PDTManager()
             status = pdt_manager.get_pdt_status(account)
-            
-            logger.info(
-                "PDT_STATUS_CHECK",
-                extra={
-                    "is_pdt": status.is_pattern_day_trader,
+
+            pdt_status_context = _sanitize_pdt_context(
+                {
+                    "pattern_day_trader": status.is_pattern_day_trader,
                     "daytrade_count": status.daytrade_count,
                     "daytrade_limit": status.daytrade_limit,
+                    "remaining_daytrades": status.remaining_daytrades,
                     "can_daytrade": status.can_daytrade,
-                    "remaining": status.remaining_daytrades,
-                    "strategy": status.strategy_recommendation
+                    "strategy": status.strategy_recommendation,
+                    "equity": status.equity,
+                    "pdt_limit_applicable": status.pdt_limit_applicable,
+                    "pdt_equity_exempt": (
+                        bool(status.is_pattern_day_trader and not status.pdt_limit_applicable)
+                    ),
                 }
             )
-            
+            logger.info(
+                "PDT_STATUS_CHECK",
+                extra=pdt_status_context,
+            )
+
             # Auto-enable swing mode if PDT limit reached
             if status.strategy_recommendation == "swing_only":
                 swing_mode = get_swing_mode()
@@ -2099,9 +2156,9 @@ class ExecutionEngine:
                         extra={
                             "daytrade_count": status.daytrade_count,
                             "daytrade_limit": status.daytrade_limit,
-                            "message": "Automatically switched to swing trading mode to avoid PDT violations"
-                }
-            )
+                            "message": "Automatically switched to swing trading mode to avoid PDT violations",
+                        },
+                    )
         self._apply_pending_new_timeout_policy()
 
     def _reset_pending_new_policy_state_for_tests(self) -> None:
@@ -2457,13 +2514,26 @@ class ExecutionEngine:
     def _pending_backlog_local_stale_seconds(self) -> float:
         """Return max local pending-cache age counted toward backlog pacing caps."""
 
+        default_stale_seconds = max(float(_ACK_TIMEOUT_SECONDS) * 6.0, 180.0)
         configured = _config_float("AI_TRADING_PENDING_BACKLOG_LOCAL_STALE_SEC", None)
         if configured is None:
-            configured = max(float(_ACK_TIMEOUT_SECONDS) * 6.0, 180.0)
+            sweep_floor = _config_float("AI_TRADING_PENDING_STALE_SWEEP_SEC", None)
+            if sweep_floor is None:
+                sweep_floor = _config_float("AI_TRADING_STARTUP_CANCEL_STALE_SEC", None)
+            if sweep_floor is not None:
+                try:
+                    sweep_floor_val = float(sweep_floor)
+                    if math.isfinite(sweep_floor_val):
+                        default_stale_seconds = max(default_stale_seconds, sweep_floor_val)
+                except (TypeError, ValueError):
+                    pass
+            configured = default_stale_seconds
         try:
             stale_seconds = float(configured)
         except (TypeError, ValueError):
-            stale_seconds = max(float(_ACK_TIMEOUT_SECONDS) * 6.0, 180.0)
+            stale_seconds = default_stale_seconds
+        if not math.isfinite(stale_seconds):
+            stale_seconds = default_stale_seconds
         return max(30.0, min(stale_seconds, 86400.0))
 
     def _effective_pending_order_cache_count(self) -> tuple[int, int]:
@@ -5863,6 +5933,7 @@ class ExecutionEngine:
 
         quote_type = "synthetic" if synthetic_quote else ("nbbo" if provider_for_log == "alpaca" else "fallback")
         age_ms_int = int(round(quote_age_ms)) if quote_age_ms is not None else -1
+        age_ms_log: int | None = age_ms_int if age_ms_int >= 0 else None
 
         try:
             cfg = get_trading_config()
@@ -6005,7 +6076,7 @@ class ExecutionEngine:
                         "symbol": symbol,
                         "side": mapped_side,
                         "provider": provider_for_log,
-                        "age_ms": age_ms_int,
+                        "age_ms": age_ms_log,
                         "mode": degraded_mode,
                         "degraded": bool(degrade_active),
                         "reason": "primary_quote_required",
@@ -6058,7 +6129,7 @@ class ExecutionEngine:
                         "symbol": symbol,
                         "side": mapped_side,
                         "provider": provider_for_log,
-                        "age_ms": age_ms_int,
+                        "age_ms": age_ms_log,
                         "degrade_due_age": bool(degrade_due_age),
                         "degrade_due_provider": bool(degrade_due_provider),
                         "degrade_due_monitor": bool(degrade_due_monitor),
@@ -6080,7 +6151,7 @@ class ExecutionEngine:
                 "symbol": symbol,
                 "side": mapped_side,
                 "provider": provider_for_log,
-                "age_ms": age_ms_int,
+                "age_ms": age_ms_log,
                 "mode": degraded_mode,
                 "degraded": True,
                 "reason": "realtime_nbbo_required",
@@ -6175,10 +6246,68 @@ class ExecutionEngine:
                         quote_age_ms = None
                     else:
                         age_ms_int = int(round(float(fallback_age_ms)))
+                        age_ms_log = age_ms_int if age_ms_int >= 0 else None
                         degrade_due_age = quote_age_ms > float(min_quote_fresh_ms)
                 if quote_age_ms is None:
                     age_ms_int = -1
+                    age_ms_log = None
                     degrade_due_age = False
+
+        def _sync_runtime_market_state(*, allowed: bool) -> None:
+            try:
+                active_provider = "alpaca"
+                if provider_source_str:
+                    active_provider = (
+                        "alpaca" if provider_source_str.startswith("alpaca") else provider_source_str
+                    )
+                elif provider_for_log != "alpaca":
+                    active_provider = "backup"
+                using_backup_provider = active_provider != "alpaca"
+                quote_age_ms_value: float | None = None
+                if quote_age_ms is not None and math.isfinite(float(quote_age_ms)):
+                    quote_age_ms_value = max(0.0, float(quote_age_ms))
+                quote_reason = quality_reason
+                if quote_reason is None and (synthetic_quote or using_fallback_price):
+                    quote_reason = "synthetic_quote" if synthetic_quote else "fallback_price"
+                if allowed:
+                    if synthetic_quote or using_fallback_price:
+                        quote_status = "synthetic"
+                    elif degrade_active:
+                        quote_status = "degraded"
+                    else:
+                        quote_status = "ready"
+                else:
+                    quote_status = "fallback_blocked" if (synthetic_quote or using_fallback_price) else "blocked"
+                provider_status = (
+                    "healthy" if allowed and not using_backup_provider and not degrade_active else "degraded"
+                )
+                runtime_state.update_quote_status(
+                    allowed=allowed,
+                    reason=quote_reason,
+                    age_sec=None if quote_age_ms_value is None else quote_age_ms_value / 1000.0,
+                    synthetic=bool(synthetic_quote or using_fallback_price),
+                    bid=None if bid is None else float(bid),
+                    ask=None if ask is None else float(ask),
+                    status=quote_status,
+                    source=active_provider,
+                    last_price=None if basis_price is None else float(basis_price),
+                    quote_age_ms=quote_age_ms_value,
+                )
+                runtime_state.update_data_provider_state(
+                    primary="alpaca",
+                    active=active_provider,
+                    backup=active_provider if using_backup_provider else None,
+                    using_backup=using_backup_provider,
+                    reason=quote_reason or (
+                        "execution_quote_ready" if provider_status == "healthy" else "execution_quote_degraded"
+                    ),
+                    status=provider_status,
+                    timeframe="1Min",
+                    quote_fresh_ms=quote_age_ms_value,
+                    safe_mode=is_safe_mode_active(),
+                )
+            except Exception:
+                logger.debug("RUNTIME_MARKET_STATE_SYNC_FAILED", exc_info=True)
         if (
             degrade_active
             and degraded_mode == "block"
@@ -6191,7 +6320,7 @@ class ExecutionEngine:
                     "reason": quality_reason or "degraded_feed",
                     "synthetic": bool(synthetic_quote or using_fallback_price),
                     "provider": provider_for_log,
-                    "age_ms": age_ms_int,
+                    "age_ms": age_ms_log,
                 },
             )
             logger.info(
@@ -6201,7 +6330,7 @@ class ExecutionEngine:
                     "side": mapped_side,
                     "provider": provider_for_log,
                     "type": quote_type,
-                    "age_ms": age_ms_int,
+                    "age_ms": age_ms_log,
                     "basis": basis_label,
                     "limit": None if limit_for_log is None else round(float(limit_for_log), 6),
                     "degraded": True,
@@ -6216,7 +6345,7 @@ class ExecutionEngine:
                     "side": mapped_side,
                     "provider": provider_for_log,
                     "mode": degraded_mode,
-                    "age_ms": age_ms_int,
+                    "age_ms": age_ms_log,
                 },
             )
             _emit_quote_block_log(
@@ -6224,10 +6353,11 @@ class ExecutionEngine:
                 extra={
                     "provider": provider_for_log,
                     "mode": degraded_mode,
-                    "age_ms": age_ms_int,
+                    "age_ms": age_ms_log,
                     "quality_reason": quality_reason or "degraded_feed",
                 },
             )
+            _sync_runtime_market_state(allowed=False)
             self._skip_submit(
                 symbol=symbol,
                 side=mapped_side,
@@ -6267,7 +6397,7 @@ class ExecutionEngine:
                 "side": mapped_side,
                 "provider": provider_for_log,
                 "type": quote_type,
-                "age_ms": age_ms_int,
+                "age_ms": age_ms_log,
                 "basis": basis_label,
                 "limit": None if limit_for_log is None else round(float(limit_for_log), 6),
                 "degraded": bool(degrade_active),
@@ -6275,6 +6405,7 @@ class ExecutionEngine:
                 "widen_bps": degraded_widen_bps if widen_applied else 0,
             },
         )
+        _sync_runtime_market_state(allowed=True)
 
         if price_gate_required and not price_gate_ok:
             gate_log_extra = {
@@ -6629,7 +6760,7 @@ class ExecutionEngine:
                         "reason": quality_reason or "fallback_price_unavailable",
                         "synthetic": True,
                         "provider": provider_for_log,
-                        "age_ms": age_ms_int,
+                        "age_ms": age_ms_log,
                     },
                 )
                 _emit_quote_block_log(
@@ -6638,7 +6769,7 @@ class ExecutionEngine:
                         "provider": provider_for_log,
                         "mode": degraded_mode,
                         "degraded": bool(degrade_active),
-                        "age_ms": age_ms_int,
+                        "age_ms": age_ms_log,
                         "quality_reason": quality_reason or "fallback_price_unavailable",
                     },
                 )

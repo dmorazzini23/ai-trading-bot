@@ -89,3 +89,28 @@ def test_startup_healthcheck_logs_backup_usage_alert(monkeypatch, caplog) -> Non
         record.getMessage() == "STARTUP_BACKUP_PROVIDER_USAGE_HIGH"
         for record in caplog.records
     )
+
+
+def test_startup_healthcheck_does_not_alert_on_single_fallback_by_default(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("AI_TRADING_STARTUP_PREFETCH_ENABLED", "0")
+    monkeypatch.delenv("AI_TRADING_STARTUP_BACKUP_ALERT_THRESHOLD", raising=False)
+    monkeypatch.setattr(bot_engine, "data_source_health_check", lambda ctx, symbols: None)
+    bot_engine.REGIME_SYMBOLS = ["AAPL"]
+
+    totals = iter((0, 1))
+    monkeypatch.setattr(
+        bot_engine,
+        "backup_provider_used_total",
+        lambda provider=None: next(totals),
+    )
+
+    ctx = SimpleNamespace(data_fetcher=SimpleNamespace(_daily_cache={}))
+    bot_engine._HEALTH_CHECK_FAILURES = 0
+
+    with caplog.at_level(logging.WARNING):
+        bot_engine._initialize_bot_context_post_setup(ctx)
+
+    assert not any(
+        record.getMessage() == "STARTUP_BACKUP_PROVIDER_USAGE_HIGH"
+        for record in caplog.records
+    )

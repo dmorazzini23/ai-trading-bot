@@ -608,7 +608,7 @@ def test_after_hours_training_trains_and_writes_outputs(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -666,7 +666,7 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     _write_tca(tca_path, n=420)
     state_path = tmp_path / "runtime" / "after_hours_training_state.json"
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -727,7 +727,7 @@ def test_after_hours_training_falls_back_when_model_dir_read_only(
         ),
     )
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(requested_model_dir))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -771,7 +771,7 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -808,7 +808,7 @@ def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -853,7 +853,7 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -905,7 +905,7 @@ def test_after_hours_required_phase1_gate_blocks_promotion(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -1547,7 +1547,7 @@ def test_after_hours_training_handles_leakage_assertions(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -1583,7 +1583,7 @@ def test_after_hours_training_no_global_leakage_warning(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
@@ -1620,7 +1620,7 @@ def test_after_hours_uses_dedicated_ticker_csv(
     tca_path = tmp_path / "tca_records.jsonl"
     _write_tca(tca_path, n=420)
 
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(live_tickers))
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(live_tickers))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TICKERS_CSV", str(train_tickers))
     monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))

@@ -288,6 +288,16 @@ def test_pending_backlog_cap_ignores_stale_local_pending(monkeypatch):
     assert context.get("local_pending_count") == 0
 
 
+def test_pending_backlog_local_stale_default_respects_sweep_threshold(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.delenv("AI_TRADING_PENDING_BACKLOG_LOCAL_STALE_SEC", raising=False)
+    monkeypatch.setenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", "240")
+
+    stale_seconds = engine._pending_backlog_local_stale_seconds()
+
+    assert stale_seconds == 240.0
+
+
 def test_pending_backlog_hard_block_by_count(monkeypatch):
     engine = _engine_stub()
     engine._pending_orders = {

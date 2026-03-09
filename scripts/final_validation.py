@@ -15,7 +15,7 @@ def test_ticker_loading():
     try:
         sys.path.insert(0, '.')
 
-        def test_load_tickers(path='tickers.csv'):
+        def test_load_tickers(path='ai_trading/data/tickers.csv'):
             tickers = []
             try:
                 with open(path, newline='') as f:
@@ -29,7 +29,7 @@ def test_ticker_loading():
                 logging.info(f'Error reading {path}: {e}')
             return tickers
         tickers = test_load_tickers()
-        logging.info(f'📊 Loaded {len(tickers)} tickers from tickers.csv')
+        logging.info(f'📊 Loaded {len(tickers)} tickers from ai_trading/data/tickers.csv')
         logging.info(f'🎯 Tickers: {tickers}')
         tech_stocks = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'AMD', 'META']
         etfs = ['SPY', 'QQQ', 'IWM']

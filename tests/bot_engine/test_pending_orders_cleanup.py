@@ -481,6 +481,13 @@ def test_select_startup_stale_orders(monkeypatch):
     assert selected_ids == ["stale-1"]
 
 
+def test_pending_stale_sweep_defaults_to_startup_stale_threshold(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_STARTUP_CANCEL_STALE_SEC", "75")
+    monkeypatch.delenv("AI_TRADING_PENDING_STALE_SWEEP_SEC", raising=False)
+
+    assert be._pending_stale_sweep_age_seconds() == 75.0
+
+
 def test_cancel_open_orders_subset_cancels_target_orders():
     cancelled_ids: list[str] = []
 

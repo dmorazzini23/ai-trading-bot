@@ -187,9 +187,22 @@ def test_netting_cycle_applies_execution_symbol_budget(monkeypatch):
         execution_engine=_ExecEngine(),
     )
     state = bot_engine.BotState()
-    monkeypatch.setenv("AI_TRADING_EXEC_SYMBOLS_PER_ORDER", "1")
-    monkeypatch.setenv("AI_TRADING_EXEC_SYMBOL_BUDGET_MIN", "1")
-    monkeypatch.setenv("AI_TRADING_EXEC_SYMBOL_BUDGET_MAX", "1")
+    real_get_env = bot_engine.get_env
+
+    def _get_env(key, default=None, cast=None, **kwargs):
+        overrides = {
+            "AI_TRADING_EXEC_SYMBOLS_PER_ORDER": 1,
+            "AI_TRADING_EXEC_SYMBOL_BUDGET_MIN": 1,
+            "AI_TRADING_EXEC_SYMBOL_BUDGET_MAX": 1,
+        }
+        if key in overrides:
+            value = overrides[key]
+            if callable(cast):
+                return cast(value)
+            return value
+        return real_get_env(key, default, cast=cast, **kwargs)
+
+    monkeypatch.setattr(bot_engine, "get_env", _get_env)
 
     bar_ts = datetime.now(UTC)
     df = pd.DataFrame(
@@ -219,3 +232,28 @@ def test_netting_cycle_applies_execution_symbol_budget(monkeypatch):
 
     assert seen_batches
     assert all(len(batch) <= 1 for batch in seen_batches)
+
+
+def test_symbol_budget_rotation_for_held_positions():
+    state = bot_engine.BotState()
+    symbols = ["AAPL", "MSFT", "GOOG"]
+    positions = {"AAPL": 10.0, "MSFT": 10.0, "GOOG": 10.0}
+
+    first_selected, first_cursor_start, held_kept = bot_engine._select_symbols_with_budget_rotation(
+        symbols,
+        positions,
+        symbol_budget=1,
+        state=state,
+    )
+    second_selected, second_cursor_start, _ = bot_engine._select_symbols_with_budget_rotation(
+        symbols,
+        positions,
+        symbol_budget=1,
+        state=state,
+    )
+
+    assert held_kept == 3
+    assert first_cursor_start == 0
+    assert second_cursor_start == 1
+    assert first_selected == ["AAPL"]
+    assert second_selected == ["MSFT"]

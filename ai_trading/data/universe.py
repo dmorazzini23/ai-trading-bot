@@ -11,7 +11,7 @@ from ai_trading.paths import TICKERS_FILE_PATH
 pd = load_pandas()
 
 def locate_tickers_csv() -> str | None:
-    env = str(get_env("AI_TRADING_TICKERS_CSV", "", cast=str) or "").strip()
+    env = str(get_env("AI_TRADING_TICKERS_FILE", "", cast=str) or "").strip()
     if env:
         env_path = Path(env).expanduser()
         if env_path.is_file():
@@ -26,9 +26,6 @@ def locate_tickers_csv() -> str | None:
             return str(p)
     except ModuleNotFoundError:
         pass
-    cwd = Path.cwd() / "tickers.csv"
-    if cwd.is_file():
-        return str(cwd)
     return None
 
 def load_universe() -> list[str]:
