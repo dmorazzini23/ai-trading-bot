@@ -5,81 +5,103 @@ import builtins
 import random
 import time
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
+RetryPredicate = Callable[[BaseException], bool]
+
+
+class _FallbackRetryError(Exception):
+    """Fallback RetryError used when Tenacity is unavailable."""
+
+
+class _Wait:
+    def __init__(self, fn: Callable[[int], float]):
+        self._fn = fn
+
+    def __call__(self, attempt: int) -> float:
+        return self._fn(attempt)
+
+    def __add__(self, other: "_Wait") -> "_Wait":
+        return _Wait(lambda a: self(a) + other(a))
+
+
+def _fallback_stop_after_attempt(max_attempts: int) -> Callable[[int], bool]:
+    def stop(attempt_number: int) -> bool:
+        return attempt_number >= max_attempts
+
+    return stop
+
+
+def _fallback_wait_exponential(
+    *,
+    multiplier: float = 1.0,
+    min: float = 0.0,
+    max: float | None = None,
+) -> _Wait:
+    def fn(attempt: int) -> float:
+        delay = multiplier * (2 ** (attempt - 1))
+        delay = builtins.max(delay, min)
+        if max is not None:
+            delay = builtins.min(delay, max)
+        return float(delay)
+
+    return _Wait(fn)
+
+
+def _fallback_wait_random(min: float = 0.0, max: float = 1.0) -> _Wait:
+    def fn(_attempt: int) -> float:
+        return random.uniform(min, max)
+
+    return _Wait(fn)
+
+
+def _fallback_retry_if_exception_type(
+    exc_types: type[BaseException] | tuple[type[BaseException], ...]
+) -> RetryPredicate:
+    if not isinstance(exc_types, tuple):
+        exc_types = (exc_types,)
+
+    def predicate(exc: BaseException) -> bool:
+        return isinstance(exc, exc_types)
+
+    return predicate
+
+
+HAS_TENACITY = False
+RetryError: type[BaseException] = _FallbackRetryError
+stop_after_attempt: Any = _fallback_stop_after_attempt
+wait_exponential: Any = _fallback_wait_exponential
+wait_random: Any = _fallback_wait_random
+retry_if_exception_type: Any = _fallback_retry_if_exception_type
+_tenacity_retry: Any = None
+_wait_fixed: Any = None
+_wait_incrementing: Any = None
 
 try:  # pragma: no cover - exercised via HAS_TENACITY flag in tests
     from tenacity import (
-        stop_after_attempt as _stop_after_attempt,
-        wait_exponential as _wait_exponential,
-        wait_random as _wait_random,
-        wait_fixed as _wait_fixed,
-        wait_incrementing as _wait_incrementing,
-        retry_if_exception_type as _retry_if_exception_type,
-        retry as _tenacity_retry,
+        stop_after_attempt as _stop_after_attempt_impl,
+        wait_exponential as _wait_exponential_impl,
+        wait_random as _wait_random_impl,
+        wait_fixed as _wait_fixed_impl,
+        wait_incrementing as _wait_incrementing_impl,
+        retry_if_exception_type as _retry_if_exception_type_impl,
+        retry as _tenacity_retry_impl,
         RetryError as _RetryError,
     )
     if not isinstance(_RetryError, type) or not issubclass(_RetryError, BaseException):
         raise TypeError("Invalid RetryError type")
-    stop_after_attempt = _stop_after_attempt
-    wait_exponential = _wait_exponential
-    wait_random = _wait_random
-    retry_if_exception_type = _retry_if_exception_type
+    _tenacity_retry = _tenacity_retry_impl
+    _wait_fixed = _wait_fixed_impl
+    _wait_incrementing = _wait_incrementing_impl
+    stop_after_attempt = _stop_after_attempt_impl
+    wait_exponential = _wait_exponential_impl
+    wait_random = _wait_random_impl
+    retry_if_exception_type = _retry_if_exception_type_impl
     RetryError = _RetryError
     HAS_TENACITY = True
 except (ImportError, TypeError):  # pragma: no cover - fallback path when tenacity missing
-    HAS_TENACITY = False
-
-    class _FallbackRetryError(Exception):
-        """Fallback RetryError used when Tenacity is unavailable."""
-
-    RetryError = _FallbackRetryError
-
-    def stop_after_attempt(max_attempts: int) -> Callable[[int], bool]:
-        def stop(attempt_number: int) -> bool:
-            return attempt_number >= max_attempts
-        return stop
-
-    class _Wait:
-        def __init__(self, fn: Callable[[int], float]):
-            self._fn = fn
-
-        def __call__(self, attempt: int) -> float:
-            return self._fn(attempt)
-
-        def __add__(self, other: "_Wait") -> "_Wait":
-            return _Wait(lambda a: self(a) + other(a))
-
-    def wait_exponential(
-        *,
-        multiplier: float = 1.0,
-        min: float = 0.0,
-        max: float | None = None,
-    ) -> _Wait:
-        def fn(attempt: int) -> float:
-            delay = multiplier * (2 ** (attempt - 1))
-            delay = builtins.max(delay, min)
-            if max is not None:
-                delay = builtins.min(delay, max)
-            return float(delay)
-        return _Wait(fn)
-
-    def wait_random(min: float = 0.0, max: float = 1.0) -> _Wait:
-        def fn(_attempt: int) -> float:
-            return random.uniform(min, max)
-        return _Wait(fn)
-
-    def retry_if_exception_type(
-        exc_types: type[BaseException] | tuple[type[BaseException], ...]
-    ) -> Callable[[BaseException], bool]:
-        if not isinstance(exc_types, tuple):
-            exc_types = (exc_types,)
-
-        def predicate(exc: BaseException) -> bool:
-            return isinstance(exc, exc_types)
-
-        return predicate
+    pass
 
 
 def retry_call(
@@ -119,9 +141,9 @@ def retry(
     exceptions: tuple[type[BaseException], ...] = (Exception,),
     reraise: bool = False,
     # Tenacity-compatible kwargs (optional)
-    stop: object | None = None,
-    wait: object | None = None,
-    retry: object | None = None,
+    stop: Any | None = None,
+    wait: Any | None = None,
+    retry: Any | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Lightweight retry decorator built on Tenacity when available.
 
@@ -168,16 +190,21 @@ def retry(
             elif mode_lc == "linear":
                 _wait = _wait_incrementing(start=base, increment=max(0.0, factor))
             else:
-                _wait = _wait_exponential(multiplier=base, min=base)
+                _wait = wait_exponential(multiplier=base, min=base)
         _retry = retry if retry is not None else retry_if_exception_type(exceptions)
-        dec = _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=reraise)
+        dec = _tenacity_retry(
+            retry=cast(Any, _retry),
+            stop=cast(Any, _stop),
+            wait=cast(Any, _wait),
+            reraise=reraise,
+        )
 
         def tenacity_policy_decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
 
             @functools.wraps(fn)
-            def inner(*args, **kwargs):
-                return wrapped(*args, **kwargs)
+            def inner(*args: Any, **kwargs: Any) -> T:
+                return cast(T, wrapped(*args, **kwargs))
 
             return inner
 
@@ -190,16 +217,21 @@ def retry(
         elif mode_lc == "linear":
             _wait = _wait_incrementing(start=base, increment=max(0.0, factor))
         else:  # exponential (default)
-            _wait = _wait_exponential(multiplier=base, min=base)
+            _wait = wait_exponential(multiplier=base, min=base)
         predicate = retry_if_exception_type(exceptions)
-        dec = _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=reraise)
+        dec = _tenacity_retry(
+            retry=cast(Any, predicate),
+            stop=cast(Any, _stop),
+            wait=cast(Any, _wait),
+            reraise=reraise,
+        )
 
         def tenacity_decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
 
             @functools.wraps(fn)
-            def inner(*args, **kwargs):
-                return wrapped(*args, **kwargs)
+            def inner(*args: Any, **kwargs: Any) -> T:
+                return cast(T, wrapped(*args, **kwargs))
 
             return inner
 
@@ -212,11 +244,11 @@ def retry(
         if mode_lc == "linear":
             return base + (n - 1) * factor
         # exponential
-        return base * (2 ** (n - 1)) if n > 0 else 0.0
+        return float(base * (2 ** (n - 1)) if n > 0 else 0.0)
 
     def fallback_decorator(fn: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> T:
             attempt = 0
             while True:
                 try:
@@ -245,7 +277,7 @@ def retry(
                     if attempt >= attempts:
                         if reraise:
                             raise
-                        raise RetryError() from exc
+                        raise _FallbackRetryError() from exc
                     time.sleep(max(0.0, _calc_wait(attempt)))
 
         return wrapper
@@ -258,8 +290,8 @@ __all__ = [
     "stop_after_attempt",
     "wait_exponential",
     "wait_random",
-"retry_if_exception_type",
-"RetryError",
-"retry_call",
-"HAS_TENACITY",
+    "retry_if_exception_type",
+    "RetryError",
+    "retry_call",
+    "HAS_TENACITY",
 ]

@@ -7,6 +7,7 @@ with the specific Python 3.12 compatibility error.
 
 import logging
 import unittest
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 
@@ -44,7 +45,10 @@ class TestAlpacaImportHandling(unittest.TestCase):
             rest_client = None
 
             try:
-                from alpaca import REST as imported_rest
+                imported_rest = getattr(
+                    cast(Any, __import__("alpaca", fromlist=["REST"])),
+                    "REST",
+                )
 
                 self.fail("Expected alpaca import to fail")
             except TypeError as e:

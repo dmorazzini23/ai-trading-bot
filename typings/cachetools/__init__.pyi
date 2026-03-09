@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from typing import Generic, KeysView, MutableMapping, TypeVar, overload
+from typing import Generic, KeysView, MutableMapping, TypeVar
 
 _K = TypeVar("_K")
 _V = TypeVar("_V")
@@ -23,14 +23,5 @@ class TTLCache(MutableMapping[_K, _V], Generic[_K, _V]):
     def __iter__(self) -> Iterator[_K]: ...
 
     def __len__(self) -> int: ...
-
-    @overload
-    def get(self, key: _K, /) -> _V | None: ...
-
-    @overload
-    def get(self, key: _K, default: _V, /) -> _V: ...
-
-    @overload
-    def get(self, key: _K, default: _T, /) -> _V | _T: ...
 
     def keys(self) -> KeysView[_K]: ...

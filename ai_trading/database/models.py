@@ -221,7 +221,8 @@ class PerformanceMetric(Base):
     @property
     def loss_rate(self) -> float:
         """Calculate loss rate."""
-        return 1.0 - self.win_rate if self.win_rate else 0.0
+        win_rate = _as_float(self.win_rate)
+        return 1.0 - win_rate if win_rate else 0.0
 
     @property
     def avg_win_loss_ratio(self) -> float:

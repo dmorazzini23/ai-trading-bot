@@ -78,4 +78,7 @@ def load_learning_overrides(path: str, *, max_age_days: int = 30) -> dict[str, A
         ts = ts.replace(tzinfo=UTC)
     if datetime.now(UTC) - ts > timedelta(days=max(1, int(max_age_days))):
         return {}
-    return payload.get("overrides", {}) if isinstance(payload.get("overrides"), dict) else {}
+    overrides = payload.get("overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    return {str(key): value for key, value in overrides.items()}

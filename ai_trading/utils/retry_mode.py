@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from importlib import metadata
 import types
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -34,38 +34,56 @@ def _is_real_tenacity(mod: types.ModuleType) -> bool:
     return ("site-packages" in path_lc) or ("dist-packages" in path_lc) or ("/tmp" in path_lc)
 
 
+_tenacity_retry: Any = None
+_stop_after_attempt: Callable[[int], object]
+_wait_fixed: Callable[[float], object]
+_retry_if_exception_type: Callable[[tuple[type[BaseException], ...]], object]
+
+
+def _fallback_stop_after_attempt(max_attempts: int) -> Callable[[int], bool]:
+    def stop(attempt: int) -> bool:
+        return attempt >= max_attempts
+
+    return stop
+
+
+def _fallback_wait_fixed(delay: float) -> Callable[[int], float]:
+    def wait(_attempt: int) -> float:
+        return delay
+
+    return wait
+
+
+def _fallback_retry_if_exception_type(
+    exc_types: tuple[type[BaseException], ...]
+) -> Callable[[BaseException], bool]:
+    def predicate(exc: BaseException) -> bool:
+        return isinstance(exc, exc_types)
+
+    return predicate
+
+
 try:  # pragma: no cover - optional tenacity import
     import tenacity as _tenacity_mod
 
     from tenacity import (
-        retry as _tenacity_retry,
-        stop_after_attempt as _stop_after_attempt,
-        wait_fixed as _wait_fixed,
-        retry_if_exception_type as _retry_if_exception_type,
+        retry as _tenacity_retry_impl,
+        stop_after_attempt as _stop_after_attempt_impl,
+        wait_fixed as _wait_fixed_impl,
+        retry_if_exception_type as _retry_if_exception_type_impl,
     )
     if not _is_real_tenacity(_tenacity_mod):
         raise ImportError("tenacity stub detected")
+    _tenacity_retry = _tenacity_retry_impl
+    _stop_after_attempt = _stop_after_attempt_impl
+    _wait_fixed = _wait_fixed_impl
+    _retry_if_exception_type = _retry_if_exception_type_impl
     HAS_TENACITY = True
 except Exception:  # pragma: no cover - tenacity missing
     HAS_TENACITY = False
-
-    def _stop_after_attempt(max_attempts: int) -> Callable[[int], bool]:
-        def stop(attempt: int) -> bool:
-            return attempt >= max_attempts
-
-        return stop
-
-    def _wait_fixed(delay: float) -> Callable[[int], float]:
-        def wait(_attempt: int) -> float:
-            return delay
-
-        return wait
-
-    def _retry_if_exception_type(exc_types: tuple[type[BaseException], ...]) -> Callable[[BaseException], bool]:
-        def predicate(exc: BaseException) -> bool:
-            return isinstance(exc, exc_types)
-
-        return predicate
+    _stop_after_attempt = _fallback_stop_after_attempt
+    _wait_fixed = _fallback_wait_fixed
+    _retry_if_exception_type = _fallback_retry_if_exception_type
 
 
 def retry_mode(

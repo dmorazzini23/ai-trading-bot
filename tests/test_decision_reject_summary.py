@@ -150,6 +150,13 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     )
     state = bot_engine.BotState()
 
+    class _NoBarDedupeDict(dict[str, datetime]):
+        def get(self, key: str, default=None):  # type: ignore[override]
+            _ = (key, default)
+            return None
+
+    state.last_order_bar_ts = _NoBarDedupeDict()
+
     now = datetime.now(UTC)
     df = pd.DataFrame(
         {
@@ -256,6 +263,12 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     )
     monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda cfg: (False, None))
     monkeypatch.setattr(bot_engine, "_dependency_breakers", lambda _state: _AllowBreakers())
+    monkeypatch.setattr(
+        "ai_trading.oms.ledger.deterministic_client_order_id",
+        lambda **kwargs: (
+            f"{kwargs['symbol']}-{kwargs['bar_ts']}-{kwargs['side']}-{int(abs(float(kwargs['qty'])))}"
+        ),
+    )
     monkeypatch.setattr(bot_engine, "market_is_open", lambda _now=None: True)
     monkeypatch.setattr(bot_engine, "retry_idempotent", lambda fn, **_kwargs: fn())
     monkeypatch.setattr(bot_engine, "ensure_data_fetcher", lambda runtime_obj: None)
