@@ -9,6 +9,7 @@ from ai_trading.paths import TICKERS_FILE_PATH
 
 # Lazy pandas proxy
 pd = load_pandas()
+_HEADER_TOKENS = {"symbol", "symbols", "ticker", "tickers"}
 
 def locate_tickers_csv() -> str | None:
     env = str(get_env("AI_TRADING_TICKERS_FILE", "", cast=str) or "").strip()
@@ -41,15 +42,17 @@ def load_universe() -> list[str]:
         logger.error("TICKERS_FILE_MISSING", extra={"path": "tickers.csv"})
         raise RuntimeError("tickers.csv not found")
     try:
-        df = pd.read_csv(path)
+        # Read as headerless first-column data, then optionally strip a header token.
+        df = pd.read_csv(path, header=None)
     except (OSError, pd.errors.EmptyDataError, ValueError) as e:
         logger.error(
             "TICKERS_FILE_READ_FAILED", extra={"path": path, "error": str(e)}
         )
         return []
+    first_col = [str(value).strip() for value in df.iloc[:, 0].tolist() if str(value).strip()]
+    if first_col and first_col[0].strip().lower() in _HEADER_TOKENS:
+        first_col = first_col[1:]
     # Normalize symbols so downstream modules see provider-ready tickers
-    symbols = [
-        normalize_symbol(str(s)) for s in df.iloc[:, 0].tolist() if str(s).strip()
-    ]
+    symbols = [normalize_symbol(symbol) for symbol in first_col if symbol]
     logger.info("TICKERS_SOURCE", extra={"path": path, "count": len(symbols)})
     return symbols

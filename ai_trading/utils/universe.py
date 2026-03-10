@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 # Mapping for data providers that expect alternate share-class separators.
 _SYMBOL_FIXES: dict[str, str] = {}
+_HEADER_TOKENS = {"symbol", "symbols", "ticker", "tickers"}
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -20,8 +22,7 @@ def load_universe(path_or_csv: str | None, limit: int | None = None) -> list[str
     if path_or_csv:
         p = Path(path_or_csv)
         if p.exists() and p.is_file():
-            s = p.read_text(encoding="utf-8", errors="ignore")
-            raw = _split_symbols(s)
+            raw = _symbols_from_file(p)
         else:
             raw = _split_symbols(path_or_csv)
     if not raw:
@@ -35,10 +36,32 @@ def load_universe(path_or_csv: str | None, limit: int | None = None) -> list[str
         if up and up not in seen:
             seen.add(up)
             out.append(up)
-    out.sort()
     if limit and limit > 0:
         out = out[:limit]
     return out
+
+
+def _symbols_from_file(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    rows: list[list[str]] = []
+    for row in csv.reader(text.splitlines()):
+        normalized_row = [cell.strip() for cell in row if cell is not None]
+        if any(cell for cell in normalized_row):
+            rows.append(normalized_row)
+    if not rows:
+        return []
+
+    first_cell = rows[0][0].strip().lower() if rows[0] and rows[0][0] else ""
+    if first_cell in _HEADER_TOKENS:
+        data_rows = rows[1:]
+        return [row[0].strip() for row in data_rows if row and row[0].strip()]
+
+    # Preserve comma-separated env-style payloads saved as one-line files.
+    if len(rows) == 1 and len(rows[0]) > 1:
+        return [cell.strip() for cell in rows[0] if cell.strip()]
+
+    # Default CSV interpretation: first column contains symbols.
+    return [row[0].strip() for row in rows if row and row[0].strip()]
 
 
 def _split_symbols(s: str) -> list[str]:
@@ -53,4 +76,3 @@ def _split_symbols(s: str) -> list[str]:
 
 
 __all__ = ["load_universe", "normalize_symbol"]
-

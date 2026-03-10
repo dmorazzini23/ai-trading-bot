@@ -33,6 +33,14 @@ def test_packaged_exists_without_env(monkeypatch):
     assert len(uni) > 3  # S&P-100 default
 
 
+def test_headerless_csv_preserves_first_symbol(monkeypatch, tmp_path):
+    csv = tmp_path / "tick_no_header.csv"
+    csv.write_text("AAPL\nMSFT\n", encoding="utf-8")
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(csv))
+    uni = load_universe()
+    assert uni == ["AAPL", "MSFT"]
+
+
 def test_missing_raises_runtime_error(monkeypatch):
     monkeypatch.setenv("AI_TRADING_TICKERS_FILE", "/nonexistent.csv")
     import ai_trading.data.universe as U

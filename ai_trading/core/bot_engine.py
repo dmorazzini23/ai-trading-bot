@@ -1374,17 +1374,11 @@ def _pre_rank_execution_candidates(
     else:
         ranked = list(deduped)
     if top_n is None or len(ranked) <= top_n:
-        _record_prerank_shadow_snapshot(
-            ranked_symbols=ranked,
-            selected_symbols=ranked,
-            rank_source=rank_source,
-            top_n=top_n,
-            runtime=runtime,
-        )
-        return ranked
-
-    selected = ranked[:top_n]
-    dropped = ranked[top_n:]
+        selected = ranked
+        dropped: list[str] = []
+    else:
+        selected = ranked[:top_n]
+        dropped = ranked[top_n:]
     logger.info(
         "EXECUTION_CANDIDATE_PRERANK",
         extra={
@@ -5957,7 +5951,7 @@ RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
 
 def _require_cfg(value: str | None, name: str) -> str:
-    """Return value or load from config, retrying in production."""
+    """Return a required config value or raise with a deterministic error."""
     if value:
         return value
 
@@ -5970,16 +5964,6 @@ def _require_cfg(value: str | None, name: str) -> str:
         }
         return dummy_values.get(name, f"test_{name.lower()}")
 
-    if TRADING_MODE_ENV == "production":
-        while not value:
-            logger.critical("Missing %s; retrying in 60s", name)
-            time.sleep(60)
-            _reload_env()
-            import importlib
-
-            importlib.reload(config)
-            value = getattr(config, name, None)
-        return str(value)
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 
@@ -6041,7 +6025,7 @@ def init_runtime_config():
         ALPACA_SECRET_KEY = str(get_env("TEST_ALPACA_SECRET_KEY", "") or "")
 
     TRADING_MODE_ENV = _normalize_runtime_trading_mode(
-        getattr(cfg, "trading_mode", getattr(cfg, "TRADING_MODE", None))
+        getattr(cfg, "trading_mode", DEFAULT_TRADING_MODE)
     )
 
     if not callable(validate_alpaca_credentials):
@@ -6168,73 +6152,60 @@ def _init_metrics() -> None:
     _METRICS_READY = True
 
 
-ExecutionEngine: Any
-try:
-    from ai_trading.execution import (
-        ExecutionEngine as _ExecutionEngineImported,  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
-    )
-    ExecutionEngine = _ExecutionEngineImported
-except ImportError:  # pragma: no cover - allow tests with stubbed module
-    from ai_trading.core.enums import OrderSide
+class _ExecutionEngineFallback:
+    """
+    Fallback execution engine for import-time safety and isolated tests.
 
-    class _ExecutionEngineFallback:
-        """
-        Fallback execution engine used when the real trade_execution module is
-        unavailable.  Many parts of the trading logic expect an execution
-        engine exposing ``execute_order`` as well as ``start_cycle`` and
-        ``end_cycle`` hooks.  Without these methods the bot would raise
-        AttributeError.  This stub logs invocation of each method and returns
-        dummy order objects.
-        """
+    The real engine is resolved lazily in ``_ensure_execution_engine`` so this
+    class only exists to satisfy call sites that access ``bot_engine.ExecutionEngine``
+    before runtime initialization.
+    """
 
-        _IS_STUB = True
+    _IS_STUB = True
 
-        def __init__(self, *args, **kwargs) -> None:
-            # Provide a logger specific to the stub
-            self._logger = get_logger(__name__ + ".StubExecutionEngine")
+    def __init__(self, *args, **kwargs) -> None:
+        self._logger = get_logger(__name__ + ".StubExecutionEngine")
 
-        def logger(self, method: str, *args, **kwargs) -> None:
-            self._logger.debug(
-                "StubExecutionEngine.%s called with args=%s kwargs=%s",
-                method,
-                args,
-                kwargs,
-            )
+    def logger(self, method: str, *args, **kwargs) -> None:
+        self._logger.debug(
+            "StubExecutionEngine.%s called with args=%s kwargs=%s",
+            method,
+            args,
+            kwargs,
+        )
 
-        def execute_order(
-            self,
-            symbol: str,
-            side: Any,
-            qty: int,
-            *args: Any,
-            **kwargs: Any,
-        ) -> types.SimpleNamespace:
-            """Simulate an order execution and return a dummy order object."""
+    def execute_order(
+        self,
+        symbol: str,
+        side: Any,
+        qty: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> types.SimpleNamespace:
+        """Simulate an order execution and return a dummy order object."""
 
-            price = kwargs.pop("price", None)
-            if args:
-                self.logger("execute_order_extra_args", *args)
-            if kwargs:
-                self.logger("execute_order_extra_kwargs", **kwargs)
-            self.logger("execute_order", symbol, side, qty, price=price)
-            # Return a simple namespace with an id attribute to mimic a real order
-            return types.SimpleNamespace(id=None, price=price)
+        price = kwargs.pop("price", None)
+        if args:
+            self.logger("execute_order_extra_args", *args)
+        if kwargs:
+            self.logger("execute_order_extra_kwargs", **kwargs)
+        self.logger("execute_order", symbol, side, qty, price=price)
+        return types.SimpleNamespace(id=None, price=price)
 
-        # Provide empty hooks for cycle management used elsewhere in the code
-        def start_cycle(self) -> None:
-            self.logger("start_cycle")
+    def start_cycle(self) -> None:
+        self.logger("start_cycle")
 
-        def end_cycle(self) -> None:
-            self.logger("end_cycle")
+    def end_cycle(self) -> None:
+        self.logger("end_cycle")
 
-        def check_trailing_stops(self) -> None:
-            """Stub method for trailing stops check - used when real execution engine unavailable."""
-            self.logger("check_trailing_stops")
+    def check_trailing_stops(self) -> None:
+        self.logger("check_trailing_stops")
 
-        def check_stops(self) -> None:
-            """Mirror the real engine safety hook with a debug no-op."""
-            self.logger("check_stops")
-    ExecutionEngine = _ExecutionEngineFallback
+    def check_stops(self) -> None:
+        self.logger("check_stops")
+
+
+ExecutionEngine: Any = _ExecutionEngineFallback
 
 CapitalScalingEngine: Any
 try:
@@ -29952,6 +29923,15 @@ def _prepare_run(
     logger.info(
         "Number of screened candidates: %s", len(symbols)
     )  # AI-AGENT-REF: log candidate count
+    logger.info(
+        "CANDIDATE_PIPELINE",
+        extra={
+            "universe_count": len(full_watchlist),
+            "screened_count": len(symbols),
+            "degraded_cycle": bool(degraded_cycle),
+            "degraded_reason": degrade_reason,
+        },
+    )
     if not symbols:
         logger.warning(
             "No candidates found after filtering, using top 5 tickers fallback."
@@ -30129,13 +30109,27 @@ def _process_symbols(
             },
         )
 
-    # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion
-    _max_syms = get_env("MAX_SYMBOLS_PER_CYCLE", 50)
+    # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion.
+    # A non-positive value keeps the full screened universe available in this cycle.
+    configured_max_symbols = 0
+    raw_max_symbols = get_env("MAX_SYMBOLS_PER_CYCLE", 0)
     try:
-        _max_syms = int(_max_syms)  # type: ignore[arg-type]
+        configured_max_symbols = int(raw_max_symbols)  # type: ignore[arg-type]
     except (TypeError, ValueError):  # pragma: no cover - defensive cast
-        _max_syms = 50
-    max_symbols_per_cycle = min(_max_syms, len(symbols))
+        configured_max_symbols = 0
+    if configured_max_symbols > 0:
+        max_symbols_per_cycle = min(configured_max_symbols, len(symbols))
+    else:
+        max_symbols_per_cycle = len(symbols)
+    if 0 < max_symbols_per_cycle < len(symbols):
+        logger.info(
+            "SYMBOL_PROCESSING_CAP_APPLIED",
+            extra={
+                "configured_max_symbols": configured_max_symbols,
+                "before": len(symbols),
+                "after": max_symbols_per_cycle,
+            },
+        )
     processed_symbols = 0
 
     _budget_sec = get_env("SYMBOL_PROCESS_BUDGET", 300)
@@ -30745,7 +30739,6 @@ def _ensure_execution_engine(runtime) -> None:
         ) from exc
 
     try:
-        _ExecutionEngine = getattr(execution_module, "ExecutionEngine")
         get_execution_runtime_status = getattr(
             execution_module, "get_execution_runtime_status"
         )
@@ -30777,6 +30770,18 @@ def _ensure_execution_engine(runtime) -> None:
         return status_local, diagnostics_local
 
     status, diagnostics = _capture_status()
+    try:
+        _ExecutionEngine = getattr(execution_module, "ExecutionEngine")
+    except AttributeError as exc:
+        logger_once.error(
+            "EXECUTION_ENGINE_IMPORT_ABORTED",
+            key="execution_engine_import_aborted",
+            extra={"error": str(exc), "missing_module": "ai_trading.execution"},
+        )
+        raise RuntimeError(
+            "Execution engine dependencies are unavailable. Install the required runtime "
+            "packages (pydantic, pydantic-settings, alpaca-py) before trading."
+        ) from exc
 
     global _exec_engine, ExecutionEngine
 
@@ -30862,7 +30867,6 @@ def _ensure_execution_engine(runtime) -> None:
     if stub_attached or stub_class:
         try:
             execution_module = importlib.reload(execution_module)
-            _ExecutionEngine = getattr(execution_module, "ExecutionEngine")
             get_execution_runtime_status = getattr(
                 execution_module, "get_execution_runtime_status"
             )
@@ -30877,6 +30881,17 @@ def _ensure_execution_engine(runtime) -> None:
             ) from exc
 
         status, diagnostics = _capture_status()
+        try:
+            _ExecutionEngine = getattr(execution_module, "ExecutionEngine")
+        except AttributeError as exc:
+            logger_once.error(
+                "EXECUTION_ENGINE_STUB_SELECTED",
+                key="execution_engine_stub_selected",
+                extra=diagnostics,
+            )
+            raise RuntimeError(
+                "Execution engine stub detected; install runtime dependencies to restore risk-stop enforcement."
+            ) from exc
         stub_class = getattr(_ExecutionEngine, "_IS_STUB", False)
         if stub_class:
             logger_once.error(

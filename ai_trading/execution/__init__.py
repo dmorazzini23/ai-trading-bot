@@ -63,6 +63,7 @@ _RUNTIME_STATUS = ExecutionEngineStatus(
     reason=None,
     settings_fallback=None,
 )
+_ENGINE_SELECTION_READY = False
 
 
 def _collect_dependency_gaps(mode: str) -> list[str]:
@@ -247,12 +248,25 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
     return engine_cls
 
 
-ExecutionEngine = _select_execution_engine()
+ExecutionEngine: type[_SimExecutionEngine] = _SimExecutionEngine
+
+
+def select_execution_engine(*, force_refresh: bool = False) -> type[_SimExecutionEngine]:
+    """Resolve and cache the execution engine class for the active runtime."""
+
+    global ExecutionEngine, _ENGINE_SELECTION_READY
+    if _ENGINE_SELECTION_READY and not force_refresh:
+        return ExecutionEngine
+    ExecutionEngine = _select_execution_engine()
+    _ENGINE_SELECTION_READY = True
+    return ExecutionEngine
 
 
 def get_execution_runtime_status() -> ExecutionEngineStatus:
     """Return the most recent execution engine selection status."""
 
+    if not _ENGINE_SELECTION_READY:
+        select_execution_engine()
     return _RUNTIME_STATUS
 
 # Optional exports are dynamically imported; predeclare to keep fallback
@@ -369,6 +383,7 @@ __all__ = [
     "pdt_preflight",
     "ExecutionAlgorithm",
     "ExecutionEngine",
+    "select_execution_engine",
     "ProductionExecutionCoordinator",
     "ExecutionResult",
     "OrderRequest",

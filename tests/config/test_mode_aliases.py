@@ -7,7 +7,7 @@ from ai_trading.logging import logger_once
 
 
 def _clear_env(monkeypatch):
-    for k in ("TRADING_MODE", "bot_mode"):
+    for k in ("AI_TRADING_TRADING_MODE", "TRADING_MODE", "bot_mode"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -19,12 +19,14 @@ def test_precedence(monkeypatch):
     assert resolve_trading_mode("balanced") == "aggressive"
     monkeypatch.setenv("TRADING_MODE", "conservative")
     assert resolve_trading_mode("balanced") == "conservative"
+    monkeypatch.setenv("AI_TRADING_TRADING_MODE", "balanced")
+    assert resolve_trading_mode("aggressive") == "balanced"
 
 
 def test_conflict_prefers_canonical(monkeypatch):
     _clear_env(monkeypatch)
     logger_once._emitted_keys.clear()
-    monkeypatch.setenv("TRADING_MODE", "balanced")
+    monkeypatch.setenv("AI_TRADING_TRADING_MODE", "balanced")
     monkeypatch.setenv("bot_mode", "aggressive")
     assert resolve_trading_mode("moderate") == "balanced"
 
@@ -40,4 +42,3 @@ def test_deprecation_logged_once(monkeypatch, caplog):
         caplog.clear()
         assert resolve_trading_mode("balanced") == "aggressive"
         assert not caplog.records
-

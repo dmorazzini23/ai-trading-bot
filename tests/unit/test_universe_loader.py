@@ -260,3 +260,22 @@ def test_load_candidate_universe_prefers_canonical_runtime_universe(
     assert symbols == ["AAPL", "MSFT", "GOOGL", "AMZN"]
     assert runtime.universe_tickers == ["AAPL", "MSFT", "GOOGL", "AMZN"]
     assert called == []
+
+
+def test_load_tickers_skips_header_and_preserves_order(tmp_path: Path) -> None:
+    """Ticker loader should ignore CSV header rows and keep file order."""
+
+    csv_path = tmp_path / "tickers.csv"
+    csv_path.write_text("symbol\nMSFT\nAAPL\nTSLA\n", encoding="utf-8")
+
+    symbols = bot_engine.load_tickers(str(csv_path))
+
+    assert symbols == ["MSFT", "AAPL", "TSLA"]
+
+
+def test_load_tickers_csv_string_preserves_order_and_dedupes() -> None:
+    """Inline CSV ticker lists should preserve first-seen order."""
+
+    symbols = bot_engine.load_tickers("MSFT,AAPL,MSFT,TSLA")
+
+    assert symbols == ["MSFT", "AAPL", "TSLA"]
