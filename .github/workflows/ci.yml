@@ -97,6 +97,19 @@ jobs:
             --cov=ai_trading \
             --cov-report=term-missing \
             --cov-fail-under="${COVERAGE_MIN}"
+      - name: Runtime performance report
+        if: always()
+        run: |
+          mkdir -p "${AI_TRADING_OUTPUT_DIR}"
+          python3 -m ai_trading.tools.runtime_performance_report --json \
+            > "${AI_TRADING_OUTPUT_DIR}/runtime_performance_report.json"
+      - name: Upload runtime performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-performance-report
+          path: ${{ env.AI_TRADING_OUTPUT_DIR }}/runtime_performance_report.json
+          if-no-files-found: error
 
   determinism-seed-matrix:
     if: github.event_name != 'schedule'
@@ -169,3 +182,16 @@ jobs:
             --cov=ai_trading \
             --cov-report=term-missing \
             --cov-fail-under="${COVERAGE_MIN}"
+      - name: Runtime performance report
+        if: always()
+        run: |
+          mkdir -p "${AI_TRADING_OUTPUT_DIR}"
+          python3 -m ai_trading.tools.runtime_performance_report --json \
+            > "${AI_TRADING_OUTPUT_DIR}/runtime_performance_report.json"
+      - name: Upload runtime performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-performance-report-nightly
+          path: ${{ env.AI_TRADING_OUTPUT_DIR }}/runtime_performance_report.json
+          if-no-files-found: error

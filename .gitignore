@@ -101,3 +101,4 @@ patch_full_cleanup.patch
 /runtime/execution_cost_model.json
 /runtime/run_manifest.jsonl
 /runtime/research_reports/
+/runtime/archive/

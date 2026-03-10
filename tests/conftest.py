@@ -254,9 +254,13 @@ def _block_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _env_defaults(monkeypatch):
+def _env_defaults(monkeypatch, tmp_path: pathlib.Path):
     monkeypatch.setenv("ALPACA_API_KEY", "dummy")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+    runtime_data_dir = tmp_path / "runtime_data"
+    runtime_data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(runtime_data_dir))
+    monkeypatch.delenv("STATE_DIRECTORY", raising=False)
     # Enforce canonical env contract in tests; legacy aliases must not leak
     # from developer shells or prior tests.
     for key in (
@@ -561,7 +565,7 @@ def _reset_bot_engine_state():
         if hasattr(bot_engine, "time") and hasattr(bot_engine.time, "sleep"):
             bot_engine.time.sleep = _time.sleep
         if hasattr(bot_engine, "datetime"):
-            bot_engine.datetime = _REAL_DATETIME
+            cast(Any, bot_engine).datetime = _REAL_DATETIME
         if hasattr(bot_engine, "_ctx"):
             bot_engine._ctx = None
         lazy_cls = getattr(bot_engine, "LazyBotContext", None)

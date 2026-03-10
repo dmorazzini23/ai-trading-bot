@@ -2968,10 +2968,23 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
 def parse_cli(argv: list[str] | None = None):
     """Parse CLI arguments, tolerating unknown flags."""
     parser = argparse.ArgumentParser(description="AI Trading Bot")
-    parser.add_argument("--iterations")
-    parser.add_argument("--interval")
+    parser.add_argument("--iterations", type=int)
+    parser.add_argument("--interval", type=float)
     args, _unknown = parser.parse_known_args(argv)
     return args
+
+
+def _coerce_int_like(raw_value: Any, default: int) -> int:
+    """Parse integer-like values including float-encoded strings."""
+
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(raw_value))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -3264,19 +3277,10 @@ def main(argv: list[str] | None = None) -> None:
             else getattr(S, "iterations", None) or getattr(S, "scheduler_iterations", 0)
         )
     )
-    try:
-        iterations = int(raw_iter)
-    except ValueError:
-        iterations = 0
+    iterations = _coerce_int_like(raw_iter, 0)
     raw_interval = args.interval if args.interval is not None else getattr(S, "interval", 60)
-    try:
-        interval = int(raw_interval)
-    except ValueError:
-        interval = 60
-    try:
-        closed_interval = int(getattr(S, "interval_when_closed", 300))
-    except Exception:
-        closed_interval = 300
+    interval = max(1, _coerce_int_like(raw_interval, 60))
+    closed_interval = max(1, _coerce_int_like(getattr(S, "interval_when_closed", 300), 300))
     seed = get_seed_int()
     logger.info("Runtime defaults resolved", extra={"iterations": iterations, "interval": interval, "seed": seed})
     count = 0
@@ -3682,24 +3686,6 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("SCHEDULER_COMPLETE", extra={"iterations": count})
         return
 
-
-if __name__ == "__main__":
-    try:
-        main()
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else 1
-        if code != 0:
-            logger.error("SERVICE_EXIT", extra={"code": code})
-        raise
-    except BaseException as exc:  # noqa: BLE001
-        _maybe_build_bad_session_replay_dataset(
-            trigger="service_crash",
-            detail={"error": str(exc), "exc_type": exc.__class__.__name__},
-        )
-        logger.exception("SERVICE_CRASH")
-        sys.exit(1)
-    else:
-        sys.exit(0)
 def _log_auth_preflight_failure(detail: str, action: str) -> None:
     """Emit a single critical log for Alpaca auth preflight failures."""
 
@@ -3745,3 +3731,22 @@ def _emit_capture_handler_record(detail: str, action: str) -> None:
             handler.emit(record)
         except Exception:  # pragma: no cover - defensive guard for custom handlers
             continue
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code != 0:
+            logger.error("SERVICE_EXIT", extra={"code": code})
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        _maybe_build_bad_session_replay_dataset(
+            trigger="service_crash",
+            detail={"error": str(exc), "exc_type": exc.__class__.__name__},
+        )
+        logger.exception("SERVICE_CRASH")
+        sys.exit(1)
+    else:
+        sys.exit(0)

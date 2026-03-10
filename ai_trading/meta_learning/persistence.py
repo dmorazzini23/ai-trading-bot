@@ -120,6 +120,10 @@ def _normalise_record(raw: Mapping[str, Any]) -> dict[str, Any]:
         "reward": None,
         "order_id": record.get("order_id"),
         "fill_id": record.get("fill_id"),
+        "expected_price": None,
+        "slippage_bps": None,
+        "fee_amount": None,
+        "fee_bps": None,
     }
     for key, value in defaults.items():
         record.setdefault(key, value)

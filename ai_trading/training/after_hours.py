@@ -2300,6 +2300,119 @@ def _promotion_gate_bundle(
     }
 
 
+def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
+    """Evaluate runtime realized-performance go/no-go criteria for promotion."""
+
+    enabled = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    if not enabled:
+        return {
+            "enabled": False,
+            "gate_passed": True,
+            "reason": "disabled",
+            "checks": {},
+            "failed_checks": [],
+            "thresholds": {},
+            "observed": {},
+        }
+
+    trade_history_path = Path(
+        str(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+                "artifacts/trade_history.parquet",
+                cast=str,
+            )
+            or "artifacts/trade_history.parquet"
+        )
+    )
+    gate_summary_path = Path(
+        str(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+                "runtime/gate_effectiveness_summary.json",
+                cast=str,
+            )
+            or "runtime/gate_effectiveness_summary.json"
+        )
+    )
+    thresholds = {
+        "min_closed_trades": int(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
+        ),
+        "min_profit_factor": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1, cast=float)
+        ),
+        "min_win_rate": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5, cast=float)
+        ),
+        "min_net_pnl": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_NET_PNL", 0.0, cast=float)
+        ),
+        "min_acceptance_rate": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float)
+        ),
+        "min_expected_net_edge_bps": float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+                -50.0,
+                cast=float,
+            )
+        ),
+        "require_pnl_available": bool(
+            get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", True, cast=bool)
+        ),
+        "require_gate_valid": bool(
+            get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID", False, cast=bool)
+        ),
+    }
+
+    try:
+        from ai_trading.tools import runtime_performance_report as performance_report
+
+        report = performance_report.build_report(
+            trade_history_path=trade_history_path,
+            gate_summary_path=gate_summary_path,
+        )
+        decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
+    except Exception as exc:
+        logger.warning(
+            "AFTER_HOURS_RUNTIME_GONOGO_FAILED",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+        )
+        return {
+            "enabled": True,
+            "gate_passed": False,
+            "reason": "runtime_performance_eval_failed",
+            "checks": {},
+            "failed_checks": ["runtime_performance_eval_failed"],
+            "thresholds": thresholds,
+            "observed": {},
+            "paths": {
+                "trade_history": str(trade_history_path),
+                "gate_summary": str(gate_summary_path),
+            },
+        }
+
+    return {
+        "enabled": True,
+        "gate_passed": bool(decision.get("gate_passed")),
+        "checks": dict(decision.get("checks", {})),
+        "failed_checks": list(decision.get("failed_checks", [])),
+        "thresholds": dict(decision.get("thresholds", {})),
+        "observed": dict(decision.get("observed", {})),
+        "paths": {
+            "trade_history": str(trade_history_path),
+            "gate_summary": str(gate_summary_path),
+        },
+    }
+
+
 def _regime_calibration_diagnostics(
     *,
     current: Mapping[str, Any] | None,
@@ -2725,6 +2838,29 @@ def _write_after_hours_reports(
     return timestamped_path, daily_alias_path
 
 
+def _is_pytest_temp_path(path_value: Any) -> bool:
+    normalized = str(path_value or "").strip().replace("\\", "/").lower()
+    return "/pytest-of-" in normalized or "/tmp/pytest-" in normalized
+
+
+def _sanitize_after_hours_training_state_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized = dict(payload)
+    removed_keys: list[str] = []
+    for key in ("report_path", "daily_report_path"):
+        value = sanitized.get(key)
+        if value is None:
+            continue
+        if _is_pytest_temp_path(value):
+            sanitized.pop(key, None)
+            removed_keys.append(key)
+    if removed_keys:
+        logger.warning(
+            "AFTER_HOURS_TRAINING_STATE_SANITIZED",
+            extra={"removed_keys": removed_keys},
+        )
+    return sanitized
+
+
 def _after_hours_training_state_path() -> Path:
     raw = str(
         get_env(
@@ -2755,7 +2891,7 @@ def _load_after_hours_training_state() -> Mapping[str, Any] | None:
         )
         return None
     if isinstance(payload, Mapping):
-        return payload
+        return _sanitize_after_hours_training_state_payload(payload)
     return None
 
 
@@ -2775,8 +2911,9 @@ def _write_after_hours_training_state(payload: Mapping[str, Any]) -> Path | None
         )
         return None
     target = path if writable_dir == path.parent else (fallback if writable_dir == fallback.parent else writable_dir / path.name)
+    sanitized_payload = _sanitize_after_hours_training_state_payload(payload)
     try:
-        return _write_json(target, dict(payload))
+        return _write_json(target, sanitized_payload)
     except OSError as exc:
         logger.warning(
             "AFTER_HOURS_TRAINING_STATE_WRITE_FAILED",
@@ -3248,9 +3385,14 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         prior_metrics=prior_model_metrics,
         regime_calibration=best.regime_calibration,
     )
+    runtime_performance_gate = _runtime_performance_go_no_go_gate()
     roadmap_additional_gates: dict[str, bool] = {}
     if bool(phase1_week1.get("required_for_promotion", False)):
         roadmap_additional_gates["phase1_week1"] = bool(phase1_week1.get("gate_passed", False))
+    if bool(runtime_performance_gate.get("enabled", False)):
+        roadmap_additional_gates["runtime_performance"] = bool(
+            runtime_performance_gate.get("gate_passed", False)
+        )
     promotion = _promotion_gate_bundle(
         best=best,
         rows=int(len(dataset)),
@@ -3277,6 +3419,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "gate_passed": bool(promotion["gate_passed"]),
             "combined_gates": dict(promotion["combined_gates"]),
             "prior_model_comparison": dict(promotion.get("prior_model_comparison", {})),
+            "runtime_performance_gate": runtime_performance_gate,
         },
     )
 
@@ -3372,6 +3515,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "prior_model_metrics": prior_model_metrics,
             "sensitivity_sweep": sensitivity_sweep,
             "roadmap": {"phase_1_week_1": phase1_week1},
+            "runtime_performance_gate": runtime_performance_gate,
         },
     )
     promoted_model_path, promoted_manifest_path = _maybe_promote_to_runtime_model_path(
@@ -3429,6 +3573,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "edge_gates": gate_map,
         "promotion": promotion,
         "roadmap": {"phase_1_week_1": phase1_week1},
+        "runtime_performance_gate": runtime_performance_gate,
         "prior_model_metrics": prior_model_metrics,
         "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
@@ -3513,6 +3658,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "promoted_manifest_path": promoted_manifest_path,
         "promotion": promotion,
         "roadmap": {"phase_1_week_1": phase1_week1},
+        "runtime_performance_gate": runtime_performance_gate,
         "rl_overlay": rl_overlay,
     }
 

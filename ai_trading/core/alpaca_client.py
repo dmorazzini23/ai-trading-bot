@@ -116,8 +116,23 @@ def _validate_trading_api(api: Any) -> bool:
                 sig = inspect.signature(api.get_orders)  # type: ignore[attr-defined]
             except (TypeError, ValueError):  # pragma: no cover - defensive
                 sig = None
-            accepts_status = bool(sig and "status" in sig.parameters)
-            accepts_filter = bool(sig and "filter" in sig.parameters)
+            accepts_var_kwargs = bool(
+                sig
+                and any(
+                    param.kind is inspect.Parameter.VAR_KEYWORD
+                    for param in sig.parameters.values()
+                )
+            )
+
+            def _accepts_named_or_kwargs(param_name: str) -> bool:
+                if sig is None:
+                    return False
+                if param_name in sig.parameters:
+                    return True
+                return accepts_var_kwargs
+
+            accepts_status = _accepts_named_or_kwargs("status")
+            accepts_filter = _accepts_named_or_kwargs("filter")
 
             def _list_orders_via_get_orders(*args: Any, **kwargs: Any):  # type: ignore[override]
                 status = kwargs.pop("status", None)
@@ -148,11 +163,11 @@ def _validate_trading_api(api: Any) -> bool:
                     except TypeError:
                         filter_obj = GetOrdersRequest(statuses=[enum_val])
                 except Exception:
-                    if accepts_status:
-                        filter_obj = None
+                    if accepts_filter and accepts_var_kwargs:
+                        filter_obj = {"status": enum_val}
                     logger.debug("LIST_ORDERS_FILTER_BUILD_FAILED", exc_info=True)
 
-                if filter_obj is not None:
+                if filter_obj is not None and accepts_filter:
                     try:
                         return api.get_orders(
                             *args, filter=filter_obj, **kwargs
@@ -165,7 +180,7 @@ def _validate_trading_api(api: Any) -> bool:
                     except Exception:
                         raise
 
-                if accepts_status:
+                if accepts_status and not accepts_var_kwargs:
                     kwargs["status"] = enum_val
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]

@@ -701,6 +701,33 @@ def test_after_hours_training_skips_when_no_new_signal_data(
     assert second["unchanged_dataset_fingerprint"] is True
 
 
+def test_after_hours_training_state_strips_pytest_temp_report_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_path = tmp_path / "runtime" / "after_hours_training_state.json"
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_TRAINING_STATE_PATH", str(state_path))
+
+    written = after_hours._write_after_hours_training_state(
+        {
+            "updated_at": "2026-01-06T21:10:00+00:00",
+            "rows": 560,
+            "dataset_fingerprint": "fp-001",
+            "max_label_ts": "2025-04-24T00:00:00+00:00",
+            "report_path": "/tmp/pytest-of-root/pytest-77/reports/after_hours_training_20260106_211000.json",
+            "daily_report_path": "/tmp/pytest-of-root/pytest-77/reports/after_hours_training_20260106.json",
+            "model_id": "ml-edge-001",
+            "model_name": "histgb",
+        }
+    )
+
+    assert written is not None
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert "report_path" not in payload
+    assert "daily_report_path" not in payload
+    assert payload["model_id"] == "ml-edge-001"
+
+
 def test_after_hours_training_falls_back_when_model_dir_read_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

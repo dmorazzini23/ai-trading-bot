@@ -6,4 +6,5 @@ __all__ = [
     "fetch_sample_universe",
     "live_cutover_drill",
     "refresh_meta_model",
+    "runtime_performance_report",
 ]

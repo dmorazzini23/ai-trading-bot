@@ -19430,6 +19430,16 @@ def pre_trade_checks(
     if getattr(CFG, "force_trades", False):
         logger.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
         return True
+    if not bool(regime_ok):
+        logger.info(
+            "SKIP_REGIME_BLOCK",
+            extra={
+                "symbol": symbol,
+                "regime": _normalize_regime_name(getattr(state, "current_regime", "")),
+            },
+        )
+        _log_health_diagnostics(ctx, "regime")
+        return False
     # Streak kill-switch check
     if (
         state.streak_halt_until
@@ -25803,6 +25813,33 @@ def detect_regime_state(ctx: BotContext) -> str:
         return "sideways"
 
 
+def _regime_allows_trading(regime: Any) -> bool:
+    """Return whether trading should proceed for the resolved regime."""
+
+    allow_trading_attr = getattr(regime, "allow_trading", None)
+    if allow_trading_attr is not None:
+        return bool(allow_trading_attr)
+
+    regime_name_raw: Any = regime
+    if isinstance(regime, Mapping):
+        if "allow_trading" in regime:
+            return bool(regime.get("allow_trading"))
+        regime_name_raw = regime.get("name", regime_name_raw)
+
+    normalized_regime = _normalize_regime_name(regime_name_raw)
+    blocked_raw = str(get_env("AI_TRADING_BLOCKED_REGIMES", "", cast=str) or "").strip()
+    blocked_regimes = {
+        _normalize_regime_name(token)
+        for token in blocked_raw.split(",")
+        if token and token.strip()
+    }
+    if normalized_regime in blocked_regimes:
+        return False
+    if normalized_regime in {"blocked", "disabled", "halt", "risk_off"}:
+        return False
+    return True
+
+
 def check_market_regime(runtime: BotContext, state: BotState) -> bool:
     """
     Evaluate the current market regime and update state.current_regime.
@@ -25811,7 +25848,13 @@ def check_market_regime(runtime: BotContext, state: BotState) -> bool:
     try:
         # AI-AGENT-REF: pass runtime explicitly into regime detection
         state.current_regime = detect_regime_state(runtime)
-        return bool(getattr(state.current_regime, "allow_trading", True))
+        trading_allowed = _regime_allows_trading(state.current_regime)
+        if not trading_allowed:
+            logger.info(
+                "REGIME_BLOCKED",
+                extra={"regime": _normalize_regime_name(state.current_regime)},
+            )
+        return trading_allowed
     except (KeyError, ValueError, TypeError) as e:
         logger.warning(
             "REGIME_DETECT_FAILED",

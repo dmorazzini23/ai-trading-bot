@@ -2564,10 +2564,55 @@ class ExecutionEngine:
             price_obj = None
             timestamp = None
             fill_id = None
+            fee_amount: float | None = None
+            fee_keys = (
+                "fee_amount",
+                "fee",
+                "fees",
+                "commission",
+                "commission_amount",
+                "filled_fee",
+                "filled_fees",
+            )
             if isinstance(fill, dict):
                 price_obj = fill.get("price")
                 timestamp = fill.get("timestamp")
                 fill_id = fill.get("fill_id")
+                for key in fee_keys:
+                    try:
+                        candidate = fill.get(key)
+                    except Exception:
+                        candidate = None
+                    try:
+                        parsed = float(candidate) if candidate is not None else None
+                    except (TypeError, ValueError):
+                        parsed = None
+                    if parsed is not None and math.isfinite(parsed):
+                        fee_amount = abs(parsed)
+                        break
+            elif fill is not None:
+                price_obj = getattr(fill, "price", None)
+                timestamp = getattr(fill, "timestamp", None)
+                fill_id = getattr(fill, "fill_id", None) or getattr(fill, "id", None)
+                for key in fee_keys:
+                    candidate = getattr(fill, key, None)
+                    try:
+                        parsed = float(candidate) if candidate is not None else None
+                    except (TypeError, ValueError):
+                        parsed = None
+                    if parsed is not None and math.isfinite(parsed):
+                        fee_amount = abs(parsed)
+                        break
+            if fee_amount is None:
+                for key in fee_keys:
+                    candidate = getattr(order, key, None)
+                    try:
+                        parsed = float(candidate) if candidate is not None else None
+                    except (TypeError, ValueError):
+                        parsed = None
+                    if parsed is not None and math.isfinite(parsed):
+                        fee_amount = abs(parsed)
+                        break
             if price_obj is None:
                 price_obj = getattr(order, "average_fill_price", None)
             if timestamp is None:
@@ -2580,6 +2625,39 @@ class ExecutionEngine:
                 except (TypeError, ValueError):
                     price = None
             side_val = getattr(order.side, "value", order.side)
+            side_name = str(side_val).lower()
+            expected_price_raw = getattr(order, "expected_price", None)
+            try:
+                expected_price = (
+                    float(expected_price_raw) if expected_price_raw is not None else None
+                )
+            except (TypeError, ValueError):
+                expected_price = None
+
+            slippage_bps: float | None = None
+            if (
+                expected_price is not None
+                and price is not None
+                and expected_price > 0
+                and math.isfinite(expected_price)
+                and math.isfinite(price)
+            ):
+                if side_name.startswith("buy"):
+                    slippage_bps = ((price - expected_price) / expected_price) * 10000.0
+                else:
+                    slippage_bps = ((expected_price - price) / expected_price) * 10000.0
+
+            fee_bps = float(
+                get_env("AI_TRADING_ESTIMATED_FEE_BPS", "0.0", cast=float)
+            )
+            if (
+                fee_amount is None
+                and fee_bps > 0
+                and price is not None
+                and math.isfinite(price)
+            ):
+                notional = abs(float(delta_qty) * price)
+                fee_amount = notional * (fee_bps / 10000.0)
             signal_tags = getattr(signal, "signal_tags", None) or getattr(signal, "tags", "")
             try:
                 confidence = float(getattr(signal, "confidence", 0.0))
@@ -2591,12 +2669,16 @@ class ExecutionEngine:
                     "entry_time": timestamp,
                     "entry_price": price,
                     "qty": int(delta_qty),
-                    "side": str(side_val).lower(),
+                    "side": side_name,
                     "strategy": getattr(signal, "strategy", ""),
                     "signal_tags": signal_tags,
                     "confidence": confidence,
                     "order_id": getattr(order, "id", None),
                     "fill_id": fill_id,
+                    "expected_price": expected_price,
+                    "slippage_bps": slippage_bps,
+                    "fee_amount": fee_amount,
+                    "fee_bps": fee_bps if fee_bps > 0 else None,
                 }
             )
             # Log realized slippage to CSV and update EWMA feedback (best-effort)
@@ -2605,9 +2687,9 @@ class ExecutionEngine:
 
                 _log_slip(
                     symbol=getattr(order, "symbol", ""),
-                    side=str(side_val).lower(),
+                    side=side_name,
                     qty=int(delta_qty),
-                    expected_price=float(getattr(order, "expected_price", None) or 0) or None,
+                    expected_price=expected_price,
                     fill_price=price,
                     timestamp=timestamp if isinstance(timestamp, datetime) else datetime.now(UTC),
                 )

@@ -29,6 +29,7 @@ def test_trade_persistence_updates_canonical_history(
 
     monkeypatch.setattr(persistence, "_CANONICAL_PATH", canonical_path)
     monkeypatch.setattr(persistence, "_PANDAS_MISSING_LOGGED", False)
+    monkeypatch.setenv("AI_TRADING_ESTIMATED_FEE_BPS", "10")
 
     import ai_trading.core.bot_engine as bot_engine
 
@@ -48,6 +49,7 @@ def test_trade_persistence_updates_canonical_history(
     engine = ExecutionEngine(ctx=ctx)
     order = Order("AAPL", OrderSide.BUY, 100, order_type=OrderType.MARKET, price=Money(150))
     order.add_fill(100, Money(151))
+    order.expected_price = Money(150)
     signal = SimpleNamespace(
         symbol="AAPL",
         side="buy",
@@ -63,6 +65,10 @@ def test_trade_persistence_updates_canonical_history(
     assert canonical_path.exists()
     frame = pd.read_parquet(canonical_path)
     assert len(frame) >= 1
+    latest = frame.iloc[-1]
+    assert float(latest["expected_price"]) == pytest.approx(150.0)
+    assert float(latest["slippage_bps"]) == pytest.approx(66.6666666667, rel=1e-6)
+    assert float(latest["fee_amount"]) == pytest.approx(15.1, rel=1e-6)
 
     caplog.clear()
     loaded = bot_engine._read_trade_log(str(trade_log_path))
@@ -148,3 +154,40 @@ def test_trade_history_engine_missing_log_emits_once(
         rec for rec in caplog.records if rec.message == "TRADE_HISTORY_PARQUET_ENGINE_MISSING"
     ]
     assert len(engine_logs) == 1
+
+
+def test_trade_persistence_prefers_broker_reported_fee(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    canonical_path = tmp_path / "trade_history.parquet"
+
+    import ai_trading.meta_learning.persistence as persistence
+
+    monkeypatch.setattr(persistence, "_CANONICAL_PATH", canonical_path)
+    monkeypatch.setenv("AI_TRADING_ESTIMATED_FEE_BPS", "0")
+
+    ctx = SimpleNamespace(risk_engine=SimpleNamespace(register_fill=lambda *_: None))
+    engine = ExecutionEngine(ctx=ctx)
+    order = Order("MSFT", OrderSide.BUY, 10, order_type=OrderType.MARKET, price=Money(100))
+    order.add_fill(10, Money(101))
+    order.expected_price = Money(100)
+    setattr(order, "commission", 1.25)
+    signal = SimpleNamespace(
+        symbol="MSFT",
+        side="buy",
+        strategy="alpha",
+        confidence=0.5,
+        signal_tags="alpha",
+        weight=1.0,
+    )
+    engine._order_signal_meta[order.id] = _SignalMeta(
+        signal=signal,
+        requested_qty=10,
+        signal_weight=1.0,
+    )
+    engine._handle_execution_event(order, "completed")
+
+    frame = pd.read_parquet(canonical_path)
+    latest = frame.iloc[-1]
+    assert float(latest["fee_amount"]) == pytest.approx(1.25)

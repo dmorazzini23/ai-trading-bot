@@ -1,1 +1,11 @@
-{"account_id": "dummy", "effective_policy": {"objective": "expected_net_edge_after_fees_slippage_borrow", "trading_mode": "balanced"}, "effective_policy_hash": "bede38f0608c34d7aea2b17295ca408b99854f26543ab12a46d97e4c5ad7cf3c", "enabled_feature_flags": [], "git_commit_hash": "88ce77edd575d5073786c05c908a364a0c5c1ce8", "mode": "sim", "resolved_config_hash": "966ade81b1faa9af996c3ec668b4bd1beab6a2a1f773d89dae0ebf7eaeb5acfc", "runtime_contract": {"stubs_enabled": false}, "timestamp": "2024-01-02T15:04:05+00:00"}
+{
+  "timestamp": "",
+  "mode": "",
+  "account_id": "",
+  "git_commit_hash": "",
+  "resolved_config_hash": "",
+  "enabled_feature_flags": [],
+  "runtime_contract": {},
+  "effective_policy_hash": "",
+  "effective_policy": {}
+}
