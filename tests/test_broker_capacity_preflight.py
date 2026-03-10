@@ -67,6 +67,21 @@ def test_preflight_capacity_downsizes_quantity(monkeypatch):
     assert broker.list_orders_calls == 1
 
 
+def test_preflight_capacity_applies_reserve_and_price_buffer(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
+    monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "0")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_RESERVE_DOLLARS", "100")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_RESERVE_BPS", "100")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_PRICE_BUFFER_BPS", "100")
+    broker = FakeBroker(buying_power="1000", maintenance_margin="0", orders=[])
+
+    check = preflight_capacity("AAPL", "buy", 100, 10, broker)
+
+    assert check.can_submit is True
+    assert check.suggested_qty == 8
+    assert check.reason is None
+
+
 def test_preflight_capacity_rejects_when_below_minimums(monkeypatch):
     monkeypatch.setenv("EXECUTION_MIN_QTY", "5")
     monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "360")

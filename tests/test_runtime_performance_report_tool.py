@@ -8,6 +8,10 @@ import pytest
 from ai_trading.tools import runtime_performance_report as rpt
 
 
+def test_default_trade_history_path_uses_runtime_tca_records() -> None:
+    assert rpt._DEFAULT_TRADE_HISTORY_PATH == "runtime/tca_records.jsonl"
+
+
 def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"

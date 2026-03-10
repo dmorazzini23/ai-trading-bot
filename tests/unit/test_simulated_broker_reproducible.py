@@ -71,3 +71,32 @@ def test_simulated_broker_cancel_reject_probability() -> None:
         market_price_by_symbol={"AAPL": 190.0},
     )
     assert any(event.get("event_type") == "cancel_rejected" for event in events)
+
+
+def test_simulated_broker_emits_single_fill_event_per_schedule() -> None:
+    broker = SimulatedBroker(
+        seed=11,
+        fill_probability=1.0,
+        partial_fill_probability=0.0,
+        min_fill_delay_ms=0,
+        max_fill_delay_ms=0,
+    )
+    submitted_at = datetime(2026, 2, 18, 15, 0, tzinfo=UTC)
+    order = broker.submit_order(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 2,
+            "type": "limit",
+            "limit_price": 190.0,
+            "client_order_id": "single-fill",
+        },
+        timestamp=submitted_at,
+    )
+    events = broker.process_until(
+        now=submitted_at + timedelta(seconds=1),
+        market_price_by_symbol={"AAPL": 190.0},
+    )
+    fills = [event for event in events if event.get("event_type") == "fill"]
+    assert len(fills) == 1
+    assert fills[0]["order_id"] == order["id"]

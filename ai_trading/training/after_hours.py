@@ -2321,25 +2321,29 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             "observed": {},
         }
 
-    trade_history_path = Path(
-        str(
-            get_env(
-                "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
-                "artifacts/trade_history.parquet",
-                cast=str,
-            )
-            or "artifacts/trade_history.parquet"
+    trade_history_configured = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+            "runtime/tca_records.jsonl",
+            cast=str,
         )
+        or ""
+    ).strip()
+    trade_history_path = resolve_runtime_artifact_path(
+        trade_history_configured or "runtime/tca_records.jsonl",
+        default_relative="runtime/tca_records.jsonl",
     )
-    gate_summary_path = Path(
-        str(
-            get_env(
-                "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
-                "runtime/gate_effectiveness_summary.json",
-                cast=str,
-            )
-            or "runtime/gate_effectiveness_summary.json"
+    gate_summary_configured = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+            "runtime/gate_effectiveness_summary.json",
+            cast=str,
         )
+        or ""
+    ).strip()
+    gate_summary_path = resolve_runtime_artifact_path(
+        gate_summary_configured or "runtime/gate_effectiveness_summary.json",
+        default_relative="runtime/gate_effectiveness_summary.json",
     )
     thresholds = {
         "min_closed_trades": int(

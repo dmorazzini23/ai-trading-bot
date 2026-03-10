@@ -79,6 +79,7 @@ class ReplayEventLoop:
         )
         self._seen_intent_keys: set[str] = set()
         self._positions: dict[str, float] = {}
+        self._last_price_by_symbol: dict[str, float] = {}
 
     def run(self, bars: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         """Execute replay loop and enforce parity invariants."""
@@ -95,6 +96,7 @@ class ReplayEventLoop:
             close = float(bar.get("close", 0.0) or 0.0)
             if close <= 0:
                 continue
+            self._last_price_by_symbol[symbol] = close
 
             fill_events = self.broker.process_until(
                 now=ts,
@@ -107,6 +109,9 @@ class ReplayEventLoop:
                 fill_symbol = str(event.get("symbol", "")).upper()
                 fill_qty = float(event.get("fill_qty", 0.0) or 0.0)
                 side = str(event.get("side", "buy")).lower()
+                fill_price = float(event.get("fill_price", 0.0) or 0.0)
+                if fill_symbol and fill_price > 0:
+                    self._last_price_by_symbol[fill_symbol] = fill_price
                 signed_qty = fill_qty if side == "buy" else -fill_qty
                 self._positions[fill_symbol] = self._positions.get(fill_symbol, 0.0) + signed_qty
                 if abs(self._positions[fill_symbol]) < 1e-9:
@@ -181,6 +186,9 @@ class ReplayEventLoop:
                 fill_symbol = str(event.get("symbol", "")).upper()
                 fill_qty = float(event.get("fill_qty", 0.0) or 0.0)
                 side = str(event.get("side", "buy")).lower()
+                fill_price = float(event.get("fill_price", 0.0) or 0.0)
+                if fill_symbol and fill_price > 0:
+                    self._last_price_by_symbol[fill_symbol] = fill_price
                 signed_qty = fill_qty if side == "buy" else -fill_qty
                 self._positions[fill_symbol] = self._positions.get(fill_symbol, 0.0) + signed_qty
                 if abs(self._positions[fill_symbol]) < 1e-9:
@@ -204,14 +212,19 @@ class ReplayEventLoop:
 
     def _passes_notional_limits(self, *, symbol: str, close: float, side: str, qty: float) -> bool:
         signed_qty = qty if side == "buy" else -qty
-        projected_symbol_qty = self._positions.get(symbol, 0.0) + signed_qty
+        current_symbol_qty = self._positions.get(symbol, 0.0)
+        projected_symbol_qty = current_symbol_qty + signed_qty
         projected_symbol_notional = abs(projected_symbol_qty * close)
         if projected_symbol_notional > self.max_symbol_notional:
             return False
 
         gross = 0.0
         for sym, position_qty in self._positions.items():
-            px = close if sym == symbol else close
+            if sym == symbol:
+                px = close
+            else:
+                px = self._last_price_by_symbol.get(sym, close)
             gross += abs(position_qty * px)
-        gross += abs(signed_qty * close)
+        gross -= abs(current_symbol_qty * close)
+        gross += projected_symbol_notional
         return gross <= self.max_gross_notional

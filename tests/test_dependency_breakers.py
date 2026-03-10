@@ -24,6 +24,18 @@ def _error_info(dep: str) -> ErrorInfo:
     )
 
 
+def _order_rejected_error_info(dep: str) -> ErrorInfo:
+    return ErrorInfo(
+        category=ErrorCategory.ORDER_REJECTED,
+        scope=ErrorScope.SYMBOL,
+        action=ErrorAction.SKIP_SYMBOL,
+        retryable=False,
+        dependency=dep,
+        reason_code="ORDER_REJECTED_SKIP",
+        details={},
+    )
+
+
 def test_breaker_opens_after_three_failures_in_60s(monkeypatch) -> None:
     clock = _Clock()
     breakers = DependencyBreakers()
@@ -55,3 +67,41 @@ def test_breaker_clears_after_success(monkeypatch) -> None:
 
     breakers.record_success(dep)
     assert breakers.allow(dep) is True
+
+
+def test_skip_symbol_rejections_do_not_open_breaker(monkeypatch) -> None:
+    clock = _Clock()
+    breakers = DependencyBreakers()
+    monkeypatch.setattr(breakers, "_monotonic", clock)
+
+    dep = "broker_submit"
+    for timestamp in (0.0, 10.0, 20.0, 30.0, 40.0, 50.0):
+        clock.value = timestamp
+        breakers.record_failure(dep, _order_rejected_error_info(dep))
+
+    clock.value = 55.0
+    assert breakers.allow(dep) is True
+    assert breakers.open_reason(dep) is None
+    snapshot = breakers.snapshot()
+    assert snapshot[dep]["failure_count_window"] == 0
+
+
+def test_skip_symbol_failures_do_not_pollute_retryable_breaker_budget(monkeypatch) -> None:
+    clock = _Clock()
+    breakers = DependencyBreakers()
+    monkeypatch.setattr(breakers, "_monotonic", clock)
+
+    dep = "broker_submit"
+    for timestamp in (0.0, 10.0, 20.0):
+        clock.value = timestamp
+        breakers.record_failure(dep, _order_rejected_error_info(dep))
+
+    for timestamp in (30.0, 40.0):
+        clock.value = timestamp
+        breakers.record_failure(dep, _error_info(dep))
+        assert breakers.allow(dep) is True
+
+    clock.value = 50.0
+    breakers.record_failure(dep, _error_info(dep))
+    assert breakers.allow(dep) is False
+    assert breakers.open_reason(dep) == "CIRCUIT_OPEN_broker_submit"

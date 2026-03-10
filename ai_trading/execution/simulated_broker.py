@@ -239,7 +239,6 @@ class SimulatedBroker:
                 "ts": item.due_at.isoformat(),
             }
             self._events.append(event)
-            drained.append(event)
         while self._events:
             drained.append(self._events.popleft())
         return drained

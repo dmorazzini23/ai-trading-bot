@@ -34874,9 +34874,70 @@ def _persist_effective_policy_snapshot(
         ),
         "effective_policy": policy.to_dict(),
     }
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
-    state.effective_policy_snapshot_path = str(target)
+    serialized = json.dumps(payload, sort_keys=True, default=str)
+
+    def _write_snapshot(path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(serialized, encoding="utf-8")
+
+    preferred_error: str | None = None
+    try:
+        _write_snapshot(target)
+    except PermissionError as exc:
+        preferred_error = f"{exc.__class__.__name__}: {exc}"
+        repaired = False
+        try:
+            if target.exists():
+                target.unlink()
+                _write_snapshot(target)
+                repaired = True
+        except OSError as repair_exc:
+            preferred_error = f"{repair_exc.__class__.__name__}: {repair_exc}"
+        if repaired:
+            state.effective_policy_snapshot_path = str(target)
+            logger_once.warning(
+                "EFFECTIVE_POLICY_SNAPSHOT_PERMISSION_REPAIRED",
+                key=f"effective_policy_snapshot_permission_repaired::{target}",
+                extra={
+                    "path": str(target),
+                    "loop_id": str(loop_id or ""),
+                    "error": preferred_error,
+                },
+            )
+            return
+    except OSError as exc:
+        preferred_error = f"{exc.__class__.__name__}: {exc}"
+    else:
+        state.effective_policy_snapshot_path = str(target)
+        return
+
+    fallback_target = Path(_compute_user_state_trade_log_path("effective_policy.json"))
+    try:
+        _write_snapshot(fallback_target)
+    except OSError as fallback_exc:
+        logger.warning(
+            "EFFECTIVE_POLICY_SNAPSHOT_WRITE_FAILED",
+            extra={
+                "preferred_path": str(target),
+                "preferred_error": preferred_error or "unknown_error",
+                "fallback_path": str(fallback_target),
+                "fallback_error": f"{fallback_exc.__class__.__name__}: {fallback_exc}",
+                "loop_id": str(loop_id or ""),
+            },
+        )
+        return
+
+    state.effective_policy_snapshot_path = str(fallback_target)
+    logger_once.warning(
+        "EFFECTIVE_POLICY_SNAPSHOT_FALLBACK_PATH",
+        key=f"effective_policy_snapshot_fallback::{target}",
+        extra={
+            "preferred_path": str(target),
+            "fallback_path": str(fallback_target),
+            "preferred_error": preferred_error or "unknown_error",
+            "loop_id": str(loop_id or ""),
+        },
+    )
 
 
 def _resolve_rollout_state_path() -> Path:
@@ -37029,7 +37090,16 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         pacing_headroom = 999999
         if max_new_orders_per_cycle is not None:
-            pacing_headroom = max(0, int(max_new_orders_per_cycle) - int(orders_attempted))
+            pacing_used = max(0, int(orders_submitted))
+            if exec_engine is not None:
+                try:
+                    engine_submits = int(
+                        getattr(exec_engine, "_cycle_new_orders_submitted", orders_submitted)
+                    )
+                except (TypeError, ValueError):
+                    engine_submits = int(orders_submitted)
+                pacing_used = max(pacing_used, max(engine_submits, 0))
+            pacing_headroom = max(0, int(max_new_orders_per_cycle) - pacing_used)
         stale_orders_present = bool(
             float(slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0) > 0.0
         )

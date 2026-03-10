@@ -13,7 +13,7 @@ SKIP_INSTALL ?= 0
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
 
-.PHONY: ensure-runtime install-dev validate-env test-collect-report ci-smoke smoke test test-all test-all-heavy test-after-hours-pipeline lint tests-self lint-core institutional-gates secret-scan
+.PHONY: ensure-runtime install-dev validate-env test-collect-report ci-smoke smoke test test-all test-all-heavy test-after-hours-pipeline lint tests-self lint-core institutional-gates secret-scan runtime-artifacts-reset runtime-artifacts-reset-no-cycle
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
@@ -114,3 +114,9 @@ lint:
 
 institutional-gates:
 	@bash ci/scripts/institutional_gates.sh
+
+runtime-artifacts-reset:
+	@PYTHON_BIN="$(PYTHON)" scripts/runtime_artifacts_reset.sh
+
+runtime-artifacts-reset-no-cycle:
+	@PYTHON_BIN="$(PYTHON)" scripts/runtime_artifacts_reset.sh --skip-cycle

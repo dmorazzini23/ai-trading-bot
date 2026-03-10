@@ -12,7 +12,7 @@ from statistics import median
 import sys
 from typing import Any, Mapping
 
-_DEFAULT_TRADE_HISTORY_PATH = "artifacts/trade_history.parquet"
+_DEFAULT_TRADE_HISTORY_PATH = "runtime/tca_records.jsonl"
 
 
 def _as_float(value: Any) -> float | None:

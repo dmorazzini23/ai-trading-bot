@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, Deque
 
-from ai_trading.core.errors import ErrorInfo
+from ai_trading.core.errors import ErrorAction, ErrorCategory, ErrorInfo
 
 
 @dataclass(slots=True)
@@ -37,6 +37,19 @@ class DependencyBreakers:
 
         return time.monotonic()
 
+    @staticmethod
+    def _counts_toward_breaker(error_info: ErrorInfo) -> bool:
+        """Return whether a failure should contribute to breaker-open thresholds."""
+
+        if error_info.action is ErrorAction.SKIP_SYMBOL:
+            return False
+        if error_info.category in {
+            ErrorCategory.ORDER_REJECTED,
+            ErrorCategory.BAD_DATA,
+        }:
+            return False
+        return True
+
     def allow(self, dep: str) -> bool:
         now = self._monotonic()
         with self._lock:
@@ -62,9 +75,11 @@ class DependencyBreakers:
         now = self._monotonic()
         with self._lock:
             state = self._state(dep)
-            state.failures.append(now)
             state.last_error_info = error_info
             state.last_updated = datetime.now(UTC)
+            if not self._counts_toward_breaker(error_info):
+                return
+            state.failures.append(now)
 
             ten_min = 600.0
             while state.failures and now - state.failures[0] > ten_min:

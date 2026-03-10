@@ -1505,6 +1505,32 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     min_qty_default = 1
     min_qty = _config_int("EXECUTION_MIN_QTY", min_qty_default) or min_qty_default
     min_notional = _config_decimal("EXECUTION_MIN_NOTIONAL", Decimal("0"))
+    capacity_reserve_bps = _config_float("AI_TRADING_CAPACITY_RESERVE_BPS", 0.0)
+    if capacity_reserve_bps is None:
+        capacity_reserve_bps = 0.0
+    try:
+        reserve_bps_float = float(capacity_reserve_bps)
+    except (TypeError, ValueError):
+        reserve_bps_float = 0.0
+    if not math.isfinite(reserve_bps_float):
+        reserve_bps_float = 0.0
+    reserve_bps_float = max(0.0, min(reserve_bps_float, 5000.0))
+    capacity_reserve_dollars = _config_decimal("AI_TRADING_CAPACITY_RESERVE_DOLLARS", Decimal("0"))
+    if capacity_reserve_dollars < 0:
+        capacity_reserve_dollars = Decimal("0")
+    capacity_price_buffer_bps = _config_float("AI_TRADING_CAPACITY_PRICE_BUFFER_BPS", 0.0)
+    if capacity_price_buffer_bps is None:
+        capacity_price_buffer_bps = 0.0
+    try:
+        price_buffer_bps_float = float(capacity_price_buffer_bps)
+    except (TypeError, ValueError):
+        price_buffer_bps_float = 0.0
+    if not math.isfinite(price_buffer_bps_float):
+        price_buffer_bps_float = 0.0
+    price_buffer_bps_float = max(0.0, min(price_buffer_bps_float, 1000.0))
+    price_buffer_multiplier = Decimal("1")
+    if price_buffer_bps_float > 0.0:
+        price_buffer_multiplier += Decimal(str(price_buffer_bps_float)) / Decimal("10000")
     max_open_orders_global = _config_int_alias(
         ("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", "AI_TRADING_EXEC_MAX_OPEN_ORDERS_GLOBAL"),
         None,
@@ -1685,6 +1711,13 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     available = min(capacity_candidates) if capacity_candidates else buying_power - open_notional
     if available < 0:
         available = Decimal("0")
+    if available > 0 and (capacity_reserve_dollars > 0 or reserve_bps_float > 0.0):
+        reserve_amount = capacity_reserve_dollars
+        if reserve_bps_float > 0.0:
+            reserve_amount += (
+                available * Decimal(str(reserve_bps_float)) / Decimal("10000")
+            )
+        available = max(available - reserve_amount, Decimal("0"))
 
     if price_decimal is None:
         logger.info(
@@ -1696,7 +1729,11 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         )
         return CapacityCheck(True, qty_int, None)
 
-    required_notional = (price_decimal * Decimal(qty_int)).copy_abs()
+    required_notional = (
+        price_decimal
+        * Decimal(qty_int)
+        * price_buffer_multiplier
+    ).copy_abs()
 
     if available >= required_notional:
         logger.info(
@@ -1720,7 +1757,8 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         )
         return CapacityCheck(False, 0, "insufficient_buying_power")
 
-    max_qty_decimal = (available / price_decimal) if price_decimal != 0 else Decimal("0")
+    unit_notional = (price_decimal * price_buffer_multiplier).copy_abs()
+    max_qty_decimal = (available / unit_notional) if unit_notional > 0 else Decimal("0")
     max_qty = min(
         qty_int,
         int(max_qty_decimal.to_integral_value(rounding=ROUND_DOWN)) if max_qty_decimal > 0 else 0,
