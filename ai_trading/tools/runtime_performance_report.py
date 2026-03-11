@@ -12,7 +12,8 @@ from statistics import median
 import sys
 from typing import Any, Mapping
 
-_DEFAULT_TRADE_HISTORY_PATH = "runtime/tca_records.jsonl"
+_DEFAULT_TRADE_HISTORY_PATH = "runtime/trade_history.parquet"
+_DEFAULT_TCA_PATH = "runtime/tca_records.jsonl"
 
 
 def _as_float(value: Any) -> float | None:
@@ -131,6 +132,18 @@ def _normalise_side(value: Any) -> str | None:
     return None
 
 
+def _normalise_status_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    token = token.replace("-", "_").replace(" ", "_")
+    if "." in token:
+        token = token.rsplit(".", 1)[-1]
+    if token in {"partial_fill", "partiallyfilled"}:
+        return "partially_filled"
+    return token
+
+
 def _resolve_qty(row: dict[str, Any]) -> float | None:
     for key in ("qty", "quantity", "filled_qty"):
         qty = _as_float(row.get(key))
@@ -147,27 +160,72 @@ def _resolve_price(row: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
-def _resolve_fee_amount(row: dict[str, Any], qty: float, price: float) -> float:
+def _resolve_fee_amount_with_source(
+    row: dict[str, Any],
+    qty: float,
+    price: float,
+) -> tuple[float, str | None]:
     for key in ("fee_amount", "fee", "fees", "commission", "commission_amount"):
         fee = _as_float(row.get(key))
         if fee is not None:
-            return abs(fee)
+            return abs(fee), key
     fee_bps = _as_float(row.get("fee_bps"))
     if fee_bps is not None and fee_bps > 0:
-        return abs(qty * price * (fee_bps / 10000.0))
-    return 0.0
+        return abs(qty * price * (fee_bps / 10000.0)), "fee_bps"
+    return 0.0, None
+
+
+def _resolve_fee_amount(row: dict[str, Any], qty: float, price: float) -> float:
+    return _resolve_fee_amount_with_source(row, qty, price)[0]
+
+
+def _resolve_slippage_bps_with_source(
+    row: dict[str, Any],
+    side: str,
+    price: float,
+) -> tuple[float, str | None]:
+    for key in (
+        "slippage_bps",
+        "is_bps",
+        "implementation_shortfall_bps",
+        "spread_paid_bps",
+    ):
+        slippage_bps = _as_float(row.get(key))
+        if slippage_bps is not None:
+            return slippage_bps, key
+
+    expected = _resolve_price(row, "expected_price")
+    if expected is None or expected <= 0:
+        return 0.0, None
+    if side == "buy":
+        return ((price - expected) / expected) * 10000.0, "expected_price"
+    return ((expected - price) / expected) * 10000.0, "expected_price"
 
 
 def _resolve_slippage_bps(row: dict[str, Any], side: str, price: float) -> float:
-    slippage_bps = _as_float(row.get("slippage_bps"))
-    if slippage_bps is not None:
-        return slippage_bps
-    expected = _resolve_price(row, "expected_price")
-    if expected is None or expected <= 0:
-        return 0.0
-    if side == "buy":
-        return ((price - expected) / expected) * 10000.0
-    return ((expected - price) / expected) * 10000.0
+    return _resolve_slippage_bps_with_source(row, side, price)[0]
+
+
+def _resolve_slippage_cost_with_source(
+    row: dict[str, Any],
+    *,
+    qty: float,
+    side: str,
+    price: float,
+) -> tuple[float, str | None]:
+    for key in (
+        "slippage_cost",
+        "slippage",
+        "slippage_amount",
+        "implementation_shortfall_cost",
+    ):
+        value = _as_float(row.get(key))
+        if value is not None:
+            return abs(value), key
+    slippage_bps, source = _resolve_slippage_bps_with_source(row, side, price)
+    if source is None:
+        return 0.0, None
+    return abs(qty * price * (slippage_bps / 10000.0)), source
 
 
 @dataclass(slots=True)
@@ -193,6 +251,17 @@ class _OpenLot:
     signal_tags: str
     fee_per_share: float
     slippage_per_share: float
+
+
+@dataclass(slots=True)
+class _TCALegEvent:
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    timestamp: datetime
+    fee_cost: float
+    slippage_cost: float
 
 
 def _as_fill_event(row: dict[str, Any]) -> _FillEvent | None:
@@ -291,7 +360,11 @@ def _closed_trade_record(
 def _direct_closed_trades(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     trades: list[dict[str, Any]] = []
     for row in records:
-        pnl = _as_float(row.get("pnl"))
+        pnl = None
+        for key in ("pnl", "net_pnl", "realized_pnl", "reward"):
+            pnl = _as_float(row.get(key))
+            if pnl is not None:
+                break
         if pnl is None:
             continue
         side = _normalise_side(row.get("side"))
@@ -304,28 +377,198 @@ def _direct_closed_trades(records: list[dict[str, Any]]) -> list[dict[str, Any]]
             entry_price = 1.0
         if exit_price is None:
             exit_price = entry_price
-        fee_cost = _resolve_fee_amount(row, qty, entry_price)
-        slippage_cost = _as_float(row.get("slippage_cost"))
-        if slippage_cost is None:
-            slippage_bps = _resolve_slippage_bps(row, side, entry_price)
-            slippage_cost = abs(qty * entry_price * (slippage_bps / 10000.0))
-        trades.append(
-            _closed_trade_record(
-                symbol=str(row.get("symbol", "") or "").strip().upper() or "UNKNOWN",
-                side="long" if side == "buy" else "short",
-                qty=qty,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                entry_time=_parse_timestamp(row.get("entry_time") or row.get("timestamp")),
-                exit_time=_parse_timestamp(row.get("exit_time") or row.get("timestamp")),
-                strategy=str(row.get("strategy", "") or ""),
-                signal_tags=str(row.get("signal_tags", "") or ""),
-                gross_pnl=pnl,
-                fee_cost=fee_cost,
-                slippage_cost=slippage_cost,
-            )
+        fee_cost, fee_source = _resolve_fee_amount_with_source(row, qty, entry_price)
+        slippage_cost, slippage_source = _resolve_slippage_cost_with_source(
+            row,
+            qty=qty,
+            side=side,
+            price=entry_price,
         )
+        trade = _closed_trade_record(
+            symbol=str(row.get("symbol", "") or "").strip().upper() or "UNKNOWN",
+            side="long" if side == "buy" else "short",
+            qty=qty,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            entry_time=_parse_timestamp(row.get("entry_time") or row.get("timestamp")),
+            exit_time=_parse_timestamp(row.get("exit_time") or row.get("timestamp")),
+            strategy=str(row.get("strategy", "") or ""),
+            signal_tags=str(row.get("signal_tags", "") or ""),
+            gross_pnl=pnl,
+            fee_cost=fee_cost,
+            slippage_cost=slippage_cost,
+        )
+        trade["_fee_source"] = fee_source
+        trade["_slippage_source"] = slippage_source
+        trades.append(trade)
     return trades
+
+
+def _as_tca_leg_event(row: dict[str, Any]) -> _TCALegEvent | None:
+    symbol = str(row.get("symbol", "") or "").strip().upper()
+    if not symbol:
+        return None
+    side = _normalise_side(row.get("side"))
+    if side is None:
+        return None
+    qty = _resolve_qty(row)
+    price = _resolve_price(
+        row,
+        "fill_price",
+        "fill_vwap",
+        "price",
+        "entry_price",
+        "submit_price_reference",
+    )
+    timestamp = _parse_timestamp(
+        row.get("first_fill_ts")
+        or row.get("filled_at")
+        or row.get("executed_at")
+        or row.get("ts")
+        or row.get("submit_ts")
+    )
+    if qty is None or price is None or timestamp is None:
+        return None
+    status = _normalise_status_token(row.get("status"))
+    if status in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}:
+        return None
+    if status and status not in {"filled", "partially_filled"}:
+        return None
+    fee_cost, _ = _resolve_fee_amount_with_source(row, qty, price)
+    slippage_cost, _ = _resolve_slippage_cost_with_source(
+        row,
+        qty=qty,
+        side=side,
+        price=price,
+    )
+    return _TCALegEvent(
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        price=price,
+        timestamp=timestamp,
+        fee_cost=fee_cost,
+        slippage_cost=slippage_cost,
+    )
+
+
+def _pick_tca_event(
+    events: list[_TCALegEvent],
+    *,
+    target_ts: datetime | None,
+    qty: float,
+    price: float,
+    max_delta_seconds: float = 300.0,
+) -> _TCALegEvent | None:
+    if target_ts is None or not events:
+        return None
+    best_idx: int | None = None
+    best_score: tuple[float, float, float, int] | None = None
+    for idx, event in enumerate(events):
+        delta = abs((event.timestamp - target_ts).total_seconds())
+        if delta > max_delta_seconds:
+            continue
+        score = (delta, abs(event.qty - qty), abs(event.price - price), idx)
+        if best_score is None or score < best_score:
+            best_idx = idx
+            best_score = score
+    if best_idx is None:
+        return None
+    return events.pop(best_idx)
+
+
+def _enrich_direct_trades_with_tca_costs(
+    direct_trades: list[dict[str, Any]],
+    *,
+    tca_records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    buckets: dict[tuple[str, str], list[_TCALegEvent]] = defaultdict(list)
+    for row in tca_records:
+        event = _as_tca_leg_event(row)
+        if event is None:
+            continue
+        buckets[(event.symbol, event.side)].append(event)
+    for events in buckets.values():
+        events.sort(key=lambda item: item.timestamp)
+
+    matched_entry_legs = 0
+    matched_exit_legs = 0
+    enriched_trades = 0
+    trades_with_fee = 0
+    trades_with_slippage = 0
+    for trade in direct_trades:
+        symbol = str(trade.get("symbol", "") or "").strip().upper()
+        side = str(trade.get("side", "") or "").strip().lower()
+        if not symbol or side not in {"long", "short"}:
+            continue
+        qty = abs(float(trade.get("qty", 0.0) or 0.0))
+        entry_price = abs(float(trade.get("entry_price", 0.0) or 0.0))
+        exit_price = abs(float(trade.get("exit_price", 0.0) or 0.0))
+        entry_ts = _parse_timestamp(trade.get("entry_time"))
+        exit_ts = _parse_timestamp(trade.get("exit_time"))
+        if qty <= 0 or entry_price <= 0:
+            continue
+
+        entry_side = "buy" if side == "long" else "sell"
+        exit_side = "sell" if entry_side == "buy" else "buy"
+        entry_event = _pick_tca_event(
+            buckets.get((symbol, entry_side), []),
+            target_ts=entry_ts,
+            qty=qty,
+            price=entry_price,
+        )
+        exit_event = _pick_tca_event(
+            buckets.get((symbol, exit_side), []),
+            target_ts=exit_ts,
+            qty=qty,
+            price=exit_price if exit_price > 0 else entry_price,
+        )
+
+        fee_add = 0.0
+        slippage_add = 0.0
+        if entry_event is not None:
+            matched_entry_legs += 1
+            scale = min(1.0, qty / entry_event.qty) if entry_event.qty > 0 else 1.0
+            fee_add += entry_event.fee_cost * scale
+            slippage_add += entry_event.slippage_cost * scale
+        if exit_event is not None:
+            matched_exit_legs += 1
+            scale = min(1.0, qty / exit_event.qty) if exit_event.qty > 0 else 1.0
+            fee_add += exit_event.fee_cost * scale
+            slippage_add += exit_event.slippage_cost * scale
+        if entry_event is None and exit_event is None:
+            continue
+
+        trade["fee_cost"] = abs(float(trade.get("fee_cost", 0.0) or 0.0)) + abs(fee_add)
+        trade["slippage_cost"] = abs(float(trade.get("slippage_cost", 0.0) or 0.0)) + abs(slippage_add)
+        trade["_fee_source"] = "tca_matched"
+        trade["_slippage_source"] = "tca_matched"
+        gross_pnl = float(trade.get("gross_pnl", 0.0) or 0.0)
+        net_pnl = gross_pnl - float(trade.get("fee_cost", 0.0) or 0.0) - float(
+            trade.get("slippage_cost", 0.0) or 0.0
+        )
+        trade["net_pnl"] = net_pnl
+        entry_notional = abs(float(trade.get("entry_notional", 0.0) or 0.0))
+        trade["net_edge_bps"] = (net_pnl / entry_notional * 10000.0) if entry_notional > 0 else None
+        enriched_trades += 1
+        if float(trade.get("fee_cost", 0.0) or 0.0) > 0:
+            trades_with_fee += 1
+        if float(trade.get("slippage_cost", 0.0) or 0.0) > 0:
+            trades_with_slippage += 1
+
+    total_events = sum(len(events) for events in buckets.values()) + matched_entry_legs + matched_exit_legs
+    return direct_trades, {
+        "enabled": True,
+        "source": "tca",
+        "records": int(len(tca_records)),
+        "events_considered": int(total_events),
+        "matched_entry_legs": int(matched_entry_legs),
+        "matched_exit_legs": int(matched_exit_legs),
+        "matched_legs": int(matched_entry_legs + matched_exit_legs),
+        "enriched_trades": int(enriched_trades),
+        "trades_with_nonzero_fee": int(trades_with_fee),
+        "trades_with_nonzero_slippage": int(trades_with_slippage),
+    }
 
 
 def _reconstruct_closed_trades(
@@ -365,6 +608,8 @@ def _reconstruct_closed_trades(
                     slippage_cost=entry_slippage + exit_slippage,
                 )
             )
+            closed[-1]["_fee_source"] = "fifo_reconstructed"
+            closed[-1]["_slippage_source"] = "fifo_reconstructed"
             lot.qty -= close_qty
             remaining -= close_qty
             if lot.qty <= 0:
@@ -426,6 +671,14 @@ def _aggregate_closed_trades(
     symbol_totals: dict[str, float] = defaultdict(float)
     strategy_totals: dict[str, float] = defaultdict(float)
     daily: dict[str, dict[str, Any]] = {}
+    total_fee_cost = 0.0
+    total_slippage_cost = 0.0
+    fee_attributed_trades = 0
+    slippage_attributed_trades = 0
+    nonzero_fee_trades = 0
+    nonzero_slippage_trades = 0
+    fee_sources: dict[str, int] = defaultdict(int)
+    slippage_sources: dict[str, int] = defaultdict(int)
     for row in closed_trades:
         side = str(row.get("side", "unknown") or "unknown").strip().lower()
         symbol = str(row.get("symbol", "UNKNOWN") or "UNKNOWN").strip().upper()
@@ -434,10 +687,26 @@ def _aggregate_closed_trades(
         gross_pnl = float(row.get("gross_pnl", 0.0) or 0.0)
         fee_cost = abs(float(row.get("fee_cost", 0.0) or 0.0))
         slippage_cost = float(row.get("slippage_cost", 0.0) or 0.0)
+        fee_source = row.get("_fee_source")
+        slippage_source = row.get("_slippage_source")
         notional = abs(float(row.get("entry_notional", 0.0) or 0.0))
         side_totals[side] = side_totals.get(side, 0.0) + net_pnl
         symbol_totals[symbol] += net_pnl
         strategy_totals[strategy] += net_pnl
+        total_fee_cost += fee_cost
+        total_slippage_cost += slippage_cost
+        if fee_source:
+            key = str(fee_source)
+            fee_attributed_trades += 1
+            fee_sources[key] += 1
+        if slippage_source:
+            key = str(slippage_source)
+            slippage_attributed_trades += 1
+            slippage_sources[key] += 1
+        if fee_cost > 0:
+            nonzero_fee_trades += 1
+        if abs(slippage_cost) > 0:
+            nonzero_slippage_trades += 1
 
         day = "unknown"
         exit_ts = _parse_timestamp(row.get("exit_time"))
@@ -511,6 +780,16 @@ def _aggregate_closed_trades(
             "pnl_median": median(pnl_values),
             "win_rate": len(wins) / len(pnl_values),
             "profit_factor": profit_factor,
+            "total_fee_cost": total_fee_cost,
+            "total_slippage_cost": total_slippage_cost,
+            "cost_attribution": {
+                "fee_attributed_trades": int(fee_attributed_trades),
+                "slippage_attributed_trades": int(slippage_attributed_trades),
+                "nonzero_fee_trades": int(nonzero_fee_trades),
+                "nonzero_slippage_trades": int(nonzero_slippage_trades),
+                "fee_sources": dict(sorted(fee_sources.items())),
+                "slippage_sources": dict(sorted(slippage_sources.items())),
+            },
             "side_totals": side_totals,
             "daily_expectancy": daily_expectancy,
             "top_loss_drivers": {
@@ -522,12 +801,15 @@ def _aggregate_closed_trades(
     return summary
 
 
-def summarize_trade_history(path: Path) -> dict[str, Any]:
+def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "path": str(path),
         "exists": path.exists(),
         "records": 0,
     }
+    if tca_path is not None:
+        summary["tca_path"] = str(tca_path)
+        summary["tca_exists"] = bool(tca_path.exists())
     if not path.exists():
         return summary
 
@@ -538,16 +820,25 @@ def summarize_trade_history(path: Path) -> dict[str, Any]:
         return summary
 
     direct_trades = _direct_closed_trades(records)
-    if direct_trades:
-        summary.update(
-            _aggregate_closed_trades(
-                records_count=len(records),
-                source="direct_pnl_rows",
-                closed_trades=direct_trades,
-                open_positions={},
-                open_lot_count=0,
+    cost_enrichment: dict[str, Any] | None = None
+    if direct_trades and tca_path is not None and tca_path.exists():
+        tca_records = _load_trade_rows(tca_path)
+        if tca_records:
+            direct_trades, cost_enrichment = _enrich_direct_trades_with_tca_costs(
+                direct_trades,
+                tca_records=tca_records,
             )
+    if direct_trades:
+        aggregated = _aggregate_closed_trades(
+            records_count=len(records),
+            source="direct_pnl_rows",
+            closed_trades=direct_trades,
+            open_positions={},
+            open_lot_count=0,
         )
+        if cost_enrichment is not None:
+            aggregated["cost_enrichment"] = cost_enrichment
+        summary.update(aggregated)
         return summary
 
     events = _extract_fill_events(records)
@@ -644,9 +935,10 @@ def build_report(
     *,
     trade_history_path: Path,
     gate_summary_path: Path,
+    tca_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
-        "trade_history": summarize_trade_history(trade_history_path),
+        "trade_history": summarize_trade_history(trade_history_path, tca_path=tca_path),
         "gate_effectiveness": summarize_gate_effectiveness(gate_summary_path),
     }
 
@@ -779,9 +1071,25 @@ def format_text_report(report: dict[str, Any]) -> str:
                 f"- Realized net pnl sum: {trade.get('pnl_sum'):.4f}",
                 f"- Win rate: {trade.get('win_rate'):.2%}",
                 f"- Profit factor: {trade.get('profit_factor')}",
+                f"- Total fee cost: {float(trade.get('total_fee_cost', 0.0) or 0.0):.4f}",
+                f"- Total slippage cost: {float(trade.get('total_slippage_cost', 0.0) or 0.0):.4f}",
                 f"- Open lots (unrealized): {trade.get('open_lot_count')}",
             ]
         )
+        cost_attr = trade.get("cost_attribution")
+        if isinstance(cost_attr, Mapping):
+            lines.append(
+                "- Cost attribution coverage: "
+                f"fees={cost_attr.get('fee_attributed_trades')}/{trade.get('closed_trades')} "
+                f"slippage={cost_attr.get('slippage_attributed_trades')}/{trade.get('closed_trades')}"
+            )
+        cost_enrichment = trade.get("cost_enrichment")
+        if isinstance(cost_enrichment, Mapping):
+            lines.append(
+                "- TCA enrichment: "
+                f"matched_legs={cost_enrichment.get('matched_legs')} "
+                f"enriched_trades={cost_enrichment.get('enriched_trades')}"
+            )
         top_symbols = (trade.get("top_loss_drivers") or {}).get("symbols", [])
         if top_symbols:
             lines.append("- Top loss symbols:")
@@ -848,6 +1156,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to gate effectiveness summary json.",
     )
     parser.add_argument(
+        "--tca-path",
+        default=_DEFAULT_TCA_PATH,
+        help="Optional path to TCA jsonl for fee/slippage enrichment.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit JSON instead of text.",
@@ -883,6 +1196,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         trade_history_path=Path(args.trade_history),
         gate_summary_path=Path(args.gate_summary),
+        tca_path=(Path(args.tca_path) if args.tca_path else None),
     )
     if args.go_no_go or args.fail_on_no_go:
         thresholds = {

@@ -291,6 +291,61 @@ def test_preflight_helper_legacy_signature():
     assert called["args"][:4] == ("MSFT", "sell", 250.0, 3)
 
 
+def test_capacity_precheck_side_marks_non_closing_sells_as_short():
+    assert lt._capacity_precheck_side("sell", closing_position=False) == "sell_short"
+    assert lt._capacity_precheck_side("sell", closing_position=True) == "sell"
+    assert lt._capacity_precheck_side("buy", closing_position=False) == "buy"
+
+
+def test_submit_market_order_preflight_uses_short_side_for_opening_sell(monkeypatch):
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine._get_account_snapshot = lambda: None
+    engine._check_capital_and_risk = lambda account: None
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {
+        "total_execution_time": 0.0,
+        "total_orders": 0,
+        "successful_orders": 0,
+        "failed_orders": 0,
+    }
+
+    class DummyClient:
+        @staticmethod
+        def get_asset(symbol):
+            _ = symbol
+            return type(
+                "Asset",
+                (),
+                {"shortable": True, "marginable": True, "easy_to_borrow": True},
+            )()
+
+    engine.trading_client = DummyClient()
+    observed: dict[str, Any] = {}
+
+    def fake_preflight(symbol, side, price_hint, quantity, trading_client, account=None):
+        observed["symbol"] = symbol
+        observed["side"] = side
+        observed["price_hint"] = price_hint
+        observed["quantity"] = quantity
+        observed["account"] = account
+        observed["trading_client"] = trading_client
+        return lt.CapacityCheck(True, int(quantity), None)
+
+    monkeypatch.setattr(lt, "preflight_capacity", fake_preflight)
+    monkeypatch.setattr(engine, "_execute_with_retry", lambda fn, payload: {"id": "ok"})
+
+    result = engine.submit_market_order("AAPL", "sell", 1)
+
+    assert result == {"id": "ok"}
+    assert observed["symbol"] == "AAPL"
+    assert observed["side"] == "sell_short"
+    assert observed["quantity"] == 1
+
+
 def test_preflight_capacity_respects_global_open_order_cap(monkeypatch):
     monkeypatch.setenv("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", "1")
     monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS_PER_SYMBOL", raising=False)

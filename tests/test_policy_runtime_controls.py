@@ -114,3 +114,71 @@ def test_startup_healthcheck_does_not_alert_on_single_fallback_by_default(monkey
         record.getMessage() == "STARTUP_BACKUP_PROVIDER_USAGE_HIGH"
         for record in caplog.records
     )
+
+
+def test_clear_transient_halt_state_unlatches_derisk_block() -> None:
+    state = bot_engine.BotState()
+    state.halt_trading = True
+    state.halt_reason = "DERISK_SLO_BREACH_BLOCK"
+
+    changed = bot_engine._clear_transient_halt_state(state)
+
+    assert changed is True
+    assert state.halt_trading is False
+    assert state.halt_reason is None
+
+
+def test_clear_transient_halt_state_keeps_non_transient_halt() -> None:
+    state = bot_engine.BotState()
+    state.halt_trading = True
+    state.halt_reason = "DAILY_RISK_BUDGET_HARD_STOP"
+
+    changed = bot_engine._clear_transient_halt_state(state)
+
+    assert changed is False
+    assert state.halt_trading is True
+    assert state.halt_reason == "DAILY_RISK_BUDGET_HARD_STOP"
+
+
+def test_record_netting_model_liveness_emits_ml_and_rl_when_enabled(monkeypatch) -> None:
+    calls: dict[str, int] = {"ml": 0, "rl": 0}
+
+    def _note_ml_signal(*, now=None) -> None:
+        _ = now
+        calls["ml"] += 1
+
+    def _note_rl_signal(*, now=None) -> None:
+        _ = now
+        calls["rl"] += 1
+
+    monkeypatch.setattr(bot_engine, "note_ml_signal", _note_ml_signal)
+    monkeypatch.setattr(bot_engine, "note_rl_signals_emitted", _note_rl_signal)
+    monkeypatch.setattr(bot_engine, "RL_AGENT", object())
+    monkeypatch.setenv("USE_RL_AGENT", "1")
+
+    bot_engine._record_netting_model_liveness(proposals_total=3)
+
+    assert calls["ml"] == 1
+    assert calls["rl"] == 1
+
+
+def test_record_netting_model_liveness_skips_when_no_proposals(monkeypatch) -> None:
+    calls: dict[str, int] = {"ml": 0, "rl": 0}
+
+    def _note_ml_signal(*, now=None) -> None:
+        _ = now
+        calls["ml"] += 1
+
+    def _note_rl_signal(*, now=None) -> None:
+        _ = now
+        calls["rl"] += 1
+
+    monkeypatch.setattr(bot_engine, "note_ml_signal", _note_ml_signal)
+    monkeypatch.setattr(bot_engine, "note_rl_signals_emitted", _note_rl_signal)
+    monkeypatch.setattr(bot_engine, "RL_AGENT", object())
+    monkeypatch.setenv("USE_RL_AGENT", "1")
+
+    bot_engine._record_netting_model_liveness(proposals_total=0)
+
+    assert calls["ml"] == 0
+    assert calls["rl"] == 0

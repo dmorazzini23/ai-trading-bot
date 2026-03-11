@@ -121,6 +121,46 @@ def test_load_trade_history_falls_back_to_pickle_when_parquet_unavailable(
     assert frame.iloc[0]["symbol"] == "AAPL"
 
 
+def test_record_trade_fill_falls_back_to_pickle_when_parquet_unavailable_outside_pytest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    canonical_path = tmp_path / "trade_history.parquet"
+
+    import ai_trading.meta_learning.persistence as persistence
+
+    monkeypatch.setattr(persistence, "_CANONICAL_PATH", canonical_path)
+    monkeypatch.setattr(persistence, "_WRITE_FALLBACK_LOGGED", set(), raising=False)
+    monkeypatch.setattr(persistence, "_pytest_active", lambda: False)
+
+    monkeypatch.setattr(
+        pd.DataFrame,
+        "to_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ImportError("Unable to find a usable engine; tried using: 'pyarrow', 'fastparquet'.")
+        ),
+    )
+
+    persistence.record_trade_fill(
+        {
+            "symbol": "MSFT",
+            "entry_time": "2026-03-11T00:00:00+00:00",
+            "entry_price": 100.0,
+            "qty": 2,
+            "side": "buy",
+            "order_id": "ord-1",
+            "fill_id": "fill-1",
+        }
+    )
+
+    assert canonical_path.exists()
+    frame, source = persistence.load_trade_history(sync_from_broker=False)
+    assert source == "canonical"
+    assert frame is not None
+    assert len(frame) == 1
+    assert str(frame.iloc[0]["symbol"]) == "MSFT"
+
+
 def test_trade_history_engine_missing_log_emits_once(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

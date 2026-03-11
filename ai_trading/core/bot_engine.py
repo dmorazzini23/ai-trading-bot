@@ -532,6 +532,81 @@ def _normalize_broker_order_status(value: Any) -> str:
         return ""
 
 
+_FILLED_TCA_STATUSES: frozenset[str] = frozenset({"filled", "partially_filled"})
+
+
+def _normalize_order_status_token(value: Any) -> str:
+    """Return a normalized status token from enum-like or string values."""
+
+    status_value = getattr(value, "value", value)
+    if status_value in (None, ""):
+        return ""
+    try:
+        token = str(status_value).strip().lower()
+    except COMMON_EXC:
+        return ""
+    if not token:
+        return ""
+    token = token.replace("-", "_").replace(" ", "_")
+    if "." in token:
+        token = token.rsplit(".", 1)[-1]
+    return token
+
+
+def _extract_order_value(order: Any, *fields: str) -> Any:
+    """Return first non-empty order value from execution result or nested payload."""
+
+    nested_order = getattr(order, "order", None)
+    candidates: list[Any] = [order]
+    if nested_order is not None and nested_order is not order:
+        candidates.append(nested_order)
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        for field_name in fields:
+            if isinstance(candidate, Mapping):
+                value = candidate.get(field_name)
+            else:
+                value = getattr(candidate, field_name, None)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _extract_order_fill_timestamp(order: Any) -> datetime | None:
+    """Return best-effort fill timestamp from order payload."""
+
+    for field_name in ("filled_at", "executed_at", "updated_at"):
+        raw_value = _extract_order_value(order, field_name)
+        if raw_value in (None, ""):
+            continue
+        if isinstance(raw_value, datetime):
+            parsed = raw_value
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+        parsed = _parse_iso_timestamp(raw_value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _has_persistable_fill(
+    *,
+    status_token: str,
+    filled_qty: float,
+    fill_price: float | None,
+) -> bool:
+    """Return ``True`` when order metadata indicates a real fill."""
+
+    if fill_price is None or filled_qty <= 0.0:
+        return False
+    if not status_token:
+        return True
+    return status_token in _FILLED_TCA_STATUSES
+
+
 def _refresh_broker_order(
     api: Any,
     order: Any,
@@ -5171,6 +5246,15 @@ def _reload_rl_agent_from_runtime_path(
         if use_rl_enabled is not None
         else bool(get_env("USE_RL_AGENT", False, cast=bool))
     )
+    require_runtime_stack = bool(
+        get_env("AI_TRADING_RL_REQUIRE_RUNTIME_STACK", False, cast=bool)
+    )
+    test_mode = bool(
+        str(get_env("PYTEST_CURRENT_TEST", "", cast=str) or "").strip()
+        or str(get_env("PYTEST_RUNNING", "", cast=str) or "").strip()
+        or bool(get_env("TESTING", False, cast=bool))
+    )
+    fail_hard_startup = bool(require_runtime_stack and not test_mode and reason == "startup")
     target = _resolve_rl_model_path(model_path)
     if not enabled:
         RL_MODEL_PATH = target
@@ -5189,6 +5273,8 @@ def _reload_rl_agent_from_runtime_path(
             "RL_AGENT_PATH_MISSING",
             extra={"reason": reason},
         )
+        if fail_hard_startup:
+            raise RuntimeError("RL_AGENT_PATH_MISSING")
         return False
     if RLTrader is None:
         warning_kv(
@@ -5196,6 +5282,8 @@ def _reload_rl_agent_from_runtime_path(
             "RL_TRADER_UNAVAILABLE",
             extra={"hint": "ai_trading.rl_trading import failed"},
         )
+        if fail_hard_startup:
+            raise RuntimeError("RL_TRADER_UNAVAILABLE")
         return False
     target_sig = _rl_model_signature(target)
     if (
@@ -5214,6 +5302,8 @@ def _reload_rl_agent_from_runtime_path(
                 "RL_AGENT_DISABLED_STUB",
                 extra={"model": str(target)},
             )
+            if fail_hard_startup:
+                raise RuntimeError("RL_AGENT_DISABLED_STUB")
             return False
     except COMMON_EXC as exc:  # noqa: BLE001
         warning_kv(
@@ -5221,6 +5311,8 @@ def _reload_rl_agent_from_runtime_path(
             "RL_AGENT_INIT_FAILED",
             extra={"error": str(exc), "model": str(target)},
         )
+        if fail_hard_startup:
+            raise RuntimeError("RL_AGENT_INIT_FAILED") from exc
         return False
     RL_AGENT = rl
     RL_MODEL_PATH = target
@@ -6127,6 +6219,11 @@ skipped_duplicates = None
 skipped_cooldown = None
 sentiment_api_failures = None
 sentiment_cb_state = None
+rl_eval_cycles_total = None
+rl_eval_symbols_total = None
+rl_eval_state_vectors_total = None
+rl_eval_failures_total = None
+rl_eval_skips_total = None
 
 
 def _init_metrics() -> None:
@@ -6135,6 +6232,8 @@ def _init_metrics() -> None:
     global run_all_trades_duration, minute_cache_hit, minute_cache_miss, daily_cache_hit, daily_cache_miss
     global event_cooldown_hits, slippage_total, slippage_count, weekly_drawdown, skipped_duplicates, skipped_cooldown
     global sentiment_api_failures, sentiment_cb_state
+    global rl_eval_cycles_total, rl_eval_symbols_total, rl_eval_state_vectors_total
+    global rl_eval_failures_total, rl_eval_skips_total
     if _METRICS_READY:
         return
     orders_total = get_counter("bot_orders_total", "Total orders sent")
@@ -6177,6 +6276,26 @@ def _init_metrics() -> None:
         "Sentiment circuit breaker state (0 closed, 1 half-open, 2 open)",
     )
     sentiment_cb_state.set(0)
+    rl_eval_cycles_total = get_counter(
+        "bot_rl_eval_cycles_total",
+        "Total RL evaluation cycles attempted",
+    )
+    rl_eval_symbols_total = get_counter(
+        "bot_rl_eval_symbols_total",
+        "Total symbols considered by RL evaluations",
+    )
+    rl_eval_state_vectors_total = get_counter(
+        "bot_rl_eval_state_vectors_total",
+        "Total RL feature state vectors computed",
+    )
+    rl_eval_failures_total = get_counter(
+        "bot_rl_eval_failures_total",
+        "Total RL evaluation failures",
+    )
+    rl_eval_skips_total = get_counter(
+        "bot_rl_eval_skips_total",
+        "Total RL evaluation skips",
+    )
     _METRICS_READY = True
 
 
@@ -28907,6 +29026,98 @@ def _dedupe_cycle_intents(candidates: list[Any]) -> tuple[list[Any], dict[str, A
     return deduped, summary
 
 
+def _resolve_rl_symbol_limit() -> int:
+    rl_symbol_limit = int(get_env("AI_TRADING_RL_MAX_SYMBOLS", 64, cast=int))
+    if rl_symbol_limit < 1:
+        return 1
+    if rl_symbol_limit > 512:
+        return 512
+    return rl_symbol_limit
+
+
+def _resolve_rl_candidate_symbols(
+    ctx: Any,
+    signals_by_strategy: Mapping[str, Sequence[Any]],
+) -> tuple[list[str], dict[str, Any]]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+
+    def _add_symbol(raw_symbol: Any) -> None:
+        normalized = str(raw_symbol or "").strip().upper()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        symbols.append(normalized)
+
+    for sigs in signals_by_strategy.values():
+        for sig in sigs:
+            _add_symbol(getattr(sig, "symbol", None))
+    source = "strategy_signals" if symbols else "none"
+
+    if not symbols:
+        for attr_name in ("universe_tickers", "tickers"):
+            raw_symbols = getattr(ctx, attr_name, None)
+            if raw_symbols is None:
+                continue
+            for raw_symbol in raw_symbols:
+                _add_symbol(raw_symbol)
+            if symbols:
+                source = f"ctx.{attr_name}"
+                break
+
+    if not symbols:
+        try:
+            for raw_symbol in load_universe():
+                _add_symbol(raw_symbol)
+        except (
+            FileNotFoundError,
+            PermissionError,
+            IsADirectoryError,
+            JSONDecodeError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+            RuntimeError,
+        ) as exc:
+            logger.debug("RL_UNIVERSE_LOAD_FAILED", extra={"error": str(exc)})
+        else:
+            if symbols:
+                source = "packaged_universe"
+
+    symbol_limit = _resolve_rl_symbol_limit()
+    selected = symbols[:symbol_limit]
+    metadata = {
+        "source": source,
+        "requested_count": len(symbols),
+        "selected_count": len(selected),
+        "symbol_limit": symbol_limit,
+        "truncated": len(symbols) > len(selected),
+    }
+    return selected, metadata
+
+
+def _increment_counter_safe(counter: Any, amount: float = 1.0) -> None:
+    if not counter:
+        return
+    try:
+        if amount == 1.0:
+            counter.inc()
+        else:
+            counter.inc(amount)
+    except (
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        JSONDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+    ):
+        logger.debug("METRIC_INCREMENT_FAILED", exc_info=True)
+
+
 def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
     signals_by_strategy: dict[str, list[Any]] = {}
@@ -28940,15 +29151,48 @@ def run_multi_strategy(ctx) -> None:
             logger.warning(f"Strategy {strat.name} failed: {e}")
     # Optionally augment strategy signals with reinforcement learning signals.
     if RL_AGENT:
+        _init_metrics()
+        _increment_counter_safe(rl_eval_cycles_total)
+        rl_cycle_summary: dict[str, Any] = {
+            "status": "started",
+            "reason": "init",
+            "candidate_symbols": 0,
+            "state_vectors": 0,
+            "rl_signals": 0,
+            "symbol_source": "none",
+            "symbol_limit": _resolve_rl_symbol_limit(),
+            "symbols_truncated": False,
+        }
         try:
-            # Determine the set of symbols that currently have signals from other strategies
-            all_symbols: list[str] = []
-            for sigs in signals_by_strategy.values():
-                for sig in sigs:
-                    sym = getattr(sig, "symbol", None)
-                    if sym and sym not in all_symbols:
-                        all_symbols.append(sym)
-            if all_symbols:
+            all_symbols, symbol_metadata = _resolve_rl_candidate_symbols(
+                ctx,
+                signals_by_strategy,
+            )
+            rl_cycle_summary.update(
+                {
+                    "candidate_symbols": len(all_symbols),
+                    "symbol_source": symbol_metadata.get("source", "none"),
+                    "symbol_limit": int(symbol_metadata.get("symbol_limit", 0) or 0),
+                    "symbols_truncated": bool(symbol_metadata.get("truncated", False)),
+                    "symbol_sample": all_symbols[:5],
+                }
+            )
+            _increment_counter_safe(rl_eval_symbols_total, float(len(all_symbols)))
+
+            if not all_symbols:
+                _increment_counter_safe(rl_eval_skips_total)
+                note_rl_signals_emitted()
+                rl_cycle_summary.update(
+                    {
+                        "status": "skipped",
+                        "reason": "no_symbols",
+                    }
+                )
+                logger.debug(
+                    "RL_SIGNALS_SKIPPED",
+                    extra={"reason": "no_symbols"},
+                )
+            else:
                 # Compute meaningful feature vectors for each symbol
                 import numpy as _np  # AI-AGENT-REF: alias to avoid shadowing global np
 
@@ -29004,6 +29248,8 @@ def run_multi_strategy(ctx) -> None:
                         continue
                     states.append(state_vec)
                     rl_symbols.append(sym)
+                rl_cycle_summary["state_vectors"] = len(rl_symbols)
+                _increment_counter_safe(rl_eval_state_vectors_total, float(len(rl_symbols)))
                 if states and rl_symbols:
                     state_mat = _np.stack(states).astype(_np.float32)
                     rl_sigs = RL_AGENT.predict(state_mat, symbols=rl_symbols)
@@ -29012,6 +29258,13 @@ def run_multi_strategy(ctx) -> None:
                     if rl_sigs:
                         rl_signal_list = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
                         signals_by_strategy["rl"] = rl_signal_list
+                        rl_cycle_summary.update(
+                            {
+                                "status": "emitted",
+                                "reason": "predict_ok",
+                                "rl_signals": len(rl_signal_list),
+                            }
+                        )
                         logger.info(
                             "RL_SIGNALS_EMITTED",
                             extra={
@@ -29020,11 +29273,25 @@ def run_multi_strategy(ctx) -> None:
                             },
                         )
                     else:
+                        rl_cycle_summary.update(
+                            {
+                                "status": "empty",
+                                "reason": "predict_ok",
+                            }
+                        )
                         logger.debug(
                             "RL_SIGNALS_EMPTY",
                             extra={"symbols": rl_symbols},
                         )
                 else:
+                    _increment_counter_safe(rl_eval_skips_total)
+                    note_rl_signals_emitted()
+                    rl_cycle_summary.update(
+                        {
+                            "status": "skipped",
+                            "reason": "no_state_vectors",
+                        }
+                    )
                     logger.debug(
                         "RL_SIGNALS_SKIPPED",
                         extra={"reason": "no_state_vectors", "symbols": all_symbols},
@@ -29039,7 +29306,17 @@ def run_multi_strategy(ctx) -> None:
             TypeError,
             OSError,
         ) as exc:
+            _increment_counter_safe(rl_eval_failures_total)
+            rl_cycle_summary.update(
+                {
+                    "status": "error",
+                    "reason": "exception",
+                    "error": str(exc),
+                }
+            )
             logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
+        finally:
+            logger.info("RL_EVAL_CYCLE", extra=rl_cycle_summary)
 
     # AI-AGENT-REF: Add position holding logic to reduce churn
     try:
@@ -33050,6 +33327,23 @@ def _kill_switch_active(cfg: TradingConfig) -> tuple[bool, str | None]:
     return False, None
 
 
+_TRANSIENT_HALT_REASONS: frozenset[str] = frozenset({"DERISK_SLO_BREACH_BLOCK"})
+
+
+def _clear_transient_halt_state(state: BotState) -> bool:
+    """Clear non-latching halt reasons so they are re-evaluated each cycle."""
+
+    if not bool(getattr(state, "halt_trading", False)):
+        return False
+    reason = str(getattr(state, "halt_reason", "") or "").strip().upper()
+    if reason not in _TRANSIENT_HALT_REASONS:
+        return False
+    state.halt_trading = False
+    state.halt_reason = None
+    logger.info("TRANSIENT_HALT_CLEARED", extra={"reason": reason})
+    return True
+
+
 def _freshness_seconds_for_timeframe(timeframe: str) -> int:
     mapping = {
         "1Min": 120,
@@ -33159,6 +33453,27 @@ def _score_from_bars(df) -> tuple[float, float]:
     except Exception:
         logger.debug("SCORE_FROM_BARS_FAILED", exc_info=True)
         return 0.0, 0.0
+
+
+def _record_netting_model_liveness(*, proposals_total: int) -> None:
+    """Emit model heartbeat signals from the active netting decision path."""
+
+    if int(max(0, proposals_total)) <= 0:
+        return
+    try:
+        note_ml_signal()
+    except Exception:
+        logger.debug("NETTING_MODEL_LIVENESS_ML_NOTE_FAILED", exc_info=True)
+    try:
+        rl_enabled = bool(get_env("USE_RL_AGENT", False, cast=bool))
+    except Exception:
+        rl_enabled = False
+    if not rl_enabled or RL_AGENT is None:
+        return
+    try:
+        note_rl_signals_emitted()
+    except Exception:
+        logger.debug("NETTING_MODEL_LIVENESS_RL_NOTE_FAILED", exc_info=True)
 
 
 def _resolve_submit_none_reason(runtime: Any) -> str:
@@ -35127,10 +35442,18 @@ def _run_runtime_truth_report(
     if not _runtime_truth_report_schedule_due(state, now=now, market_open_now=market_open_now):
         return
 
+    default_trade_history = str(
+        get_env(
+            "AI_TRADING_TRADE_HISTORY_PATH",
+            "runtime/trade_history.parquet",
+            cast=str,
+        )
+        or ""
+    ).strip() or "runtime/trade_history.parquet"
     trade_history_raw = str(
         get_env(
             "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
-            "runtime/tca_records.jsonl",
+            default_trade_history,
             cast=str,
         )
         or ""
@@ -35152,9 +35475,44 @@ def _run_runtime_truth_report(
         or ""
     ).strip()
     trade_history_path = resolve_runtime_artifact_path(
-        trade_history_raw or "runtime/tca_records.jsonl",
+        trade_history_raw or default_trade_history,
+        default_relative=default_trade_history,
+    )
+    fill_derived_fallback_raw = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_FILL_DERIVED_PATH",
+            "runtime/meta_learning_fill_derived.csv",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    tca_fallback_raw = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_TCA_FALLBACK_PATH",
+            str(_resolved_tca_path()),
+            cast=str,
+        )
+        or ""
+    ).strip()
+    fill_derived_fallback_path = resolve_runtime_artifact_path(
+        fill_derived_fallback_raw or "runtime/meta_learning_fill_derived.csv",
+        default_relative="runtime/meta_learning_fill_derived.csv",
+    )
+    tca_fallback_path = resolve_runtime_artifact_path(
+        tca_fallback_raw or str(_resolved_tca_path()),
         default_relative="runtime/tca_records.jsonl",
     )
+    selected_trade_history_path = trade_history_path
+    trade_history_source = "primary"
+    if not selected_trade_history_path.exists():
+        for candidate_path, candidate_source in (
+            (fill_derived_fallback_path, "fill_derived_fallback"),
+            (tca_fallback_path, "tca_fallback"),
+        ):
+            if candidate_path.exists():
+                selected_trade_history_path = candidate_path
+                trade_history_source = candidate_source
+                break
     gate_summary_path = resolve_runtime_artifact_path(
         gate_summary_raw or "runtime/gate_effectiveness_summary.json",
         default_relative="runtime/gate_effectiveness_summary.json",
@@ -35172,8 +35530,9 @@ def _run_runtime_truth_report(
         from ai_trading.tools import runtime_performance_report as performance_report
 
         report = performance_report.build_report(
-            trade_history_path=trade_history_path,
+            trade_history_path=selected_trade_history_path,
             gate_summary_path=gate_summary_path,
+            tca_path=tca_fallback_path,
         )
         go_no_go = performance_report.evaluate_go_no_go(
             report,
@@ -35183,8 +35542,14 @@ def _run_runtime_truth_report(
             "ts": now.isoformat(),
             "date": now.date().isoformat(),
             "paths": {
-                "trade_history": str(trade_history_path),
+                "trade_history": str(selected_trade_history_path),
                 "gate_summary": str(gate_summary_path),
+                "trade_history_primary": str(trade_history_path),
+                "trade_history_fill_derived_fallback": str(fill_derived_fallback_path),
+                "trade_history_tca_fallback": str(tca_fallback_path),
+            },
+            "source": {
+                "trade_history": trade_history_source,
             },
             "report": report,
             "go_no_go": go_no_go,
@@ -35198,6 +35563,8 @@ def _run_runtime_truth_report(
             extra={
                 "path": str(report_path),
                 "latest_path": str(latest_path),
+                "trade_history_source": trade_history_source,
+                "trade_history_path": str(selected_trade_history_path),
                 "gate_passed": bool(go_no_go.get("gate_passed")),
                 "failed_checks": list(go_no_go.get("failed_checks", [])),
             },
@@ -35208,7 +35575,8 @@ def _run_runtime_truth_report(
             extra={
                 "error": str(exc),
                 "report_path": str(report_path),
-                "trade_history_path": str(trade_history_path),
+                "trade_history_path": str(selected_trade_history_path),
+                "trade_history_primary_path": str(trade_history_path),
                 "gate_summary_path": str(gate_summary_path),
             },
         )
@@ -35958,6 +36326,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             )
             _write_decision_record(record, decision_path)
             return
+    _clear_transient_halt_state(state)
     if state.halt_trading:
         reason = state.halt_reason or "HALT_TRADING"
         base_snapshot = _decision_record_config_snapshot(
@@ -36644,6 +37013,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             latest_bar_ts[symbol] = bar_ts
             if price > 0:
                 latest_price[symbol] = price
+
+    _record_netting_model_liveness(proposals_total=proposals_total)
 
     if bool(get_env("AI_TRADING_EVENT_DRIVEN_NEW_BAR_ONLY", True, cast=bool)) and symbols:
         sleeve_count = max(len(sleeves), 1)
@@ -38026,7 +38397,54 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
         orders_attempted += 1
-        order_status = getattr(order, "status", None) if order is not None else None
+        order_status = _extract_order_value(order, "status") if order is not None else None
+        status_value = getattr(order_status, "value", order_status)
+        order_status_text = (
+            str(status_value).strip() if status_value not in (None, "") else "submitted"
+        )
+        order_status_token = _normalize_order_status_token(status_value)
+        broker_order_id = (
+            _extract_order_value(order, "id", "order_id", "client_order_id")
+            if order is not None
+            else None
+        )
+        filled_qty = _safe_float(
+            _extract_order_value(order, "filled_quantity", "filled_qty")
+        )
+        if filled_qty is None:
+            filled_qty = 0.0
+        requested_qty = _safe_float(
+            _extract_order_value(order, "requested_quantity", "qty", "quantity")
+        )
+        if requested_qty is None:
+            requested_qty = float(abs(delta_shares))
+        fill_price = _safe_float(
+            _extract_order_value(
+                order,
+                "filled_avg_price",
+                "fill_price",
+                "average_fill_price",
+                "average_price",
+            )
+        )
+        fill_timestamp = _extract_order_fill_timestamp(order)
+        raw_fees = _safe_float(
+            _extract_order_value(
+                order,
+                "fees",
+                "fee",
+                "commission",
+                "filled_fee",
+                "filled_fees",
+                "total_fees",
+            )
+        )
+        fill_fees = abs(float(raw_fees)) if raw_fees is not None else 0.0
+        persistable_fill = _has_persistable_fill(
+            status_token=order_status_token,
+            filled_qty=float(filled_qty),
+            fill_price=fill_price,
+        )
         if ledger is not None:
             ledger.record(
                 LedgerEntry(
@@ -38037,8 +38455,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     side=side,
                     limit_price=price,
                     ts=now.isoformat(),
-                    broker_order_id=getattr(order, "id", None) if order is not None else None,
-                    status=str(order_status) if order_status is not None else None,
+                    broker_order_id=str(broker_order_id) if broker_order_id is not None else None,
+                    status=order_status_text if order_status_text else None,
                 )
             )
         state.last_order_bar_ts[symbol] = net_target.bar_ts
@@ -38056,20 +38474,21 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         metrics = {}
         tca_record: dict[str, Any] | None = None
         try:
-            fill_price = getattr(order, "filled_avg_price", None)
             metrics = compute_attribution_metrics(
                 arrival_price=price,
-                fill_price=float(fill_price) if fill_price else None,
+                fill_price=float(fill_price) if fill_price is not None else None,
                 side=side,
                 bid=None,
                 ask=None,
+                order_ts=now,
+                fill_ts=fill_timestamp if persistable_fill else None,
             )
         except Exception:
             metrics = {}
             fill_price = None
+            persistable_fill = False
         if bool(get_env("AI_TRADING_TCA_ENABLED", False, cast=bool)):
-            order_status_text = str(order_status) if order_status is not None else "submitted"
-            fill_vwap = float(fill_price) if fill_price else float(price)
+            fill_vwap = float(fill_price) if fill_price is not None else None
             arrival_benchmark = str(
                 get_env("AI_TRADING_TCA_ARRIVAL_BENCHMARK", "decision")
             ).strip().lower()
@@ -38079,6 +38498,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 get_env("AI_TRADING_TCA_ALLOW_PROXY_QUOTES", True, cast=bool)
             )
             arrival_ts = net_target.bar_ts if arrival_benchmark == "decision" else now
+            first_fill_ts = fill_timestamp if persistable_fill else None
+            if first_fill_ts is None and persistable_fill:
+                first_fill_ts = now
+            partial_fill = order_status_token == "partially_filled"
+            if (
+                not partial_fill
+                and persistable_fill
+                and float(requested_qty) > 0
+                and float(filled_qty) < float(requested_qty)
+            ):
+                partial_fill = True
+            tca_qty = float(filled_qty) if persistable_fill and filled_qty > 0 else float(abs(delta_shares))
             benchmark = ExecutionBenchmark(
                 arrival_price=float(price),
                 mid_at_arrival=float(price) if allow_proxy_quotes else None,
@@ -38087,14 +38518,14 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 bar_close_price=float(price),
                 decision_ts=arrival_ts,
                 submit_ts=now,
-                first_fill_ts=now,
+                first_fill_ts=first_fill_ts,
             )
             fill_summary = FillSummary(
                 fill_vwap=fill_vwap,
-                total_qty=float(abs(delta_shares)),
-                fees=0.0,
+                total_qty=tca_qty,
+                fees=float(fill_fees) if persistable_fill else 0.0,
                 status=order_status_text,
-                partial_fill=order_status_text.lower() == "partially_filled",
+                partial_fill=partial_fill,
             )
             tca_record = build_tca_record(
                 client_order_id=client_order_id,
@@ -38108,6 +38539,12 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 order_type="limit",
                 quote_proxy=allow_proxy_quotes,
             )
+            if not persistable_fill:
+                tca_record["fill_price"] = None
+                tca_record["fill_vwap"] = None
+                tca_record["is_bps"] = None
+                tca_record["spread_paid_bps"] = None
+                tca_record["fill_latency_ms"] = None
             tca_record["arrival_benchmark"] = arrival_benchmark
             tca_record["pending_write_sec"] = int(
                 get_env("AI_TRADING_TCA_PENDING_WRITE_SEC", 60, cast=int)
@@ -38121,7 +38558,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "spread_paid_bps": tca_record.get("spread_paid_bps"),
                 "fill_latency_ms": tca_record.get("fill_latency_ms"),
             }
-            if bool(get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool)):
+            tca_update_on_fill = bool(
+                get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool)
+            )
+            if tca_update_on_fill and persistable_fill:
                 resolved_tca_path = str(
                     get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
                 )
@@ -38147,7 +38587,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 "side": side,
                 "qty": abs(delta_shares),
                 "price": price,
-                "status": str(order_status) if order_status is not None else None,
+                "status": order_status_text if order_status_text else None,
             },
             metrics=metrics,
             config_snapshot=symbol_snapshot,

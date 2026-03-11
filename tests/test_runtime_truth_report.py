@@ -25,6 +25,7 @@ def test_runtime_truth_report_writes_daily_artifact(
     monkeypatch.setenv("AI_TRADING_RUNTIME_TRUTH_REPORT_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH", "runtime/tca_records.jsonl")
 
     trade_history = data_root / "runtime" / "tca_records.jsonl"
     _write_jsonl(
@@ -91,3 +92,60 @@ def test_runtime_truth_report_skips_when_already_written_for_day(
 
     report_path = data_root / "runtime" / "reports" / "runtime_performance_20260310.json"
     assert not report_path.exists()
+
+
+def test_runtime_truth_report_uses_fill_derived_fallback_when_primary_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 3, 10, 22, 30, tzinfo=UTC)
+    data_root = tmp_path / "data-root"
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.setenv("AI_TRADING_RUNTIME_TRUTH_REPORT_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+        "runtime/trade_history_missing.parquet",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_FILL_DERIVED_PATH",
+        "runtime/meta_learning_fill_derived.csv",
+    )
+
+    fill_derived_path = data_root / "runtime" / "meta_learning_fill_derived.csv"
+    fill_derived_path.parent.mkdir(parents=True, exist_ok=True)
+    fill_derived_path.write_text(
+        "\n".join(
+            [
+                "symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward",
+                "AAPL,2026-03-10T20:00:00+00:00,100.0,2026-03-10T21:00:00+00:00,101.0,1,buy,fill_derived,fill_derived,test,0.5,1.0",
+                "MSFT,2026-03-10T20:10:00+00:00,200.0,2026-03-10T21:10:00+00:00,198.0,1,buy,fill_derived,fill_derived,test,0.5,-2.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    gate_summary = data_root / "runtime" / "gate_effectiveness_summary.json"
+    gate_summary.write_text(
+        json.dumps(
+            {
+                "total_records": 20,
+                "total_accepted_records": 8,
+                "total_rejected_records": 12,
+                "total_expected_net_edge_bps": 10.0,
+                "gate_totals": {"OK_TRADE": 8, "COST_GATE": 6},
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    state = bot_engine.BotState()
+    bot_engine._run_runtime_truth_report(state, now=now, market_open_now=False)
+
+    report_path = data_root / "runtime" / "reports" / "runtime_performance_20260310.json"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert payload["source"]["trade_history"] == "fill_derived_fallback"
+    assert payload["paths"]["trade_history"] == str(fill_derived_path)
+    assert payload["report"]["trade_history"]["pnl_available"] is True
+    assert payload["report"]["trade_history"]["closed_trades"] == 2

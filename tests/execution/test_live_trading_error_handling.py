@@ -572,3 +572,84 @@ def test_execute_order_records_failure_outcome_on_submit_exception(engine_factor
     assert engine._cycle_order_outcomes[-1]["status"] == "failed"
     assert engine._cycle_order_outcomes[-1]["reason"] == "submit_exception"
     assert any(record.msg == "ORDER_SUBMIT_FAILED" for record in caplog.records)
+
+
+def test_execute_order_applies_cycle_capacity_reservation(engine_factory, monkeypatch):
+    snapshots: list[Any] = []
+
+    def _capacity_stub(symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None):
+        snapshots.append(account_snapshot)
+        return lt.CapacityCheck(True, int(quantity))
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _capacity_stub)
+    engine = engine_factory()
+    engine._cycle_account = {
+        "buying_power": "1000",
+        "daytrading_buying_power": "1000",
+        "non_marginable_buying_power": "1000",
+    }
+    engine._cycle_account_fetched = True
+    engine._should_suppress_duplicate_intent = lambda *_args, **_kwargs: False
+    engine._reserve_cycle_intent = lambda *_args, **_kwargs: True
+    submit_counter = {"count": 0}
+
+    def _submit_limit(symbol, side, quantity, limit_price, **_kwargs):
+        submit_counter["count"] += 1
+        return {
+            "id": f"ord-{submit_counter['count']}",
+            "status": "accepted",
+            "qty": quantity,
+            "filled_qty": "0",
+            "symbol": symbol,
+            "side": side,
+            "limit_price": limit_price,
+        }
+
+    engine.submit_limit_order = _submit_limit
+
+    first = engine.execute_order("AAPL", "buy", 2, order_type="limit", limit_price=100.0)
+    second = engine.execute_order("MSFT", "buy", 2, order_type="limit", limit_price=100.0)
+
+    assert first is not None
+    assert second is not None
+    assert len(snapshots) == 2
+    first_snapshot = snapshots[0]
+    second_snapshot = snapshots[1]
+    assert isinstance(first_snapshot, dict)
+    assert isinstance(second_snapshot, dict)
+    assert float(first_snapshot["daytrading_buying_power"]) == pytest.approx(1000.0)
+    assert float(second_snapshot["daytrading_buying_power"]) == pytest.approx(800.0)
+
+
+def test_execute_order_releases_capacity_reservation_on_terminal_reject(engine_factory, monkeypatch):
+    monkeypatch.setattr(
+        lt,
+        "_call_preflight_capacity",
+        lambda symbol, side, price_hint, quantity, broker, account_snapshot, preflight_fn=None: lt.CapacityCheck(
+            True, int(quantity)
+        ),
+    )
+    engine = engine_factory()
+    engine._cycle_account = {
+        "buying_power": "1000",
+        "daytrading_buying_power": "1000",
+        "non_marginable_buying_power": "1000",
+    }
+    engine._cycle_account_fetched = True
+    engine._should_suppress_duplicate_intent = lambda *_args, **_kwargs: False
+    engine._reserve_cycle_intent = lambda *_args, **_kwargs: True
+    engine.submit_limit_order = lambda symbol, side, quantity, limit_price, **_kwargs: {
+        "id": "ord-rejected",
+        "status": "rejected",
+        "qty": quantity,
+        "filled_qty": "0",
+        "symbol": symbol,
+        "side": side,
+        "limit_price": limit_price,
+        "rejection_reason": "insufficient day trading buying power",
+    }
+
+    result = engine.execute_order("AAPL", "buy", 2, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    assert lt._safe_decimal(getattr(engine, "_cycle_reserved_opening_notional", None)) == Decimal("0")

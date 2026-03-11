@@ -8,8 +8,8 @@ import pytest
 from ai_trading.tools import runtime_performance_report as rpt
 
 
-def test_default_trade_history_path_uses_runtime_tca_records() -> None:
-    assert rpt._DEFAULT_TRADE_HISTORY_PATH == "runtime/tca_records.jsonl"
+def test_default_trade_history_path_uses_runtime_trade_history() -> None:
+    assert rpt._DEFAULT_TRADE_HISTORY_PATH == "runtime/trade_history.parquet"
 
 
 def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:
@@ -51,6 +51,34 @@ def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:
     assert trade["win_rate"] == 2 / 3
     assert gate["acceptance_rate"] == 0.25
     assert gate["top_gates"][0]["gate"] == "COST_GATE"
+
+
+def test_build_report_treats_reward_as_realized_pnl(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {"symbol": "AAPL", "side": "buy", "reward": 2.5},
+                {"symbol": "MSFT", "side": "sell", "reward": -1.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 0, "total_accepted_records": 0, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    trade = report["trade_history"]
+    assert trade["pnl_available"] is True
+    assert trade["pnl_sum"] == pytest.approx(1.5)
+    assert trade["closed_trades"] == 2
 
 
 def test_format_text_report_handles_missing_inputs(tmp_path: Path) -> None:
@@ -134,6 +162,179 @@ def test_build_report_reconstructs_fifo_realized_pnl(tmp_path: Path) -> None:
     assert trade["pnl_sum"] == pytest.approx(-24.893, rel=1e-6)
     assert trade["top_loss_drivers"]["symbols"][0]["name"] == "MSFT"
     assert trade["daily_expectancy"][-1]["date"] == "2026-01-03"
+
+
+def test_build_report_enriches_direct_rows_with_tca_costs(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    tca_path = tmp_path / "tca_records.jsonl"
+
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 10,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "entry_time": "2026-02-01T14:30:00+00:00",
+                    "exit_time": "2026-02-01T15:00:00+00:00",
+                    "reward": 10.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 1, "total_accepted_records": 1, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+    tca_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "qty": 10,
+                        "fill_price": 100.0,
+                        "ts": "2026-02-01T14:30:00+00:00",
+                        "fees": 1.0,
+                        "is_bps": 5.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "symbol": "AAPL",
+                        "side": "sell",
+                        "qty": 10,
+                        "fill_price": 101.0,
+                        "ts": "2026-02-01T15:00:00+00:00",
+                        "fees": 1.0,
+                        "is_bps": 6.0,
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        tca_path=tca_path,
+    )
+    trade = report["trade_history"]
+
+    assert trade["pnl_available"] is True
+    assert trade["closed_trades"] == 1
+    assert trade["total_fee_cost"] == pytest.approx(2.0)
+    assert trade["total_slippage_cost"] == pytest.approx(1.106, rel=1e-6)
+    assert trade["pnl_sum"] == pytest.approx(6.894, rel=1e-6)
+    assert trade["cost_enrichment"]["matched_legs"] == 2
+    assert trade["cost_enrichment"]["enriched_trades"] == 1
+    assert trade["cost_attribution"]["fee_sources"]["tca_matched"] == 1
+    assert trade["cost_attribution"]["slippage_sources"]["tca_matched"] == 1
+    assert trade["daily_expectancy"][0]["fee_cost"] == pytest.approx(2.0)
+    assert trade["daily_expectancy"][0]["slippage_cost"] == pytest.approx(1.106, rel=1e-6)
+
+
+def test_build_report_ignores_non_fill_tca_status_rows(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    tca_path = tmp_path / "tca_records.jsonl"
+
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 10,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "entry_time": "2026-02-01T14:30:00+00:00",
+                    "exit_time": "2026-02-01T15:00:00+00:00",
+                    "reward": 10.0,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 1, "total_accepted_records": 1, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+    tca_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "qty": 10,
+                        "fill_price": 100.0,
+                        "ts": "2026-02-01T14:30:00+00:00",
+                        "status": "OrderStatus.PENDING_NEW",
+                        "fees": 0.0,
+                        "is_bps": 0.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "qty": 10,
+                        "fill_price": 100.0,
+                        "ts": "2026-02-01T14:30:00+00:00",
+                        "status": "filled",
+                        "fees": 1.0,
+                        "is_bps": 5.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "symbol": "AAPL",
+                        "side": "sell",
+                        "qty": 10,
+                        "fill_price": 101.0,
+                        "ts": "2026-02-01T15:00:00+00:00",
+                        "status": "submitted",
+                        "fees": 0.0,
+                        "is_bps": 0.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "symbol": "AAPL",
+                        "side": "sell",
+                        "qty": 10,
+                        "fill_price": 101.0,
+                        "ts": "2026-02-01T15:00:00+00:00",
+                        "status": "partially_filled",
+                        "fees": 1.0,
+                        "is_bps": 6.0,
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        tca_path=tca_path,
+    )
+    trade = report["trade_history"]
+
+    assert trade["closed_trades"] == 1
+    assert trade["total_fee_cost"] == pytest.approx(2.0)
+    assert trade["cost_enrichment"]["matched_legs"] == 2
+    assert trade["cost_attribution"]["fee_sources"]["tca_matched"] == 1
 
 
 def test_evaluate_go_no_go_uses_thresholds() -> None:

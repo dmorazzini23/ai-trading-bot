@@ -186,6 +186,8 @@ from ai_trading.execution.engine import (
     KNOWN_EXECUTE_ORDER_KWARGS,
     OrderManager,
 )
+from ai_trading.meta_learning.persistence import record_trade_fill
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from ai_trading.core.enums import OrderSide as CoreOrderSide
@@ -1392,6 +1394,23 @@ def _order_consumes_capacity(side: Any) -> bool:
     return True
 
 
+def _capacity_precheck_side(side: Any, *, closing_position: bool) -> Any:
+    """Return normalized side token used for broker capacity preflight checks."""
+
+    if side is None:
+        return side
+    try:
+        normalized = str(side).strip().lower()
+    except Exception:
+        return side
+    # Plain sell can mean close-long or open-short. When caller declares this is
+    # not a position-closing order, force short semantics so preflight reserves
+    # buying power and catches broker capacity limits before submit.
+    if normalized == "sell" and not bool(closing_position):
+        return "sell_short"
+    return normalized or side
+
+
 @dataclass
 class CapacityCheck:
     can_submit: bool
@@ -2096,6 +2115,8 @@ class ExecutionEngine:
         self._recent_order_intents: dict[tuple[str, str], float] = {}
         self._cycle_reserved_intents: set[tuple[str, str]] = set()
         self._cycle_reserved_intents_lock = Lock()
+        self._capacity_reservation_lock = Lock()
+        self._cycle_reserved_opening_notional = Decimal("0")
         self._pending_new_actions_this_cycle: int = 0
         self._pending_new_policy_last_cycle_index: int | None = None
         self._engine_started_mono: float = float(monotonic_time())
@@ -2175,6 +2196,7 @@ class ExecutionEngine:
             self._cycle_reserved_intents_lock = Lock()
         self._cycle_account = None
         self._cycle_account_fetched = False
+        self._cycle_reserved_opening_notional = Decimal("0")
         self._last_submit_outcome = {}
         account = self._refresh_cycle_account()
         
@@ -3555,6 +3577,321 @@ class ExecutionEngine:
             return self._cycle_account
         return self._refresh_cycle_account()
 
+    def _runtime_exec_event_persistence_enabled(self) -> bool:
+        """Return True when runtime order/fill persistence is enabled."""
+
+        configured = _resolve_bool_env("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED")
+        if configured is not None:
+            return bool(configured)
+        return not _pytest_mode_active()
+
+    def _append_runtime_jsonl(
+        self,
+        *,
+        env_key: str,
+        default_relative: str,
+        payload: Mapping[str, Any],
+        failure_log: str,
+    ) -> None:
+        """Append one JSON payload to the configured runtime artifact path."""
+
+        configured_path = str(_runtime_env(env_key, default_relative) or default_relative)
+        target_path = resolve_runtime_artifact_path(
+            configured_path,
+            default_relative=default_relative,
+        )
+        row = dict(payload)
+        row.setdefault("ts", datetime.now(UTC).isoformat())
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with target_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, sort_keys=True, default=str))
+                handle.write("\n")
+        except OSError as exc:
+            logger.debug(
+                failure_log,
+                extra={"path": str(target_path), "error": str(exc)},
+            )
+
+    def _record_runtime_order_event(self, payload: Mapping[str, Any]) -> None:
+        """Persist canonical runtime order event diagnostics."""
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return
+        self._append_runtime_jsonl(
+            env_key="AI_TRADING_ORDER_EVENTS_PATH",
+            default_relative="runtime/order_events.jsonl",
+            payload=payload,
+            failure_log="ORDER_EVENT_WRITE_FAILED",
+        )
+
+    def _record_runtime_fill_event(self, payload: Mapping[str, Any]) -> None:
+        """Persist canonical runtime fill event diagnostics."""
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return
+        self._append_runtime_jsonl(
+            env_key="AI_TRADING_FILL_EVENTS_PATH",
+            default_relative="runtime/fill_events.jsonl",
+            payload=payload,
+            failure_log="FILL_EVENT_WRITE_FAILED",
+        )
+
+    def _current_cycle_reserved_opening_notional(self) -> Decimal:
+        """Return local reserved opening-order notional for the current cycle."""
+
+        current_raw = getattr(self, "_cycle_reserved_opening_notional", Decimal("0"))
+        current = _safe_decimal(current_raw)
+        if current <= 0:
+            return Decimal("0")
+        return current
+
+    def _account_with_cycle_capacity_reservation(
+        self,
+        account_snapshot: Any | None,
+        *,
+        side: Any,
+        closing_position: bool,
+    ) -> Any | None:
+        """Apply local reserved notional to capacity account fields."""
+
+        if account_snapshot is None or closing_position or not _order_consumes_capacity(side):
+            return account_snapshot
+        reserved_notional = self._current_cycle_reserved_opening_notional()
+        if reserved_notional <= 0:
+            return account_snapshot
+
+        capacity_fields = (
+            "buying_power",
+            "cash",
+            "portfolio_cash",
+            "available_cash",
+            "daytrading_buying_power",
+            "day_trading_buying_power",
+            "non_marginable_buying_power",
+            "non_marginable_cash",
+        )
+        if isinstance(account_snapshot, Mapping):
+            adjusted: dict[str, Any] = dict(account_snapshot)
+            changed = False
+            for field in capacity_fields:
+                if field not in adjusted:
+                    continue
+                field_value = _safe_decimal(adjusted.get(field))
+                if field_value <= 0:
+                    continue
+                adjusted[field] = str(max(field_value - reserved_notional, Decimal("0")))
+                changed = True
+            if changed:
+                adjusted["local_reserved_notional"] = float(reserved_notional)
+                return adjusted
+            return account_snapshot
+
+        adjusted_obj: dict[str, Any] = {}
+        if hasattr(account_snapshot, "__dict__"):
+            try:
+                adjusted_obj.update(vars(account_snapshot))
+            except Exception:
+                adjusted_obj = {}
+        changed = False
+        for field in capacity_fields:
+            field_value = _safe_decimal(_extract_value(account_snapshot, field))
+            if field_value <= 0:
+                continue
+            adjusted_obj[field] = str(max(field_value - reserved_notional, Decimal("0")))
+            changed = True
+        if not changed:
+            return account_snapshot
+        adjusted_obj["local_reserved_notional"] = float(reserved_notional)
+        return SimpleNamespace(**adjusted_obj)
+
+    def _reserve_cycle_opening_notional(
+        self,
+        *,
+        symbol: str,
+        side: Any,
+        quantity: Any,
+        price_hint: Any,
+        order_type: str,
+        client_order_id: str | None,
+    ) -> Decimal:
+        """Reserve notional locally to avoid same-cycle over-submission races."""
+
+        if not _order_consumes_capacity(side):
+            return Decimal("0")
+        qty_decimal = _safe_decimal(quantity).copy_abs()
+        price_decimal = _safe_decimal(price_hint).copy_abs()
+        if qty_decimal <= 0 or price_decimal <= 0:
+            return Decimal("0")
+
+        price_buffer_bps = _config_float("AI_TRADING_CAPACITY_PRICE_BUFFER_BPS", 0.0)
+        try:
+            buffer_bps = float(price_buffer_bps if price_buffer_bps is not None else 0.0)
+        except (TypeError, ValueError):
+            buffer_bps = 0.0
+        if not math.isfinite(buffer_bps):
+            buffer_bps = 0.0
+        buffer_bps = max(0.0, min(buffer_bps, 1000.0))
+        multiplier = Decimal("1")
+        if buffer_bps > 0.0:
+            multiplier += Decimal(str(buffer_bps)) / Decimal("10000")
+        reserved_notional = (qty_decimal * price_decimal * multiplier).copy_abs()
+        if reserved_notional <= 0:
+            return Decimal("0")
+
+        reservation_lock = getattr(self, "_capacity_reservation_lock", None)
+        if reservation_lock is None:
+            reservation_lock = Lock()
+            self._capacity_reservation_lock = reservation_lock
+        with reservation_lock:
+            current = self._current_cycle_reserved_opening_notional()
+            self._cycle_reserved_opening_notional = current + reserved_notional
+            total_reserved = self._current_cycle_reserved_opening_notional()
+        logger.debug(
+            "BROKER_CAPACITY_LOCAL_RESERVE",
+            extra={
+                "symbol": symbol,
+                "side": str(side),
+                "order_type": order_type,
+                "qty": float(qty_decimal),
+                "price_hint": float(price_decimal),
+                "reserved_notional": float(reserved_notional),
+                "cycle_reserved_notional": float(total_reserved),
+                "client_order_id": str(client_order_id) if client_order_id else None,
+            },
+        )
+        return reserved_notional
+
+    def _release_cycle_opening_notional(
+        self,
+        reserved_notional: Decimal,
+        *,
+        reason: str,
+        symbol: str,
+        side: Any,
+        client_order_id: str | None,
+    ) -> None:
+        """Release previously reserved local opening-order notional."""
+
+        release_amount = _safe_decimal(reserved_notional).copy_abs()
+        if release_amount <= 0:
+            return
+        reservation_lock = getattr(self, "_capacity_reservation_lock", None)
+        if reservation_lock is None:
+            reservation_lock = Lock()
+            self._capacity_reservation_lock = reservation_lock
+        with reservation_lock:
+            current = self._current_cycle_reserved_opening_notional()
+            updated = current - release_amount
+            if updated < 0:
+                updated = Decimal("0")
+            self._cycle_reserved_opening_notional = updated
+        logger.debug(
+            "BROKER_CAPACITY_LOCAL_RELEASE",
+            extra={
+                "symbol": symbol,
+                "side": str(side),
+                "reason": reason,
+                "released_notional": float(release_amount),
+                "cycle_reserved_notional": float(self._current_cycle_reserved_opening_notional()),
+                "client_order_id": str(client_order_id) if client_order_id else None,
+            },
+        )
+
+    def _persist_fill_derived_trade_record(
+        self,
+        *,
+        symbol: str,
+        side: Any,
+        filled_qty: float,
+        fill_price: float | None,
+        expected_price: float | None,
+        order_id: str | None,
+        client_order_id: str | None,
+        order_status: str | None,
+        signal: Any | None,
+        timestamp: datetime,
+        runtime_payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Persist canonical fill-derived record for learning and truth reporting."""
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return
+        qty_value = _safe_float(filled_qty)
+        if qty_value is None or qty_value <= 0:
+            return
+        if fill_price is None or fill_price <= 0:
+            return
+
+        side_token = str(side or "").strip().lower()
+        side_normalized = "sell" if side_token in {"sell", "short", "sell_short"} else "buy"
+        slippage_bps: float | None = None
+        if expected_price is not None and expected_price > 0:
+            try:
+                if side_normalized == "buy":
+                    slippage_bps = ((float(fill_price) - float(expected_price)) / float(expected_price)) * 10000.0
+                else:
+                    slippage_bps = ((float(expected_price) - float(fill_price)) / float(expected_price)) * 10000.0
+            except (TypeError, ValueError, ZeroDivisionError):
+                slippage_bps = None
+
+        fee_amount: float | None = None
+        if runtime_payload is not None:
+            for key in ("fee_amount", "fee", "fees", "commission", "commission_amount"):
+                candidate = _safe_float(runtime_payload.get(key))
+                if candidate is not None:
+                    fee_amount = abs(candidate)
+                    break
+        fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
+        if fee_amount is None and fee_bps > 0:
+            fee_amount = abs(float(qty_value) * float(fill_price) * (float(fee_bps) / 10000.0))
+        signal_tags = getattr(signal, "signal_tags", None) or getattr(signal, "tags", "")
+        try:
+            confidence = float(getattr(signal, "confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        fill_id = None
+        if runtime_payload is not None:
+            fill_id_raw = runtime_payload.get("fill_id") or runtime_payload.get("execution_id") or runtime_payload.get("trade_id")
+            if fill_id_raw not in (None, ""):
+                fill_id = str(fill_id_raw)
+        if fill_id is None:
+            fill_id = f"{order_id or client_order_id or symbol}:{int(qty_value)}:{order_status or 'filled'}"
+        fill_record = {
+            "symbol": symbol,
+            "entry_time": timestamp,
+            "entry_price": float(fill_price),
+            "qty": int(max(1.0, round(float(qty_value)))),
+            "side": side_normalized,
+            "strategy": getattr(signal, "strategy", "") if signal is not None else "",
+            "signal_tags": signal_tags,
+            "confidence": confidence,
+            "order_id": order_id,
+            "fill_id": fill_id,
+            "expected_price": expected_price,
+            "slippage_bps": slippage_bps,
+            "fee_amount": fee_amount,
+            "fee_bps": float(fee_bps) if fee_bps > 0 else None,
+            "status": order_status,
+            "client_order_id": client_order_id,
+        }
+        try:
+            record_trade_fill(fill_record)
+        except Exception:
+            logger.debug(
+                "RUNTIME_FILL_RECORD_PERSIST_FAILED",
+                extra={
+                    "symbol": symbol,
+                    "order_id": order_id,
+                    "client_order_id": client_order_id,
+                },
+                exc_info=True,
+            )
+        fill_event_payload = dict(fill_record)
+        fill_event_payload["event"] = "fill_recorded"
+        fill_event_payload["entry_time"] = timestamp.isoformat()
+        self._record_runtime_fill_event(fill_event_payload)
+
     def _pdt_lockout_active(self, account: Any | None) -> bool:
         """Return ``True`` when the PDT lockout should block new openings."""
 
@@ -4684,13 +5021,22 @@ class ExecutionEngine:
                 return None
 
         if not capacity_prechecked:
+            capacity_side = _capacity_precheck_side(
+                side_lower,
+                closing_position=closing_position,
+            )
+            capacity_account = self._account_with_cycle_capacity_reservation(
+                account_snapshot,
+                side=capacity_side,
+                closing_position=closing_position,
+            )
             capacity = _call_preflight_capacity(
                 symbol,
-                side_lower,
+                capacity_side,
                 None,
                 quantity,
                 capacity_broker,
-                account_snapshot,
+                capacity_account,
             )
             if not capacity.can_submit:
                 self.stats.setdefault("capacity_skips", 0)
@@ -5176,13 +5522,22 @@ class ExecutionEngine:
             }
 
         if not capacity_prechecked:
+            capacity_side = _capacity_precheck_side(
+                side_lower,
+                closing_position=closing_position,
+            )
+            capacity_account = self._account_with_cycle_capacity_reservation(
+                account_snapshot,
+                side=capacity_side,
+                closing_position=closing_position,
+            )
             capacity = _call_preflight_capacity(
                 symbol,
-                side_lower,
+                capacity_side,
                 limit_price,
                 quantity,
                 capacity_broker,
-                account_snapshot,
+                capacity_account,
             )
             if not capacity.can_submit:
                 self.stats.setdefault("capacity_skips", 0)
@@ -6626,13 +6981,22 @@ class ExecutionEngine:
                     quantity = max_qty_allowed
                     order_data["quantity"] = quantity
 
+        capacity_side = _capacity_precheck_side(
+            side_lower,
+            closing_position=closing_position,
+        )
+        capacity_account = self._account_with_cycle_capacity_reservation(
+            account_snapshot,
+            side=capacity_side,
+            closing_position=closing_position,
+        )
         capacity = _call_preflight_capacity(
             symbol,
-            side_lower,
+            capacity_side,
             price_hint,
             quantity,
             capacity_broker,
-            account_snapshot,
+            capacity_account,
         )
         if not capacity.can_submit:
             self.stats.setdefault("capacity_skips", 0)
@@ -6880,6 +7244,32 @@ class ExecutionEngine:
             )
             return None
 
+        capacity_reservation_notional = Decimal("0")
+        capacity_reservation_active = False
+        if not closing_position:
+            capacity_reservation_notional = self._reserve_cycle_opening_notional(
+                symbol=symbol,
+                side=capacity_side,
+                quantity=qty,
+                price_hint=price_hint,
+                order_type=order_type_normalized,
+                client_order_id=client_order_id,
+            )
+            capacity_reservation_active = capacity_reservation_notional > 0
+
+        def _release_capacity_reservation(reason: str) -> None:
+            nonlocal capacity_reservation_active
+            if not capacity_reservation_active:
+                return
+            self._release_cycle_opening_notional(
+                capacity_reservation_notional,
+                reason=reason,
+                symbol=symbol,
+                side=mapped_side,
+                client_order_id=client_order_id,
+            )
+            capacity_reservation_active = False
+
         order_type_submitted = order_type_normalized
         order: Any | None = None
         try:
@@ -6979,6 +7369,7 @@ class ExecutionEngine:
                         detail=str(md2.get("detail") or "retry_failed"),
                         submit_started_at=submit_started_at,
                     )
+                    _release_capacity_reservation("nonretryable_retry_failed")
                     return None
             else:
                 logger.info(
@@ -6998,6 +7389,7 @@ class ExecutionEngine:
                     detail=str(detail_val or exc),
                     submit_started_at=submit_started_at,
                 )
+                _release_capacity_reservation("nonretryable_rejected")
                 return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             status_code = getattr(exc, "status_code", None)
@@ -7033,6 +7425,7 @@ class ExecutionEngine:
                 detail=str(exc) or "order execution failed",
                 submit_started_at=submit_started_at,
             )
+            _release_capacity_reservation("submit_exception")
             return None
         finally:
             if hasattr(self, "_pending_order_kwargs"):
@@ -7053,6 +7446,7 @@ class ExecutionEngine:
                     context=skip_context,
                     submit_started_at=submit_started_at,
                 )
+                _release_capacity_reservation("submit_skipped")
                 return None
         if order is None:
             logger.warning(
@@ -7070,6 +7464,7 @@ class ExecutionEngine:
                 order_type=order_type_normalized,
                 submit_started_at=submit_started_at,
             )
+            _release_capacity_reservation("submit_no_result")
             return None
 
         final_order = order
@@ -7128,6 +7523,11 @@ class ExecutionEngine:
             elapsed_ms = int(max(0.0, (time.monotonic() - submit_started_at) * 1000.0))
             event_sequence += 1
             payload["event_seq"] = event_sequence
+            transition_payload = dict(payload)
+            transition_payload["event"] = "status_transition"
+            transition_payload["order_type"] = order_type_normalized
+            transition_payload["latency_ms"] = elapsed_ms
+            self._record_runtime_order_event(transition_payload)
 
             status_rank = _ORDER_STATUS_RANK.get(decided_status, 0)
             if (
@@ -7349,6 +7749,7 @@ class ExecutionEngine:
                 detail=str(status),
                 submit_started_at=submit_started_at,
             )
+            _release_capacity_reservation("invalid_order_response")
             return None
 
         order_id_display = order_id or client_order_id
@@ -7418,6 +7819,13 @@ class ExecutionEngine:
             if rejection_detail:
                 final_payload["message"] = rejection_detail
             logger.warning("ORDER_REJECTED", extra=final_payload)
+        final_event_payload = dict(final_payload)
+        final_event_payload["event"] = "final_state"
+        final_event_payload["order_type"] = order_type_normalized
+        final_event_payload["ack_timed_out"] = bool(ack_timed_out)
+        self._record_runtime_order_event(final_event_payload)
+        if order_status_lower in _TERMINAL_ORDER_STATUSES and order_status_lower != "filled":
+            _release_capacity_reservation(f"terminal_{order_status_lower}")
         if order_id_display:
             store = getattr(self, "_pending_orders", None) or {}
             key = str(order_id_display)
@@ -7609,6 +8017,51 @@ class ExecutionEngine:
                 execution_drift_bps = None
         if execution_drift_bps is not None:
             realized_slippage_bps = float(abs(execution_drift_bps))
+        if (
+            order_status_lower in {"filled", "partially_filled"}
+            and resolved_fill_price is not None
+            and float(filled_qty or 0) > 0.0
+        ):
+            fill_ts_raw = _extract_value(
+                final_order,
+                "filled_at",
+                "executed_at",
+                "updated_at",
+                "timestamp",
+                "ts",
+            )
+            fill_timestamp = datetime.now(UTC)
+            if isinstance(fill_ts_raw, datetime):
+                try:
+                    fill_timestamp = fill_ts_raw.astimezone(UTC)
+                except Exception:
+                    fill_timestamp = fill_ts_raw.replace(tzinfo=UTC)
+            elif fill_ts_raw not in (None, ""):
+                text = str(fill_ts_raw).strip()
+                if text.endswith("Z"):
+                    text = f"{text[:-1]}+00:00"
+                try:
+                    parsed_fill_ts = datetime.fromisoformat(text)
+                except ValueError:
+                    parsed_fill_ts = None
+                if parsed_fill_ts is not None:
+                    if parsed_fill_ts.tzinfo is None:
+                        parsed_fill_ts = parsed_fill_ts.replace(tzinfo=UTC)
+                    fill_timestamp = parsed_fill_ts.astimezone(UTC)
+            runtime_fill_payload = final_order if isinstance(final_order, Mapping) else None
+            self._persist_fill_derived_trade_record(
+                symbol=symbol,
+                side=mapped_side,
+                filled_qty=float(filled_qty or 0.0),
+                fill_price=resolved_fill_price,
+                expected_price=benchmark_price,
+                order_id=str(order_id_display) if order_id_display is not None else None,
+                client_order_id=str(client_order_id) if client_order_id is not None else None,
+                order_status=order_status_lower,
+                signal=signal,
+                timestamp=fill_timestamp,
+                runtime_payload=runtime_fill_payload,
+            )
         outcome_reason: str | None = None
         if order_status_lower == "rejected":
             outcome_reason = parsed_rejection or "rejected"

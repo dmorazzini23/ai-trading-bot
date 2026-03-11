@@ -157,13 +157,14 @@ def build_runtime_health_payload(
     provider_disabled = provider_status_normalized in {"down", "disabled", "failed", "unreachable"}
     provider_unknown = provider_status_normalized in {"", "unknown"}
     broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
+    broker_degraded = broker_status_normalized in {"degraded"}
     broker_unknown = broker_status_normalized in {"", "unknown"}
     data_degraded = data_status_normalized in {"empty", "degraded"}
 
     degraded = provider_disabled or provider_payload.get("using_backup") or (
         provider_status_normalized not in {"healthy", "ready"}
     )
-    if broker_down:
+    if broker_down or broker_degraded:
         degraded = True
     if provider_unknown or broker_unknown:
         degraded = True
@@ -182,6 +183,8 @@ def build_runtime_health_payload(
         overall_ok = provider_connectivity_ok and broker_connectivity_ok
     if force_ok_for_pytest:
         overall_ok = True
+    if not overall_ok:
+        degraded = True
 
     if degraded:
         resolved_status = "degraded"

@@ -38,6 +38,7 @@ _CANONICAL_PATH = Path(
 _PANDAS_MISSING_LOGGED = False
 _PATCHED_PARQUET = False
 _READ_FAILURE_LOGGED: set[tuple[str, str, str]] = set()
+_WRITE_FALLBACK_LOGGED: set[str] = set()
 
 
 def _pytest_active() -> bool:
@@ -181,12 +182,23 @@ def _write_parquet(path: Path, frame: "pd.DataFrame") -> None:
     try:
         frame.to_parquet(path, index=False)
     except (OSError, ValueError, ImportError, ModuleNotFoundError) as exc:
-        if _pytest_active():
-            try:
-                frame.to_pickle(path)
-                return
-            except Exception:
-                pass
+        try:
+            frame.to_pickle(path)
+        except Exception:
+            logger.warning(
+                "TRADE_HISTORY_WRITE_FAILED",
+                extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},
+            )
+            return
+        key = f"{path}:{exc.__class__.__name__}"
+        if key not in _WRITE_FALLBACK_LOGGED:
+            _WRITE_FALLBACK_LOGGED.add(key)
+            logger.warning(
+                "TRADE_HISTORY_WRITE_PICKLE_FALLBACK",
+                extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},
+            )
+        return
+    except Exception as exc:
         logger.warning(
             "TRADE_HISTORY_WRITE_FAILED",
             extra={"path": str(path), "cause": exc.__class__.__name__, "detail": str(exc)},

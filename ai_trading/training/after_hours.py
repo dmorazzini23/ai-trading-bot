@@ -2321,17 +2321,25 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             "observed": {},
         }
 
+    default_trade_history = str(
+        get_env(
+            "AI_TRADING_TRADE_HISTORY_PATH",
+            "runtime/trade_history.parquet",
+            cast=str,
+        )
+        or ""
+    ).strip() or "runtime/trade_history.parquet"
     trade_history_configured = str(
         get_env(
             "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
-            "runtime/tca_records.jsonl",
+            default_trade_history,
             cast=str,
         )
         or ""
     ).strip()
     trade_history_path = resolve_runtime_artifact_path(
-        trade_history_configured or "runtime/tca_records.jsonl",
-        default_relative="runtime/tca_records.jsonl",
+        trade_history_configured or default_trade_history,
+        default_relative=default_trade_history,
     )
     gate_summary_configured = str(
         get_env(

@@ -167,6 +167,36 @@ def test_health_connectivity_mode_requires_known_broker_status(monkeypatch):
     assert payload["reason"] == "broker_status_unknown"
 
 
+def test_health_payload_does_not_report_healthy_when_ok_is_false(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "healthy",
+    }
+    broker_state = {
+        "status": "degraded",
+        "connected": True,
+    }
+    service_state = {"status": "ready", "reason": "runtime_health_pending"}
+    quote_state = {"status": "aligned"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+    assert payload["reason"] == "runtime_health_pending"
+
+
 def test_pytest_detection_silent_without_hints(monkeypatch, caplog):
     monkeypatch.delenv("PYTEST_RUNNING", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)

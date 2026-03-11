@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from types import SimpleNamespace
 
@@ -349,3 +350,47 @@ def test_order_status_enum_tokens_normalized(monkeypatch, caplog):
     assert "ORDER_SUBMITTED" in msgs
     assert "ORDER_FILL_CONFIRMED" in msgs
     assert "ORDER_PENDING_NO_TERMINAL" not in msgs
+
+
+def test_execute_order_persists_runtime_order_and_fill_events(monkeypatch, tmp_path):
+    class _FillPriceClient(_AckStubClient):
+        def get_order_by_id(self, order_id: str):
+            self._polls += 1
+            if self._polls >= 2:
+                return {
+                    "id": order_id,
+                    "status": "filled",
+                    "filled_qty": "5",
+                    "filled_avg_price": "100.25",
+                }
+            return {"id": order_id, "status": "accepted", "filled_qty": "0"}
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    engine = _build_engine(_FillPriceClient())
+    _prime_engine(engine, monkeypatch)
+
+    result = engine.execute_order("AAPL", "buy", qty=5, order_type="limit", limit_price=100.0)
+
+    assert result is not None
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    fill_events_path = tmp_path / "runtime" / "fill_events.jsonl"
+    assert order_events_path.exists()
+    assert fill_events_path.exists()
+
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fill_rows = [
+        json.loads(line)
+        for line in fill_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(row.get("event") == "status_transition" for row in order_rows)
+    assert any(row.get("event") == "final_state" and row.get("status") == "filled" for row in order_rows)
+    assert any(row.get("event") == "fill_recorded" and row.get("symbol") == "AAPL" for row in fill_rows)

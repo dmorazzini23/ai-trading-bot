@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from ai_trading.core import bot_engine
@@ -154,3 +155,56 @@ def test_tca_stale_block_reason_blocks_out_of_bounds_model(
     monkeypatch.setenv("AI_TRADING_EXEC_COST_MODEL_PATH", str(model_path))
 
     assert bot_engine._tca_stale_block_reason(datetime.now(UTC)) == "TCA_OUT_OF_BOUNDS_BLOCK"
+
+
+def test_normalize_order_status_token_handles_enum_like_values() -> None:
+    status = SimpleNamespace(value="OrderStatus.PENDING_NEW")
+    assert bot_engine._normalize_order_status_token(status) == "pending_new"
+    assert bot_engine._normalize_order_status_token("partially filled") == "partially_filled"
+
+
+def test_extract_order_value_and_fill_timestamp_read_nested_execution_result() -> None:
+    nested_order = SimpleNamespace(
+        id="broker-1",
+        filled_avg_price="101.25",
+        filled_at="2026-03-11T16:12:00Z",
+    )
+    execution_result = SimpleNamespace(
+        status="submitted",
+        filled_quantity=2.0,
+        order=nested_order,
+    )
+
+    assert bot_engine._extract_order_value(execution_result, "id") == "broker-1"
+    assert bot_engine._extract_order_value(execution_result, "filled_avg_price") == "101.25"
+    fill_ts = bot_engine._extract_order_fill_timestamp(execution_result)
+    assert fill_ts is not None
+    assert fill_ts.tzinfo is not None
+    assert fill_ts.isoformat() == "2026-03-11T16:12:00+00:00"
+
+
+def test_has_persistable_fill_requires_fill_metadata() -> None:
+    assert (
+        bot_engine._has_persistable_fill(
+            status_token="pending_new",
+            filled_qty=5.0,
+            fill_price=100.0,
+        )
+        is False
+    )
+    assert (
+        bot_engine._has_persistable_fill(
+            status_token="filled",
+            filled_qty=5.0,
+            fill_price=100.0,
+        )
+        is True
+    )
+    assert (
+        bot_engine._has_persistable_fill(
+            status_token="",
+            filled_qty=5.0,
+            fill_price=100.0,
+        )
+        is True
+    )

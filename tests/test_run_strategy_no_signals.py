@@ -91,6 +91,59 @@ def test_run_strategy_rl_feature_extraction_uses_feature_config(monkeypatch):
     assert symbols == ["AAPL"]
 
 
+def test_run_strategy_rl_uses_ctx_universe_when_no_strategy_signals(monkeypatch):
+    class StrategyNoSignals:
+        name = "dummy"
+
+        def generate_signals(self, _ctx):
+            return []
+
+    class DummyAllocator:
+        def allocate(self, _signals):
+            return []
+
+    class DummyRLAgent:
+        def __init__(self):
+            self.calls: list[tuple[object, list[str] | None]] = []
+
+        def predict(self, state, symbols=None):
+            self.calls.append((state, symbols))
+            return []
+
+    bars = pd.DataFrame(
+        {
+            "open": [100.0, 100.5, 101.0, 101.5],
+            "high": [101.0, 101.5, 102.0, 102.5],
+            "low": [99.0, 99.5, 100.0, 100.5],
+            "close": [100.2, 100.7, 101.2, 101.7],
+            "volume": [1000, 1100, 1200, 1300],
+        }
+    )
+    rl_agent = DummyRLAgent()
+    ctx = SimpleNamespace(
+        strategies=[StrategyNoSignals()],
+        universe_tickers=["AAPL", "MSFT", "AAPL"],
+        allocator=DummyAllocator(),
+        api=SimpleNamespace(list_positions=lambda: []),
+        data_fetcher=SimpleNamespace(
+            get_daily_df=lambda _ctx, _sym: bars,
+            get_minute_df=lambda _ctx, _sym: pd.DataFrame(),
+        ),
+    )
+
+    monkeypatch.setattr(bot_engine, "RL_AGENT", rl_agent)
+    import ai_trading.signals as sig
+
+    monkeypatch.setattr(sig, "generate_position_hold_signals", lambda _ctx, _pos: [])
+    monkeypatch.setattr(sig, "enhance_signals_with_position_logic", lambda s, _ctx, _h: s)
+
+    bot_engine.run_multi_strategy(ctx)
+
+    assert len(rl_agent.calls) == 1
+    _, symbols = rl_agent.calls[0]
+    assert symbols == ["AAPL", "MSFT"]
+
+
 def test_run_strategy_logs_rl_signals_emitted(
     monkeypatch,
     caplog: pytest.LogCaptureFixture,
@@ -189,4 +242,51 @@ def test_run_strategy_logs_rl_signals_skipped_when_no_state_vectors(
 
     matched = [record for record in caplog.records if record.message == "RL_SIGNALS_SKIPPED"]
     assert matched
+    assert any(getattr(record, "reason", None) == "no_state_vectors" for record in matched)
+
+
+def test_run_strategy_rl_heartbeat_when_no_state_vectors(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    class StrategyNoSignals:
+        name = "dummy"
+
+        def generate_signals(self, _ctx):
+            return []
+
+    class DummyAllocator:
+        def allocate(self, _signals):
+            return []
+
+    class DummyRLAgent:
+        def predict(self, _state, symbols=None):  # pragma: no cover - should not be called
+            raise AssertionError("predict should not be called without state vectors")
+
+    heartbeats: list[str] = []
+    ctx = SimpleNamespace(
+        strategies=[StrategyNoSignals()],
+        universe_tickers=["AAPL"],
+        allocator=DummyAllocator(),
+        api=SimpleNamespace(list_positions=lambda: []),
+        data_fetcher=SimpleNamespace(
+            get_daily_df=lambda _ctx, _sym: pd.DataFrame(),
+            get_minute_df=lambda _ctx, _sym: pd.DataFrame(),
+        ),
+    )
+
+    caplog.set_level("INFO")
+    monkeypatch.setattr(bot_engine, "RL_AGENT", DummyRLAgent())
+    monkeypatch.setattr(bot_engine, "note_rl_signals_emitted", lambda: heartbeats.append("beat"))
+    import ai_trading.signals as sig
+
+    monkeypatch.setattr(sig, "generate_position_hold_signals", lambda _ctx, _pos: [])
+    monkeypatch.setattr(sig, "enhance_signals_with_position_logic", lambda s, _ctx, _h: s)
+
+    bot_engine.run_multi_strategy(ctx)
+
+    assert heartbeats == ["beat"]
+    matched = [record for record in caplog.records if record.message == "RL_EVAL_CYCLE"]
+    assert matched
+    assert any(getattr(record, "status", None) == "skipped" for record in matched)
     assert any(getattr(record, "reason", None) == "no_state_vectors" for record in matched)
