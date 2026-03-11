@@ -1754,9 +1754,8 @@ class BotEngine:
         self._ctx = get_ctx()
         self._trading_client_cls = trading_client_cls or get_trading_client_cls()
         self._data_client_cls = data_client_cls or _get_data_client_cls_cached()
-        global APIError
         if getattr(APIError, "__module__", "") == __name__ and ALPACA_AVAILABLE:
-            APIError = get_api_error_cls()
+            globals()["APIError"] = get_api_error_cls()
         # Load universe tickers once and store on both engine and runtime
         self._tickers = load_universe()
         setattr(self._ctx, "tickers", self._tickers)
@@ -5632,6 +5631,16 @@ def _ensure_alpaca_classes() -> None:
         return
     _ALPACA_IMPORT_ERROR = None
     fatal_error: BaseException | None = None
+    _StockLatestQuoteRequestResolved: type[Any]
+    _MarketOrderRequestResolved: type[Any]
+    _LimitOrderRequestResolved: type[Any]
+    _StopOrderRequestResolved: type[Any]
+    _StopLimitOrderRequestResolved: type[Any]
+    _OrderSideResolved: Any
+    _OrderStatusResolved: Any
+    _TimeInForceResolved: Any
+    _QuoteResolved: type[Any]
+    _OrderResolved: type[Any]
 
     try:  # pragma: no cover - independent imports with fallbacks
         from alpaca.data.requests import (
@@ -5965,6 +5974,25 @@ def _require_cfg(value: str | None, name: str) -> str:
         return dummy_values.get(name, f"test_{name.lower()}")
 
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
+
+
+def _coerce_secret_value(value: Any) -> str | None:
+    """Resolve callable/secret-like values into a plain string."""
+
+    candidate = value
+    if callable(candidate):
+        try:
+            candidate = candidate()
+        except COMMON_EXC:
+            logger.debug("ALPACA_SECRET_CALLABLE_FAILED", exc_info=True)
+            return None
+    if candidate in (None, ""):
+        return None
+    try:
+        text = str(candidate).strip()
+    except COMMON_EXC:
+        return None
+    return text or None
 
 
 # Defer credential checks to runtime (avoid import-time crashes before .env loads)
@@ -10516,7 +10544,10 @@ class DataFetcher:
 
         # Verify required Alpaca configuration
         has_key = bool(getattr(self.settings, "alpaca_api_key", ""))
-        has_secret = bool(getattr(self.settings, "alpaca_secret_key_plain", ""))
+        has_secret = bool(
+            _coerce_secret_value(getattr(self.settings, "alpaca_secret_key_plain", None))
+            or _coerce_secret_value(get_alpaca_secret_key_plain())
+        )
         if not (has_key and has_secret):
             level = logging.ERROR if should_import_alpaca_sdk() else logging.WARNING
             logger.log(
@@ -10703,7 +10734,9 @@ class DataFetcher:
             use_client = client
             if use_client is None:
                 api_key = getattr(self.settings, "alpaca_api_key", "")
-                api_secret = getattr(self.settings, "alpaca_secret_key_plain", "") or get_alpaca_secret_key_plain()
+                api_secret = _coerce_secret_value(
+                    getattr(self.settings, "alpaca_secret_key_plain", None)
+                ) or _coerce_secret_value(get_alpaca_secret_key_plain())
                 if not api_key or not api_secret:
                     raise RuntimeError(
                         "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
@@ -12053,7 +12086,9 @@ class DataFetcher:
             return cached_result
 
         api_key = self.settings.alpaca_api_key
-        api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
+        api_secret = _coerce_secret_value(
+            getattr(self.settings, "alpaca_secret_key_plain", None)
+        ) or _coerce_secret_value(get_alpaca_secret_key_plain())
         provider_reason: str | None = None
         if not ALPACA_AVAILABLE:
             provider_reason = "alpaca_unavailable"
@@ -12329,7 +12364,9 @@ class DataFetcher:
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
         api_key = self.settings.alpaca_api_key
-        api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
+        api_secret = _coerce_secret_value(
+            getattr(self.settings, "alpaca_secret_key_plain", None)
+        ) or _coerce_secret_value(get_alpaca_secret_key_plain())
         # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             raise RuntimeError(
@@ -12972,7 +13009,9 @@ def prefetch_daily_data(
 ) -> dict[str, pd.DataFrame]:
     settings = get_settings()
     alpaca_key = settings.alpaca_api_key
-    alpaca_secret = settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
+    alpaca_secret = _coerce_secret_value(
+        getattr(settings, "alpaca_secret_key_plain", None)
+    ) or _coerce_secret_value(get_alpaca_secret_key_plain())
     # AI-AGENT-REF: use plain secret string
     if not alpaca_key or not alpaca_secret:
         raise RuntimeError(

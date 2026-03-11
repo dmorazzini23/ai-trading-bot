@@ -10,22 +10,39 @@ from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING, Type, cast
 from threading import RLock
 
+_imported_trading_client: type[Any] | None
 try:
-    from alpaca.trading.client import TradingClient
-    ALPACA_AVAILABLE = True
+    from alpaca.trading.client import TradingClient as _TradingClientImported
 except Exception:
-    TradingClient = None  # type: ignore[assignment]
+    _imported_trading_client = None
     ALPACA_AVAILABLE = False
+else:
+    _imported_trading_client = _TradingClientImported
+    ALPACA_AVAILABLE = True
 
+TradingClient: type[Any] | None = _imported_trading_client
+
+_MarketOrderRequest: type[Any] | None
+_LimitOrderRequest: type[Any] | None
+_StopOrderRequest: type[Any] | None
+_StopLimitOrderRequest: type[Any] | None
 try:  # pragma: no cover - exercised via stub classes in tests
     from alpaca.trading.requests import (
-        LimitOrderRequest as _LimitOrderRequest,
-        MarketOrderRequest as _MarketOrderRequest,
-        StopOrderRequest as _StopOrderRequest,
-        StopLimitOrderRequest as _StopLimitOrderRequest,
+        LimitOrderRequest as _ImportedLimitOrderRequest,
+        MarketOrderRequest as _ImportedMarketOrderRequest,
+        StopOrderRequest as _ImportedStopOrderRequest,
+        StopLimitOrderRequest as _ImportedStopLimitOrderRequest,
     )
 except Exception:
-    _MarketOrderRequest = _LimitOrderRequest = _StopOrderRequest = _StopLimitOrderRequest = None  # type: ignore[assignment]
+    _MarketOrderRequest = None
+    _LimitOrderRequest = None
+    _StopOrderRequest = None
+    _StopLimitOrderRequest = None
+else:
+    _MarketOrderRequest = _ImportedMarketOrderRequest
+    _LimitOrderRequest = _ImportedLimitOrderRequest
+    _StopOrderRequest = _ImportedStopOrderRequest
+    _StopLimitOrderRequest = _ImportedStopLimitOrderRequest
 
 
 _fallback_market_order_request_cls: type[Any] | None = None
@@ -354,10 +371,10 @@ def _ensure_trading_client_cls():
     try:
         from alpaca.trading.client import TradingClient as _TradingClient
     except Exception:
-        TradingClient = None  # type: ignore[assignment]
+        TradingClient = None
         ALPACA_AVAILABLE = False
         return None
-    TradingClient = _TradingClient  # type: ignore[assignment]
+    TradingClient = _TradingClient
     ALPACA_AVAILABLE = True
     return TradingClient
 

@@ -51,9 +51,11 @@ from ai_trading.utils.process_manager import file_lock as process_file_lock
 from ai_trading.utils.time import monotonic_time
 
 try:  # pragma: no cover - optional dependency
-    from alpaca.common.exceptions import APIError as _AlpacaAPIError  # type: ignore[import]
+    from alpaca.common.exceptions import APIError as _ImportedAlpacaAPIError  # type: ignore[import]
 except Exception:  # pragma: no cover - fallback when SDK missing
-    _AlpacaAPIError = None  # type: ignore[assignment]
+    _AlpacaAPIError: type[BaseException] | None = None
+else:
+    _AlpacaAPIError = _ImportedAlpacaAPIError
 
 
 class _FallbackAPIError(Exception):
@@ -1811,13 +1813,33 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
     return CapacityCheck(True, max_qty, None)
 from ai_trading.core import bot_engine as _bot_engine
 
+AlpacaREST: type[Any] | None
+OrderSide: Any | None
+TimeInForce: Any | None
+LimitOrderRequest: type[Any] | None
+MarketOrderRequest: type[Any] | None
 try:  # pragma: no cover - optional dependency
-    from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
+    from alpaca.trading.client import TradingClient as _ImportedAlpacaREST  # type: ignore
+    from alpaca.trading.enums import (
+        OrderSide as _ImportedOrderSide,
+        TimeInForce as _ImportedTimeInForce,
+    )
+    from alpaca.trading.requests import (
+        LimitOrderRequest as _ImportedLimitOrderRequest,
+        MarketOrderRequest as _ImportedMarketOrderRequest,
+    )
 except (ValueError, TypeError, ModuleNotFoundError, ImportError):
     AlpacaREST = None
-    OrderSide = TimeInForce = LimitOrderRequest = MarketOrderRequest = None  # type: ignore[assignment]
+    OrderSide = None
+    TimeInForce = None
+    LimitOrderRequest = None
+    MarketOrderRequest = None
+else:
+    AlpacaREST = _ImportedAlpacaREST
+    OrderSide = _ImportedOrderSide
+    TimeInForce = _ImportedTimeInForce
+    LimitOrderRequest = _ImportedLimitOrderRequest
+    MarketOrderRequest = _ImportedMarketOrderRequest
 
 
 def _ensure_request_models():

@@ -22,13 +22,15 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 
 try:  # pragma: no cover - Alpaca SDK optional in tests
-    from alpaca.common.exceptions import APIError
+    from alpaca.common.exceptions import APIError as _ImportedAPIError
 except Exception:  # ImportError
 
     class _FallbackAPIError(Exception):
         """Fallback when Alpaca SDK is unavailable."""
 
-    APIError = _FallbackAPIError
+    APIError: type[Exception] = _FallbackAPIError
+else:
+    APIError = _ImportedAPIError
 
 
 from ai_trading.logging.emit_once import emit_once

@@ -18,12 +18,14 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
     pd = load_pandas()
 
 try:  # pragma: no cover - alpaca may be missing in tests
-    from alpaca.common.exceptions import APIError
+    from alpaca.common.exceptions import APIError as _ImportedAPIError
 except Exception:  # ImportError
     class _FallbackAPIError(Exception):
         """Fallback APIError when alpaca package is absent."""
 
-    APIError = _FallbackAPIError
+    APIError: type[Exception] = _FallbackAPIError
+else:
+    APIError = _ImportedAPIError
 
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout, clamp_request_timeout

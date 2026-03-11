@@ -22,19 +22,28 @@ from ai_trading.data.fetch import normalize_ohlcv_columns
 from ai_trading.utils.pandas_facade import DataFrame as PDDataFrame
 
 try:
-    from alpaca.common.exceptions import APIError
+    from alpaca.common.exceptions import APIError as _ImportedAPIError
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
 
     class _FallbackAPIError(Exception):
         pass
 
-    APIError = _FallbackAPIError
+    APIError: type[Exception] = _FallbackAPIError
+else:
+    APIError = _ImportedAPIError
 
 
 try:
-    from alpaca.trading.client import TradingClient
+    from alpaca.trading.client import TradingClient as _ImportedTradingClient
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
-    TradingClient = object  # type: ignore[assignment]
+
+    class _FallbackTradingClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args, kwargs
+
+    TradingClient: type[Any] = _FallbackTradingClient
+else:
+    TradingClient = _ImportedTradingClient
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
@@ -151,9 +160,16 @@ def _calculate_position_size(
 
 
 try:
-    from alpaca.data.historical.stock import StockHistoricalDataClient
+    from alpaca.data.historical.stock import StockHistoricalDataClient as _ImportedStockHistoricalDataClient
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
-    StockHistoricalDataClient = object  # type: ignore[assignment]
+
+    class _FallbackStockHistoricalDataClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            _ = args, kwargs
+
+    StockHistoricalDataClient: type[Any] = _FallbackStockHistoricalDataClient
+else:
+    StockHistoricalDataClient = _ImportedStockHistoricalDataClient
 
 
 def _safe_call(fn, *a, **k):
