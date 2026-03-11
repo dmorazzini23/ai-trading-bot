@@ -155,6 +155,28 @@ def write_run_manifest(
     )
     target = _resolve_manifest_path(cfg, path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    logger.info("RUN_MANIFEST_WRITTEN", extra={"path": str(target)})
+    serialized = json.dumps(manifest, sort_keys=True)
+    wrote_mirror = False
+    mirror_path: str | None = None
+    if target.suffix.lower() == ".jsonl":
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.write("\n")
+        latest_json_path = target.with_suffix("")
+        if latest_json_path.suffix.lower() != ".json":
+            latest_json_path = target.with_suffix(".json")
+        latest_json_path.write_text(serialized, encoding="utf-8")
+        wrote_mirror = True
+        mirror_path = str(latest_json_path)
+    else:
+        target.write_text(serialized, encoding="utf-8")
+    logger.info(
+        "RUN_MANIFEST_WRITTEN",
+        extra={
+            "path": str(target),
+            "mode": "append_jsonl" if target.suffix.lower() == ".jsonl" else "write_json",
+            "mirror_path": mirror_path,
+            "mirror_written": wrote_mirror,
+        },
+    )
     return target

@@ -40,6 +40,7 @@ class ReplayEventLoop:
         max_symbol_notional: float | None = None,
         max_gross_notional: float | None = None,
         initial_positions: Mapping[str, float] | None = None,
+        clip_intents_to_caps: bool | None = None,
     ) -> None:
         replay_seed = int(seed if seed is not None else get_env("REPLAY_SEED", "42", cast=int))
         self.strategy = strategy
@@ -79,6 +80,11 @@ class ReplayEventLoop:
             if max_gross_notional is not None
             else get_env("GLOBAL_MAX_GROSS_DOLLARS", "150000", cast=float)
         )
+        if clip_intents_to_caps is None:
+            clip_intents_to_caps = bool(
+                get_env("AI_TRADING_REPLAY_CLIP_INTENTS_TO_CAPS", True, cast=bool)
+            )
+        self.clip_intents_to_caps = bool(clip_intents_to_caps)
         self._seen_intent_keys: set[str] = set()
         self._positions: dict[str, float] = {}
         if isinstance(initial_positions, Mapping):
@@ -102,6 +108,7 @@ class ReplayEventLoop:
         intents: list[dict[str, Any]] = []
         orders: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
+        cap_adjustments: list[dict[str, Any]] = []
         violations: list[ReplayInvariantViolation] = []
 
         for bar in ordered:
@@ -139,6 +146,19 @@ class ReplayEventLoop:
             qty = float(proposal.get("qty", 0.0) or 0.0)
             if qty <= 0:
                 continue
+            if self.clip_intents_to_caps:
+                clipped_qty, adjustment = self._clip_qty_to_symbol_cap(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    close=close,
+                )
+                if adjustment is not None:
+                    adjustment["ts"] = ts.isoformat()
+                    cap_adjustments.append(adjustment)
+                qty = clipped_qty
+                if qty <= 0:
+                    continue
             intent_key = str(
                 proposal.get(
                     "intent_key",
@@ -229,8 +249,61 @@ class ReplayEventLoop:
                 }
                 for violation in violations
             ],
+            "cap_adjustments": cap_adjustments,
             "positions": dict(self._positions),
         }
+
+    def _clip_qty_to_symbol_cap(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: float,
+        close: float,
+    ) -> tuple[float, dict[str, Any] | None]:
+        if qty <= 0 or close <= 0 or self.max_symbol_notional <= 0:
+            return max(0.0, float(qty)), None
+        current_symbol_qty = float(self._positions.get(symbol, 0.0) or 0.0)
+        signed_qty = float(qty) if side == "buy" else -float(qty)
+        projected_symbol_qty = current_symbol_qty + signed_qty
+        current_symbol_notional = abs(current_symbol_qty * close)
+        projected_symbol_notional = abs(projected_symbol_qty * close)
+        if projected_symbol_notional <= self.max_symbol_notional + 1e-9:
+            return float(qty), None
+        if projected_symbol_notional <= current_symbol_notional + 1e-9:
+            return float(qty), None
+
+        max_abs_qty = max(0.0, float(self.max_symbol_notional) / float(close))
+        if abs(current_symbol_qty) > max_abs_qty + 1e-9:
+            adjusted_qty = 0.0
+        else:
+            projected_sign = 1.0 if projected_symbol_qty > 0 else -1.0
+            target_qty = projected_sign * max_abs_qty
+            adjusted_signed_delta = target_qty - current_symbol_qty
+            if side == "buy":
+                adjusted_qty = max(0.0, min(float(qty), adjusted_signed_delta))
+            else:
+                adjusted_qty = max(0.0, min(float(qty), -adjusted_signed_delta))
+
+        adjusted_signed = adjusted_qty if side == "buy" else -adjusted_qty
+        adjusted_projected_qty = current_symbol_qty + adjusted_signed
+        adjustment = {
+            "symbol": symbol,
+            "side": side,
+            "requested_qty": float(qty),
+            "adjusted_qty": float(adjusted_qty),
+            "close": float(close),
+            "max_symbol_notional": float(self.max_symbol_notional),
+            "current_symbol_qty": float(current_symbol_qty),
+            "current_symbol_notional": float(current_symbol_notional),
+            "requested_projected_symbol_qty": float(projected_symbol_qty),
+            "requested_projected_symbol_notional": float(projected_symbol_notional),
+            "adjusted_projected_symbol_qty": float(adjusted_projected_qty),
+            "adjusted_projected_symbol_notional": float(
+                abs(adjusted_projected_qty * close)
+            ),
+        }
+        return float(adjusted_qty), adjustment
 
     def _notional_limit_violation(
         self,
@@ -246,7 +319,7 @@ class ReplayEventLoop:
         current_symbol_notional = abs(current_symbol_qty * close)
         projected_symbol_notional = abs(projected_symbol_qty * close)
         if (
-            projected_symbol_notional > self.max_symbol_notional
+            projected_symbol_notional > (self.max_symbol_notional + 1e-9)
             and projected_symbol_notional > (current_symbol_notional + 1e-9)
         ):
             return {
@@ -270,7 +343,7 @@ class ReplayEventLoop:
                 px = self._last_price_by_symbol.get(sym, close)
             gross_before += abs(position_qty * px)
         gross_after = gross_before - current_symbol_notional + projected_symbol_notional
-        if gross_after > self.max_gross_notional and gross_after > (gross_before + 1e-9):
+        if gross_after > (self.max_gross_notional + 1e-9) and gross_after > (gross_before + 1e-9):
             return {
                 "dimension": "gross",
                 "symbol": symbol,

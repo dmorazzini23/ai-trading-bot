@@ -13270,7 +13270,11 @@ def get_daily_df(
             raise DataFetchError("DATA_FETCHER_UNAVAILABLE") from exc
         except RuntimeError as exc:
             message = str(exc).lower()
-            if "_get_rest unavailable" in message or "stockhistoricaldataclient" in message:
+            if (
+                "_get_rest unavailable" in message
+                or "stockhistoricaldataclient" in message
+                or "external network blocked in tests" in message
+            ):
                 raise DataFetchError("DATA_FETCHER_UNAVAILABLE") from exc
             raise
 

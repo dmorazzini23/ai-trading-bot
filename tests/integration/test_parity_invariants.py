@@ -43,6 +43,7 @@ def test_replay_parity_invariant_blocks_position_cap_breaches() -> None:
         seed=99,
         max_symbol_notional=1000.0,
         max_gross_notional=1000.0,
+        clip_intents_to_caps=False,
     ).run(bars)
     codes = {item["code"] for item in result["violations"]}
     assert "position_cap_exceeded" in codes
@@ -51,6 +52,38 @@ def test_replay_parity_invariant_blocks_position_cap_breaches() -> None:
     assert violation["dimension"] == "symbol"
     assert violation["symbol"] == "MSFT"
     assert float(violation["projected_symbol_notional"]) > float(violation["max_symbol_notional"])
+
+
+def test_replay_clips_symbol_cap_breaches_when_enabled() -> None:
+    bars = [
+        {"symbol": "MSFT", "ts": "2026-02-18T15:20:00Z", "close": 410.0},
+    ]
+
+    def strategy(bar):
+        return {
+            "symbol": bar["symbol"],
+            "side": "buy",
+            "qty": 10,
+            "price": bar["close"],
+            "intent_key": "cap-clip-1",
+        }
+
+    result = ReplayEventLoop(
+        strategy=strategy,
+        seed=99,
+        max_symbol_notional=1000.0,
+        max_gross_notional=1000.0,
+        clip_intents_to_caps=True,
+    ).run(bars)
+    codes = {item["code"] for item in result["violations"]}
+    assert "position_cap_exceeded" not in codes
+    assert result["orders"] != []
+    assert len(result["cap_adjustments"]) == 1
+    adjustment = result["cap_adjustments"][0]
+    assert float(adjustment["adjusted_qty"]) < float(adjustment["requested_qty"])
+    assert float(adjustment["adjusted_projected_symbol_notional"]) <= float(
+        adjustment["max_symbol_notional"]
+    ) + 1e-6
 
 
 def test_replay_gross_notional_uses_symbol_specific_prices() -> None:

@@ -9371,6 +9371,7 @@ class BotState:
     last_execution_report_date: date | None = None
     last_tca_cost_calibration_date: date | None = None
     last_learning_run_date: date | None = None
+    last_runtime_truth_report_date: date | None = None
     last_replay_run_date: date | None = None
     last_walk_forward_run_date: date | None = None
     last_allocation_update_date: date | None = None
@@ -17565,6 +17566,78 @@ def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) 
             headroom_dollars,
         )
     return max(0, max_qty if max_qty < qty else qty)
+
+
+def _clip_delta_to_symbol_notional_cap(
+    *,
+    symbol: str,
+    current_shares: int,
+    delta_shares: int,
+    price: float,
+    max_symbol_notional: float,
+) -> tuple[int, dict[str, Any] | None]:
+    """Clamp delta shares so projected symbol notional does not worsen beyond cap.
+
+    Returns ``(adjusted_delta, details)``. ``details`` is ``None`` when no
+    adjustment is required.
+    """
+
+    if int(delta_shares) == 0:
+        return 0, None
+    if price <= 0 or max_symbol_notional <= 0:
+        return int(delta_shares), None
+
+    current_qty = int(current_shares)
+    requested_delta = int(delta_shares)
+    projected_qty = current_qty + requested_delta
+    current_notional = abs(float(current_qty) * float(price))
+    projected_notional = abs(float(projected_qty) * float(price))
+    max_notional = float(max_symbol_notional)
+
+    # Within cap or actively de-risking an already over-cap position.
+    if projected_notional <= max_notional + 1e-9:
+        return requested_delta, None
+    if projected_notional <= current_notional + 1e-9:
+        return requested_delta, None
+
+    max_abs_shares = int(math.floor(max_notional / float(price) + 1e-9))
+    max_abs_shares = max(0, max_abs_shares)
+    if max_abs_shares <= 0:
+        adjusted_delta = 0
+    elif abs(current_qty) > max_abs_shares:
+        # Already above cap: allow only de-risking moves.
+        adjusted_delta = 0
+    else:
+        projected_sign = 1 if projected_qty > 0 else -1
+        clamped_target_qty = projected_sign * max_abs_shares
+        adjusted_delta = clamped_target_qty - current_qty
+        # Never flip direction relative to the original intent.
+        if requested_delta > 0 and adjusted_delta < 0:
+            adjusted_delta = 0
+        if requested_delta < 0 and adjusted_delta > 0:
+            adjusted_delta = 0
+        if abs(adjusted_delta) > abs(requested_delta):
+            adjusted_delta = requested_delta
+
+    if adjusted_delta == requested_delta:
+        return requested_delta, None
+
+    adjusted_projected_qty = current_qty + int(adjusted_delta)
+    adjusted_projected_notional = abs(float(adjusted_projected_qty) * float(price))
+    details = {
+        "symbol": str(symbol or "").upper(),
+        "price": float(price),
+        "max_symbol_notional": max_notional,
+        "current_shares": int(current_qty),
+        "current_notional": float(current_notional),
+        "requested_delta_shares": int(requested_delta),
+        "requested_projected_shares": int(projected_qty),
+        "requested_projected_notional": float(projected_notional),
+        "adjusted_delta_shares": int(adjusted_delta),
+        "adjusted_projected_shares": int(adjusted_projected_qty),
+        "adjusted_projected_notional": float(adjusted_projected_notional),
+    }
+    return int(adjusted_delta), details
 
 
 # --------------------------------------------------------------------------- #
@@ -26994,6 +27067,90 @@ def check_disaster_halt() -> None:
 # retrain_meta_learner is imported above if available
 
 
+def _resolve_meta_retrain_trade_log_path() -> str | None:
+    """Resolve meta-learning retrain source with optional canonical enforcement."""
+
+    enforce_fill_derived = bool(
+        get_env("AI_TRADING_META_CANONICAL_FILL_DERIVED_ONLY", False, cast=bool)
+    )
+    if not enforce_fill_derived:
+        return str(TRADE_LOG_FILE)
+
+    source_raw = str(
+        get_env(
+            "AI_TRADING_META_FILL_DERIVED_CSV_PATH",
+            "runtime/meta_learning_fill_derived.csv",
+            cast=str,
+        )
+        or "runtime/meta_learning_fill_derived.csv"
+    ).strip()
+    source_path = resolve_runtime_artifact_path(
+        source_raw,
+        default_relative="runtime/meta_learning_fill_derived.csv",
+    )
+    require_existing = bool(
+        get_env("AI_TRADING_META_CANONICAL_SOURCE_REQUIRE_EXISTING", True, cast=bool)
+    )
+    if require_existing and not source_path.exists():
+        logger.error(
+            "META_RETRAIN_SOURCE_MISSING",
+            extra={
+                "source_mode": "canonical_fill_derived",
+                "trade_log_path": str(source_path),
+                "requested_path": source_raw,
+            },
+        )
+        return None
+    logger.info(
+        "META_RETRAIN_SOURCE_SELECTED",
+        extra={
+            "source_mode": "canonical_fill_derived",
+            "trade_log_path": str(source_path),
+        },
+    )
+    return str(source_path)
+
+
+def _learning_readiness_fail_hard_enabled() -> bool:
+    return bool(get_env("AI_TRADING_LEARNING_READINESS_FAIL_HARD", False, cast=bool))
+
+
+def _mark_learning_readiness_block(
+    state: BotState,
+    *,
+    reason: str,
+    details: Mapping[str, Any],
+) -> None:
+    payload = {"reason": reason, **dict(details)}
+    logger.warning("LEARNING_READINESS_BLOCKED", extra=payload)
+    try:
+        from ai_trading.monitoring.alerts import emit_runtime_alert
+
+        emit_runtime_alert(
+            "ALERT_LEARNING_READINESS_BLOCKED",
+            severity="warning",
+            details=payload,
+        )
+    except Exception:
+        logger.debug("LEARNING_READINESS_ALERT_EMIT_FAILED", exc_info=True)
+    if _learning_readiness_fail_hard_enabled():
+        state.halt_trading = True
+        state.halt_reason = reason
+
+
+def _resolve_runtime_sleeve_whitelist() -> set[str]:
+    raw = str(get_env("AI_TRADING_RUNTIME_SLEEVE_WHITELIST", "") or "").strip()
+    if not raw:
+        return set()
+    parsed = [token.strip() for token in raw.split(",") if token and token.strip()]
+    if not parsed:
+        return set()
+    max_active = max(0, int(get_env("AI_TRADING_RUNTIME_SLEEVE_MAX_ACTIVE", 0, cast=int)))
+    if max_active > 0:
+        parsed = parsed[:max_active]
+    return {value for value in parsed}
+
+
 def load_or_retrain_daily(ctx: BotContext) -> Any:
     """
     1. Check RETRAIN_MARKER_FILE for last retrain date (YYYY-MM-DD).
@@ -27097,10 +27254,15 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                                 retrain_meta_learner,  # AI-AGENT-REF: lazy import
                             )
 
-                            success = retrain_meta_learner(
-                                trade_log_path=TRADE_LOG_FILE,
-                                model_path=MODEL_PATH or "meta_model.pkl",
-                            )
+                            meta_trade_log = _resolve_meta_retrain_trade_log_path()
+                            if not meta_trade_log:
+                                success = False
+                                logger.warning("META_RETRAIN_SKIPPED_SOURCE_UNAVAILABLE")
+                            else:
+                                success = retrain_meta_learner(
+                                    trade_log_path=meta_trade_log,
+                                    model_path=MODEL_PATH or "meta_model.pkl",
+                                )
                         else:
                             logger.info(
                                 "[retrain_meta_learner] Outside market hours; skipping"
@@ -33785,6 +33947,15 @@ def _run_post_trade_learning_update(
     records = _read_recent_tca_records(tca_path, max_records=max(min_samples, window_trades))
     symbol_metrics = _build_symbol_learning_metrics(records, min_samples=min_samples)
     if not symbol_metrics:
+        _mark_learning_readiness_block(
+            state,
+            reason="POST_TRADE_LEARNING_INSUFFICIENT_SAMPLES",
+            details={
+                "records": int(len(records)),
+                "min_samples": int(min_samples),
+                "source_path": str(tca_path),
+            },
+        )
         logger.info(
             "POST_TRADE_LEARNING_SKIPPED",
             extra={"reason": "insufficient_samples", "records": len(records)},
@@ -33926,11 +34097,29 @@ def _run_tca_cost_calibration(
             lookback_days=lookback_days,
         )
     except Exception as exc:
+        _mark_learning_readiness_block(
+            state,
+            reason="TCA_COST_CALIBRATION_FAILED",
+            details={"error": str(exc), "model_path": str(model_path)},
+        )
         logger.warning(
             "TCA_COST_CALIBRATION_FAILED",
             extra={"error": str(exc), "model_path": model_path},
         )
     else:
+        calibrated = bool(result.get("calibrated", False))
+        if not calibrated:
+            _mark_learning_readiness_block(
+                state,
+                reason="TCA_COST_CALIBRATION_INSUFFICIENT_SAMPLES",
+                details={
+                    "records": int(result.get("records", 0) or 0),
+                    "tca_records": int(result.get("tca_records", 0) or 0),
+                    "slippage_records": int(result.get("slippage_records", 0) or 0),
+                    "model_path": str(result.get("model_path", model_path)),
+                    "skip_reason": str(result.get("skipped_write_reason") or ""),
+                },
+            )
         logger.info(
             "TCA_COST_CALIBRATION_UPDATED",
             extra={
@@ -34444,8 +34633,14 @@ def _load_latest_replay_summary(output_dir: Path, *, before_path: Path) -> dict[
     return None
 
 
-def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) -> None:
-    if not _replay_schedule_due(state, now=now, market_open_now=market_open_now):
+def _run_replay_governance(
+    state: Any,
+    *,
+    now: datetime,
+    market_open_now: bool,
+    force: bool = False,
+) -> None:
+    if not force and not _replay_schedule_due(state, now=now, market_open_now=market_open_now):
         return
     from ai_trading.replay.event_loop import ReplayEventLoop
 
@@ -34614,6 +34809,7 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
     out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
     replay_summary = _replay_summary_metrics(first)
     replay_violations = list(first.get("violations", []))
+    replay_cap_adjustments = list(first.get("cap_adjustments", []))
     violation_counts: Counter[str] = Counter(
         str(item.get("code", "unknown"))
         for item in replay_violations
@@ -34680,6 +34876,8 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
                         ]
                     )
                 ),
+                "cap_adjustments": replay_cap_adjustments,
+                "cap_adjustments_count": int(len(replay_cap_adjustments)),
                 "violations": replay_violations,
                 "violations_by_code": dict(
                     sorted(
@@ -34708,6 +34906,7 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
             "path": str(out_path),
             "source_path": data_dir,
             "violations": len(replay_violations),
+            "cap_adjustments_count": int(len(replay_cap_adjustments)),
             "violations_by_code": dict(violation_counts),
             "replay_summary": replay_summary,
             "counterfactual_passed": bool((counterfactual or {}).get("passed", True)),
@@ -34832,6 +35031,148 @@ def _run_walk_forward_governance(state: BotState, *, now: datetime, market_open_
     out_path.write_text(json.dumps(result, sort_keys=True, default=str), encoding="utf-8")
     logger.info("WALK_FORWARD_GOVERNANCE_OK", extra={"path": str(out_path), "folds": result.get("fold_count", 0)})
     state.last_walk_forward_run_date = now.date()
+
+
+def _runtime_truth_report_schedule_due(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> bool:
+    if not bool(get_env("AI_TRADING_RUNTIME_TRUTH_REPORT_ENABLED", True, cast=bool)):
+        return False
+    if market_open_now:
+        return False
+    return bool(getattr(state, "last_runtime_truth_report_date", None) != now.date())
+
+
+def _runtime_truth_report_thresholds() -> dict[str, Any]:
+    return {
+        "min_closed_trades": int(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
+        ),
+        "min_profit_factor": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1, cast=float)
+        ),
+        "min_win_rate": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5, cast=float)
+        ),
+        "min_net_pnl": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_NET_PNL", 0.0, cast=float)
+        ),
+        "min_acceptance_rate": float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float)
+        ),
+        "min_expected_net_edge_bps": float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+                -50.0,
+                cast=float,
+            )
+        ),
+        "require_pnl_available": bool(
+            get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", True, cast=bool)
+        ),
+        "require_gate_valid": bool(
+            get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID", False, cast=bool)
+        ),
+    }
+
+
+def _run_runtime_truth_report(
+    state: BotState,
+    *,
+    now: datetime,
+    market_open_now: bool,
+) -> None:
+    if not _runtime_truth_report_schedule_due(state, now=now, market_open_now=market_open_now):
+        return
+
+    trade_history_raw = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+            "runtime/tca_records.jsonl",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    gate_summary_raw = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+            "runtime/gate_effectiveness_summary.json",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    output_dir_raw = str(
+        get_env(
+            "AI_TRADING_RUNTIME_TRUTH_REPORT_DIR",
+            "runtime/reports",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    trade_history_path = resolve_runtime_artifact_path(
+        trade_history_raw or "runtime/tca_records.jsonl",
+        default_relative="runtime/tca_records.jsonl",
+    )
+    gate_summary_path = resolve_runtime_artifact_path(
+        gate_summary_raw or "runtime/gate_effectiveness_summary.json",
+        default_relative="runtime/gate_effectiveness_summary.json",
+    )
+    output_dir = resolve_runtime_artifact_path(
+        output_dir_raw or "runtime/reports",
+        default_relative="runtime/reports",
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / f"runtime_performance_{now.strftime('%Y%m%d')}.json"
+    latest_path = output_dir / "runtime_performance_latest.json"
+    thresholds = _runtime_truth_report_thresholds()
+
+    try:
+        from ai_trading.tools import runtime_performance_report as performance_report
+
+        report = performance_report.build_report(
+            trade_history_path=trade_history_path,
+            gate_summary_path=gate_summary_path,
+        )
+        go_no_go = performance_report.evaluate_go_no_go(
+            report,
+            thresholds=thresholds,
+        )
+        payload = {
+            "ts": now.isoformat(),
+            "date": now.date().isoformat(),
+            "paths": {
+                "trade_history": str(trade_history_path),
+                "gate_summary": str(gate_summary_path),
+            },
+            "report": report,
+            "go_no_go": go_no_go,
+        }
+        serialized = json.dumps(payload, sort_keys=True, default=str)
+        report_path.write_text(serialized, encoding="utf-8")
+        latest_path.write_text(serialized, encoding="utf-8")
+        state.last_runtime_truth_report_date = now.date()
+        logger.info(
+            "RUNTIME_TRUTH_REPORT_WRITTEN",
+            extra={
+                "path": str(report_path),
+                "latest_path": str(latest_path),
+                "gate_passed": bool(go_no_go.get("gate_passed")),
+                "failed_checks": list(go_no_go.get("failed_checks", [])),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "RUNTIME_TRUTH_REPORT_FAILED",
+            extra={
+                "error": str(exc),
+                "report_path": str(report_path),
+                "trade_history_path": str(trade_history_path),
+                "gate_summary_path": str(gate_summary_path),
+            },
+        )
 
 
 def _load_quarantine_manager(state: BotState) -> Any:
@@ -35644,6 +35985,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     logger.warning("EXECUTION_REPORT_FAILED", extra={"error": str(exc)})
                 else:
                     state.last_execution_report_date = now.date()
+        _run_runtime_truth_report(state, now=now, market_open_now=market_open_now)
         base_snapshot = _decision_record_config_snapshot(
             cfg=cfg,
             state=state,
@@ -35728,8 +36070,26 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         return
 
     sleeves = [s for s in build_sleeve_configs(cfg) if s.enabled]
+    sleeve_whitelist = _resolve_runtime_sleeve_whitelist()
+    if sleeve_whitelist:
+        sleeves_before = list(sleeves)
+        sleeves = [s for s in sleeves if str(getattr(s, "name", "") or "") in sleeve_whitelist]
+        logger.info(
+            "RUNTIME_SLEEVE_WHITELIST_APPLIED",
+            extra={
+                "requested": sorted(sleeve_whitelist),
+                "before": [str(getattr(s, "name", "") or "") for s in sleeves_before],
+                "after": [str(getattr(s, "name", "") or "") for s in sleeves],
+            },
+        )
     if not sleeves:
-        logger.warning("HORIZONS_EMPTY")
+        if sleeve_whitelist:
+            logger.warning(
+                "RUNTIME_SLEEVE_WHITELIST_EMPTY",
+                extra={"requested": sorted(sleeve_whitelist)},
+            )
+        else:
+            logger.warning("HORIZONS_EMPTY")
         return
     sleeve_configs_map = {str(s.name): s for s in sleeves}
     sleeve_snapshot = {
@@ -37238,6 +37598,47 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     "reason": reversal_clamp_reason,
                 },
             )
+
+        try:
+            max_symbol_notional = float(
+                getattr(
+                    cfg,
+                    "global_max_symbol_dollars",
+                    get_env("GLOBAL_MAX_SYMBOL_DOLLARS", 25000.0, cast=float),
+                )
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            max_symbol_notional = float(
+                get_env("GLOBAL_MAX_SYMBOL_DOLLARS", 25000.0, cast=float)
+            )
+        delta_shares_capped, symbol_cap_details = _clip_delta_to_symbol_notional_cap(
+            symbol=symbol,
+            current_shares=int(current_shares),
+            delta_shares=int(delta_shares),
+            price=float(price),
+            max_symbol_notional=max_symbol_notional,
+        )
+        if symbol_cap_details is not None:
+            if int(delta_shares_capped) == 0:
+                gates.append("RISK_CAP_SYMBOL")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    metrics={"symbol_cap": symbol_cap_details},
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
+            delta_shares = int(delta_shares_capped)
+            net_target.target_shares = current_shares + delta_shares
+            net_target.target_dollars = net_target.target_shares * price
+            gates.append("RISK_CAP_SYMBOL_CLIP")
+            symbol_snapshot["symbol_cap_clip"] = symbol_cap_details
+            logger.info("SYMBOL_NOTIONAL_CAP_CLIP", extra=symbol_cap_details)
 
         min_qty = int(getattr(cfg, "execution_min_qty", 1))
         min_notional = float(getattr(cfg, "execution_min_notional", 1.0))

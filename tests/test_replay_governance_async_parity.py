@@ -52,6 +52,7 @@ def test_replay_governance_uses_async_parity_path(
     assert payload["simulate_fills"] is True
     assert payload["seed"] == 123
     assert payload["orders_submitted"] >= 1
+    assert "cap_adjustments_count" in payload
     assert "violations" in payload
     assert state.last_replay_run_date == now.date()
 
@@ -134,3 +135,37 @@ def test_replay_governance_resolves_runtime_paths_against_data_dir(
     assert out_path.exists()
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["source_path"] == str(data_root / "runtime" / "replay_data")
+
+
+def test_replay_governance_force_bypasses_schedule_gate(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        bot_engine,
+        "_load_replay_bars",
+        lambda **_kwargs: [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "aapl-1",
+            }
+        ],
+    )
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_REPLAY_SIMULATE_FILLS", "1")
+    monkeypatch.setenv("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", "0")
+
+    state = _State()
+    bot_engine._run_replay_governance(state, now=now, market_open_now=False, force=True)
+
+    out_path = tmp_path / "replay_hash_20260218.json"
+    assert out_path.exists()
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["rows"] == 1
+    assert state.last_replay_run_date == now.date()
