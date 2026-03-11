@@ -76,3 +76,54 @@ def test_gate_effectiveness_analytics_excludes_global_halt_noise_and_writes_attr
     assert summary["symbol_attribution"]["AAPL"]["count"] == 1.0
     assert summary["regime_attribution"]["THIN"]["accepted_records"] == 1.0
     assert summary["gate_attribution"]["OK_TRADE"]["edge_proxy_bps_sum"] == 7.5
+
+
+def test_gate_effectiveness_analytics_excludes_warmup_records(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    log_path = tmp_path / "gate_effectiveness.jsonl"
+    summary_path = tmp_path / "gate_effectiveness_summary.json"
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_ANALYTICS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_LOG_PATH", str(log_path))
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_SUMMARY_PATH", str(summary_path))
+    monkeypatch.setenv("AI_TRADING_GATE_EFFECTIVENESS_EXCLUDE_WARMUP_RECORDS", "1")
+
+    bot_engine._update_gate_effectiveness_analytics(
+        decision_gate_counts={"WARMUP_DATA_ONLY": 2, "OK_TRADE": 1},
+        decision_records_total=3,
+        accepted_decisions=1,
+        decision_observations=[
+            {
+                "symbol": "AAPL",
+                "gates": ["WARMUP_DATA_ONLY"],
+                "accepted": False,
+                "regime": "UNKNOWN",
+                "expected_net_edge_bps": 0.0,
+                "edge_proxy_bps": 0.0,
+            },
+            {
+                "symbol": "MSFT",
+                "gates": ["WARMUP_DATA_ONLY"],
+                "accepted": False,
+                "regime": "UNKNOWN",
+                "expected_net_edge_bps": 0.0,
+                "edge_proxy_bps": 0.0,
+            },
+            {
+                "symbol": "GOOG",
+                "gates": ["OK_TRADE"],
+                "accepted": True,
+                "regime": "NORMAL",
+                "expected_net_edge_bps": 5.0,
+                "edge_proxy_bps": 5.0,
+            },
+        ],
+    )
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["total_records"] == 1
+    assert summary["total_accepted_records"] == 1
+    assert summary["excluded_records_total"] == 2
+    assert summary["gate_totals"]["OK_TRADE"] == 1
+    assert summary["excluded_gate_totals"]["WARMUP_DATA_ONLY"] == 2

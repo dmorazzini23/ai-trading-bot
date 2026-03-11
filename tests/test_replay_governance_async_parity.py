@@ -93,3 +93,44 @@ def test_replay_governance_enforced_invariants_raise(
         assert "REPLAY_GOVERNANCE_INVARIANTS_FAILED" in str(exc)
     else:  # pragma: no cover - explicit safety
         raise AssertionError("Expected replay invariants to fail")
+
+
+def test_replay_governance_resolves_runtime_paths_against_data_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 2, 18, 23, 0, tzinfo=UTC)
+    data_root = tmp_path / "data-root"
+    data_root.mkdir(parents=True, exist_ok=True)
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(bot_engine, "_replay_schedule_due", lambda *_args, **_kwargs: True)
+
+    def _load_bars(**kwargs):
+        captured["path"] = str(kwargs.get("path", ""))
+        return [
+            {
+                "symbol": "AAPL",
+                "ts": "2026-02-18T22:00:00+00:00",
+                "close": 189.5,
+                "side": "buy",
+                "qty": 1,
+                "client_order_id": "aapl-1",
+            },
+        ]
+
+    monkeypatch.setattr(bot_engine, "_load_replay_bars", _load_bars)
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.setenv("AI_TRADING_REPLAY_DATA_DIR", "runtime/replay_data")
+    monkeypatch.setenv("AI_TRADING_REPLAY_OUTPUT_DIR", "runtime/replay_outputs")
+    monkeypatch.setenv("AI_TRADING_REPLAY_ENFORCE_OMS_GATES", "0")
+    monkeypatch.setenv("AI_TRADING_REPLAY_SIMULATE_FILLS", "1")
+
+    state = _State()
+    bot_engine._run_replay_governance(state, now=now, market_open_now=False)
+
+    assert captured["path"] == str(data_root / "runtime" / "replay_data")
+    out_path = data_root / "runtime" / "replay_outputs" / "replay_hash_20260218.json"
+    assert out_path.exists()
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["source_path"] == str(data_root / "runtime" / "replay_data")

@@ -33214,6 +33214,15 @@ def _gate_effectiveness_exclude_global_halts() -> bool:
     return bool(get_env("AI_TRADING_GATE_EFFECTIVENESS_EXCLUDE_GLOBAL_HALTS", True, cast=bool))
 
 
+def _gate_effectiveness_exclude_warmup_records() -> bool:
+    return bool(get_env("AI_TRADING_GATE_EFFECTIVENESS_EXCLUDE_WARMUP_RECORDS", True, cast=bool))
+
+
+def _gate_name_is_warmup_noise(gate_name: str) -> bool:
+    gate = str(gate_name or "").strip().upper()
+    return gate in {"WARMUP_DATA_ONLY", "WARMUP_DATA_ONLY_RETRY_BYPASS"}
+
+
 def _gate_name_is_halt_noise(gate_name: str) -> bool:
     gate = str(gate_name or "").strip().upper()
     if not gate:
@@ -33326,6 +33335,7 @@ def _update_gate_effectiveness_analytics(
     summary_path = _gate_effectiveness_summary_path()
     include_attribution = _gate_effectiveness_include_attribution()
     exclude_global_halts = _gate_effectiveness_exclude_global_halts()
+    exclude_warmup_records = _gate_effectiveness_exclude_warmup_records()
     records_total = int(max(0, decision_records_total))
     accepted_records = int(max(0, accepted_decisions))
     rejected_records = int(max(0, records_total - accepted_records))
@@ -33379,7 +33389,10 @@ def _update_gate_effectiveness_analytics(
                 and symbol == "ALL"
                 and any(_gate_name_is_halt_noise(gate) for gate in gates)
             )
-            if is_global_halt_noise:
+            is_warmup_noise = bool(
+                exclude_warmup_records and any(_gate_name_is_warmup_noise(gate) for gate in gates)
+            )
+            if is_global_halt_noise or is_warmup_noise:
                 excluded_records += 1
                 for gate in gates:
                     excluded_gate_counts[str(gate)] += 1
@@ -34246,6 +34259,112 @@ def _load_replay_bars(
     return filtered
 
 
+def _parse_replay_initial_positions_payload(payload: Any) -> dict[str, float]:
+    positions: dict[str, float] = {}
+    if not isinstance(payload, Mapping):
+        return positions
+    for raw_symbol, raw_qty in payload.items():
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            continue
+        try:
+            qty = float(raw_qty or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(qty) <= 1e-9:
+            continue
+        positions[symbol] = qty
+    return positions
+
+
+def _replay_initial_positions_from_env() -> dict[str, float]:
+    path_raw = str(get_env("AI_TRADING_REPLAY_INITIAL_POSITIONS_PATH", "") or "").strip()
+    if path_raw:
+        path = resolve_runtime_artifact_path(
+            path_raw,
+            default_relative=path_raw,
+        )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return _parse_replay_initial_positions_payload(payload)
+        except Exception as exc:
+            logger.warning(
+                "REPLAY_INITIAL_POSITIONS_PATH_INVALID",
+                extra={"path": str(path), "error": str(exc)},
+            )
+
+    raw = str(get_env("AI_TRADING_REPLAY_INITIAL_POSITIONS_JSON", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except Exception as exc:
+        logger.warning(
+            "REPLAY_INITIAL_POSITIONS_JSON_INVALID",
+            extra={"error": str(exc)},
+        )
+        return {}
+    return _parse_replay_initial_positions_payload(payload)
+
+
+def _replay_initial_positions_from_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    position_keys = (
+        "position_before_shares",
+        "position_before_qty",
+        "position_before",
+        "starting_position",
+        "position_start",
+        "position_qty_start",
+    )
+    positions: dict[str, float] = {}
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            _parse_iso_timestamp(row.get("ts") or row.get("timestamp"))
+            or datetime.min.replace(tzinfo=UTC)
+        ),
+    )
+    for row in ordered_rows:
+        symbol = str(row.get("symbol", "") or "").strip().upper()
+        if not symbol or symbol in positions:
+            continue
+        for key in position_keys:
+            try:
+                qty = float(row.get(key, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if abs(qty) <= 1e-9:
+                continue
+            positions[symbol] = qty
+            break
+    return positions
+
+
+def _replay_non_flat_start_symbols(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    seeded_symbols: set[str],
+) -> set[str]:
+    non_flat_symbols: set[str] = set()
+    seen: set[str] = set()
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            _parse_iso_timestamp(row.get("ts") or row.get("timestamp"))
+            or datetime.min.replace(tzinfo=UTC)
+        ),
+    )
+    for row in ordered_rows:
+        symbol = str(row.get("symbol", "") or "").strip().upper()
+        if not symbol or symbol in seen or symbol in seeded_symbols:
+            continue
+        seen.add(symbol)
+        side = str(row.get("side", "buy") or "").strip().lower()
+        if side == "sell":
+            non_flat_symbols.add(symbol)
+    return non_flat_symbols
+
+
 def _replay_summary_metrics(result: Mapping[str, Any]) -> dict[str, Any]:
     """Build replay quality metrics for counterfactual non-regression checks."""
 
@@ -34345,7 +34464,12 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
     end_raw = str(get_env("AI_TRADING_REPLAY_END_DATE", "") or "").strip()
     start_date = date.fromisoformat(start_raw) if start_raw else None
     end_date = date.fromisoformat(end_raw) if end_raw else None
-    data_dir = str(get_env("AI_TRADING_REPLAY_DATA_DIR", "runtime/replay_data"))
+    data_dir_raw = str(get_env("AI_TRADING_REPLAY_DATA_DIR", "runtime/replay_data") or "").strip()
+    data_dir_path = resolve_runtime_artifact_path(
+        data_dir_raw,
+        default_relative="runtime/replay_data",
+    )
+    data_dir = str(data_dir_path)
     bars = _load_replay_bars(
         path=data_dir,
         symbols=symbols,
@@ -34401,6 +34525,30 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
                 "client_order_id": str(row.get("client_order_id", "")),
             }
         )
+    if not normalized_bars:
+        logger.warning(
+            "REPLAY_GOVERNANCE_SKIPPED",
+            extra={"reason": "no_valid_bars", "path": data_dir},
+        )
+        state.last_replay_run_date = now.date()
+        return
+
+    initial_positions = _replay_initial_positions_from_env()
+    if not initial_positions:
+        initial_positions = _replay_initial_positions_from_rows(normalized_bars)
+    require_flat_start = bool(get_env("AI_TRADING_REPLAY_REQUIRE_FLAT_START", False, cast=bool))
+    if require_flat_start:
+        non_flat_symbols = sorted(
+            _replay_non_flat_start_symbols(
+                normalized_bars,
+                seeded_symbols=set(initial_positions.keys()),
+            )
+        )
+        if non_flat_symbols:
+            raise RuntimeError(
+                "REPLAY_INPUT_NOT_FLAT_START:"
+                + ",".join(non_flat_symbols[:10])
+            )
 
     def _strategy(bar: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if not simulate_fills:
@@ -34437,12 +34585,14 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
         seed=replay_seed,
         max_symbol_notional=max_symbol_notional,
         max_gross_notional=max_gross_notional,
+        initial_positions=initial_positions,
     ).run(normalized_bars)
     second = ReplayEventLoop(
         strategy=_strategy,
         seed=replay_seed,
         max_symbol_notional=max_symbol_notional,
         max_gross_notional=max_gross_notional,
+        initial_positions=initial_positions,
     ).run(normalized_bars)
     first_hash = hashlib.sha256(
         json.dumps(first, sort_keys=True, default=str).encode("utf-8")
@@ -34452,10 +34602,23 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
     ).hexdigest()
     if first_hash != second_hash:
         raise RuntimeError("REPLAY_DETERMINISM_FAILED")
-    output_dir = Path(str(get_env("AI_TRADING_REPLAY_OUTPUT_DIR", "runtime/replay_outputs")))
+    output_dir_raw = str(
+        get_env("AI_TRADING_REPLAY_OUTPUT_DIR", "runtime/replay_outputs", cast=str)
+        or ""
+    ).strip()
+    output_dir = resolve_runtime_artifact_path(
+        output_dir_raw,
+        default_relative="runtime/replay_outputs",
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"replay_hash_{now.strftime('%Y%m%d')}.json"
     replay_summary = _replay_summary_metrics(first)
+    replay_violations = list(first.get("violations", []))
+    violation_counts: Counter[str] = Counter(
+        str(item.get("code", "unknown"))
+        for item in replay_violations
+        if isinstance(item, Mapping)
+    )
     baseline_summary = _load_latest_replay_summary(output_dir, before_path=out_path)
     governance = getattr(getattr(state, "_effective_policy", None), "governance", None)
     min_samples = int(get_env("AI_TRADING_POLICY_REPLAY_MIN_SAMPLES", 100, cast=int))
@@ -34501,6 +34664,7 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
                 "ts": now.isoformat(),
                 "hash": first_hash,
                 "symbols": list(active_symbols),
+                "source_path": data_dir,
                 "rows": len(normalized_bars),
                 "seed": replay_seed,
                 "simulate_fills": simulate_fills,
@@ -34516,7 +34680,17 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
                         ]
                     )
                 ),
-                "violations": first.get("violations", []),
+                "violations": replay_violations,
+                "violations_by_code": dict(
+                    sorted(
+                        {
+                            code: int(count)
+                            for code, count in violation_counts.items()
+                            if int(count) > 0
+                        }.items(),
+                        key=lambda item: item[0],
+                    )
+                ),
                 "replay_summary": replay_summary,
                 "counterfactual": counterfactual,
             },
@@ -34524,7 +34698,7 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
         ),
         encoding="utf-8",
     )
-    if enforce_oms_gates and first.get("violations"):
+    if enforce_oms_gates and replay_violations:
         raise RuntimeError("REPLAY_GOVERNANCE_INVARIANTS_FAILED")
     logger.info(
         "REPLAY_GOVERNANCE_OK",
@@ -34532,7 +34706,9 @@ def _run_replay_governance(state: Any, *, now: datetime, market_open_now: bool) 
             "hash": first_hash,
             "rows": len(normalized_bars),
             "path": str(out_path),
-            "violations": len(first.get("violations", [])),
+            "source_path": data_dir,
+            "violations": len(replay_violations),
+            "violations_by_code": dict(violation_counts),
             "replay_summary": replay_summary,
             "counterfactual_passed": bool((counterfactual or {}).get("passed", True)),
         },
@@ -34617,24 +34793,39 @@ def _run_walk_forward_governance(state: BotState, *, now: datetime, market_open_
         }
 
     result = run_walk_forward(frame, score_fn=_score, config=config)
+    fold_count = int((result or {}).get("fold_count", 0) or 0)
     leakage_enabled = bool(get_env("AI_TRADING_LEAKAGE_GUARDS_ENABLED", True, cast=bool))
     fail_hard = bool(get_env("AI_TRADING_LEAKAGE_FAIL_HARD", True, cast=bool))
+    leakage_min_rows = int(get_env("AI_TRADING_WF_LEAKAGE_MIN_ROWS", 100, cast=int))
+    leakage_horizon_days = max(1, int(get_env("AI_TRADING_WF_HORIZON_DAYS", 1, cast=int)))
     if leakage_enabled:
-        try:
-            timeline = list(frame["timestamp"])
-            split_idx = max(1, int(len(timeline) * 0.7))
-            run_leakage_guards(
-                feature_timestamps=timeline,
-                label_timestamps=timeline,
-                train_label_times=timeline[:split_idx],
-                test_label_times=timeline[split_idx:],
-                horizon_days=int(get_env("AI_TRADING_WF_TEST_DAYS", 30, cast=int)),
-                embargo_days=int(get_env("AI_TRADING_WF_EMBARGO_DAYS", 5, cast=int)),
+        if fold_count <= 0:
+            logger.info("LEAKAGE_GUARD_SKIPPED", extra={"reason": "no_folds", "fold_count": fold_count})
+        elif len(frame) < max(1, leakage_min_rows):
+            logger.info(
+                "LEAKAGE_GUARD_SKIPPED",
+                extra={
+                    "reason": "insufficient_rows",
+                    "rows": int(len(frame)),
+                    "min_rows": int(max(1, leakage_min_rows)),
+                },
             )
-        except Exception as exc:
-            logger.error("LEAKAGE_GUARD_FAILED", extra={"error": str(exc)})
-            if fail_hard:
-                raise RuntimeError("LEAKAGE_GUARD_FAILED") from exc
+        else:
+            try:
+                timeline = list(frame["timestamp"])
+                split_idx = max(1, int(len(timeline) * 0.7))
+                run_leakage_guards(
+                    feature_timestamps=timeline,
+                    label_timestamps=timeline,
+                    train_label_times=timeline[:split_idx],
+                    test_label_times=timeline[split_idx:],
+                    horizon_days=leakage_horizon_days,
+                    embargo_days=int(get_env("AI_TRADING_WF_EMBARGO_DAYS", 5, cast=int)),
+                )
+            except Exception as exc:
+                logger.error("LEAKAGE_GUARD_FAILED", extra={"error": str(exc)})
+                if fail_hard:
+                    raise RuntimeError("LEAKAGE_GUARD_FAILED") from exc
     output_dir = Path(str(get_env("AI_TRADING_WF_OUTPUT_DIR", "runtime/walk_forward")))
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"walk_forward_{now.strftime('%Y%m%d')}.json"

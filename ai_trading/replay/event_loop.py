@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
@@ -25,6 +25,7 @@ class ReplayInvariantViolation:
     code: str
     message: str
     ts: str
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class ReplayEventLoop:
@@ -38,6 +39,7 @@ class ReplayEventLoop:
         seed: int | None = None,
         max_symbol_notional: float | None = None,
         max_gross_notional: float | None = None,
+        initial_positions: Mapping[str, float] | None = None,
     ) -> None:
         replay_seed = int(seed if seed is not None else get_env("REPLAY_SEED", "42", cast=int))
         self.strategy = strategy
@@ -79,6 +81,18 @@ class ReplayEventLoop:
         )
         self._seen_intent_keys: set[str] = set()
         self._positions: dict[str, float] = {}
+        if isinstance(initial_positions, Mapping):
+            for raw_symbol, raw_qty in initial_positions.items():
+                symbol = str(raw_symbol or "").strip().upper()
+                if not symbol:
+                    continue
+                try:
+                    qty = float(raw_qty or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if abs(qty) <= 1e-9:
+                    continue
+                self._positions[symbol] = qty
         self._last_price_by_symbol: dict[str, float] = {}
 
     def run(self, bars: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -142,12 +156,19 @@ class ReplayEventLoop:
                 continue
             self._seen_intent_keys.add(intent_key)
 
-            if not self._passes_notional_limits(symbol=symbol, close=close, side=side, qty=qty):
+            violation_details = self._notional_limit_violation(
+                symbol=symbol,
+                close=close,
+                side=side,
+                qty=qty,
+            )
+            if violation_details is not None:
                 violations.append(
                     ReplayInvariantViolation(
                         code="position_cap_exceeded",
                         message=f"Position/gross cap exceeded for {symbol}",
                         ts=ts.isoformat(),
+                        details=violation_details,
                     )
                 )
                 continue
@@ -204,27 +225,64 @@ class ReplayEventLoop:
                     "code": violation.code,
                     "message": violation.message,
                     "ts": violation.ts,
+                    **dict(violation.details),
                 }
                 for violation in violations
             ],
             "positions": dict(self._positions),
         }
 
-    def _passes_notional_limits(self, *, symbol: str, close: float, side: str, qty: float) -> bool:
+    def _notional_limit_violation(
+        self,
+        *,
+        symbol: str,
+        close: float,
+        side: str,
+        qty: float,
+    ) -> dict[str, Any] | None:
         signed_qty = qty if side == "buy" else -qty
         current_symbol_qty = self._positions.get(symbol, 0.0)
         projected_symbol_qty = current_symbol_qty + signed_qty
+        current_symbol_notional = abs(current_symbol_qty * close)
         projected_symbol_notional = abs(projected_symbol_qty * close)
-        if projected_symbol_notional > self.max_symbol_notional:
-            return False
+        if (
+            projected_symbol_notional > self.max_symbol_notional
+            and projected_symbol_notional > (current_symbol_notional + 1e-9)
+        ):
+            return {
+                "dimension": "symbol",
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "close": close,
+                "current_symbol_qty": current_symbol_qty,
+                "projected_symbol_qty": projected_symbol_qty,
+                "current_symbol_notional": current_symbol_notional,
+                "projected_symbol_notional": projected_symbol_notional,
+                "max_symbol_notional": self.max_symbol_notional,
+            }
 
-        gross = 0.0
+        gross_before = 0.0
         for sym, position_qty in self._positions.items():
             if sym == symbol:
                 px = close
             else:
                 px = self._last_price_by_symbol.get(sym, close)
-            gross += abs(position_qty * px)
-        gross -= abs(current_symbol_qty * close)
-        gross += projected_symbol_notional
-        return gross <= self.max_gross_notional
+            gross_before += abs(position_qty * px)
+        gross_after = gross_before - current_symbol_notional + projected_symbol_notional
+        if gross_after > self.max_gross_notional and gross_after > (gross_before + 1e-9):
+            return {
+                "dimension": "gross",
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "close": close,
+                "current_symbol_qty": current_symbol_qty,
+                "projected_symbol_qty": projected_symbol_qty,
+                "gross_before": gross_before,
+                "gross_after": gross_after,
+                "max_gross_notional": self.max_gross_notional,
+                "current_symbol_notional": current_symbol_notional,
+                "projected_symbol_notional": projected_symbol_notional,
+            }
+        return None

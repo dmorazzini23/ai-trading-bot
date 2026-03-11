@@ -47,6 +47,10 @@ def test_replay_parity_invariant_blocks_position_cap_breaches() -> None:
     codes = {item["code"] for item in result["violations"]}
     assert "position_cap_exceeded" in codes
     assert result["orders"] == []
+    violation = next(item for item in result["violations"] if item["code"] == "position_cap_exceeded")
+    assert violation["dimension"] == "symbol"
+    assert violation["symbol"] == "MSFT"
+    assert float(violation["projected_symbol_notional"]) > float(violation["max_symbol_notional"])
 
 
 def test_replay_gross_notional_uses_symbol_specific_prices() -> None:
@@ -90,3 +94,30 @@ def test_replay_gross_notional_uses_symbol_specific_prices() -> None:
     codes = {item["code"] for item in result["violations"]}
     assert "position_cap_exceeded" not in codes
     assert len(result["orders"]) == 2
+
+
+def test_replay_allows_derisking_when_already_over_cap() -> None:
+    bars = [
+        {"symbol": "MSFT", "ts": "2026-02-18T15:40:00Z", "close": 100.0},
+    ]
+
+    def strategy(_bar):
+        return {
+            "symbol": "MSFT",
+            "side": "sell",
+            "qty": 1,
+            "price": 100.0,
+            "intent_key": "derisk-1",
+        }
+
+    result = ReplayEventLoop(
+        strategy=strategy,
+        seed=5,
+        max_symbol_notional=1000.0,
+        max_gross_notional=1000.0,
+        initial_positions={"MSFT": 20.0},
+    ).run(bars)
+
+    codes = {item["code"] for item in result["violations"]}
+    assert "position_cap_exceeded" not in codes
+    assert len(result["orders"]) == 1
