@@ -257,6 +257,66 @@ def test_handle_pending_orders_symbol_scope_applies_policy(monkeypatch, caplog):
     assert any(record.message == "PENDING_ORDERS_POLICY_APPLIED" for record in caplog.records)
 
 
+def test_handle_pending_orders_symbol_scope_policy_no_action_falls_back_to_cleanup(monkeypatch):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(_apply_pending_new_timeout_policy=lambda: False),
+    )
+    cancel_mock = MagicMock()
+    monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=30),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+
+    clock = types.SimpleNamespace(value=100.0)
+    monkeypatch.setattr(be.time, "time", lambda: clock.value)
+    orders = [_order("pending_new", "o-symbol-fallback", symbol="AAPL")]
+
+    assert be._handle_pending_orders(orders, runtime) is True
+    clock.value = 131.0
+    assert be._handle_pending_orders(orders, runtime) is False
+    cancel_mock.assert_called_once_with(runtime)
+
+
+def test_handle_pending_orders_partial_fill_excluded_from_stuck_pending_slo(monkeypatch):
+    runtime = types.SimpleNamespace(
+        state={},
+        execution_engine=types.SimpleNamespace(_apply_pending_new_timeout_policy=lambda: None),
+    )
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=60),
+    )
+    monkeypatch.setenv("AI_TRADING_PENDING_ORDERS_BLOCK_SCOPE", "symbol")
+    monkeypatch.setattr(be.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(
+        be,
+        "_pending_order_broker_age_seconds",
+        lambda _order, _now_dt: 600.0,
+    )
+
+    metric_calls: list[tuple[int, float]] = []
+    monkeypatch.setattr(
+        be,
+        "_record_pending_order_slo_metrics",
+        lambda *, pending_count, oldest_pending_age_s: metric_calls.append(
+            (int(pending_count), float(oldest_pending_age_s))
+        ),
+    )
+
+    orders = [_order("partially_filled", "o-partial", symbol="USB")]
+    assert be._handle_pending_orders(orders, runtime) is True
+
+    assert metric_calls
+    pending_count, oldest_pending_age_s = metric_calls[-1]
+    assert pending_count == 0
+    assert oldest_pending_age_s == 0.0
+
+
 def test_handle_pending_orders_symbol_scope_decay_releases_stale_symbol(monkeypatch, caplog):
     runtime = types.SimpleNamespace(
         state={},

@@ -50,9 +50,10 @@ def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
 
     caplog.set_level(logging.WARNING)
-    engine._apply_pending_new_timeout_policy()
+    applied = engine._apply_pending_new_timeout_policy()
 
     assert canceled == ["ord-1"]
+    assert applied is True
     assert engine._pending_new_actions_this_cycle == 1
     assert engine._cycle_maintenance_actions == 1
     assert engine._cycle_new_orders_submitted == 0
@@ -80,15 +81,132 @@ def test_pending_new_timeout_policy_idempotent_per_cycle(monkeypatch):
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
     monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
 
-    engine._apply_pending_new_timeout_policy()
-    engine._apply_pending_new_timeout_policy()
+    first_applied = engine._apply_pending_new_timeout_policy()
+    second_applied = engine._apply_pending_new_timeout_policy()
 
     assert canceled == ["ord-1"]
+    assert first_applied is True
+    assert second_applied is False
 
     engine._reset_pending_new_policy_state_for_tests()
-    engine._apply_pending_new_timeout_policy()
+    third_applied = engine._apply_pending_new_timeout_policy()
 
     assert canceled == ["ord-1", "ord-1"]
+    assert third_applied is True
+
+
+def test_pending_new_timeout_policy_defaults_to_cancel(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-default",
+        symbol="AAPL",
+        side="buy",
+        qty="1",
+        status="pending_new",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._replace_limit_order_with_marketable = lambda **_: None
+
+    monkeypatch.delenv("AI_TRADING_PENDING_NEW_POLICY", raising=False)
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+
+    applied = engine._apply_pending_new_timeout_policy()
+
+    assert applied is True
+    assert canceled == ["ord-default"]
+
+
+def test_pending_new_timeout_policy_returns_false_without_stale_orders(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    fresh_order = SimpleNamespace(
+        id="ord-fresh",
+        symbol="AAPL",
+        side="buy",
+        qty="1",
+        status="pending_new",
+        created_at=now_dt - timedelta(seconds=5),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [fresh_order])
+    canceled: list[str] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._replace_limit_order_with_marketable = lambda **_: None
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "cancel")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+
+    applied = engine._apply_pending_new_timeout_policy()
+
+    assert applied is False
+    assert canceled == []
+
+
+def test_retry_capacity_precheck_with_fresh_account_enables_submit(monkeypatch):
+    engine = _engine_stub()
+    original_account = SimpleNamespace(tag="orig")
+    refreshed_account = SimpleNamespace(tag="fresh")
+    initial = lt.CapacityCheck(
+        can_submit=False,
+        suggested_qty=2,
+        reason="insufficient_buying_power",
+    )
+    retry = lt.CapacityCheck(
+        can_submit=True,
+        suggested_qty=2,
+        reason=None,
+    )
+    monkeypatch.delenv("AI_TRADING_CAPACITY_REFRESH_RETRY_ENABLED", raising=False)
+    engine._refresh_cycle_account = lambda: refreshed_account
+    engine._account_with_cycle_capacity_reservation = (
+        lambda account, *, side, closing_position: account
+    )
+    monkeypatch.setattr(lt, "_call_preflight_capacity", lambda *args, **kwargs: retry)
+
+    resolved, resolved_account = engine._retry_capacity_precheck_with_fresh_account(
+        capacity=initial,
+        symbol="AAPL",
+        side="buy",
+        price_hint=123.45,
+        quantity=2,
+        broker=object(),
+        account_snapshot=original_account,
+        closing_position=False,
+    )
+
+    assert resolved.can_submit is True
+    assert resolved.reason is None
+    assert resolved_account is refreshed_account
+
+
+def test_retry_capacity_precheck_with_fresh_account_skips_non_buying_power_reason(monkeypatch):
+    engine = _engine_stub()
+    account = SimpleNamespace(tag="orig")
+    initial = lt.CapacityCheck(
+        can_submit=False,
+        suggested_qty=1,
+        reason="rate_throttle_block",
+    )
+    engine._refresh_cycle_account = lambda: pytest.fail("unexpected refresh call")
+
+    resolved, resolved_account = engine._retry_capacity_precheck_with_fresh_account(
+        capacity=initial,
+        symbol="AAPL",
+        side="buy",
+        price_hint=123.45,
+        quantity=1,
+        broker=object(),
+        account_snapshot=account,
+        closing_position=False,
+    )
+
+    assert resolved is initial
+    assert resolved_account is account
 
 
 def test_duplicate_intent_window(monkeypatch):

@@ -2334,7 +2334,8 @@ class ExecutionEngine:
                 policy_raw = None
         if policy_raw in (None, ""):
             policy_raw = _runtime_env("AI_TRADING_PENDING_NEW_POLICY")
-        policy = str(policy_raw or "off").strip().lower()
+        # Default to bounded cancel so stale broker-open orders do not linger indefinitely.
+        policy = str(policy_raw or "cancel").strip().lower()
         if policy in {"", "0", "false", "no", "none", "off", "disabled"}:
             policy = "off"
         elif policy in {"replace", "replace_widen", "widen"}:
@@ -2373,20 +2374,20 @@ class ExecutionEngine:
 
         return policy, timeout_s, max_actions, replace_widen_bps
 
-    def _apply_pending_new_timeout_policy(self) -> None:
+    def _apply_pending_new_timeout_policy(self) -> bool:
         """Apply pending-new timeout actions for stale broker-open orders."""
 
         cycle_index = int(max(getattr(self, "_engine_cycle_index", 0), 0))
         if getattr(self, "_pending_new_policy_last_cycle_index", None) == cycle_index:
-            return
+            return False
         self._pending_new_policy_last_cycle_index = cycle_index
 
         policy, timeout_s, max_actions, replace_widen_bps = self._pending_new_policy_config()
         if policy == "off" or max_actions <= 0:
-            return
+            return False
         open_orders = self._list_open_orders_snapshot()
         if not open_orders:
-            return
+            return False
 
         now_dt = datetime.now(UTC)
         actions_taken = 0
@@ -2501,6 +2502,7 @@ class ExecutionEngine:
                     "timeout_s": timeout_s,
                 },
             )
+        return actions_taken > 0
 
     def _duplicate_intent_window_seconds(self) -> float:
         """Return duplicate-intent suppression window in seconds."""
@@ -3566,6 +3568,69 @@ class ExecutionEngine:
         self._cycle_account = account_snapshot
         self._cycle_account_fetched = True
         return account_snapshot
+
+    def _retry_capacity_precheck_with_fresh_account(
+        self,
+        *,
+        capacity: CapacityCheck,
+        symbol: str,
+        side: Any,
+        price_hint: Any,
+        quantity: int,
+        broker: Any | None,
+        account_snapshot: Any | None,
+        closing_position: bool,
+    ) -> tuple[CapacityCheck, Any | None]:
+        """Retry insufficient-buying-power precheck once after refreshing account snapshot."""
+
+        if capacity.can_submit:
+            return capacity, account_snapshot
+        reason = str(capacity.reason or "").strip().lower()
+        if reason != "insufficient_buying_power":
+            return capacity, account_snapshot
+        refresh_retry_enabled = _resolve_bool_env("AI_TRADING_CAPACITY_REFRESH_RETRY_ENABLED")
+        if refresh_retry_enabled is None:
+            refresh_retry_enabled = True
+        if not refresh_retry_enabled:
+            return capacity, account_snapshot
+
+        refreshed_account = self._refresh_cycle_account()
+        if refreshed_account is None:
+            return capacity, account_snapshot
+
+        refreshed_capacity_account = self._account_with_cycle_capacity_reservation(
+            refreshed_account,
+            side=side,
+            closing_position=closing_position,
+        )
+        refreshed_capacity = _call_preflight_capacity(
+            symbol,
+            side,
+            price_hint,
+            quantity,
+            broker,
+            refreshed_capacity_account,
+        )
+        if (
+            refreshed_capacity.can_submit != capacity.can_submit
+            or int(refreshed_capacity.suggested_qty) != int(capacity.suggested_qty)
+            or str(refreshed_capacity.reason or "") != str(capacity.reason or "")
+        ):
+            logger.info(
+                "BROKER_CAPACITY_PRECHECK_REFRESH_RETRY",
+                extra={
+                    "symbol": symbol,
+                    "side": str(side),
+                    "quantity": int(max(quantity, 0)),
+                    "initial_reason": str(capacity.reason or ""),
+                    "retry_reason": str(refreshed_capacity.reason or ""),
+                    "initial_suggested_qty": int(max(capacity.suggested_qty, 0)),
+                    "retry_suggested_qty": int(max(refreshed_capacity.suggested_qty, 0)),
+                    "initial_can_submit": bool(capacity.can_submit),
+                    "retry_can_submit": bool(refreshed_capacity.can_submit),
+                },
+            )
+        return refreshed_capacity, refreshed_account
 
     def _get_account_snapshot(self) -> Any | None:
         """Return the cached account snapshot, refreshing once per cycle."""
@@ -5038,6 +5103,16 @@ class ExecutionEngine:
                 capacity_broker,
                 capacity_account,
             )
+            capacity, account_snapshot = self._retry_capacity_precheck_with_fresh_account(
+                capacity=capacity,
+                symbol=symbol,
+                side=capacity_side,
+                price_hint=None,
+                quantity=int(quantity),
+                broker=capacity_broker,
+                account_snapshot=account_snapshot,
+                closing_position=closing_position,
+            )
             if not capacity.can_submit:
                 self.stats.setdefault("capacity_skips", 0)
                 self.stats.setdefault("skipped_orders", 0)
@@ -5538,6 +5613,16 @@ class ExecutionEngine:
                 quantity,
                 capacity_broker,
                 capacity_account,
+            )
+            capacity, account_snapshot = self._retry_capacity_precheck_with_fresh_account(
+                capacity=capacity,
+                symbol=symbol,
+                side=capacity_side,
+                price_hint=limit_price,
+                quantity=int(quantity),
+                broker=capacity_broker,
+                account_snapshot=account_snapshot,
+                closing_position=closing_position,
             )
             if not capacity.can_submit:
                 self.stats.setdefault("capacity_skips", 0)
@@ -6997,6 +7082,16 @@ class ExecutionEngine:
             quantity,
             capacity_broker,
             capacity_account,
+        )
+        capacity, account_snapshot = self._retry_capacity_precheck_with_fresh_account(
+            capacity=capacity,
+            symbol=symbol,
+            side=capacity_side,
+            price_hint=price_hint,
+            quantity=int(quantity),
+            broker=capacity_broker,
+            account_snapshot=account_snapshot,
+            closing_position=closing_position,
         )
         if not capacity.can_submit:
             self.stats.setdefault("capacity_skips", 0)
@@ -9861,6 +9956,349 @@ class ExecutionEngine:
         except Exception:
             logger.debug("OMS_INTENT_RECONCILE_FAILED", exc_info=True)
 
+    def _load_pending_candidates_from_runtime_order_events(self) -> dict[str, dict[str, Any]]:
+        """Hydrate pending-order candidates from runtime order event artifacts."""
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return {}
+
+        max_scan_lines = _config_int("AI_TRADING_PENDING_RECONCILE_ARTIFACT_SCAN_LINES", 2000)
+        if max_scan_lines is None:
+            max_scan_lines = 2000
+        max_scan_lines = max(100, min(int(max_scan_lines), 20000))
+
+        max_candidates = _config_int("AI_TRADING_PENDING_RECONCILE_ARTIFACT_MAX_CANDIDATES", 50)
+        if max_candidates is None:
+            max_candidates = 50
+        max_candidates = max(1, min(int(max_candidates), 500))
+
+        configured_path = str(
+            _runtime_env("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+            or "runtime/order_events.jsonl"
+        )
+        order_events_path = resolve_runtime_artifact_path(
+            configured_path,
+            default_relative="runtime/order_events.jsonl",
+        )
+        try:
+            raw_lines = order_events_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return {}
+        if not raw_lines:
+            return {}
+        if len(raw_lines) > max_scan_lines:
+            raw_lines = raw_lines[-max_scan_lines:]
+
+        candidates: dict[str, dict[str, Any]] = {}
+        for raw_line in reversed(raw_lines):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            order_id_raw = row.get("order_id")
+            if order_id_raw in (None, ""):
+                continue
+            order_id = str(order_id_raw)
+            if order_id in candidates:
+                continue
+            status = _normalize_status(row.get("status"))
+            if not status or status in _TERMINAL_ORDER_STATUSES:
+                continue
+            qty_value = _safe_float(row.get("quantity"))
+            if qty_value is None:
+                qty_value = _safe_float(row.get("qty"))
+            candidates[order_id] = {
+                "status": status,
+                "symbol": str(row.get("symbol") or "").strip().upper(),
+                "side": self._normalized_order_side(row.get("side")),
+                "qty": int(max(float(qty_value or 0.0), 0.0)),
+                "order_type": str(row.get("order_type") or "").strip().lower() or None,
+                "client_order_id": row.get("client_order_id"),
+                "event_seq": _safe_int(row.get("event_seq"), 0),
+                "updated_at": row.get("ts"),
+                "order_id": order_id,
+            }
+            if len(candidates) >= max_candidates:
+                break
+        return candidates
+
+    def _reconcile_pending_order_runtime_artifacts(self, *, open_orders: Iterable[Any]) -> None:
+        """Best-effort reconciliation of local pending cache with broker terminal state."""
+
+        store = getattr(self, "_pending_orders", None)
+        if not isinstance(store, dict):
+            store = {}
+        if not store:
+            store = self._load_pending_candidates_from_runtime_order_events()
+            if store:
+                logger.info(
+                    "PENDING_ORDER_RECONCILE_BOOTSTRAP",
+                    extra={"candidates": int(max(len(store), 0))},
+                )
+        if not store:
+            self._pending_orders = {}
+            return
+
+        client = getattr(self, "trading_client", None)
+        if client is None:
+            return
+        get_by_id = getattr(client, "get_order_by_id", None)
+        get_by_client = getattr(client, "get_order_by_client_order_id", None)
+        if not callable(get_by_id) and not callable(get_by_client):
+            return
+
+        open_refs: set[str] = set()
+        for order in open_orders:
+            for token in (
+                _extract_value(order, "id", "order_id"),
+                _extract_value(order, "client_order_id"),
+            ):
+                if token in (None, ""):
+                    continue
+                open_refs.add(str(token))
+
+        max_checks = _config_int("AI_TRADING_PENDING_TERMINAL_RECONCILE_MAX_PER_CYCLE", 25)
+        if max_checks is None:
+            max_checks = 25
+        max_checks = max(1, min(int(max_checks), 200))
+
+        checked = 0
+        reconciled = 0
+        reconciled_terminal = 0
+        now_iso = datetime.now(UTC).isoformat()
+
+        for pending_key, pending_raw in list(store.items()):
+            if checked >= max_checks:
+                break
+            key = str(pending_key)
+            entry: Mapping[str, Any]
+            if isinstance(pending_raw, Mapping):
+                entry = pending_raw
+            else:
+                entry = {}
+            prev_status = _normalize_status(_extract_value(entry, "status")) or "pending_new"
+            if prev_status in _TERMINAL_ORDER_STATUSES:
+                store.pop(key, None)
+                continue
+
+            ref_order_id_raw = _extract_value(entry, "order_id")
+            ref_order_id = str(ref_order_id_raw) if ref_order_id_raw not in (None, "") else key
+            ref_client_id_raw = _extract_value(entry, "client_order_id")
+            ref_client_id = (
+                str(ref_client_id_raw)
+                if ref_client_id_raw not in (None, "")
+                else None
+            )
+            if ref_order_id in open_refs or (ref_client_id and ref_client_id in open_refs):
+                continue
+
+            checked += 1
+            refreshed: Any | None = None
+            try:
+                if callable(get_by_id) and ref_order_id:
+                    refreshed = get_by_id(ref_order_id)
+                if refreshed is None and callable(get_by_client):
+                    client_ref = ref_client_id or (key if key != ref_order_id else None)
+                    if client_ref:
+                        refreshed = get_by_client(client_ref)
+            except Exception:
+                logger.debug(
+                    "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
+                    extra={
+                        "pending_key": key,
+                        "order_id": ref_order_id,
+                        "client_order_id": ref_client_id,
+                    },
+                    exc_info=True,
+                )
+                continue
+            if refreshed is None:
+                continue
+
+            qty_fallback = _safe_float(_extract_value(entry, "qty", "quantity")) or 0.0
+            (
+                _order_obj,
+                refreshed_status_raw,
+                refreshed_filled_qty,
+                refreshed_requested_qty,
+                resolved_order_id_raw,
+                resolved_client_order_id_raw,
+            ) = _normalize_order_payload(refreshed, qty_fallback)
+            refreshed_status = _normalize_status(refreshed_status_raw)
+            if not refreshed_status:
+                continue
+
+            resolved_order_id = str(
+                resolved_order_id_raw
+                if resolved_order_id_raw not in (None, "")
+                else ref_order_id
+            )
+            resolved_client_order_id = (
+                str(resolved_client_order_id_raw)
+                if resolved_client_order_id_raw not in (None, "")
+                else ref_client_id
+            )
+            symbol_token = str(
+                _extract_value(refreshed, "symbol")
+                or _extract_value(entry, "symbol")
+                or ""
+            ).strip().upper()
+            side_token = self._normalized_order_side(
+                _extract_value(refreshed, "side") or _extract_value(entry, "side")
+            )
+            order_type_token = str(
+                _extract_value(entry, "order_type")
+                or _extract_value(refreshed, "type", "order_type")
+                or ""
+            ).strip().lower() or None
+            changed = refreshed_status != prev_status
+            event_seq = _safe_int(_extract_value(entry, "event_seq"), 0)
+            if changed:
+                event_seq = int(max(event_seq, 0)) + 1
+                transition_payload = {
+                    "event": "status_transition",
+                    "source": "broker_reconcile",
+                    "order_id": resolved_order_id,
+                    "client_order_id": resolved_client_order_id,
+                    "symbol": symbol_token or None,
+                    "side": side_token,
+                    "status": refreshed_status,
+                    "prev_status": prev_status,
+                    "new_status": refreshed_status,
+                    "event_seq": event_seq,
+                    "order_type": order_type_token,
+                    "quantity": int(max(float(refreshed_requested_qty or qty_fallback), 0.0)),
+                    "filled_qty": float(max(float(refreshed_filled_qty or 0.0), 0.0)),
+                }
+                self._record_runtime_order_event(transition_payload)
+                reconciled += 1
+
+            if refreshed_status in _TERMINAL_ORDER_STATUSES:
+                final_payload = {
+                    "event": "final_state",
+                    "source": "broker_reconcile",
+                    "order_id": resolved_order_id,
+                    "client_order_id": resolved_client_order_id,
+                    "symbol": symbol_token or None,
+                    "side": side_token,
+                    "status": refreshed_status,
+                    "prev_status": prev_status,
+                    "new_status": refreshed_status,
+                    "event_seq": int(max(event_seq, 0)),
+                    "order_type": order_type_token,
+                    "quantity": int(max(float(refreshed_requested_qty or qty_fallback), 0.0)),
+                    "filled_qty": float(max(float(refreshed_filled_qty or 0.0), 0.0)),
+                    "ack_timed_out": False,
+                }
+                self._record_runtime_order_event(final_payload)
+
+                fill_qty_value = float(max(float(refreshed_filled_qty or 0.0), 0.0))
+                fill_price_value = _safe_float(
+                    _extract_value(
+                        refreshed,
+                        "filled_avg_price",
+                        "avg_fill_price",
+                        "price",
+                    )
+                )
+                if (
+                    refreshed_status in {"filled", "partially_filled"}
+                    and fill_qty_value > 0.0
+                    and fill_price_value is not None
+                    and fill_price_value > 0
+                ):
+                    fill_ts_raw = _extract_value(
+                        refreshed,
+                        "filled_at",
+                        "executed_at",
+                        "updated_at",
+                        "timestamp",
+                        "ts",
+                    )
+                    fill_timestamp = datetime.now(UTC)
+                    if isinstance(fill_ts_raw, datetime):
+                        try:
+                            fill_timestamp = fill_ts_raw.astimezone(UTC)
+                        except Exception:
+                            fill_timestamp = fill_ts_raw.replace(tzinfo=UTC)
+                    elif fill_ts_raw not in (None, ""):
+                        fill_text = str(fill_ts_raw).strip()
+                        if fill_text.endswith("Z"):
+                            fill_text = f"{fill_text[:-1]}+00:00"
+                        try:
+                            parsed_fill_ts = datetime.fromisoformat(fill_text)
+                        except ValueError:
+                            parsed_fill_ts = None
+                        if parsed_fill_ts is not None:
+                            if parsed_fill_ts.tzinfo is None:
+                                parsed_fill_ts = parsed_fill_ts.replace(tzinfo=UTC)
+                            fill_timestamp = parsed_fill_ts.astimezone(UTC)
+                    signal = None
+                    meta_store = getattr(self, "_order_signal_meta", None)
+                    if isinstance(meta_store, Mapping):
+                        meta = meta_store.get(resolved_order_id)
+                        if meta is None and resolved_client_order_id:
+                            meta = meta_store.get(str(resolved_client_order_id))
+                        if isinstance(meta, _SignalMeta):
+                            signal = meta.signal
+                    runtime_fill_payload = refreshed if isinstance(refreshed, Mapping) else None
+                    self._persist_fill_derived_trade_record(
+                        symbol=symbol_token or "",
+                        side=side_token,
+                        filled_qty=fill_qty_value,
+                        fill_price=float(fill_price_value),
+                        expected_price=None,
+                        order_id=resolved_order_id,
+                        client_order_id=resolved_client_order_id,
+                        order_status=refreshed_status,
+                        signal=signal,
+                        timestamp=fill_timestamp,
+                        runtime_payload=runtime_fill_payload,
+                    )
+
+                store.pop(key, None)
+                if resolved_order_id != key:
+                    store.pop(resolved_order_id, None)
+                if resolved_client_order_id:
+                    store.pop(str(resolved_client_order_id), None)
+                meta_store_mut = getattr(self, "_order_signal_meta", None)
+                if isinstance(meta_store_mut, dict):
+                    meta_store_mut.pop(resolved_order_id, None)
+                    if resolved_client_order_id:
+                        meta_store_mut.pop(str(resolved_client_order_id), None)
+                reconciled_terminal += 1
+                continue
+
+            updated_entry = dict(entry)
+            updated_entry["status"] = refreshed_status
+            updated_entry["order_id"] = resolved_order_id
+            if resolved_client_order_id:
+                updated_entry["client_order_id"] = str(resolved_client_order_id)
+            if symbol_token:
+                updated_entry["symbol"] = symbol_token
+            if side_token:
+                updated_entry["side"] = side_token
+            updated_entry["qty"] = int(max(float(refreshed_requested_qty or qty_fallback), 0.0))
+            updated_entry["event_seq"] = int(max(event_seq, 0))
+            updated_entry["updated_at"] = now_iso
+            if key != resolved_order_id:
+                store.pop(key, None)
+            store[resolved_order_id] = updated_entry
+
+        if reconciled or reconciled_terminal:
+            logger.info(
+                "PENDING_ORDER_RECONCILE_APPLIED",
+                extra={
+                    "checked": int(max(checked, 0)),
+                    "updated": int(max(reconciled, 0)),
+                    "terminal": int(max(reconciled_terminal, 0)),
+                },
+            )
+        self._pending_orders = store
+
     def open_order_totals(self, symbol: str) -> tuple[float, float]:
         """Return aggregate (buy_qty, sell_qty) for *symbol* from cached snapshot."""
 
@@ -9936,10 +10374,17 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         open_orders, positions = self._fetch_broker_state()
         self._reconcile_durable_intents(open_orders=open_orders)
         try:
-            return self._update_broker_snapshot(open_orders, positions)
+            snapshot = self._update_broker_snapshot(open_orders, positions)
         except Exception:
             logger.debug("BROKER_SYNC_UPDATE_FAILED", exc_info=True)
-            return super().synchronize_broker_state()
+            snapshot = super().synchronize_broker_state()
+        try:
+            self._reconcile_pending_order_runtime_artifacts(
+                open_orders=getattr(snapshot, "open_orders", ()) or (),
+            )
+        except Exception:
+            logger.debug("PENDING_ORDER_RECONCILE_FAILED", exc_info=True)
+        return snapshot
 
     def _fetch_account_state(self) -> tuple[Any | None, float | None]:
         """Return broker account object and cash balance when available."""

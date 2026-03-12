@@ -386,11 +386,225 @@ def test_execute_order_persists_runtime_order_and_fill_events(monkeypatch, tmp_p
         for line in order_events_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    fill_rows = []
+    if fill_events_path.exists():
+        fill_rows = [
+            json.loads(line)
+            for line in fill_events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    assert any(row.get("event") == "status_transition" for row in order_rows)
+    assert any(row.get("event") == "final_state" and row.get("status") == "filled" for row in order_rows)
+    assert any(row.get("event") == "fill_recorded" and row.get("symbol") == "AAPL" for row in fill_rows)
+
+
+def test_synchronize_broker_state_reconciles_pending_fill_events(monkeypatch, tmp_path):
+    class _BrokerTerminalFillClient(_AckStubClient):
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            return {
+                "id": order_id,
+                "client_order_id": "client-1",
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": "5",
+                "status": "filled",
+                "filled_qty": "5",
+                "filled_avg_price": "100.75",
+                "filled_at": "2026-03-11T19:55:48+00:00",
+            }
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    engine = _build_engine(_BrokerTerminalFillClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {
+        "order-reconcile": {
+            "status": "pending_new",
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": 5,
+            "order_type": "limit",
+            "client_order_id": "client-1",
+        }
+    }
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    fill_events_path = tmp_path / "runtime" / "fill_events.jsonl"
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fill_rows = []
+    if fill_events_path.exists():
+        fill_rows = [
+            json.loads(line)
+            for line in fill_events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    assert any(
+        row.get("event") == "status_transition"
+        and row.get("source") == "broker_reconcile"
+        and row.get("status") == "filled"
+        for row in order_rows
+    )
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("source") == "broker_reconcile"
+        and row.get("status") == "filled"
+        for row in order_rows
+    )
+    assert any(
+        row.get("event") == "fill_recorded"
+        and row.get("symbol") == "AAPL"
+        and row.get("order_id") == "order-reconcile"
+        for row in fill_rows
+    )
+    assert engine._pending_orders == {}
+
+
+def test_synchronize_broker_state_reconciles_pending_cancel_without_fill(monkeypatch, tmp_path):
+    class _BrokerTerminalCancelClient(_AckStubClient):
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            return {
+                "id": order_id,
+                "client_order_id": "client-2",
+                "symbol": "MSFT",
+                "side": "buy",
+                "qty": "3",
+                "status": "canceled",
+                "filled_qty": "0",
+            }
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    engine = _build_engine(_BrokerTerminalCancelClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {
+        "order-cancel": {
+            "status": "pending_new",
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 3,
+            "order_type": "limit",
+            "client_order_id": "client-2",
+        }
+    }
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    fill_events_path = tmp_path / "runtime" / "fill_events.jsonl"
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fill_rows = []
+    if fill_events_path.exists():
+        fill_rows = [
+            json.loads(line)
+            for line in fill_events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("source") == "broker_reconcile"
+        and row.get("status") == "canceled"
+        for row in order_rows
+    )
+    assert not fill_rows
+    assert engine._pending_orders == {}
+
+
+def test_synchronize_broker_state_bootstraps_pending_from_order_events(monkeypatch, tmp_path):
+    class _BrokerHydrateClient(_AckStubClient):
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            return {
+                "id": order_id,
+                "client_order_id": "client-hydrate",
+                "symbol": "IBM",
+                "side": "buy",
+                "qty": "2",
+                "status": "filled",
+                "filled_qty": "2",
+                "filled_avg_price": "145.10",
+                "filled_at": "2026-03-11T19:40:16+00:00",
+            }
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    order_events_path.parent.mkdir(parents=True, exist_ok=True)
+    order_events_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-03-11T19:40:16.466514+00:00",
+                "event": "final_state",
+                "order_id": "order-hydrate",
+                "client_order_id": "client-hydrate",
+                "symbol": "IBM",
+                "side": "buy",
+                "status": "pending_new",
+                "order_type": "limit",
+                "qty": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    engine = _build_engine(_BrokerHydrateClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {}
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fill_events_path = tmp_path / "runtime" / "fill_events.jsonl"
     fill_rows = [
         json.loads(line)
         for line in fill_events_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert any(row.get("event") == "status_transition" for row in order_rows)
-    assert any(row.get("event") == "final_state" and row.get("status") == "filled" for row in order_rows)
-    assert any(row.get("event") == "fill_recorded" and row.get("symbol") == "AAPL" for row in fill_rows)
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("source") == "broker_reconcile"
+        and row.get("order_id") == "order-hydrate"
+        and row.get("status") == "filled"
+        for row in order_rows
+    )
+    assert any(
+        row.get("event") == "fill_recorded"
+        and row.get("order_id") == "order-hydrate"
+        and row.get("symbol") == "IBM"
+        for row in fill_rows
+    )
+    assert engine._pending_orders == {}

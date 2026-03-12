@@ -32566,7 +32566,7 @@ def _apply_pending_new_timeout_policy(runtime: Any) -> bool:
     if not callable(policy_hook):
         return False
     try:
-        policy_hook()
+        result = policy_hook()
     except COMMON_EXC as exc:
         logger.warning(
             "PENDING_NEW_POLICY_APPLY_FAILED",
@@ -32574,6 +32574,8 @@ def _apply_pending_new_timeout_policy(runtime: Any) -> bool:
             exc_info=True,
         )
         return False
+    if isinstance(result, bool):
+        return result
     return True
 
 
@@ -32693,6 +32695,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     pending_statuses: set[str] = set()
     oldest_pending_age_s: float | None = None
     oldest_stuck_age_s: float | None = None
+    stuck_pending_count = 0
     symbol_oldest_age_s: dict[str, float] = {}
     symbol_statuses: dict[str, set[str]] = {}
     for order in confirmed_pending:
@@ -32703,6 +32706,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             pending_statuses.add(status)
             if symbol:
                 symbol_statuses.setdefault(symbol, set()).add(status)
+            if status in _PENDING_ORDER_STUCK_STATUSES:
+                stuck_pending_count += 1
         broker_age_s = _pending_order_broker_age_seconds(order, now_dt)
         if broker_age_s is not None:
             if oldest_pending_age_s is None or broker_age_s > oldest_pending_age_s:
@@ -32851,6 +32856,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     payload_base: dict[str, Any] = {
         "open_count": int(open_count),
         "pending_count": len(pending_ids),
+        "pending_stuck_count": int(max(stuck_pending_count, 0)),
         "counts_by_status": dict(sorted(counts_by_status.items())),
         "oldest_open_age_s": (
             round(float(oldest_open_age_s), 3) if oldest_open_age_s is not None else None
@@ -32878,9 +32884,14 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         "open_count_definition": "broker-active non-terminal orders",
         "pending_count_definition": "confirmed pending-ack/stuck orders under policy tracking",
     }
+    slo_pending_oldest_age_s = (
+        float(oldest_stuck_age_s)
+        if oldest_stuck_age_s is not None
+        else 0.0
+    )
     _record_pending_order_slo_metrics(
-        pending_count=len(pending_ids),
-        oldest_pending_age_s=oldest_pending_age_s,
+        pending_count=int(max(stuck_pending_count, 0)),
+        oldest_pending_age_s=slo_pending_oldest_age_s,
     )
 
     if first_seen is None:
@@ -38912,6 +38923,19 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         allow_extended = bool(getattr(cfg_for_market, "allow_extended", False))
         if (rth_only or not allow_extended) and not is_market_open():
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
+            try:
+                post_sync_enabled = bool(getattr(cfg_for_market, "post_submit_broker_sync", True))
+            except (TypeError, ValueError):
+                post_sync_enabled = True
+            if post_sync_enabled:
+                engine_obj = getattr(runtime, "execution_engine", None)
+                if engine_obj is not None and hasattr(engine_obj, "synchronize_broker_state"):
+                    try:
+                        broker_snapshot = engine_obj.synchronize_broker_state()
+                    except Exception:
+                        logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
+                    else:
+                        _record_broker_sync_metrics(state, broker_snapshot)
             return  # skip work when market closed
         loop_start = monotonic_time()
         _persist_effective_policy_snapshot(state, effective_policy, loop_id=loop_id)
@@ -39503,11 +39527,41 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 if attempt < attempts_limit - 1 and retry_delay > 0.0:
                     time.sleep(retry_delay)
 
+            try:
+                cfg_for_summary = get_trading_config()
+            except COMMON_EXC:
+                cfg_for_summary = None
+
+            def _sync_broker_snapshot_if_enabled() -> Any | None:
+                """Refresh broker snapshot when post-submit sync is enabled."""
+
+                post_sync_enabled = True
+                if cfg_for_summary is not None:
+                    try:
+                        post_sync_enabled = bool(
+                            getattr(cfg_for_summary, "post_submit_broker_sync", True)
+                        )
+                    except (TypeError, ValueError):
+                        post_sync_enabled = True
+                if not post_sync_enabled:
+                    return None
+                engine_obj = getattr(runtime, "execution_engine", None)
+                if engine_obj is None or not hasattr(engine_obj, "synchronize_broker_state"):
+                    return None
+                try:
+                    return engine_obj.synchronize_broker_state()
+                except Exception:
+                    logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
+                    return None
+
             if fetch_attempts_total == 0:
                 logger.info(
                     "CYCLE_DATA_SKIP_NO_FETCH",
                     extra={"symbols": symbols, "attempts": attempts_used or attempts_limit},
                 )
+                broker_snapshot = _sync_broker_snapshot_if_enabled()
+                if broker_snapshot is not None:
+                    _record_broker_sync_metrics(state, broker_snapshot)
                 return
 
             # AI-AGENT-REF: abort only if all symbols returned zero rows
@@ -39539,6 +39593,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
                 runtime_state.update_service_status(status="degraded", reason="data_source_empty")
                 # AI-AGENT-REF: exit immediately on repeated data failure
+                broker_snapshot = _sync_broker_snapshot_if_enabled()
+                if broker_snapshot is not None:
+                    _record_broker_sync_metrics(state, broker_snapshot)
                 return
             zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
             skipped = [s for s in symbols if s not in processed]
@@ -39577,24 +39634,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
 
             run_multi_strategy(runtime)
-            try:
-                cfg_for_summary = get_trading_config()
-            except COMMON_EXC:
-                cfg_for_summary = None
-            broker_snapshot = None
-            post_sync_enabled = True
-            if cfg_for_summary is not None:
-                try:
-                    post_sync_enabled = bool(getattr(cfg_for_summary, "post_submit_broker_sync", True))
-                except (TypeError, ValueError):
-                    post_sync_enabled = True
-            if post_sync_enabled:
-                engine_obj = getattr(runtime, "execution_engine", None)
-                if engine_obj is not None and hasattr(engine_obj, "synchronize_broker_state"):
-                    try:
-                        broker_snapshot = engine_obj.synchronize_broker_state()
-                    except Exception:
-                        logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
+            broker_snapshot = _sync_broker_snapshot_if_enabled()
             if broker_snapshot is not None:
                 _record_broker_sync_metrics(state, broker_snapshot)
             try:

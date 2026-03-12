@@ -1631,6 +1631,7 @@ def run_cycle() -> None:
             )
             return
 
+    cfg = None
     try:
         cfg = get_trading_config()
         rth_only = bool(getattr(cfg, "rth_only", True))
@@ -1653,6 +1654,63 @@ def run_cycle() -> None:
                     ttl_seconds=closed_skip_ttl_s,
                 ):
                     logger.info("MARKET_CLOSED_SKIP_CYCLE")
+                try:
+                    post_sync_enabled = bool(getattr(cfg, "post_submit_broker_sync", True))
+                except (TypeError, ValueError):
+                    post_sync_enabled = True
+                if post_sync_enabled and cfg is not None:
+                    try:
+                        from ai_trading.core.bot_engine import BotState, get_ctx
+                        from ai_trading.core.runtime import build_runtime, enhance_runtime_with_context
+                    except Exception:
+                        if _should_emit_info_log(
+                            "MARKET_CLOSED_BROKER_SYNC_IMPORT_FAILED",
+                            ttl_seconds=300.0,
+                        ):
+                            logger.warning(
+                                "MARKET_CLOSED_BROKER_SYNC_IMPORT_FAILED",
+                                exc_info=True,
+                            )
+                    else:
+                        try:
+                            _state, runtime_obj, _ = _resolve_cached_context(cfg, BotState, build_runtime)
+                            runtime_obj = enhance_runtime_with_context(runtime_obj, get_ctx())
+                            engine_obj = getattr(runtime_obj, "execution_engine", None)
+                            if engine_obj is None or not hasattr(engine_obj, "synchronize_broker_state"):
+                                if _should_emit_info_log(
+                                    "MARKET_CLOSED_BROKER_SYNC_SKIPPED_NO_ENGINE",
+                                    ttl_seconds=300.0,
+                                ):
+                                    logger.info(
+                                        "MARKET_CLOSED_BROKER_SYNC_SKIPPED",
+                                        extra={"reason": "no_execution_engine"},
+                                    )
+                            else:
+                                snapshot = engine_obj.synchronize_broker_state()
+                                try:
+                                    open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
+                                except Exception:
+                                    open_orders_count = 0
+                                try:
+                                    positions_count = len(getattr(snapshot, "positions", ()) or ())
+                                except Exception:
+                                    positions_count = 0
+                                logger.info(
+                                    "BROKER_SYNC",
+                                    extra={
+                                        "open_orders": int(open_orders_count),
+                                        "positions": int(positions_count),
+                                    },
+                                )
+                        except Exception:
+                            if _should_emit_info_log(
+                                "MARKET_CLOSED_BROKER_SYNC_FAILED",
+                                ttl_seconds=300.0,
+                            ):
+                                logger.warning(
+                                    "MARKET_CLOSED_BROKER_SYNC_FAILED",
+                                    exc_info=True,
+                                )
                 return
         except Exception:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)

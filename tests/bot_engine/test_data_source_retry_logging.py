@@ -149,11 +149,20 @@ def test_data_source_retry_marks_failure(monkeypatch, caplog):
 
 
 def test_data_source_empty_skipped_when_no_fetch_attempts(monkeypatch, caplog):
+    class _ExecutionEngine:
+        def __init__(self) -> None:
+            self.sync_calls = 0
+
+        def synchronize_broker_state(self):
+            self.sync_calls += 1
+            return types.SimpleNamespace(open_orders=[], positions=[])
+
+    execution_engine = _ExecutionEngine()
     state = bot.BotState()
     runtime = types.SimpleNamespace(
         risk_engine=DummyRiskEngine(),
         api=DummyAPI(),
-        execution_engine=None,
+        execution_engine=execution_engine,
         data_fetcher=types.SimpleNamespace(_minute_timestamps={}),
         model=object(),
         tickers=["AAA", "BBB"],
@@ -189,6 +198,11 @@ def test_data_source_empty_skipped_when_no_fetch_attempts(monkeypatch, caplog):
         "_prepare_run",
         lambda runtime, state, tickers: (1000.0, True, ["AAA", "BBB"]),
     )
+    monkeypatch.setattr(
+        bot,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(post_submit_broker_sync=True),
+    )
     monkeypatch.setattr(bot, "run_multi_strategy", lambda runtime: None)
     monkeypatch.setattr(bot, "_send_heartbeat", lambda: None)
     monkeypatch.setattr(bot, "_log_loop_heartbeat", lambda *args, **kwargs: None)
@@ -209,4 +223,57 @@ def test_data_source_empty_skipped_when_no_fetch_attempts(monkeypatch, caplog):
     bot.run_all_trades_worker(state, runtime)
 
     assert any(record.getMessage() == "CYCLE_DATA_SKIP_NO_FETCH" for record in caplog.records)
+    assert any(record.getMessage() == "BROKER_SYNC" for record in caplog.records)
     assert all(record.getMessage() != "DATA_SOURCE_EMPTY" for record in caplog.records)
+    assert execution_engine.sync_calls == 1
+
+
+def test_market_closed_cycle_runs_broker_sync(monkeypatch, caplog):
+    class _ExecutionEngine:
+        def __init__(self) -> None:
+            self.sync_calls = 0
+
+        def synchronize_broker_state(self):
+            self.sync_calls += 1
+            return types.SimpleNamespace(open_orders=[], positions=[])
+
+    execution_engine = _ExecutionEngine()
+    state = bot.BotState()
+    runtime = types.SimpleNamespace(
+        risk_engine=DummyRiskEngine(),
+        api=DummyAPI(),
+        execution_engine=execution_engine,
+        data_fetcher=types.SimpleNamespace(_minute_timestamps={}),
+        model=object(),
+        tickers=["AAA", "BBB"],
+        portfolio_weights={},
+    )
+
+    setattr(bot.CFG, "log_market_fetch", False)
+    setattr(bot.CFG, "shadow_mode", False)
+
+    monkeypatch.setattr(bot, "_ALPACA_IMPORT_ERROR", None, raising=False)
+    monkeypatch.setattr(bot, "_ensure_alpaca_classes", lambda: None)
+    monkeypatch.setattr(bot, "_init_metrics", lambda: None)
+    monkeypatch.setattr(bot, "_ensure_execution_engine", lambda runtime: None)
+    monkeypatch.setattr(bot, "check_pdt_rule", lambda runtime: False)
+    monkeypatch.setattr(bot, "is_market_open", lambda: False)
+    monkeypatch.setattr(
+        bot,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(post_submit_broker_sync=True),
+    )
+    monkeypatch.setattr(bot, "_send_heartbeat", lambda: None)
+    monkeypatch.setattr(bot, "_log_loop_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "_check_runtime_stops", lambda runtime: None)
+    monkeypatch.setattr(bot, "check_halt_flag", lambda runtime: False)
+    monkeypatch.setattr(bot.time, "sleep", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "get_strategies", lambda: [])
+
+    caplog.set_level(logging.INFO)
+
+    bot.run_all_trades_worker(state, runtime)
+
+    assert any(record.getMessage() == "MARKET_CLOSED_NO_FETCH" for record in caplog.records)
+    assert any(record.getMessage() == "BROKER_SYNC" for record in caplog.records)
+    assert execution_engine.sync_calls == 1
