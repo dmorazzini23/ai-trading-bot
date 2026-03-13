@@ -175,8 +175,8 @@ class StrategyAllocator:
                     },
                 )
 
-    def replace_config(self, **changes: Any) -> TradingConfig:
-        """Return new TradingConfig with ``changes`` applied and set it."""
+    def replace_config(self, **changes: Any) -> Any:
+        """Return a new config object with ``changes`` applied and set it."""
         if isinstance(self.config, TradingConfig):
             updated = self.config.to_dict()
             updated.update(changes)

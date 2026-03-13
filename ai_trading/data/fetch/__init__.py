@@ -5820,6 +5820,16 @@ def _set_price_reliability(
         pass
 
 
+def _normalize_yahoo_symbol(symbol: str) -> str:
+    """Map broker/canonical symbols to Yahoo-compatible ticker format."""
+
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return normalized
+    # Yahoo uses dashes for share classes (e.g., BRK-B instead of BRK.B).
+    return normalized.replace(".", "-")
+
+
 def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Return a DataFrame with a tz-aware 'timestamp' column between start and end."""
     pd_local = _ensure_pandas()
@@ -5846,6 +5856,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
 
     chunk_span = _dt.timedelta(days=7)
     needs_chunk = interval_norm in {"1m", "1min", "1minute"} and (end_dt - start_dt) > chunk_span
+    yahoo_symbol = _normalize_yahoo_symbol(symbol)
 
     frames: list[pd.DataFrame] = []
     if needs_chunk:
@@ -5853,13 +5864,13 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
         while cur_start < end_dt:
             cur_end = min(cur_start + chunk_span, end_dt)
             df_map = fetch_yf_batched(
-                [symbol],
+                [yahoo_symbol],
                 start=cur_start,
                 end=cur_end,
                 period="1y",
                 interval=interval_norm,
             )
-            frame = df_map.get(symbol)
+            frame = df_map.get(yahoo_symbol)
             if frame is not None and not frame.empty:
                 frame = frame.copy()
                 frame.index.name = "timestamp"
@@ -5881,13 +5892,13 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             return combined
 
     df_map = fetch_yf_batched(
-        [symbol],
+        [yahoo_symbol],
         start=start_dt,
         end=end_dt,
         period="1y",
         interval=interval_norm,
     )
-    frame = df_map.get(symbol)
+    frame = df_map.get(yahoo_symbol)
     if frame is None or frame.empty:
         return _empty_frame()
     frame = frame.copy()
@@ -13758,7 +13769,11 @@ def is_market_open() -> bool:
 def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
     start_s = int(start.timestamp())
     end_s = int(end.timestamp())
-    return "https://query1.finance.yahoo.com/v8/finance/chart/" f"{symbol}?period1={start_s}&period2={end_s}&interval=1d"
+    yahoo_symbol = _normalize_yahoo_symbol(symbol)
+    return (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        f"{yahoo_symbol}?period1={start_s}&period2={end_s}&interval=1d"
+    )
 
 
 __all__ = [

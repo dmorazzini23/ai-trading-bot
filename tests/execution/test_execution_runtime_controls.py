@@ -293,6 +293,76 @@ def test_execution_phase_gate_allows_closing_orders(monkeypatch):
     assert detail is None
 
 
+def test_pre_execution_order_checks_blocks_openings_when_exposure_overloaded(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS", "1")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BP_MIN_RATIO", "0.03")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY", "0.35")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 5,
+        "client_order_id": "cid-1",
+        "closing_position": False,
+        "account_snapshot": {
+            "equity": 100000,
+            "buying_power": 500,
+            "long_market_value": 150000,
+            "short_market_value": 80000,
+        },
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_prioritize_losing_short_reduction_targets_largest_losses(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_MAX_ACTIONS", "2")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_FRACTION", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BP_MIN_RATIO", "0.03")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY", "0.35")
+
+    submitted: list[tuple[str, int]] = []
+    monkeypatch.setattr(engine, "_submit_cover_order", lambda symbol, qty: submitted.append((symbol, qty)) or True)
+
+    actions = engine._prioritize_losing_short_reduction(
+        positions=[
+            {"symbol": "AAA", "side": "short", "qty": 10, "current_price": 50.0, "unrealized_intraday_pl": -100.0},
+            {"symbol": "BBB", "side": "short", "qty": 8, "current_price": 80.0, "unrealized_intraday_pl": -50.0},
+            {"symbol": "CCC", "side": "short", "qty": 12, "current_price": 40.0, "unrealized_intraday_pl": -200.0},
+            {"symbol": "DDD", "side": "short", "qty": 5, "current_price": 25.0, "unrealized_intraday_pl": 20.0},
+        ],
+        account_snapshot={
+            "equity": 100000,
+            "buying_power": 1000,
+            "long_market_value": 90000,
+            "short_market_value": 140000,
+        },
+    )
+
+    assert actions == 2
+    assert submitted[0][0] == "CCC"
+    assert submitted[1][0] == "AAA"
+
+
 def test_resolve_order_submit_cap_uses_bootstrap_defaults(monkeypatch):
     engine = _engine_stub()
     engine.ctx = SimpleNamespace(state={"service_phase": "bootstrap"})

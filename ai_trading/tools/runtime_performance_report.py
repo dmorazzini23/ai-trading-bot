@@ -79,6 +79,35 @@ def _load_json_lines(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _normalise_fill_source(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return "unknown"
+    if token in {"broker_reconcile", "reconcile", "backfill"}:
+        return "reconcile_backfill"
+    if token.startswith("broker_reconcile"):
+        return "reconcile_backfill"
+    if token in {"live", "initial", "poll", "final", "manual_probe"}:
+        return "live"
+    if "reconcile" in token:
+        return "reconcile_backfill"
+    return "live"
+
+
+def _build_order_source_lookup(path: Path) -> dict[str, str]:
+    latest: dict[str, tuple[str, str]] = {}
+    for row in _load_json_lines(path):
+        order_id = str(row.get("order_id") or "").strip()
+        if not order_id:
+            continue
+        ts = str(row.get("ts") or "")
+        source = _normalise_fill_source(row.get("source"))
+        previous = latest.get(order_id)
+        if previous is None or ts >= previous[0]:
+            latest[order_id] = (ts, source)
+    return {order_id: source for order_id, (_ts, source) in latest.items()}
+
+
 def _load_trade_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -239,6 +268,8 @@ class _FillEvent:
     signal_tags: str
     fee_per_share: float
     slippage_per_share: float
+    order_id: str | None
+    fill_source: str
 
 
 @dataclass(slots=True)
@@ -251,6 +282,7 @@ class _OpenLot:
     signal_tags: str
     fee_per_share: float
     slippage_per_share: float
+    fill_source: str
 
 
 @dataclass(slots=True)
@@ -264,7 +296,11 @@ class _TCALegEvent:
     slippage_cost: float
 
 
-def _as_fill_event(row: dict[str, Any]) -> _FillEvent | None:
+def _as_fill_event(
+    row: dict[str, Any],
+    *,
+    order_source_lookup: Mapping[str, str] | None = None,
+) -> _FillEvent | None:
     symbol = str(row.get("symbol", "") or "").strip().upper()
     if not symbol:
         return None
@@ -282,6 +318,12 @@ def _as_fill_event(row: dict[str, Any]) -> _FillEvent | None:
     )
     if qty is None or price is None:
         return None
+    order_id_raw = row.get("order_id")
+    order_id = None if order_id_raw in (None, "") else str(order_id_raw)
+    source_hint = row.get("source")
+    if source_hint in (None, "") and order_id and order_source_lookup:
+        source_hint = order_source_lookup.get(order_id)
+    fill_source = _normalise_fill_source(source_hint)
     fee_amount = _resolve_fee_amount(row, qty, price)
     slippage_bps = _resolve_slippage_bps(row, side, price)
     return _FillEvent(
@@ -301,13 +343,19 @@ def _as_fill_event(row: dict[str, Any]) -> _FillEvent | None:
         signal_tags=str(row.get("signal_tags", "") or ""),
         fee_per_share=(fee_amount / qty) if qty > 0 else 0.0,
         slippage_per_share=price * (slippage_bps / 10000.0),
+        order_id=order_id,
+        fill_source=fill_source,
     )
 
 
-def _extract_fill_events(records: list[dict[str, Any]]) -> list[_FillEvent]:
+def _extract_fill_events(
+    records: list[dict[str, Any]],
+    *,
+    order_source_lookup: Mapping[str, str] | None = None,
+) -> list[_FillEvent]:
     events: list[tuple[datetime, int, _FillEvent]] = []
     for index, row in enumerate(records):
-        event = _as_fill_event(row)
+        event = _as_fill_event(row, order_source_lookup=order_source_lookup)
         if event is None:
             continue
         event_ts = event.timestamp or datetime.max.replace(tzinfo=UTC)
@@ -330,6 +378,7 @@ def _closed_trade_record(
     gross_pnl: float,
     fee_cost: float,
     slippage_cost: float,
+    fill_source: str | None = None,
 ) -> dict[str, Any]:
     entry_notional = abs(entry_price * qty)
     net_pnl = gross_pnl - fee_cost - slippage_cost
@@ -354,10 +403,15 @@ def _closed_trade_record(
         "net_pnl": net_pnl,
         "net_edge_bps": net_edge_bps,
         "holding_seconds": holding_seconds,
+        "fill_source": _normalise_fill_source(fill_source),
     }
 
 
-def _direct_closed_trades(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _direct_closed_trades(
+    records: list[dict[str, Any]],
+    *,
+    order_source_lookup: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
     trades: list[dict[str, Any]] = []
     for row in records:
         pnl = None
@@ -384,6 +438,11 @@ def _direct_closed_trades(records: list[dict[str, Any]]) -> list[dict[str, Any]]
             side=side,
             price=entry_price,
         )
+        order_id_raw = row.get("order_id")
+        order_id = None if order_id_raw in (None, "") else str(order_id_raw)
+        source_hint = row.get("source")
+        if source_hint in (None, "") and order_id and order_source_lookup:
+            source_hint = order_source_lookup.get(order_id)
         trade = _closed_trade_record(
             symbol=str(row.get("symbol", "") or "").strip().upper() or "UNKNOWN",
             side="long" if side == "buy" else "short",
@@ -397,6 +456,7 @@ def _direct_closed_trades(records: list[dict[str, Any]]) -> list[dict[str, Any]]
             gross_pnl=pnl,
             fee_cost=fee_cost,
             slippage_cost=slippage_cost,
+            fill_source=None if source_hint in (None, "") else str(source_hint),
         )
         trade["_fee_source"] = fee_source
         trade["_slippage_source"] = slippage_source
@@ -588,6 +648,16 @@ def _reconstruct_closed_trades(
             else:
                 gross_pnl = (lot.price - event.price) * close_qty
                 trade_side = "short"
+            fill_source = lot.fill_source
+            if fill_source != event.fill_source:
+                if "reconcile_backfill" in {fill_source, event.fill_source}:
+                    fill_source = "reconcile_backfill"
+                elif fill_source == "unknown":
+                    fill_source = event.fill_source
+                elif event.fill_source == "unknown":
+                    fill_source = fill_source
+                else:
+                    fill_source = "mixed"
             entry_fee = lot.fee_per_share * close_qty
             exit_fee = event.fee_per_share * close_qty
             entry_slippage = lot.slippage_per_share * close_qty
@@ -606,6 +676,7 @@ def _reconstruct_closed_trades(
                     gross_pnl=gross_pnl,
                     fee_cost=entry_fee + exit_fee,
                     slippage_cost=entry_slippage + exit_slippage,
+                    fill_source=fill_source,
                 )
             )
             closed[-1]["_fee_source"] = "fifo_reconstructed"
@@ -626,6 +697,7 @@ def _reconstruct_closed_trades(
                     signal_tags=event.signal_tags,
                     fee_per_share=event.fee_per_share,
                     slippage_per_share=event.slippage_per_share,
+                    fill_source=event.fill_source,
                 )
             )
 
@@ -671,6 +743,9 @@ def _aggregate_closed_trades(
     symbol_totals: dict[str, float] = defaultdict(float)
     strategy_totals: dict[str, float] = defaultdict(float)
     daily: dict[str, dict[str, Any]] = {}
+    daily_by_fill_source: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    closed_trades_by_fill_source: dict[str, int] = defaultdict(int)
+    pnl_by_fill_source: dict[str, float] = defaultdict(float)
     total_fee_cost = 0.0
     total_slippage_cost = 0.0
     fee_attributed_trades = 0
@@ -690,9 +765,14 @@ def _aggregate_closed_trades(
         fee_source = row.get("_fee_source")
         slippage_source = row.get("_slippage_source")
         notional = abs(float(row.get("entry_notional", 0.0) or 0.0))
+        fill_source = _normalise_fill_source(
+            row.get("fill_source") or row.get("_fill_source")
+        )
         side_totals[side] = side_totals.get(side, 0.0) + net_pnl
         symbol_totals[symbol] += net_pnl
         strategy_totals[strategy] += net_pnl
+        closed_trades_by_fill_source[fill_source] += 1
+        pnl_by_fill_source[fill_source] += net_pnl
         total_fee_cost += fee_cost
         total_slippage_cost += slippage_cost
         if fee_source:
@@ -734,29 +814,57 @@ def _aggregate_closed_trades(
         bucket["slippage_cost"] += slippage_cost
         bucket["entry_notional"] += notional
 
-    daily_expectancy: list[dict[str, Any]] = []
-    for key in sorted(daily):
-        bucket = daily[key]
-        trades = int(bucket["trades"])
-        avg_net = bucket["net_pnl"] / trades if trades > 0 else 0.0
-        entry_notional = float(bucket["entry_notional"])
-        net_edge_bps = (
-            (bucket["net_pnl"] / entry_notional * 10000.0)
-            if entry_notional > 0
-            else None
-        )
-        daily_expectancy.append(
+        source_daily = daily_by_fill_source[fill_source]
+        source_bucket = source_daily.setdefault(
+            day,
             {
-                "date": key,
-                "trades": trades,
-                "gross_pnl": bucket["gross_pnl"],
-                "net_pnl": bucket["net_pnl"],
-                "avg_net_pnl": avg_net,
-                "fee_cost": bucket["fee_cost"],
-                "slippage_cost": bucket["slippage_cost"],
-                "net_edge_bps": net_edge_bps,
-            }
+                "date": day,
+                "trades": 0,
+                "gross_pnl": 0.0,
+                "net_pnl": 0.0,
+                "fee_cost": 0.0,
+                "slippage_cost": 0.0,
+                "entry_notional": 0.0,
+            },
         )
+        source_bucket["trades"] += 1
+        source_bucket["gross_pnl"] += gross_pnl
+        source_bucket["net_pnl"] += net_pnl
+        source_bucket["fee_cost"] += fee_cost
+        source_bucket["slippage_cost"] += slippage_cost
+        source_bucket["entry_notional"] += notional
+
+    def _daily_expectancy_from_buckets(payload: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for key in sorted(payload):
+            bucket = payload[key]
+            trades = int(bucket["trades"])
+            avg_net = bucket["net_pnl"] / trades if trades > 0 else 0.0
+            entry_notional = float(bucket["entry_notional"])
+            net_edge_bps = (
+                (bucket["net_pnl"] / entry_notional * 10000.0)
+                if entry_notional > 0
+                else None
+            )
+            out.append(
+                {
+                    "date": key,
+                    "trades": trades,
+                    "gross_pnl": bucket["gross_pnl"],
+                    "net_pnl": bucket["net_pnl"],
+                    "avg_net_pnl": avg_net,
+                    "fee_cost": bucket["fee_cost"],
+                    "slippage_cost": bucket["slippage_cost"],
+                    "net_edge_bps": net_edge_bps,
+                }
+            )
+        return out
+
+    daily_expectancy = _daily_expectancy_from_buckets(daily)
+    daily_expectancy_by_fill_source = {
+        source_key: _daily_expectancy_from_buckets(buckets)
+        for source_key, buckets in sorted(daily_by_fill_source.items())
+    }
 
     def _top_losses(values: dict[str, float]) -> list[dict[str, Any]]:
         ranked = sorted(
@@ -792,6 +900,16 @@ def _aggregate_closed_trades(
             },
             "side_totals": side_totals,
             "daily_expectancy": daily_expectancy,
+            "daily_expectancy_by_fill_source": daily_expectancy_by_fill_source,
+            "daily_expectancy_live": daily_expectancy_by_fill_source.get("live", []),
+            "daily_expectancy_reconcile_backfill": daily_expectancy_by_fill_source.get(
+                "reconcile_backfill",
+                [],
+            ),
+            "closed_trades_by_fill_source": dict(
+                sorted(closed_trades_by_fill_source.items())
+            ),
+            "pnl_by_fill_source": dict(sorted(pnl_by_fill_source.items())),
             "top_loss_drivers": {
                 "symbols": _top_losses(symbol_totals),
                 "strategies": _top_losses(strategy_totals),
@@ -819,7 +937,18 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
         summary["pnl_available"] = False
         return summary
 
-    direct_trades = _direct_closed_trades(records)
+    order_events_path = path.parent / "order_events.jsonl"
+    order_source_lookup: dict[str, str] = {}
+    if order_events_path.exists():
+        order_source_lookup = _build_order_source_lookup(order_events_path)
+    summary["order_events_path"] = str(order_events_path)
+    summary["order_events_exists"] = bool(order_events_path.exists())
+    summary["order_source_records"] = int(len(order_source_lookup))
+
+    direct_trades = _direct_closed_trades(
+        records,
+        order_source_lookup=order_source_lookup,
+    )
     cost_enrichment: dict[str, Any] | None = None
     if direct_trades and tca_path is not None and tca_path.exists():
         tca_records = _load_trade_rows(tca_path)
@@ -841,7 +970,7 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
         summary.update(aggregated)
         return summary
 
-    events = _extract_fill_events(records)
+    events = _extract_fill_events(records, order_source_lookup=order_source_lookup)
     if not events:
         summary["pnl_available"] = False
         return summary
@@ -1090,6 +1219,9 @@ def format_text_report(report: dict[str, Any]) -> str:
                 f"matched_legs={cost_enrichment.get('matched_legs')} "
                 f"enriched_trades={cost_enrichment.get('enriched_trades')}"
             )
+        fill_source_counts = trade.get("closed_trades_by_fill_source")
+        if isinstance(fill_source_counts, Mapping) and fill_source_counts:
+            lines.append(f"- Closed trades by fill source: {dict(fill_source_counts)}")
         top_symbols = (trade.get("top_loss_drivers") or {}).get("symbols", [])
         if top_symbols:
             lines.append("- Top loss symbols:")
@@ -1104,6 +1236,26 @@ def format_text_report(report: dict[str, Any]) -> str:
                     f"{item.get('date')}: trades={item.get('trades')} "
                     f"net_pnl={item.get('net_pnl'):.4f} "
                     f"net_edge_bps={item.get('net_edge_bps')}"
+                )
+        source_daily = trade.get("daily_expectancy_by_fill_source")
+        if isinstance(source_daily, Mapping) and source_daily:
+            live_rows = source_daily.get("live")
+            if isinstance(live_rows, list) and live_rows:
+                latest_live = live_rows[-1]
+                lines.append(
+                    "- Daily expectancy live (latest): "
+                    f"{latest_live.get('date')} trades={latest_live.get('trades')} "
+                    f"net_pnl={latest_live.get('net_pnl'):.4f} "
+                    f"net_edge_bps={latest_live.get('net_edge_bps')}"
+                )
+            reconcile_rows = source_daily.get("reconcile_backfill")
+            if isinstance(reconcile_rows, list) and reconcile_rows:
+                latest_reconcile = reconcile_rows[-1]
+                lines.append(
+                    "- Daily expectancy reconcile (latest): "
+                    f"{latest_reconcile.get('date')} trades={latest_reconcile.get('trades')} "
+                    f"net_pnl={latest_reconcile.get('net_pnl'):.4f} "
+                    f"net_edge_bps={latest_reconcile.get('net_edge_bps')}"
                 )
     else:
         lines.append("- Realized pnl: unavailable (no usable closed-trade records found)")

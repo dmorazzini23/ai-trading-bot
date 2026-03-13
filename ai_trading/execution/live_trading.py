@@ -1005,7 +1005,7 @@ def _normalize_order_payload(
     if isinstance(order_payload, dict):
         order_id = order_payload.get("id") or order_payload.get("order_id") or order_payload.get("client_order_id")
         client_order_id = order_payload.get("client_order_id")
-        status = order_payload.get("status") or "submitted"
+        status = order_payload.get("status") or order_payload.get("order_status") or "submitted"
         filled_raw = order_payload.get("filled_qty") or order_payload.get("filled_quantity")
         requested_raw = (
             order_payload.get("qty")
@@ -1116,6 +1116,50 @@ def _extract_api_error_metadata(err: BaseException | None) -> dict[str, Any]:
     if rendered:
         metadata.setdefault("error", rendered)
     return {key: value for key, value in metadata.items() if value not in (None, "")}
+
+
+def _is_missing_order_lookup_error(err: BaseException) -> bool:
+    """Return ``True`` when a broker lookup error indicates an unknown order id."""
+
+    metadata = _extract_api_error_metadata(err)
+    status_value = metadata.get("status_code")
+    try:
+        status_int = int(status_value) if status_value is not None else None
+    except (TypeError, ValueError):
+        status_int = None
+    code_value = metadata.get("code")
+    code_text = str(code_value).strip().lower() if code_value not in (None, "") else ""
+    detail = str(metadata.get("detail") or metadata.get("error") or err).strip().lower()
+    if status_int == 404:
+        return True
+    if code_text in {"404", "40410000", "not_found"}:
+        return True
+    missing_tokens = (
+        "order not found",
+        "resource not found",
+        "does not exist",
+        "no such order",
+    )
+    return any(token in detail for token in missing_tokens)
+
+
+def _resolve_expected_order_price(*sources: Any) -> float | None:
+    """Return best-effort benchmark price for slippage attribution."""
+
+    for source in sources:
+        if source is None:
+            continue
+        for key in (
+            "expected_price",
+            "limit_price",
+            "submitted_limit_price",
+            "price",
+            "avg_entry_price",
+        ):
+            candidate = _safe_float(_extract_value(source, key))
+            if candidate is not None and candidate > 0:
+                return float(candidate)
+    return None
 
 
 def _parse_retry_after_seconds(raw_value: Any) -> float | None:
@@ -1411,6 +1455,21 @@ def _capacity_precheck_side(side: Any, *, closing_position: bool) -> Any:
     return normalized or side
 
 
+def _is_capacity_exhaustion_reason(reason: Any) -> bool:
+    """Return True when a preflight reason indicates account capacity exhaustion."""
+
+    token = str(reason or "").strip().lower()
+    if not token:
+        return False
+    if token in {
+        "insufficient_buying_power",
+        "insufficient_day_trading_buying_power",
+        "insufficient_funds",
+    }:
+        return True
+    return "insufficient" in token and "buying_power" in token
+
+
 @dataclass
 class CapacityCheck:
     can_submit: bool
@@ -1426,6 +1485,7 @@ class _SignalMeta:
     requested_qty: int
     signal_weight: float | None
     reported_fill_qty: int = 0
+    expected_price: float | None = None
 
 
 @lru_cache(maxsize=8)
@@ -2121,11 +2181,14 @@ class ExecutionEngine:
         self._pending_new_policy_last_cycle_index: int | None = None
         self._engine_started_mono: float = float(monotonic_time())
         self._engine_cycle_index: int = 0
+        self._capacity_exhausted_cycle: bool = False
+        self._capacity_exhausted_reason: str | None = None
         self._broker_locked_until: float = 0.0
         self._broker_lock_reason: str | None = None
         self._long_only_mode_reason: str | None = None
         self._long_only_context: dict[str, Any] | None = None
         self._broker_lock_logged: bool = False
+        self._last_short_deleverage_mono: float = 0.0
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -2188,6 +2251,8 @@ class ExecutionEngine:
         self._pending_new_actions_this_cycle = 0
         self._pending_new_policy_last_cycle_index = None
         self._cycle_order_outcomes = []
+        self._capacity_exhausted_cycle = False
+        self._capacity_exhausted_reason = None
         try:
             with self._cycle_reserved_intents_lock:
                 self._cycle_reserved_intents.clear()
@@ -3569,6 +3634,58 @@ class ExecutionEngine:
         self._cycle_account_fetched = True
         return account_snapshot
 
+    def _capacity_cycle_block_enabled(self) -> bool:
+        """Return True when per-cycle capacity exhaustion short-circuit is enabled."""
+
+        configured = _resolve_bool_env("AI_TRADING_CAPACITY_CYCLE_BLOCK_ENABLED")
+        if configured is None:
+            return True
+        return bool(configured)
+
+    def _capacity_exhausted_for_cycle(
+        self,
+        *,
+        side: Any,
+        closing_position: bool,
+    ) -> str | None:
+        """Return cached capacity reason when openings should be blocked for this cycle."""
+
+        if closing_position or not _order_consumes_capacity(side):
+            return None
+        if not self._capacity_cycle_block_enabled():
+            return None
+        if not bool(getattr(self, "_capacity_exhausted_cycle", False)):
+            return None
+        reason = str(getattr(self, "_capacity_exhausted_reason", "") or "").strip().lower()
+        return reason or "insufficient_buying_power"
+
+    def _mark_capacity_exhausted_for_cycle(
+        self,
+        *,
+        reason: Any,
+        side: Any,
+        closing_position: bool,
+    ) -> str | None:
+        """Cache capacity exhaustion reason to avoid repeated preflight failures in-cycle."""
+
+        if closing_position or not _order_consumes_capacity(side):
+            return None
+        if not self._capacity_cycle_block_enabled():
+            return None
+        normalized_reason = str(reason or "").strip().lower()
+        if not _is_capacity_exhaustion_reason(normalized_reason):
+            return None
+        self._capacity_exhausted_cycle = True
+        self._capacity_exhausted_reason = normalized_reason or "insufficient_buying_power"
+        log_throttled_event(
+            logger,
+            "BROKER_CAPACITY_CYCLE_EXHAUSTED",
+            level=logging.INFO,
+            message="BROKER_CAPACITY_CYCLE_EXHAUSTED",
+            extra={"reason": self._capacity_exhausted_reason},
+        )
+        return self._capacity_exhausted_reason
+
     def _retry_capacity_precheck_with_fresh_account(
         self,
         *,
@@ -3940,6 +4057,10 @@ class ExecutionEngine:
             "status": order_status,
             "client_order_id": client_order_id,
         }
+        if runtime_payload is not None:
+            source_value = runtime_payload.get("source")
+            if source_value not in (None, ""):
+                fill_record["source"] = str(source_value)
         try:
             record_trade_fill(fill_record)
         except Exception:
@@ -5090,6 +5211,22 @@ class ExecutionEngine:
                 side_lower,
                 closing_position=closing_position,
             )
+            cached_capacity_reason = self._capacity_exhausted_for_cycle(
+                side=capacity_side,
+                closing_position=closing_position,
+            )
+            if cached_capacity_reason:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason=cached_capacity_reason,
+                    order_type="market",
+                )
+                return None
             capacity_account = self._account_with_cycle_capacity_reservation(
                 account_snapshot,
                 side=capacity_side,
@@ -5118,6 +5255,18 @@ class ExecutionEngine:
                 self.stats.setdefault("skipped_orders", 0)
                 self.stats["capacity_skips"] += 1
                 self.stats["skipped_orders"] += 1
+                failure_reason = str(capacity.reason or "capacity_preflight_blocked")
+                cached_reason = self._mark_capacity_exhausted_for_cycle(
+                    reason=failure_reason,
+                    side=capacity_side,
+                    closing_position=closing_position,
+                )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason=cached_reason or failure_reason,
+                    order_type="market",
+                )
                 return None
             if capacity.suggested_qty != quantity:
                 quantity = capacity.suggested_qty
@@ -5601,6 +5750,22 @@ class ExecutionEngine:
                 side_lower,
                 closing_position=closing_position,
             )
+            cached_capacity_reason = self._capacity_exhausted_for_cycle(
+                side=capacity_side,
+                closing_position=closing_position,
+            )
+            if cached_capacity_reason:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason=cached_capacity_reason,
+                    order_type="limit",
+                )
+                return None
             capacity_account = self._account_with_cycle_capacity_reservation(
                 account_snapshot,
                 side=capacity_side,
@@ -5629,6 +5794,18 @@ class ExecutionEngine:
                 self.stats.setdefault("skipped_orders", 0)
                 self.stats["capacity_skips"] += 1
                 self.stats["skipped_orders"] += 1
+                failure_reason = str(capacity.reason or "capacity_preflight_blocked")
+                cached_reason = self._mark_capacity_exhausted_for_cycle(
+                    reason=failure_reason,
+                    side=capacity_side,
+                    closing_position=closing_position,
+                )
+                self._skip_submit(
+                    symbol=symbol,
+                    side=side_lower,
+                    reason=cached_reason or failure_reason,
+                    order_type="limit",
+                )
                 return None
             if capacity.suggested_qty != quantity:
                 quantity = capacity.suggested_qty
@@ -7070,6 +7247,23 @@ class ExecutionEngine:
             side_lower,
             closing_position=closing_position,
         )
+        cached_capacity_reason = self._capacity_exhausted_for_cycle(
+            side=capacity_side,
+            closing_position=closing_position,
+        )
+        if cached_capacity_reason:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            self._skip_submit(
+                symbol=symbol,
+                side=mapped_side,
+                reason=cached_capacity_reason,
+                order_type=order_type_normalized,
+                submit_started_at=submit_started_at,
+            )
+            return None
         capacity_account = self._account_with_cycle_capacity_reservation(
             account_snapshot,
             side=capacity_side,
@@ -7098,10 +7292,16 @@ class ExecutionEngine:
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
+            failure_reason = str(capacity.reason or "capacity_preflight_blocked")
+            cached_reason = self._mark_capacity_exhausted_for_cycle(
+                reason=failure_reason,
+                side=capacity_side,
+                closing_position=closing_position,
+            )
             self._skip_submit(
                 symbol=symbol,
                 side=mapped_side,
-                reason=str(capacity.reason or "capacity_preflight_blocked"),
+                reason=cached_reason or failure_reason,
                 order_type=order_type_normalized,
                 submit_started_at=submit_started_at,
             )
@@ -7847,6 +8047,12 @@ class ExecutionEngine:
             _release_capacity_reservation("invalid_order_response")
             return None
 
+        benchmark_price = _resolve_expected_order_price(
+            {"limit_price": resolved_limit_price},
+            {"price": price_for_limit},
+            {"price": limit_price},
+        )
+
         order_id_display = order_id or client_order_id
         if order_id_display:
             meta_weight = None
@@ -7871,7 +8077,12 @@ class ExecutionEngine:
                 store = getattr(self, "_order_signal_meta", None)
                 if store is None:
                     store = {}
-                store[str(order_id_display)] = _SignalMeta(signal, requested_qty_int, meta_weight)
+                store[str(order_id_display)] = _SignalMeta(
+                    signal,
+                    requested_qty_int,
+                    meta_weight,
+                    expected_price=benchmark_price,
+                )
                 self._order_signal_meta = store
             else:
                 store = getattr(self, "_order_signal_meta", None)
@@ -7896,6 +8107,8 @@ class ExecutionEngine:
             "quantity": requested_qty,
             "filled_qty": float(filled_qty or 0),
         }
+        if benchmark_price is not None and benchmark_price > 0:
+            final_payload["expected_price"] = float(benchmark_price)
         if event_sequence > 0:
             final_payload["event_seq"] = event_sequence
         if last_prev_status is not None:
@@ -7932,6 +8145,8 @@ class ExecutionEngine:
                 pending_entry["symbol"] = symbol
                 pending_entry["side"] = mapped_side
                 pending_entry["qty"] = requested_qty
+                if benchmark_price is not None and benchmark_price > 0:
+                    pending_entry["expected_price"] = float(benchmark_price)
                 pending_entry["updated_at"] = datetime.now(UTC).isoformat()
             self._pending_orders = store
 
@@ -8089,11 +8304,6 @@ class ExecutionEngine:
         )
         if resolved_fill_price is None:
             resolved_fill_price = _safe_float(getattr(execution_result, "fill_price", None))
-        benchmark_price = (
-            _safe_float(resolved_limit_price)
-            or _safe_float(price_for_limit)
-            or _safe_float(limit_price)
-        )
         execution_drift_bps: float | None = None
         realized_slippage_bps: float | None = None
         if (
@@ -8144,6 +8354,8 @@ class ExecutionEngine:
                         parsed_fill_ts = parsed_fill_ts.replace(tzinfo=UTC)
                     fill_timestamp = parsed_fill_ts.astimezone(UTC)
             runtime_fill_payload = final_order if isinstance(final_order, Mapping) else None
+            if isinstance(runtime_fill_payload, dict):
+                runtime_fill_payload.setdefault("source", "live")
             self._persist_fill_derived_trade_record(
                 symbol=symbol,
                 side=mapped_side,
@@ -8291,15 +8503,18 @@ class ExecutionEngine:
         if side is None:
             return None
         try:
-            value = str(side).strip().lower()
+            value_obj = getattr(side, "value", side)
+            value = str(value_obj).strip().lower()
         except Exception:
             logger.debug("ORDER_SIDE_NORMALIZE_FAILED", extra={"side": side}, exc_info=True)
             return None
+        if "." in value:
+            value = value.rsplit(".", 1)[-1]
         if value in {"buy", "sell"}:
             return value
-        if value in {"short", "sell_short", "exit"}:
+        if value in {"short", "sell_short", "sellshort", "exit"}:
             return "sell"
-        if value in {"cover", "long"}:
+        if value in {"cover", "buy_to_cover", "buytocover", "long"}:
             return "buy"
         return None
 
@@ -8946,6 +9161,206 @@ class ExecutionEngine:
         sanitized_context["block_enforced"] = skip
         return skip, reason, sanitized_context
 
+    def _exposure_normalization_context(self, account_snapshot: Any | None) -> dict[str, Any] | None:
+        """Build exposure/buying-power normalization context from broker account state."""
+
+        if account_snapshot is None:
+            return None
+
+        equity = _safe_float(
+            _extract_value(account_snapshot, "equity", "last_equity", "portfolio_value")
+        )
+        if equity is None or not math.isfinite(equity) or equity <= 0:
+            return None
+
+        long_market_value = abs(
+            _safe_float(_extract_value(account_snapshot, "long_market_value")) or 0.0
+        )
+        short_market_value = abs(
+            _safe_float(_extract_value(account_snapshot, "short_market_value")) or 0.0
+        )
+        gross_exposure = long_market_value + short_market_value
+        net_exposure_abs = abs(long_market_value - short_market_value)
+
+        buying_power = _safe_float(
+            _extract_value(
+                account_snapshot,
+                "daytrading_buying_power",
+                "day_trading_buying_power",
+                "buying_power",
+                "regt_buying_power",
+                "cash",
+                "available_cash",
+            )
+        )
+        buying_power_ratio = None
+        if buying_power is not None and math.isfinite(buying_power):
+            buying_power_ratio = buying_power / equity
+
+        gross_to_equity = gross_exposure / equity
+        net_to_equity = net_exposure_abs / equity
+
+        bp_min_ratio = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_BP_MIN_RATIO", 0.03)
+        max_gross_to_equity = _config_float(
+            "AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY",
+            1.0,
+        )
+        max_net_to_equity = _config_float(
+            "AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY",
+            0.35,
+        )
+        try:
+            bp_floor = float(bp_min_ratio if bp_min_ratio is not None else 0.03)
+        except (TypeError, ValueError):
+            bp_floor = 0.03
+        try:
+            gross_cap = float(max_gross_to_equity if max_gross_to_equity is not None else 1.0)
+        except (TypeError, ValueError):
+            gross_cap = 1.0
+        try:
+            net_cap = float(max_net_to_equity if max_net_to_equity is not None else 0.35)
+        except (TypeError, ValueError):
+            net_cap = 0.35
+
+        reasons: list[str] = []
+        if gross_to_equity > gross_cap:
+            reasons.append("gross_exposure_over_cap")
+        if net_to_equity > net_cap:
+            reasons.append("net_exposure_over_cap")
+        if buying_power_ratio is not None and buying_power_ratio < bp_floor:
+            reasons.append("buying_power_below_floor")
+
+        return {
+            "equity": equity,
+            "buying_power": buying_power,
+            "buying_power_ratio": buying_power_ratio,
+            "gross_exposure": gross_exposure,
+            "net_exposure_abs": net_exposure_abs,
+            "gross_to_equity": gross_to_equity,
+            "net_to_equity": net_to_equity,
+            "bp_min_ratio": bp_floor,
+            "max_gross_to_equity": gross_cap,
+            "max_net_to_equity": net_cap,
+            "reasons": reasons,
+            "overloaded": bool(reasons),
+        }
+
+    def _prioritize_losing_short_reduction(
+        self,
+        *,
+        positions: Sequence[Any],
+        account_snapshot: Any | None,
+    ) -> int:
+        """Submit reduce-only covers for the largest losing shorts when overloaded."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED")
+        if enabled is None or not bool(enabled):
+            return 0
+
+        context = self._exposure_normalization_context(account_snapshot)
+        if not context or not bool(context.get("overloaded")):
+            return 0
+
+        max_actions = _config_int("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_MAX_ACTIONS", 3) or 3
+        max_actions = max(1, int(max_actions))
+        reduce_fraction = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_FRACTION", 0.35) or 0.35
+        reduce_fraction = max(0.01, min(float(reduce_fraction), 1.0))
+        min_notional = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_MIN_NOTIONAL", 250.0) or 250.0
+        min_notional = max(0.0, float(min_notional))
+        cooldown_seconds = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_COOLDOWN_SEC", 90.0) or 90.0
+        cooldown_seconds = max(0.0, float(cooldown_seconds))
+
+        now_mono = monotonic_time()
+        last_run = float(getattr(self, "_last_short_deleverage_mono", 0.0) or 0.0)
+        if cooldown_seconds > 0 and last_run > 0 and (now_mono - last_run) < cooldown_seconds:
+            return 0
+
+        candidates: list[tuple[float, float, str, int]] = []
+        for position in positions or ():
+            symbol_raw = _extract_value(position, "symbol", "asset_symbol")
+            if symbol_raw in (None, ""):
+                continue
+            symbol = str(symbol_raw).strip().upper()
+            if not symbol:
+                continue
+            side_raw = _extract_value(position, "side")
+            side = str(side_raw or "").strip().lower()
+            if side not in {"short", "sell"}:
+                continue
+
+            qty_float = abs(
+                _safe_float(_extract_value(position, "qty", "quantity", "position")) or 0.0
+            )
+            if qty_float <= 0:
+                continue
+            qty = int(max(0, math.floor(qty_float)))
+            if qty <= 0:
+                continue
+
+            current_price = _safe_float(
+                _extract_value(position, "current_price", "market_price", "lastday_price")
+            )
+            market_value = abs(
+                _safe_float(_extract_value(position, "market_value")) or 0.0
+            )
+            if market_value <= 0 and current_price is not None and current_price > 0:
+                market_value = abs(current_price * qty_float)
+
+            unrealized_loss = _safe_float(
+                _extract_value(position, "unrealized_intraday_pl", "unrealized_pl")
+            )
+            if unrealized_loss is None:
+                plpc = _safe_float(
+                    _extract_value(position, "unrealized_intraday_plpc", "unrealized_plpc")
+                )
+                if plpc is not None and market_value > 0:
+                    unrealized_loss = plpc * market_value
+            if unrealized_loss is None or unrealized_loss >= 0:
+                continue
+
+            target_qty = int(max(1, math.floor(qty_float * reduce_fraction)))
+            if current_price is not None and current_price > 0 and min_notional > 0:
+                min_qty_for_notional = int(math.ceil(min_notional / current_price))
+                target_qty = max(target_qty, max(1, min_qty_for_notional))
+            target_qty = max(1, min(qty, target_qty))
+            if target_qty <= 0:
+                continue
+            candidates.append((float(unrealized_loss), -market_value, symbol, target_qty))
+
+        if not candidates:
+            return 0
+
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        selected = candidates[:max_actions]
+        actions = 0
+        action_rows: list[dict[str, Any]] = []
+        for loss_value, neg_notional, symbol, qty in selected:
+            submitted = bool(self._submit_cover_order(symbol, qty))
+            if submitted:
+                actions += 1
+                action_rows.append(
+                    {
+                        "symbol": symbol,
+                        "cover_qty": int(qty),
+                        "unrealized_pl": float(loss_value),
+                        "market_value": float(-neg_notional),
+                    }
+                )
+
+        self._last_short_deleverage_mono = now_mono
+        if actions > 0:
+            logger.warning(
+                "EXPOSURE_NORMALIZE_SHORT_REDUCTION",
+                extra={
+                    "actions": int(actions),
+                    "max_actions": int(max_actions),
+                    "overload_reasons": list(context.get("reasons") or []),
+                    "candidates": int(len(candidates)),
+                    "applied": action_rows,
+                },
+            )
+        return actions
+
     def _pre_execution_order_checks(self, order: Mapping[str, Any] | None = None) -> bool:
         """Run order-specific pre-execution checks."""
 
@@ -8987,6 +9402,38 @@ class ExecutionEngine:
             account_snapshot = self._get_account_snapshot()
             if isinstance(order, dict):
                 order["account_snapshot"] = account_snapshot
+
+        if not closing_position:
+            constrain_openings = _resolve_bool_env("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS")
+            if constrain_openings is None:
+                constrain_openings = True
+            exposure_context = self._exposure_normalization_context(account_snapshot)
+            if constrain_openings and exposure_context and bool(exposure_context.get("overloaded")):
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "exposure_normalization_gate",
+                    "context": exposure_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_EXPOSURE_NORMALIZE", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "exposure_normalization_gate",
+                    exposure_context,
+                    extra=skip_payload | {"detail": "exposure_normalization_gate"},
+                )
+                return False
 
         snapshot_payload: Mapping[str, Any] = (
             account_snapshot if isinstance(account_snapshot, Mapping) else {}
@@ -9990,6 +10437,7 @@ class ExecutionEngine:
             raw_lines = raw_lines[-max_scan_lines:]
 
         candidates: dict[str, dict[str, Any]] = {}
+        seen_order_ids: set[str] = set()
         for raw_line in reversed(raw_lines):
             line = raw_line.strip()
             if not line:
@@ -10002,20 +10450,25 @@ class ExecutionEngine:
             if order_id_raw in (None, ""):
                 continue
             order_id = str(order_id_raw)
-            if order_id in candidates:
+            if order_id in seen_order_ids:
                 continue
             status = _normalize_status(row.get("status"))
-            if not status or status in _TERMINAL_ORDER_STATUSES:
+            if not status:
+                continue
+            seen_order_ids.add(order_id)
+            if status in _TERMINAL_ORDER_STATUSES:
                 continue
             qty_value = _safe_float(row.get("quantity"))
             if qty_value is None:
                 qty_value = _safe_float(row.get("qty"))
+            expected_price = _resolve_expected_order_price(row)
             candidates[order_id] = {
                 "status": status,
                 "symbol": str(row.get("symbol") or "").strip().upper(),
                 "side": self._normalized_order_side(row.get("side")),
                 "qty": int(max(float(qty_value or 0.0), 0.0)),
                 "order_type": str(row.get("order_type") or "").strip().lower() or None,
+                "expected_price": expected_price,
                 "client_order_id": row.get("client_order_id"),
                 "event_seq": _safe_int(row.get("event_seq"), 0),
                 "updated_at": row.get("ts"),
@@ -10044,10 +10497,25 @@ class ExecutionEngine:
 
         client = getattr(self, "trading_client", None)
         if client is None:
+            log_throttled_event(
+                logger,
+                "PENDING_ORDER_RECONCILE_SKIPPED_NO_CLIENT",
+                level=logging.INFO,
+                message="PENDING_ORDER_RECONCILE_SKIPPED_NO_CLIENT",
+                extra={"pending_candidates": int(max(len(store), 0))},
+            )
             return
         get_by_id = getattr(client, "get_order_by_id", None)
+        if not callable(get_by_id):
+            get_by_id = getattr(client, "get_order", None)
         get_by_client = getattr(client, "get_order_by_client_order_id", None)
+        if not callable(get_by_client):
+            get_by_client = getattr(client, "get_order_by_client_id", None)
         if not callable(get_by_id) and not callable(get_by_client):
+            logger.info(
+                "PENDING_ORDER_RECONCILE_SKIPPED_NO_LOOKUP_METHOD",
+                extra={"client_type": type(client).__name__},
+            )
             return
 
         open_refs: set[str] = set()
@@ -10068,6 +10536,8 @@ class ExecutionEngine:
         checked = 0
         reconciled = 0
         reconciled_terminal = 0
+        lookup_failed = 0
+        lookup_not_found = 0
         now_iso = datetime.now(UTC).isoformat()
 
         for pending_key, pending_raw in list(store.items()):
@@ -10104,7 +10574,29 @@ class ExecutionEngine:
                     client_ref = ref_client_id or (key if key != ref_order_id else None)
                     if client_ref:
                         refreshed = get_by_client(client_ref)
-            except Exception:
+            except Exception as err:
+                if _is_missing_order_lookup_error(err):
+                    lookup_not_found += 1
+                    refreshed = {
+                        "id": ref_order_id,
+                        "client_order_id": ref_client_id,
+                        "symbol": _extract_value(entry, "symbol"),
+                        "side": _extract_value(entry, "side"),
+                        "qty": _extract_value(entry, "qty", "quantity"),
+                        "limit_price": _extract_value(entry, "limit_price", "expected_price", "price"),
+                        "status": "canceled",
+                        "filled_qty": _extract_value(entry, "filled_qty") or 0,
+                    }
+                    logger.info(
+                        "PENDING_ORDER_RECONCILE_LOOKUP_NOT_FOUND",
+                        extra={
+                            "pending_key": key,
+                            "order_id": ref_order_id,
+                            "client_order_id": ref_client_id,
+                        },
+                    )
+                else:
+                    lookup_failed += 1
                 logger.debug(
                     "PENDING_ORDER_RECONCILE_LOOKUP_FAILED",
                     extra={
@@ -10114,7 +10606,8 @@ class ExecutionEngine:
                     },
                     exc_info=True,
                 )
-                continue
+                if refreshed is None:
+                    continue
             if refreshed is None:
                 continue
 
@@ -10140,6 +10633,19 @@ class ExecutionEngine:
                 str(resolved_client_order_id_raw)
                 if resolved_client_order_id_raw not in (None, "")
                 else ref_client_id
+            )
+            meta_store_ref = getattr(self, "_order_signal_meta", None)
+            meta_expected_price: float | None = None
+            if isinstance(meta_store_ref, Mapping):
+                meta = meta_store_ref.get(resolved_order_id)
+                if meta is None and resolved_client_order_id:
+                    meta = meta_store_ref.get(str(resolved_client_order_id))
+                if isinstance(meta, _SignalMeta):
+                    meta_expected_price = _safe_float(meta.expected_price)
+            expected_price_value = _resolve_expected_order_price(
+                entry,
+                refreshed,
+                {"expected_price": meta_expected_price},
             )
             symbol_token = str(
                 _extract_value(refreshed, "symbol")
@@ -10173,6 +10679,8 @@ class ExecutionEngine:
                     "quantity": int(max(float(refreshed_requested_qty or qty_fallback), 0.0)),
                     "filled_qty": float(max(float(refreshed_filled_qty or 0.0), 0.0)),
                 }
+                if expected_price_value is not None and expected_price_value > 0:
+                    transition_payload["expected_price"] = float(expected_price_value)
                 self._record_runtime_order_event(transition_payload)
                 reconciled += 1
 
@@ -10193,6 +10701,8 @@ class ExecutionEngine:
                     "filled_qty": float(max(float(refreshed_filled_qty or 0.0), 0.0)),
                     "ack_timed_out": False,
                 }
+                if expected_price_value is not None and expected_price_value > 0:
+                    final_payload["expected_price"] = float(expected_price_value)
                 self._record_runtime_order_event(final_payload)
 
                 fill_qty_value = float(max(float(refreshed_filled_qty or 0.0), 0.0))
@@ -10245,12 +10755,14 @@ class ExecutionEngine:
                         if isinstance(meta, _SignalMeta):
                             signal = meta.signal
                     runtime_fill_payload = refreshed if isinstance(refreshed, Mapping) else None
+                    if isinstance(runtime_fill_payload, dict):
+                        runtime_fill_payload.setdefault("source", "broker_reconcile")
                     self._persist_fill_derived_trade_record(
                         symbol=symbol_token or "",
                         side=side_token,
                         filled_qty=fill_qty_value,
                         fill_price=float(fill_price_value),
-                        expected_price=None,
+                        expected_price=expected_price_value,
                         order_id=resolved_order_id,
                         client_order_id=resolved_client_order_id,
                         order_status=refreshed_status,
@@ -10284,6 +10796,8 @@ class ExecutionEngine:
             updated_entry["qty"] = int(max(float(refreshed_requested_qty or qty_fallback), 0.0))
             updated_entry["event_seq"] = int(max(event_seq, 0))
             updated_entry["updated_at"] = now_iso
+            if expected_price_value is not None and expected_price_value > 0:
+                updated_entry["expected_price"] = float(expected_price_value)
             if key != resolved_order_id:
                 store.pop(key, None)
             store[resolved_order_id] = updated_entry
@@ -10295,6 +10809,17 @@ class ExecutionEngine:
                     "checked": int(max(checked, 0)),
                     "updated": int(max(reconciled, 0)),
                     "terminal": int(max(reconciled_terminal, 0)),
+                    "lookup_failed": int(max(lookup_failed, 0)),
+                    "lookup_not_found": int(max(lookup_not_found, 0)),
+                },
+            )
+        elif checked or lookup_failed or lookup_not_found:
+            logger.info(
+                "PENDING_ORDER_RECONCILE_NOOP",
+                extra={
+                    "checked": int(max(checked, 0)),
+                    "lookup_failed": int(max(lookup_failed, 0)),
+                    "lookup_not_found": int(max(lookup_not_found, 0)),
                 },
             )
         self._pending_orders = store
@@ -10371,7 +10896,16 @@ class LiveTradingExecutionEngine(ExecutionEngine):
     def synchronize_broker_state(self) -> BrokerSyncResult:
         """Refresh and return broker state snapshot."""
 
+        if getattr(self, "trading_client", None) is None:
+            try:
+                self._ensure_initialized()
+            except Exception:
+                logger.debug("BROKER_SYNC_INITIALIZE_FAILED", exc_info=True)
         open_orders, positions = self._fetch_broker_state()
+        account_snapshot, _ = self._fetch_account_state()
+        if account_snapshot is not None:
+            self._cycle_account = account_snapshot
+            self._cycle_account_fetched = True
         self._reconcile_durable_intents(open_orders=open_orders)
         try:
             snapshot = self._update_broker_snapshot(open_orders, positions)
@@ -10383,7 +10917,29 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 open_orders=getattr(snapshot, "open_orders", ()) or (),
             )
         except Exception:
-            logger.debug("PENDING_ORDER_RECONCILE_FAILED", exc_info=True)
+            logger.warning(
+                "PENDING_ORDER_RECONCILE_FAILED",
+                extra={
+                    "open_orders": len(getattr(snapshot, "open_orders", ()) or ()),
+                    "positions": len(getattr(snapshot, "positions", ()) or ()),
+                },
+                exc_info=True,
+            )
+        try:
+            reduction_positions = getattr(snapshot, "positions", ()) or positions
+            self._prioritize_losing_short_reduction(
+                positions=tuple(reduction_positions),
+                account_snapshot=account_snapshot,
+            )
+        except Exception:
+            logger.warning(
+                "EXPOSURE_NORMALIZE_SHORT_REDUCTION_FAILED",
+                extra={
+                    "open_orders": len(getattr(snapshot, "open_orders", ()) or ()),
+                    "positions": len(getattr(snapshot, "positions", ()) or ()),
+                },
+                exc_info=True,
+            )
         return snapshot
 
     def _fetch_account_state(self) -> tuple[Any | None, float | None]:

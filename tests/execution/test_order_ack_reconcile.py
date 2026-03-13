@@ -608,3 +608,286 @@ def test_synchronize_broker_state_bootstraps_pending_from_order_events(monkeypat
         for row in fill_rows
     )
     assert engine._pending_orders == {}
+
+
+def test_pending_bootstrap_ignores_older_pending_when_latest_terminal(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_ARTIFACT_SCAN_LINES", "2000")
+    monkeypatch.setenv("AI_TRADING_PENDING_RECONCILE_ARTIFACT_MAX_CANDIDATES", "50")
+
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    order_events_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "ts": "2026-03-11T18:35:25.493191+00:00",
+            "event": "status_transition",
+            "source": "initial",
+            "order_id": "order-terminal",
+            "client_order_id": "client-terminal",
+            "symbol": "IBM",
+            "side": "buy",
+            "status": "pending_new",
+            "order_type": "limit",
+            "quantity": 2,
+        },
+        {
+            "ts": "2026-03-12T01:32:45.606000+00:00",
+            "event": "final_state",
+            "source": "broker_reconcile",
+            "order_id": "order-terminal",
+            "client_order_id": "client-terminal",
+            "symbol": "IBM",
+            "side": "buy",
+            "status": "filled",
+            "order_type": "limit",
+            "quantity": 2,
+            "filled_qty": 2,
+        },
+        {
+            "ts": "2026-03-11T18:39:54.923866+00:00",
+            "event": "status_transition",
+            "source": "initial",
+            "order_id": "order-pending",
+            "client_order_id": "client-pending",
+            "symbol": "MSFT",
+            "side": "buy",
+            "status": "pending_new",
+            "order_type": "limit",
+            "quantity": 3,
+        },
+    ]
+    with order_events_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row))
+            handle.write("\n")
+
+    engine = _build_engine(_AckStubClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {}
+
+    candidates = engine._load_pending_candidates_from_runtime_order_events()
+    assert "order-pending" in candidates
+    assert "order-terminal" not in candidates
+
+
+def test_synchronize_broker_state_reconciles_pending_with_get_order_lookup(monkeypatch, tmp_path):
+    class _BrokerGetOrderClient:
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order(self, order_id: str):
+            return {
+                "id": order_id,
+                "client_order_id": "client-get-order",
+                "symbol": "CSCO",
+                "side": "buy",
+                "qty": "3",
+                "status": "filled",
+                "filled_qty": "3",
+                "filled_avg_price": "51.25",
+                "limit_price": "51.00",
+                "filled_at": "2026-03-11T20:10:00+00:00",
+            }
+
+        def get_all_positions(self):
+            return []
+
+        def get_account(self):
+            return SimpleNamespace(cash="10000", buying_power="10000")
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    engine = _build_engine(_BrokerGetOrderClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {
+        "order-get-order": {
+            "status": "pending_new",
+            "symbol": "CSCO",
+            "side": "buy",
+            "qty": 3,
+            "order_type": "limit",
+            "client_order_id": "client-get-order",
+        }
+    }
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    fill_events_path = tmp_path / "runtime" / "fill_events.jsonl"
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fill_rows = [
+        json.loads(line)
+        for line in fill_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("source") == "broker_reconcile"
+        and row.get("order_id") == "order-get-order"
+        and row.get("status") == "filled"
+        for row in order_rows
+    )
+    assert any(
+        row.get("event") == "fill_recorded"
+        and row.get("order_id") == "order-get-order"
+        and row.get("symbol") == "CSCO"
+        for row in fill_rows
+    )
+    fill_row = next(
+        row
+        for row in fill_rows
+        if row.get("event") == "fill_recorded" and row.get("order_id") == "order-get-order"
+    )
+    assert float(fill_row["expected_price"]) == pytest.approx(51.0)
+    assert float(fill_row["slippage_bps"]) == pytest.approx(49.0196078431, rel=1e-6)
+    assert engine._pending_orders == {}
+
+
+def test_synchronize_broker_state_terminalizes_missing_lookup(monkeypatch, tmp_path):
+    class _MissingLookupClient:
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            raise RuntimeError("order not found")
+
+        def get_all_positions(self):
+            return []
+
+        def get_account(self):
+            return SimpleNamespace(cash="10000", buying_power="10000")
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    engine = _build_engine(_MissingLookupClient())
+    _prime_engine(engine, monkeypatch)
+    engine._pending_orders = {
+        "order-missing": {
+            "status": "pending_new",
+            "symbol": "CSCO",
+            "side": "buy",
+            "qty": 3,
+            "order_type": "limit",
+            "client_order_id": "client-missing",
+        }
+    }
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("source") == "broker_reconcile"
+        and row.get("order_id") == "order-missing"
+        and row.get("status") == "canceled"
+        for row in order_rows
+    )
+    assert engine._pending_orders == {}
+
+
+def test_synchronize_broker_state_initializes_client_before_reconcile(monkeypatch, tmp_path):
+    class _InitClient:
+        def get_orders(self, status: str = "open"):
+            return []
+
+        def get_order_by_id(self, order_id: str):
+            return {
+                "id": order_id,
+                "client_order_id": "client-init",
+                "symbol": "MSFT",
+                "side": "buy",
+                "qty": "2",
+                "status": "filled",
+                "filled_qty": "2",
+                "filled_avg_price": "417.50",
+                "limit_price": "417.00",
+                "filled_at": "2026-03-12T00:59:00+00:00",
+            }
+
+        def get_all_positions(self):
+            return []
+
+        def get_account(self):
+            return SimpleNamespace(cash="10000", buying_power="10000")
+
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+
+    engine = _build_engine(_AckStubClient())
+    _prime_engine(engine, monkeypatch)
+    engine.trading_client = None
+    engine.is_initialized = False
+    client = _InitClient()
+    init_calls = {"count": 0}
+
+    def _ensure_initialized():
+        init_calls["count"] += 1
+        engine.trading_client = client
+        engine.is_initialized = True
+        return True
+
+    monkeypatch.setattr(engine, "_ensure_initialized", _ensure_initialized)
+    engine._pending_orders = {
+        "order-init": {
+            "status": "pending_new",
+            "symbol": "MSFT",
+            "side": "buy",
+            "qty": 2,
+            "order_type": "limit",
+            "client_order_id": "client-init",
+        }
+    }
+
+    snapshot = engine.synchronize_broker_state()
+
+    assert snapshot is not None
+    assert init_calls["count"] >= 1
+    order_events_path = tmp_path / "runtime" / "order_events.jsonl"
+    order_rows = [
+        json.loads(line)
+        for line in order_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        row.get("event") == "final_state"
+        and row.get("source") == "broker_reconcile"
+        and row.get("order_id") == "order-init"
+        and row.get("status") == "filled"
+        for row in order_rows
+    )
+    fill_events_path = tmp_path / "runtime" / "fill_events.jsonl"
+    fill_rows = [
+        json.loads(line)
+        for line in fill_events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    fill_row = next(
+        row
+        for row in fill_rows
+        if row.get("event") == "fill_recorded" and row.get("order_id") == "order-init"
+    )
+    assert float(fill_row["expected_price"]) == pytest.approx(417.0)
+    assert float(fill_row["slippage_bps"]) == pytest.approx(11.9904076739, rel=1e-6)
+    assert engine._pending_orders == {}

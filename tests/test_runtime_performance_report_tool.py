@@ -164,6 +164,105 @@ def test_build_report_reconstructs_fifo_realized_pnl(tmp_path: Path) -> None:
     assert trade["daily_expectancy"][-1]["date"] == "2026-01-03"
 
 
+def test_build_report_separates_live_and_reconcile_fill_expectancy(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    order_events_path = tmp_path / "order_events.jsonl"
+
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 1,
+                    "entry_price": 100.0,
+                    "entry_time": "2026-02-02T14:30:00+00:00",
+                    "order_id": "live-1",
+                },
+                {
+                    "symbol": "AAPL",
+                    "side": "sell",
+                    "qty": 1,
+                    "entry_price": 101.0,
+                    "entry_time": "2026-02-02T15:30:00+00:00",
+                    "order_id": "live-2",
+                },
+                {
+                    "symbol": "MSFT",
+                    "side": "buy",
+                    "qty": 1,
+                    "entry_price": 200.0,
+                    "entry_time": "2026-02-02T16:00:00+00:00",
+                    "order_id": "reconcile-1",
+                },
+                {
+                    "symbol": "MSFT",
+                    "side": "sell",
+                    "qty": 1,
+                    "entry_price": 190.0,
+                    "entry_time": "2026-02-02T17:00:00+00:00",
+                    "order_id": "reconcile-2",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    order_events_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T14:30:10+00:00",
+                        "order_id": "live-1",
+                        "source": "initial",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T15:30:10+00:00",
+                        "order_id": "live-2",
+                        "source": "final",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T16:00:10+00:00",
+                        "order_id": "reconcile-1",
+                        "source": "broker_reconcile",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T17:00:10+00:00",
+                        "order_id": "reconcile-2",
+                        "source": "broker_reconcile",
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 0, "total_accepted_records": 0, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+    trade = report["trade_history"]
+
+    assert trade["pnl_available"] is True
+    assert trade["closed_trades"] == 2
+    assert trade["closed_trades_by_fill_source"]["live"] == 1
+    assert trade["closed_trades_by_fill_source"]["reconcile_backfill"] == 1
+    assert trade["daily_expectancy_live"][0]["net_pnl"] == pytest.approx(1.0)
+    assert trade["daily_expectancy_reconcile_backfill"][0]["net_pnl"] == pytest.approx(-10.0)
+
+
 def test_build_report_enriches_direct_rows_with_tca_costs(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"

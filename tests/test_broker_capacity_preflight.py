@@ -210,3 +210,65 @@ def test_submit_limit_order_uses_explicit_broker_when_provider_is_paper(monkeypa
     assert broker.submit_calls == 0
     assert engine.stats["capacity_skips"] == 1
     assert engine.stats["skipped_orders"] == 1
+
+
+def test_submit_limit_order_reuses_capacity_exhaustion_within_cycle(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_CYCLE_BLOCK_ENABLED", "1")
+    monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
+    monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "0")
+
+    call_counter = {"count": 0}
+
+    def _always_insufficient(*_args, **_kwargs):
+        call_counter["count"] += 1
+        return CapacityCheck(False, 0, "insufficient_buying_power")
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _always_insufficient)
+
+    engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
+    engine.is_initialized = True
+    engine.trading_client = FakeBroker(buying_power="0", orders=[])
+
+    first = engine.submit_limit_order("TSLA", "buy", 10, limit_price=50)
+    second = engine.submit_limit_order("AAPL", "buy", 10, limit_price=50)
+
+    assert first is None
+    assert second is None
+    assert call_counter["count"] == 2
+    assert engine.stats["capacity_skips"] == 2
+    assert engine.stats["skipped_orders"] == 2
+
+
+def test_start_cycle_resets_capacity_exhaustion_cache(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_CYCLE_BLOCK_ENABLED", "1")
+    monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
+    monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "0")
+
+    call_counter = {"count": 0}
+
+    def _always_insufficient(*_args, **_kwargs):
+        call_counter["count"] += 1
+        return CapacityCheck(False, 0, "insufficient_buying_power")
+
+    monkeypatch.setattr(lt, "_call_preflight_capacity", _always_insufficient)
+
+    engine = ExecutionEngine(execution_mode="paper", shadow_mode=False)
+    engine.is_initialized = True
+    broker = FakeBroker(buying_power="0", orders=[])
+    engine.trading_client = broker
+
+    first = engine.submit_limit_order("TSLA", "buy", 10, limit_price=50)
+    assert first is None
+    assert call_counter["count"] == 2
+
+    engine.start_cycle()
+    second = engine.submit_limit_order("AAPL", "buy", 10, limit_price=50)
+
+    assert second is None
+    assert call_counter["count"] == 4

@@ -39172,6 +39172,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             if _netting_pipeline_enabled(runtime):
                 cycle_engine = getattr(runtime, "execution_engine", None)
                 cycle_started = False
+                broker_snapshot = None
                 if cycle_engine is not None:
                     start_hook = getattr(cycle_engine, "start_cycle", None)
                     if callable(start_hook):
@@ -39186,6 +39187,22 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                             )
                 try:
                     _run_netting_cycle(state, runtime, loop_id, loop_start)
+                    post_sync_enabled = True
+                    try:
+                        post_sync_enabled = bool(
+                            getattr(cfg_runtime, "post_submit_broker_sync", True)
+                        )
+                    except (TypeError, ValueError):
+                        post_sync_enabled = True
+                    if post_sync_enabled:
+                        engine_for_sync = getattr(runtime, "execution_engine", None) or cycle_engine
+                        if engine_for_sync is not None and hasattr(
+                            engine_for_sync, "synchronize_broker_state"
+                        ):
+                            try:
+                                broker_snapshot = engine_for_sync.synchronize_broker_state()
+                            except Exception:
+                                logger.debug("BROKER_SYNC_REFRESH_FAILED", exc_info=True)
                 finally:
                     if cycle_started and cycle_engine is not None:
                         end_hook = getattr(cycle_engine, "end_cycle", None)
@@ -39198,6 +39215,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                                     extra={"cause": exc.__class__.__name__, "detail": str(exc)},
                                     exc_info=True,
                                 )
+                if broker_snapshot is not None:
+                    _record_broker_sync_metrics(state, broker_snapshot)
                 return
             if get_verbose_logging():
                 logger.info(

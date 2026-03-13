@@ -482,12 +482,17 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
         def __init__(self) -> None:
             self.start_cycle_called = 0
             self.end_cycle_called = 0
+            self.sync_called = 0
 
         def start_cycle(self) -> None:
             self.start_cycle_called += 1
 
         def end_cycle(self) -> None:
             self.end_cycle_called += 1
+
+        def synchronize_broker_state(self):
+            self.sync_called += 1
+            return types.SimpleNamespace(open_orders=[], positions=[])
 
     class DummyRiskEngine:
         def wait_for_exposure_update(self, _timeout: float) -> None:
@@ -528,7 +533,11 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
     monkeypatch.setattr(
         eng,
         "_resolve_trading_config",
-        lambda _runtime: types.SimpleNamespace(rth_only=False, allow_extended=True),
+        lambda _runtime: types.SimpleNamespace(
+            rth_only=False,
+            allow_extended=True,
+            post_submit_broker_sync=True,
+        ),
     )
     monkeypatch.setattr(
         eng,
@@ -552,6 +561,12 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
     monkeypatch.setattr(eng, "_log_loop_heartbeat", lambda *_a, **_k: None)
     monkeypatch.setattr(eng, "flush_log_throttle_summaries", lambda: None)
     monkeypatch.setattr(eng.provider_monitor, "is_safe_mode_active", lambda: False)
+    broker_sync_metrics_calls = {"count": 0}
+
+    def _record_broker_sync_metrics(_state, _snapshot):
+        broker_sync_metrics_calls["count"] += 1
+
+    monkeypatch.setattr(eng, "_record_broker_sync_metrics", _record_broker_sync_metrics)
 
     netting_calls = {"count": 0}
 
@@ -565,3 +580,5 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
     assert netting_calls["count"] == 1
     assert dummy_exec.start_cycle_called == 1
     assert dummy_exec.end_cycle_called == 1
+    assert dummy_exec.sync_called == 1
+    assert broker_sync_metrics_calls["count"] == 1
