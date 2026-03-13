@@ -505,6 +505,219 @@ def test_evaluate_go_no_go_fails_when_metrics_are_weak() -> None:
     assert "profit_factor" in decision["failed_checks"]
 
 
+def test_build_report_includes_daily_gate_stats_from_log(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    gate_log_path = tmp_path / "gate_effectiveness.jsonl"
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 2, "total_accepted_records": 1, "total_rejected_records": 1}),
+        encoding="utf-8",
+    )
+    gate_log_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "ts": "2026-03-10T18:00:00+00:00",
+                        "records_total": 10,
+                        "accepted_records": 2,
+                        "rejected_records": 8,
+                        "total_expected_net_edge_bps": -5.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-03-11T18:00:00+00:00",
+                        "records_total": 20,
+                        "accepted_records": 4,
+                        "rejected_records": 16,
+                        "total_expected_net_edge_bps": 7.5,
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    gate = report["gate_effectiveness"]
+    daily = gate["daily_gate_stats"]
+    assert gate["gate_log_exists"] is True
+    assert len(daily) == 2
+    assert daily[0]["date"] == "2026-03-10"
+    assert daily[0]["acceptance_rate"] == pytest.approx(0.2)
+    assert daily[1]["date"] == "2026-03-11"
+    assert daily[1]["total_expected_net_edge_bps"] == pytest.approx(7.5)
+
+
+def test_evaluate_go_no_go_lookback_days_uses_recent_window_metrics() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 100,
+            "profit_factor": 1.8,
+            "win_rate": 0.7,
+            "pnl_sum": 400.0,
+            "daily_trade_stats": [
+                {
+                    "date": "2026-03-10",
+                    "trades": 50,
+                    "wins": 35,
+                    "losses": 15,
+                    "gross_win_pnl": 350.0,
+                    "gross_loss_pnl": 100.0,
+                    "net_pnl": 250.0,
+                },
+                {
+                    "date": "2026-03-11",
+                    "trades": 50,
+                    "wins": 20,
+                    "losses": 30,
+                    "gross_win_pnl": 150.0,
+                    "gross_loss_pnl": 300.0,
+                    "net_pnl": -150.0,
+                },
+            ],
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 20.0,
+            "daily_gate_stats": [
+                {
+                    "date": "2026-03-10",
+                    "total_records": 100,
+                    "accepted_records": 20,
+                    "rejected_records": 80,
+                    "total_expected_net_edge_bps": 15.0,
+                },
+                {
+                    "date": "2026-03-11",
+                    "total_records": 100,
+                    "accepted_records": 2,
+                    "rejected_records": 98,
+                    "total_expected_net_edge_bps": -3.0,
+                },
+            ],
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.55,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "lookback_days": 1,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "profit_factor" in decision["failed_checks"]
+    assert "win_rate" in decision["failed_checks"]
+    assert "net_pnl" in decision["failed_checks"]
+    assert "acceptance_rate" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["trade_metric_scope"]["mode"] == "rolling_days"
+    assert observed["gate_metric_scope"]["mode"] == "rolling_days"
+    assert observed["closed_trades"] == 50
+    assert observed["acceptance_rate"] == pytest.approx(0.02)
+
+
+def test_evaluate_go_no_go_lookback_days_enforces_min_used_days() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 6,
+            "profit_factor": 1.5,
+            "win_rate": 0.66,
+            "pnl_sum": 12.0,
+            "daily_trade_stats": [
+                {
+                    "date": "2026-03-11",
+                    "trades": 3,
+                    "wins": 2,
+                    "losses": 1,
+                    "gross_win_pnl": 6.0,
+                    "gross_loss_pnl": 2.0,
+                    "net_pnl": 4.0,
+                },
+                {
+                    "date": "2026-03-12",
+                    "trades": 3,
+                    "wins": 2,
+                    "losses": 1,
+                    "gross_win_pnl": 6.0,
+                    "gross_loss_pnl": 2.0,
+                    "net_pnl": 4.0,
+                },
+            ],
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.3,
+            "total_expected_net_edge_bps": 10.0,
+            "daily_gate_stats": [
+                {
+                    "date": "2026-03-10",
+                    "total_records": 10,
+                    "accepted_records": 3,
+                    "rejected_records": 7,
+                    "total_expected_net_edge_bps": 2.0,
+                },
+                {
+                    "date": "2026-03-11",
+                    "total_records": 10,
+                    "accepted_records": 3,
+                    "rejected_records": 7,
+                    "total_expected_net_edge_bps": 3.0,
+                },
+                {
+                    "date": "2026-03-12",
+                    "total_records": 10,
+                    "accepted_records": 3,
+                    "rejected_records": 7,
+                    "total_expected_net_edge_bps": 4.0,
+                },
+            ],
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 2,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "lookback_days": 5,
+            "min_used_days": 3,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "trade_used_days" in decision["failed_checks"]
+    assert "gate_used_days" not in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["trade_used_days"] == 2
+    assert observed["gate_used_days"] == 3
+
+
 def test_main_fail_on_no_go_returns_nonzero(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"

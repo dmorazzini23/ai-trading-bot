@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -341,7 +343,12 @@ def test_prioritize_losing_short_reduction_targets_largest_losses(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY", "0.35")
 
     submitted: list[tuple[str, int]] = []
-    monkeypatch.setattr(engine, "_submit_cover_order", lambda symbol, qty: submitted.append((symbol, qty)) or True)
+
+    def _submit_cover_order(symbol: str, qty: int) -> bool:
+        submitted.append((symbol, qty))
+        return True
+
+    monkeypatch.setattr(engine, "_submit_cover_order", _submit_cover_order)
 
     actions = engine._prioritize_losing_short_reduction(
         positions=[
@@ -361,6 +368,149 @@ def test_prioritize_losing_short_reduction_targets_largest_losses(monkeypatch):
     assert actions == 2
     assert submitted[0][0] == "CCC"
     assert submitted[1][0] == "AAA"
+
+
+def _write_runtime_gonogo_artifacts(
+    *,
+    root: Path,
+    trade_rows: list[dict[str, Any]],
+    gate_summary: dict[str, Any],
+) -> None:
+    runtime_dir = root / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "trade_history.json").write_text(
+        json.dumps(trade_rows),
+        encoding="utf-8",
+    )
+    (runtime_dir / "gate_effectiveness_summary.json").write_text(
+        json.dumps(gate_summary),
+        encoding="utf-8",
+    )
+
+
+def test_runtime_gonogo_precheck_blocks_openings_when_gate_fails(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    _write_runtime_gonogo_artifacts(
+        root=tmp_path,
+        trade_rows=[{"symbol": "AAPL", "side": "buy", "pnl": -10.0}],
+        gate_summary={
+            "total_records": 10,
+            "total_accepted_records": 7,
+            "total_rejected_records": 3,
+            "total_expected_net_edge_bps": 0.0,
+        },
+    )
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        "runtime/gate_effectiveness_summary.json",
+    )
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", "1.1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+
+    allowed = engine._pre_execution_order_checks(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 5,
+            "client_order_id": "cid-gonogo-fail",
+            "closing_position": False,
+            "account_snapshot": {
+                "equity": 100000,
+                "buying_power": 20000,
+                "long_market_value": 20000,
+                "short_market_value": 10000,
+            },
+        }
+    )
+
+    assert allowed is False
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    _write_runtime_gonogo_artifacts(
+        root=tmp_path,
+        trade_rows=[
+            {"symbol": "AAPL", "side": "buy", "pnl": 20.0},
+            {"symbol": "MSFT", "side": "sell", "pnl": -10.0},
+        ],
+        gate_summary={
+            "total_records": 20,
+            "total_accepted_records": 10,
+            "total_rejected_records": 10,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    )
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        "runtime/gate_effectiveness_summary.json",
+    )
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", "1.1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+
+    allowed = engine._pre_execution_order_checks(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 5,
+            "client_order_id": "cid-gonogo-pass",
+            "closing_position": False,
+            "account_snapshot": {
+                "equity": 100000,
+                "buying_power": 20000,
+                "long_market_value": 20000,
+                "short_market_value": 10000,
+            },
+        }
+    )
+
+    assert allowed is True
+    assert engine.stats.get("capacity_skips", 0) == 0
+    assert engine.stats.get("skipped_orders", 0) == 0
 
 
 def test_resolve_order_submit_cap_uses_bootstrap_defaults(monkeypatch):

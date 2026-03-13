@@ -38,6 +38,38 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _normalise_iso_date(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _select_recent_daily_rows(
+    rows: Any,
+    *,
+    lookback_days: int,
+) -> tuple[list[dict[str, Any]], int]:
+    if lookback_days <= 0 or not isinstance(rows, list):
+        return [], 0
+    by_day: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            continue
+        day = _normalise_iso_date(raw.get("date"))
+        if not day:
+            continue
+        by_day[day] = dict(raw)
+    days = sorted(by_day.keys())
+    if not days:
+        return [], 0
+    selected_days = days[-int(lookback_days) :]
+    return [by_day[day] for day in selected_days], len(days)
+
+
 def _parse_timestamp(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -800,6 +832,10 @@ def _aggregate_closed_trades(
             {
                 "date": day,
                 "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "gross_win_pnl": 0.0,
+                "gross_loss_pnl": 0.0,
                 "gross_pnl": 0.0,
                 "net_pnl": 0.0,
                 "fee_cost": 0.0,
@@ -813,6 +849,12 @@ def _aggregate_closed_trades(
         bucket["fee_cost"] += fee_cost
         bucket["slippage_cost"] += slippage_cost
         bucket["entry_notional"] += notional
+        if net_pnl > 0:
+            bucket["wins"] += 1
+            bucket["gross_win_pnl"] += net_pnl
+        elif net_pnl < 0:
+            bucket["losses"] += 1
+            bucket["gross_loss_pnl"] += abs(net_pnl)
 
         source_daily = daily_by_fill_source[fill_source]
         source_bucket = source_daily.setdefault(
@@ -820,6 +862,10 @@ def _aggregate_closed_trades(
             {
                 "date": day,
                 "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "gross_win_pnl": 0.0,
+                "gross_loss_pnl": 0.0,
                 "gross_pnl": 0.0,
                 "net_pnl": 0.0,
                 "fee_cost": 0.0,
@@ -833,6 +879,12 @@ def _aggregate_closed_trades(
         source_bucket["fee_cost"] += fee_cost
         source_bucket["slippage_cost"] += slippage_cost
         source_bucket["entry_notional"] += notional
+        if net_pnl > 0:
+            source_bucket["wins"] += 1
+            source_bucket["gross_win_pnl"] += net_pnl
+        elif net_pnl < 0:
+            source_bucket["losses"] += 1
+            source_bucket["gross_loss_pnl"] += abs(net_pnl)
 
     def _daily_expectancy_from_buckets(payload: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -863,6 +915,44 @@ def _aggregate_closed_trades(
     daily_expectancy = _daily_expectancy_from_buckets(daily)
     daily_expectancy_by_fill_source = {
         source_key: _daily_expectancy_from_buckets(buckets)
+        for source_key, buckets in sorted(daily_by_fill_source.items())
+    }
+
+    def _daily_trade_stats_from_buckets(
+        payload: Mapping[str, Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for key in sorted(payload):
+            bucket = payload[key]
+            trades = int(bucket["trades"])
+            wins = int(bucket.get("wins", 0))
+            losses = int(bucket.get("losses", 0))
+            gross_win_pnl = float(bucket.get("gross_win_pnl", 0.0) or 0.0)
+            gross_loss_pnl = float(bucket.get("gross_loss_pnl", 0.0) or 0.0)
+            win_rate = (wins / trades) if trades > 0 else 0.0
+            profit_factor = (
+                gross_win_pnl / gross_loss_pnl
+                if gross_loss_pnl > 0
+                else None
+            )
+            out.append(
+                {
+                    "date": key,
+                    "trades": trades,
+                    "wins": wins,
+                    "losses": losses,
+                    "gross_win_pnl": gross_win_pnl,
+                    "gross_loss_pnl": gross_loss_pnl,
+                    "net_pnl": float(bucket.get("net_pnl", 0.0) or 0.0),
+                    "win_rate": win_rate,
+                    "profit_factor": profit_factor,
+                }
+            )
+        return out
+
+    daily_trade_stats = _daily_trade_stats_from_buckets(daily)
+    daily_trade_stats_by_fill_source = {
+        source_key: _daily_trade_stats_from_buckets(buckets)
         for source_key, buckets in sorted(daily_by_fill_source.items())
     }
 
@@ -906,6 +996,8 @@ def _aggregate_closed_trades(
                 "reconcile_backfill",
                 [],
             ),
+            "daily_trade_stats": daily_trade_stats,
+            "daily_trade_stats_by_fill_source": daily_trade_stats_by_fill_source,
             "closed_trades_by_fill_source": dict(
                 sorted(closed_trades_by_fill_source.items())
             ),
@@ -1012,11 +1104,84 @@ def _top_negative_attr(
     ]
 
 
-def summarize_gate_effectiveness(path: Path) -> dict[str, Any]:
+def _summarize_gate_effectiveness_daily(path: Path) -> list[dict[str, Any]]:
+    rows = _load_json_lines(path)
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        ts = _parse_timestamp(row.get("ts"))
+        if ts is None:
+            continue
+        day = ts.date().isoformat()
+        total_records = max(0, _as_int(row.get("records_total")) or 0)
+        accepted_records = max(0, _as_int(row.get("accepted_records")) or 0)
+        rejected_raw = _as_int(row.get("rejected_records"))
+        rejected_records = (
+            max(0, rejected_raw)
+            if rejected_raw is not None
+            else max(0, total_records - accepted_records)
+        )
+        expected_edge = _as_float(row.get("total_expected_net_edge_bps")) or 0.0
+        bucket = buckets.setdefault(
+            day,
+            {
+                "date": day,
+                "total_records": 0,
+                "accepted_records": 0,
+                "rejected_records": 0,
+                "total_expected_net_edge_bps": 0.0,
+            },
+        )
+        bucket["total_records"] += int(total_records)
+        bucket["accepted_records"] += int(accepted_records)
+        bucket["rejected_records"] += int(rejected_records)
+        bucket["total_expected_net_edge_bps"] += float(expected_edge)
+    out: list[dict[str, Any]] = []
+    for day in sorted(buckets.keys()):
+        bucket = buckets[day]
+        total_records = int(bucket["total_records"])
+        accepted_records = int(bucket["accepted_records"])
+        acceptance_rate = (
+            accepted_records / total_records if total_records > 0 else None
+        )
+        out.append(
+            {
+                "date": day,
+                "total_records": total_records,
+                "accepted_records": accepted_records,
+                "rejected_records": int(bucket["rejected_records"]),
+                "acceptance_rate": acceptance_rate,
+                "total_expected_net_edge_bps": float(
+                    bucket["total_expected_net_edge_bps"]
+                ),
+            }
+        )
+    return out
+
+
+def summarize_gate_effectiveness(
+    path: Path,
+    *,
+    gate_log_path: Path | None = None,
+) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "path": str(path),
         "exists": path.exists(),
     }
+    resolved_gate_log = (
+        Path(gate_log_path)
+        if gate_log_path is not None
+        else path.parent / "gate_effectiveness.jsonl"
+    )
+    summary["gate_log_path"] = str(resolved_gate_log)
+    summary["gate_log_exists"] = bool(resolved_gate_log.exists())
+    summary["daily_gate_stats"] = []
+    if resolved_gate_log.exists():
+        try:
+            summary["daily_gate_stats"] = _summarize_gate_effectiveness_daily(
+                resolved_gate_log
+            )
+        except Exception:
+            summary["daily_gate_stats"] = []
     if not path.exists():
         return summary
 
@@ -1065,10 +1230,14 @@ def build_report(
     trade_history_path: Path,
     gate_summary_path: Path,
     tca_path: Path | None = None,
+    gate_log_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
         "trade_history": summarize_trade_history(trade_history_path, tca_path=tca_path),
-        "gate_effectiveness": summarize_gate_effectiveness(gate_summary_path),
+        "gate_effectiveness": summarize_gate_effectiveness(
+            gate_summary_path,
+            gate_log_path=gate_log_path,
+        ),
     }
 
 
@@ -1099,6 +1268,14 @@ def evaluate_go_no_go(
     )
     if min_expected_net_edge_bps is None:
         min_expected_net_edge_bps = -50.0
+    min_used_days = _as_int(threshold_map.get("min_used_days"))
+    if min_used_days is None:
+        min_used_days = 0
+    min_used_days = max(0, int(min_used_days))
+    lookback_days = _as_int(threshold_map.get("lookback_days"))
+    if lookback_days is None:
+        lookback_days = 0
+    lookback_days = max(0, int(lookback_days))
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
     )
@@ -1121,9 +1298,118 @@ def evaluate_go_no_go(
     gate_valid = bool(gate.get("valid"))
     acceptance_rate = _as_float(gate.get("acceptance_rate"))
     expected_net_edge_bps = _as_float(gate.get("total_expected_net_edge_bps"))
+    trade_metric_scope: dict[str, Any] = {"mode": "full_history"}
+    gate_metric_scope: dict[str, Any] = {"mode": "full_history"}
+    trade_used_days = 0
+    gate_used_days = 0
+
+    if lookback_days > 0:
+        recent_trade_rows, trade_available_days = _select_recent_daily_rows(
+            trade.get("daily_trade_stats"),
+            lookback_days=lookback_days,
+        )
+        if recent_trade_rows:
+            trade_used_days = int(len(recent_trade_rows))
+            closed_trades = sum(
+                max(0, _as_int(row.get("trades")) or 0)
+                for row in recent_trade_rows
+            )
+            wins = sum(
+                max(0, _as_int(row.get("wins")) or 0)
+                for row in recent_trade_rows
+            )
+            net_pnl = sum(_as_float(row.get("net_pnl")) or 0.0 for row in recent_trade_rows)
+            gross_win_pnl = sum(
+                max(0.0, _as_float(row.get("gross_win_pnl")) or 0.0)
+                for row in recent_trade_rows
+            )
+            gross_loss_pnl = sum(
+                max(0.0, _as_float(row.get("gross_loss_pnl")) or 0.0)
+                for row in recent_trade_rows
+            )
+            win_rate = (wins / closed_trades) if closed_trades > 0 else 0.0
+            profit_factor = (
+                gross_win_pnl / gross_loss_pnl
+                if gross_loss_pnl > 0
+                else None
+            )
+            pnl_available = bool(trade.get("pnl_available")) and closed_trades > 0
+            trade_metric_scope = {
+                "mode": "rolling_days",
+                "lookback_days": int(lookback_days),
+                "available_days": int(trade_available_days),
+                "used_days": trade_used_days,
+                "start_date": str(recent_trade_rows[0].get("date")),
+                "end_date": str(recent_trade_rows[-1].get("date")),
+            }
+        else:
+            trade_metric_scope = {
+                "mode": "full_history_fallback",
+                "lookback_days": int(lookback_days),
+                "reason": "daily_trade_stats_unavailable",
+            }
+
+        recent_gate_rows, gate_available_days = _select_recent_daily_rows(
+            gate.get("daily_gate_stats"),
+            lookback_days=lookback_days,
+        )
+        if recent_gate_rows:
+            gate_used_days = int(len(recent_gate_rows))
+            total_records_window = sum(
+                max(0, _as_int(row.get("total_records")) or 0)
+                for row in recent_gate_rows
+            )
+            accepted_records_window = sum(
+                max(0, _as_int(row.get("accepted_records")) or 0)
+                for row in recent_gate_rows
+            )
+            acceptance_rate = (
+                (accepted_records_window / total_records_window)
+                if total_records_window > 0
+                else None
+            )
+            expected_net_edge_bps = sum(
+                _as_float(row.get("total_expected_net_edge_bps")) or 0.0
+                for row in recent_gate_rows
+            )
+            gate_metric_scope = {
+                "mode": "rolling_days",
+                "lookback_days": int(lookback_days),
+                "available_days": int(gate_available_days),
+                "used_days": gate_used_days,
+                "start_date": str(recent_gate_rows[0].get("date")),
+                "end_date": str(recent_gate_rows[-1].get("date")),
+                "window_total_records": int(total_records_window),
+                "window_accepted_records": int(accepted_records_window),
+            }
+        else:
+            gate_metric_scope = {
+                "mode": "full_history_fallback",
+                "lookback_days": int(lookback_days),
+                "reason": "daily_gate_stats_unavailable",
+            }
+    else:
+        trade_rows = trade.get("daily_trade_stats")
+        if isinstance(trade_rows, list):
+            trade_used_days = len({str(row.get("date")) for row in trade_rows if isinstance(row, Mapping)})
+        gate_rows = gate.get("daily_gate_stats")
+        if isinstance(gate_rows, list):
+            gate_used_days = len({str(row.get("date")) for row in gate_rows if isinstance(row, Mapping)})
+
+    enforce_used_days = bool(lookback_days > 0 and min_used_days > 0)
 
     checks = {
         "pnl_available": (pnl_available if require_pnl_available else True),
+        "trade_used_days": (
+            int(trade_used_days) >= int(min_used_days)
+            if enforce_used_days
+            else True
+        ),
+        "gate_used_days": (
+            int(gate_used_days) >= int(min_used_days)
+            if enforce_used_days
+            else True
+        ),
         "closed_trades": int(closed_trades) >= int(min_closed_trades),
         "profit_factor": (
             (profit_factor is not None and profit_factor >= float(min_profit_factor))
@@ -1168,11 +1454,15 @@ def evaluate_go_no_go(
             "min_net_pnl": float(min_net_pnl),
             "min_acceptance_rate": float(min_acceptance_rate),
             "min_expected_net_edge_bps": float(min_expected_net_edge_bps),
+            "min_used_days": int(min_used_days),
+            "lookback_days": int(lookback_days),
             "require_pnl_available": bool(require_pnl_available),
             "require_gate_valid": bool(require_gate_valid),
         },
         "observed": {
             "pnl_available": pnl_available,
+            "trade_used_days": int(trade_used_days),
+            "gate_used_days": int(gate_used_days),
             "closed_trades": int(closed_trades),
             "profit_factor": profit_factor,
             "win_rate": float(win_rate),
@@ -1180,6 +1470,8 @@ def evaluate_go_no_go(
             "gate_valid": gate_valid,
             "acceptance_rate": acceptance_rate,
             "expected_net_edge_bps": expected_net_edge_bps,
+            "trade_metric_scope": trade_metric_scope,
+            "gate_metric_scope": gate_metric_scope,
         },
     }
 
@@ -1308,6 +1600,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to gate effectiveness summary json.",
     )
     parser.add_argument(
+        "--gate-log-path",
+        default="",
+        help="Optional path to per-cycle gate effectiveness jsonl (for rolling checks).",
+    )
+    parser.add_argument(
         "--tca-path",
         default=_DEFAULT_TCA_PATH,
         help="Optional path to TCA jsonl for fee/slippage enrichment.",
@@ -1333,6 +1630,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-net-pnl", type=float, default=None)
     parser.add_argument("--min-acceptance-rate", type=float, default=None)
     parser.add_argument("--min-expected-net-edge-bps", type=float, default=None)
+    parser.add_argument("--min-used-days", type=int, default=None)
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=None,
+        help="Rolling trading-day window for go/no-go metrics; 0 or unset uses full history.",
+    )
     parser.add_argument(
         "--require-gate-valid",
         action="store_true",
@@ -1349,6 +1653,7 @@ def main(argv: list[str] | None = None) -> int:
         trade_history_path=Path(args.trade_history),
         gate_summary_path=Path(args.gate_summary),
         tca_path=(Path(args.tca_path) if args.tca_path else None),
+        gate_log_path=(Path(args.gate_log_path) if str(args.gate_log_path).strip() else None),
     )
     if args.go_no_go or args.fail_on_no_go:
         thresholds = {
@@ -1362,6 +1667,8 @@ def main(argv: list[str] | None = None) -> int:
             "min_net_pnl",
             "min_acceptance_rate",
             "min_expected_net_edge_bps",
+            "min_used_days",
+            "lookback_days",
         ):
             value = getattr(args, key)
             if value is not None:

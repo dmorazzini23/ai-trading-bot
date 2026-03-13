@@ -2353,6 +2353,22 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         gate_summary_configured or "runtime/gate_effectiveness_summary.json",
         default_relative="runtime/gate_effectiveness_summary.json",
     )
+    gate_log_configured = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_GATE_LOG_PATH",
+            "",
+            cast=str,
+        )
+        or ""
+    ).strip()
+    gate_log_path = (
+        resolve_runtime_artifact_path(
+            gate_log_configured,
+            default_relative="runtime/gate_effectiveness.jsonl",
+        )
+        if gate_log_configured
+        else None
+    )
     thresholds = {
         "min_closed_trades": int(
             get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
@@ -2376,6 +2392,14 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
                 cast=float,
             )
         ),
+        "min_used_days": max(
+            0,
+            int(get_env("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0, cast=int)),
+        ),
+        "lookback_days": max(
+            0,
+            int(get_env("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", 0, cast=int)),
+        ),
         "require_pnl_available": bool(
             get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", True, cast=bool)
         ),
@@ -2390,6 +2414,7 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         report = performance_report.build_report(
             trade_history_path=trade_history_path,
             gate_summary_path=gate_summary_path,
+            gate_log_path=gate_log_path,
         )
         decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
     except Exception as exc:

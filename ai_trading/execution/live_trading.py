@@ -2189,6 +2189,9 @@ class ExecutionEngine:
         self._long_only_context: dict[str, Any] | None = None
         self._broker_lock_logged: bool = False
         self._last_short_deleverage_mono: float = 0.0
+        self._runtime_gonogo_cache_until_mono: float = 0.0
+        self._runtime_gonogo_cache_allowed: bool = True
+        self._runtime_gonogo_cache_context: dict[str, Any] = {}
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -9361,6 +9364,205 @@ class ExecutionEngine:
             )
         return actions
 
+    def _runtime_gonogo_openings_allowed(self) -> tuple[bool, dict[str, Any]]:
+        """Return go/no-go eligibility for opening orders using runtime performance artifacts."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED")
+        if enabled is None or not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        cache_ttl_seconds = _config_float("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", 60.0)
+        try:
+            ttl = float(cache_ttl_seconds if cache_ttl_seconds is not None else 60.0)
+        except (TypeError, ValueError):
+            ttl = 60.0
+        if not math.isfinite(ttl):
+            ttl = 60.0
+        ttl = max(1.0, min(ttl, 1800.0))
+
+        now_mono = monotonic_time()
+        cache_until = float(getattr(self, "_runtime_gonogo_cache_until_mono", 0.0) or 0.0)
+        if now_mono < cache_until:
+            cached_allowed = bool(getattr(self, "_runtime_gonogo_cache_allowed", True))
+            cached_context = getattr(self, "_runtime_gonogo_cache_context", {}) or {}
+            if isinstance(cached_context, dict):
+                return cached_allowed, dict(cached_context)
+            return cached_allowed, {}
+
+        default_trade_history = str(
+            (_config_get_env("AI_TRADING_TRADE_HISTORY_PATH", "runtime/trade_history.parquet") if _config_get_env else "runtime/trade_history.parquet")
+            or ""
+        ).strip() or "runtime/trade_history.parquet"
+        trade_history_configured = str(
+            (_config_get_env("AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH", default_trade_history) if _config_get_env else default_trade_history)
+            or ""
+        ).strip()
+        gate_summary_configured = str(
+            (_config_get_env("AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH", "runtime/gate_effectiveness_summary.json") if _config_get_env else "runtime/gate_effectiveness_summary.json")
+            or ""
+        ).strip()
+        gate_log_configured = str(
+            (_config_get_env("AI_TRADING_RUNTIME_PERF_GATE_LOG_PATH", "") if _config_get_env else "")
+            or ""
+        ).strip()
+        trade_history_path = resolve_runtime_artifact_path(
+            trade_history_configured or default_trade_history,
+            default_relative=default_trade_history,
+        )
+        gate_summary_path = resolve_runtime_artifact_path(
+            gate_summary_configured or "runtime/gate_effectiveness_summary.json",
+            default_relative="runtime/gate_effectiveness_summary.json",
+        )
+        gate_log_path: Path | None = None
+        if gate_log_configured:
+            gate_log_path = resolve_runtime_artifact_path(
+                gate_log_configured,
+                default_relative="runtime/gate_effectiveness.jsonl",
+            )
+        min_closed_trades = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES",
+            None,
+        )
+        if min_closed_trades is None:
+            min_closed_trades = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20)
+        min_profit_factor = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR",
+            None,
+        )
+        if min_profit_factor is None:
+            min_profit_factor = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1)
+        min_win_rate = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE",
+            None,
+        )
+        if min_win_rate is None:
+            min_win_rate = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5)
+        min_net_pnl = _config_float("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", None)
+        if min_net_pnl is None:
+            min_net_pnl = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_NET_PNL", 0.0)
+        min_acceptance_rate = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE",
+            None,
+        )
+        if min_acceptance_rate is None:
+            min_acceptance_rate = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE",
+                0.05,
+            )
+        min_expected_net_edge_bps = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+            None,
+        )
+        if min_expected_net_edge_bps is None:
+            min_expected_net_edge_bps = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+                -50.0,
+            )
+        lookback_days = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS",
+            None,
+        )
+        if lookback_days is None:
+            lookback_days = _config_int("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", 5)
+        min_used_days = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS",
+            None,
+        )
+        if min_used_days is None:
+            min_used_days = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0)
+        thresholds = {
+            "min_closed_trades": int(
+                min_closed_trades if min_closed_trades is not None else 20
+            ),
+            "min_profit_factor": float(
+                min_profit_factor if min_profit_factor is not None else 1.1
+            ),
+            "min_win_rate": float(
+                min_win_rate if min_win_rate is not None else 0.5
+            ),
+            "min_net_pnl": float(
+                min_net_pnl if min_net_pnl is not None else 0.0
+            ),
+            "min_acceptance_rate": float(
+                min_acceptance_rate if min_acceptance_rate is not None else 0.05
+            ),
+            "min_expected_net_edge_bps": float(
+                min_expected_net_edge_bps if min_expected_net_edge_bps is not None else -50.0
+            ),
+            "min_used_days": int(max(0, min_used_days if min_used_days is not None else 0)),
+            "lookback_days": int(max(0, lookback_days if lookback_days is not None else 0)),
+            "require_pnl_available": True,
+            "require_gate_valid": False,
+        }
+        require_pnl_available = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE"
+        )
+        if require_pnl_available is None:
+            require_pnl_available = _resolve_bool_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE"
+            )
+        if require_pnl_available is not None:
+            thresholds["require_pnl_available"] = bool(require_pnl_available)
+        require_gate_valid = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID"
+        )
+        if require_gate_valid is None:
+            require_gate_valid = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID")
+        if require_gate_valid is not None:
+            thresholds["require_gate_valid"] = bool(require_gate_valid)
+        fail_closed = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_FAIL_CLOSED")
+        if fail_closed is None:
+            fail_closed = True
+
+        try:
+            from ai_trading.tools import runtime_performance_report as performance_report
+
+            report = performance_report.build_report(
+                trade_history_path=trade_history_path,
+                gate_summary_path=gate_summary_path,
+                gate_log_path=gate_log_path,
+            )
+            decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
+            allowed = bool(decision.get("gate_passed"))
+            context = {
+                "enabled": True,
+                "gate_passed": allowed,
+                "failed_checks": list(decision.get("failed_checks", [])),
+                "thresholds": dict(decision.get("thresholds", {})),
+                "observed": dict(decision.get("observed", {})),
+                "paths": {
+                    "trade_history": str(trade_history_path),
+                    "gate_summary": str(gate_summary_path),
+                },
+            }
+        except Exception as exc:
+            allowed = not bool(fail_closed)
+            context = {
+                "enabled": True,
+                "gate_passed": allowed,
+                "failed_checks": ["runtime_gonogo_eval_failed"],
+                "reason": "runtime_gonogo_eval_failed",
+                "error": str(exc),
+                "paths": {
+                    "trade_history": str(trade_history_path),
+                    "gate_summary": str(gate_summary_path),
+                },
+            }
+            logger.warning(
+                "EXECUTION_RUNTIME_GONOGO_EVAL_FAILED",
+                extra={
+                    "cause": exc.__class__.__name__,
+                    "detail": str(exc),
+                    "fail_closed": bool(fail_closed),
+                    "allowed": bool(allowed),
+                },
+            )
+
+        self._runtime_gonogo_cache_allowed = bool(allowed)
+        self._runtime_gonogo_cache_context = dict(context)
+        self._runtime_gonogo_cache_until_mono = now_mono + ttl
+        return bool(allowed), dict(context)
+
     def _pre_execution_order_checks(self, order: Mapping[str, Any] | None = None) -> bool:
         """Run order-specific pre-execution checks."""
 
@@ -9432,6 +9634,33 @@ class ExecutionEngine:
                     "exposure_normalization_gate",
                     exposure_context,
                     extra=skip_payload | {"detail": "exposure_normalization_gate"},
+                )
+                return False
+            gonogo_allowed, gonogo_context = self._runtime_gonogo_openings_allowed()
+            if not gonogo_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "runtime_gonogo_gate",
+                    "context": gonogo_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_RUNTIME_GONOGO", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "runtime_gonogo_gate",
+                    gonogo_context,
+                    extra=skip_payload | {"detail": "runtime_gonogo_gate"},
                 )
                 return False
 

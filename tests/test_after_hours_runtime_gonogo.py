@@ -20,6 +20,8 @@ def test_runtime_performance_go_no_go_gate_disabled(monkeypatch) -> None:
 def test_runtime_performance_go_no_go_gate_enabled(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "25")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", "5")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", "3")
 
     captured: dict[str, object] = {}
 
@@ -48,6 +50,8 @@ def test_runtime_performance_go_no_go_gate_enabled(monkeypatch) -> None:
     thresholds = captured["thresholds"]
     assert isinstance(thresholds, dict)
     assert thresholds.get("min_closed_trades") == 25
+    assert thresholds.get("lookback_days") == 5
+    assert thresholds.get("min_used_days") == 3
 
 
 def test_runtime_performance_go_no_go_gate_resolves_runtime_paths(
@@ -64,9 +68,10 @@ def test_runtime_performance_go_no_go_gate_resolves_runtime_paths(
 
     captured: dict[str, object] = {}
 
-    def _build_report(*, trade_history_path, gate_summary_path):
+    def _build_report(*, trade_history_path, gate_summary_path, gate_log_path=None):
         captured["trade_history_path"] = trade_history_path
         captured["gate_summary_path"] = gate_summary_path
+        captured["gate_log_path"] = gate_log_path
         return {"trade_history": {"pnl_available": True}, "gate_effectiveness": {"valid": True}}
 
     monkeypatch.setattr(rpt, "build_report", _build_report)
@@ -91,3 +96,4 @@ def test_runtime_performance_go_no_go_gate_resolves_runtime_paths(
     assert captured["gate_summary_path"] == (
         tmp_path / "data-root" / "runtime" / "gate_effectiveness_summary.json"
     ).resolve()
+    assert captured["gate_log_path"] is None

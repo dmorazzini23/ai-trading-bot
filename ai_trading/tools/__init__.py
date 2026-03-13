@@ -7,5 +7,6 @@ __all__ = [
     "live_cutover_drill",
     "replay_governance",
     "refresh_meta_model",
+    "runtime_gonogo_status",
     "runtime_performance_report",
 ]
