@@ -2007,6 +2007,9 @@ _BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
 _BACKUP_PRIMARY_PROBE_AT: dict[tuple[str, str], datetime] = {}
 _BACKUP_SKIP_WINDOW = timedelta(minutes=10)
 _GLOBAL_BACKUP_SKIP_UNTIL: dict[str, datetime] = {}
+_BACKUP_PRIMARY_PROBE_LAST_SEEN_AT: dict[str, datetime] = {}
+_BACKUP_SKIP_ACTIVE_SINCE: dict[str, datetime] = {}
+_BACKUP_PRIMARY_PROBE_ALERT_AT: dict[str, datetime] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(get_env("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
@@ -2064,6 +2067,15 @@ def _set_global_backup_skip(timeframe: str, *, until: datetime | float | None = 
             until_dt = None
     if until_dt is None:
         return
+    current_until = _GLOBAL_BACKUP_SKIP_UNTIL.get(key)
+    if isinstance(current_until, datetime):
+        try:
+            if current_until.tzinfo is None:
+                current_until = current_until.replace(tzinfo=UTC)
+        except Exception:
+            current_until = None
+    if isinstance(current_until, datetime) and current_until >= until_dt:
+        return
     _GLOBAL_BACKUP_SKIP_UNTIL[key] = until_dt
 
 
@@ -2088,6 +2100,39 @@ def _clear_global_backup_skip(timeframe: str) -> None:
     key = str(timeframe or "").strip()
     if key:
         _GLOBAL_BACKUP_SKIP_UNTIL.pop(key, None)
+        _clear_backup_probe_watch(key)
+
+
+def _timeframe_has_active_backup_skip(timeframe: str) -> bool:
+    """Return True when any symbol retains an active backup skip for ``timeframe``."""
+
+    tf = str(timeframe or "").strip()
+    if not tf:
+        return False
+    now_dt = datetime.now(tz=UTC)
+    for (symbol_key, timeframe_key), until_raw in list(_BACKUP_SKIP_UNTIL.items()):
+        if str(timeframe_key or "").strip() != tf:
+            continue
+        until_dt: datetime | None
+        if isinstance(until_raw, datetime):
+            until_dt = until_raw
+            if until_dt.tzinfo is None:
+                try:
+                    until_dt = until_dt.replace(tzinfo=UTC)
+                except Exception:
+                    until_dt = None
+        else:
+            try:
+                until_dt = datetime.fromtimestamp(float(until_raw), tz=UTC)
+            except Exception:
+                until_dt = None
+        if until_dt is None:
+            _BACKUP_SKIP_UNTIL.pop((symbol_key, timeframe_key), None)
+            continue
+        if until_dt > now_dt:
+            return True
+        _BACKUP_SKIP_UNTIL.pop((symbol_key, timeframe_key), None)
+    return False
 
 
 def _backup_primary_probe_interval() -> timedelta:
@@ -2101,6 +2146,131 @@ def _backup_primary_probe_interval() -> timedelta:
     if seconds < 0:
         seconds = 0
     return timedelta(seconds=seconds)
+
+
+def _backup_probe_watch_enabled(timeframe: str) -> bool:
+    tf_norm = str(timeframe or "").strip().lower()
+    if tf_norm != "1min":
+        return False
+    try:
+        return bool(get_env("AI_TRADING_BACKUP_PROBE_GUARD_ENABLED", True, cast=bool))
+    except Exception:
+        return True
+
+
+def _backup_probe_missing_threshold() -> timedelta:
+    try:
+        seconds = int(get_env("AI_TRADING_BACKUP_PROBE_MISSING_SECONDS", 300, cast=int))
+    except Exception:
+        seconds = 300
+    seconds = max(0, min(seconds, 7200))
+    return timedelta(seconds=seconds)
+
+
+def _backup_probe_alert_cooldown() -> timedelta:
+    try:
+        seconds = int(get_env("AI_TRADING_BACKUP_PROBE_ALERT_COOLDOWN_SECONDS", 300, cast=int))
+    except Exception:
+        seconds = 300
+    seconds = max(0, min(seconds, 7200))
+    return timedelta(seconds=seconds)
+
+
+def _record_primary_probe_seen(
+    timeframe: str,
+    *,
+    symbol: str | None = None,
+    route: str | None = None,
+) -> None:
+    """Record that a primary recovery probe was attempted for ``timeframe``."""
+
+    tf_key = str(timeframe or "").strip()
+    if not tf_key:
+        return
+    now_dt = datetime.now(tz=UTC)
+    _BACKUP_PRIMARY_PROBE_LAST_SEEN_AT[tf_key] = now_dt
+    _BACKUP_PRIMARY_PROBE_ALERT_AT.pop(tf_key, None)
+    if (
+        _get_global_backup_skip_until(tf_key) is None
+        and not _timeframe_has_active_backup_skip(tf_key)
+    ):
+        _BACKUP_SKIP_ACTIVE_SINCE.pop(tf_key, None)
+
+
+def _clear_backup_probe_watch(timeframe: str) -> None:
+    tf_key = str(timeframe or "").strip()
+    if not tf_key:
+        return
+    _BACKUP_SKIP_ACTIVE_SINCE.pop(tf_key, None)
+    _BACKUP_PRIMARY_PROBE_ALERT_AT.pop(tf_key, None)
+
+
+def _note_backup_skip_activity(
+    timeframe: str,
+    *,
+    symbol: str | None = None,
+    skip_until: datetime | None = None,
+    global_skip: bool = False,
+) -> None:
+    """Emit an alert when backup skip remains active without recent primary probes."""
+
+    if not _backup_probe_watch_enabled(timeframe):
+        return
+    tf_key = str(timeframe or "").strip()
+    if not tf_key:
+        return
+    now_dt = datetime.now(tz=UTC)
+    active_since = _BACKUP_SKIP_ACTIVE_SINCE.setdefault(tf_key, now_dt)
+    threshold = _backup_probe_missing_threshold()
+    if threshold <= timedelta(0):
+        return
+    last_probe_dt = _BACKUP_PRIMARY_PROBE_LAST_SEEN_AT.get(tf_key)
+    reference_dt = last_probe_dt if isinstance(last_probe_dt, datetime) else active_since
+    missing_duration = now_dt - reference_dt
+    if missing_duration < threshold:
+        return
+
+    cooldown = _backup_probe_alert_cooldown()
+    last_alert_dt = _BACKUP_PRIMARY_PROBE_ALERT_AT.get(tf_key)
+    if (
+        isinstance(last_alert_dt, datetime)
+        and cooldown > timedelta(0)
+        and (now_dt - last_alert_dt) < cooldown
+    ):
+        return
+
+    probe_interval = _backup_primary_probe_interval()
+    payload = {
+        "provider": "alpaca",
+        "timeframe": tf_key,
+        "symbol": symbol,
+        "global_skip": bool(global_skip),
+        "skip_until": skip_until.isoformat() if isinstance(skip_until, datetime) else None,
+        "skip_active_since": active_since.isoformat(),
+        "last_probe_at": last_probe_dt.isoformat() if isinstance(last_probe_dt, datetime) else None,
+        "missing_duration_s": round(max(0.0, missing_duration.total_seconds()), 3),
+        "threshold_s": round(max(0.0, threshold.total_seconds()), 3),
+        "probe_interval_s": round(max(0.0, probe_interval.total_seconds()), 3),
+    }
+    _incr(
+        "data.fetch.primary_probe_missing",
+        value=1.0,
+        tags={"provider": "alpaca", "timeframe": tf_key},
+    )
+    logger.error(
+        "ALERT_PRIMARY_RECOVERY_PROBE_MISSING",
+        extra=_norm_extra(payload),
+    )
+    try:
+        provider_monitor.alert_manager.create_alert(
+            AlertType.SYSTEM,
+            AlertSeverity.CRITICAL,
+            f"Primary recovery probe missing while backup skip active ({tf_key})",
+            metadata=_coerce_json_primitives(payload),
+        )
+    except Exception:
+        logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
+    _BACKUP_PRIMARY_PROBE_ALERT_AT[tf_key] = now_dt
 
 
 def _schedule_backup_primary_probe(key: tuple[str, str]) -> None:
@@ -2128,6 +2298,9 @@ def _backup_primary_probe_due(symbol: str, timeframe: str) -> bool:
     except Exception:
         now_dt = datetime.now()
     due_at = _BACKUP_PRIMARY_PROBE_AT.get(key)
+    if not isinstance(due_at, datetime):
+        _BACKUP_PRIMARY_PROBE_AT[key] = now_dt + interval
+        return False
     if isinstance(due_at, datetime):
         try:
             if due_at.tzinfo is None and now_dt.tzinfo is not None:
@@ -2932,6 +3105,8 @@ def _mark_fallback(
             backup_canon = str(backup_label)
     using_backup_flag = active_canon != primary_canon
     reason_value = log_extra.get("reason") or log_extra.get("fallback_reason") or reason
+    if not reason_value and using_backup_flag:
+        reason_value = "upstream_unavailable"
     gap_ratio_recent: float | None = None
     try:
         if log_extra.get("gap_ratio") is not None:
@@ -2947,6 +3122,8 @@ def _mark_fallback(
         using_backup=using_backup_flag,
         reason=reason_value,
         cooldown_sec=cooldown_seconds,
+        status="degraded" if using_backup_flag else "healthy",
+        data_status="degraded" if using_backup_flag else "healthy",
         timeframe=timeframe,
         safe_mode=is_safe_mode_active(),
         gap_ratio_recent=gap_ratio_recent,
@@ -2961,6 +3138,23 @@ def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
 
 def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | None = None) -> None:
     key = (symbol, timeframe)
+    now_dt = datetime.now(tz=UTC)
+    existing_until = _BACKUP_SKIP_UNTIL.get(key)
+    if isinstance(existing_until, datetime):
+        if existing_until.tzinfo is None:
+            try:
+                existing_until = existing_until.replace(tzinfo=UTC)
+            except Exception:
+                existing_until = None
+    elif existing_until is not None:
+        try:
+            existing_until = datetime.fromtimestamp(float(existing_until), tz=UTC)
+        except Exception:
+            existing_until = None
+    active_existing_skip = bool(
+        isinstance(existing_until, datetime)
+        and existing_until > now_dt
+    )
     if until is not None:
         if isinstance(until, datetime):
             until_dt = until
@@ -2981,19 +3175,30 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 _SKIPPED_SYMBOLS.add(key)
                 _set_global_backup_skip(timeframe)
                 return
-        _BACKUP_SKIP_UNTIL[key] = until_dt
-        _schedule_backup_primary_probe(key)
+        if not active_existing_skip:
+            _BACKUP_SKIP_UNTIL[key] = until_dt
+        if key not in _BACKUP_PRIMARY_PROBE_AT:
+            _schedule_backup_primary_probe(key)
         _SKIPPED_SYMBOLS.add(key)
-        _set_global_backup_skip(timeframe, until=until_dt)
+        effective_until = existing_until if active_existing_skip else until_dt
+        if _get_global_backup_skip_until(timeframe) is None:
+            _set_global_backup_skip(timeframe, until=effective_until)
         return
     _SKIPPED_SYMBOLS.add(key)
+    if active_existing_skip:
+        if key not in _BACKUP_PRIMARY_PROBE_AT:
+            _schedule_backup_primary_probe(key)
+        if _get_global_backup_skip_until(timeframe) is None:
+            _set_global_backup_skip(timeframe, until=existing_until)
+        return
     try:
-        until_dt = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
+        until_dt = now_dt + _BACKUP_SKIP_WINDOW
     except Exception:
         until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
     _schedule_backup_primary_probe(key)
-    _set_global_backup_skip(timeframe, until=until_dt)
+    if _get_global_backup_skip_until(timeframe) is None:
+        _set_global_backup_skip(timeframe, until=until_dt)
 
 
 def _clear_backup_skip(symbol: str, timeframe: str) -> None:
@@ -3001,6 +3206,9 @@ def _clear_backup_skip(symbol: str, timeframe: str) -> None:
     _BACKUP_SKIP_UNTIL.pop(key, None)
     _BACKUP_PRIMARY_PROBE_AT.pop(key, None)
     _SKIPPED_SYMBOLS.discard(key)
+    tf_key = str(timeframe or "").strip()
+    if tf_key and _get_global_backup_skip_until(tf_key) is None and not _timeframe_has_active_backup_skip(tf_key):
+        _clear_backup_probe_watch(tf_key)
 
 
 def _clear_minute_fallback_state(
@@ -3057,6 +3265,8 @@ def _clear_minute_fallback_state(
             except Exception:
                 backup_canon = backup_label
         _record_provider_success_event()
+        if not _timeframe_has_active_backup_skip(timeframe):
+            _clear_global_backup_skip(timeframe)
         runtime_state.update_data_provider_state(
             primary=primary_canon,
             active=primary_canon,
@@ -3064,6 +3274,8 @@ def _clear_minute_fallback_state(
             using_backup=False,
             reason="primary_recovered",
             cooldown_sec=0.0,
+            status="healthy",
+            data_status="healthy",
             timeframe=timeframe,
             safe_mode=is_safe_mode_active(),
         )
@@ -7658,6 +7870,7 @@ def _fetch_bars(
     adjustment: str = "raw",
     _from_get_bars: bool = False,
     return_meta: bool = False,
+    bypass_backup_skip: bool = False,
 ) -> pd.DataFrame | None:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
@@ -8416,12 +8629,7 @@ def _fetch_bars(
     now = datetime.now(UTC)
     tf_key = (symbol, _interval)
     skip_until_dt = _BACKUP_SKIP_UNTIL.get(tf_key)
-    global_skip_until_dt = _get_global_backup_skip_until(_interval)
     skip_from_global = False
-    if isinstance(global_skip_until_dt, datetime):
-        if not isinstance(skip_until_dt, datetime) or global_skip_until_dt >= skip_until_dt:
-            skip_until_dt = global_skip_until_dt
-            skip_from_global = True
     if pytest_active and skip_until_dt is not None:
         preserve_skip = bool(get_env("ENABLE_HTTP_FALLBACK"))
         if not preserve_skip:
@@ -8429,6 +8637,7 @@ def _fetch_bars(
             skip_until_dt = None
     if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
         _clear_backup_skip(symbol, _interval)
+        _clear_global_backup_skip(_interval)
         skip_until_dt = None
     if skip_until_dt is not None and not isinstance(skip_until_dt, datetime):
         try:
@@ -8440,7 +8649,30 @@ def _fetch_bars(
         if skip_until_dt <= now:
             _clear_backup_skip(symbol, _interval)
             skip_until_dt = None
+    global_skip_until_dt = _get_global_backup_skip_until(_interval)
+    if isinstance(global_skip_until_dt, datetime) and skip_until_dt is None:
+        skip_until_dt = global_skip_until_dt
+        skip_from_global = True
     skip_window_active = isinstance(skip_until_dt, datetime) and skip_until_dt > now
+    if skip_window_active and bypass_backup_skip:
+        skip_window_active = False
+        logger.info(
+            "ALPACA_PRIMARY_RECOVERY_PROBE_BYPASS_SKIP",
+            extra=_norm_extra(
+                {
+                    "symbol": symbol,
+                    "timeframe": _interval,
+                    "feed": _feed,
+                    "skip_until": skip_until_dt.isoformat() if isinstance(skip_until_dt, datetime) else None,
+                    "global_skip": skip_from_global,
+                }
+            ),
+        )
+        _record_primary_probe_seen(
+            _interval,
+            symbol=symbol,
+            route="bypass_backup_skip",
+        )
     if skip_window_active and tf_key in _SKIPPED_SYMBOLS:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_interval = interval_map.get(_interval)
@@ -8463,6 +8695,12 @@ def _fetch_bars(
             logger.info(
                 "PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE",
                 extra=_norm_extra(skip_payload),
+            )
+            _note_backup_skip_activity(
+                _interval,
+                symbol=symbol,
+                skip_until=skip_until_dt if isinstance(skip_until_dt, datetime) else None,
+                global_skip=bool(skip_from_global),
             )
             try:
                 _state["empty_data_logged"] = True
@@ -8499,6 +8737,12 @@ def _fetch_bars(
                 logger.info(
                     "PRIMARY_PROVIDER_SKIP_WINDOW_ACTIVE",
                     extra=_norm_extra(skip_payload),
+                )
+                _note_backup_skip_activity(
+                    _interval,
+                    symbol=symbol,
+                    skip_until=skip_until_dt if isinstance(skip_until_dt, datetime) else None,
+                    global_skip=bool(skip_from_global),
                 )
                 try:
                     _state["empty_data_logged"] = True
@@ -11434,15 +11678,25 @@ def get_minute_df(
             skip_until_dt = datetime.fromtimestamp(float(skip_until_raw), tz=UTC)
         except Exception:
             skip_until_dt = None
+    now_skip_eval = datetime.now(tz=UTC)
+    if isinstance(skip_until_dt, datetime) and skip_until_dt <= now_skip_eval:
+        skip_until_dt = None
     global_skip_until_dt = _get_global_backup_skip_until("1Min")
     if isinstance(global_skip_until_dt, datetime):
         global_skip_window_active = True
-        if skip_until_dt is None or global_skip_until_dt >= skip_until_dt:
+        if skip_until_dt is None:
             skip_until_dt = global_skip_until_dt
     try:
         skip_window_active = bool(skip_until_dt and datetime.now(tz=UTC) < skip_until_dt)
     except Exception:
         skip_window_active = False
+    if skip_window_active:
+        _note_backup_skip_activity(
+            "1Min",
+            symbol=symbol,
+            skip_until=skip_until_dt if isinstance(skip_until_dt, datetime) else None,
+            global_skip=bool(global_skip_window_active),
+        )
 
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
@@ -11973,27 +12227,44 @@ def get_minute_df(
     if pytest_active and not force_primary_fetch and not forced_provider_label:
         if not forced_skip_engaged:
             force_primary_fetch = True
+    def _primary_probe_allowed() -> bool:
+        allow_probe_when_disabled = bool(
+            get_env("AI_TRADING_BACKUP_PROBE_ALLOW_WHEN_DISABLED", True, cast=bool)
+        )
+        return bool(
+            (not forced_provider_label)
+            and (not safe_mode_forced_skip)
+            and _has_alpaca_keys()
+            and window_has_session
+            and fallback_allowed_flag
+            and (allow_probe_when_disabled or (not _disable_signal_active(primary_label)))
+        )
+
+    def _mark_primary_probe_due(*, route: str) -> None:
+        _state["backup_probe_due"] = True
+        _state["fallback_reason"] = "primary_probe_recheck"
+        _record_primary_probe_seen("1Min", symbol=symbol, route=route)
+        logger.info(
+            "ALPACA_PRIMARY_RECOVERY_PROBE",
+            extra={"symbol": symbol, "timeframe": "1Min", "route": route},
+        )
+
     if (
         not force_primary_fetch
         and skip_primary_due_to_fallback
-        and not forced_provider_label
-        and not safe_mode_forced_skip
-        and window_has_session
-        and fallback_allowed_flag
-        and not _disable_signal_active(primary_label)
+        and _primary_probe_allowed()
         and _backup_primary_probe_due(symbol, "1Min")
     ):
         skip_primary_due_to_fallback = False
         force_primary_fetch = True
-        _state["backup_probe_due"] = True
-        _state["fallback_reason"] = "primary_probe_recheck"
-        logger.info(
-            "ALPACA_PRIMARY_RECOVERY_PROBE",
-            extra={"symbol": symbol, "timeframe": "1Min"},
-        )
+        _mark_primary_probe_due(route="backup_skip_window")
     if backup_label:
         prefer_primary_first = bool(get_env("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
-        if skip_primary_due_to_fallback:
+        if _state.get("backup_probe_due"):
+            # A scheduled probe must force a primary attempt before any
+            # provider-monitor backup routing is applied for this request.
+            active_provider = primary_label
+        elif skip_primary_due_to_fallback:
             active_provider = backup_label
         elif prefer_primary_first:
             try:
@@ -12003,6 +12274,16 @@ def get_minute_df(
             active_provider = monitored_choice if monitored_choice == backup_label else primary_label
         else:
             active_provider = provider_monitor.active_provider(primary_label, backup_label)
+        if (
+            active_provider == backup_label
+            and (not _state.get("backup_probe_due"))
+            and _primary_probe_allowed()
+            and _backup_primary_probe_due(symbol, "1Min")
+        ):
+            active_provider = primary_label
+            force_primary_fetch = True
+            _mark_primary_probe_due(route="provider_monitor_backup")
+            skip_primary_due_to_fallback = False
         if active_provider == backup_label:
             try:
                 refreshed_last_minute = _evaluate_last_complete(last_complete_minute)
@@ -12069,6 +12350,32 @@ def get_minute_df(
             _state["fallback_reason"] = None
             return finnhub_processed
 
+    backup_probe_due = bool(_state.get("backup_probe_due"))
+
+    def _fetch_primary_with_probe(
+        symbol_arg: str,
+        start_arg: Any,
+        end_arg: Any,
+        timeframe_arg: str,
+        *,
+        feed_arg: str,
+    ) -> Any:
+        if backup_probe_due:
+            try:
+                return _fetch_bars(
+                    symbol_arg,
+                    start_arg,
+                    end_arg,
+                    timeframe_arg,
+                    feed=feed_arg,
+                    bypass_backup_skip=True,
+                )
+            except TypeError as exc:
+                # Test stubs frequently monkeypatch ``_fetch_bars`` without new kwargs.
+                if "bypass_backup_skip" not in str(exc):
+                    raise
+        return _fetch_bars(symbol_arg, start_arg, end_arg, timeframe_arg, feed=feed_arg)
+
     if _has_alpaca_keys() and force_primary_fetch:
         try:
             override_raw = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
@@ -12090,7 +12397,13 @@ def get_minute_df(
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             primary_fetch_attempted = True
-            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
+            df = _fetch_primary_with_probe(
+                symbol,
+                start_dt,
+                end_dt,
+                "1Min",
+                feed_arg=feed_to_use,
+            )
             fallback_http_provider = False
             if df is not None:
                 try:
@@ -12160,7 +12473,13 @@ def get_minute_df(
                                 pass
                             switch_recorded = True
                         try:
-                            df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed="sip")
+                            df_alt = _fetch_primary_with_probe(
+                                symbol,
+                                start_dt,
+                                end_dt,
+                                "1Min",
+                                feed_arg="sip",
+                            )
                         except (EmptyBarsError, ValueError, RuntimeError, AttributeError):
                             df_alt = None
                         if df_alt is not None:
@@ -12297,7 +12616,13 @@ def get_minute_df(
                             switch_recorded = True
                         df_sip_forced = None
                         try:
-                            df_sip_forced = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed="sip")
+                            df_sip_forced = _fetch_primary_with_probe(
+                                symbol,
+                                start_dt,
+                                end_dt,
+                                "1Min",
+                                feed_arg="sip",
+                            )
                         except (EmptyBarsError, ValueError, RuntimeError) as sip_err:
                             logger.debug(
                                 "ALPACA_ALT_FEED_FAILED",
@@ -12388,7 +12713,13 @@ def get_minute_df(
                             extra={"provider": "alpaca", "fallback": fallback_payload_info},
                         )
                         try:
-                            df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
+                            df_alt = _fetch_primary_with_probe(
+                                symbol,
+                                start_dt,
+                                end_dt,
+                                "1Min",
+                                feed_arg=alt_feed,
+                            )
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
                             logger.debug(
                                 "ALPACA_ALT_FEED_FAILED",
@@ -12461,12 +12792,12 @@ def get_minute_df(
                             },
                         )
                         try:
-                            df_short = _fetch_bars(
+                            df_short = _fetch_primary_with_probe(
                                 symbol,
                                 short_start,
                                 end_dt,
                                 "1Min",
-                                feed=normalized_feed or _DEFAULT_FEED,
+                                feed_arg=normalized_feed or _DEFAULT_FEED,
                             )
                         except (EmptyBarsError, ValueError, RuntimeError):
                             df_short = None

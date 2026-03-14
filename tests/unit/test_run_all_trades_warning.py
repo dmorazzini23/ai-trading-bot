@@ -9,6 +9,8 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from ai_trading.telemetry import runtime_state
+
 sys = cast(Any, sys)
 
 
@@ -478,6 +480,8 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
 
 
 def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch):
+    runtime_state.reset_data_provider_state()
+
     class DummyExecutionEngine:
         def __init__(self) -> None:
             self.start_cycle_called = 0
@@ -582,3 +586,7 @@ def test_run_all_trades_worker_netting_invokes_execution_cycle_hooks(monkeypatch
     assert dummy_exec.end_cycle_called == 1
     assert dummy_exec.sync_called == 1
     assert broker_sync_metrics_calls["count"] == 1
+    provider_state = runtime_state.observe_data_provider_state()
+    assert provider_state.get("status") == "healthy"
+    assert provider_state.get("data_status") == "ready"
+    assert provider_state.get("reason") == "data_available_netting"

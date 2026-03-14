@@ -24151,6 +24151,15 @@ def _record_broker_sync_metrics(state: BotState, snapshot: "BrokerSyncResult" | 
         except Exception:
             metrics.positions = positions_count
 
+    try:
+        runtime_state.update_broker_status(
+            connected=bool(snapshot is not None),
+            last_error=None if snapshot is not None else "broker_sync_unavailable",
+            status="connected" if snapshot is not None else "unknown",
+        )
+    except Exception:
+        logger.debug("BROKER_SYNC_RUNTIME_STATE_UPDATE_FAILED", exc_info=True)
+
     logger.info(
         "BROKER_SYNC",
         extra={"open_orders": open_orders_count, "positions": positions_count},
@@ -39187,6 +39196,37 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                             )
                 try:
                     _run_netting_cycle(state, runtime, loop_id, loop_start)
+                    provider_status_after = ""
+                    provider_using_backup = False
+                    try:
+                        provider_state_after = runtime_state.observe_data_provider_state()
+                    except Exception:
+                        provider_state_after = {}
+                    if isinstance(provider_state_after, dict):
+                        try:
+                            provider_status_after = str(
+                                provider_state_after.get("status") or ""
+                            ).strip().lower()
+                        except Exception:
+                            provider_status_after = ""
+                        provider_using_backup = bool(provider_state_after.get("using_backup"))
+                    if provider_status_after not in {
+                        "down",
+                        "disabled",
+                        "failed",
+                        "unreachable",
+                        "error",
+                    }:
+                        runtime_state.update_data_provider_state(
+                            status="degraded" if provider_using_backup else "healthy",
+                            data_status="ready",
+                            reason=(
+                                "data_available_via_backup"
+                                if provider_using_backup
+                                else "data_available_netting"
+                            ),
+                            safe_mode=is_safe_mode_active(),
+                        )
                     post_sync_enabled = True
                     try:
                         post_sync_enabled = bool(
@@ -39627,9 +39667,17 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     extra={"success": success, "attempts": attempts_used},
                 )
 
+            provider_using_backup = False
+            try:
+                provider_state_post = runtime_state.observe_data_provider_state()
+            except Exception:
+                provider_state_post = {}
+            if isinstance(provider_state_post, dict):
+                provider_using_backup = bool(provider_state_post.get("using_backup"))
             runtime_state.update_data_provider_state(
+                status="degraded" if provider_using_backup else "healthy",
                 data_status="ready",
-                reason="data_available",
+                reason="data_available_via_backup" if provider_using_backup else "data_available",
                 safe_mode=is_safe_mode_active(),
             )
 

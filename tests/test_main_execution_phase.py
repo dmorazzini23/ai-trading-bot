@@ -96,6 +96,68 @@ def test_emit_cycle_market_snapshot_respects_cadence(monkeypatch, caplog) -> Non
     assert any(record.message == "CYCLE_MARKET_SNAPSHOT" for record in caplog.records)
 
 
+def test_emit_cycle_market_snapshot_preserves_unknown_quote_allowed(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"updated": "2026-02-24T15:00:00+00:00", "status": "healthy", "active": "alpaca", "reason": None, "safe_mode": False},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_quote_status",
+        lambda: {"status": "unknown"},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "reachable", "connected": True, "last_error": None},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_service_status",
+        lambda: {"status": "ready", "phase": "active"},
+    )
+    caplog.set_level(logging.INFO)
+
+    main._emit_cycle_market_snapshot(cycle_index=1, closed=False, interval_s=60)
+
+    snapshots = [record for record in caplog.records if record.message == "CYCLE_MARKET_SNAPSHOT"]
+    assert snapshots
+    assert getattr(snapshots[-1], "quote_allowed", None) is None
+
+
+def test_emit_cycle_market_snapshot_unknown_quote_status_overrides_false_allowed(
+    monkeypatch, caplog
+) -> None:
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_data_provider_state",
+        lambda: {"updated": "2026-02-24T15:00:00+00:00", "status": "healthy", "active": "alpaca", "reason": None, "safe_mode": False},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_quote_status",
+        lambda: {"status": "unknown", "allowed": False},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_broker_status",
+        lambda: {"status": "reachable", "connected": True, "last_error": None},
+    )
+    monkeypatch.setattr(
+        main.runtime_state,
+        "observe_service_status",
+        lambda: {"status": "ready", "phase": "active"},
+    )
+    caplog.set_level(logging.INFO)
+
+    main._emit_cycle_market_snapshot(cycle_index=1, closed=False, interval_s=60)
+
+    snapshots = [record for record in caplog.records if record.message == "CYCLE_MARKET_SNAPSHOT"]
+    assert snapshots
+    assert getattr(snapshots[-1], "quote_allowed", None) is None
+
+
 def test_emit_cycle_market_snapshot_uses_closed_cadence_override(monkeypatch, caplog) -> None:
     monkeypatch.setenv("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES", "1")
     monkeypatch.setenv("AI_TRADING_MARKET_SNAPSHOT_EVERY_N_CYCLES_CLOSED", "3")

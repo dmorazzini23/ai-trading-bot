@@ -9272,13 +9272,16 @@ class ExecutionEngine:
         min_notional = max(0.0, float(min_notional))
         cooldown_seconds = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_COOLDOWN_SEC", 90.0) or 90.0
         cooldown_seconds = max(0.0, float(cooldown_seconds))
+        require_loss = _resolve_bool_env("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_REQUIRE_LOSS")
+        if require_loss is None:
+            require_loss = True
 
         now_mono = monotonic_time()
         last_run = float(getattr(self, "_last_short_deleverage_mono", 0.0) or 0.0)
         if cooldown_seconds > 0 and last_run > 0 and (now_mono - last_run) < cooldown_seconds:
             return 0
 
-        candidates: list[tuple[float, float, str, int]] = []
+        candidates: list[tuple[int, float, float, str, int]] = []
         for position in positions or ():
             symbol_raw = _extract_value(position, "symbol", "asset_symbol")
             if symbol_raw in (None, ""):
@@ -9287,8 +9290,8 @@ class ExecutionEngine:
             if not symbol:
                 continue
             side_raw = _extract_value(position, "side")
-            side = str(side_raw or "").strip().lower()
-            if side not in {"short", "sell"}:
+            normalized_side = self._normalized_order_side(side_raw)
+            if normalized_side != "sell":
                 continue
 
             qty_float = abs(
@@ -9318,7 +9321,9 @@ class ExecutionEngine:
                 )
                 if plpc is not None and market_value > 0:
                     unrealized_loss = plpc * market_value
-            if unrealized_loss is None or unrealized_loss >= 0:
+            loss_value = float(unrealized_loss) if unrealized_loss is not None else 0.0
+            is_losing = loss_value < 0.0
+            if bool(require_loss) and not is_losing:
                 continue
 
             target_qty = int(max(1, math.floor(qty_float * reduce_fraction)))
@@ -9328,16 +9333,17 @@ class ExecutionEngine:
             target_qty = max(1, min(qty, target_qty))
             if target_qty <= 0:
                 continue
-            candidates.append((float(unrealized_loss), -market_value, symbol, target_qty))
+            loss_bucket = 0 if is_losing else 1
+            candidates.append((loss_bucket, loss_value, -market_value, symbol, target_qty))
 
         if not candidates:
             return 0
 
-        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        candidates.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
         selected = candidates[:max_actions]
         actions = 0
         action_rows: list[dict[str, Any]] = []
-        for loss_value, neg_notional, symbol, qty in selected:
+        for _loss_bucket, loss_value, neg_notional, symbol, qty in selected:
             submitted = bool(self._submit_cover_order(symbol, qty))
             if submitted:
                 actions += 1
@@ -9358,6 +9364,7 @@ class ExecutionEngine:
                     "actions": int(actions),
                     "max_actions": int(max_actions),
                     "overload_reasons": list(context.get("reasons") or []),
+                    "require_loss": bool(require_loss),
                     "candidates": int(len(candidates)),
                     "applied": action_rows,
                 },

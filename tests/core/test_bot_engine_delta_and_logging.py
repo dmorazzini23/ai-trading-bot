@@ -7,6 +7,7 @@ import logging
 import pytest
 
 from ai_trading.core import bot_engine
+from ai_trading.telemetry import runtime_state
 
 
 @pytest.mark.parametrize(
@@ -32,6 +33,7 @@ def test_record_broker_sync_metrics_updates_state(caplog) -> None:
     state = bot_engine.BotState()
     state.execution_metrics = bot_engine.ExecutionCycleMetrics()
     snapshot = SimpleNamespace(open_orders=(1, 2, 3), positions=("AAPL",))
+    runtime_state.reset_broker_status()
 
     caplog.set_level(logging.INFO)
     bot_engine._record_broker_sync_metrics(state, cast(Any, snapshot))
@@ -41,6 +43,9 @@ def test_record_broker_sync_metrics_updates_state(caplog) -> None:
     record = next(rec for rec in caplog.records if rec.msg == "BROKER_SYNC")
     assert record.open_orders == 3
     assert record.positions == 1
+    broker_state = runtime_state.observe_broker_status()
+    assert broker_state.get("connected") is True
+    assert broker_state.get("status") == "connected"
 
 
 def test_log_execution_summary_emits_expected_payload(caplog) -> None:

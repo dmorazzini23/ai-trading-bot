@@ -48,6 +48,7 @@ if "flask" not in sys.modules:  # pragma: no cover - optional dependency shim
 import pytest
 
 from ai_trading.core import bot_engine as bot
+from ai_trading.telemetry import runtime_state
 
 
 class DummyRiskEngine:
@@ -78,6 +79,7 @@ class DummyLock:
 
 
 def test_data_source_retry_marks_failure(monkeypatch, caplog):
+    runtime_state.reset_data_provider_state()
     state = bot.BotState()
     runtime = types.SimpleNamespace(
         risk_engine=DummyRiskEngine(),
@@ -146,6 +148,10 @@ def test_data_source_retry_marks_failure(monkeypatch, caplog):
     ]
     assert records, "Expected DATA_SOURCE_RETRY_FINAL log entry"
     assert records[-1].success is False
+    provider_state = runtime_state.observe_data_provider_state()
+    assert provider_state.get("status") == "healthy"
+    assert provider_state.get("data_status") == "ready"
+    assert provider_state.get("reason") == "data_available"
 
 
 def test_data_source_empty_skipped_when_no_fetch_attempts(monkeypatch, caplog):

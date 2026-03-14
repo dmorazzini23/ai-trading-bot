@@ -779,6 +779,21 @@ def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: i
         quote_state = runtime_state.observe_quote_status()
     except Exception:
         quote_state = {}
+    quote_allowed_raw: Any = None
+    quote_status_token = ""
+    if isinstance(quote_state, Mapping):
+        quote_allowed_raw = quote_state.get("allowed")
+        try:
+            quote_status_token = str(quote_state.get("status") or "").strip().lower()
+        except Exception:
+            quote_status_token = ""
+    quote_allowed_value: bool | None
+    if quote_status_token in {"", "unknown"}:
+        quote_allowed_value = None
+    elif isinstance(quote_allowed_raw, bool):
+        quote_allowed_value = quote_allowed_raw
+    else:
+        quote_allowed_value = None
     try:
         broker_state = runtime_state.observe_broker_status()
     except Exception:
@@ -802,7 +817,7 @@ def _emit_cycle_market_snapshot(*, cycle_index: int, closed: bool, interval_s: i
             "provider_safe_mode": bool(provider_state.get("safe_mode")),
             "provider_age_s": provider_age_s,
             "quote_status": quote_state.get("status"),
-            "quote_allowed": bool(quote_state.get("allowed")),
+            "quote_allowed": quote_allowed_value,
             "broker_status": broker_state.get("status"),
             "broker_connected": bool(broker_state.get("connected")),
             "broker_last_error": broker_state.get("last_error"),
@@ -1407,6 +1422,8 @@ def _emit_data_config_log(settings: Any, cfg_obj: Any) -> None:
         using_backup=False,
         timeframe="1Min",
         reason="startup_config_resolved",
+        status="warming_up",
+        data_status="warming_up",
     )
 
 

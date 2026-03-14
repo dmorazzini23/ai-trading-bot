@@ -77,4 +77,6 @@ def test_emit_data_config_log_initializes_provider_runtime_state(monkeypatch):
     assert provider_state["active"] == "alpaca"
     assert provider_state["using_backup"] is False
     assert provider_state["reason"] == "startup_config_resolved"
+    assert provider_state["status"] == "warming_up"
+    assert provider_state["data_status"] == "warming_up"
     assert provider_state["updated"] is not None

@@ -272,6 +272,8 @@ def test_fallback_logging_suppressed_within_window(monkeypatch, caplog):
     provider_state = runtime_state.observe_data_provider_state()
     assert provider_state["using_backup"] is True
     assert provider_state["active"] == "yahoo"
+    assert provider_state.get("status") == "degraded"
+    assert provider_state.get("reason")
 
 
 def test_no_session_intraday_skips_backup_when_toggle_disabled(monkeypatch, caplog):
