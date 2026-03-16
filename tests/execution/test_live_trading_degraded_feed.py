@@ -218,6 +218,36 @@ def test_degraded_feed_block_prevents_submission(monkeypatch, caplog) -> None:
     assert block_records, "Block diagnostics not emitted"
 
 
+def test_degraded_feed_hard_block_prevents_submission(monkeypatch, caplog) -> None:
+    """Hard-block mode should enforce entry blocking under degraded quotes."""
+
+    engine = DummyLiveEngine()
+    config = SimpleNamespace(
+        min_quote_freshness_ms=1500,
+        degraded_feed_mode="hard_block",
+        degraded_feed_limit_widen_bps=8,
+        execution_require_realtime_nbbo=False,
+    )
+    _patch_config_getter(monkeypatch, config)
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(engine, "_broker_lock_suppressed", lambda **_: False)
+
+    result = engine.execute_order(
+        "AAPL",
+        "buy",
+        10,
+        order_type="limit",
+        limit_price=100.0,
+        quote=_quote_payload(),
+        annotations={"price_source": "backup"},
+    )
+
+    assert result is None
+    assert engine.last_submitted is None
+    assert any(record.msg == "DEGRADED_FEED_BLOCK_ENTRY" for record in caplog.records)
+
+
 def test_nbbo_required_blocks_degraded_quotes(monkeypatch, caplog) -> None:
     """NBBO requirement should block synthetic quotes even when a limit is provided."""
 

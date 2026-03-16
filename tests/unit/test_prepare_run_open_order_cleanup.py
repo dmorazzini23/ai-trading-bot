@@ -52,3 +52,46 @@ def test_prepare_run_cancels_open_orders_only_once(monkeypatch):
     eng._prepare_run(runtime, state, ["AAPL", "MSFT"])
 
     assert len(cancel_calls) == 1
+
+
+def test_prepare_run_hard_block_skips_cycle_when_degraded(monkeypatch):
+    runtime = types.SimpleNamespace(params={}, cfg=None)
+    state = eng.BotState()
+
+    mock_acct = types.SimpleNamespace(equity="1000", buying_power="1000", cash="1000")
+    mock_cfg = types.SimpleNamespace(
+        skip_compute_when_provider_disabled=False,
+        degraded_feed_mode="hard_block",
+        safe_mode_failsoft=True,
+    )
+
+    monkeypatch.setattr(eng, "ensure_data_fetcher", lambda rt: None)
+    monkeypatch.setattr(eng, "cancel_all_open_orders", lambda rt: None)
+    monkeypatch.setattr(eng, "audit_positions", lambda rt: None)
+    monkeypatch.setattr(eng, "safe_alpaca_get_account", lambda rt: mock_acct)
+    monkeypatch.setattr(eng, "compute_spy_vol_stats", lambda rt: None)
+    monkeypatch.setattr(eng, "_param", lambda rt, key, default: default)
+    monkeypatch.setattr(eng, "get_trading_config", lambda: mock_cfg)
+    monkeypatch.setattr(eng, "_failsoft_mode_active", lambda *_, **__: False)
+    monkeypatch.setattr(
+        eng,
+        "_resolve_data_provider_degraded",
+        lambda: {"status": "degraded", "reason": "upstream_unavailable"},
+    )
+    monkeypatch.setattr(
+        eng,
+        "_degrade_state",
+        lambda snapshot: (True, "upstream_unavailable", False),
+    )
+    monkeypatch.setattr(eng, "load_candidate_universe", lambda rt, syms: syms or ["AAPL"])
+    monkeypatch.setattr(
+        eng,
+        "pretrade_data_health",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should skip before pretrade_data_health")),
+    )
+
+    current_cash, regime_ok, symbols = eng._prepare_run(runtime, state, ["AAPL"])
+
+    assert current_cash == 1000.0
+    assert regime_ok is False
+    assert symbols == []

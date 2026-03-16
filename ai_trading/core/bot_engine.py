@@ -9542,6 +9542,8 @@ class BotState:
     trade_history: list[tuple[str, datetime]] = field(
         default_factory=list
     )  # (symbol, timestamp)
+    profitability_governor_cache_until_mono: float = 0.0
+    profitability_governor_cache: dict[str, Any] = field(default_factory=dict)
 
 
 class _LazyState:
@@ -20786,6 +20788,447 @@ def _entry_expectancy_allowed(
     return False
 
 
+def _profitability_governor_enabled() -> bool:
+    try:
+        return bool(get_env("AI_TRADING_PROFITABILITY_GOVERNOR_ENABLED", True, cast=bool))
+    except Exception:
+        return True
+
+
+def _profitability_governor_cache_ttl_seconds() -> float:
+    try:
+        ttl = float(get_env("AI_TRADING_PROFITABILITY_GOVERNOR_CACHE_TTL_SEC", 60.0, cast=float))
+    except Exception:
+        ttl = 60.0
+    return max(5.0, min(ttl, 3600.0))
+
+
+def _profitability_governor_thresholds() -> dict[str, Any]:
+    def _bool_env(name: str, default: bool) -> bool:
+        try:
+            return bool(get_env(name, default, cast=bool))
+        except Exception:
+            return default
+
+    def _int_env(name: str, default: int) -> int:
+        try:
+            return int(get_env(name, default, cast=int))
+        except Exception:
+            return default
+
+    def _float_env(name: str, default: float) -> float:
+        try:
+            return float(get_env(name, default, cast=float))
+        except Exception:
+            return default
+
+    return {
+        "lookback_days": max(1, _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_LOOKBACK_DAYS", 5)),
+        "global_enabled": _bool_env("AI_TRADING_PROFITABILITY_GOVERNOR_BLOCK_GLOBAL", True),
+        "symbol_enabled": _bool_env("AI_TRADING_PROFITABILITY_GOVERNOR_BLOCK_SYMBOL", True),
+        "regime_enabled": _bool_env("AI_TRADING_PROFITABILITY_GOVERNOR_BLOCK_REGIME", True),
+        "fail_closed": _bool_env("AI_TRADING_PROFITABILITY_GOVERNOR_FAIL_CLOSED", False),
+        "min_global_trades": max(1, _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_GLOBAL_TRADES", 30)),
+        "min_symbol_trades": max(1, _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_SYMBOL_TRADES", 6)),
+        "min_regime_trades": max(1, _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_REGIME_TRADES", 20)),
+        "min_global_net_edge_bps": _float_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_GLOBAL_NET_EDGE_BPS", 0.0),
+        "min_symbol_net_edge_bps": _float_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_SYMBOL_NET_EDGE_BPS", 0.0),
+        "min_regime_net_edge_bps": _float_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_REGIME_NET_EDGE_BPS", 0.0),
+    }
+
+
+def _profitability_governor_trade_history_path() -> Path:
+    default_trade_history = str(
+        get_env(
+            "AI_TRADING_TRADE_HISTORY_PATH",
+            "runtime/trade_history.parquet",
+            cast=str,
+        )
+        or ""
+    ).strip() or "runtime/trade_history.parquet"
+    configured_trade_history = str(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+            default_trade_history,
+            cast=str,
+        )
+        or ""
+    ).strip()
+    primary_path = resolve_runtime_artifact_path(
+        configured_trade_history or default_trade_history,
+        default_relative=default_trade_history,
+    )
+    if primary_path.exists():
+        return primary_path
+    fill_derived_fallback = resolve_runtime_artifact_path(
+        str(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_FILL_DERIVED_PATH",
+                "runtime/meta_learning_fill_derived.csv",
+                cast=str,
+            )
+            or ""
+        ).strip()
+        or "runtime/meta_learning_fill_derived.csv",
+        default_relative="runtime/meta_learning_fill_derived.csv",
+    )
+    if fill_derived_fallback.exists():
+        return fill_derived_fallback
+    tca_fallback = resolve_runtime_artifact_path(
+        str(
+            get_env(
+                "AI_TRADING_RUNTIME_PERF_TCA_FALLBACK_PATH",
+                "runtime/tca_records.jsonl",
+                cast=str,
+            )
+            or ""
+        ).strip()
+        or "runtime/tca_records.jsonl",
+        default_relative="runtime/tca_records.jsonl",
+    )
+    if tca_fallback.exists():
+        return tca_fallback
+    return primary_path
+
+
+def _profitability_governor_as_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _profitability_governor_parse_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime(value.year, value.month, value.day, tzinfo=UTC)
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _profitability_governor_load_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        from ai_trading.tools import runtime_performance_report as performance_report
+    except Exception:
+        performance_report = None
+    if performance_report is not None:
+        loader = getattr(performance_report, "_load_trade_rows", None)
+        if callable(loader):
+            try:
+                rows = loader(path)
+            except Exception:
+                rows = []
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    suffix = path.suffix.lower()
+    if suffix == ".jsonl":
+        json_rows: list[dict[str, Any]] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                payload = line.strip()
+                if not payload:
+                    continue
+                parsed = json.loads(payload)
+                if isinstance(parsed, dict):
+                    json_rows.append(parsed)
+        except Exception:
+            return []
+        return json_rows
+    try:
+        import pandas as pd_mod  # type: ignore
+    except Exception:
+        return []
+    frame = None
+    if suffix in {".parquet", ".pq"}:
+        try:
+            frame = pd_mod.read_parquet(path)
+        except Exception:
+            try:
+                frame = pd_mod.read_pickle(path)
+            except Exception:
+                frame = None
+    elif suffix in {".pkl", ".pickle"}:
+        try:
+            frame = pd_mod.read_pickle(path)
+        except Exception:
+            frame = None
+    elif suffix == ".csv":
+        try:
+            frame = pd_mod.read_csv(path)
+        except Exception:
+            frame = None
+    if frame is None:
+        return []
+    try:
+        frame_rows = frame.to_dict(orient="records")
+    except Exception:
+        return []
+    if not isinstance(frame_rows, list):
+        return []
+    return [row for row in frame_rows if isinstance(row, dict)]
+
+
+def _profitability_governor_metric_from_bucket(bucket: Mapping[str, Any]) -> dict[str, Any]:
+    trades = int(bucket.get("trades", 0) or 0)
+    notional_sum = float(bucket.get("notional_sum", 0.0) or 0.0)
+    pnl_sum = float(bucket.get("pnl_sum", 0.0) or 0.0)
+    edge_sum = float(bucket.get("edge_sum", 0.0) or 0.0)
+    edge_count = int(bucket.get("edge_count", 0) or 0)
+    net_edge_bps: float | None = None
+    if notional_sum > 0:
+        net_edge_bps = (pnl_sum / notional_sum) * 10000.0
+    elif edge_count > 0:
+        net_edge_bps = edge_sum / max(1, edge_count)
+    return {
+        "trades": trades,
+        "net_edge_bps": net_edge_bps,
+        "net_pnl": pnl_sum,
+        "entry_notional": notional_sum,
+    }
+
+
+def _profitability_governor_snapshot(state: BotState) -> Mapping[str, Any]:
+    now_mono = float(monotonic_time())
+    cached_until = float(getattr(state, "profitability_governor_cache_until_mono", 0.0) or 0.0)
+    cached_snapshot = getattr(state, "profitability_governor_cache", None)
+    if cached_until > now_mono and isinstance(cached_snapshot, dict):
+        return cached_snapshot
+
+    thresholds = _profitability_governor_thresholds()
+    path = _profitability_governor_trade_history_path()
+    snapshot: dict[str, Any] = {
+        "enabled": True,
+        "path": str(path),
+        "thresholds": dict(thresholds),
+        "rows_loaded": 0,
+        "rows_used": 0,
+        "global": {"trades": 0, "net_edge_bps": None, "net_pnl": 0.0, "entry_notional": 0.0},
+        "by_symbol": {},
+        "by_regime": {},
+        "error": None,
+    }
+    try:
+        rows = _profitability_governor_load_rows(path)
+        snapshot["rows_loaded"] = int(len(rows))
+        lookback_days = int(thresholds.get("lookback_days", 5) or 5)
+        cutoff_dt = datetime.now(UTC) - timedelta(days=max(1, lookback_days))
+
+        global_bucket: dict[str, float | int] = {
+            "trades": 0,
+            "pnl_sum": 0.0,
+            "notional_sum": 0.0,
+            "edge_sum": 0.0,
+            "edge_count": 0,
+        }
+        symbol_buckets: dict[str, dict[str, float | int]] = {}
+        regime_buckets: dict[str, dict[str, float | int]] = {}
+
+        for row in rows:
+            symbol = str(row.get("symbol", "") or "").strip().upper()
+            if not symbol:
+                continue
+            ts = None
+            for ts_key in ("exit_time", "timestamp", "entry_time", "ts", "date"):
+                ts = _profitability_governor_parse_timestamp(row.get(ts_key))
+                if ts is not None:
+                    break
+            if ts is not None and ts < cutoff_dt:
+                continue
+
+            net_pnl = None
+            for pnl_key in ("net_pnl", "pnl", "realized_pnl", "reward"):
+                net_pnl = _profitability_governor_as_float(row.get(pnl_key))
+                if net_pnl is not None:
+                    break
+            entry_notional = _profitability_governor_as_float(row.get("entry_notional"))
+            if not entry_notional or entry_notional <= 0.0:
+                qty = _profitability_governor_as_float(
+                    row.get("qty") or row.get("quantity") or row.get("filled_qty")
+                )
+                price = _profitability_governor_as_float(
+                    row.get("entry_price")
+                    or row.get("price")
+                    or row.get("fill_price")
+                    or row.get("filled_avg_price")
+                )
+                if qty is not None and qty > 0 and price is not None and price > 0:
+                    entry_notional = abs(float(qty) * float(price))
+                else:
+                    entry_notional = None
+
+            net_edge_bps = _profitability_governor_as_float(row.get("net_edge_bps"))
+            if net_pnl is None and net_edge_bps is not None and entry_notional and entry_notional > 0:
+                net_pnl = (net_edge_bps / 10000.0) * entry_notional
+            if net_pnl is None and net_edge_bps is None:
+                continue
+
+            snapshot["rows_used"] = int(snapshot.get("rows_used", 0) or 0) + 1
+
+            def _update_bucket(bucket: dict[str, float | int]) -> None:
+                bucket["trades"] = int(bucket.get("trades", 0) or 0) + 1
+                if net_pnl is not None:
+                    bucket["pnl_sum"] = float(bucket.get("pnl_sum", 0.0) or 0.0) + float(net_pnl)
+                if entry_notional is not None and entry_notional > 0 and net_pnl is not None:
+                    bucket["notional_sum"] = float(bucket.get("notional_sum", 0.0) or 0.0) + float(entry_notional)
+                elif net_edge_bps is not None:
+                    bucket["edge_sum"] = float(bucket.get("edge_sum", 0.0) or 0.0) + float(net_edge_bps)
+                    bucket["edge_count"] = int(bucket.get("edge_count", 0) or 0) + 1
+
+            _update_bucket(global_bucket)
+            symbol_bucket = symbol_buckets.setdefault(
+                symbol,
+                {"trades": 0, "pnl_sum": 0.0, "notional_sum": 0.0, "edge_sum": 0.0, "edge_count": 0},
+            )
+            _update_bucket(symbol_bucket)
+
+            regime_raw = (
+                row.get("regime")
+                or row.get("regime_name")
+                or row.get("market_regime")
+                or row.get("classification")
+            )
+            if regime_raw not in (None, ""):
+                regime_name = _normalize_regime_name(regime_raw)
+                regime_bucket = regime_buckets.setdefault(
+                    regime_name,
+                    {"trades": 0, "pnl_sum": 0.0, "notional_sum": 0.0, "edge_sum": 0.0, "edge_count": 0},
+                )
+                _update_bucket(regime_bucket)
+
+        snapshot["global"] = _profitability_governor_metric_from_bucket(global_bucket)
+        snapshot["by_symbol"] = {
+            name: _profitability_governor_metric_from_bucket(bucket)
+            for name, bucket in symbol_buckets.items()
+        }
+        snapshot["by_regime"] = {
+            name: _profitability_governor_metric_from_bucket(bucket)
+            for name, bucket in regime_buckets.items()
+        }
+    except Exception as exc:
+        snapshot["error"] = str(exc)
+
+    setattr(state, "profitability_governor_cache", snapshot)
+    setattr(
+        state,
+        "profitability_governor_cache_until_mono",
+        now_mono + _profitability_governor_cache_ttl_seconds(),
+    )
+    return snapshot
+
+
+def _profitability_governor_allows_entry(
+    state: BotState,
+    *,
+    symbol: str,
+    regime: str,
+    side: str,
+) -> bool:
+    if not _profitability_governor_enabled():
+        return True
+
+    snapshot = _profitability_governor_snapshot(state)
+    thresholds = snapshot.get("thresholds", {})
+    if not isinstance(thresholds, Mapping):
+        return True
+
+    fail_closed = bool(thresholds.get("fail_closed", False))
+    error_text = snapshot.get("error")
+    if error_text:
+        if not fail_closed:
+            return True
+        logger.warning(
+            "PROFITABILITY_GOVERNOR_FAIL_CLOSED",
+            extra={
+                "symbol": symbol,
+                "regime": _normalize_regime_name(regime),
+                "side": side,
+                "error": str(error_text),
+                "path": snapshot.get("path"),
+            },
+        )
+        return False
+
+    reasons: list[str] = []
+    metrics: dict[str, Any] = {}
+    global_metric = snapshot.get("global", {})
+    if isinstance(global_metric, Mapping) and bool(thresholds.get("global_enabled", True)):
+        global_trades = int(global_metric.get("trades", 0) or 0)
+        global_edge = _profitability_governor_as_float(global_metric.get("net_edge_bps"))
+        min_global_trades = int(thresholds.get("min_global_trades", 0) or 0)
+        min_global_edge = float(thresholds.get("min_global_net_edge_bps", 0.0) or 0.0)
+        metrics["global"] = {"trades": global_trades, "net_edge_bps": global_edge}
+        if global_edge is not None and global_trades >= min_global_trades and global_edge < min_global_edge:
+            reasons.append("PROFITABILITY_GOVERNOR_GLOBAL_BLOCK")
+
+    symbol_metric = {}
+    symbol_map = snapshot.get("by_symbol", {})
+    if isinstance(symbol_map, Mapping):
+        symbol_metric = symbol_map.get(str(symbol).upper(), {})
+    if isinstance(symbol_metric, Mapping) and bool(thresholds.get("symbol_enabled", True)):
+        symbol_trades = int(symbol_metric.get("trades", 0) or 0)
+        symbol_edge = _profitability_governor_as_float(symbol_metric.get("net_edge_bps"))
+        min_symbol_trades = int(thresholds.get("min_symbol_trades", 0) or 0)
+        min_symbol_edge = float(thresholds.get("min_symbol_net_edge_bps", 0.0) or 0.0)
+        metrics["symbol"] = {"trades": symbol_trades, "net_edge_bps": symbol_edge}
+        if symbol_edge is not None and symbol_trades >= min_symbol_trades and symbol_edge < min_symbol_edge:
+            reasons.append("PROFITABILITY_GOVERNOR_SYMBOL_BLOCK")
+
+    normalized_regime = _normalize_regime_name(regime)
+    regime_metric = {}
+    regime_map = snapshot.get("by_regime", {})
+    if isinstance(regime_map, Mapping):
+        regime_metric = regime_map.get(normalized_regime, {})
+    if isinstance(regime_metric, Mapping) and bool(thresholds.get("regime_enabled", True)):
+        regime_trades = int(regime_metric.get("trades", 0) or 0)
+        regime_edge = _profitability_governor_as_float(regime_metric.get("net_edge_bps"))
+        min_regime_trades = int(thresholds.get("min_regime_trades", 0) or 0)
+        min_regime_edge = float(thresholds.get("min_regime_net_edge_bps", 0.0) or 0.0)
+        metrics["regime"] = {"trades": regime_trades, "net_edge_bps": regime_edge}
+        if regime_edge is not None and regime_trades >= min_regime_trades and regime_edge < min_regime_edge:
+            reasons.append("PROFITABILITY_GOVERNOR_REGIME_BLOCK")
+
+    if not reasons:
+        return True
+
+    log_key = f"{str(symbol).upper()}:{normalized_regime}:{str(side).lower()}"
+    log_throttled_event(
+        logger,
+        f"ENTRY_BLOCKED_PROFITABILITY_GOVERNOR_{log_key}",
+        level=logging.WARNING,
+        message="ENTRY_BLOCKED_PROFITABILITY_GOVERNOR",
+        extra={
+            "symbol": str(symbol).upper(),
+            "regime": normalized_regime,
+            "side": str(side).lower(),
+            "reasons": tuple(sorted(set(reasons))),
+            "metrics": metrics,
+            "rows_used": int(snapshot.get("rows_used", 0) or 0),
+            "lookback_days": int(thresholds.get("lookback_days", 0) or 0),
+            "path": snapshot.get("path"),
+        },
+    )
+    return False
+
+
 def _record_entry_expectancy_context(
     state: BotState,
     *,
@@ -22040,10 +22483,14 @@ def _safe_mode_blocks_trading() -> bool:
     execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
     if execution_mode == "paper" and bool(getattr(cfg, "safe_mode_allow_paper", False)):
         return False
+    mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
+    if mode not in {"block", "widen", "hard_block"}:
+        mode = "block"
+    if mode == "hard_block":
+        return True
     failsoft_enabled = _safe_mode_failsoft_enabled()
     if not failsoft_enabled:
         return True
-    mode = str(getattr(cfg, "degraded_feed_mode", "block") or "block").strip().lower()
     if failsoft_enabled:
         degraded_marker = getattr(provider_monitor, "safe_mode_degraded_only", None)
         if callable(degraded_marker):
@@ -24436,6 +24883,13 @@ def trade_logic(
             side="long",
         ):
             return True
+        if not _profitability_governor_allows_entry(
+            state,
+            symbol=symbol,
+            regime=getattr(state, "current_regime", "sideways"),
+            side="long",
+        ):
+            return True
         blocked, degraded_extra = _entry_data_degraded(state, symbol)
         if blocked:
             logger.warning(
@@ -24469,6 +24923,13 @@ def trade_logic(
         ):
             return True
         if not _entry_expectancy_allowed(
+            state,
+            symbol=symbol,
+            regime=getattr(state, "current_regime", "sideways"),
+            side="short",
+        ):
+            return True
+        if not _profitability_governor_allows_entry(
             state,
             symbol=symbol,
             regime=getattr(state, "current_regime", "sideways"),
@@ -30426,21 +30887,30 @@ def _prepare_run(
         cfg_obj = get_trading_config()
         skip_on_disabled = bool(getattr(cfg_obj, "skip_compute_when_provider_disabled", False))
         degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
+        if degraded_mode not in {"block", "widen", "hard_block"}:
+            degraded_mode = "block"
         failsoft_enabled = bool(getattr(cfg_obj, "safe_mode_failsoft", True))
-        if not failsoft_enabled and degraded_mode != "block":
+        if not failsoft_enabled and degraded_mode not in {"block", "hard_block"}:
             degraded_mode = "block"
     except Exception:
         skip_on_disabled = False
         degraded_mode = "block"
     failsoft_cycle = _failsoft_mode_active()
-    if degraded_cycle and skip_on_disabled and not failsoft_cycle and (
+    hard_block_cycle = degraded_cycle and degraded_mode == "hard_block"
+    fatal_skip_cycle = degraded_cycle and skip_on_disabled and not failsoft_cycle and (
         _reason_implies_fatal(degrade_reason) or degrade_fatal
-    ):
+    )
+    if hard_block_cycle or fatal_skip_cycle:
+        reason_label = degrade_reason or safe_mode_reason() or "provider_disabled"
+        if hard_block_cycle and not degrade_reason:
+            reason_label = "degraded_feed_hard_block"
         logger.warning(
             "PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP",
             extra={
-                "reason": degrade_reason or safe_mode_reason() or "provider_disabled",
+                "reason": reason_label,
                 "symbol_budget": len(full_watchlist),
+                "degraded_mode": degraded_mode,
+                "hard_block": bool(hard_block_cycle),
             },
         )
         return current_cash, False, []
@@ -30583,7 +31053,7 @@ def _process_symbols(
         cfg_obj = None
     if cfg_obj is not None:
         degraded_mode = str(getattr(cfg_obj, "degraded_feed_mode", "block") or "block").strip().lower()
-        if degraded_mode not in {"block", "widen"}:
+        if degraded_mode not in {"block", "widen", "hard_block"}:
             degraded_mode = "block"
     explicit_degraded_mode = get_env("TRADING__DEGRADED_FEED_MODE") or get_env("DEGRADED_FEED_MODE")
     if pytest_mode and not explicit_degraded_mode and degraded_mode == "block":
@@ -30728,7 +31198,7 @@ def _process_symbols(
                     extra={"symbol": symbol, "reason": degrade_reason},
                 )
                 continue
-            if degraded_mode == "block" and pos >= 0:
+            if degraded_mode in {"block", "hard_block"} and pos >= 0:
                 logger.warning(
                     "DEGRADED_FEED_SKIP_SYMBOL",
                     extra={"symbol": symbol, "reason": degrade_reason, "mode": degraded_mode},

@@ -3315,6 +3315,22 @@ class ExecutionEngine:
             reason=reason,
             submit_started_at=submit_started_at,
         )
+        quality_payload: dict[str, Any] = {
+            "event": "submit_skipped",
+            "status": "skipped",
+            "reason": str(reason),
+        }
+        if symbol:
+            quality_payload["symbol"] = str(symbol)
+        if side:
+            quality_payload["side"] = str(side)
+        if order_type:
+            quality_payload["order_type"] = str(order_type)
+        if detail:
+            quality_payload["detail"] = str(detail)
+        if context:
+            quality_payload["context"] = dict(context)
+        self._record_execution_quality_event(quality_payload)
 
     def _record_submit_failure(
         self,
@@ -3358,6 +3374,22 @@ class ExecutionEngine:
             reason=reason,
             submit_started_at=submit_started_at,
         )
+        quality_payload: dict[str, Any] = {
+            "event": "submit_failed",
+            "status": "failed",
+            "reason": str(reason),
+        }
+        if symbol:
+            quality_payload["symbol"] = str(symbol)
+        if side:
+            quality_payload["side"] = str(side)
+        if order_type:
+            quality_payload["order_type"] = str(order_type)
+        if status_code is not None:
+            quality_payload["status_code"] = int(status_code)
+        if detail:
+            quality_payload["detail"] = str(detail)
+        self._record_execution_quality_event(quality_payload)
 
     def _emit_cycle_execution_kpis(self) -> None:
         """Emit per-cycle execution KPIs and optional runtime alerts."""
@@ -3820,6 +3852,18 @@ class ExecutionEngine:
             default_relative="runtime/fill_events.jsonl",
             payload=payload,
             failure_log="FILL_EVENT_WRITE_FAILED",
+        )
+
+    def _record_execution_quality_event(self, payload: Mapping[str, Any]) -> None:
+        """Persist execution-quality diagnostics for skipped/failed submits."""
+
+        if not self._runtime_exec_event_persistence_enabled():
+            return
+        self._append_runtime_jsonl(
+            env_key="AI_TRADING_EXEC_QUALITY_EVENTS_PATH",
+            default_relative="runtime/execution_quality_events.jsonl",
+            payload=payload,
+            failure_log="EXEC_QUALITY_EVENT_WRITE_FAILED",
         )
 
     def _current_cycle_reserved_opening_notional(self) -> Decimal:
@@ -6630,6 +6674,8 @@ class ExecutionEngine:
             mode_candidate = getattr(cfg, "degraded_feed_mode", degraded_mode)
             if isinstance(mode_candidate, str) and mode_candidate.strip():
                 degraded_mode = mode_candidate.strip().lower()
+            if degraded_mode not in {"block", "widen", "hard_block"}:
+                degraded_mode = "block"
             try:
                 degraded_widen_bps = max(0, int(getattr(cfg, "degraded_feed_limit_widen_bps", degraded_widen_bps)))
             except (TypeError, ValueError):
@@ -6664,7 +6710,7 @@ class ExecutionEngine:
             and require_realtime_nbbo
             and market_on_degraded
             and not closing_position
-            and degraded_mode != "block"
+            and degraded_mode not in {"block", "hard_block"}
         ):
             if order_type_normalized in {"limit", "stop_limit"} and basis_price is not None:
                 current_limit = _safe_float(resolved_limit_price)
@@ -6878,7 +6924,8 @@ class ExecutionEngine:
             elif degrade_due_monitor:
                 quality_reason = "provider_disabled"
 
-        if degrade_active and degraded_mode == "block" and not closing_position:
+        degrade_blocks_entries = degraded_mode in {"block", "hard_block"}
+        if degrade_active and degrade_blocks_entries and not closing_position:
             allowed, details = _maybe_accept_backup_quote(
                 annotations,
                 provider_hint=provider_source_str,
@@ -6988,11 +7035,7 @@ class ExecutionEngine:
                 )
             except Exception:
                 logger.debug("RUNTIME_MARKET_STATE_SYNC_FAILED", exc_info=True)
-        if (
-            degrade_active
-            and degraded_mode == "block"
-            and not closing_position
-        ):
+        if degrade_active and degrade_blocks_entries and not closing_position:
             logger.warning(
                 "QUOTE_QUALITY_BLOCKED",
                 extra={
@@ -9257,7 +9300,9 @@ class ExecutionEngine:
         """Submit reduce-only covers for the largest losing shorts when overloaded."""
 
         enabled = _resolve_bool_env("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED")
-        if enabled is None or not bool(enabled):
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
             return 0
 
         context = self._exposure_normalization_context(account_snapshot)

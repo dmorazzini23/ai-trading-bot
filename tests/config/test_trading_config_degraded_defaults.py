@@ -25,3 +25,12 @@ def test_degraded_feed_defaults(monkeypatch):
     assert cfg.degraded_feed_mode == "block"
     assert cfg.degraded_feed_limit_widen_bps == 50
     assert cfg.log_exec_summary_enabled is True
+
+
+def test_degraded_feed_mode_accepts_hard_block(monkeypatch):
+    monkeypatch.setenv("TRADING__DEGRADED_FEED_MODE", "hard_block")
+    cast(Any, runtime.get_trading_config).cache_clear()
+
+    cfg = runtime.get_trading_config()
+
+    assert cfg.degraded_feed_mode == "hard_block"

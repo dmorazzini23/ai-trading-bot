@@ -370,6 +370,39 @@ def test_prioritize_losing_short_reduction_targets_largest_losses(monkeypatch):
     assert submitted[1][0] == "AAA"
 
 
+def test_prioritize_short_reduction_enabled_by_default(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.delenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED", raising=False)
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_MAX_ACTIONS", "1")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_FRACTION", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY", "1.0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY", "0.35")
+
+    submitted: list[tuple[str, int]] = []
+
+    def _submit_cover_order(symbol: str, qty: int) -> bool:
+        submitted.append((symbol, qty))
+        return True
+
+    monkeypatch.setattr(engine, "_submit_cover_order", _submit_cover_order)
+
+    actions = engine._prioritize_losing_short_reduction(
+        positions=[
+            {"symbol": "AAA", "side": "short", "qty": 10, "current_price": 50.0, "unrealized_intraday_pl": -100.0},
+        ],
+        account_snapshot={
+            "equity": 100000,
+            "buying_power": 1000,
+            "long_market_value": 90000,
+            "short_market_value": 140000,
+        },
+    )
+
+    assert actions == 1
+    assert submitted == [("AAA", 5)]
+
+
 def test_prioritize_short_reduction_handles_positionside_short(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED", "1")
@@ -838,6 +871,75 @@ def test_execute_order_skips_submit_during_data_only_warmup(monkeypatch, caplog)
         and getattr(record, "reason", None) == "warmup_data_only"
         for record in caplog.records
     )
+
+
+def test_skip_submit_records_execution_quality_event(monkeypatch):
+    engine = _engine_stub()
+    captured: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_append_runtime_jsonl",
+        lambda **kwargs: captured.append(dict(kwargs)),
+    )
+
+    engine._skip_submit(
+        symbol="AAPL",
+        side="buy",
+        reason="unit_skip_reason",
+        order_type="limit",
+        detail="unit detail",
+        context={"gate": "test"},
+    )
+
+    quality_rows = [
+        row
+        for row in captured
+        if row.get("env_key") == "AI_TRADING_EXEC_QUALITY_EVENTS_PATH"
+    ]
+    assert quality_rows
+    payload = quality_rows[-1]["payload"]
+    assert payload["event"] == "submit_skipped"
+    assert payload["status"] == "skipped"
+    assert payload["reason"] == "unit_skip_reason"
+    assert payload["symbol"] == "AAPL"
+    assert payload["side"] == "buy"
+
+
+def test_submit_failure_records_execution_quality_event(monkeypatch):
+    engine = _engine_stub()
+    captured: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_append_runtime_jsonl",
+        lambda **kwargs: captured.append(dict(kwargs)),
+    )
+
+    engine._record_submit_failure(
+        symbol="MSFT",
+        side="sell",
+        reason="unit_failure_reason",
+        order_type="market",
+        status_code=503,
+        detail="upstream unavailable",
+    )
+
+    quality_rows = [
+        row
+        for row in captured
+        if row.get("env_key") == "AI_TRADING_EXEC_QUALITY_EVENTS_PATH"
+    ]
+    assert quality_rows
+    payload = quality_rows[-1]["payload"]
+    assert payload["event"] == "submit_failed"
+    assert payload["status"] == "failed"
+    assert payload["reason"] == "unit_failure_reason"
+    assert payload["symbol"] == "MSFT"
+    assert payload["side"] == "sell"
+    assert payload["status_code"] == 503
 
 
 def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):

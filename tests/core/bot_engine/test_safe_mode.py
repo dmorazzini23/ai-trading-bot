@@ -406,3 +406,22 @@ def test_failsoft_low_coverage_guard(monkeypatch, caplog):
 
     assert allowed is True
     assert any(record.message == "DEGRADED_COVERAGE_FAILSOFT_ALLOW" for record in caplog.records)
+
+
+def test_safe_mode_hard_block_overrides_failsoft(monkeypatch):
+    cfg = _ns(
+        execution_mode="live",
+        safe_mode_allow_paper=False,
+        safe_mode_failsoft=True,
+        degraded_feed_mode="hard_block",
+        execution_market_on_degraded=True,
+    )
+    monkeypatch.setattr(bot_engine, "get_trading_config", lambda: cfg)
+    monkeypatch.setattr(
+        bot_engine.provider_monitor,
+        "safe_mode_degraded_only",
+        lambda: True,
+        raising=False,
+    )
+
+    assert bot_engine._safe_mode_blocks_trading() is True

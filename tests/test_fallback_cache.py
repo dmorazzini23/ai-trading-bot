@@ -320,6 +320,24 @@ def test_backup_skip_new_symbol_does_not_extend_active_global_window(monkeypatch
     assert second_global_until == first_global_until
 
 
+def test_backup_skip_clamps_symbol_until_to_active_global_window(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_GLOBAL_BACKUP_SKIP_ENABLED", "1")
+    data_fetcher._BACKUP_SKIP_UNTIL.clear()
+    data_fetcher._GLOBAL_BACKUP_SKIP_UNTIL.clear()
+
+    now_dt = datetime.now(UTC)
+    global_until = now_dt + timedelta(seconds=45)
+    requested_until = now_dt + timedelta(minutes=10)
+    data_fetcher._set_global_backup_skip("1Min", until=global_until)
+
+    data_fetcher._set_backup_skip("AAPL", "1Min", until=requested_until)
+    symbol_until = data_fetcher._BACKUP_SKIP_UNTIL.get(("AAPL", "1Min"))
+
+    assert isinstance(symbol_until, datetime)
+    assert symbol_until == data_fetcher._get_global_backup_skip_until("1Min")
+    assert symbol_until <= requested_until
+
+
 def test_backup_probe_watchdog_alerts_when_probe_missing(monkeypatch, caplog):
     monkeypatch.setenv("AI_TRADING_BACKUP_PROBE_GUARD_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_BACKUP_PROBE_MISSING_SECONDS", "60")

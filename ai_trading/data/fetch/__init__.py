@@ -3175,6 +3175,15 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 _SKIPPED_SYMBOLS.add(key)
                 _set_global_backup_skip(timeframe)
                 return
+        if until_dt.tzinfo is None:
+            try:
+                until_dt = until_dt.replace(tzinfo=UTC)
+            except Exception:
+                until_dt = datetime.now(tz=UTC)
+        global_until = _get_global_backup_skip_until(timeframe)
+        if isinstance(global_until, datetime) and global_until > now_dt and until_dt > global_until:
+            # Keep symbol-level cooldown aligned with active global skip to avoid per-symbol slide-forward.
+            until_dt = global_until
         if not active_existing_skip:
             _BACKUP_SKIP_UNTIL[key] = until_dt
         if key not in _BACKUP_PRIMARY_PROBE_AT:
