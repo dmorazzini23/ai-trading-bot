@@ -16,14 +16,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 import numpy as np
 
 from ai_trading import paths
-from ai_trading.config.management import get_env
-from ai_trading.data.fetch import get_daily_df
+from ai_trading.config.management import get_env, reload_env
+from ai_trading.data.fetch import get_daily_df, refresh_default_feed
 from ai_trading.data.splits import PurgedGroupTimeSeriesSplit
 from ai_trading.features.indicators import (
     compute_atr,
@@ -237,6 +237,7 @@ class CandidateMetrics:
     oof_probabilities: np.ndarray
     brier_score: float = 1.0
     regime_calibration: dict[str, dict[str, float]] = field(default_factory=dict)
+    selected_threshold: float = 0.5
 
 
 @dataclass(slots=True)
@@ -862,11 +863,7 @@ def _evaluate_candidate(
             if len(train_idx) >= 60 and len(test_idx) >= 20:
                 fallback_folds.append((train_idx, test_idx))
         folds = fallback_folds
-    fold_edges: list[float] = []
-    fold_turnover: list[float] = []
-    fold_hits: list[float] = []
-    fold_dd: list[float] = []
-    total_support = 0
+    fold_predictions: list[tuple[np.ndarray, np.ndarray]] = []
     oof_probs = np.full(len(dataset), np.nan, dtype=float)
     valid_folds = 0
     for train_idx, test_idx in folds:
@@ -908,29 +905,25 @@ def _evaluate_candidate(
         probs = _predict_probabilities(model, X.iloc[test_idx])
         if probs.shape[0] != len(test_idx):
             continue
-        oof_probs[test_idx] = probs
-        selected = probs >= threshold
-        support = int(np.sum(selected))
-        total_support += support
-        if support <= 0:
-            fold_edges.append(0.0)
-            fold_turnover.append(0.0)
-            fold_hits.append(0.0)
-            fold_dd.append(0.0)
-            valid_folds += 1
-            continue
-        selected_edge = edge[test_idx][selected]
-        fold_edges.append(float(np.mean(selected_edge)))
-        fold_turnover.append(float(np.mean(selected)))
-        fold_hits.append(float(np.mean(selected_edge > 0)))
-        strategy_path = np.where(selected, edge[test_idx], 0.0)
-        fold_dd.append(_max_drawdown_bps(strategy_path))
+        safe_test_idx = np.asarray(test_idx, dtype=int)
+        safe_probs = np.asarray(probs, dtype=float)
+        oof_probs[safe_test_idx] = safe_probs
+        fold_predictions.append((safe_test_idx, safe_probs))
         valid_folds += 1
     if valid_folds <= 0:
         return None
     valid_probs_mask = np.isfinite(oof_probs)
-    selected_all = valid_probs_mask & (oof_probs >= threshold)
-    regime_metrics = _regime_summary(regimes, selected_all, edge)
+    selected_metrics = _select_candidate_threshold(
+        dataset=dataset,
+        oof_probabilities=oof_probs,
+        fold_predictions=fold_predictions,
+        default_threshold=threshold,
+    )
+    if not selected_metrics:
+        return None
+    selected_threshold = float(selected_metrics.get("threshold", threshold) or threshold)
+    selected_all = valid_probs_mask & (oof_probs >= selected_threshold)
+    regime_metrics = dict(selected_metrics.get("regime_metrics", {}) or {})
     brier_score = 1.0
     y_values_all = y.to_numpy(dtype=float)
     regime_calibration: dict[str, dict[str, float]] = {}
@@ -947,26 +940,22 @@ def _evaluate_candidate(
                 get_env("AI_TRADING_AFTER_HOURS_REGIME_CALIBRATION_MIN_SUPPORT", 25, cast=int)
             ),
         )
-    hit_stability = 1.0
-    if len(fold_hits) > 1:
-        hit_stability = max(0.0, 1.0 - float(pstdev(fold_hits)))
-    profitable_fold_count = int(sum(1 for edge_value in fold_edges if edge_value > 0.0))
-    profitable_fold_ratio = float(profitable_fold_count) / float(max(1, valid_folds))
     return CandidateMetrics(
         name=name,
         fold_count=valid_folds,
-        profitable_fold_count=profitable_fold_count,
-        profitable_fold_ratio=profitable_fold_ratio,
-        support=total_support,
-        mean_expectancy_bps=float(mean(fold_edges)) if fold_edges else 0.0,
-        max_drawdown_bps=float(max(fold_dd)) if fold_dd else 0.0,
-        turnover_ratio=float(mean(fold_turnover)) if fold_turnover else 0.0,
-        mean_hit_rate=float(mean(fold_hits)) if fold_hits else 0.0,
-        hit_rate_stability=float(hit_stability),
+        profitable_fold_count=int(selected_metrics.get("profitable_fold_count", 0) or 0),
+        profitable_fold_ratio=float(selected_metrics.get("profitable_fold_ratio", 0.0) or 0.0),
+        support=int(selected_metrics.get("support", 0) or 0),
+        mean_expectancy_bps=float(selected_metrics.get("mean_expectancy_bps", 0.0) or 0.0),
+        max_drawdown_bps=float(selected_metrics.get("max_drawdown_bps", 0.0) or 0.0),
+        turnover_ratio=float(selected_metrics.get("turnover_ratio", 0.0) or 0.0),
+        mean_hit_rate=float(selected_metrics.get("mean_hit_rate", 0.0) or 0.0),
+        hit_rate_stability=float(selected_metrics.get("hit_rate_stability", 0.0) or 0.0),
         regime_metrics=regime_metrics,
         oof_probabilities=oof_probs,
         brier_score=float(brier_score),
         regime_calibration=regime_calibration,
+        selected_threshold=float(selected_threshold),
     )
 
 
@@ -1876,6 +1865,227 @@ def _threshold_metrics_snapshot(
     }
 
 
+def _candidate_threshold_grid(default_threshold: float) -> list[float]:
+    raw_grid = str(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_GRID",
+            "",
+            cast=str,
+        )
+        or ""
+    )
+    parsed = _parse_float_grid(raw_grid, fallback=_THRESHOLD_GRID)
+    candidates = {
+        round(_clamp(float(default_threshold), low=0.05, high=0.95), 4),
+    }
+    for value in parsed:
+        if not math.isfinite(value):
+            continue
+        candidates.add(round(_clamp(float(value), low=0.05, high=0.95), 4))
+    return sorted(candidates)
+
+
+def _fold_oof_threshold_metrics(
+    *,
+    edge: np.ndarray,
+    regimes: np.ndarray,
+    oof_probabilities: np.ndarray,
+    fold_predictions: Sequence[tuple[np.ndarray, np.ndarray]],
+    threshold: float,
+) -> dict[str, Any]:
+    fold_edges: list[float] = []
+    fold_turnover: list[float] = []
+    fold_hits: list[float] = []
+    fold_dd: list[float] = []
+    total_support = 0
+    for test_idx, probs in fold_predictions:
+        idx = np.asarray(test_idx, dtype=int)
+        prob_values = np.asarray(probs, dtype=float)
+        if idx.size == 0 or prob_values.size != idx.size:
+            continue
+        selected = prob_values >= float(threshold)
+        support = int(np.sum(selected))
+        total_support += support
+        if support <= 0:
+            fold_edges.append(0.0)
+            fold_turnover.append(0.0)
+            fold_hits.append(0.0)
+            fold_dd.append(0.0)
+            continue
+        selected_edge = edge[idx][selected]
+        fold_edges.append(float(np.mean(selected_edge)))
+        fold_turnover.append(float(np.mean(selected)))
+        fold_hits.append(float(np.mean(selected_edge > 0)))
+        strategy_path = np.where(selected, edge[idx], 0.0)
+        fold_dd.append(_max_drawdown_bps(strategy_path))
+
+    valid_probs_mask = np.isfinite(oof_probabilities)
+    selected_all = valid_probs_mask & (oof_probabilities >= float(threshold))
+    regime_metrics = _regime_summary(regimes, selected_all, edge)
+    hit_stability = 1.0
+    if len(fold_hits) > 1:
+        hit_stability = max(0.0, 1.0 - float(pstdev(fold_hits)))
+    profitable_fold_count = int(sum(1 for value in fold_edges if value > 0.0))
+    fold_count = max(1, len(fold_edges))
+    return {
+        "threshold": float(threshold),
+        "support": int(total_support),
+        "mean_expectancy_bps": float(mean(fold_edges)) if fold_edges else 0.0,
+        "max_drawdown_bps": float(max(fold_dd)) if fold_dd else 0.0,
+        "turnover_ratio": float(mean(fold_turnover)) if fold_turnover else 0.0,
+        "mean_hit_rate": float(mean(fold_hits)) if fold_hits else 0.0,
+        "hit_rate_stability": float(hit_stability),
+        "profitable_fold_count": int(profitable_fold_count),
+        "profitable_fold_ratio": float(profitable_fold_count) / float(fold_count),
+        "regime_metrics": regime_metrics,
+    }
+
+
+def _candidate_threshold_selection_score(metrics: Mapping[str, Any]) -> float:
+    expectancy_bps = float(metrics.get("mean_expectancy_bps", 0.0) or 0.0)
+    max_drawdown_bps = float(metrics.get("max_drawdown_bps", 0.0) or 0.0)
+    hit_rate = float(metrics.get("mean_hit_rate", 0.0) or 0.0)
+    profitable_fold_ratio = float(metrics.get("profitable_fold_ratio", 0.0) or 0.0)
+    hit_rate_stability = float(metrics.get("hit_rate_stability", 0.0) or 0.0)
+    support = int(metrics.get("support", 0) or 0)
+    drawdown_penalty = float(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_DRAWDOWN_PENALTY", 0.003, cast=float)
+    )
+    hit_rate_weight = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_HIT_RATE_WEIGHT",
+                2.0,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=20.0,
+    )
+    profitable_fold_weight = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_PROFITABLE_FOLD_WEIGHT",
+                2.5,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=20.0,
+    )
+    stability_weight = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_STABILITY_WEIGHT",
+                1.0,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=20.0,
+    )
+    support_log_weight = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_SUPPORT_LOG_WEIGHT",
+                0.05,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=5.0,
+    )
+    return (
+        _score_expectancy_with_drawdown_penalty(
+            expectancy_bps=expectancy_bps,
+            max_drawdown_bps=max_drawdown_bps,
+            penalty_per_bps=drawdown_penalty,
+        )
+        + (hit_rate_weight * hit_rate)
+        + (profitable_fold_weight * profitable_fold_ratio)
+        + (stability_weight * hit_rate_stability)
+        + (support_log_weight * float(math.log1p(max(0, support))))
+    )
+
+
+def _select_candidate_threshold(
+    *,
+    dataset: Any,
+    oof_probabilities: np.ndarray,
+    fold_predictions: Sequence[tuple[np.ndarray, np.ndarray]],
+    default_threshold: float,
+) -> dict[str, Any]:
+    threshold_tuning_enabled = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_TUNING_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    threshold_candidates = (
+        _candidate_threshold_grid(default_threshold)
+        if threshold_tuning_enabled
+        else [round(_clamp(float(default_threshold), low=0.05, high=0.95), 4)]
+    )
+    edge = dataset["realized_edge_bps"].astype(float).to_numpy()
+    regimes = dataset["regime"].astype(str).to_numpy()
+    min_support = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", 25, cast=int)),
+    )
+    min_expectancy_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", 0.0, cast=float)
+    )
+    drawdown_cap_bps = float(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS",
+            get_env("AI_TRADING_EDGE_TARGET_MAX_DRAWDOWN_BPS", 300.0, cast=float),
+            cast=float,
+        )
+    )
+    max_turnover_ratio = float(
+        get_env("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", 0.45, cast=float)
+    )
+    best_feasible_key = (-float("inf"), -float("inf"), -float("inf"), -float("inf"), -1)
+    best_feasible: dict[str, Any] | None = None
+    best_fallback_key = (-float("inf"), -float("inf"), -float("inf"), -float("inf"), -1)
+    best_fallback: dict[str, Any] | None = None
+    best_any_key = (-float("inf"), -float("inf"), -float("inf"), -float("inf"), -1)
+    best_any: dict[str, Any] | None = None
+    for candidate_threshold in threshold_candidates:
+        metrics = _fold_oof_threshold_metrics(
+            edge=edge,
+            regimes=regimes,
+            oof_probabilities=oof_probabilities,
+            fold_predictions=fold_predictions,
+            threshold=float(candidate_threshold),
+        )
+        objective = _candidate_threshold_selection_score(metrics)
+        comparison_key = (
+            float(objective),
+            float(metrics["mean_expectancy_bps"]),
+            float(metrics["mean_hit_rate"]),
+            float(metrics["profitable_fold_ratio"]),
+            int(metrics["support"]),
+        )
+        if comparison_key > best_any_key:
+            best_any_key = comparison_key
+            best_any = metrics
+        if int(metrics["support"]) > 0 and comparison_key > best_fallback_key:
+            best_fallback_key = comparison_key
+            best_fallback = metrics
+        feasible = (
+            int(metrics["support"]) >= int(min_support)
+            and float(metrics["mean_expectancy_bps"]) >= float(min_expectancy_bps)
+            and float(metrics["max_drawdown_bps"]) <= float(drawdown_cap_bps)
+            and float(metrics["turnover_ratio"]) <= float(max_turnover_ratio)
+        )
+        if feasible and comparison_key > best_feasible_key:
+            best_feasible_key = comparison_key
+            best_feasible = metrics
+    return dict(best_feasible or best_fallback or best_any or {})
+
+
 def _run_sensitivity_sweep(
     dataset: Any,
     probabilities: np.ndarray,
@@ -2369,43 +2579,41 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         if gate_log_configured
         else None
     )
+    def _threshold_int(name: str, default: int) -> int:
+        execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
+        runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
+        value = get_env(execution_key, None, cast=int)
+        if value is None:
+            value = get_env(runtime_key, default, cast=int)
+        return int(value)
+
+    def _threshold_float(name: str, default: float) -> float:
+        execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
+        runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
+        value = get_env(execution_key, None, cast=float)
+        if value is None:
+            value = get_env(runtime_key, default, cast=float)
+        return float(value)
+
+    def _threshold_bool(name: str, default: bool) -> bool:
+        execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
+        runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
+        value = get_env(execution_key, None, cast=bool)
+        if value is None:
+            value = get_env(runtime_key, default, cast=bool)
+        return bool(value)
+
     thresholds = {
-        "min_closed_trades": int(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
-        ),
-        "min_profit_factor": float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1, cast=float)
-        ),
-        "min_win_rate": float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5, cast=float)
-        ),
-        "min_net_pnl": float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_NET_PNL", 0.0, cast=float)
-        ),
-        "min_acceptance_rate": float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float)
-        ),
-        "min_expected_net_edge_bps": float(
-            get_env(
-                "AI_TRADING_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
-                -50.0,
-                cast=float,
-            )
-        ),
-        "min_used_days": max(
-            0,
-            int(get_env("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0, cast=int)),
-        ),
-        "lookback_days": max(
-            0,
-            int(get_env("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", 0, cast=int)),
-        ),
-        "require_pnl_available": bool(
-            get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", True, cast=bool)
-        ),
-        "require_gate_valid": bool(
-            get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID", False, cast=bool)
-        ),
+        "min_closed_trades": _threshold_int("MIN_CLOSED_TRADES", 20),
+        "min_profit_factor": _threshold_float("MIN_PROFIT_FACTOR", 1.1),
+        "min_win_rate": _threshold_float("MIN_WIN_RATE", 0.5),
+        "min_net_pnl": _threshold_float("MIN_NET_PNL", 0.0),
+        "min_acceptance_rate": _threshold_float("MIN_ACCEPTANCE_RATE", 0.05),
+        "min_expected_net_edge_bps": _threshold_float("MIN_EXPECTED_NET_EDGE_BPS", -50.0),
+        "min_used_days": max(0, _threshold_int("MIN_USED_DAYS", 0)),
+        "lookback_days": max(0, _threshold_int("LOOKBACK_DAYS", 0)),
+        "require_pnl_available": _threshold_bool("REQUIRE_PNL_AVAILABLE", True),
+        "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", False),
     }
 
     try:
@@ -2757,6 +2965,7 @@ def _serialize_candidate_metrics(
                 "mean_hit_rate": item.mean_hit_rate,
                 "hit_rate_stability": item.hit_rate_stability,
                 "brier_score": item.brier_score,
+                "selected_threshold": item.selected_threshold,
                 "selection_score": _candidate_selection_score(item, weights=selection_weights),
                 "regime_metrics": item.regime_metrics,
                 "regime_calibration": item.regime_calibration,
@@ -2815,6 +3024,7 @@ def _build_manifest_metadata(
     rows: int,
     lookback_days: int,
     default_threshold: float,
+    selected_threshold: float | None,
     thresholds_by_regime: Mapping[str, float],
     cost_floor_bps: float,
     dataset_fingerprint: str,
@@ -2833,6 +3043,9 @@ def _build_manifest_metadata(
         "feature_columns": list(FEATURE_COLUMNS),
         "feature_hash": feature_hash,
         "default_threshold": float(default_threshold),
+        "selected_threshold": (
+            float(selected_threshold) if selected_threshold is not None else float(default_threshold)
+        ),
         "thresholds_by_regime": dict(thresholds_by_regime),
         "cost_floor_bps": float(cost_floor_bps),
         "cost_model_version": str(
@@ -3306,6 +3519,17 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     """Run after-hours ML training and optional RL overlay training."""
     import pandas as pd
 
+    # Manual invocations may import this module before loading dotenv.
+    # Refresh once at entry so data-provider/credential checks are consistent.
+    reload_env()
+    try:
+        refresh_default_feed()
+    except Exception:
+        logger.info(
+            "AFTER_HOURS_FEED_REFRESH_SKIPPED",
+            extra={"reason": "refresh_default_feed_failed"},
+        )
+
     now_utc = (now or datetime.now(UTC)).astimezone(UTC)
     now_ny = now_utc.astimezone(ZoneInfo("America/New_York"))
     now_minutes = (int(now_ny.hour) * 60) + int(now_ny.minute)
@@ -3536,6 +3760,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         rows=int(len(dataset)),
         lookback_days=lookback_days,
         default_threshold=default_threshold,
+        selected_threshold=float(best.selected_threshold),
         thresholds_by_regime=thresholds_by_regime,
         cost_floor_bps=cost_floor_bps,
         dataset_fingerprint=dataset_fp,
@@ -3581,6 +3806,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "feature_columns": list(FEATURE_COLUMNS),
             "thresholds_by_regime": thresholds_by_regime,
             "default_threshold": default_threshold,
+            "selected_threshold": float(best.selected_threshold),
             "rows": int(len(dataset)),
             "symbols": symbols,
             "manifest_path": str(manifest_path),
@@ -3615,6 +3841,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "turnover_ratio": best.turnover_ratio,
                 "mean_hit_rate": best.mean_hit_rate,
                 "hit_rate_stability": best.hit_rate_stability,
+                "selected_threshold": best.selected_threshold,
                 "brier_score": best.brier_score,
                 "selection_score": _candidate_selection_score(best, weights=selection_weights),
                 "profitable_fold_count": best.profitable_fold_count,
@@ -3688,6 +3915,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "turnover_ratio": best.turnover_ratio,
             "mean_hit_rate": best.mean_hit_rate,
             "hit_rate_stability": best.hit_rate_stability,
+            "selected_threshold": best.selected_threshold,
             "brier_score": best.brier_score,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "fold_count": best.fold_count,
@@ -3761,6 +3989,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "rows": int(len(dataset)),
             "expectancy_bps": best.mean_expectancy_bps,
             "brier_score": best.brier_score,
+            "selected_threshold": best.selected_threshold,
             "selection_score": _candidate_selection_score(best, weights=selection_weights),
             "report_path": str(report_path),
             "daily_report_path": str(daily_report_path),
@@ -3779,6 +4008,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "governance_status": status,
         "edge_gates": gate_map,
         "rows": int(len(dataset)),
+        "selected_threshold": float(best.selected_threshold),
         "selection_score": _candidate_selection_score(best, weights=selection_weights),
         "brier_score": best.brier_score,
         "candidate_metrics": candidate_metrics_payload,

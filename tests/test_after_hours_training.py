@@ -1146,6 +1146,64 @@ def test_threshold_by_regime_respects_drawdown_cap(
     assert thresholds["regular"] == pytest.approx(0.35)
 
 
+def test_select_candidate_threshold_prefers_higher_quality_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = pd.DataFrame(
+        {
+            "regime": ["regular"] * 10,
+            "realized_edge_bps": [5.0, 4.0, 3.0, 2.0, 1.0, -3.0, -2.0, -1.0, -4.0, -5.0],
+        }
+    )
+    oof_probs = np.asarray([0.95, 0.9, 0.85, 0.8, 0.75, 0.6, 0.55, 0.5, 0.45, 0.4], dtype=float)
+    fold_predictions = [(np.arange(10, dtype=int), oof_probs.copy())]
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_TUNING_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_GRID", "0.4,0.5,0.6")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
+
+    selected = after_hours._select_candidate_threshold(
+        dataset=dataset,
+        oof_probabilities=oof_probs,
+        fold_predictions=fold_predictions,
+        default_threshold=0.5,
+    )
+
+    assert selected["threshold"] == pytest.approx(0.6)
+    assert selected["mean_expectancy_bps"] > 1.5
+    assert selected["mean_hit_rate"] > 0.8
+
+
+def test_select_candidate_threshold_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = pd.DataFrame(
+        {
+            "regime": ["regular"] * 10,
+            "realized_edge_bps": [5.0, 4.0, 3.0, 2.0, 1.0, -3.0, -2.0, -1.0, -4.0, -5.0],
+        }
+    )
+    oof_probs = np.asarray([0.95, 0.9, 0.85, 0.8, 0.75, 0.6, 0.55, 0.5, 0.45, 0.4], dtype=float)
+    fold_predictions = [(np.arange(10, dtype=int), oof_probs.copy())]
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_TUNING_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_GRID", "0.4,0.6")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
+
+    selected = after_hours._select_candidate_threshold(
+        dataset=dataset,
+        oof_probabilities=oof_probs,
+        fold_predictions=fold_predictions,
+        default_threshold=0.5,
+    )
+
+    assert selected["threshold"] == pytest.approx(0.5)
+
+
 def test_promotion_gate_bundle_requires_profitable_folds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

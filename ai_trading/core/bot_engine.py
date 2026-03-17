@@ -5415,6 +5415,25 @@ def _rl_runtime_governance_allows_load(
     return True, "ok"
 
 
+def _bootstrap_missing_rl_governance_sidecar(model_path: Path) -> tuple[bool, str]:
+    sidecar_path = _resolve_rl_governance_sidecar_path(model_path)
+    if not model_path.is_file():
+        return False, "model_missing"
+    payload = {
+        "updated_at": dt_.now(UTC).isoformat(),
+        "runtime_model_path": str(model_path),
+        "governance_status": "shadow",
+        "recommend_use_rl_agent": False,
+        "bootstrap_reason": "sidecar_missing",
+    }
+    try:
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        return False, "sidecar_bootstrap_write_failed"
+    return True, "sidecar_bootstrapped"
+
+
 def _rl_model_signature(path: Path | None) -> tuple[str, int, int] | None:
     if path is None:
         return None
@@ -5473,6 +5492,36 @@ def _reload_rl_agent_from_runtime_path(
         target,
         test_mode=test_mode,
     )
+    if not governance_ok and governance_reason == "sidecar_missing":
+        bootstrap_sidecar = bool(
+            get_env(
+                "AI_TRADING_RL_RUNTIME_BOOTSTRAP_GOVERNANCE_SIDECAR",
+                True,
+                cast=bool,
+            )
+        )
+        if bootstrap_sidecar:
+            bootstrapped, bootstrap_reason = _bootstrap_missing_rl_governance_sidecar(target)
+            if bootstrapped:
+                info_kv(
+                    logger,
+                    "RL_AGENT_GOVERNANCE_SIDECAR_BOOTSTRAPPED",
+                    extra={"model": str(target), "sidecar_path": str(_resolve_rl_governance_sidecar_path(target))},
+                )
+                governance_ok, governance_reason = _rl_runtime_governance_allows_load(
+                    target,
+                    test_mode=test_mode,
+                )
+            else:
+                warning_kv(
+                    logger,
+                    "RL_AGENT_GOVERNANCE_SIDECAR_BOOTSTRAP_FAILED",
+                    extra={
+                        "model": str(target),
+                        "reason": bootstrap_reason,
+                        "sidecar_path": str(_resolve_rl_governance_sidecar_path(target)),
+                    },
+                )
     if not governance_ok:
         warning_kv(
             logger,
