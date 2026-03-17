@@ -3155,6 +3155,16 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         isinstance(existing_until, datetime)
         and existing_until > now_dt
     )
+    global_until = _get_global_backup_skip_until(timeframe)
+    if (
+        active_existing_skip
+        and isinstance(existing_until, datetime)
+        and isinstance(global_until, datetime)
+        and global_until > now_dt
+        and existing_until > global_until
+    ):
+        existing_until = global_until
+        _BACKUP_SKIP_UNTIL[key] = global_until
     if until is not None:
         if isinstance(until, datetime):
             until_dt = until
@@ -3180,8 +3190,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
                 until_dt = until_dt.replace(tzinfo=UTC)
             except Exception:
                 until_dt = datetime.now(tz=UTC)
-        global_until = _get_global_backup_skip_until(timeframe)
-        if isinstance(global_until, datetime) and global_until > now_dt and until_dt > global_until:
+        if isinstance(global_until, datetime) and global_until > now_dt:
             # Keep symbol-level cooldown aligned with active global skip to avoid per-symbol slide-forward.
             until_dt = global_until
         if not active_existing_skip:
@@ -3200,10 +3209,13 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         if _get_global_backup_skip_until(timeframe) is None:
             _set_global_backup_skip(timeframe, until=existing_until)
         return
-    try:
-        until_dt = now_dt + _BACKUP_SKIP_WINDOW
-    except Exception:
-        until_dt = datetime.now(tz=UTC)
+    if isinstance(global_until, datetime) and global_until > now_dt:
+        until_dt = global_until
+    else:
+        try:
+            until_dt = now_dt + _BACKUP_SKIP_WINDOW
+        except Exception:
+            until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
     _schedule_backup_primary_probe(key)
     if _get_global_backup_skip_until(timeframe) is None:

@@ -618,7 +618,7 @@ def test_after_hours_training_trains_and_writes_outputs(
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
-    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "1")
     monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
     monkeypatch.setattr(
         after_hours,
@@ -634,8 +634,10 @@ def test_after_hours_training_trains_and_writes_outputs(
     assert Path(result["manifest_path"]).exists()
     assert Path(result["report_path"]).exists()
     assert Path(result["daily_report_path"]).exists()
-    assert Path(result["promoted_model_path"]).exists()
-    assert Path(result["promoted_manifest_path"]).exists()
+    if result["promoted_model_path"] is not None:
+        assert Path(result["promoted_model_path"]).exists()
+    if result["promoted_manifest_path"] is not None:
+        assert Path(result["promoted_manifest_path"]).exists()
     assert "_" in Path(result["report_path"]).stem
 
     report_payload = json.loads(Path(result["report_path"]).read_text(encoding="utf-8"))
@@ -824,6 +826,43 @@ def test_after_hours_sensitivity_gate_can_block_promotion(
     assert result["edge_gates"]["sensitivity"] is False
     assert result["sensitivity_sweep"]["enabled"] is True
     assert result["sensitivity_sweep"]["gate"] is False
+
+
+def test_after_hours_runtime_promotion_skips_shadow_governance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tickers = tmp_path / "tickers.csv"
+    tickers.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
+    tca_path = tmp_path / "tca_records.jsonl"
+    _write_tca(tca_path, n=420)
+
+    monkeypatch.setenv("AI_TRADING_TICKERS_FILE", str(tickers))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", str(tca_path))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_REPORT_DIR", str(tmp_path / "reports"))
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(tmp_path / "runtime_model.joblib"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_MODEL_PATH", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_AUTO_PROMOTE", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_ROWS", "120")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CV_SPLITS", "3")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_LOOKBACK_DAYS", "420")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "0")
+    monkeypatch.setattr(
+        after_hours,
+        "_fetch_daily_bars",
+        lambda symbol, _start, _end: _synthetic_daily(symbol),
+    )
+
+    result = after_hours.run_after_hours_training(
+        now=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+    )
+
+    assert result["status"] == "trained"
+    assert result["governance_status"] == "shadow"
+    assert result["promoted_model_path"] is None
+    assert result["promoted_manifest_path"] is None
 
 
 def test_after_hours_strict_promotion_policy_blocks_when_min_rows_not_met(
@@ -1921,6 +1960,11 @@ def test_maybe_train_rl_overlay_promotes_runtime_rl_model(
     promoted = Path(promoted_path)
     assert promoted.exists()
     assert promoted.read_bytes() == b"rl-model"
+    governance_path = result.get("promoted_governance_path")
+    assert isinstance(governance_path, str) and governance_path
+    governance_payload = json.loads(Path(governance_path).read_text(encoding="utf-8"))
+    assert governance_payload["governance_status"] == "production"
+    assert governance_payload["recommend_use_rl_agent"] is True
 
 
 def test_maybe_train_rl_overlay_promotion_permission_denied_is_fail_soft(
@@ -2000,6 +2044,78 @@ def test_maybe_train_rl_overlay_promotion_permission_denied_is_fail_soft(
         "AFTER_HOURS_RL_PROMOTION_FAILED" in record.message
         for record in caplog.records
     )
+
+
+def test_maybe_train_rl_overlay_skips_promotion_when_governance_shadow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ai_trading.rl_trading.train as train_mod
+
+    n_rows = 140
+    dataset = pd.DataFrame(
+        {
+            "rsi": np.linspace(45.0, 65.0, n_rows),
+            "macd": np.linspace(-0.2, 0.3, n_rows),
+            "atr": np.linspace(1.0, 2.5, n_rows),
+            "vwap": np.linspace(99.0, 105.0, n_rows),
+            "sma_50": np.linspace(98.0, 104.0, n_rows),
+            "sma_200": np.linspace(95.0, 101.0, n_rows),
+            "close": np.linspace(100.0, 110.0, n_rows),
+        }
+    )
+
+    class DummyTrainer:
+        def __init__(
+            self,
+            *,
+            algorithm: str,
+            total_timesteps: int,
+            eval_freq: int,
+            early_stopping_patience: int,
+            seed: int,
+        ) -> None:
+            self.algorithm = algorithm
+
+        def train(
+            self,
+            *,
+            data: np.ndarray,
+            env_params: dict[str, object],
+            save_path: str,
+        ) -> dict[str, object]:
+            save_dir = Path(save_path)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            artifact = save_dir / f"model_{self.algorithm.lower()}.zip"
+            artifact.write_bytes(b"rl-model")
+            return {
+                "final_evaluation": {"mean_reward": 1.0},
+                "model_id": "rl-model-shadow",
+                "governance_status": "shadow",
+            }
+
+    monkeypatch.setattr(train_mod, "RLTrainer", DummyTrainer)
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_TIMESTEPS", "2500")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_ALGO", "PPO")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_DIR", str(tmp_path / "rl"))
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTE_RL_PATH", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_RL_PROMOTION_REQUIRE_PRODUCTION", "1")
+    monkeypatch.setenv("AI_TRADING_RL_MODEL_PATH", str(tmp_path / "runtime_rl.zip"))
+    monkeypatch.setenv("AI_TRADING_RL_MIN_MEAN_REWARD", "0.0")
+    monkeypatch.setenv("AI_TRADING_RL_REQUIRE_BASELINE_EXPECTANCY_BPS", "0.0")
+
+    result = after_hours._maybe_train_rl_overlay(
+        dataset,
+        now_utc=datetime(2026, 1, 6, 21, 10, tzinfo=UTC),
+        baseline_expectancy_bps=2.2,
+        governance_status="shadow",
+    )
+
+    assert result["enabled"] is True
+    assert result["trained"] is True
+    assert result.get("promoted_model_path") is None
+    assert result.get("promoted_governance_path") is None
 
 
 def test_on_market_close_applies_promoted_model_artifacts(

@@ -9246,27 +9246,10 @@ class ExecutionEngine:
         gross_to_equity = gross_exposure / equity
         net_to_equity = net_exposure_abs / equity
 
-        bp_min_ratio = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_BP_MIN_RATIO", 0.03)
-        max_gross_to_equity = _config_float(
-            "AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY",
-            1.0,
-        )
-        max_net_to_equity = _config_float(
-            "AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY",
-            0.35,
-        )
-        try:
-            bp_floor = float(bp_min_ratio if bp_min_ratio is not None else 0.03)
-        except (TypeError, ValueError):
-            bp_floor = 0.03
-        try:
-            gross_cap = float(max_gross_to_equity if max_gross_to_equity is not None else 1.0)
-        except (TypeError, ValueError):
-            gross_cap = 1.0
-        try:
-            net_cap = float(max_net_to_equity if max_net_to_equity is not None else 0.35)
-        except (TypeError, ValueError):
-            net_cap = 0.35
+        exposure_settings = self._resolve_exposure_normalization_settings()
+        bp_floor = float(exposure_settings["bp_min_ratio"])
+        gross_cap = float(exposure_settings["max_gross_to_equity"])
+        net_cap = float(exposure_settings["max_net_to_equity"])
 
         reasons: list[str] = []
         if gross_to_equity > gross_cap:
@@ -9290,6 +9273,51 @@ class ExecutionEngine:
             "reasons": reasons,
             "overloaded": bool(reasons),
         }
+
+    def _resolve_exposure_normalization_settings(self) -> dict[str, float | bool]:
+        """Resolve exposure-normalization thresholds and emit one-shot config diagnostics."""
+
+        constrain_openings = _resolve_bool_env("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS")
+        if constrain_openings is None:
+            constrain_openings = True
+        bp_min_ratio = _config_float("AI_TRADING_EXPOSURE_NORMALIZE_BP_MIN_RATIO", 0.03)
+        max_gross_to_equity = _config_float(
+            "AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY",
+            1.0,
+        )
+        max_net_to_equity = _config_float(
+            "AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY",
+            0.35,
+        )
+        try:
+            bp_floor = float(bp_min_ratio if bp_min_ratio is not None else 0.03)
+        except (TypeError, ValueError):
+            bp_floor = 0.03
+        try:
+            gross_cap = float(max_gross_to_equity if max_gross_to_equity is not None else 1.0)
+        except (TypeError, ValueError):
+            gross_cap = 1.0
+        try:
+            net_cap = float(max_net_to_equity if max_net_to_equity is not None else 0.35)
+        except (TypeError, ValueError):
+            net_cap = 0.35
+
+        settings: dict[str, float | bool] = {
+            "block_openings": bool(constrain_openings),
+            "bp_min_ratio": bp_floor,
+            "max_gross_to_equity": gross_cap,
+            "max_net_to_equity": net_cap,
+        }
+        signature = (
+            bool(settings["block_openings"]),
+            float(settings["bp_min_ratio"]),
+            float(settings["max_gross_to_equity"]),
+            float(settings["max_net_to_equity"]),
+        )
+        if signature != getattr(self, "_exposure_normalization_settings_signature", None):
+            logger.info("EXPOSURE_NORMALIZATION_CONFIG_RESOLVED", extra=settings)
+            self._exposure_normalization_settings_signature = signature
+        return settings
 
     def _prioritize_losing_short_reduction(
         self,
@@ -9440,6 +9468,27 @@ class ExecutionEngine:
             if isinstance(cached_context, dict):
                 return cached_allowed, dict(cached_context)
             return cached_allowed, {}
+
+        enforce_in_paper = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER")
+        if enforce_in_paper is None:
+            enforce_in_paper = False
+        execution_mode_raw = (
+            str(getattr(self, "execution_mode", "") or "").strip().lower()
+            or str(_runtime_env("EXECUTION_MODE", "live") or "live").strip().lower()
+        )
+        if execution_mode_raw in {"paper", "sim", "simulation"} and not bool(enforce_in_paper):
+            context = {
+                "enabled": True,
+                "enforced": False,
+                "gate_passed": True,
+                "reason": "paper_mode_monitor_only",
+                "execution_mode": execution_mode_raw,
+                "enforce_in_paper": False,
+            }
+            self._runtime_gonogo_cache_allowed = True
+            self._runtime_gonogo_cache_context = dict(context)
+            self._runtime_gonogo_cache_until_mono = now_mono + ttl
+            return True, dict(context)
 
         default_trade_history = str(
             (_config_get_env("AI_TRADING_TRADE_HISTORY_PATH", "runtime/trade_history.parquet") if _config_get_env else "runtime/trade_history.parquet")
@@ -9658,9 +9707,8 @@ class ExecutionEngine:
                 order["account_snapshot"] = account_snapshot
 
         if not closing_position:
-            constrain_openings = _resolve_bool_env("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS")
-            if constrain_openings is None:
-                constrain_openings = True
+            exposure_settings = self._resolve_exposure_normalization_settings()
+            constrain_openings = bool(exposure_settings["block_openings"])
             exposure_context = self._exposure_normalization_context(account_snapshot)
             if constrain_openings and exposure_context and bool(exposure_context.get("overloaded")):
                 self.stats.setdefault("capacity_skips", 0)

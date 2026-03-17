@@ -1320,6 +1320,152 @@ def _resolve_prepare_symbol_limit() -> int | None:
     return max(1, min(limit, 500))
 
 
+def _acceptance_rate_governor_enabled() -> bool:
+    try:
+        return bool(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_ENABLED", True, cast=bool))
+    except Exception:
+        return True
+
+
+def _acceptance_rate_governor_min_rate() -> float:
+    try:
+        fallback = float(get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float))
+    except Exception:
+        fallback = 0.05
+    try:
+        raw = float(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_MIN_RATE", fallback, cast=float))
+    except Exception:
+        raw = fallback
+    return max(0.0, min(raw, 1.0))
+
+
+def _acceptance_rate_governor_min_records() -> int:
+    try:
+        raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_MIN_RECORDS", 50, cast=int))
+    except Exception:
+        raw = 50
+    return max(1, min(raw, 10000))
+
+
+def _acceptance_rate_governor_trigger_streak() -> int:
+    try:
+        raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_TRIGGER_STREAK", 3, cast=int))
+    except Exception:
+        raw = 3
+    return max(1, min(raw, 100))
+
+
+def _acceptance_rate_governor_recover_streak() -> int:
+    try:
+        raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_RECOVER_STREAK", 2, cast=int))
+    except Exception:
+        raw = 2
+    return max(1, min(raw, 100))
+
+
+def _acceptance_rate_governor_symbol_cap() -> int | None:
+    try:
+        raw = int(get_env("AI_TRADING_ACCEPTANCE_RATE_GOVERNOR_SYMBOL_CAP", 25, cast=int))
+    except Exception:
+        raw = 25
+    if raw <= 0:
+        return None
+    return max(1, min(raw, 500))
+
+
+def _update_acceptance_rate_governor_state(
+    state: BotState,
+    *,
+    decision_records_total: int,
+    accepted_decisions: int,
+) -> None:
+    if not _acceptance_rate_governor_enabled():
+        state.acceptance_rate_governor_active = False
+        state.acceptance_rate_governor_streak = 0
+        state.acceptance_rate_governor_last_rate = None
+        state.acceptance_rate_governor_last_records = 0
+        return
+
+    total = max(0, int(decision_records_total))
+    accepted = max(0, int(accepted_decisions))
+    if total <= 0:
+        return
+    accepted = min(accepted, total)
+    acceptance_rate = float(accepted) / float(total)
+    state.acceptance_rate_governor_last_rate = acceptance_rate
+    state.acceptance_rate_governor_last_records = total
+
+    min_records = _acceptance_rate_governor_min_records()
+    if total < min_records:
+        return
+
+    min_rate = _acceptance_rate_governor_min_rate()
+    low_acceptance = acceptance_rate < min_rate
+    streak = int(getattr(state, "acceptance_rate_governor_streak", 0) or 0)
+    if low_acceptance:
+        streak = streak + 1 if streak > 0 else 1
+    else:
+        streak = streak - 1 if streak < 0 else -1
+    state.acceptance_rate_governor_streak = streak
+
+    active = bool(getattr(state, "acceptance_rate_governor_active", False))
+    trigger_streak = _acceptance_rate_governor_trigger_streak()
+    recover_streak = _acceptance_rate_governor_recover_streak()
+    changed = False
+    if not active and streak >= trigger_streak:
+        active = True
+        changed = True
+    elif active and streak <= -recover_streak:
+        active = False
+        changed = True
+    state.acceptance_rate_governor_active = active
+
+    if changed:
+        logger.warning(
+            "ACCEPTANCE_RATE_GOVERNOR_STATE_CHANGED",
+            extra={
+                "active": bool(active),
+                "streak": int(streak),
+                "acceptance_rate": round(float(acceptance_rate), 6),
+                "min_rate": round(float(min_rate), 6),
+                "records_total": int(total),
+                "accepted_records": int(accepted),
+                "trigger_streak": int(trigger_streak),
+                "recover_streak": int(recover_streak),
+            },
+        )
+
+
+def _apply_acceptance_rate_governor_symbol_cap(
+    state: BotState,
+    symbols: Sequence[str],
+) -> list[str]:
+    bounded_symbols = [str(symbol).strip() for symbol in symbols if str(symbol).strip()]
+    if not bounded_symbols:
+        return []
+    if not _acceptance_rate_governor_enabled():
+        return bounded_symbols
+    if not bool(getattr(state, "acceptance_rate_governor_active", False)):
+        return bounded_symbols
+    cap = _acceptance_rate_governor_symbol_cap()
+    if cap is None or len(bounded_symbols) <= cap:
+        return bounded_symbols
+    capped = bounded_symbols[:cap]
+    logger.warning(
+        "ACCEPTANCE_RATE_GOVERNOR_SYMBOL_CAP_APPLIED",
+        extra={
+            "before": len(bounded_symbols),
+            "after": len(capped),
+            "cap": int(cap),
+            "acceptance_rate": getattr(state, "acceptance_rate_governor_last_rate", None),
+            "records_total": int(getattr(state, "acceptance_rate_governor_last_records", 0) or 0),
+            "streak": int(getattr(state, "acceptance_rate_governor_streak", 0) or 0),
+            "sample": capped[:10],
+        },
+    )
+    return capped
+
+
 def _record_prerank_shadow_snapshot(
     *,
     ranked_symbols: Sequence[str],
@@ -5216,10 +5362,57 @@ def _resolve_rl_model_path(raw_path: str | None = None) -> Path | None:
         candidate = str(get_env("AI_TRADING_RL_MODEL_PATH", "") or "").strip()
     if not candidate:
         return None
-    path = Path(candidate)
-    if not path.is_absolute():
-        path = (Path(BASE_DIR) / path).resolve()
-    return path
+    return resolve_runtime_artifact_path(
+        candidate,
+        default_relative="models/runtime/rl_agent.zip",
+    )
+
+
+def _resolve_rl_governance_sidecar_path(model_path: Path) -> Path:
+    return Path(f"{model_path}.governance.json")
+
+
+def _rl_runtime_governance_allows_load(
+    model_path: Path,
+    *,
+    test_mode: bool,
+) -> tuple[bool, str]:
+    require_raw = str(
+        get_env("AI_TRADING_RL_RUNTIME_REQUIRE_GOVERNANCE", "", cast=str) or ""
+    ).strip()
+    if require_raw:
+        require_governance = require_raw.lower() not in {"0", "false", "no", "off"}
+    else:
+        require_governance = not test_mode
+    if not require_governance:
+        return True, "disabled"
+
+    sidecar_path = _resolve_rl_governance_sidecar_path(model_path)
+    if not sidecar_path.exists():
+        return False, "sidecar_missing"
+
+    try:
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False, "sidecar_unreadable"
+    if not isinstance(payload, MappingABC):
+        return False, "sidecar_invalid"
+
+    status_raw = payload.get("governance_status") or payload.get("status")
+    status = str(status_raw or "").strip().lower()
+    recommend_use_rl = bool(payload.get("recommend_use_rl_agent", False))
+    require_production = bool(
+        get_env("AI_TRADING_RL_RUNTIME_REQUIRE_PRODUCTION", True, cast=bool)
+    )
+    require_recommend = bool(
+        get_env("AI_TRADING_RL_RUNTIME_REQUIRE_RECOMMEND", True, cast=bool)
+    )
+
+    if require_production and status != "production":
+        return False, f"governance_status_{status or 'missing'}"
+    if require_recommend and not recommend_use_rl:
+        return False, "recommend_use_rl_agent_false"
+    return True, "ok"
 
 
 def _rl_model_signature(path: Path | None) -> tuple[str, int, int] | None:
@@ -5275,6 +5468,23 @@ def _reload_rl_agent_from_runtime_path(
         )
         if fail_hard_startup:
             raise RuntimeError("RL_AGENT_PATH_MISSING")
+        return False
+    governance_ok, governance_reason = _rl_runtime_governance_allows_load(
+        target,
+        test_mode=test_mode,
+    )
+    if not governance_ok:
+        warning_kv(
+            logger,
+            "RL_AGENT_GOVERNANCE_BLOCKED",
+            extra={
+                "model": str(target),
+                "reason": governance_reason,
+                "sidecar_path": str(_resolve_rl_governance_sidecar_path(target)),
+            },
+        )
+        if fail_hard_startup:
+            raise RuntimeError("RL_AGENT_GOVERNANCE_BLOCKED")
         return False
     if RLTrader is None:
         warning_kv(
@@ -9544,6 +9754,10 @@ class BotState:
     )  # (symbol, timestamp)
     profitability_governor_cache_until_mono: float = 0.0
     profitability_governor_cache: dict[str, Any] = field(default_factory=dict)
+    acceptance_rate_governor_active: bool = False
+    acceptance_rate_governor_streak: int = 0
+    acceptance_rate_governor_last_rate: float | None = None
+    acceptance_rate_governor_last_records: int = 0
 
 
 class _LazyState:
@@ -23351,6 +23565,39 @@ def _enter_long(
                 f"Skipping {symbol}: insufficient capital for minimum position (balance=${balance:.0f}, weight={target_weight:.4f}, price=${current_price:.2f})"
             )
             return True
+    prescale_requested_qty = int(raw_qty)
+    raw_qty, precheck_bp = _enforce_buying_power_limit(
+        ctx,
+        account_obj,
+        "buy",
+        current_price,
+        raw_qty,
+    )
+    if raw_qty <= 0:
+        logger.warning(
+            "SKIP_INSUFFICIENT_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "buy",
+                "requested_qty": prescale_requested_qty,
+                "price": current_price,
+                "available_buying_power": None if precheck_bp is None else round(precheck_bp, 2),
+                "stage": "precheck",
+            },
+        )
+        return True
+    if raw_qty < prescale_requested_qty:
+        logger.info(
+            "ORDER_PRESCALED_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "buy",
+                "requested_qty": prescale_requested_qty,
+                "adjusted_qty": raw_qty,
+                "price": current_price,
+                "available_buying_power": None if precheck_bp is None else round(precheck_bp, 2),
+            },
+        )
     # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
     adj_qty = _apply_sector_cap_qty(ctx, symbol, raw_qty, current_price)
     requested_qty = adj_qty
@@ -24106,6 +24353,39 @@ def _enter_short(
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return True
+    prescale_requested_qty = int(qty)
+    qty, precheck_bp = _enforce_buying_power_limit(
+        ctx,
+        account_obj,
+        "sell_short",
+        current_price,
+        qty,
+    )
+    if qty <= 0:
+        logger.warning(
+            "SKIP_INSUFFICIENT_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "sell_short",
+                "requested_qty": prescale_requested_qty,
+                "price": current_price,
+                "available_short_capacity": None if precheck_bp is None else round(precheck_bp, 2),
+                "stage": "precheck",
+            },
+        )
+        return True
+    if qty < prescale_requested_qty:
+        logger.info(
+            "ORDER_PRESCALED_BUYING_POWER",
+            extra={
+                "symbol": symbol,
+                "side": "sell_short",
+                "requested_qty": prescale_requested_qty,
+                "adjusted_qty": qty,
+                "price": current_price,
+                "available_short_capacity": None if precheck_bp is None else round(precheck_bp, 2),
+            },
+        )
     # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
     adj_qty = _apply_sector_cap_qty(ctx, symbol, qty, current_price)
     requested_qty = adj_qty
@@ -30946,6 +31226,10 @@ def _prepare_run(
         runtime.tickers = symbols
     if symbols:
         pre_ranked_symbols = _pre_rank_execution_candidates(symbols, runtime=runtime)
+        pre_ranked_symbols = _apply_acceptance_rate_governor_symbol_cap(
+            state,
+            pre_ranked_symbols,
+        )
         prepare_limit = _resolve_prepare_symbol_limit()
         if prepare_limit is not None and len(pre_ranked_symbols) > prepare_limit:
             dropped_count = len(pre_ranked_symbols) - prepare_limit
@@ -39051,13 +39335,27 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             tca_update_on_fill = bool(
                 get_env("AI_TRADING_TCA_UPDATE_ON_FILL", True, cast=bool)
             )
-            if tca_update_on_fill and persistable_fill:
+            tca_write_pending = bool(
+                get_env("AI_TRADING_TCA_WRITE_PENDING_EVENTS", True, cast=bool)
+            )
+            should_write_tca = bool(
+                (tca_update_on_fill and persistable_fill)
+                or (tca_write_pending and not persistable_fill)
+            )
+            if should_write_tca:
                 resolved_tca_path = str(
                     get_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
                 )
                 try:
                     resolved_tca_path = str(_resolved_tca_path())
-                    write_tca_record(resolved_tca_path, tca_record)
+                    tca_payload = dict(tca_record)
+                    if not persistable_fill:
+                        tca_payload["pending_event"] = True
+                        tca_payload["pending_reason"] = (
+                            order_status_token or "no_fill"
+                        )
+                        tca_payload["order_status"] = order_status_text
+                    write_tca_record(resolved_tca_path, tca_payload)
                 except Exception as exc:
                     logger.warning(
                         "TCA_WRITE_FAILED path=%s error=%s",
@@ -39085,6 +39383,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         )
         _write_decision_record(record, decision_path)
     accepted_decisions = int(decision_gate_counts.get("OK_TRADE", 0))
+    _update_acceptance_rate_governor_state(
+        state,
+        decision_records_total=int(decision_records_total),
+        accepted_decisions=accepted_decisions,
+    )
     if _gate_effectiveness_exclude_global_halts() and decision_observations:
         filtered_reject_counts: Counter[str] = Counter()
         for observation in decision_observations:

@@ -3034,6 +3034,38 @@ def _maybe_promote_to_runtime_model_path(
     return str(runtime_model_path), str(manifest_path)
 
 
+def _rl_runtime_governance_sidecar_path(runtime_model_path: Path) -> Path:
+    return Path(f"{runtime_model_path}.governance.json")
+
+
+def _write_rl_runtime_governance_sidecar(
+    runtime_model_path: Path,
+    *,
+    governance_status: str,
+    recommend_use_rl_agent: bool,
+    mean_reward: float,
+    baseline_expectancy_bps: float,
+) -> str | None:
+    payload = {
+        "updated_at": datetime.now(UTC).isoformat(),
+        "runtime_model_path": str(runtime_model_path),
+        "governance_status": str(governance_status or "").strip().lower() or "shadow",
+        "recommend_use_rl_agent": bool(recommend_use_rl_agent),
+        "mean_reward": float(mean_reward),
+        "baseline_expectancy_bps": float(baseline_expectancy_bps),
+    }
+    sidecar_path = _rl_runtime_governance_sidecar_path(runtime_model_path)
+    try:
+        _write_json(sidecar_path, payload)
+    except OSError as exc:
+        logger.warning(
+            "AFTER_HOURS_RL_GOVERNANCE_SIDECAR_WRITE_FAILED",
+            extra={"path": str(sidecar_path), "error": str(exc)},
+        )
+        return None
+    return str(sidecar_path)
+
+
 def _maybe_promote_rl_overlay_to_runtime_path(
     trained_model_path: Path,
 ) -> str | None:
@@ -3084,7 +3116,7 @@ def _maybe_train_rl_overlay(
     baseline_expectancy_bps: float,
     dataset_fingerprint: str | None = None,
     feature_hash: str | None = None,
-    governance_status: str = "shadow",
+    governance_status: str | None = None,
 ) -> dict[str, Any]:
     enabled = bool(get_env("AI_TRADING_AFTER_HOURS_RL_OVERLAY_ENABLED", False, cast=bool))
     if not enabled:
@@ -3148,6 +3180,7 @@ def _maybe_train_rl_overlay(
         early_stopping_patience=5,
         seed=int(get_env("AI_TRADING_SEED", 42, cast=int)),
     )
+    requested_governance_status = str(governance_status or "shadow").strip().lower() or "shadow"
     env_params: dict[str, Any] = {
         "transaction_cost": float(get_env("AI_TRADING_RL_TRANSACTION_COST", 0.001, cast=float)),
         "slippage": float(get_env("AI_TRADING_RL_SLIPPAGE", 0.0005, cast=float)),
@@ -3157,7 +3190,7 @@ def _maybe_train_rl_overlay(
         "registry_strategy": "rl_overlay",
         "registry_model_type": algorithm.lower(),
         "registry_tags": tags,
-        "registry_requested_status": governance_status,
+        "registry_requested_status": requested_governance_status,
     }
     if dataset_fingerprint:
         env_params["dataset_fingerprint"] = str(dataset_fingerprint)
@@ -3208,11 +3241,48 @@ def _maybe_train_rl_overlay(
     recommend = mean_reward >= rl_reward_target and baseline_expectancy_bps >= baseline_target
     trained_model_path = run_dir / f"model_{algorithm.lower()}.zip"
     trained_model_path_str = str(trained_model_path) if trained_model_path.is_file() else None
+    explicit_governance = str(governance_status or "").strip().lower()
+    result_governance = str(
+        (results.get("governance_status") if isinstance(results, Mapping) else "") or ""
+    ).strip().lower()
+    governance_token = explicit_governance or result_governance or "shadow"
+    require_production = bool(
+        get_env("AI_TRADING_AFTER_HOURS_RL_PROMOTION_REQUIRE_PRODUCTION", True, cast=bool)
+    )
+    require_recommend = bool(
+        get_env("AI_TRADING_AFTER_HOURS_RL_PROMOTION_REQUIRE_RECOMMEND", True, cast=bool)
+    )
+    promote_reasons: list[str] = []
+    if require_production and governance_token != "production":
+        promote_reasons.append("governance_not_production")
+    if require_recommend and not recommend:
+        promote_reasons.append("recommendation_not_met")
+    promote_runtime_rl = not promote_reasons
+    if promote_reasons:
+        logger.info(
+            "AFTER_HOURS_RL_PROMOTION_SKIPPED",
+            extra={
+                "reasons": tuple(promote_reasons),
+                "governance_status": governance_token or None,
+                "recommend_use_rl_agent": bool(recommend),
+                "mean_reward": float(mean_reward),
+                "baseline_expectancy_bps": float(baseline_expectancy_bps),
+            },
+        )
     promoted_model_path = (
         _maybe_promote_rl_overlay_to_runtime_path(trained_model_path)
-        if trained_model_path_str
+        if trained_model_path_str and promote_runtime_rl
         else None
     )
+    promoted_governance_path: str | None = None
+    if promoted_model_path:
+        promoted_governance_path = _write_rl_runtime_governance_sidecar(
+            Path(promoted_model_path),
+            governance_status=governance_token or "shadow",
+            recommend_use_rl_agent=bool(recommend),
+            mean_reward=float(mean_reward),
+            baseline_expectancy_bps=float(baseline_expectancy_bps),
+        )
     return {
         "enabled": True,
         "trained": True,
@@ -3221,6 +3291,7 @@ def _maybe_train_rl_overlay(
         "output_dir": str(run_dir),
         "trained_model_path": trained_model_path_str,
         "promoted_model_path": promoted_model_path,
+        "promoted_governance_path": promoted_governance_path,
         "mean_reward": mean_reward,
         "rl_reward_target": rl_reward_target,
         "baseline_expectancy_bps": baseline_expectancy_bps,
@@ -3555,10 +3626,35 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "runtime_performance_gate": runtime_performance_gate,
         },
     )
-    promoted_model_path, promoted_manifest_path = _maybe_promote_to_runtime_model_path(
-        model_path,
-        manifest_metadata=manifest_metadata,
+    require_runtime_promotion_gate = bool(
+        get_env("AI_TRADING_AFTER_HOURS_RUNTIME_PROMOTION_REQUIRE_GATE", True, cast=bool)
     )
+    require_runtime_production = bool(
+        get_env("AI_TRADING_AFTER_HOURS_RUNTIME_PROMOTION_REQUIRE_PRODUCTION", True, cast=bool)
+    )
+    promote_runtime_model = True
+    runtime_promotion_reasons: list[str] = []
+    if require_runtime_promotion_gate and not bool(promotion.get("gate_passed", False)):
+        promote_runtime_model = False
+        runtime_promotion_reasons.append("promotion_gate_failed")
+    if require_runtime_production and str(status).strip().lower() != "production":
+        promote_runtime_model = False
+        runtime_promotion_reasons.append("governance_not_production")
+    if promote_runtime_model:
+        promoted_model_path, promoted_manifest_path = _maybe_promote_to_runtime_model_path(
+            model_path,
+            manifest_metadata=manifest_metadata,
+        )
+    else:
+        promoted_model_path, promoted_manifest_path = None, None
+        logger.info(
+            "AFTER_HOURS_RUNTIME_PROMOTION_SKIPPED",
+            extra={
+                "reasons": tuple(runtime_promotion_reasons),
+                "governance_status": str(status),
+                "gate_passed": bool(promotion.get("gate_passed", False)),
+            },
+        )
     rl_overlay = _maybe_train_rl_overlay(
         dataset,
         now_utc=now_utc,

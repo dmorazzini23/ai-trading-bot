@@ -59,3 +59,19 @@ def test_rl_runtime_path_preflight_noop_when_rl_overlay_disabled(
         record.getMessage() == "RL_RUNTIME_MODEL_PATH_PERMISSION_WARNING"
         for record in caplog.records
     )
+
+
+def test_rl_runtime_target_path_resolves_relative_to_data_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "runtime-root"
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_root))
+    monkeypatch.delenv("AI_TRADING_RL_MODEL_PATH", raising=False)
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_RUNTIME_RL_MODEL_PATH",
+        "models/runtime/rl_agent.zip",
+    )
+
+    target = main._resolve_rl_runtime_model_target_path()
+    assert target == (data_root / "models/runtime/rl_agent.zip").resolve()

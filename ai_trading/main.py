@@ -25,6 +25,7 @@ ensure_dotenv_loaded()
 
 import ai_trading.logging as _logging
 from ai_trading.paths import LOG_DIR, ensure_runtime_paths
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
 from ai_trading.data.fetch import DataFetchError, EmptyBarsError
 from ai_trading.execution.live_trading import APIError, NonRetryableBrokerError
@@ -655,7 +656,7 @@ def _emit_execution_quality_alert(*, cycle_index: int, closed: bool) -> None:
         get_env("AI_TRADING_DECISION_LOG_PATH", "runtime/decision_records.jsonl", cast=str)
         or "runtime/decision_records.jsonl"
     )
-    decision_path = _resolve_runtime_artifact_path(
+    decision_path = resolve_runtime_artifact_path(
         decision_log_raw,
         default_relative="runtime/decision_records.jsonl",
     )
@@ -999,28 +1000,6 @@ def _emit_cycle_slo_alerts(
     _PRIMARY_FALLBACK_LAST_ALERT_TS = now_wall_ts
 
 
-def _resolve_runtime_artifact_path(path_value: str, *, default_relative: str) -> Path:
-    raw_value = str(path_value or "").strip() or str(default_relative)
-    target = Path(raw_value).expanduser()
-    if target.is_absolute():
-        return target
-
-    data_root_raw = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
-    if data_root_raw:
-        data_root = Path(data_root_raw.split(":")[0]).expanduser()
-        if data_root.is_absolute():
-            return (data_root / target).resolve()
-
-    state_dir_raw = str(_raw_env("STATE_DIRECTORY", "") or "").strip()
-    if state_dir_raw:
-        state_root = Path(state_dir_raw.split(":")[0]).expanduser()
-        if state_root.is_absolute():
-            return (state_root / target).resolve()
-
-    repo_root = Path(__file__).resolve().parents[1]
-    return (repo_root / target).resolve()
-
-
 def _maybe_build_bad_session_replay_dataset(
     *,
     trigger: str,
@@ -1054,11 +1033,11 @@ def _maybe_build_bad_session_replay_dataset(
         )
         or "runtime/replay_bad_session"
     )
-    source_path = _resolve_runtime_artifact_path(
+    source_path = resolve_runtime_artifact_path(
         source_raw,
         default_relative=source_default or "runtime/tca_records.jsonl",
     )
-    output_dir = _resolve_runtime_artifact_path(
+    output_dir = resolve_runtime_artifact_path(
         output_raw,
         default_relative="runtime/replay_bad_session",
     )
@@ -2501,10 +2480,10 @@ def _resolve_rl_runtime_model_target_path() -> Path | None:
         ).strip()
     if not rl_model_path_raw:
         return None
-    target = Path(rl_model_path_raw)
-    if not target.is_absolute():
-        target = (Path(__file__).resolve().parents[1] / target).resolve()
-    return target
+    return resolve_runtime_artifact_path(
+        rl_model_path_raw,
+        default_relative="models/runtime/rl_agent.zip",
+    )
 
 
 def _is_writable_file_target(path: Path) -> tuple[bool, str]:

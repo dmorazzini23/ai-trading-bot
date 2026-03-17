@@ -332,6 +332,21 @@ def test_pre_execution_order_checks_blocks_openings_when_exposure_overloaded(mon
     assert engine.stats["skipped_orders"] == 1
 
 
+def test_resolve_exposure_normalization_settings_uses_runtime_env(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BLOCK_OPENINGS", "0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_BP_MIN_RATIO", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_GROSS_TO_EQUITY", "3.0")
+    monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_MAX_NET_TO_EQUITY", "2.2")
+
+    settings = engine._resolve_exposure_normalization_settings()
+
+    assert settings["block_openings"] is False
+    assert settings["bp_min_ratio"] == pytest.approx(0.05)
+    assert settings["max_gross_to_equity"] == pytest.approx(3.0)
+    assert settings["max_net_to_equity"] == pytest.approx(2.2)
+
+
 def test_prioritize_losing_short_reduction_targets_largest_losses(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_EXPOSURE_NORMALIZE_REDUCE_SHORTS_ENABLED", "1")
@@ -556,6 +571,78 @@ def test_runtime_gonogo_precheck_blocks_openings_when_gate_fails(monkeypatch, tm
     assert allowed is False
     assert engine.stats["capacity_skips"] == 1
     assert engine.stats["skipped_orders"] == 1
+
+
+def test_runtime_gonogo_monitor_only_for_paper_mode_by_default(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    _write_runtime_gonogo_artifacts(
+        root=tmp_path,
+        trade_rows=[{"symbol": "AAPL", "side": "buy", "pnl": -10.0}],
+        gate_summary={
+            "total_records": 10,
+            "total_accepted_records": 7,
+            "total_rejected_records": 3,
+            "total_expected_net_edge_bps": 0.0,
+        },
+    )
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        "runtime/gate_effectiveness_summary.json",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+    monkeypatch.delenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", raising=False)
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is True
+    assert context["enabled"] is True
+    assert context["enforced"] is False
+    assert context["reason"] == "paper_mode_monitor_only"
+    assert context["execution_mode"] == "paper"
+
+
+def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "paper"
+    _write_runtime_gonogo_artifacts(
+        root=tmp_path,
+        trade_rows=[{"symbol": "AAPL", "side": "buy", "pnl": -10.0}],
+        gate_summary={
+            "total_records": 10,
+            "total_accepted_records": 7,
+            "total_rejected_records": 3,
+            "total_expected_net_edge_bps": 0.0,
+        },
+    )
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH", "runtime/trade_history.json")
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        "runtime/gate_effectiveness_summary.json",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", "1.1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is False
+    assert context["enabled"] is True
+    assert context["gate_passed"] is False
+    assert "profit_factor" in context["failed_checks"]
 
 
 def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, tmp_path):
