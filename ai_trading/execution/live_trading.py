@@ -17,6 +17,7 @@ import random
 import statistics
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
@@ -420,7 +421,20 @@ def _resolve_bool_env(name: str) -> bool | None:
         return _safe_bool(raw)
     except Exception:
         logger.debug("BOOL_ENV_PARSE_FAILED", extra={"name": name, "raw": raw}, exc_info=True)
-        return None
+    return None
+
+
+def _market_is_open_now(now_utc: datetime | None = None) -> bool:
+    """Return market-open status with defensive fallback."""
+
+    current = now_utc if now_utc is not None else datetime.now(UTC)
+    try:
+        from ai_trading.utils.base import is_market_open as _is_market_open
+
+        return bool(_is_market_open(current))
+    except Exception:
+        logger.debug("MARKET_OPEN_STATUS_RESOLVE_FAILED", exc_info=True)
+        return False
 
 
 def _runtime_trading_config() -> Any | None:
@@ -2196,6 +2210,14 @@ class ExecutionEngine:
         self._runtime_gonogo_cache_context: dict[str, Any] = {}
         self._runtime_gonogo_threshold_lock_session: str = ""
         self._runtime_gonogo_locked_thresholds: dict[str, Any] = {}
+        self._last_order_ack_timeout_mono: float = 0.0
+        self._last_order_ack_timeout_order_id: str | None = None
+        self._last_order_ack_timeout_client_order_id: str | None = None
+        self._tca_fill_backfill_last_run_mono: float = 0.0
+        self._tca_fill_backfill_offset: int = 0
+        self._tca_fill_backfill_bootstrapped: bool = False
+        self._symbol_loss_streak: dict[str, int] = {}
+        self._symbol_loss_cooldown_until: dict[str, float] = {}
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
         self._cancel_ratio_adaptive_context: dict[str, Any] = {}
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
@@ -4365,6 +4387,10 @@ class ExecutionEngine:
         fill_event_payload["event"] = "fill_recorded"
         fill_event_payload["entry_time"] = timestamp.isoformat()
         self._record_runtime_fill_event(fill_event_payload)
+        self._update_symbol_loss_cooldown_from_fill(
+            symbol=symbol,
+            slippage_bps=slippage_bps,
+        )
         runtime_source = None
         if runtime_payload is not None:
             source_value = runtime_payload.get("source")
@@ -4460,6 +4486,174 @@ class ExecutionEngine:
                 "reason": reason,
             },
         )
+
+    def _backfill_pending_tca_from_fill_events(self) -> dict[str, Any]:
+        """Best-effort TCA reconciliation pass using persisted fill events."""
+
+        enabled = _resolve_bool_env("AI_TRADING_TCA_BACKFILL_FROM_FILL_EVENTS_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return {"enabled": False, "reason": "disabled"}
+        tca_enabled = _resolve_bool_env("AI_TRADING_TCA_ENABLED")
+        if tca_enabled is False:
+            return {"enabled": False, "reason": "tca_disabled"}
+        tca_update_on_fill = _resolve_bool_env("AI_TRADING_TCA_UPDATE_ON_FILL")
+        if tca_update_on_fill is False:
+            return {"enabled": False, "reason": "tca_update_on_fill_disabled"}
+
+        interval_s = _config_float("AI_TRADING_TCA_BACKFILL_INTERVAL_SEC", 45.0) or 45.0
+        interval_s = max(5.0, min(float(interval_s), 3600.0))
+        now_mono = float(monotonic_time())
+        last_run = float(getattr(self, "_tca_fill_backfill_last_run_mono", 0.0) or 0.0)
+        if last_run > 0.0 and (now_mono - last_run) < interval_s:
+            return {
+                "enabled": True,
+                "reason": "interval_active",
+                "remaining_s": round(float(max(interval_s - (now_mono - last_run), 0.0)), 3),
+            }
+        self._tca_fill_backfill_last_run_mono = now_mono
+
+        fill_events_path = resolve_runtime_artifact_path(
+            str(_runtime_env("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl") or "runtime/fill_events.jsonl"),
+            default_relative="runtime/fill_events.jsonl",
+        )
+        tca_path = resolve_runtime_artifact_path(
+            str(_runtime_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl") or "runtime/tca_records.jsonl"),
+            default_relative="runtime/tca_records.jsonl",
+        )
+        if not fill_events_path.exists():
+            return {"enabled": True, "reason": "fill_events_missing", "path": str(fill_events_path)}
+
+        bootstrap_lines_cfg = _config_int("AI_TRADING_TCA_BACKFILL_BOOTSTRAP_LINES", 4000)
+        bootstrap_lines = max(50, min(int(bootstrap_lines_cfg if bootstrap_lines_cfg is not None else 4000), 100000))
+        incremental_lines_cfg = _config_int("AI_TRADING_TCA_BACKFILL_MAX_INCREMENTAL_LINES", 1200)
+        incremental_lines = max(10, min(int(incremental_lines_cfg if incremental_lines_cfg is not None else 1200), 20000))
+
+        lines_to_process: list[str] = []
+        try:
+            with fill_events_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                handle.seek(0, os.SEEK_END)
+                file_size = int(max(handle.tell(), 0))
+                bootstrapped = bool(getattr(self, "_tca_fill_backfill_bootstrapped", False))
+                current_offset = int(max(getattr(self, "_tca_fill_backfill_offset", 0), 0))
+                if current_offset > file_size:
+                    current_offset = 0
+                if not bootstrapped:
+                    handle.seek(0)
+                    ring: deque[str] = deque(maxlen=bootstrap_lines)
+                    for line in handle:
+                        ring.append(line)
+                    lines_to_process = list(ring)
+                    self._tca_fill_backfill_bootstrapped = True
+                    self._tca_fill_backfill_offset = file_size
+                else:
+                    handle.seek(current_offset)
+                    lines_to_process = handle.readlines()
+                    self._tca_fill_backfill_offset = file_size
+        except OSError as exc:
+            return {
+                "enabled": True,
+                "reason": "fill_events_unreadable",
+                "path": str(fill_events_path),
+                "error": str(exc),
+            }
+
+        if not lines_to_process:
+            return {
+                "enabled": True,
+                "reason": "no_new_fill_events",
+                "path": str(fill_events_path),
+            }
+        if len(lines_to_process) > incremental_lines:
+            lines_to_process = lines_to_process[-incremental_lines:]
+
+        def _parse_fill_ts(raw_value: Any) -> datetime | None:
+            if raw_value in (None, ""):
+                return None
+            if isinstance(raw_value, datetime):
+                return raw_value if raw_value.tzinfo is not None else raw_value.replace(tzinfo=UTC)
+            text = str(raw_value).strip()
+            if not text:
+                return None
+            if text.endswith("Z"):
+                text = f"{text[:-1]}+00:00"
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+
+        scanned = 0
+        reconciled_count = 0
+        for raw_line in lines_to_process:
+            payload = raw_line.strip()
+            if not payload:
+                continue
+            try:
+                row = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("event") or "").strip().lower() != "fill_recorded":
+                continue
+            scanned += 1
+            fill_price = _safe_float(row.get("fill_price"))
+            if fill_price is None:
+                fill_price = _safe_float(row.get("entry_price"))
+            fill_qty = _safe_float(row.get("fill_qty"))
+            if fill_qty is None:
+                fill_qty = _safe_float(row.get("qty"))
+            if (fill_price or 0.0) <= 0.0 or (fill_qty or 0.0) <= 0.0:
+                continue
+            client_order_id = row.get("client_order_id")
+            order_id = row.get("order_id") or row.get("alpaca_order_id")
+            status_token = _normalize_status(row.get("status")) or "filled"
+            fill_ts = _parse_fill_ts(row.get("entry_time") or row.get("ts"))
+            fee_amount = _safe_float(row.get("fee_amount"))
+            source = row.get("source")
+            source_token = (
+                str(source).strip() if source not in (None, "") else "backfill_fill_events"
+            )
+            resolved, _reason = reconcile_pending_tca_with_fill(
+                str(tca_path),
+                client_order_id=(
+                    str(client_order_id)
+                    if client_order_id not in (None, "")
+                    else None
+                ),
+                order_id=str(order_id) if order_id not in (None, "") else None,
+                fill_price=float(fill_price),
+                fill_qty=float(fill_qty),
+                status=status_token,
+                fill_ts=fill_ts,
+                fee_amount=fee_amount,
+                source=source_token,
+            )
+            if resolved:
+                reconciled_count += 1
+
+        if reconciled_count > 0:
+            logger.info(
+                "TCA_PENDING_EVENT_RECONCILE_BACKFILL",
+                extra={
+                    "path": str(tca_path),
+                    "fill_events_path": str(fill_events_path),
+                    "scanned": int(max(scanned, 0)),
+                    "reconciled": int(max(reconciled_count, 0)),
+                },
+            )
+        return {
+            "enabled": True,
+            "reason": "processed",
+            "scanned": int(max(scanned, 0)),
+            "reconciled": int(max(reconciled_count, 0)),
+            "path": str(tca_path),
+            "fill_events_path": str(fill_events_path),
+        }
 
     def _pdt_lockout_active(self, account: Any | None) -> bool:
         """Return ``True`` when the PDT lockout should block new openings."""
@@ -8233,6 +8427,7 @@ class ExecutionEngine:
                     ack_payload["latency_ms"] = elapsed_ms
                     ack_payload["ack_source"] = source
                     logger.info("ORDER_ACK_RECEIVED", extra=ack_payload)
+                    self._clear_order_ack_timeout_state(reason="ack_received")
                     runtime_state.update_broker_status(
                         connected=True,
                         latency_ms=elapsed_ms,
@@ -8357,6 +8552,10 @@ class ExecutionEngine:
                 timeout_payload["status_detail"] = str(last_status_raw) if last_status_raw is not None else None
                 timeout_payload["ack_logged"] = bool(ack_logged)
                 logger.error("ORDER_ACK_TIMEOUT", extra=timeout_payload)
+                self._record_order_ack_timeout(
+                    order_id=order_id,
+                    client_order_id=client_order_id,
+                )
                 runtime_state.update_broker_status(
                     connected=True,
                     last_error="order_ack_timeout",
@@ -8626,6 +8825,8 @@ class ExecutionEngine:
                 "reconciled": reconciled,
             },
         )
+        if reconciled and not ack_timed_out:
+            self._clear_order_ack_timeout_state(reason="reconciled_submit")
 
         execution_result = ExecutionResult(
             order_obj,
@@ -9780,6 +9981,62 @@ class ExecutionEngine:
             )
         return actions
 
+    def _order_ack_recovery_seconds(self) -> float:
+        """Return cooldown window before clearing a recorded ack-timeout error."""
+
+        configured = _config_float("AI_TRADING_ORDER_ACK_RECOVERY_SEC", 45.0)
+        if configured is None:
+            configured = 45.0
+        if not math.isfinite(float(configured)):
+            configured = 45.0
+        return max(5.0, min(float(configured), 600.0))
+
+    def _record_order_ack_timeout(
+        self,
+        *,
+        order_id: Any | None,
+        client_order_id: Any | None,
+    ) -> None:
+        """Persist latest ack-timeout identifiers for recovery telemetry."""
+
+        self._last_order_ack_timeout_mono = float(monotonic_time())
+        self._last_order_ack_timeout_order_id = (
+            str(order_id) if order_id not in (None, "") else None
+        )
+        self._last_order_ack_timeout_client_order_id = (
+            str(client_order_id) if client_order_id not in (None, "") else None
+        )
+
+    def _clear_order_ack_timeout_state(self, *, reason: str) -> None:
+        """Clear any persisted ack-timeout marker after healthy broker evidence."""
+
+        had_timeout = bool(float(getattr(self, "_last_order_ack_timeout_mono", 0.0) or 0.0) > 0.0)
+        self._last_order_ack_timeout_mono = 0.0
+        self._last_order_ack_timeout_order_id = None
+        self._last_order_ack_timeout_client_order_id = None
+        runtime_state.update_broker_status(
+            connected=True,
+            last_error=None,
+            status="connected",
+        )
+        if had_timeout:
+            logger.info("ORDER_ACK_TIMEOUT_RECOVERED", extra={"reason": str(reason)})
+
+    def _maybe_recover_order_ack_timeout(self, *, open_orders_count: int | None = None) -> bool:
+        """Clear stale ack-timeout broker status after a healthy recovery window."""
+
+        timeout_mono = float(getattr(self, "_last_order_ack_timeout_mono", 0.0) or 0.0)
+        if timeout_mono <= 0.0:
+            return False
+        now_mono = float(monotonic_time())
+        recovery_s = self._order_ack_recovery_seconds()
+        if (now_mono - timeout_mono) < recovery_s:
+            return False
+        if open_orders_count is not None and int(max(open_orders_count, 0)) > 0:
+            return False
+        self._clear_order_ack_timeout_state(reason="sync_window_elapsed")
+        return True
+
     def _runtime_gonogo_intraday_lock_enabled(self) -> bool:
         """Return True when intraday go/no-go threshold loosening is disallowed."""
 
@@ -9818,6 +10075,93 @@ class ExecutionEngine:
         if token in {"mixed", "unknown"}:
             return 1
         return 0
+
+    def _apply_after_close_runtime_gonogo_overrides(
+        self,
+        thresholds: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Tighten runtime go/no-go thresholds outside market hours."""
+
+        threshold_map = dict(thresholds)
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_TIGHTEN_ENABLED"
+        )
+        if enabled is None:
+            enabled = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_AFTER_CLOSE_TIGHTEN_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return threshold_map, {"enabled": False, "reason": "disabled"}
+        if _market_is_open_now():
+            return threshold_map, {"enabled": True, "reason": "market_open"}
+
+        float_overrides = {
+            "min_profit_factor": _config_float(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_PROFIT_FACTOR",
+                None,
+            ),
+            "min_win_rate": _config_float(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_WIN_RATE",
+                None,
+            ),
+            "min_net_pnl": _config_float(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_NET_PNL",
+                None,
+            ),
+            "min_acceptance_rate": _config_float(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_ACCEPTANCE_RATE",
+                None,
+            ),
+            "min_expected_net_edge_bps": _config_float(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_EXPECTED_NET_EDGE_BPS",
+                None,
+            ),
+        }
+        int_overrides = {
+            "min_closed_trades": _config_int(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_CLOSED_TRADES",
+                None,
+            ),
+            "min_used_days": _config_int(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_USED_DAYS",
+                None,
+            ),
+            "lookback_days": _config_int(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_LOOKBACK_DAYS",
+                None,
+            ),
+        }
+
+        applied: dict[str, Any] = {}
+        for key, override_val in float_overrides.items():
+            if override_val is None:
+                continue
+            current_val = _safe_float(threshold_map.get(key))
+            if current_val is None:
+                threshold_map[key] = float(override_val)
+                applied[key] = float(override_val)
+                continue
+            tightened = max(float(current_val), float(override_val))
+            if not math.isclose(tightened, float(current_val), rel_tol=0.0, abs_tol=1e-12):
+                threshold_map[key] = float(tightened)
+                applied[key] = float(tightened)
+
+        for key, override_val in int_overrides.items():
+            if override_val is None:
+                continue
+            current_val = _safe_int(threshold_map.get(key), -1)
+            tightened = max(current_val, int(override_val))
+            if tightened < 0:
+                continue
+            if tightened != current_val:
+                threshold_map[key] = int(tightened)
+                applied[key] = int(tightened)
+
+        return threshold_map, {
+            "enabled": True,
+            "reason": "market_closed",
+            "applied": applied,
+        }
 
     def _locked_runtime_gonogo_thresholds(
         self,
@@ -10140,6 +10484,194 @@ class ExecutionEngine:
             "target_metrics": dict(target_metrics),
         }
 
+    def _runtime_intraday_pnl_kill_switch_allows_openings(
+        self,
+        *,
+        report: Mapping[str, Any],
+        thresholds: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Block new entries when current-day realized PnL breaches a hard loss limit."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_INTRADAY_PNL_KILL_SWITCH_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        max_loss = _config_float("AI_TRADING_EXECUTION_INTRADAY_PNL_KILL_SWITCH_MAX_LOSS", None)
+        if max_loss is None:
+            return True, {"enabled": False, "reason": "threshold_unset"}
+
+        tz_name = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_INTRADAY_PNL_KILL_SWITCH_TZ",
+                "America/New_York",
+            )
+            or "America/New_York"
+        ).strip() or "America/New_York"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz_name = "America/New_York"
+            tz = ZoneInfo(tz_name)
+        today = datetime.now(tz).date().isoformat()
+
+        trade_payload_raw = report.get("trade_history")
+        trade_payload = (
+            dict(trade_payload_raw) if isinstance(trade_payload_raw, Mapping) else {}
+        )
+        fill_source = str(thresholds.get("trade_fill_source") or "all").strip().lower() or "all"
+        daily_rows_raw: Any = trade_payload.get("daily_trade_stats")
+        if fill_source != "all":
+            by_source_raw = trade_payload.get("daily_trade_stats_by_fill_source")
+            if isinstance(by_source_raw, Mapping):
+                candidate = by_source_raw.get(fill_source)
+                if isinstance(candidate, list):
+                    daily_rows_raw = candidate
+        daily_rows: list[dict[str, Any]] = []
+        if isinstance(daily_rows_raw, list):
+            daily_rows = [dict(row) for row in daily_rows_raw if isinstance(row, Mapping)]
+
+        today_row = next((row for row in daily_rows if str(row.get("date") or "") == today), None)
+        if today_row is None:
+            return True, {
+                "enabled": True,
+                "reason": "no_today_trade_row",
+                "timezone": tz_name,
+                "today": today,
+                "threshold_net_pnl": float(max_loss),
+                "trade_fill_source": fill_source,
+            }
+
+        net_pnl = _safe_float(today_row.get("net_pnl"))
+        if net_pnl is None:
+            return True, {
+                "enabled": True,
+                "reason": "today_net_pnl_unavailable",
+                "timezone": tz_name,
+                "today": today,
+                "threshold_net_pnl": float(max_loss),
+                "trade_fill_source": fill_source,
+            }
+
+        allowed = float(net_pnl) > float(max_loss)
+        return allowed, {
+            "enabled": True,
+            "reason": "ok" if allowed else "intraday_loss_breach",
+            "timezone": tz_name,
+            "today": today,
+            "threshold_net_pnl": float(max_loss),
+            "today_net_pnl": float(net_pnl),
+            "trade_fill_source": fill_source,
+        }
+
+    def _symbol_loss_cooldown_allows_opening(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Return whether symbol-level cooldown currently allows a new opening trade."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+
+        cooldown_until_raw = getattr(self, "_symbol_loss_cooldown_until", {}) or {}
+        cooldown_until = (
+            dict(cooldown_until_raw)
+            if isinstance(cooldown_until_raw, Mapping)
+            else {}
+        )
+        cooldown_expiry = _safe_float(cooldown_until.get(symbol_token)) or 0.0
+        now_mono = float(monotonic_time())
+        if cooldown_expiry <= now_mono:
+            if cooldown_expiry > 0.0 and isinstance(cooldown_until_raw, dict):
+                cooldown_until_raw.pop(symbol_token, None)
+            return True, {
+                "enabled": True,
+                "reason": "cooldown_inactive",
+                "symbol": symbol_token,
+            }
+        remaining = max(cooldown_expiry - now_mono, 0.0)
+        return False, {
+            "enabled": True,
+            "reason": "symbol_loss_cooldown",
+            "symbol": symbol_token,
+            "remaining_seconds": round(float(remaining), 3),
+        }
+
+    def _update_symbol_loss_cooldown_from_fill(
+        self,
+        *,
+        symbol: str,
+        slippage_bps: float | None,
+    ) -> None:
+        """Track consecutive costly fills and arm a temporary symbol cooldown."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return
+        slippage_val = _safe_float(slippage_bps)
+        if slippage_val is None or not math.isfinite(slippage_val):
+            return
+
+        trigger_streak = _config_int("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_TRIGGER_STREAK", 3) or 3
+        trigger_streak = max(1, int(trigger_streak))
+        min_loss_bps = _config_float("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MIN_SLIPPAGE_BPS", 4.0)
+        if min_loss_bps is None:
+            min_loss_bps = 4.0
+        min_loss_bps = max(0.0, float(min_loss_bps))
+        cooldown_minutes = _config_float("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MINUTES", 30.0)
+        if cooldown_minutes is None:
+            cooldown_minutes = 30.0
+        cooldown_seconds = max(60.0, min(float(cooldown_minutes) * 60.0, 6.0 * 3600.0))
+
+        streak_raw = getattr(self, "_symbol_loss_streak", {}) or {}
+        streak_map = streak_raw if isinstance(streak_raw, dict) else {}
+        current_streak = int(max(_safe_int(streak_map.get(symbol_token), 0), 0))
+        costly_fill = float(slippage_val) >= float(min_loss_bps)
+        if costly_fill:
+            current_streak += 1
+            streak_map[symbol_token] = current_streak
+        else:
+            streak_map[symbol_token] = 0
+            self._symbol_loss_streak = streak_map
+            return
+
+        if current_streak < trigger_streak:
+            self._symbol_loss_streak = streak_map
+            return
+
+        now_mono = float(monotonic_time())
+        cooldown_until_raw = getattr(self, "_symbol_loss_cooldown_until", {}) or {}
+        cooldown_until = cooldown_until_raw if isinstance(cooldown_until_raw, dict) else {}
+        previous_until = _safe_float(cooldown_until.get(symbol_token)) or 0.0
+        next_until = max(previous_until, now_mono + cooldown_seconds)
+        cooldown_until[symbol_token] = next_until
+        streak_map[symbol_token] = 0
+        self._symbol_loss_cooldown_until = cooldown_until
+        self._symbol_loss_streak = streak_map
+        logger.warning(
+            "SYMBOL_LOSS_COOLDOWN_TRIGGERED",
+            extra={
+                "symbol": symbol_token,
+                "trigger_streak": int(trigger_streak),
+                "cooldown_seconds": float(cooldown_seconds),
+                "slippage_bps": float(slippage_val),
+                "min_slippage_bps": float(min_loss_bps),
+            },
+        )
+
     def _runtime_gonogo_openings_allowed(self) -> tuple[bool, dict[str, Any]]:
         """Return go/no-go eligibility for opening orders using runtime performance artifacts."""
 
@@ -10336,6 +10868,9 @@ class ExecutionEngine:
             require_gate_valid = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID")
         if require_gate_valid is not None:
             thresholds["require_gate_valid"] = bool(require_gate_valid)
+        thresholds, after_close_tighten_context = self._apply_after_close_runtime_gonogo_overrides(
+            thresholds
+        )
         thresholds, threshold_lock_context = self._locked_runtime_gonogo_thresholds(thresholds)
         fail_closed = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_FAIL_CLOSED")
         if fail_closed is None:
@@ -10360,6 +10895,7 @@ class ExecutionEngine:
                 "failed_checks": list(decision.get("failed_checks", [])),
                 "thresholds": dict(decision.get("thresholds", {})),
                 "observed": dict(decision.get("observed", {})),
+                "after_close_tighten": after_close_tighten_context,
                 "threshold_lock": threshold_lock_context,
                 "paths": {
                     "trade_history": str(trade_history_path),
@@ -10384,6 +10920,24 @@ class ExecutionEngine:
                     context["failed_checks"] = failed_checks
                     context["gate_passed"] = False
                     context["reason"] = "hourly_window_quality"
+            if allowed:
+                intraday_allowed, intraday_context = self._runtime_intraday_pnl_kill_switch_allows_openings(
+                    report=report,
+                    thresholds=thresholds,
+                )
+                context["intraday_pnl_kill_switch"] = intraday_context
+                if not intraday_allowed:
+                    allowed = False
+                    existing_failed_checks = context.get("failed_checks", [])
+                    failed_checks = (
+                        [str(item) for item in existing_failed_checks]
+                        if isinstance(existing_failed_checks, Sequence)
+                        else []
+                    )
+                    failed_checks.append("intraday_net_pnl_kill_switch")
+                    context["failed_checks"] = failed_checks
+                    context["gate_passed"] = False
+                    context["reason"] = "intraday_net_pnl_kill_switch"
         except Exception as exc:
             allowed = not bool(fail_closed)
             context = {
@@ -10392,6 +10946,7 @@ class ExecutionEngine:
                 "failed_checks": ["runtime_gonogo_eval_failed"],
                 "reason": "runtime_gonogo_eval_failed",
                 "error": str(exc),
+                "after_close_tighten": after_close_tighten_context,
                 "threshold_lock": threshold_lock_context,
                 "paths": {
                     "trade_history": str(trade_history_path),
@@ -10510,6 +11065,35 @@ class ExecutionEngine:
                     "runtime_gonogo_gate",
                     gonogo_context,
                     extra=skip_payload | {"detail": "runtime_gonogo_gate"},
+                )
+                return False
+            symbol_cooldown_allowed, symbol_cooldown_context = self._symbol_loss_cooldown_allows_opening(
+                symbol=str(order.get("symbol") or ""),
+            )
+            if not symbol_cooldown_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "symbol_loss_cooldown",
+                    "context": symbol_cooldown_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_SYMBOL_COOLDOWN", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "symbol_loss_cooldown",
+                    symbol_cooldown_context,
+                    extra=skip_payload | {"detail": "symbol_loss_cooldown"},
                 )
                 return False
 
@@ -12003,6 +12587,22 @@ class LiveTradingExecutionEngine(ExecutionEngine):
                 },
                 exc_info=True,
             )
+        try:
+            self._backfill_pending_tca_from_fill_events()
+        except Exception:
+            logger.warning(
+                "TCA_BACKFILL_RECONCILE_FAILED",
+                extra={
+                    "open_orders": len(getattr(snapshot, "open_orders", ()) or ()),
+                    "positions": len(getattr(snapshot, "positions", ()) or ()),
+                },
+                exc_info=True,
+            )
+        try:
+            open_orders_count = len(getattr(snapshot, "open_orders", ()) or ())
+            self._maybe_recover_order_ack_timeout(open_orders_count=open_orders_count)
+        except Exception:
+            logger.debug("ORDER_ACK_TIMEOUT_RECOVERY_CHECK_FAILED", exc_info=True)
         try:
             reduction_positions = getattr(snapshot, "positions", ()) or positions
             self._prioritize_losing_short_reduction(

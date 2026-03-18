@@ -472,6 +472,75 @@ def test_synchronize_broker_state_reconciles_pending_fill_events(monkeypatch, tm
     assert engine._pending_orders == {}
 
 
+def test_tca_backfill_reconciles_pending_from_fill_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_TRADING_RUNTIME_EXEC_EVENT_PERSIST_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
+    monkeypatch.setenv("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl")
+    monkeypatch.setenv("AI_TRADING_TCA_BACKFILL_FROM_FILL_EVENTS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_TCA_BACKFILL_BOOTSTRAP_LINES", "200")
+    monkeypatch.setenv("AI_TRADING_TCA_BACKFILL_MAX_INCREMENTAL_LINES", "200")
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    tca_path = runtime_dir / "tca_records.jsonl"
+    fill_events_path = runtime_dir / "fill_events.jsonl"
+    tca_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-03-18T18:00:00+00:00",
+                "client_order_id": "cid-backfill-1",
+                "order_id": "oid-backfill-1",
+                "symbol": "AAPL",
+                "side": "buy",
+                "decision_price": 100.0,
+                "qty": 5.0,
+                "pending_event": True,
+                "benchmark": {
+                    "mid_at_arrival": 100.0,
+                    "submit_ts": "2026-03-18T18:00:00+00:00",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fill_events_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-03-18T18:01:00+00:00",
+                "event": "fill_recorded",
+                "symbol": "AAPL",
+                "client_order_id": "cid-backfill-1",
+                "order_id": "oid-backfill-1",
+                "side": "buy",
+                "fill_price": 100.5,
+                "fill_qty": 5.0,
+                "status": "filled",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    engine = _build_engine(_AckStubClient())
+    _prime_engine(engine, monkeypatch)
+
+    result = engine._backfill_pending_tca_from_fill_events()
+
+    assert result["enabled"] is True
+    assert result["reconciled"] == 1
+    rows = [
+        json.loads(line)
+        for line in tca_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 2
+    resolved = rows[-1]
+    assert resolved["pending_event"] is False
+    assert resolved["pending_resolved_source"] == "backfill_fill_events"
+
+
 def test_synchronize_broker_state_reconciles_pending_cancel_without_fill(monkeypatch, tmp_path):
     class _BrokerTerminalCancelClient(_AckStubClient):
         def get_orders(self, status: str = "open"):

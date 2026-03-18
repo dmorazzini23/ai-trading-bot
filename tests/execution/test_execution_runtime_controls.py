@@ -30,6 +30,14 @@ def _engine_stub() -> Any:
     engine._cancel_ratio_adaptive_context = {}
     engine._broker_sync = None
     engine._last_submit_outcome = {}
+    engine._last_order_ack_timeout_mono = 0.0
+    engine._last_order_ack_timeout_order_id = None
+    engine._last_order_ack_timeout_client_order_id = None
+    engine._symbol_loss_streak = {}
+    engine._symbol_loss_cooldown_until = {}
+    engine._tca_fill_backfill_last_run_mono = 0.0
+    engine._tca_fill_backfill_offset = 0
+    engine._tca_fill_backfill_bootstrapped = False
     return engine
 
 
@@ -880,6 +888,110 @@ def test_runtime_gonogo_hourly_guard_blocks_current_weakest_hour(monkeypatch, tm
     assert context["enabled"] is True
     assert "hourly_acceptance_rate" in context["failed_checks"]
     assert "hourly_expected_edge_bps_per_record" in context["failed_checks"]
+
+
+def test_runtime_gonogo_after_close_tighten_overrides(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_TIGHTEN_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_PROFIT_FACTOR",
+        "0.95",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AFTER_CLOSE_MIN_NET_PNL",
+        "-200",
+    )
+    monkeypatch.setattr(lt, "_market_is_open_now", lambda *_args, **_kwargs: False)
+
+    tightened, context = engine._apply_after_close_runtime_gonogo_overrides(
+        {
+            "min_profit_factor": 0.73,
+            "min_net_pnl": -1100.0,
+            "min_win_rate": 0.50,
+            "min_acceptance_rate": 0.015,
+        }
+    )
+
+    assert context["enabled"] is True
+    assert context["reason"] == "market_closed"
+    assert tightened["min_profit_factor"] == pytest.approx(0.95)
+    assert tightened["min_net_pnl"] == pytest.approx(-200.0)
+
+
+def test_runtime_gonogo_intraday_pnl_kill_switch_blocks(monkeypatch):
+    engine = _engine_stub()
+    today = datetime.now(UTC).date().isoformat()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_INTRADAY_PNL_KILL_SWITCH_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_INTRADAY_PNL_KILL_SWITCH_MAX_LOSS", "-50")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_INTRADAY_PNL_KILL_SWITCH_TZ", "UTC")
+    allowed, context = engine._runtime_intraday_pnl_kill_switch_allows_openings(
+        report={
+            "trade_history": {
+                "daily_trade_stats": [
+                    {
+                        "date": today,
+                        "net_pnl": -100.0,
+                    }
+                ]
+            }
+        },
+        thresholds={"trade_fill_source": "all"},
+    )
+
+    assert allowed is False
+    assert context["reason"] == "intraday_loss_breach"
+
+
+def test_symbol_loss_cooldown_triggers_and_expires(monkeypatch):
+    engine = _engine_stub()
+    clock = {"value": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_TRIGGER_STREAK", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MIN_SLIPPAGE_BPS", "2.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MINUTES", "1")
+
+    engine._update_symbol_loss_cooldown_from_fill(symbol="AAPL", slippage_bps=2.5)
+    allowed_before, _ = engine._symbol_loss_cooldown_allows_opening(symbol="AAPL")
+    assert allowed_before is True
+
+    engine._update_symbol_loss_cooldown_from_fill(symbol="AAPL", slippage_bps=3.0)
+    allowed_during, context_during = engine._symbol_loss_cooldown_allows_opening(symbol="AAPL")
+    assert allowed_during is False
+    assert context_during["reason"] == "symbol_loss_cooldown"
+
+    clock["value"] = 170.0
+    allowed_after, context_after = engine._symbol_loss_cooldown_allows_opening(symbol="AAPL")
+    assert allowed_after is True
+    assert context_after["reason"] == "cooldown_inactive"
+
+
+def test_order_ack_timeout_recovery_clears_state(monkeypatch):
+    engine = _engine_stub()
+    engine._last_order_ack_timeout_mono = 10.0
+    engine._last_order_ack_timeout_order_id = "oid-1"
+    engine._last_order_ack_timeout_client_order_id = "cid-1"
+    clock = {"value": 100.0}
+    updates: list[dict[str, Any]] = []
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setattr(
+        lt.runtime_state,
+        "update_broker_status",
+        lambda **kwargs: updates.append(dict(kwargs)),
+    )
+    monkeypatch.setenv("AI_TRADING_ORDER_ACK_RECOVERY_SEC", "30")
+
+    recovered = engine._maybe_recover_order_ack_timeout(open_orders_count=0)
+
+    assert recovered is True
+    assert engine._last_order_ack_timeout_mono == 0.0
+    assert engine._last_order_ack_timeout_order_id is None
+    assert engine._last_order_ack_timeout_client_order_id is None
+    assert updates
+    assert updates[-1]["last_error"] is None
 
 
 def test_resolve_order_submit_cap_uses_bootstrap_defaults(monkeypatch):
