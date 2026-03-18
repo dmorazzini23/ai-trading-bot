@@ -2580,33 +2580,45 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         else None
     )
     def _threshold_int(name: str, default: int) -> int:
+        promotion_key = f"AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_{name}"
         execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
         runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
-        value = get_env(execution_key, None, cast=int)
+        value = get_env(promotion_key, None, cast=int)
+        if value is None:
+            value = get_env(execution_key, None, cast=int)
         if value is None:
             value = get_env(runtime_key, default, cast=int)
         return int(value)
 
     def _threshold_float(name: str, default: float) -> float:
+        promotion_key = f"AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_{name}"
         execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
         runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
-        value = get_env(execution_key, None, cast=float)
+        value = get_env(promotion_key, None, cast=float)
+        if value is None:
+            value = get_env(execution_key, None, cast=float)
         if value is None:
             value = get_env(runtime_key, default, cast=float)
         return float(value)
 
     def _threshold_bool(name: str, default: bool) -> bool:
+        promotion_key = f"AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_{name}"
         execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
         runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
-        value = get_env(execution_key, None, cast=bool)
+        value = get_env(promotion_key, None, cast=bool)
+        if value is None:
+            value = get_env(execution_key, None, cast=bool)
         if value is None:
             value = get_env(runtime_key, default, cast=bool)
         return bool(value)
 
     def _threshold_str(name: str, default: str) -> str:
+        promotion_key = f"AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_{name}"
         execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
         runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
-        value = get_env(execution_key, None, cast=str)
+        value = get_env(promotion_key, None, cast=str)
+        if value in (None, ""):
+            value = get_env(execution_key, None, cast=str)
         if value in (None, ""):
             value = get_env(runtime_key, default, cast=str)
         return str(value or default).strip() or str(default)

@@ -2194,6 +2194,8 @@ class ExecutionEngine:
         self._runtime_gonogo_cache_until_mono: float = 0.0
         self._runtime_gonogo_cache_allowed: bool = True
         self._runtime_gonogo_cache_context: dict[str, Any] = {}
+        self._runtime_gonogo_threshold_lock_session: str = ""
+        self._runtime_gonogo_locked_thresholds: dict[str, Any] = {}
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
         self._cancel_ratio_adaptive_context: dict[str, Any] = {}
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
@@ -4326,6 +4328,8 @@ class ExecutionEngine:
         fill_record = {
             "symbol": symbol,
             "entry_time": timestamp,
+            "fill_price": float(fill_price),
+            "fill_qty": float(qty_value),
             "entry_price": float(fill_price),
             "qty": int(max(1.0, round(float(qty_value)))),
             "side": side_normalized,
@@ -9776,6 +9780,366 @@ class ExecutionEngine:
             )
         return actions
 
+    def _runtime_gonogo_intraday_lock_enabled(self) -> bool:
+        """Return True when intraday go/no-go threshold loosening is disallowed."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOCK_THRESHOLDS_INTRADAY")
+        if enabled is None:
+            enabled = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_LOCK_THRESHOLDS_INTRADAY")
+        if enabled is None:
+            return True
+        return bool(enabled)
+
+    def _runtime_gonogo_session_key(self) -> tuple[str, str]:
+        """Return the current session key and timezone label for threshold locking."""
+
+        tz_name = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOCK_TZ",
+                _runtime_env("AI_TRADING_RUNTIME_GONOGO_LOCK_TZ", "America/New_York"),
+            )
+            or "America/New_York"
+        ).strip() or "America/New_York"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz_name = "America/New_York"
+            tz = ZoneInfo(tz_name)
+        session_key = datetime.now(tz).date().isoformat()
+        return session_key, tz_name
+
+    @staticmethod
+    def _runtime_gonogo_fill_source_rank(value: Any) -> int:
+        token = str(value or "").strip().lower()
+        if token in {"live"}:
+            return 3
+        if token in {"reconcile_backfill"}:
+            return 2
+        if token in {"mixed", "unknown"}:
+            return 1
+        return 0
+
+    def _locked_runtime_gonogo_thresholds(
+        self,
+        thresholds: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Lock go/no-go thresholds per session so intraday loosening cannot occur."""
+
+        threshold_map = dict(thresholds)
+        if not self._runtime_gonogo_intraday_lock_enabled():
+            return threshold_map, {"enabled": False, "reason": "disabled"}
+
+        session_key, tz_name = self._runtime_gonogo_session_key()
+        locked_session = str(getattr(self, "_runtime_gonogo_threshold_lock_session", "") or "")
+        locked_raw = getattr(self, "_runtime_gonogo_locked_thresholds", {}) or {}
+        locked = dict(locked_raw) if isinstance(locked_raw, Mapping) else {}
+
+        if locked_session != session_key or not locked:
+            self._runtime_gonogo_threshold_lock_session = session_key
+            self._runtime_gonogo_locked_thresholds = dict(threshold_map)
+            return dict(threshold_map), {
+                "enabled": True,
+                "session_key": session_key,
+                "timezone": tz_name,
+                "changed": False,
+                "reason": "initialized",
+            }
+
+        merged = dict(locked)
+        changed = False
+        int_keys = ("min_closed_trades", "min_used_days", "lookback_days")
+        for key in int_keys:
+            current_val = _safe_int(threshold_map.get(key), -1)
+            previous_val = _safe_int(locked.get(key), -1)
+            strict_val = max(previous_val, current_val)
+            if strict_val < 0:
+                continue
+            if strict_val != previous_val:
+                changed = True
+            merged[key] = strict_val
+
+        float_keys = (
+            "min_profit_factor",
+            "min_win_rate",
+            "min_net_pnl",
+            "min_acceptance_rate",
+            "min_expected_net_edge_bps",
+        )
+        for key in float_keys:
+            current_raw = _safe_float(threshold_map.get(key))
+            previous_raw = _safe_float(locked.get(key))
+            if previous_raw is None and current_raw is None:
+                continue
+            if previous_raw is None and current_raw is not None:
+                merged[key] = float(current_raw)
+                changed = True
+                continue
+            if previous_raw is not None and current_raw is None:
+                merged[key] = float(previous_raw)
+                continue
+            assert previous_raw is not None and current_raw is not None
+            strict_float = max(float(previous_raw), float(current_raw))
+            if strict_float != float(previous_raw):
+                changed = True
+            merged[key] = float(strict_float)
+
+        for key in ("require_pnl_available", "require_gate_valid"):
+            previous_val = bool(locked.get(key))
+            current_val = bool(threshold_map.get(key))
+            strict_val = bool(previous_val or current_val)
+            if strict_val != previous_val:
+                changed = True
+            merged[key] = strict_val
+
+        previous_source = str(locked.get("trade_fill_source") or "all").strip().lower() or "all"
+        current_source = str(threshold_map.get("trade_fill_source") or "all").strip().lower() or "all"
+        strict_source = previous_source
+        if self._runtime_gonogo_fill_source_rank(current_source) > self._runtime_gonogo_fill_source_rank(previous_source):
+            strict_source = current_source
+        if strict_source != previous_source:
+            changed = True
+        merged["trade_fill_source"] = strict_source
+
+        self._runtime_gonogo_threshold_lock_session = session_key
+        self._runtime_gonogo_locked_thresholds = dict(merged)
+        return dict(merged), {
+            "enabled": True,
+            "session_key": session_key,
+            "timezone": tz_name,
+            "changed": bool(changed),
+            "reason": "active",
+        }
+
+    def _runtime_gonogo_hourly_guard_allows_openings(
+        self,
+        *,
+        gate_log_path: Path | None,
+        thresholds: Mapping[str, Any] | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Block openings during the weakest intraday hour when quality is poor."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_ENABLED")
+        if enabled is None:
+            enabled = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_ENABLED")
+        if enabled is None:
+            enabled = False
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        if gate_log_path is None:
+            return True, {"enabled": True, "reason": "gate_log_unset"}
+        if not gate_log_path.exists():
+            return True, {"enabled": True, "reason": "gate_log_missing", "path": str(gate_log_path)}
+
+        tz_name = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_TZ",
+                _runtime_env("AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_TZ", "America/New_York"),
+            )
+            or "America/New_York"
+        ).strip() or "America/New_York"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz_name = "America/New_York"
+            tz = ZoneInfo(tz_name)
+
+        lookback_days = _config_int_alias(
+            (
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_LOOKBACK_DAYS",
+                "AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_LOOKBACK_DAYS",
+            ),
+            10,
+        )
+        lookback = max(1, int(lookback_days if lookback_days is not None else 10))
+        min_records_cfg = _config_int_alias(
+            (
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_RECORDS",
+                "AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_RECORDS",
+            ),
+            200,
+        )
+        min_records = max(1, int(min_records_cfg if min_records_cfg is not None else 200))
+        min_acceptance = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_ACCEPTANCE_RATE",
+            None,
+        )
+        if min_acceptance is None:
+            min_acceptance = _config_float("AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_ACCEPTANCE_RATE", None)
+        if min_acceptance is None and isinstance(thresholds, Mapping):
+            min_acceptance = _safe_float(thresholds.get("min_acceptance_rate"))
+        if min_acceptance is None:
+            min_acceptance = 0.015
+        min_acceptance = max(0.0, min(1.0, float(min_acceptance)))
+        min_edge_per_record = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_EDGE_BPS_PER_RECORD",
+            None,
+        )
+        if min_edge_per_record is None:
+            min_edge_per_record = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_EDGE_BPS_PER_RECORD",
+                None,
+            )
+        if min_edge_per_record is None:
+            min_edge_per_record = 0.0
+        only_weakest_hour = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_ONLY_WEAKEST")
+        if only_weakest_hour is None:
+            only_weakest_hour = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_HOURLY_BLOCK_ONLY_WEAKEST")
+        if only_weakest_hour is None:
+            only_weakest_hour = True
+
+        now_local = datetime.now(tz)
+        window_start_date = now_local.date() - timedelta(days=int(lookback))
+        hourly_buckets: dict[int, dict[str, float]] = {}
+        sampled_rows = 0
+        try:
+            with gate_log_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    payload = line.strip()
+                    if not payload:
+                        continue
+                    try:
+                        row = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, Mapping):
+                        continue
+                    ts_raw = row.get("ts")
+                    if ts_raw in (None, ""):
+                        continue
+                    try:
+                        ts_text = str(ts_raw).strip()
+                        if ts_text.endswith("Z"):
+                            ts_text = f"{ts_text[:-1]}+00:00"
+                        ts_utc = datetime.fromisoformat(ts_text)
+                    except Exception:
+                        continue
+                    if ts_utc.tzinfo is None:
+                        ts_utc = ts_utc.replace(tzinfo=UTC)
+                    ts_local = ts_utc.astimezone(tz)
+                    if ts_local.date() < window_start_date:
+                        continue
+                    total_records = _safe_int(row.get("records_total"), 0)
+                    if total_records <= 0:
+                        total_records = _safe_int(row.get("total_records"), 0)
+                    if total_records <= 0:
+                        continue
+                    accepted_records = _safe_int(row.get("accepted_records"), 0)
+                    if accepted_records < 0:
+                        accepted_records = 0
+                    expected_edge = _safe_float(row.get("total_expected_net_edge_bps"))
+                    if expected_edge is None:
+                        expected_edge = _safe_float(row.get("expected_net_edge_bps_sum"))
+                    if expected_edge is None:
+                        expected_edge = 0.0
+                    bucket = hourly_buckets.setdefault(
+                        int(ts_local.hour),
+                        {"total_records": 0.0, "accepted_records": 0.0, "expected_edge_sum": 0.0},
+                    )
+                    bucket["total_records"] += float(max(0, total_records))
+                    bucket["accepted_records"] += float(max(0, accepted_records))
+                    bucket["expected_edge_sum"] += float(expected_edge)
+                    sampled_rows += 1
+        except Exception as exc:
+            logger.debug(
+                "RUNTIME_GONOGO_HOURLY_GUARD_READ_FAILED",
+                extra={"path": str(gate_log_path), "cause": exc.__class__.__name__, "detail": str(exc)},
+                exc_info=True,
+            )
+            return True, {
+                "enabled": True,
+                "reason": "read_failed",
+                "path": str(gate_log_path),
+                "error": str(exc),
+            }
+
+        candidates: list[dict[str, Any]] = []
+        for hour, bucket in hourly_buckets.items():
+            records = float(bucket.get("total_records", 0.0) or 0.0)
+            if records < float(min_records):
+                continue
+            accepted = float(bucket.get("accepted_records", 0.0) or 0.0)
+            expected_sum = float(bucket.get("expected_edge_sum", 0.0) or 0.0)
+            acceptance_rate = accepted / records if records > 0 else 0.0
+            edge_per_record = expected_sum / records if records > 0 else 0.0
+            candidates.append(
+                {
+                    "hour": int(hour),
+                    "records": int(records),
+                    "accepted_records": int(accepted),
+                    "acceptance_rate": float(acceptance_rate),
+                    "expected_edge_bps_per_record": float(edge_per_record),
+                }
+            )
+
+        if not candidates:
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_hourly_samples",
+                "path": str(gate_log_path),
+                "sampled_rows": int(sampled_rows),
+                "lookback_days": int(lookback),
+                "min_records": int(min_records),
+            }
+
+        weakest_hour = min(
+            candidates,
+            key=lambda row: (
+                float(row.get("expected_edge_bps_per_record", 0.0)),
+                float(row.get("acceptance_rate", 0.0)),
+                int(row.get("records", 0)),
+                int(row.get("hour", 0)),
+            ),
+        )
+        current_hour = int(now_local.hour)
+        current_hour_metrics = next((row for row in candidates if int(row.get("hour", -1)) == current_hour), None)
+        if current_hour_metrics is None:
+            return True, {
+                "enabled": True,
+                "reason": "current_hour_unseen",
+                "path": str(gate_log_path),
+                "timezone": tz_name,
+                "current_hour": current_hour,
+                "weakest_hour": int(weakest_hour.get("hour", -1)),
+            }
+
+        target_metrics = current_hour_metrics
+        if bool(only_weakest_hour):
+            if int(weakest_hour.get("hour", -1)) != current_hour:
+                return True, {
+                    "enabled": True,
+                    "reason": "current_hour_not_weakest",
+                    "path": str(gate_log_path),
+                    "timezone": tz_name,
+                    "current_hour": current_hour,
+                    "weakest_hour": int(weakest_hour.get("hour", -1)),
+                    "current_metrics": dict(current_hour_metrics),
+                }
+            target_metrics = weakest_hour
+
+        failed_checks: list[str] = []
+        if float(target_metrics.get("acceptance_rate", 0.0)) < float(min_acceptance):
+            failed_checks.append("hourly_acceptance_rate")
+        if float(target_metrics.get("expected_edge_bps_per_record", 0.0)) < float(min_edge_per_record):
+            failed_checks.append("hourly_expected_edge_bps_per_record")
+
+        allowed = not failed_checks
+        return allowed, {
+            "enabled": True,
+            "path": str(gate_log_path),
+            "timezone": tz_name,
+            "current_hour": current_hour,
+            "weakest_hour": int(weakest_hour.get("hour", -1)),
+            "only_weakest_hour": bool(only_weakest_hour),
+            "lookback_days": int(lookback),
+            "min_records": int(min_records),
+            "min_acceptance_rate": float(min_acceptance),
+            "min_edge_bps_per_record": float(min_edge_per_record),
+            "failed_checks": failed_checks,
+            "current_metrics": dict(current_hour_metrics),
+            "weakest_metrics": dict(weakest_hour),
+            "target_metrics": dict(target_metrics),
+        }
+
     def _runtime_gonogo_openings_allowed(self) -> tuple[bool, dict[str, Any]]:
         """Return go/no-go eligibility for opening orders using runtime performance artifacts."""
 
@@ -9972,9 +10336,13 @@ class ExecutionEngine:
             require_gate_valid = _resolve_bool_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID")
         if require_gate_valid is not None:
             thresholds["require_gate_valid"] = bool(require_gate_valid)
+        thresholds, threshold_lock_context = self._locked_runtime_gonogo_thresholds(thresholds)
         fail_closed = _resolve_bool_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_FAIL_CLOSED")
         if fail_closed is None:
             fail_closed = True
+        resolved_gate_log_path = gate_log_path
+        if resolved_gate_log_path is None:
+            resolved_gate_log_path = gate_summary_path.parent / "gate_effectiveness.jsonl"
 
         try:
             from ai_trading.tools import runtime_performance_report as performance_report
@@ -9992,11 +10360,30 @@ class ExecutionEngine:
                 "failed_checks": list(decision.get("failed_checks", [])),
                 "thresholds": dict(decision.get("thresholds", {})),
                 "observed": dict(decision.get("observed", {})),
+                "threshold_lock": threshold_lock_context,
                 "paths": {
                     "trade_history": str(trade_history_path),
                     "gate_summary": str(gate_summary_path),
                 },
             }
+            if allowed:
+                hourly_allowed, hourly_context = self._runtime_gonogo_hourly_guard_allows_openings(
+                    gate_log_path=resolved_gate_log_path,
+                    thresholds=thresholds,
+                )
+                context["hourly_guard"] = hourly_context
+                if not hourly_allowed:
+                    allowed = False
+                    existing_failed_checks = context.get("failed_checks", [])
+                    failed_checks = (
+                        [str(item) for item in existing_failed_checks]
+                        if isinstance(existing_failed_checks, Sequence)
+                        else []
+                    )
+                    failed_checks.append("hourly_window_quality")
+                    context["failed_checks"] = failed_checks
+                    context["gate_passed"] = False
+                    context["reason"] = "hourly_window_quality"
         except Exception as exc:
             allowed = not bool(fail_closed)
             context = {
@@ -10005,6 +10392,7 @@ class ExecutionEngine:
                 "failed_checks": ["runtime_gonogo_eval_failed"],
                 "reason": "runtime_gonogo_eval_failed",
                 "error": str(exc),
+                "threshold_lock": threshold_lock_context,
                 "paths": {
                     "trade_history": str(trade_history_path),
                     "gate_summary": str(gate_summary_path),

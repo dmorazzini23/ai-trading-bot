@@ -56,6 +56,46 @@ def test_runtime_performance_go_no_go_gate_enabled(monkeypatch) -> None:
     assert thresholds.get("trade_fill_source") == "live"
 
 
+def test_runtime_performance_go_no_go_gate_prefers_after_hours_threshold_overrides(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR",
+        "1.02",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR",
+        "0.70",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _build_report(**_kwargs):
+        return {"trade_history": {"pnl_available": True}, "gate_effectiveness": {"valid": True}}
+
+    def _evaluate_go_no_go(report, *, thresholds=None):
+        captured["report"] = report
+        captured["thresholds"] = dict(thresholds or {})
+        return {
+            "gate_passed": True,
+            "checks": {},
+            "failed_checks": [],
+            "thresholds": dict(thresholds or {}),
+            "observed": {},
+        }
+
+    monkeypatch.setattr(rpt, "build_report", _build_report)
+    monkeypatch.setattr(rpt, "evaluate_go_no_go", _evaluate_go_no_go)
+
+    result = after_hours._runtime_performance_go_no_go_gate()
+
+    assert result["enabled"] is True
+    thresholds = captured["thresholds"]
+    assert isinstance(thresholds, dict)
+    assert thresholds.get("min_profit_factor") == 1.02
+
+
 def test_runtime_performance_go_no_go_gate_resolves_runtime_paths(
     monkeypatch,
     tmp_path,

@@ -749,6 +749,8 @@ def test_synchronize_broker_state_reconciles_pending_with_get_order_lookup(monke
         for row in fill_rows
         if row.get("event") == "fill_recorded" and row.get("order_id") == "order-get-order"
     )
+    assert float(fill_row["fill_price"]) == pytest.approx(51.25)
+    assert float(fill_row["fill_qty"]) == pytest.approx(3.0)
     assert float(fill_row["expected_price"]) == pytest.approx(51.0)
     assert float(fill_row["slippage_bps"]) == pytest.approx(49.0196078431, rel=1e-6)
     assert engine._pending_orders == {}
@@ -888,6 +890,8 @@ def test_synchronize_broker_state_initializes_client_before_reconcile(monkeypatc
         for row in fill_rows
         if row.get("event") == "fill_recorded" and row.get("order_id") == "order-init"
     )
+    assert float(fill_row["fill_price"]) == pytest.approx(417.5)
+    assert float(fill_row["fill_qty"]) == pytest.approx(2.0)
     assert float(fill_row["expected_price"]) == pytest.approx(417.0)
     assert float(fill_row["slippage_bps"]) == pytest.approx(11.9904076739, rel=1e-6)
     assert engine._pending_orders == {}

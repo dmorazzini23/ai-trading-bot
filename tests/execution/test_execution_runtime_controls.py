@@ -770,6 +770,118 @@ def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, t
     assert engine.stats.get("skipped_orders", 0) == 0
 
 
+def test_runtime_gonogo_threshold_lock_prevents_intraday_loosening(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOCK_THRESHOLDS_INTRADAY", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOCK_TZ", "UTC")
+
+    first, first_context = engine._locked_runtime_gonogo_thresholds(
+        {
+            "min_closed_trades": 50,
+            "min_profit_factor": 0.90,
+            "min_win_rate": 0.50,
+            "min_net_pnl": -300.0,
+            "min_acceptance_rate": 0.015,
+            "min_expected_net_edge_bps": -50.0,
+            "min_used_days": 3,
+            "lookback_days": 5,
+            "trade_fill_source": "live",
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        }
+    )
+    assert first["min_profit_factor"] == pytest.approx(0.90)
+    assert first_context["enabled"] is True
+
+    relaxed, _ = engine._locked_runtime_gonogo_thresholds(
+        {
+            "min_closed_trades": 10,
+            "min_profit_factor": 0.70,
+            "min_win_rate": 0.45,
+            "min_net_pnl": -1100.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -100.0,
+            "min_used_days": 1,
+            "lookback_days": 1,
+            "trade_fill_source": "all",
+            "require_pnl_available": False,
+            "require_gate_valid": False,
+        }
+    )
+
+    assert relaxed["min_closed_trades"] == 50
+    assert relaxed["min_profit_factor"] == pytest.approx(0.90)
+    assert relaxed["min_win_rate"] == pytest.approx(0.50)
+    assert relaxed["min_net_pnl"] == pytest.approx(-300.0)
+    assert relaxed["min_acceptance_rate"] == pytest.approx(0.015)
+    assert relaxed["min_expected_net_edge_bps"] == pytest.approx(-50.0)
+    assert relaxed["min_used_days"] == 3
+    assert relaxed["lookback_days"] == 5
+    assert relaxed["trade_fill_source"] == "live"
+    assert relaxed["require_pnl_available"] is True
+    assert relaxed["require_gate_valid"] is True
+
+    tightened, _ = engine._locked_runtime_gonogo_thresholds(
+        {
+            "min_closed_trades": 80,
+            "min_profit_factor": 1.05,
+            "min_win_rate": 0.52,
+            "min_net_pnl": -200.0,
+            "min_acceptance_rate": 0.02,
+            "min_expected_net_edge_bps": -10.0,
+            "min_used_days": 4,
+            "lookback_days": 7,
+            "trade_fill_source": "live",
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        }
+    )
+    assert tightened["min_profit_factor"] == pytest.approx(1.05)
+    assert tightened["min_net_pnl"] == pytest.approx(-200.0)
+    assert tightened["min_closed_trades"] == 80
+    assert tightened["lookback_days"] == 7
+
+
+def test_runtime_gonogo_hourly_guard_blocks_current_weakest_hour(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    gate_log_path = tmp_path / "runtime" / "gate_effectiveness.jsonl"
+    gate_log_path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    rows = [
+        {
+            "ts": now.isoformat(),
+            "records_total": 120,
+            "accepted_records": 12,
+            "total_expected_net_edge_bps": -240.0,
+        },
+        {
+            "ts": (now - timedelta(hours=1)).isoformat(),
+            "records_total": 120,
+            "accepted_records": 96,
+            "total_expected_net_edge_bps": 120.0,
+        },
+    ]
+    gate_log_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_TZ", "UTC")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_LOOKBACK_DAYS", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_RECORDS", "20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_ACCEPTANCE_RATE", "0.20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_MIN_EDGE_BPS_PER_RECORD", "0.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_HOURLY_BLOCK_ONLY_WEAKEST", "1")
+
+    allowed, context = engine._runtime_gonogo_hourly_guard_allows_openings(
+        gate_log_path=gate_log_path,
+        thresholds={"min_acceptance_rate": 0.015},
+    )
+
+    assert allowed is False
+    assert context["enabled"] is True
+    assert "hourly_acceptance_rate" in context["failed_checks"]
+    assert "hourly_expected_edge_bps_per_record" in context["failed_checks"]
+
+
 def test_resolve_order_submit_cap_uses_bootstrap_defaults(monkeypatch):
     engine = _engine_stub()
     engine.ctx = SimpleNamespace(state={"service_phase": "bootstrap"})
