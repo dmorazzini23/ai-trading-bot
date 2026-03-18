@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from statistics import median
 import sys
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 _DEFAULT_TRADE_HISTORY_PATH = "runtime/trade_history.parquet"
 _DEFAULT_TCA_PATH = "runtime/tca_records.jsonl"
@@ -124,6 +124,50 @@ def _normalise_fill_source(value: Any) -> str:
     if "reconcile" in token:
         return "reconcile_backfill"
     return "live"
+
+
+def _normalise_trade_fill_source(value: Any) -> str:
+    """Normalize go/no-go fill-source selector tokens."""
+
+    token = str(value or "").strip().lower()
+    if token in {"", "all", "any", "*", "overall"}:
+        return "all"
+    if token in {"reconcile", "backfill", "broker_reconcile"}:
+        return "reconcile_backfill"
+    if token in {"live", "reconcile_backfill", "unknown", "mixed"}:
+        return token
+    if token in {"initial", "final", "poll", "manual_probe"}:
+        return "live"
+    return "all"
+
+
+def _aggregate_trade_metric_rows(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate closed-trade metrics from daily trade-stat rows."""
+
+    closed_trades = sum(max(0, _as_int(row.get("trades")) or 0) for row in rows)
+    wins = sum(max(0, _as_int(row.get("wins")) or 0) for row in rows)
+    net_pnl = sum(_as_float(row.get("net_pnl")) or 0.0 for row in rows)
+    gross_win_pnl = sum(
+        max(0.0, _as_float(row.get("gross_win_pnl")) or 0.0)
+        for row in rows
+    )
+    gross_loss_pnl = sum(
+        max(0.0, _as_float(row.get("gross_loss_pnl")) or 0.0)
+        for row in rows
+    )
+    return {
+        "closed_trades": int(closed_trades),
+        "wins": int(wins),
+        "net_pnl": float(net_pnl),
+        "win_rate": (wins / closed_trades) if closed_trades > 0 else 0.0,
+        "profit_factor": (
+            (gross_win_pnl / gross_loss_pnl)
+            if gross_loss_pnl > 0
+            else None
+        ),
+    }
 
 
 def _build_order_source_lookup(path: Path) -> dict[str, str]:
@@ -1276,6 +1320,9 @@ def evaluate_go_no_go(
     if lookback_days is None:
         lookback_days = 0
     lookback_days = max(0, int(lookback_days))
+    trade_fill_source = _normalise_trade_fill_source(
+        threshold_map.get("trade_fill_source")
+    )
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
     )
@@ -1298,44 +1345,84 @@ def evaluate_go_no_go(
     gate_valid = bool(gate.get("valid"))
     acceptance_rate = _as_float(gate.get("acceptance_rate"))
     expected_net_edge_bps = _as_float(gate.get("total_expected_net_edge_bps"))
-    trade_metric_scope: dict[str, Any] = {"mode": "full_history"}
+    trade_metric_scope: dict[str, Any] = {
+        "mode": "full_history",
+        "fill_source": trade_fill_source,
+    }
     gate_metric_scope: dict[str, Any] = {"mode": "full_history"}
     trade_used_days = 0
     gate_used_days = 0
 
+    source_trade_rows: list[Mapping[str, Any]] | None = None
+    if trade_fill_source != "all":
+        rows_by_source = trade.get("daily_trade_stats_by_fill_source")
+        if isinstance(rows_by_source, Mapping):
+            candidate_rows = rows_by_source.get(trade_fill_source)
+            if isinstance(candidate_rows, list):
+                source_trade_rows = [
+                    row for row in candidate_rows if isinstance(row, Mapping)
+                ]
+        if source_trade_rows:
+            aggregated = _aggregate_trade_metric_rows(source_trade_rows)
+            closed_trades = int(aggregated["closed_trades"])
+            profit_factor = _as_float(aggregated["profit_factor"])
+            win_rate = float(aggregated["win_rate"])
+            net_pnl = float(aggregated["net_pnl"])
+            pnl_available = bool(trade.get("pnl_available")) and closed_trades > 0
+            trade_metric_scope = {
+                "mode": "full_history",
+                "fill_source": trade_fill_source,
+                "available_days": len(
+                    {
+                        str(row.get("date"))
+                        for row in source_trade_rows
+                        if str(row.get("date", "")).strip()
+                    }
+                ),
+            }
+        else:
+            source_counts = trade.get("closed_trades_by_fill_source")
+            source_pnl = trade.get("pnl_by_fill_source")
+            if isinstance(source_counts, Mapping):
+                closed_trades = (
+                    _as_int(source_counts.get(trade_fill_source))
+                    or 0
+                )
+            if isinstance(source_pnl, Mapping):
+                net_pnl = (
+                    _as_float(source_pnl.get(trade_fill_source))
+                    or 0.0
+                )
+            win_rate = 0.0
+            profit_factor = None
+            pnl_available = bool(trade.get("pnl_available")) and int(closed_trades) > 0
+            trade_metric_scope = {
+                "mode": "full_history_fallback",
+                "fill_source": trade_fill_source,
+                "reason": "daily_trade_stats_by_fill_source_unavailable",
+            }
+
     if lookback_days > 0:
+        trade_rows_source: Any = (
+            source_trade_rows
+            if trade_fill_source != "all"
+            else trade.get("daily_trade_stats")
+        )
         recent_trade_rows, trade_available_days = _select_recent_daily_rows(
-            trade.get("daily_trade_stats"),
+            trade_rows_source,
             lookback_days=lookback_days,
         )
         if recent_trade_rows:
             trade_used_days = int(len(recent_trade_rows))
-            closed_trades = sum(
-                max(0, _as_int(row.get("trades")) or 0)
-                for row in recent_trade_rows
-            )
-            wins = sum(
-                max(0, _as_int(row.get("wins")) or 0)
-                for row in recent_trade_rows
-            )
-            net_pnl = sum(_as_float(row.get("net_pnl")) or 0.0 for row in recent_trade_rows)
-            gross_win_pnl = sum(
-                max(0.0, _as_float(row.get("gross_win_pnl")) or 0.0)
-                for row in recent_trade_rows
-            )
-            gross_loss_pnl = sum(
-                max(0.0, _as_float(row.get("gross_loss_pnl")) or 0.0)
-                for row in recent_trade_rows
-            )
-            win_rate = (wins / closed_trades) if closed_trades > 0 else 0.0
-            profit_factor = (
-                gross_win_pnl / gross_loss_pnl
-                if gross_loss_pnl > 0
-                else None
-            )
+            aggregated = _aggregate_trade_metric_rows(recent_trade_rows)
+            closed_trades = int(aggregated["closed_trades"])
+            win_rate = float(aggregated["win_rate"])
+            profit_factor = _as_float(aggregated["profit_factor"])
+            net_pnl = float(aggregated["net_pnl"])
             pnl_available = bool(trade.get("pnl_available")) and closed_trades > 0
             trade_metric_scope = {
                 "mode": "rolling_days",
+                "fill_source": trade_fill_source,
                 "lookback_days": int(lookback_days),
                 "available_days": int(trade_available_days),
                 "used_days": trade_used_days,
@@ -1345,8 +1432,13 @@ def evaluate_go_no_go(
         else:
             trade_metric_scope = {
                 "mode": "full_history_fallback",
+                "fill_source": trade_fill_source,
                 "lookback_days": int(lookback_days),
-                "reason": "daily_trade_stats_unavailable",
+                "reason": (
+                    "daily_trade_stats_by_fill_source_unavailable"
+                    if trade_fill_source != "all"
+                    else "daily_trade_stats_unavailable"
+                ),
             }
 
         recent_gate_rows, gate_available_days = _select_recent_daily_rows(
@@ -1389,7 +1481,11 @@ def evaluate_go_no_go(
                 "reason": "daily_gate_stats_unavailable",
             }
     else:
-        trade_rows = trade.get("daily_trade_stats")
+        trade_rows = (
+            source_trade_rows
+            if trade_fill_source != "all"
+            else trade.get("daily_trade_stats")
+        )
         if isinstance(trade_rows, list):
             trade_used_days = len({str(row.get("date")) for row in trade_rows if isinstance(row, Mapping)})
         gate_rows = gate.get("daily_gate_stats")
@@ -1456,6 +1552,7 @@ def evaluate_go_no_go(
             "min_expected_net_edge_bps": float(min_expected_net_edge_bps),
             "min_used_days": int(min_used_days),
             "lookback_days": int(lookback_days),
+            "trade_fill_source": trade_fill_source,
             "require_pnl_available": bool(require_pnl_available),
             "require_gate_valid": bool(require_gate_valid),
         },
@@ -1470,6 +1567,7 @@ def evaluate_go_no_go(
             "gate_valid": gate_valid,
             "acceptance_rate": acceptance_rate,
             "expected_net_edge_bps": expected_net_edge_bps,
+            "trade_fill_source": trade_fill_source,
             "trade_metric_scope": trade_metric_scope,
             "gate_metric_scope": gate_metric_scope,
         },

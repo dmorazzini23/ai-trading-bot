@@ -36426,6 +36426,14 @@ def _runtime_truth_report_schedule_due(
 
 
 def _runtime_truth_report_thresholds() -> dict[str, Any]:
+    trade_fill_source = str(
+        get_env(
+            "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+            "all",
+            cast=str,
+        )
+        or "all"
+    ).strip() or "all"
     return {
         "min_closed_trades": int(
             get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
@@ -36449,6 +36457,31 @@ def _runtime_truth_report_thresholds() -> dict[str, Any]:
                 cast=float,
             )
         ),
+        "min_used_days": int(
+            max(
+                0,
+                int(
+                    get_env(
+                        "AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS",
+                        0,
+                        cast=int,
+                    )
+                ),
+            )
+        ),
+        "lookback_days": int(
+            max(
+                0,
+                int(
+                    get_env(
+                        "AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS",
+                        0,
+                        cast=int,
+                    )
+                ),
+            )
+        ),
+        "trade_fill_source": trade_fill_source,
         "require_pnl_available": bool(
             get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", True, cast=bool)
         ),

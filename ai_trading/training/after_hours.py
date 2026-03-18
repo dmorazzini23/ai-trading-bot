@@ -2603,6 +2603,14 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             value = get_env(runtime_key, default, cast=bool)
         return bool(value)
 
+    def _threshold_str(name: str, default: str) -> str:
+        execution_key = f"AI_TRADING_EXECUTION_RUNTIME_GONOGO_{name}"
+        runtime_key = f"AI_TRADING_RUNTIME_GONOGO_{name}"
+        value = get_env(execution_key, None, cast=str)
+        if value in (None, ""):
+            value = get_env(runtime_key, default, cast=str)
+        return str(value or default).strip() or str(default)
+
     thresholds = {
         "min_closed_trades": _threshold_int("MIN_CLOSED_TRADES", 20),
         "min_profit_factor": _threshold_float("MIN_PROFIT_FACTOR", 1.1),
@@ -2612,6 +2620,7 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         "min_expected_net_edge_bps": _threshold_float("MIN_EXPECTED_NET_EDGE_BPS", -50.0),
         "min_used_days": max(0, _threshold_int("MIN_USED_DAYS", 0)),
         "lookback_days": max(0, _threshold_int("LOOKBACK_DAYS", 0)),
+        "trade_fill_source": _threshold_str("TRADE_FILL_SOURCE", "all"),
         "require_pnl_available": _threshold_bool("REQUIRE_PNL_AVAILABLE", True),
         "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", False),
     }

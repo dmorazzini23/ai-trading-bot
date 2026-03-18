@@ -9,7 +9,11 @@ def test_format_status_line_includes_core_fields() -> None:
     payload = {
         "gate_passed": False,
         "failed_checks": ["trade_used_days", "profit_factor"],
-        "thresholds": {"lookback_days": 5, "min_used_days": 3},
+        "thresholds": {
+            "lookback_days": 5,
+            "min_used_days": 3,
+            "trade_fill_source": "live",
+        },
         "observed": {
             "trade_used_days": 2,
             "gate_used_days": 3,
@@ -27,8 +31,26 @@ def test_format_status_line_includes_core_fields() -> None:
     assert "failed=trade_used_days,profit_factor" in line
     assert "lookback_days=5" in line
     assert "min_used_days=3" in line
+    assert "fill_source=live" in line
     assert "trade_used_days=2" in line
     assert "gate_used_days=3" in line
+
+
+def test_resolve_thresholds_prefers_execution_trade_fill_source(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+        "live",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+        "all",
+    )
+
+    thresholds = status_tool._resolve_thresholds()
+
+    assert thresholds["trade_fill_source"] == "live"
 
 
 def test_main_returns_fail_code_with_one_line(monkeypatch, capsys) -> None:
@@ -72,4 +94,3 @@ def test_main_json_pass(monkeypatch, capsys) -> None:
     assert exit_code == 0
     assert payload["gate_passed"] is True
     assert payload["observed"]["trade_used_days"] == 3
-

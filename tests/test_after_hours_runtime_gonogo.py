@@ -22,6 +22,7 @@ def test_runtime_performance_go_no_go_gate_enabled(monkeypatch) -> None:
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "25")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", "5")
     monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", "3")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE", "live")
 
     captured: dict[str, object] = {}
 
@@ -52,6 +53,7 @@ def test_runtime_performance_go_no_go_gate_enabled(monkeypatch) -> None:
     assert thresholds.get("min_closed_trades") == 25
     assert thresholds.get("lookback_days") == 5
     assert thresholds.get("min_used_days") == 3
+    assert thresholds.get("trade_fill_source") == "live"
 
 
 def test_runtime_performance_go_no_go_gate_resolves_runtime_paths(

@@ -718,6 +718,120 @@ def test_evaluate_go_no_go_lookback_days_enforces_min_used_days() -> None:
     assert observed["gate_used_days"] == 3
 
 
+def test_evaluate_go_no_go_trade_fill_source_uses_source_specific_rows() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 100,
+            "profit_factor": 2.0,
+            "win_rate": 0.75,
+            "pnl_sum": 500.0,
+            "daily_trade_stats_by_fill_source": {
+                "live": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 4,
+                        "wins": 1,
+                        "losses": 3,
+                        "gross_win_pnl": 10.0,
+                        "gross_loss_pnl": 20.0,
+                        "net_pnl": -10.0,
+                    }
+                ],
+                "reconcile_backfill": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 20,
+                        "wins": 15,
+                        "losses": 5,
+                        "gross_win_pnl": 120.0,
+                        "gross_loss_pnl": 30.0,
+                        "net_pnl": 90.0,
+                    }
+                ],
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "live",
+            "min_closed_trades": 1,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "profit_factor" in decision["failed_checks"]
+    assert "win_rate" in decision["failed_checks"]
+    assert "net_pnl" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["trade_fill_source"] == "live"
+    assert observed["closed_trades"] == 4
+    assert observed["trade_metric_scope"]["fill_source"] == "live"
+
+
+def test_evaluate_go_no_go_trade_fill_source_normalises_backfill_alias() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "daily_trade_stats_by_fill_source": {
+                "reconcile_backfill": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 8,
+                        "wins": 5,
+                        "losses": 3,
+                        "gross_win_pnl": 30.0,
+                        "gross_loss_pnl": 10.0,
+                        "net_pnl": 20.0,
+                    }
+                ]
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "backfill",
+            "min_closed_trades": 1,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is True
+    assert decision["thresholds"]["trade_fill_source"] == "reconcile_backfill"
+    assert decision["observed"]["trade_fill_source"] == "reconcile_backfill"
+    assert (
+        decision["observed"]["trade_metric_scope"]["fill_source"]
+        == "reconcile_backfill"
+    )
+
+
 def test_main_fail_on_no_go_returns_nonzero(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"

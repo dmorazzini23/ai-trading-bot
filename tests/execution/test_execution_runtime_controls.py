@@ -26,6 +26,8 @@ def _engine_stub() -> Any:
     engine._capacity_broker = lambda client: client
     engine._open_order_qty_index = {}
     engine._pending_orders = {}
+    engine._cancel_ratio_adaptive_new_orders_cap = None
+    engine._cancel_ratio_adaptive_context = {}
     engine._broker_sync = None
     engine._last_submit_outcome = {}
     return engine
@@ -290,6 +292,65 @@ def test_execution_phase_gate_allows_closing_orders(monkeypatch):
     monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
 
     allowed, detail = engine._execution_phase_allows_submits(closing_position=True)
+
+    assert allowed is True
+    assert detail is None
+
+
+def test_opening_provider_guard_blocks_openings_when_provider_degraded(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setattr(engine, "_opening_provider_guard_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_opening_provider_guard_elapsed_seconds",
+        lambda: 120.0,
+    )
+    monkeypatch.setattr(
+        lt.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "status": "degraded",
+            "active": "yahoo",
+            "using_backup": True,
+            "safe_mode": False,
+        },
+    )
+    monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda _provider: False)
+    monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=False)
+
+    assert allowed is False
+    assert detail is not None
+    assert "opening_provider_guard" in detail
+
+
+def test_opening_provider_guard_allows_openings_when_provider_healthy(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setattr(engine, "_opening_provider_guard_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_opening_provider_guard_elapsed_seconds",
+        lambda: 120.0,
+    )
+    monkeypatch.setattr(
+        lt.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "status": "healthy",
+            "active": "alpaca",
+            "using_backup": False,
+            "safe_mode": False,
+        },
+    )
+    monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda _provider: False)
+    monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
+
+    allowed, detail = engine._execution_phase_allows_submits(closing_position=False)
 
     assert allowed is True
     assert detail is None
@@ -775,6 +836,40 @@ def test_resolve_order_submit_cap_includes_pending_backlog(monkeypatch):
 
     assert cap == 1
     assert source == "configured+pending_backlog"
+
+
+def test_resolve_order_submit_cap_includes_cancel_ratio(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "runtime"})
+    engine._cancel_ratio_adaptive_new_orders_cap = 2
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "5")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "100")
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 2
+    assert source == "configured+cancel_ratio"
+
+
+def test_cancel_ratio_adaptive_cap_triggers_and_recovers(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_TRIGGER", "0.65")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_CLEAR", "0.40")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_SCALE", "0.50")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_MIN_CAP", "2")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_MIN_SUBMITTED", "8")
+
+    engine._update_cancel_ratio_adaptive_cap(cancel_ratio=0.8, submitted=10)
+
+    assert engine._cancel_ratio_adaptive_new_orders_cap == 5
+    assert engine._cancel_ratio_adaptive_context.get("state") == "triggered"
+
+    engine._update_cancel_ratio_adaptive_cap(cancel_ratio=0.3, submitted=10)
+
+    assert engine._cancel_ratio_adaptive_new_orders_cap is None
+    assert engine._cancel_ratio_adaptive_context.get("state") == "recovered"
 
 
 def test_pending_backlog_cap_supports_adaptive_scaling(monkeypatch):

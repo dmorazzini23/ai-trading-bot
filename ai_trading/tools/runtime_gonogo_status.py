@@ -71,6 +71,21 @@ def _resolve_thresholds() -> dict[str, Any]:
     require_gate_valid = get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", None, cast=bool)
     if require_gate_valid is None:
         require_gate_valid = bool(get_env("AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID", False, cast=bool))
+    trade_fill_source = str(
+        (
+            get_env(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                None,
+                cast=str,
+            )
+            or get_env(
+                "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                "all",
+                cast=str,
+            )
+            or "all"
+        )
+    ).strip() or "all"
     return {
         "min_closed_trades": int(max(0, min_closed_trades)),
         "min_profit_factor": float(min_profit_factor),
@@ -80,6 +95,7 @@ def _resolve_thresholds() -> dict[str, Any]:
         "min_expected_net_edge_bps": float(min_expected_net_edge_bps),
         "min_used_days": int(max(0, min_used_days)),
         "lookback_days": int(max(0, lookback_days)),
+        "trade_fill_source": trade_fill_source,
         "require_pnl_available": bool(require_pnl_available),
         "require_gate_valid": bool(require_gate_valid),
     }
@@ -178,6 +194,7 @@ def format_status_line(payload: Mapping[str, Any]) -> str:
         "RUNTIME_GONOGO_STATUS "
         f"state={state} "
         f"failed={failed_text} "
+        f"fill_source={str(thresholds.get('trade_fill_source') or observed.get('trade_fill_source') or 'all')} "
         f"lookback_days={int(_as_int(thresholds.get('lookback_days')) or 0)} "
         f"min_used_days={int(_as_int(thresholds.get('min_used_days')) or 0)} "
         f"trade_used_days={int(_as_int(observed.get('trade_used_days')) or 0)} "
@@ -221,4 +238,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

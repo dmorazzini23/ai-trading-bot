@@ -26,6 +26,7 @@ from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Optional, Sequence, cast
+from zoneinfo import ZoneInfo
 
 from ai_trading.logging import get_logger, log_pdt_enforcement, log_throttled_event
 from ai_trading.telemetry import runtime_state
@@ -2193,6 +2194,8 @@ class ExecutionEngine:
         self._runtime_gonogo_cache_until_mono: float = 0.0
         self._runtime_gonogo_cache_allowed: bool = True
         self._runtime_gonogo_cache_context: dict[str, Any] = {}
+        self._cancel_ratio_adaptive_new_orders_cap: int | None = None
+        self._cancel_ratio_adaptive_context: dict[str, Any] = {}
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -2624,6 +2627,123 @@ class ExecutionEngine:
             tokens = {"bootstrap", "reconcile"}
         return tokens
 
+    def _opening_provider_guard_enabled(self) -> bool:
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_OPENING_PROVIDER_GUARD_ENABLED")
+        if enabled is None:
+            return True
+        return bool(enabled)
+
+    def _opening_provider_guard_window_seconds(self) -> float:
+        value = _config_float("AI_TRADING_EXECUTION_OPENING_PROVIDER_GUARD_WINDOW_SEC", 600.0)
+        if value is None:
+            value = 600.0
+        if not math.isfinite(float(value)):
+            value = 600.0
+        return max(0.0, min(float(value), 7200.0))
+
+    def _opening_provider_guard_elapsed_seconds(self) -> float | None:
+        """Best-effort seconds elapsed since regular-market open."""
+
+        now_utc = datetime.now(UTC)
+        try:
+            from ai_trading.utils.base import is_market_open as _is_market_open
+
+            if not bool(_is_market_open(now_utc)):
+                return None
+        except Exception:
+            logger.debug("OPENING_PROVIDER_GUARD_MARKET_OPEN_CHECK_FAILED", exc_info=True)
+
+        try:
+            now_et = now_utc.astimezone(ZoneInfo("America/New_York"))
+            session_open_et = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            elapsed = float((now_et - session_open_et).total_seconds())
+            if elapsed >= 0.0:
+                return elapsed
+        except Exception:
+            logger.debug("OPENING_PROVIDER_GUARD_ELAPSED_CALC_FAILED", exc_info=True)
+
+        service_snapshot = runtime_state.observe_service_status()
+        if not isinstance(service_snapshot, Mapping):
+            return None
+        phase_token = str(service_snapshot.get("phase") or "").strip().lower()
+        if phase_token != "active":
+            return None
+        phase_since_raw = service_snapshot.get("phase_since")
+        if phase_since_raw in (None, ""):
+            return None
+        try:
+            phase_since_text = str(phase_since_raw).strip()
+            if phase_since_text.endswith("Z"):
+                phase_since_text = f"{phase_since_text[:-1]}+00:00"
+            phase_since_dt = datetime.fromisoformat(phase_since_text)
+            if phase_since_dt.tzinfo is None:
+                phase_since_dt = phase_since_dt.replace(tzinfo=UTC)
+            elapsed = float((now_utc - phase_since_dt.astimezone(UTC)).total_seconds())
+            return elapsed if elapsed >= 0.0 else None
+        except Exception:
+            logger.debug("OPENING_PROVIDER_GUARD_PHASE_SINCE_PARSE_FAILED", exc_info=True)
+        return None
+
+    def _opening_provider_guard_blocks_openings(self) -> tuple[bool, str | None]:
+        """Return guard decision for early-session degraded provider conditions."""
+
+        if not self._opening_provider_guard_enabled():
+            return False, None
+        window_s = self._opening_provider_guard_window_seconds()
+        if window_s <= 0.0:
+            return False, None
+        elapsed_s = self._opening_provider_guard_elapsed_seconds()
+        if elapsed_s is None or elapsed_s > window_s:
+            return False, None
+
+        provider_snapshot = runtime_state.observe_data_provider_state()
+        if not isinstance(provider_snapshot, Mapping):
+            provider_snapshot = {}
+        provider_status = str(provider_snapshot.get("status") or "").strip().lower()
+        provider_active = str(provider_snapshot.get("active") or "").strip().lower()
+        using_backup = bool(provider_snapshot.get("using_backup"))
+        provider_safe_mode = bool(provider_snapshot.get("safe_mode"))
+        provider_disabled = False
+        try:
+            provider_disabled = bool(
+                provider_monitor.is_disabled("alpaca")
+                or provider_monitor.is_disabled("alpaca_sip")
+            )
+        except Exception:
+            provider_disabled = False
+        provider_degraded = provider_status in {
+            "degraded",
+            "down",
+            "offline",
+            "disabled",
+            "halted",
+            "error",
+            "unknown",
+        }
+        active_is_primary = provider_active.startswith("alpaca") if provider_active else False
+        degraded = (
+            bool(is_safe_mode_active())
+            or provider_safe_mode
+            or provider_disabled
+            or provider_degraded
+            or using_backup
+            or (provider_active not in {"", "unknown"} and not active_is_primary)
+        )
+        if not degraded:
+            return False, None
+
+        detail = (
+            "opening_provider_guard"
+            f" elapsed_s={round(float(elapsed_s), 1)}"
+            f" window_s={round(float(window_s), 1)}"
+            f" provider_status={provider_status or 'unknown'}"
+            f" active={provider_active or 'unknown'}"
+            f" using_backup={bool(using_backup)}"
+            f" safe_mode={bool(provider_safe_mode or is_safe_mode_active())}"
+            f" disabled={bool(provider_disabled)}"
+        )
+        return True, detail
+
     def _execution_phase_allows_submits(self, *, closing_position: bool) -> tuple[bool, str | None]:
         if closing_position:
             return True, None
@@ -2633,6 +2753,11 @@ class ExecutionEngine:
         blocked = self._blocked_execution_phases()
         if phase in blocked:
             return False, f"phase={phase}"
+        provider_guard_blocked, provider_guard_detail = (
+            self._opening_provider_guard_blocks_openings()
+        )
+        if provider_guard_blocked:
+            return False, provider_guard_detail
         return True, None
 
     def _bootstrap_new_orders_cap(self) -> int | None:
@@ -2927,6 +3052,15 @@ class ExecutionEngine:
                 candidate = 0
             if candidate > 0:
                 adaptive_cap = candidate
+        cancel_ratio_cap: int | None = None
+        cancel_ratio_cap_raw = getattr(self, "_cancel_ratio_adaptive_new_orders_cap", None)
+        if cancel_ratio_cap_raw not in (None, ""):
+            try:
+                candidate = int(cancel_ratio_cap_raw)
+            except (TypeError, ValueError):
+                candidate = 0
+            if candidate > 0:
+                cancel_ratio_cap = candidate
         backlog_cap = self._pending_backlog_order_cap()
 
         cap_sources: list[str] = []
@@ -2940,12 +3074,92 @@ class ExecutionEngine:
         if adaptive_cap is not None:
             cap_sources.append("adaptive")
             cap_values.append(adaptive_cap)
+        if cancel_ratio_cap is not None:
+            cap_sources.append("cancel_ratio")
+            cap_values.append(cancel_ratio_cap)
         if backlog_cap is not None:
             cap_sources.append("pending_backlog")
             cap_values.append(backlog_cap)
         if not cap_values:
             return None, "none"
         return min(cap_values), "+".join(cap_sources)
+
+    def _cancel_ratio_adaptive_cap_enabled(self) -> bool:
+        enabled = _resolve_bool_env("AI_TRADING_ORDER_PACING_CANCEL_RATIO_ADAPTIVE_ENABLED")
+        if enabled is None:
+            return True
+        return bool(enabled)
+
+    def _update_cancel_ratio_adaptive_cap(self, *, cancel_ratio: float, submitted: int) -> None:
+        """Adjust per-cycle opening-order cap when cancel ratio is elevated."""
+
+        previous_cap_raw = getattr(self, "_cancel_ratio_adaptive_new_orders_cap", None)
+        previous_cap: int | None = None
+        if previous_cap_raw not in (None, ""):
+            try:
+                parsed_cap = int(previous_cap_raw)
+            except (TypeError, ValueError):
+                parsed_cap = 0
+            if parsed_cap > 0:
+                previous_cap = parsed_cap
+
+        enabled = self._cancel_ratio_adaptive_cap_enabled()
+        trigger = _config_float("AI_TRADING_ORDER_PACING_CANCEL_RATIO_TRIGGER", 0.65)
+        if trigger is None or not math.isfinite(float(trigger)):
+            trigger = 0.65
+        trigger = max(0.0, min(float(trigger), 1.0))
+        clear = _config_float("AI_TRADING_ORDER_PACING_CANCEL_RATIO_CLEAR", 0.40)
+        if clear is None or not math.isfinite(float(clear)):
+            clear = 0.40
+        clear = max(0.0, min(float(clear), 1.0))
+        if clear > trigger:
+            clear = trigger
+        scale = _config_float("AI_TRADING_ORDER_PACING_CANCEL_RATIO_SCALE", 0.5)
+        if scale is None or not math.isfinite(float(scale)):
+            scale = 0.5
+        scale = max(0.05, min(float(scale), 1.0))
+        min_cap = _config_int("AI_TRADING_ORDER_PACING_CANCEL_RATIO_MIN_CAP", 1)
+        if min_cap is None:
+            min_cap = 1
+        min_cap = max(1, min(int(min_cap), 100))
+        min_submitted = _config_int("AI_TRADING_ORDER_PACING_CANCEL_RATIO_MIN_SUBMITTED", 8)
+        if min_submitted is None:
+            min_submitted = 8
+        min_submitted = max(1, min(int(min_submitted), 1000))
+
+        updated_cap = previous_cap
+        state = "unchanged"
+        if not enabled:
+            updated_cap = None
+            state = "disabled"
+        elif int(submitted) >= int(min_submitted):
+            if float(cancel_ratio) >= float(trigger):
+                scaled_cap = int(round(float(submitted) * float(scale)))
+                updated_cap = max(int(min_cap), max(1, scaled_cap))
+                state = "triggered"
+            elif previous_cap is not None and float(cancel_ratio) <= float(clear):
+                updated_cap = None
+                state = "recovered"
+        else:
+            state = "insufficient_samples"
+
+        self._cancel_ratio_adaptive_new_orders_cap = updated_cap
+        context = {
+            "enabled": bool(enabled),
+            "state": state,
+            "cancel_ratio": float(cancel_ratio),
+            "submitted": int(max(int(submitted), 0)),
+            "trigger": float(trigger),
+            "clear": float(clear),
+            "scale": float(scale),
+            "min_cap": int(min_cap),
+            "min_submitted": int(min_submitted),
+            "cap": int(updated_cap) if updated_cap is not None else None,
+            "previous_cap": int(previous_cap) if previous_cap is not None else None,
+        }
+        self._cancel_ratio_adaptive_context = context
+        if updated_cap != previous_cap:
+            logger.info("ORDER_PACING_CANCEL_RATIO_CAP_UPDATED", extra=context)
 
     def _max_new_orders_per_cycle(self) -> int | None:
         """Return max new-order submits allowed per cycle."""
@@ -3454,6 +3668,22 @@ class ExecutionEngine:
         )
         fill_ratio = (float(filled) / float(submitted)) if submitted > 0 else 0.0
         cancel_ratio = (float(cancelled) / float(submitted)) if submitted > 0 else 0.0
+        self._update_cancel_ratio_adaptive_cap(
+            cancel_ratio=float(cancel_ratio),
+            submitted=int(submitted),
+        )
+        cancel_ratio_adaptive_cap = getattr(
+            self,
+            "_cancel_ratio_adaptive_new_orders_cap",
+            None,
+        )
+        cancel_ratio_adaptive_context = getattr(
+            self,
+            "_cancel_ratio_adaptive_context",
+            {},
+        )
+        if not isinstance(cancel_ratio_adaptive_context, Mapping):
+            cancel_ratio_adaptive_context = {}
         attempted = submitted + failed
         reject_rate_pct = (float(failed) / float(attempted) * 100.0) if attempted > 0 else 0.0
         drift_values = [
@@ -3524,6 +3754,12 @@ class ExecutionEngine:
                 "order_pacing_cap_hit_rate_pct": round(pacing_cap_hit_rate_pct, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
+                "cancel_ratio_adaptive_cap": (
+                    int(cancel_ratio_adaptive_cap)
+                    if cancel_ratio_adaptive_cap not in (None, "")
+                    else None
+                ),
+                "cancel_ratio_adaptive_state": cancel_ratio_adaptive_context.get("state"),
                 "reject_rate_pct": round(reject_rate_pct, 4),
                 "execution_drift_bps": round(cycle_execution_drift_bps, 4),
                 "realized_slippage_bps": round(cycle_realized_slippage_bps, 4),
@@ -9667,6 +9903,34 @@ class ExecutionEngine:
         )
         if min_used_days is None:
             min_used_days = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0)
+        trade_fill_source_raw: Any = None
+        if _config_get_env is not None:
+            try:
+                trade_fill_source_raw = _config_get_env(
+                    "AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                    default=None,
+                )
+            except Exception:
+                trade_fill_source_raw = None
+        if trade_fill_source_raw in (None, ""):
+            trade_fill_source_raw = _runtime_env(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                None,
+            )
+        if trade_fill_source_raw in (None, "") and _config_get_env is not None:
+            try:
+                trade_fill_source_raw = _config_get_env(
+                    "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                    default=None,
+                )
+            except Exception:
+                trade_fill_source_raw = None
+        if trade_fill_source_raw in (None, ""):
+            trade_fill_source_raw = _runtime_env(
+                "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                "all",
+            )
+        trade_fill_source = str(trade_fill_source_raw or "all").strip() or "all"
         thresholds = {
             "min_closed_trades": int(
                 min_closed_trades if min_closed_trades is not None else 20
@@ -9688,6 +9952,7 @@ class ExecutionEngine:
             ),
             "min_used_days": int(max(0, min_used_days if min_used_days is not None else 0)),
             "lookback_days": int(max(0, lookback_days if lookback_days is not None else 0)),
+            "trade_fill_source": trade_fill_source,
             "require_pnl_available": True,
             "require_gate_valid": False,
         }
