@@ -9,6 +9,8 @@ import random
 import statistics
 from datetime import UTC, datetime
 from typing import Any
+
+from ai_trading.config.management import get_env
 from ai_trading.logging import logger
 from .base import BaseStrategy, StrategySignal
 
@@ -85,6 +87,17 @@ class BacktestEngine:
             'simulate_execution_with_latency',
             lambda **_kwargs: None,
         )
+        self.random_seed = int(get_env("AI_TRADING_LEGACY_BACKTEST_SEED", 42, cast=int))
+        try:
+            rng = np.random.default_rng(self.random_seed)  # type: ignore[attr-defined]
+            self._rand = rng.random
+            self._uniform = rng.uniform
+            self._normal = rng.normal
+        except Exception:  # pragma: no cover - fallback for minimal numpy stubs
+            fallback_rng = random.Random(self.random_seed)
+            self._rand = fallback_rng.random
+            self._uniform = fallback_rng.uniform
+            self._normal = fallback_rng.gauss
         self.microstructure_available = all(
             callable(fn)
             for fn in (
@@ -93,7 +106,10 @@ class BacktestEngine:
                 self.calculate_partial_fill_probability,
             )
         )
-        logger.info('BacktestEngine initialized with realistic execution modeling')
+        logger.info(
+            'BacktestEngine initialized with realistic execution modeling',
+            extra={"legacy_module": True, "seed": self.random_seed},
+        )
 
     def run_backtest(
         self,
@@ -230,20 +246,20 @@ class BacktestEngine:
             if self.enable_partial_fills and self.microstructure_available:
                 market_depth = volume / 100
                 fill_prob = 1.0 - self.calculate_partial_fill_probability(trade_size=position_size, market_depth=market_depth, urgency='medium')
-                if np.random.random() > fill_prob:
-                    actual_quantity = int(position_size * np.random.uniform(0.3, 0.9))
+                if self._rand() > fill_prob:
+                    actual_quantity = int(position_size * self._uniform(0.3, 0.9))
             execution_timestamp = trade_timestamp or datetime.now(UTC)
             if self.microstructure_available and trade_timestamp:
-                latency_cost = np.random.normal(0, 0.0001)
+                latency_cost = self._normal(0, 0.0001)
                 execution_price *= 1 + latency_cost
             commission_bps_cost = self.commission_bps / 10000 * execution_price * actual_quantity
             commission_flat_cost = self.commission_flat
             total_commission = commission_bps_cost + commission_flat_cost
             if signal.is_buy:
-                exit_price = execution_price * (1 + np.random.normal(0, 0.02))
+                exit_price = execution_price * (1 + self._normal(0, 0.02))
                 gross_pnl = actual_quantity * (exit_price - execution_price)
             else:
-                exit_price = execution_price * (1 + np.random.normal(0, 0.02))
+                exit_price = execution_price * (1 + self._normal(0, 0.02))
                 gross_pnl = actual_quantity * (execution_price - exit_price)
             net_pnl = gross_pnl - total_commission
             turnover = actual_quantity * execution_price

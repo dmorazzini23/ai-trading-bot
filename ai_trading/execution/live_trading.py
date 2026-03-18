@@ -174,6 +174,7 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
 
 
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
+from ai_trading.analytics.tca import reconcile_pending_tca_with_fill
 from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
     is_safe_mode_active,
@@ -4124,6 +4125,101 @@ class ExecutionEngine:
         fill_event_payload["event"] = "fill_recorded"
         fill_event_payload["entry_time"] = timestamp.isoformat()
         self._record_runtime_fill_event(fill_event_payload)
+        runtime_source = None
+        if runtime_payload is not None:
+            source_value = runtime_payload.get("source")
+            if source_value not in (None, ""):
+                runtime_source = str(source_value)
+        self._reconcile_pending_tca_from_fill(
+            symbol=symbol,
+            side=side_normalized,
+            fill_qty=float(qty_value),
+            fill_price=float(fill_price),
+            timestamp=timestamp,
+            order_id=order_id,
+            client_order_id=client_order_id,
+            order_status=order_status,
+            fee_amount=fee_amount,
+            source=runtime_source,
+        )
+
+    def _reconcile_pending_tca_from_fill(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        fill_qty: float,
+        fill_price: float,
+        timestamp: datetime,
+        order_id: str | None,
+        client_order_id: str | None,
+        order_status: str | None,
+        fee_amount: float | None,
+        source: str | None,
+    ) -> None:
+        """Resolve pending TCA entries for a newly observed fill."""
+
+        if fill_qty <= 0.0 or fill_price <= 0.0:
+            return
+        tca_enabled = _resolve_bool_env("AI_TRADING_TCA_ENABLED")
+        if tca_enabled is False:
+            return
+        tca_update_on_fill = _resolve_bool_env("AI_TRADING_TCA_UPDATE_ON_FILL")
+        if tca_update_on_fill is False:
+            return
+        configured_path = str(
+            _runtime_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl")
+            or "runtime/tca_records.jsonl"
+        )
+        tca_path = resolve_runtime_artifact_path(
+            configured_path,
+            default_relative="runtime/tca_records.jsonl",
+        )
+        status_token = _normalize_status(order_status) or "filled"
+        resolved, reason = reconcile_pending_tca_with_fill(
+            str(tca_path),
+            client_order_id=(
+                str(client_order_id)
+                if client_order_id not in (None, "")
+                else None
+            ),
+            order_id=str(order_id) if order_id not in (None, "") else None,
+            fill_price=float(fill_price),
+            fill_qty=float(fill_qty),
+            status=status_token,
+            fill_ts=timestamp,
+            fee_amount=fee_amount,
+            source=source,
+        )
+        if resolved:
+            logger.info(
+                "TCA_PENDING_EVENT_RECONCILED",
+                extra={
+                    "path": str(tca_path),
+                    "symbol": symbol,
+                    "side": side,
+                    "client_order_id": client_order_id,
+                    "order_id": order_id,
+                    "status": status_token,
+                    "fill_qty": float(fill_qty),
+                    "fill_price": float(fill_price),
+                    "source": source,
+                },
+            )
+            return
+        if reason in {"pending_record_missing", "already_resolved", "missing_identifiers"}:
+            return
+        logger.debug(
+            "TCA_PENDING_EVENT_RECONCILE_SKIPPED",
+            extra={
+                "path": str(tca_path),
+                "symbol": symbol,
+                "side": side,
+                "client_order_id": client_order_id,
+                "order_id": order_id,
+                "reason": reason,
+            },
+        )
 
     def _pdt_lockout_active(self, account: Any | None) -> bool:
         """Return ``True`` when the PDT lockout should block new openings."""

@@ -26,7 +26,7 @@ def main() -> None:
     ensure_dotenv_loaded()
     api_key = get_env("ALPACA_API_KEY")
     secret_key = get_env("ALPACA_SECRET_KEY")
-    base_url = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    base_url = get_env("ALPACA_TRADING_BASE_URL", "https://paper-api.alpaca.markets")
     client = StockHistoricalDataClient(
         api_key=api_key, secret_key=secret_key, base_url=base_url
     )
@@ -78,4 +78,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

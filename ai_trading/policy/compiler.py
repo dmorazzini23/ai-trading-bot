@@ -904,13 +904,19 @@ def resolve_operational_safety_tier(
     return (SafetyTier.NORMAL, ("NORMAL_TIER",))
 
 
-def decompose_tca_components(records: list[Mapping[str, Any]]) -> dict[str, float]:
-    """Decompose slippage into spread, impact, and timing components."""
+def decompose_tca_components(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Decompose slippage into spread, impact, and timing components.
+
+    Includes optional symbol and hour-of-day cost profiles so runtime gating can
+    downweight pockets with persistently poor realized execution.
+    """
 
     spread_vals: list[float] = []
     impact_vals: list[float] = []
     timing_vals: list[float] = []
     total_vals: list[float] = []
+    symbol_totals: dict[str, list[float]] = {}
+    hour_totals: dict[str, list[float]] = {}
     for row in records:
         try:
             total = abs(float(row.get("is_bps", 0.0) or 0.0))
@@ -932,6 +938,27 @@ def decompose_tca_components(records: list[Mapping[str, Any]]) -> dict[str, floa
         impact_vals.append(impact)
         timing_vals.append(latency_penalty)
         total_vals.append(total)
+        symbol_raw = str(row.get("symbol", "") or "").strip().upper()
+        if symbol_raw:
+            symbol_totals.setdefault(symbol_raw, []).append(total)
+        ts_raw = row.get("ts")
+        if ts_raw in (None, ""):
+            benchmark_raw = row.get("benchmark")
+            if isinstance(benchmark_raw, Mapping):
+                ts_raw = benchmark_raw.get("submit_ts") or benchmark_raw.get("decision_ts")
+        if ts_raw not in (None, ""):
+            ts_text = str(ts_raw).strip()
+            if ts_text.endswith("Z"):
+                ts_text = f"{ts_text[:-1]}+00:00"
+            try:
+                parsed_ts = datetime.fromisoformat(ts_text)
+            except ValueError:
+                parsed_ts = None
+            if parsed_ts is not None:
+                if parsed_ts.tzinfo is None:
+                    parsed_ts = parsed_ts.replace(tzinfo=UTC)
+                hour_key = f"{parsed_ts.astimezone(UTC).hour:02d}"
+                hour_totals.setdefault(hour_key, []).append(total)
     if not total_vals:
         return {
             "sample_count": 0.0,
@@ -939,13 +966,36 @@ def decompose_tca_components(records: list[Mapping[str, Any]]) -> dict[str, floa
             "impact_bps": 0.0,
             "timing_bps": 0.0,
             "total_bps": 0.0,
+            "by_symbol_total_bps": {},
+            "by_hour_total_bps": {},
         }
+
+    symbol_profile: dict[str, dict[str, float]] = {}
+    for symbol, values in symbol_totals.items():
+        if not values:
+            continue
+        symbol_profile[symbol] = {
+            "median_bps": float(median(values)),
+            "samples": float(len(values)),
+        }
+
+    hour_profile: dict[str, dict[str, float]] = {}
+    for hour_key, values in hour_totals.items():
+        if not values:
+            continue
+        hour_profile[hour_key] = {
+            "median_bps": float(median(values)),
+            "samples": float(len(values)),
+        }
+
     return {
         "sample_count": float(len(total_vals)),
         "spread_bps": float(median(spread_vals)),
         "impact_bps": float(median(impact_vals)),
         "timing_bps": float(median(timing_vals)),
         "total_bps": float(median(total_vals)),
+        "by_symbol_total_bps": symbol_profile,
+        "by_hour_total_bps": hour_profile,
     }
 
 

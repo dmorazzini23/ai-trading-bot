@@ -1,158 +1,206 @@
-"""
-Walk-forward validation runner script.
+"""Walk-forward validation runner backed by current research helpers."""
 
-Runs walk-forward analysis on the active trading universe using
-the enhanced cost-aware strategy logic to validate changes before live deployment.
-"""
+from __future__ import annotations
+
 import argparse
+import json
 import sys
-from datetime import datetime
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from typing import Any
 
-try:
-    import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover
-    class _PD:  # minimal stub
-        @staticmethod
-        def concat(objs):
-            return list(objs)
-    pd = _PD()  # type: ignore
-try:
-    from ai_trading.config.management import TradingConfig
-    from ai_trading.core.bot_engine import DataFetcher
-    from ai_trading.evaluation.walkforward import WalkForwardEvaluator
-    from ai_trading.logging import logger
-    from ai_trading.signals import SignalDecisionPipeline
-except ImportError:
-    sys.exit(1)
+import pandas as pd
 
-def create_cost_aware_strategy(config: TradingConfig):
-    """Create a strategy function that uses the new cost-aware signal logic."""
+from ai_trading.config.management import get_env
+from ai_trading.config.runtime import TradingConfig
+from ai_trading.core.bot_engine import DataFetcher
+from ai_trading.logging import get_logger
+from ai_trading.research.walk_forward import WalkForwardConfig, run_walk_forward
 
-    def strategy_func(train_data: dict, test_data: dict) -> list:
-        """
-        Cost-aware strategy implementation for walk-forward validation.
-        
-        Args:
-            train_data: Dictionary of {symbol: pd.DataFrame} for training period
-            test_data: Dictionary of {symbol: pd.DataFrame} for testing period
-            
-        Returns:
-            List of prediction dictionaries
-        """
-        predictions = []
-        pipeline_config = {'min_edge_threshold': 0.002, 'transaction_cost_buffer': 0.001, 'ensemble_min_agree': 2, 'ensemble_total': 3, 'atr_stop_multiplier': 2.0, 'atr_target_multiplier': 3.0, 'regime_volatility_threshold': 0.025}
-        decision_pipeline = SignalDecisionPipeline(pipeline_config)
-        for symbol, test_df in test_data.items():
-            if symbol not in train_data:
-                continue
-            train_df = train_data[symbol]
-            for i in range(1, len(test_df)):
-                try:
-                    historical_data = pd.concat([train_df.tail(100), test_df.iloc[:i]])
-                    if len(historical_data) < 50:
-                        continue
-                    try:
-                        returns = historical_data['close'].pct_change().dropna()
-                        momentum = returns.tail(5).mean()
-                        volatility = returns.tail(20).std()
-                        predicted_edge = momentum * 0.5
-                        if volatility > 0:
-                            predicted_edge = predicted_edge / volatility
-                        predicted_edge = max(-0.05, min(0.05, predicted_edge))
-                    except (ValueError, TypeError):
-                        predicted_edge = 0.0
-                    decision = decision_pipeline.evaluate_signal_with_costs(symbol, historical_data, predicted_edge, quantity=1000)
-                    if decision.get('decision') == 'ACCEPT':
-                        entry_price = test_df['close'].iloc[i]
-                        exit_idx = min(i + 5, len(test_df) - 1)
-                        exit_price = test_df['close'].iloc[exit_idx]
-                        stop_loss = decision.get('stop_loss', entry_price * 0.98)
-                        take_profit = decision.get('take_profit', entry_price * 1.02)
-                        for j in range(i + 1, exit_idx + 1):
-                            day_low = test_df['low'].iloc[j] if 'low' in test_df.columns else test_df['close'].iloc[j]
-                            day_high = test_df['high'].iloc[j] if 'high' in test_df.columns else test_df['close'].iloc[j]
-                            if day_low <= stop_loss:
-                                exit_price = stop_loss
-                                break
-                            elif day_high >= take_profit:
-                                exit_price = take_profit
-                                break
-                        signal = 1 if predicted_edge > 0 else -1
-                        predictions.append({'symbol': symbol, 'signal': signal, 'entry_price': entry_price, 'exit_price': exit_price, 'predicted_edge': predicted_edge, 'decision_reason': decision.get('reason', 'UNKNOWN'), 'timestamp': test_df.index[i] if hasattr(test_df.index[i], 'strftime') else str(test_df.index[i])})
-                except (ValueError, TypeError) as e:
-                    logger.debug('Signal generation failed for %s at %d: %s', symbol, i, e)
-                    continue
-        return predictions
-    return strategy_func
+logger = get_logger(__name__)
 
-def run_walkforward_validation(symbols: list, config: TradingConfig) -> dict:
-    """Run walk-forward validation for the given symbols."""
-    try:
-        logger.info('Starting walk-forward validation for %d symbols', len(symbols))
-        data_fetcher = DataFetcher()
 
-        def data_provider(symbol: str, start_date: datetime, end_date: datetime):
-            try:
-                return data_fetcher.get_historical_data(symbol, start_date, end_date)
-            except (ValueError, TypeError) as e:
-                logger.warning('Failed to get data for %s: %s', symbol, e)
-                return None
-        strategy_func = create_cost_aware_strategy(config)
-        wf_config = {'mode': 'rolling', 'train_span': 252, 'test_span': 63, 'step_size': 21, 'embargo_pct': 0.01, 'artifacts_dir': 'artifacts/wfa', 'enable_plots': False}
-        evaluator = WalkForwardEvaluator(**wf_config)
-        results = evaluator.run_walkforward(symbols=symbols, strategy_func=strategy_func, data_provider=data_provider)
-        return results
-    except (ValueError, TypeError) as e:
-        logger.error('Walk-forward validation failed: %s', e)
-        raise
+def _normalize_daily_frame(frame: pd.DataFrame | None, symbol: str) -> pd.DataFrame | None:
+    if frame is None or frame.empty:
+        return None
+    normalized = frame.copy()
+    if "timestamp" not in normalized.columns:
+        if isinstance(normalized.index, pd.DatetimeIndex):
+            normalized = normalized.copy()
+            normalized.insert(0, "timestamp", normalized.index)
+        else:
+            return None
+    if "close" not in normalized.columns:
+        for alias in ("Close", "adj_close", "Adj Close"):
+            if alias in normalized.columns:
+                normalized = normalized.rename(columns={alias: "close"})
+                break
+    if "close" not in normalized.columns:
+        return None
+    normalized = normalized[["timestamp", "close"]].copy()
+    normalized["timestamp"] = pd.to_datetime(normalized["timestamp"], utc=True, errors="coerce")
+    normalized["close"] = pd.to_numeric(normalized["close"], errors="coerce")
+    normalized = normalized.dropna(subset=["timestamp", "close"])
+    if normalized.empty:
+        return None
+    normalized["symbol"] = symbol
+    return (
+        normalized.sort_values("timestamp")
+        .drop_duplicates(subset=["timestamp"], keep="last")
+        .reset_index(drop=True)
+    )
 
-def main():
-    """Main entry point for WFA runner."""
-    parser = argparse.ArgumentParser(description='Run walk-forward validation')
-    parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols (default: from config)')
-    parser.add_argument('--universe-file', type=str, help='Path to file containing symbols list')
-    parser.add_argument('--dry-run', action='store_true', help='Validate setup without running')
+
+def _score_fold(_train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, float]:
+    ordered = test_df.sort_values(["symbol", "timestamp"]).copy()
+    returns = ordered.groupby("symbol")["close"].pct_change().dropna()
+    if returns.empty:
+        return {
+            "post_cost_return": 0.0,
+            "turnover": 0.0,
+            "drawdown": 0.0,
+            "hit_rate": 0.0,
+        }
+    cost_per_trade = 0.0002  # 2 bps per executed bar proxy
+    post_cost_return = float(returns.sum() - (len(returns) * cost_per_trade))
+    equity = (1.0 + returns).cumprod()
+    drawdown = float((equity / equity.cummax() - 1.0).min())
+    turnover = float(len(returns)) / float(max(len(ordered), 1))
+    hit_rate = float((returns > 0).mean())
+    return {
+        "post_cost_return": post_cost_return,
+        "turnover": turnover,
+        "drawdown": drawdown,
+        "hit_rate": hit_rate,
+    }
+
+
+def _build_walk_forward_config() -> WalkForwardConfig:
+    return WalkForwardConfig(
+        train_days=int(get_env("AI_TRADING_WALK_FORWARD_TRAIN_DAYS", 180, cast=int)),
+        test_days=int(get_env("AI_TRADING_WALK_FORWARD_TEST_DAYS", 30, cast=int)),
+        step_days=int(get_env("AI_TRADING_WALK_FORWARD_STEP_DAYS", 30, cast=int)),
+        embargo_days=int(get_env("AI_TRADING_WALK_FORWARD_EMBARGO_DAYS", 5, cast=int)),
+        purge_days=int(get_env("AI_TRADING_WALK_FORWARD_PURGE_DAYS", 0, cast=int)),
+    )
+
+
+def _resolve_symbols(args: argparse.Namespace, config: TradingConfig) -> list[str]:
+    if args.symbols:
+        return [s.strip().upper() for s in str(args.symbols).split(",") if s.strip()]
+    if args.universe_file:
+        path = Path(args.universe_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Universe file not found: {path}")
+        return [line.strip().upper() for line in path.read_text().splitlines() if line.strip() and not line.startswith("#")]
+
+    cfg_universe = getattr(config, "default_universe", None)
+    if isinstance(cfg_universe, (list, tuple)):
+        parsed = [str(sym).strip().upper() for sym in cfg_universe if str(sym).strip()]
+        if parsed:
+            return parsed
+
+    env_universe = str(get_env("AI_TRADING_DEFAULT_UNIVERSE", "", cast=str) or "")
+    if env_universe.strip():
+        parsed = [s.strip().upper() for s in env_universe.split(",") if s.strip()]
+        if parsed:
+            return parsed
+
+    return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+
+
+def run_walkforward_validation(symbols: list[str]) -> dict[str, Any]:
+    logger.info("WFA_RUN_START", extra={"symbols": len(symbols)})
+    fetcher = DataFetcher()
+    symbol_frames: list[pd.DataFrame] = []
+    loaded_symbols: list[str] = []
+    for symbol in symbols:
+        try:
+            frame = fetcher.get_daily_df(None, symbol)
+        except Exception as exc:  # pragma: no cover - defensive script guard
+            logger.warning("WFA_FETCH_FAILED", extra={"symbol": symbol, "detail": str(exc)})
+            continue
+        normalized = _normalize_daily_frame(frame, symbol)
+        if normalized is None or normalized.empty:
+            logger.warning("WFA_FETCH_EMPTY", extra={"symbol": symbol})
+            continue
+        symbol_frames.append(normalized)
+        loaded_symbols.append(symbol)
+
+    if not symbol_frames:
+        raise RuntimeError("No symbol data available for walk-forward validation")
+
+    data = pd.concat(symbol_frames, ignore_index=True)
+    data = data.sort_values("timestamp").reset_index(drop=True)
+    wf_config = _build_walk_forward_config()
+    result = run_walk_forward(data, score_fn=_score_fold, config=wf_config)
+    result.update(
+        {
+            "symbols_requested": len(symbols),
+            "symbols_loaded": len(loaded_symbols),
+            "rows": int(len(data)),
+            "loaded_symbols": loaded_symbols,
+            "config": {
+                "train_days": wf_config.train_days,
+                "test_days": wf_config.test_days,
+                "step_days": wf_config.step_days,
+                "embargo_days": wf_config.embargo_days,
+                "purge_days": wf_config.purge_days,
+            },
+        }
+    )
+    logger.info(
+        "WFA_RUN_COMPLETE",
+        extra={
+            "fold_count": int(result.get("fold_count", 0) or 0),
+            "symbols_loaded": len(loaded_symbols),
+            "rows": int(len(data)),
+        },
+    )
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run walk-forward validation")
+    parser.add_argument("--symbols", type=str, help="Comma-separated list of symbols")
+    parser.add_argument("--universe-file", type=str, help="Path to file containing one symbol per line")
+    parser.add_argument("--dry-run", action="store_true", help="Validate setup without running")
+    parser.add_argument("--json", action="store_true", help="Print JSON result payload")
     args = parser.parse_args()
+
     try:
         config = TradingConfig.from_env()
-        if args.symbols:
-            symbols = [s.strip() for s in args.symbols.split(',')]
-        elif args.universe_file:
-            universe_file = Path(args.universe_file)
-            if not universe_file.exists():
-                logger.error('Universe file not found: %s', universe_file)
-                sys.exit(1)
-            with open(universe_file) as f:
-                symbols = [line.strip() for line in f if line.strip() and (not line.startswith('#'))]
-        else:
-            symbols = getattr(config, 'default_universe', ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'AMD', 'NFLX', 'DIS'])
+        symbols = _resolve_symbols(args, config)
         if not symbols:
-            logger.error('No symbols specified for validation')
-            sys.exit(1)
-        logger.info('Walk-forward validation universe: %s', symbols)
+            raise RuntimeError("No symbols resolved for walk-forward validation")
+        logger.info("WFA_UNIVERSE", extra={"symbols": symbols})
         if args.dry_run:
-            logger.info('Dry run mode - validation setup looks good')
+            payload = {"status": "ok", "symbols": symbols}
+            if args.json:
+                print(json.dumps(payload, indent=2))
             return
-        results = run_walkforward_validation(symbols, config)
-        if results and 'performance_summary' in results:
-            perf = results['performance_summary']
-            if 'sharpe_ratio' in perf:
-                pass
-            if 'hit_rate' in perf:
-                pass
-            if 'max_drawdown' in perf:
-                pass
-            results.get('performance_grade', 'N/A')
-            results.get('validation_summary', {})
-        else:
-            sys.exit(1)
+
+        result = run_walkforward_validation(symbols)
+        if args.json:
+            print(json.dumps(result, indent=2, default=str))
+            return
+
+        distribution = result.get("distribution", {})
+        post_cost = distribution.get("post_cost_return", {})
+        logger.info(
+            "WFA_SUMMARY",
+            extra={
+                "fold_count": int(result.get("fold_count", 0) or 0),
+                "symbols_loaded": int(result.get("symbols_loaded", 0) or 0),
+                "post_cost_mean": float(post_cost.get("mean", 0.0) or 0.0),
+            },
+        )
     except KeyboardInterrupt:
-        logger.info('Walk-forward validation interrupted by user')
-        sys.exit(0)
-    except (ValueError, TypeError) as e:
-        logger.error('Walk-forward validation error: %s', e, exc_info=True)
-        sys.exit(1)
-if __name__ == '__main__':
+        logger.info("WFA_INTERRUPTED")
+        raise SystemExit(0)
+    except Exception as exc:
+        logger.error("WFA_FAILED", extra={"detail": str(exc)}, exc_info=True)
+        raise SystemExit(1) from exc
+
+
+if __name__ == "__main__":
     main()

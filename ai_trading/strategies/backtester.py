@@ -6,9 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
-from ai_trading.core.bot_engine import get_risk_engine
-from ai_trading import config, signals
-from ai_trading.core import bot_engine
+
+from ai_trading import config
 from ai_trading.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -128,10 +127,7 @@ class BacktestResult:
     turnover: float
 
 class BacktestEngine:
-    """Historical simulator executing the live trading cycle.
-
-    The risk engine is initialized lazily to avoid import-time side effects.
-    """
+    """Historical simulator using deterministic local signal logic."""
 
     def __init__(self, data: dict[str, 'pd.DataFrame'], execution_model: ExecutionModel, initial_cash: float=100000.0) -> None:
         config.reload_env()
@@ -142,14 +138,7 @@ class BacktestEngine:
         self.positions: dict[str, int] = dict.fromkeys(data, 0)
         self.trades: list[Fill] = []
         self.equity_curve: list[dict[str, float]] = []
-        # Risk engine is fetched on first use to avoid import-time side effects
-        self._risk_engine: Any | None = None
-
-    def _get_risk_engine(self) -> Any:
-        """Fetch and cache the global risk engine on first use."""
-        if self._risk_engine is None:
-            self._risk_engine = get_risk_engine()
-        return self._risk_engine
+        self._close_history: dict[str, list[float]] = {symbol: [] for symbol in data}
 
     def reset(self) -> None:
         """Reset internal state for a new symbol run."""
@@ -157,20 +146,18 @@ class BacktestEngine:
         self.positions = dict.fromkeys(self.data, 0)
         self.trades = []
         self.equity_curve = []
+        self._close_history = {symbol: [] for symbol in self.data}
 
     def run_single_symbol(self, df: 'pd.DataFrame', risk: Any) -> BacktestResult:
-        """Run the backtest for ``df`` using the live bot cycle."""
+        """Run the backtest for ``df`` using local deterministic signals."""
+        _ = risk
         self.data = {'symbol': df}
         self.positions = {'symbol': 0}
         self.reset()
         return self.run(['symbol'])
 
     def _apply_fill(self, fill: Fill, ts: 'pd.Timestamp') -> None:
-        if hasattr(bot_engine, 'apply_fill'):
-            try:
-                bot_engine.apply_fill(fill)
-            except (ValueError, TypeError) as e:
-                logger.debug('Failed to apply fill in backtester: %s', e)
+        _ = ts
         qty = fill.order.qty if fill.order.side.lower() == 'buy' else -fill.order.qty
         cost = fill.fill_price * qty
         if qty > 0:
@@ -189,25 +176,44 @@ class BacktestEngine:
         total = self.cash + pos_val
         self.equity_curve.append({'timestamp': ts, 'cash': self.cash, 'positions': pos_val, 'total_equity': total})
 
+    def _generate_orders_for_bar(self, symbol: str, close: float) -> list[Order]:
+        history = self._close_history.setdefault(symbol, [])
+        history.append(close)
+        if len(history) < 5:
+            return []
+
+        short_mean = sum(history[-3:]) / 3.0
+        long_window = history[-8:] if len(history) >= 8 else history
+        long_mean = sum(long_window) / float(len(long_window))
+        side: str | None = None
+        if short_mean > long_mean * 1.001:
+            side = 'buy'
+        elif short_mean < long_mean * 0.999:
+            side = 'sell'
+        if side is None:
+            return []
+
+        current_position = int(self.positions.get(symbol, 0))
+        if side == 'sell' and current_position <= 0:
+            return []
+        if side == 'buy' and self.cash < close:
+            return []
+        return [Order(symbol=symbol, qty=1, side=side, price=close)]
+
     def run(self, symbols: list[str]) -> BacktestResult:
         import pandas as pd  # heavy import; keep local
-        self._get_risk_engine()
+
         combined = sorted(set().union(*(df.index for df in self.data.values())))
         for ts in combined:
+            orders: list[Order] = []
             for sym in symbols:
                 df = self.data.get(sym)
-                if df is not None and ts in df.index and hasattr(bot_engine, 'update_market_data'):
-                    try:
-                        bot_engine.update_market_data(sym, df.loc[ts])
-                    except (ValueError, TypeError) as e:
-                        logger.debug('Failed to update market data for %s: %s', sym, e)
-            orders = []
-            if hasattr(bot_engine, 'next_cycle'):
-                try:
-                    orders = bot_engine.next_cycle()
-                except (ValueError, TypeError) as e:
-                    logger.debug('Failed to execute next_cycle: %s', e)
-                    orders = []
+                if df is None or ts not in df.index or 'close' not in df.columns:
+                    continue
+                close = float(df.loc[ts, 'close'])
+                if close <= 0:
+                    continue
+                orders.extend(self._generate_orders_for_bar(sym, close))
             for order in orders:
                 for fill in self.execution_model.on_order(order):
                     self._apply_fill(fill, ts)
@@ -239,7 +245,7 @@ class BacktestEngine:
 def main(argv: list[str] | None=None) -> None:
     """CLI entry point for running a backtest."""
     import argparse
-    parser = argparse.ArgumentParser(description='Full‑fidelity backtester (mirrors live bot).')
+    parser = argparse.ArgumentParser(description='Deterministic local backtester for CSV OHLCV data.')
     parser.add_argument('-s', '--symbols', nargs='+', required=True, help='Tickers to backtest (e.g. AAPL MSFT GOOG).')
     parser.add_argument('-d', '--data-dir', dest='data_dir', required=True, help='Directory containing <SYMBOL>.csv time series.')
     parser.add_argument('--start', type=str, required=True, help='Backtest start date (YYYY-MM-DD).')

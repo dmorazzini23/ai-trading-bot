@@ -450,6 +450,13 @@ def run_backtest() -> None:
             raise SystemExit("Import preflight failed; see logs for details")
         logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
 
+    logger.warning(
+        "BACKTEST_ENTRYPOINT_LEGACY",
+        extra={
+            "detail": "run_backtest executes the live cycle loop; use ai-offline-replay for historical replay backtests",
+        },
+    )
+
     try:
         _run_loop(_main.run_cycle, args, "Backtest")
     finally:

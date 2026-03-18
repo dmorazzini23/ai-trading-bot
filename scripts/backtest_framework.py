@@ -20,17 +20,44 @@ class TradingBotValidator:
         self._test_data_cache = weakref.WeakValueDictionary()
         self._cleanup_callbacks = []
 
+    def _signal_confidence(self, data) -> float:
+        if hasattr(self.bot_engine, "generate_signal"):
+            signal = self.bot_engine.generate_signal("TEST", data)
+            return float(getattr(signal, "confidence", 0.0) or 0.0)
+        if hasattr(self.bot_engine, "generate_signals"):
+            if hasattr(data, "copy"):
+                frame = data.copy()
+            else:
+                return 0.0
+            price_col = "price" if "price" in frame.columns else "close" if "close" in frame.columns else None
+            if price_col is None:
+                return 0.0
+            if price_col != "price":
+                frame = frame.rename(columns={price_col: "price"})
+            signals = self.bot_engine.generate_signals(frame[["price"]])
+            if len(signals) == 0:
+                return 0.0
+            return float(abs(float(signals.iloc[-1])))
+        return 0.0
+
+    def _signal_timestamp(self, data):
+        if not hasattr(self.bot_engine, "generate_signal"):
+            return None
+        signal = self.bot_engine.generate_signal("TEST", data)
+        return getattr(signal, "timestamp", None)
+
     def test_no_lookahead_bias(self, price_series):
         for i in range(50, len(price_series), 10):
             available_data = price_series[:i]
-            signal = self.bot_engine.generate_signal('TEST', available_data)
             future_data = price_series[:i + 10]
-            future_signal = self.bot_engine.generate_signal('TEST', future_data)
-            if hasattr(signal, 'timestamp'):
+            current_confidence = self._signal_confidence(available_data)
+            future_confidence = self._signal_confidence(future_data)
+            signal_ts = self._signal_timestamp(available_data)
+            if signal_ts is not None:
                 latest_data_time = available_data.index[-1] if hasattr(available_data, 'index') else None
-                if latest_data_time and signal.timestamp > latest_data_time:
-                    raise ValueError(f'Signal timestamp {signal.timestamp} is after latest data {latest_data_time}')
-            assert signal.confidence == pytest.approx(future_signal.confidence)
+                if latest_data_time and signal_ts > latest_data_time:
+                    raise ValueError(f'Signal timestamp {signal_ts} is after latest data {latest_data_time}')
+            assert current_confidence == pytest.approx(future_confidence)
 
     def test_positive_expectancy(self, historical_data_path: str):
         cache_key = f'historical_data_{hash(historical_data_path)}'
@@ -92,6 +119,6 @@ class TradingBotValidator:
         """Ensure cleanup on garbage collection."""
         try:
             self.cleanup()
-        except (load_pandas().errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+        except (KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError, RuntimeError):
             pass
 __all__ = ['TradingBotValidator']

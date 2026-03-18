@@ -9803,6 +9803,9 @@ class BotState:
     )  # (symbol, timestamp)
     profitability_governor_cache_until_mono: float = 0.0
     profitability_governor_cache: dict[str, Any] = field(default_factory=dict)
+    profitability_governor_symbol_block_until: dict[str, datetime] = field(default_factory=dict)
+    profitability_governor_regime_block_until: dict[str, datetime] = field(default_factory=dict)
+    profitability_governor_global_block_until: datetime | None = None
     acceptance_rate_governor_active: bool = False
     acceptance_rate_governor_streak: int = 0
     acceptance_rate_governor_last_rate: float | None = None
@@ -21097,7 +21100,36 @@ def _profitability_governor_thresholds() -> dict[str, Any]:
         "min_global_net_edge_bps": _float_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_GLOBAL_NET_EDGE_BPS", 0.0),
         "min_symbol_net_edge_bps": _float_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_SYMBOL_NET_EDGE_BPS", 0.0),
         "min_regime_net_edge_bps": _float_env("AI_TRADING_PROFITABILITY_GOVERNOR_MIN_REGIME_NET_EDGE_BPS", 0.0),
+        "global_cooldown_min": max(
+            0,
+            _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_GLOBAL_COOLDOWN_MIN", 20),
+        ),
+        "symbol_cooldown_min": max(
+            0,
+            _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_SYMBOL_COOLDOWN_MIN", 45),
+        ),
+        "regime_cooldown_min": max(
+            0,
+            _int_env("AI_TRADING_PROFITABILITY_GOVERNOR_REGIME_COOLDOWN_MIN", 30),
+        ),
     }
+
+
+def _profitability_governor_block_state(
+    state: BotState,
+) -> tuple[datetime | None, dict[str, datetime], dict[str, datetime]]:
+    global_block = getattr(state, "profitability_governor_global_block_until", None)
+    if global_block is not None and not isinstance(global_block, datetime):
+        global_block = None
+    symbol_blocks = getattr(state, "profitability_governor_symbol_block_until", None)
+    if not isinstance(symbol_blocks, dict):
+        symbol_blocks = {}
+        setattr(state, "profitability_governor_symbol_block_until", symbol_blocks)
+    regime_blocks = getattr(state, "profitability_governor_regime_block_until", None)
+    if not isinstance(regime_blocks, dict):
+        regime_blocks = {}
+        setattr(state, "profitability_governor_regime_block_until", regime_blocks)
+    return global_block, symbol_blocks, regime_blocks
 
 
 def _profitability_governor_trade_history_path() -> Path:
@@ -21408,6 +21440,50 @@ def _profitability_governor_allows_entry(
     if not _profitability_governor_enabled():
         return True
 
+    normalized_symbol = str(symbol).strip().upper()
+    normalized_regime = _normalize_regime_name(regime)
+    normalized_side = str(side).strip().lower()
+    now_utc = datetime.now(UTC)
+
+    global_block_until, symbol_block_until, regime_block_until = _profitability_governor_block_state(state)
+    if global_block_until is not None and global_block_until <= now_utc:
+        setattr(state, "profitability_governor_global_block_until", None)
+        global_block_until = None
+    for block_map in (symbol_block_until, regime_block_until):
+        expired_keys = [key for key, expiry in block_map.items() if not isinstance(expiry, datetime) or expiry <= now_utc]
+        for key in expired_keys:
+            block_map.pop(key, None)
+
+    cooldown_reasons: list[str] = []
+    cooldown_until: dict[str, str] = {}
+    if global_block_until is not None and global_block_until > now_utc:
+        cooldown_reasons.append("PROFITABILITY_GOVERNOR_GLOBAL_COOLDOWN")
+        cooldown_until["global"] = global_block_until.isoformat()
+    symbol_block_expiry = symbol_block_until.get(normalized_symbol)
+    if isinstance(symbol_block_expiry, datetime) and symbol_block_expiry > now_utc:
+        cooldown_reasons.append("PROFITABILITY_GOVERNOR_SYMBOL_COOLDOWN")
+        cooldown_until["symbol"] = symbol_block_expiry.isoformat()
+    regime_block_expiry = regime_block_until.get(normalized_regime)
+    if isinstance(regime_block_expiry, datetime) and regime_block_expiry > now_utc:
+        cooldown_reasons.append("PROFITABILITY_GOVERNOR_REGIME_COOLDOWN")
+        cooldown_until["regime"] = regime_block_expiry.isoformat()
+    if cooldown_reasons:
+        log_key = f"{normalized_symbol}:{normalized_regime}:{normalized_side}"
+        log_throttled_event(
+            logger,
+            f"ENTRY_BLOCKED_PROFITABILITY_GOVERNOR_{log_key}",
+            level=logging.WARNING,
+            message="ENTRY_BLOCKED_PROFITABILITY_GOVERNOR",
+            extra={
+                "symbol": normalized_symbol,
+                "regime": normalized_regime,
+                "side": normalized_side,
+                "reasons": tuple(sorted(set(cooldown_reasons))),
+                "cooldown_until": cooldown_until,
+            },
+        )
+        return False
+
     snapshot = _profitability_governor_snapshot(state)
     thresholds = snapshot.get("thresholds", {})
     if not isinstance(thresholds, Mapping):
@@ -21421,9 +21497,9 @@ def _profitability_governor_allows_entry(
         logger.warning(
             "PROFITABILITY_GOVERNOR_FAIL_CLOSED",
             extra={
-                "symbol": symbol,
-                "regime": _normalize_regime_name(regime),
-                "side": side,
+                "symbol": normalized_symbol,
+                "regime": normalized_regime,
+                "side": normalized_side,
                 "error": str(error_text),
                 "path": snapshot.get("path"),
             },
@@ -21442,10 +21518,10 @@ def _profitability_governor_allows_entry(
         if global_edge is not None and global_trades >= min_global_trades and global_edge < min_global_edge:
             reasons.append("PROFITABILITY_GOVERNOR_GLOBAL_BLOCK")
 
-    symbol_metric = {}
+    symbol_metric: Any = {}
     symbol_map = snapshot.get("by_symbol", {})
     if isinstance(symbol_map, Mapping):
-        symbol_metric = symbol_map.get(str(symbol).upper(), {})
+        symbol_metric = symbol_map.get(normalized_symbol, {})
     if isinstance(symbol_metric, Mapping) and bool(thresholds.get("symbol_enabled", True)):
         symbol_trades = int(symbol_metric.get("trades", 0) or 0)
         symbol_edge = _profitability_governor_as_float(symbol_metric.get("net_edge_bps"))
@@ -21455,8 +21531,7 @@ def _profitability_governor_allows_entry(
         if symbol_edge is not None and symbol_trades >= min_symbol_trades and symbol_edge < min_symbol_edge:
             reasons.append("PROFITABILITY_GOVERNOR_SYMBOL_BLOCK")
 
-    normalized_regime = _normalize_regime_name(regime)
-    regime_metric = {}
+    regime_metric: Any = {}
     regime_map = snapshot.get("by_regime", {})
     if isinstance(regime_map, Mapping):
         regime_metric = regime_map.get(normalized_regime, {})
@@ -21472,21 +21547,56 @@ def _profitability_governor_allows_entry(
     if not reasons:
         return True
 
-    log_key = f"{str(symbol).upper()}:{normalized_regime}:{str(side).lower()}"
+    cooldown_updates: dict[str, str] = {}
+    global_cooldown_min = int(thresholds.get("global_cooldown_min", 0) or 0)
+    symbol_cooldown_min = int(thresholds.get("symbol_cooldown_min", 0) or 0)
+    regime_cooldown_min = int(thresholds.get("regime_cooldown_min", 0) or 0)
+    if "PROFITABILITY_GOVERNOR_GLOBAL_BLOCK" in reasons and global_cooldown_min > 0:
+        candidate = now_utc + timedelta(minutes=global_cooldown_min)
+        current = getattr(state, "profitability_governor_global_block_until", None)
+        if not isinstance(current, datetime) or candidate > current:
+            setattr(state, "profitability_governor_global_block_until", candidate)
+            cooldown_updates["global"] = candidate.isoformat()
+    if "PROFITABILITY_GOVERNOR_SYMBOL_BLOCK" in reasons and symbol_cooldown_min > 0:
+        current_symbol = symbol_block_until.get(normalized_symbol)
+        candidate = now_utc + timedelta(minutes=symbol_cooldown_min)
+        if not isinstance(current_symbol, datetime) or candidate > current_symbol:
+            symbol_block_until[normalized_symbol] = candidate
+            cooldown_updates["symbol"] = candidate.isoformat()
+    if "PROFITABILITY_GOVERNOR_REGIME_BLOCK" in reasons and regime_cooldown_min > 0:
+        current_regime = regime_block_until.get(normalized_regime)
+        candidate = now_utc + timedelta(minutes=regime_cooldown_min)
+        if not isinstance(current_regime, datetime) or candidate > current_regime:
+            regime_block_until[normalized_regime] = candidate
+            cooldown_updates["regime"] = candidate.isoformat()
+    if cooldown_updates:
+        logger.warning(
+            "PROFITABILITY_GOVERNOR_COOLDOWN_SET",
+            extra={
+                "symbol": normalized_symbol,
+                "regime": normalized_regime,
+                "side": normalized_side,
+                "reasons": tuple(sorted(set(reasons))),
+                "cooldown_until": cooldown_updates,
+            },
+        )
+
+    log_key = f"{normalized_symbol}:{normalized_regime}:{normalized_side}"
     log_throttled_event(
         logger,
         f"ENTRY_BLOCKED_PROFITABILITY_GOVERNOR_{log_key}",
         level=logging.WARNING,
         message="ENTRY_BLOCKED_PROFITABILITY_GOVERNOR",
         extra={
-            "symbol": str(symbol).upper(),
+            "symbol": normalized_symbol,
             "regime": normalized_regime,
-            "side": str(side).lower(),
+            "side": normalized_side,
             "reasons": tuple(sorted(set(reasons))),
             "metrics": metrics,
             "rows_used": int(snapshot.get("rows_used", 0) or 0),
             "lookback_days": int(thresholds.get("lookback_days", 0) or 0),
             "path": snapshot.get("path"),
+            "cooldown_until": cooldown_updates,
         },
     )
     return False
@@ -35208,6 +35318,71 @@ def _tca_cost_calibration_schedule_due(
     return False
 
 
+def _tca_feedback_penalty_map(
+    raw_profile: Any,
+    *,
+    min_samples: int,
+    target_total_bps: float,
+    max_penalty_bps: float,
+) -> dict[str, float]:
+    penalties: dict[str, float] = {}
+    if not isinstance(raw_profile, Mapping):
+        return penalties
+    min_required = max(1, int(min_samples))
+    penalty_cap = max(0.0, float(max_penalty_bps))
+    target = max(0.0, float(target_total_bps))
+    for key, raw_value in raw_profile.items():
+        if not isinstance(raw_value, Mapping):
+            continue
+        try:
+            median_bps = float(raw_value.get("median_bps", 0.0) or 0.0)
+            samples = int(raw_value.get("samples", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if samples < min_required:
+            continue
+        if not math.isfinite(median_bps):
+            continue
+        penalty = max(0.0, min(penalty_cap, median_bps - target))
+        if penalty > 0.0:
+            penalties[str(key).strip().upper()] = float(penalty)
+    return penalties
+
+
+def _refresh_tca_feedback_components(
+    state: BotState,
+    *,
+    force: bool = False,
+) -> None:
+    refresh_seconds = max(
+        5.0,
+        float(get_env("AI_TRADING_TCA_FEEDBACK_REFRESH_SEC", 120.0, cast=float)),
+    )
+    now_mono = float(monotonic_time())
+    last_loaded = float(getattr(state, "_tca_feedback_loaded_mono", 0.0) or 0.0)
+    if not force and (now_mono - last_loaded) < refresh_seconds:
+        return
+    feedback_path = resolve_runtime_artifact_path(
+        str(get_env("AI_TRADING_TCA_FEEDBACK_PATH", "runtime/tca_feedback.json")),
+        default_relative="runtime/tca_feedback.json",
+    )
+    if not feedback_path.exists():
+        setattr(state, "_tca_feedback_loaded_mono", now_mono)
+        return
+    try:
+        payload = json.loads(feedback_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.debug(
+            "TCA_FEEDBACK_LOAD_FAILED",
+            extra={"path": str(feedback_path), "error": str(exc)},
+        )
+        setattr(state, "_tca_feedback_loaded_mono", now_mono)
+        return
+    if isinstance(payload, Mapping):
+        setattr(state, "_tca_feedback_components", dict(payload))
+    setattr(state, "_tca_feedback_loaded_mono", now_mono)
+
+
 def _run_tca_cost_calibration(
     state: BotState,
     *,
@@ -35237,6 +35412,25 @@ def _run_tca_cost_calibration(
     target_ratio = float(
         get_env("AI_TRADING_TCA_FEEDBACK_TARGET_EDGE_COST_RATIO", 1.25, cast=float)
     )
+    max_penalty_bps = float(get_env("AI_TRADING_TCA_PENALTY_MAX_BPS", 8.0, cast=float))
+    symbol_penalty_samples = int(get_env("AI_TRADING_TCA_SYMBOL_PENALTY_MIN_SAMPLES", 15, cast=int))
+    hour_penalty_samples = int(get_env("AI_TRADING_TCA_HOUR_PENALTY_MIN_SAMPLES", 30, cast=int))
+    symbol_penalties = _tca_feedback_penalty_map(
+        feedback.get("by_symbol_total_bps"),
+        min_samples=symbol_penalty_samples,
+        target_total_bps=target_total_bps,
+        max_penalty_bps=max_penalty_bps,
+    )
+    hour_penalties = _tca_feedback_penalty_map(
+        feedback.get("by_hour_total_bps"),
+        min_samples=hour_penalty_samples,
+        target_total_bps=target_total_bps,
+        max_penalty_bps=max_penalty_bps,
+    )
+    if not bool(get_env("AI_TRADING_TCA_SYMBOL_PENALTY_ENABLED", True, cast=bool)):
+        symbol_penalties = {}
+    if not bool(get_env("AI_TRADING_TCA_HOUR_PENALTY_ENABLED", True, cast=bool)):
+        hour_penalties = {}
     feedback_total = float(feedback.get("total_bps", 0.0) or 0.0)
     floor_adjust = max(0.0, feedback_total - target_total_bps)
     ratio_adjust = 0.0
@@ -35248,9 +35442,15 @@ def _run_tca_cost_calibration(
         "target_edge_cost_ratio": target_ratio,
         "edge_floor_adjust_bps": float(floor_adjust),
         "edge_ratio_adjust": float(ratio_adjust),
+        "edge_floor_buffer_bps": float(
+            max(0.0, float(get_env("AI_TRADING_TCA_EDGE_FLOOR_BUFFER_BPS", 0.5, cast=float)))
+        ),
+        "symbol_cost_penalty_bps": symbol_penalties,
+        "hour_cost_penalty_bps": hour_penalties,
         "updated_at": now.isoformat(),
     }
     setattr(state, "_tca_feedback_components", feedback_payload)
+    setattr(state, "_tca_feedback_loaded_mono", float(monotonic_time()))
     feedback_path = resolve_runtime_artifact_path(
         str(get_env("AI_TRADING_TCA_FEEDBACK_PATH", "runtime/tca_feedback.json")),
         default_relative="runtime/tca_feedback.json",
@@ -35325,6 +35525,8 @@ def _run_tca_cost_calibration(
                 or 0.0,
                 "edge_ratio_adjust": _safe_float(feedback_payload.get("edge_ratio_adjust"))
                 or 0.0,
+                "symbol_penalty_count": int(len(symbol_penalties)),
+                "hour_penalty_count": int(len(hour_penalties)),
             },
         )
     finally:
@@ -37593,6 +37795,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         edge_min_expected_bps = 2.0
     edge_cost_min_ratio = max(0.0, min(edge_cost_min_ratio, 10.0))
     edge_min_expected_bps = max(0.0, min(edge_min_expected_bps, 500.0))
+    if strict_edge_gate_enabled:
+        _refresh_tca_feedback_components(state)
     proposals_total = 0
     proposals_blocked = 0
     orders_attempted = 0
@@ -37767,6 +37971,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 tca_feedback = getattr(state, "_tca_feedback_components", {})
                 edge_floor_adjust = 0.0
                 edge_ratio_adjust = 0.0
+                edge_floor_buffer_bps = 0.0
+                symbol_cost_penalty_bps = 0.0
+                hour_cost_penalty_bps = 0.0
                 if isinstance(tca_feedback, Mapping):
                     try:
                         edge_floor_adjust = float(tca_feedback.get("edge_floor_adjust_bps", 0.0) or 0.0)
@@ -37776,15 +37983,44 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         edge_ratio_adjust = float(tca_feedback.get("edge_ratio_adjust", 0.0) or 0.0)
                     except (TypeError, ValueError):
                         edge_ratio_adjust = 0.0
+                    try:
+                        edge_floor_buffer_bps = float(tca_feedback.get("edge_floor_buffer_bps", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        edge_floor_buffer_bps = 0.0
+                    raw_symbol_penalties = tca_feedback.get("symbol_cost_penalty_bps", {})
+                    if isinstance(raw_symbol_penalties, Mapping):
+                        try:
+                            symbol_cost_penalty_bps = float(raw_symbol_penalties.get(str(symbol).upper(), 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            symbol_cost_penalty_bps = 0.0
+                    raw_hour_penalties = tca_feedback.get("hour_cost_penalty_bps", {})
+                    if isinstance(raw_hour_penalties, Mapping):
+                        try:
+                            hour_key = f"{bar_ts.astimezone(UTC).hour:02d}"
+                            hour_cost_penalty_bps = float(raw_hour_penalties.get(hour_key, 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            hour_cost_penalty_bps = 0.0
                 edge_bps = max(float(proposal.expected_edge_bps), 0.0)
-                cost_bps = max(float(proposal.expected_cost_bps), 1e-6)
-                edge_ratio = edge_bps / cost_bps
+                base_cost_bps = max(float(proposal.expected_cost_bps), 1e-6)
+                total_cost_penalty_bps = max(0.0, symbol_cost_penalty_bps) + max(0.0, hour_cost_penalty_bps)
+                effective_cost_bps = max(base_cost_bps + total_cost_penalty_bps, 1e-6)
+                edge_ratio = edge_bps / effective_cost_bps
+                strict_net_edge_bps = compute_expected_net_edge_bps(
+                    float(proposal.expected_edge_bps),
+                    float(effective_cost_bps),
+                    fee_bps=float(effective_policy.objective.fee_bps),
+                    borrow_bps=float(effective_policy.objective.borrow_bps),
+                )
                 effective_edge_floor = max(
-                    edge_min_expected_bps + max(edge_floor_adjust, 0.0),
+                    edge_min_expected_bps + max(edge_floor_adjust, 0.0) + max(edge_floor_buffer_bps, 0.0),
                     float(effective_policy.objective.min_expected_net_edge_bps),
                 )
                 effective_edge_ratio = edge_cost_min_ratio + max(edge_ratio_adjust, 0.0)
-                if edge_bps < effective_edge_floor:
+                if strict_net_edge_bps < float(effective_policy.objective.min_expected_net_edge_bps):
+                    proposal.blocked = True
+                    proposal.reason_code = "NET_EDGE_FLOOR_GATE"
+                    proposal.target_dollars = positions.get(symbol, 0.0) * price
+                elif edge_bps < effective_edge_floor:
                     proposal.blocked = True
                     proposal.reason_code = "EDGE_FLOOR_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
@@ -37792,6 +38028,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     proposal.blocked = True
                     proposal.reason_code = "EDGE_COST_RATIO_GATE"
                     proposal.target_dollars = positions.get(symbol, 0.0) * price
+                proposal.debug["strict_edge_base_cost_bps"] = base_cost_bps
+                proposal.debug["strict_edge_effective_cost_bps"] = effective_cost_bps
+                proposal.debug["strict_edge_symbol_penalty_bps"] = max(0.0, symbol_cost_penalty_bps)
+                proposal.debug["strict_edge_hour_penalty_bps"] = max(0.0, hour_cost_penalty_bps)
+                proposal.debug["strict_expected_net_edge_bps"] = strict_net_edge_bps
                 proposal.debug["edge_to_cost_ratio"] = edge_ratio
                 proposal.debug["edge_cost_min_ratio"] = effective_edge_ratio
                 proposal.debug["edge_min_expected_bps"] = effective_edge_floor
