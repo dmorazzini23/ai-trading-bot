@@ -962,6 +962,70 @@ def test_after_hours_strict_promotion_policy_can_promote_when_all_gates_pass(
     assert "phase_1_week_1" in result["roadmap"]
 
 
+def test_promotion_consecutive_pass_gate_requires_second_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_CONSECUTIVE_PASSES", "2")
+    base_promotion = {
+        "auto_promote": True,
+        "gate_passed": True,
+        "status": "production",
+        "combined_gates": {"expectancy": True},
+        "additional_gates": {},
+    }
+    first_day = datetime(2026, 1, 6, tzinfo=UTC).date()
+    first_promotion, first_state = after_hours._apply_promotion_consecutive_pass_gate(
+        promotion=base_promotion,
+        previous_state=None,
+        run_date=first_day,
+    )
+    assert first_promotion["gate_passed"] is False
+    assert first_promotion["status"] == "shadow"
+    assert first_promotion["combined_gates"]["consecutive_passes"] is False
+    assert first_promotion["consecutive_passes"]["count"] == 1
+    assert first_state["count"] == 1
+
+    second_day = datetime(2026, 1, 7, tzinfo=UTC).date()
+    second_promotion, second_state = after_hours._apply_promotion_consecutive_pass_gate(
+        promotion=base_promotion,
+        previous_state={
+            "promotion_consecutive_passes": first_state["count"],
+            "promotion_last_pass_date": first_state["last_pass_date"],
+        },
+        run_date=second_day,
+    )
+    assert second_promotion["gate_passed"] is True
+    assert second_promotion["status"] == "production"
+    assert second_promotion["combined_gates"]["consecutive_passes"] is True
+    assert second_promotion["consecutive_passes"]["count"] == 2
+    assert second_state["count"] == 2
+
+
+def test_promotion_consecutive_pass_gate_does_not_increment_twice_same_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_CONSECUTIVE_PASSES", "2")
+    base_promotion = {
+        "auto_promote": True,
+        "gate_passed": True,
+        "status": "production",
+        "combined_gates": {"expectancy": True},
+        "additional_gates": {},
+    }
+    run_day = datetime(2026, 1, 6, tzinfo=UTC).date()
+    promotion, state = after_hours._apply_promotion_consecutive_pass_gate(
+        promotion=base_promotion,
+        previous_state={
+            "promotion_consecutive_passes": 1,
+            "promotion_last_pass_date": "2026-01-06",
+        },
+        run_date=run_day,
+    )
+    assert promotion["consecutive_passes"]["count"] == 1
+    assert promotion["gate_passed"] is False
+    assert state["count"] == 1
+
+
 def test_after_hours_required_phase1_gate_blocks_promotion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

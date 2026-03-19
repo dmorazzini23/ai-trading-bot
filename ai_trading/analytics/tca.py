@@ -403,3 +403,214 @@ def reconcile_pending_tca_with_fill(
 
     write_tca_record(path, resolved)
     return True, "reconciled"
+
+
+def finalize_stale_pending_tca(
+    path: str,
+    *,
+    stale_after_seconds: float,
+    now: datetime | None = None,
+    max_records: int = 500,
+    source: str | None = "maintenance_stale_nonfill",
+) -> dict[str, Any]:
+    """Finalize stale pending TCA rows as terminal non-fill events.
+
+    The function rewrites stale pending rows in place (rather than appending
+    extra rows) so simple ``pending_event=true`` counts decrease over time.
+    """
+
+    target = Path(path)
+    if not target.exists():
+        return {
+            "ok": False,
+            "reason": "tca_path_missing",
+            "path": str(target),
+            "scanned_pending": 0,
+            "finalized": 0,
+        }
+
+    stale_after = _safe_float(stale_after_seconds)
+    if stale_after is None or stale_after <= 0.0:
+        return {
+            "ok": False,
+            "reason": "invalid_stale_after_seconds",
+            "path": str(target),
+            "scanned_pending": 0,
+            "finalized": 0,
+        }
+    max_finalize = int(max(max_records, 0))
+    if max_finalize <= 0:
+        return {
+            "ok": True,
+            "reason": "max_records_zero",
+            "path": str(target),
+            "scanned_pending": 0,
+            "finalized": 0,
+        }
+
+    def _row_identifiers(row: Mapping[str, Any]) -> set[str]:
+        tokens: set[str] = set()
+        for key in ("client_order_id", "order_id", "broker_order_id"):
+            value = row.get(key)
+            if value in (None, ""):
+                continue
+            tokens.add(str(value))
+        return tokens
+
+    now_utc = _coerce_utc_datetime(now) or datetime.now(UTC)
+    resolved_ids: set[str] = set()
+    entries: list[tuple[str, Any]] = []
+    malformed = 0
+    scanned_pending = 0
+
+    try:
+        with target.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    malformed += 1
+                    entries.append(("raw", raw_line.rstrip("\n")))
+                    continue
+                if not isinstance(row, Mapping):
+                    entries.append(("raw", raw_line.rstrip("\n")))
+                    continue
+                row_dict = dict(row)
+                entries.append(("json", row_dict))
+                identifiers = _row_identifiers(row)
+                if not identifiers:
+                    continue
+                if bool(row.get("pending_event")):
+                    scanned_pending += 1
+                    continue
+
+                status_token = str(row.get("status") or row.get("order_status") or "").strip().lower()
+                fill_price = _safe_float(row.get("fill_price"))
+                if fill_price is None:
+                    fill_price = _safe_float(row.get("fill_vwap"))
+                if (
+                    fill_price is not None
+                    and fill_price > 0.0
+                    and status_token in {"filled", "partially_filled"}
+                ):
+                    resolved_ids.update(identifiers)
+    except OSError:
+        return {
+            "ok": False,
+            "reason": "tca_path_unreadable",
+            "path": str(target),
+            "scanned_pending": 0,
+            "finalized": 0,
+        }
+
+    finalized_count = 0
+    skipped_not_stale = 0
+    skipped_already_resolved = 0
+    skipped_already_finalized = 0
+    for index, (entry_kind, entry_payload) in enumerate(entries):
+        if entry_kind != "json":
+            continue
+        if not isinstance(entry_payload, dict):
+            continue
+        pending_row = entry_payload
+        if not bool(pending_row.get("pending_event")):
+            continue
+        identifiers = _row_identifiers(pending_row)
+        if not identifiers:
+            continue
+        if finalized_count >= max_finalize:
+            break
+        if identifiers.intersection(resolved_ids):
+            skipped_already_resolved += 1
+            continue
+        pending_ts = _coerce_utc_datetime(pending_row.get("ts"))
+        if pending_ts is None:
+            skipped_not_stale += 1
+            continue
+        age_seconds = max(0.0, (now_utc - pending_ts).total_seconds())
+        if age_seconds < float(stale_after):
+            skipped_not_stale += 1
+            continue
+
+        terminal_status = str(
+            pending_row.get("order_status") or pending_row.get("pending_reason") or "no_fill"
+        ).strip().lower() or "no_fill"
+        requested_qty = _safe_float(pending_row.get("qty"))
+        terminal_row = dict(pending_row)
+        terminal_row.update(
+            {
+                "ts": now_utc.isoformat(),
+                "status": terminal_status,
+                "order_status": terminal_status,
+                "pending_event": False,
+                "pending_resolved": True,
+                "pending_resolved_ts": now_utc.isoformat(),
+                "pending_terminal_nonfill": True,
+                "tca_finalization_kind": "nonfill_terminal",
+                "fill_price": None,
+                "fill_vwap": None,
+                "resolved_fill_price": None,
+                "resolved_fill_qty": 0.0,
+                "qty": 0.0,
+                "is_bps": None,
+                "spread_paid_bps": None,
+                "fill_latency_ms": None,
+                "partial_fill": False,
+            }
+        )
+        if requested_qty is not None and requested_qty > 0.0:
+            terminal_row["requested_qty"] = float(requested_qty)
+        if source not in (None, ""):
+            terminal_row["pending_resolved_source"] = str(source)
+        entries[index] = ("json", terminal_row)
+        finalized_count += 1
+
+    if finalized_count > 0:
+        try:
+            tmp_path = target.with_suffix(f"{target.suffix}.tmp")
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                for entry_kind, entry_payload in entries:
+                    if entry_kind == "json" and isinstance(entry_payload, dict):
+                        handle.write(json.dumps(entry_payload, sort_keys=True, default=str))
+                    else:
+                        handle.write(str(entry_payload))
+                    handle.write("\n")
+            tmp_path.replace(target)
+        except OSError:
+            return {
+                "ok": False,
+                "reason": "tca_path_unwritable",
+                "path": str(target),
+                "scanned_pending": int(scanned_pending),
+                "finalized": 0,
+            }
+        logger.info(
+            "TCA_PENDING_NONFILL_FINALIZED",
+            extra={
+                "path": str(target),
+                "stale_after_seconds": float(stale_after),
+                "scanned_pending": int(scanned_pending),
+                "finalized": int(finalized_count),
+                "skipped_not_stale": int(skipped_not_stale),
+                "skipped_already_resolved": int(skipped_already_resolved),
+                "skipped_already_finalized": int(skipped_already_finalized),
+                "max_records": int(max_finalize),
+            },
+        )
+
+    return {
+        "ok": True,
+        "reason": "processed",
+        "path": str(target),
+        "stale_after_seconds": float(stale_after),
+        "scanned_pending": int(scanned_pending),
+        "finalized": int(finalized_count),
+        "skipped_not_stale": int(skipped_not_stale),
+        "skipped_already_resolved": int(skipped_already_resolved),
+        "skipped_already_finalized": int(skipped_already_finalized),
+        "malformed_rows": int(malformed),
+        "max_records": int(max_finalize),
+    }

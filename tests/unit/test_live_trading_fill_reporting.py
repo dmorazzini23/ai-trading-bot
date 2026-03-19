@@ -61,3 +61,67 @@ def test_reconcile_pending_tca_from_fill_calls_reconciler(monkeypatch):
     assert kwargs_obj["order_id"] == "oid-1"
     assert kwargs_obj["fill_qty"] == 5.0
     assert kwargs_obj["fill_price"] == 100.5
+
+
+def test_record_runtime_fill_event_backfills_canonical_fill_fields(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: True,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_append_runtime_jsonl(*, env_key, default_relative, payload, failure_log):
+        captured["env_key"] = env_key
+        captured["default_relative"] = default_relative
+        captured["payload"] = dict(payload)
+        captured["failure_log"] = failure_log
+
+    monkeypatch.setattr(engine, "_append_runtime_jsonl", _fake_append_runtime_jsonl)
+
+    engine._record_runtime_fill_event(
+        {
+            "event": "fill_recorded",
+            "symbol": "AAPL",
+            "entry_price": "101.25",
+            "qty": "7",
+        }
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["fill_price"] == 101.25
+    assert payload["fill_qty"] == 7.0
+    assert payload["symbol"] == "AAPL"
+
+
+def test_record_runtime_fill_event_preserves_existing_canonical_fill_fields(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: True,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_append_runtime_jsonl(*, env_key, default_relative, payload, failure_log):
+        captured["payload"] = dict(payload)
+
+    monkeypatch.setattr(engine, "_append_runtime_jsonl", _fake_append_runtime_jsonl)
+
+    engine._record_runtime_fill_event(
+        {
+            "event": "fill_recorded",
+            "symbol": "MSFT",
+            "fill_price": 212.5,
+            "fill_qty": 3,
+            "entry_price": 199.0,
+            "qty": 99,
+        }
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["fill_price"] == 212.5
+    assert payload["fill_qty"] == 3.0

@@ -176,7 +176,7 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
 
 
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
-from ai_trading.analytics.tca import reconcile_pending_tca_with_fill
+from ai_trading.analytics.tca import finalize_stale_pending_tca, reconcile_pending_tca_with_fill
 from ai_trading.config import AlpacaConfig, ExecutionSettingsSnapshot, get_alpaca_config, get_execution_settings
 from ai_trading.data.provider_monitor import (
     is_safe_mode_active,
@@ -2216,6 +2216,7 @@ class ExecutionEngine:
         self._tca_fill_backfill_last_run_mono: float = 0.0
         self._tca_fill_backfill_offset: int = 0
         self._tca_fill_backfill_bootstrapped: bool = False
+        self._tca_stale_finalize_last_run_mono: float = 0.0
         self._symbol_loss_streak: dict[str, int] = {}
         self._symbol_loss_cooldown_until: dict[str, float] = {}
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
@@ -4108,10 +4109,34 @@ class ExecutionEngine:
 
         if not self._runtime_exec_event_persistence_enabled():
             return
+        row = dict(payload)
+        event_name = str(row.get("event") or "").strip().lower()
+        if event_name == "fill_recorded":
+            resolved_fill_price = _safe_float(row.get("fill_price"))
+            if resolved_fill_price is None or resolved_fill_price <= 0.0:
+                for candidate_key in (
+                    "entry_price",
+                    "price",
+                    "avg_fill_price",
+                    "filled_avg_price",
+                ):
+                    resolved_fill_price = _safe_float(row.get(candidate_key))
+                    if resolved_fill_price is not None and resolved_fill_price > 0.0:
+                        break
+            resolved_fill_qty = _safe_float(row.get("fill_qty"))
+            if resolved_fill_qty is None or resolved_fill_qty <= 0.0:
+                for candidate_key in ("qty", "filled_qty", "quantity"):
+                    resolved_fill_qty = _safe_float(row.get(candidate_key))
+                    if resolved_fill_qty is not None and resolved_fill_qty > 0.0:
+                        break
+            if resolved_fill_price is not None and resolved_fill_price > 0.0:
+                row["fill_price"] = float(resolved_fill_price)
+            if resolved_fill_qty is not None and resolved_fill_qty > 0.0:
+                row["fill_qty"] = float(resolved_fill_qty)
         self._append_runtime_jsonl(
             env_key="AI_TRADING_FILL_EVENTS_PATH",
             default_relative="runtime/fill_events.jsonl",
-            payload=payload,
+            payload=row,
             failure_log="FILL_EVENT_WRITE_FAILED",
         )
 
@@ -4654,6 +4679,53 @@ class ExecutionEngine:
             "path": str(tca_path),
             "fill_events_path": str(fill_events_path),
         }
+
+    def _finalize_stale_pending_tca_events(self) -> dict[str, Any]:
+        """Finalize stale pending TCA rows that have no matching fills."""
+
+        enabled = _resolve_bool_env("AI_TRADING_TCA_FINALIZE_STALE_PENDING_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return {"enabled": False, "reason": "disabled"}
+        interval_s = _config_float("AI_TRADING_TCA_FINALIZE_STALE_INTERVAL_SEC", 300.0) or 300.0
+        now_mono = float(monotonic_time())
+        last_run = float(getattr(self, "_tca_stale_finalize_last_run_mono", 0.0) or 0.0)
+        if interval_s > 0.0 and (now_mono - last_run) < interval_s:
+            return {"enabled": True, "reason": "interval_not_elapsed"}
+        self._tca_stale_finalize_last_run_mono = now_mono
+
+        stale_after_s = (
+            _config_float("AI_TRADING_TCA_FINALIZE_STALE_AFTER_SEC", 86400.0) or 86400.0
+        )
+        max_records = _config_int("AI_TRADING_TCA_FINALIZE_STALE_MAX_RECORDS", 500)
+        source_token = (
+            str(_runtime_env("AI_TRADING_TCA_FINALIZE_STALE_SOURCE", "runtime_stale_nonfill"))
+            .strip()
+            or "runtime_stale_nonfill"
+        )
+        tca_path = resolve_runtime_artifact_path(
+            str(_runtime_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl") or "runtime/tca_records.jsonl"),
+            default_relative="runtime/tca_records.jsonl",
+        )
+        summary = finalize_stale_pending_tca(
+            str(tca_path),
+            stale_after_seconds=float(stale_after_s),
+            max_records=int(max(max_records, 0)),
+            source=source_token,
+        )
+        finalized_count = int(summary.get("finalized", 0) or 0)
+        if finalized_count > 0:
+            logger.info(
+                "TCA_PENDING_NONFILL_FINALIZE_RUNTIME",
+                extra={
+                    "path": str(tca_path),
+                    "finalized": finalized_count,
+                    "stale_after_seconds": float(stale_after_s),
+                    "max_records": int(max(max_records, 0)),
+                },
+            )
+        return summary
 
     def _pdt_lockout_active(self, account: Any | None) -> bool:
         """Return ``True`` when the PDT lockout should block new openings."""
@@ -12592,6 +12664,17 @@ class LiveTradingExecutionEngine(ExecutionEngine):
         except Exception:
             logger.warning(
                 "TCA_BACKFILL_RECONCILE_FAILED",
+                extra={
+                    "open_orders": len(getattr(snapshot, "open_orders", ()) or ()),
+                    "positions": len(getattr(snapshot, "positions", ()) or ()),
+                },
+                exc_info=True,
+            )
+        try:
+            self._finalize_stale_pending_tca_events()
+        except Exception:
+            logger.warning(
+                "TCA_STALE_PENDING_FINALIZE_FAILED",
                 extra={
                     "open_orders": len(getattr(snapshot, "open_orders", ()) or ()),
                     "positions": len(getattr(snapshot, "positions", ()) or ()),

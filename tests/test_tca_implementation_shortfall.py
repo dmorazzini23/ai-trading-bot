@@ -8,6 +8,7 @@ from ai_trading.analytics.tca import (
     ExecutionBenchmark,
     FillSummary,
     build_tca_record,
+    finalize_stale_pending_tca,
     implementation_shortfall_bps,
     reconcile_pending_tca_with_fill,
     resolve_pending_tca_from_fill,
@@ -154,5 +155,90 @@ def test_reconcile_pending_tca_with_fill_ignores_already_resolved(tmp_path: Path
 
     assert reconciled is False
     assert reason == "already_resolved"
+    rows = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 2
+
+
+def test_finalize_stale_pending_tca_appends_terminal_nonfill_row(tmp_path: Path) -> None:
+    path = tmp_path / "tca_records.jsonl"
+    old_ts = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+    pending = {
+        "ts": old_ts.isoformat(),
+        "client_order_id": "cid-100",
+        "order_id": "oid-100",
+        "symbol": "AAPL",
+        "side": "buy",
+        "decision_price": 101.0,
+        "qty": 12.0,
+        "pending_event": True,
+        "pending_reason": "no_fill",
+        "benchmark": {"mid_at_arrival": 101.0, "submit_ts": old_ts.isoformat()},
+    }
+    path.write_text(json.dumps(pending) + "\n", encoding="utf-8")
+
+    summary = finalize_stale_pending_tca(
+        str(path),
+        stale_after_seconds=3600.0,
+        now=datetime(2026, 3, 18, 12, 0, tzinfo=UTC),
+        max_records=10,
+        source="unit_finalize",
+    )
+
+    assert summary["ok"] is True
+    assert summary["finalized"] == 1
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 1
+    terminal = rows[0]
+    assert terminal["pending_event"] is False
+    assert terminal["tca_finalization_kind"] == "nonfill_terminal"
+    assert terminal["pending_terminal_nonfill"] is True
+    assert terminal["pending_resolved_source"] == "unit_finalize"
+    assert terminal["fill_price"] is None
+    assert terminal["fill_vwap"] is None
+    assert terminal["qty"] == 0.0
+    assert terminal["requested_qty"] == 12.0
+
+
+def test_finalize_stale_pending_tca_skips_when_fill_already_resolved(tmp_path: Path) -> None:
+    path = tmp_path / "tca_records.jsonl"
+    ts = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+    pending = {
+        "ts": ts.isoformat(),
+        "client_order_id": "cid-101",
+        "order_id": "oid-101",
+        "symbol": "MSFT",
+        "side": "sell",
+        "decision_price": 200.0,
+        "qty": 5.0,
+        "pending_event": True,
+        "benchmark": {"mid_at_arrival": 200.0, "submit_ts": ts.isoformat()},
+    }
+    resolved = {
+        "ts": ts.isoformat(),
+        "client_order_id": "cid-101",
+        "order_id": "oid-101",
+        "symbol": "MSFT",
+        "side": "sell",
+        "pending_event": False,
+        "status": "filled",
+        "fill_price": 199.0,
+        "fill_vwap": 199.0,
+        "qty": 5.0,
+    }
+    path.write_text(
+        json.dumps(pending) + "\n" + json.dumps(resolved) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = finalize_stale_pending_tca(
+        str(path),
+        stale_after_seconds=3600.0,
+        now=datetime(2026, 3, 18, 12, 0, tzinfo=UTC),
+        max_records=10,
+        source="unit_finalize",
+    )
+
+    assert summary["ok"] is True
+    assert summary["finalized"] == 0
     rows = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(rows) == 2

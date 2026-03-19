@@ -2510,6 +2510,101 @@ def _promotion_gate_bundle(
     }
 
 
+def _parse_iso_date(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _apply_promotion_consecutive_pass_gate(
+    *,
+    promotion: Mapping[str, Any],
+    previous_state: Mapping[str, Any] | None,
+    run_date: date,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Require consecutive passing after-hours runs before production promotion."""
+
+    min_consecutive_passes = max(
+        1,
+        int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_CONSECUTIVE_PASSES", 1, cast=int)),
+    )
+    prior_pass_count = 0
+    prior_pass_date: date | None = None
+    if isinstance(previous_state, Mapping):
+        try:
+            prior_pass_count = int(previous_state.get("promotion_consecutive_passes", 0) or 0)
+        except (TypeError, ValueError):
+            prior_pass_count = 0
+        prior_pass_count = max(0, prior_pass_count)
+        prior_pass_date = _parse_iso_date(previous_state.get("promotion_last_pass_date"))
+        if prior_pass_date is None:
+            prior_updated = _parse_ts(previous_state.get("updated_at"))
+            if prior_updated is not None:
+                prior_pass_date = prior_updated.date()
+
+    base_gate_passed = bool(promotion.get("gate_passed", False))
+    if base_gate_passed:
+        if prior_pass_date == run_date:
+            consecutive_passes = max(1, prior_pass_count)
+            streak_reason = "same_day_repeat"
+        elif prior_pass_date is not None and (run_date - prior_pass_date).days == 1:
+            consecutive_passes = max(1, prior_pass_count) + 1
+            streak_reason = "incremented"
+        else:
+            consecutive_passes = 1
+            streak_reason = "reset_new_sequence"
+        last_pass_date = run_date.isoformat()
+    else:
+        consecutive_passes = 0
+        streak_reason = "reset_gate_failed"
+        last_pass_date = None
+
+    streak_gate_passed = consecutive_passes >= min_consecutive_passes
+    promotion_payload = dict(promotion)
+    combined_gates = {
+        str(k): bool(v)
+        for k, v in dict(promotion_payload.get("combined_gates", {})).items()
+    }
+    additional_gates = {
+        str(k): bool(v)
+        for k, v in dict(promotion_payload.get("additional_gates", {})).items()
+    }
+    if min_consecutive_passes > 1:
+        additional_gates["consecutive_passes"] = bool(streak_gate_passed)
+        combined_gates["consecutive_passes"] = bool(streak_gate_passed)
+
+    final_gate_passed = bool(base_gate_passed and streak_gate_passed)
+    auto_promote = bool(promotion_payload.get("auto_promote", False))
+    promotion_payload["additional_gates"] = additional_gates
+    promotion_payload["combined_gates"] = combined_gates
+    promotion_payload["gate_passed"] = final_gate_passed
+    promotion_payload["status"] = "production" if (auto_promote and final_gate_passed) else "shadow"
+    promotion_payload["consecutive_passes"] = {
+        "enabled": min_consecutive_passes > 1,
+        "required": int(min_consecutive_passes),
+        "count": int(consecutive_passes),
+        "previous_count": int(prior_pass_count),
+        "previous_date": prior_pass_date.isoformat() if prior_pass_date is not None else None,
+        "last_pass_date": last_pass_date,
+        "base_gate_passed": base_gate_passed,
+        "gate_passed": bool(streak_gate_passed),
+        "reason": streak_reason,
+    }
+    return promotion_payload, {
+        "count": int(consecutive_passes),
+        "last_pass_date": last_pass_date,
+        "required": int(min_consecutive_passes),
+        "base_gate_passed": bool(base_gate_passed),
+        "gate_passed": bool(streak_gate_passed),
+    }
+
+
 def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
     """Evaluate runtime realized-performance go/no-go criteria for promotion."""
 
@@ -3753,6 +3848,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         prior_metrics=prior_model_metrics,
         additional_gates=roadmap_additional_gates,
     )
+    promotion, promotion_streak = _apply_promotion_consecutive_pass_gate(
+        promotion=promotion,
+        previous_state=training_state,
+        run_date=now_utc.date(),
+    )
     status = str(promotion["status"])
     logger.info(
         "AFTER_HOURS_PHASE1_GATE_EVAL",
@@ -3772,6 +3872,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "gate_passed": bool(promotion["gate_passed"]),
             "combined_gates": dict(promotion["combined_gates"]),
             "prior_model_comparison": dict(promotion.get("prior_model_comparison", {})),
+            "consecutive_passes": dict(promotion.get("consecutive_passes", {})),
             "runtime_performance_gate": runtime_performance_gate,
         },
     )
@@ -3867,6 +3968,8 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "selection_score": _candidate_selection_score(best, weights=selection_weights),
                 "profitable_fold_count": best.profitable_fold_count,
                 "profitable_fold_ratio": best.profitable_fold_ratio,
+                "promotion_consecutive_passes": int(promotion_streak.get("count", 0) or 0),
+                "promotion_consecutive_required": int(promotion_streak.get("required", 1) or 1),
             },
             "prior_model_metrics": prior_model_metrics,
             "sensitivity_sweep": sensitivity_sweep,
@@ -4000,6 +4103,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "daily_report_path": str(daily_report_path),
             "model_id": str(model_id),
             "model_name": str(best.name),
+            "promotion_consecutive_passes": int(promotion_streak.get("count", 0) or 0),
+            "promotion_last_pass_date": promotion_streak.get("last_pass_date"),
+            "promotion_min_consecutive_passes": int(promotion_streak.get("required", 1) or 1),
+            "promotion_gate_passed": bool(promotion_streak.get("base_gate_passed", False)),
+            "promotion_streak_gate_passed": bool(promotion_streak.get("gate_passed", False)),
+            "governance_status": str(status),
         }
     )
     logger.info(
