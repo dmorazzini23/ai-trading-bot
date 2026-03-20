@@ -140,6 +140,162 @@ def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monk
     assert [entry["symbol"] for entry in latest["ranked"]] == ["AAPL", "GOOG"]
 
 
+def test_pre_rank_execution_candidates_adaptive_top_n_from_submit_cap(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "10")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_PER_ORDER_CAP", "3")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_MIN", "2")
+
+    class _ExecEngine:
+        @staticmethod
+        def _resolve_order_submit_cap():
+            return 1, "configured"
+
+    runtime = type("_Runtime", (), {"execution_engine": _ExecEngine()})()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "GOOG", "AMZN", "NVDA"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["MSFT", "AAPL", "GOOG"]
+
+
+def test_pre_rank_execution_candidates_adaptive_top_n_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "4")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED", "0")
+
+    class _ExecEngine:
+        @staticmethod
+        def _resolve_order_submit_cap():
+            return 1, "configured"
+
+    runtime = type("_Runtime", (), {"execution_engine": _ExecEngine()})()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "GOOG", "AMZN", "NVDA"],
+        runtime=runtime,
+    )
+
+    assert ranked == ["MSFT", "AAPL", "GOOG", "AMZN"]
+
+
+def test_capacity_throttle_adaptive_params_tighten_on_pacing_stress(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_MIN_SAMPLES", "5")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PACING_TIGHTEN_PCT", "20")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_TIGHTEN_MULT", "0.8")
+
+    (
+        spread_soft,
+        spread_hard,
+        vol_soft,
+        vol_hard,
+        min_scale,
+        details,
+    ) = bot_engine._resolve_capacity_throttle_adaptive_params(
+        spread_soft_bps=12.0,
+        spread_hard_bps=30.0,
+        volume_soft_participation=0.05,
+        volume_hard_participation=0.20,
+        min_scale=0.25,
+        slo_derisk_details={"pacing_samples": 10, "order_pacing_cap_hit_rate_pct": 35.0},
+    )
+
+    assert details["mode"] == "tightened"
+    assert spread_soft < 12.0
+    assert spread_hard < 30.0
+    assert vol_soft < 0.05
+    assert vol_hard < 0.20
+    assert min_scale <= 0.25
+
+
+def test_capacity_throttle_adaptive_params_relax_when_quality_is_good(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_MIN_SAMPLES", "5")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PACING_CLEAR_PCT", "8")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_RELAX_MULT", "1.2")
+
+    (
+        spread_soft,
+        spread_hard,
+        vol_soft,
+        vol_hard,
+        min_scale,
+        details,
+    ) = bot_engine._resolve_capacity_throttle_adaptive_params(
+        spread_soft_bps=12.0,
+        spread_hard_bps=30.0,
+        volume_soft_participation=0.05,
+        volume_hard_participation=0.20,
+        min_scale=0.25,
+        slo_derisk_details={
+            "pacing_samples": 10,
+            "order_pacing_cap_hit_rate_pct": 1.0,
+            "reject_rate_pct": 0.1,
+        },
+    )
+
+    assert details["mode"] == "relaxed"
+    assert spread_soft > 12.0
+    assert spread_hard > 30.0
+    assert vol_soft > 0.05
+    assert vol_hard > 0.20
+    assert min_scale >= 0.25
+
+
+def test_slo_derisk_effective_mode_relaxes_block_for_friction_only(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_SCALE_MULT", "0.72")
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_PACING_SEVERE_PCT", "85")
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_PENDING_SEVERE_SEC", "2400")
+
+    mode, scale, details = bot_engine._resolve_slo_derisk_effective_mode(
+        configured_mode="block",
+        reject_breached=False,
+        drift_breached=False,
+        slippage_breached=False,
+        calibration_ece_breached=False,
+        calibration_brier_breached=False,
+        feature_drift_breached=False,
+        label_drift_breached=False,
+        residual_drift_breached=False,
+        pacing_breached=True,
+        pending_breached=False,
+        pacing_hit_rate_pct=35.0,
+        pending_oldest_age_sec=0.0,
+    )
+
+    assert mode == "scale"
+    assert scale == pytest.approx(0.72)
+    assert details["block_relax_applied"] is True
+
+
+def test_slo_derisk_effective_mode_keeps_block_for_core_breach(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_ENABLED", "1")
+
+    mode, scale, details = bot_engine._resolve_slo_derisk_effective_mode(
+        configured_mode="block",
+        reject_breached=True,
+        drift_breached=False,
+        slippage_breached=False,
+        calibration_ece_breached=False,
+        calibration_brier_breached=False,
+        feature_drift_breached=False,
+        label_drift_breached=False,
+        residual_drift_breached=False,
+        pacing_breached=True,
+        pending_breached=False,
+        pacing_hit_rate_pct=20.0,
+        pending_oldest_age_sec=0.0,
+    )
+
+    assert mode == "block"
+    assert scale == pytest.approx(1.0)
+    assert details["block_relax_applied"] is False
+    assert details["block_relax_reason"] == "core_breach"
+
+
 def test_merge_managed_position_symbols_includes_nonzero_positions() -> None:
     merged = bot_engine._merge_managed_position_symbols(
         ["AAPL", "ABBV"],

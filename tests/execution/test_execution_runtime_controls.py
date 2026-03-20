@@ -28,6 +28,7 @@ def _engine_stub() -> Any:
     engine._pending_orders = {}
     engine._cancel_ratio_adaptive_new_orders_cap = None
     engine._cancel_ratio_adaptive_context = {}
+    engine._pacing_relax_new_orders_cap = None
     engine._broker_sync = None
     engine._last_submit_outcome = {}
     engine._last_order_ack_timeout_mono = 0.0
@@ -35,6 +36,7 @@ def _engine_stub() -> Any:
     engine._last_order_ack_timeout_client_order_id = None
     engine._symbol_loss_streak = {}
     engine._symbol_loss_cooldown_until = {}
+    engine._symbol_reentry_cooldown_until = {}
     engine._tca_fill_backfill_last_run_mono = 0.0
     engine._tca_fill_backfill_offset = 0
     engine._tca_fill_backfill_bootstrapped = False
@@ -246,6 +248,27 @@ def test_duplicate_intent_suppressed_when_open_order_present(monkeypatch):
     assert engine._should_suppress_duplicate_intent("AAPL", "buy") is True
 
 
+def test_symbol_reentry_cooldown_blocks_same_side_then_expires(monkeypatch):
+    engine = _engine_stub()
+    clock = {"value": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", "120")
+
+    engine._arm_symbol_reentry_cooldown_from_fill(symbol="AAPL", side="buy")
+    allowed_before, _ = engine._symbol_reentry_cooldown_allows_opening(symbol="AAPL", side="sell")
+    allowed_during, context_during = engine._symbol_reentry_cooldown_allows_opening(symbol="AAPL", side="buy")
+
+    assert allowed_before is True
+    assert allowed_during is False
+    assert context_during["reason"] == "symbol_reentry_cooldown"
+
+    clock["value"] = 260.0
+    allowed_after, context_after = engine._symbol_reentry_cooldown_allows_opening(symbol="AAPL", side="buy")
+    assert allowed_after is True
+    assert context_after["reason"] == "cooldown_inactive"
+
+
 def test_cycle_intent_reservation_dedupes_symbol_side():
     engine = _engine_stub()
 
@@ -392,6 +415,96 @@ def test_pre_execution_order_checks_blocks_openings_when_exposure_overloaded(mon
             "long_market_value": 150000,
             "short_market_value": 80000,
         },
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_pre_execution_order_checks_blocks_openings_for_symbol_reentry_cooldown(monkeypatch):
+    engine = _engine_stub()
+    clock = {"value": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", "300")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL", "0")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_gonogo_openings_allowed",
+        lambda: (True, {"enabled": False}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda *_args, **_kwargs: {})
+    engine._arm_symbol_reentry_cooldown_from_fill(symbol="AAPL", side="buy")
+
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 1,
+        "price_hint": "200.0",
+        "client_order_id": "cid-1",
+        "closing_position": False,
+        "account_snapshot": {},
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_pre_execution_order_checks_blocks_openings_below_min_notional(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL", "250")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_gonogo_openings_allowed",
+        lambda: (True, {"enabled": False}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda *_args, **_kwargs: {})
+
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 1,
+        "price_hint": "120.0",
+        "client_order_id": "cid-1",
+        "closing_position": False,
+        "account_snapshot": {},
     }
 
     allowed = engine._pre_execution_order_checks(order)
@@ -1076,6 +1189,20 @@ def test_resolve_order_submit_cap_includes_cancel_ratio(monkeypatch):
     assert source == "configured+cancel_ratio"
 
 
+def test_resolve_order_submit_cap_applies_pacing_relax_floor(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "runtime"})
+    engine._pacing_relax_new_orders_cap = 4
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_BOOTSTRAP_ORDER_CAP_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_PENDING_BACKLOG_CAP_THRESHOLD", "100")
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap == 4
+    assert source == "configured+pacing_relax"
+
+
 def test_cancel_ratio_adaptive_cap_triggers_and_recovers(monkeypatch):
     engine = _engine_stub()
     monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_ADAPTIVE_ENABLED", "1")
@@ -1094,6 +1221,39 @@ def test_cancel_ratio_adaptive_cap_triggers_and_recovers(monkeypatch):
 
     assert engine._cancel_ratio_adaptive_new_orders_cap is None
     assert engine._cancel_ratio_adaptive_context.get("state") == "recovered"
+
+
+def test_cancel_ratio_adaptive_cap_triggers_pacing_relax_when_quality_good(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_TRIGGER", "0.65")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_CANCEL_RATIO_MIN_SUBMITTED", "8")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_TRIGGER_PCT", "10")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_CLEAR_PCT", "4")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_MIN_SUBMITTED", "8")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_MAX_CANCEL_RATIO", "0.45")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_MAX_REJECT_RATE_PCT", "3.0")
+    monkeypatch.setenv("AI_TRADING_ORDER_PACING_RELAX_CAP", "4")
+
+    engine._update_cancel_ratio_adaptive_cap(
+        cancel_ratio=0.10,
+        submitted=12,
+        pacing_cap_hit_rate_pct=25.0,
+        reject_rate_pct=0.1,
+    )
+    assert engine._cancel_ratio_adaptive_new_orders_cap is None
+    assert engine._pacing_relax_new_orders_cap == 4
+    assert engine._cancel_ratio_adaptive_context.get("pacing_relax_state") == "triggered"
+
+    engine._update_cancel_ratio_adaptive_cap(
+        cancel_ratio=0.10,
+        submitted=12,
+        pacing_cap_hit_rate_pct=2.0,
+        reject_rate_pct=0.1,
+    )
+    assert engine._pacing_relax_new_orders_cap is None
+    assert engine._cancel_ratio_adaptive_context.get("pacing_relax_state") == "recovered"
 
 
 def test_pending_backlog_cap_supports_adaptive_scaling(monkeypatch):

@@ -1551,6 +1551,55 @@ def _pre_rank_execution_candidates(
         deduped.append(symbol)
 
     top_n = _resolve_execution_candidate_top_n()
+    top_n_source = "configured"
+    adaptive_submit_cap: int | None = None
+    adaptive_submit_cap_source = "none"
+    adaptive_top_n_cap: int | None = None
+    try:
+        adaptive_top_n_enabled = bool(
+            get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_ENABLED", True, cast=bool)
+        )
+    except Exception:
+        adaptive_top_n_enabled = True
+    if adaptive_top_n_enabled and runtime is not None:
+        exec_engine = getattr(runtime, "execution_engine", None)
+        resolve_submit_cap = getattr(exec_engine, "_resolve_order_submit_cap", None)
+        if callable(resolve_submit_cap):
+            try:
+                cap_value, cap_source = resolve_submit_cap()
+            except Exception:
+                cap_value, cap_source = (None, "error")
+            if cap_value is not None:
+                try:
+                    adaptive_submit_cap = max(1, int(cap_value))
+                except (TypeError, ValueError):
+                    adaptive_submit_cap = None
+            adaptive_submit_cap_source = str(cap_source or "none")
+    if adaptive_submit_cap is not None:
+        try:
+            per_order = int(
+                get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N_PER_ORDER_CAP", 4, cast=int)
+            )
+        except Exception:
+            per_order = 4
+        try:
+            adaptive_min = int(
+                get_env("AI_TRADING_EXEC_CANDIDATE_TOP_N_ADAPTIVE_MIN", 6, cast=int)
+            )
+        except Exception:
+            adaptive_min = 6
+        per_order = max(1, min(per_order, 25))
+        adaptive_min = max(1, min(adaptive_min, 500))
+        adaptive_top_n_cap = max(adaptive_min, min(adaptive_submit_cap * per_order, 500))
+        if top_n is None:
+            top_n = adaptive_top_n_cap
+            top_n_source = "adaptive_submit_cap_default"
+        else:
+            adjusted_top_n = min(top_n, adaptive_top_n_cap)
+            if adjusted_top_n != top_n:
+                top_n = adjusted_top_n
+                top_n_source = "adaptive_submit_cap_clamp"
+
     weights: Mapping[str, Any] | None = None
     runtime_rank: Mapping[str, Any] | None = None
     if runtime is not None:
@@ -1606,6 +1655,10 @@ def _pre_rank_execution_candidates(
             "requested": len(ranked),
             "selected": len(selected),
             "top_n": top_n,
+            "top_n_source": top_n_source,
+            "adaptive_top_n_cap": adaptive_top_n_cap,
+            "adaptive_submit_cap": adaptive_submit_cap,
+            "adaptive_submit_cap_source": adaptive_submit_cap_source,
             "rank_source": rank_source,
             "selected_sample": selected[:10],
             "dropped_sample": dropped[:10],
@@ -1897,6 +1950,290 @@ def _resolve_adaptive_order_cap(
         return warn_cap, details
     details["mode"] = "normal"
     return None, details
+
+
+def _resolve_slo_derisk_effective_mode(
+    *,
+    configured_mode: str,
+    reject_breached: bool,
+    drift_breached: bool,
+    slippage_breached: bool,
+    calibration_ece_breached: bool,
+    calibration_brier_breached: bool,
+    feature_drift_breached: bool,
+    label_drift_breached: bool,
+    residual_drift_breached: bool,
+    pacing_breached: bool,
+    pending_breached: bool,
+    pacing_hit_rate_pct: float,
+    pending_oldest_age_sec: float,
+) -> tuple[str, float, dict[str, Any]]:
+    """Return effective SLO de-risk mode with optional safe block->scale relaxation."""
+
+    mode = str(configured_mode or "block").strip().lower()
+    if mode not in {"block", "scale", "adaptive"}:
+        mode = "block"
+
+    try:
+        configured_scale = float(get_env("AI_TRADING_DERISK_SLO_SCALE_MULT", 0.50, cast=float))
+    except Exception:
+        configured_scale = 0.50
+    configured_scale = max(0.05, min(configured_scale, 1.0))
+
+    try:
+        relax_enabled = bool(get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_ENABLED", True, cast=bool))
+    except Exception:
+        relax_enabled = True
+    try:
+        relax_scale = float(get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_SCALE_MULT", 0.70, cast=float))
+    except Exception:
+        relax_scale = 0.70
+    relax_scale = max(0.05, min(relax_scale, 1.0))
+    try:
+        severe_pacing_pct = float(
+            get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_PACING_SEVERE_PCT", 75.0, cast=float)
+        )
+    except Exception:
+        severe_pacing_pct = 75.0
+    severe_pacing_pct = max(0.0, min(severe_pacing_pct, 100.0))
+    try:
+        severe_pending_sec = float(
+            get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_PENDING_SEVERE_SEC", 1800.0, cast=float)
+        )
+    except Exception:
+        severe_pending_sec = 1800.0
+    severe_pending_sec = max(60.0, min(severe_pending_sec, 86400.0))
+    try:
+        max_friction_breaches = int(
+            get_env("AI_TRADING_DERISK_SLO_BLOCK_RELAX_MAX_FRICTION_BREACHES", 2, cast=int)
+        )
+    except Exception:
+        max_friction_breaches = 2
+    max_friction_breaches = max(1, min(max_friction_breaches, 10))
+
+    core_breach_count = int(
+        sum(
+            bool(value)
+            for value in (
+                reject_breached,
+                drift_breached,
+                slippage_breached,
+                calibration_ece_breached,
+                calibration_brier_breached,
+                feature_drift_breached,
+                label_drift_breached,
+                residual_drift_breached,
+            )
+        )
+    )
+    friction_breach_count = int(sum(bool(value) for value in (pacing_breached, pending_breached)))
+    severe_friction = bool(
+        (pacing_breached and float(pacing_hit_rate_pct) >= severe_pacing_pct)
+        or (pending_breached and float(pending_oldest_age_sec) >= severe_pending_sec)
+        or friction_breach_count > max_friction_breaches
+    )
+
+    details: dict[str, Any] = {
+        "configured_mode": mode,
+        "effective_mode": mode,
+        "effective_scale_mult": float(configured_scale if mode == "scale" else 1.0),
+        "block_relax_enabled": bool(relax_enabled),
+        "block_relax_applied": False,
+        "block_relax_reason": "",
+        "core_breach_count": int(core_breach_count),
+        "friction_breach_count": int(friction_breach_count),
+        "friction_severe": bool(severe_friction),
+    }
+
+    if mode == "scale":
+        return "scale", float(configured_scale), details
+
+    if mode == "adaptive":
+        if core_breach_count > 0:
+            details["effective_mode"] = "block"
+            details["effective_scale_mult"] = 1.0
+            details["block_relax_reason"] = "core_breach"
+            return "block", 1.0, details
+        if friction_breach_count > 0 and not severe_friction:
+            details["effective_mode"] = "scale"
+            details["effective_scale_mult"] = float(relax_scale)
+            details["block_relax_applied"] = True
+            details["block_relax_reason"] = "friction_breach"
+            return "scale", float(relax_scale), details
+        details["effective_mode"] = "block"
+        details["effective_scale_mult"] = 1.0
+        details["block_relax_reason"] = "friction_severe" if friction_breach_count > 0 else "no_relax"
+        return "block", 1.0, details
+
+    if relax_enabled and core_breach_count == 0 and friction_breach_count > 0 and not severe_friction:
+        details["effective_mode"] = "scale"
+        details["effective_scale_mult"] = float(relax_scale)
+        details["block_relax_applied"] = True
+        details["block_relax_reason"] = "block_relaxed_friction_only"
+        return "scale", float(relax_scale), details
+
+    details["effective_mode"] = "block"
+    details["effective_scale_mult"] = 1.0
+    if core_breach_count > 0:
+        details["block_relax_reason"] = "core_breach"
+    elif friction_breach_count > 0 and severe_friction:
+        details["block_relax_reason"] = "friction_severe"
+    else:
+        details["block_relax_reason"] = "block_mode"
+    return "block", 1.0, details
+
+
+def _resolve_capacity_throttle_adaptive_params(
+    *,
+    spread_soft_bps: float,
+    spread_hard_bps: float,
+    volume_soft_participation: float,
+    volume_hard_participation: float,
+    min_scale: float,
+    slo_derisk_details: Mapping[str, Any],
+) -> tuple[float, float, float, float, float, dict[str, Any]]:
+    """Return adaptive capacity-throttle parameters from live execution telemetry."""
+
+    try:
+        enabled = bool(get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_ENABLED", True, cast=bool))
+    except Exception:
+        enabled = True
+    details: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "mode": "disabled" if not enabled else "steady",
+        "base_spread_soft_bps": float(spread_soft_bps),
+        "base_spread_hard_bps": float(spread_hard_bps),
+        "base_volume_soft_participation": float(volume_soft_participation),
+        "base_volume_hard_participation": float(volume_hard_participation),
+        "base_min_scale": float(min_scale),
+    }
+    if not enabled:
+        return (
+            float(spread_soft_bps),
+            float(spread_hard_bps),
+            float(volume_soft_participation),
+            float(volume_hard_participation),
+            float(min_scale),
+            details,
+        )
+
+    try:
+        min_samples = int(get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_MIN_SAMPLES", 10, cast=int))
+    except Exception:
+        min_samples = 10
+    min_samples = max(1, min(min_samples, 10_000))
+
+    try:
+        pacing_clear_pct = float(
+            get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PACING_CLEAR_PCT", 8.0, cast=float)
+        )
+    except Exception:
+        pacing_clear_pct = 8.0
+    try:
+        pacing_tighten_pct = float(
+            get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PACING_TIGHTEN_PCT", 20.0, cast=float)
+        )
+    except Exception:
+        pacing_tighten_pct = 20.0
+    pacing_clear_pct = max(0.0, min(pacing_clear_pct, 100.0))
+    pacing_tighten_pct = max(pacing_clear_pct, min(pacing_tighten_pct, 100.0))
+
+    try:
+        reject_clear_pct = float(
+            get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_REJECT_CLEAR_PCT", 2.5, cast=float)
+        )
+    except Exception:
+        reject_clear_pct = 2.5
+    reject_clear_pct = max(0.0, min(reject_clear_pct, 100.0))
+
+    try:
+        relax_mult = float(get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_RELAX_MULT", 1.15, cast=float))
+    except Exception:
+        relax_mult = 1.15
+    try:
+        tighten_mult = float(
+            get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_TIGHTEN_MULT", 0.90, cast=float)
+        )
+    except Exception:
+        tighten_mult = 0.90
+    relax_mult = max(1.0, min(relax_mult, 3.0))
+    tighten_mult = max(0.25, min(tighten_mult, 1.0))
+
+    try:
+        relax_min_scale_add = float(
+            get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_RELAX_MIN_SCALE_ADD", 0.10, cast=float)
+        )
+    except Exception:
+        relax_min_scale_add = 0.10
+    try:
+        tighten_min_scale_mult = float(
+            get_env("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_TIGHTEN_MIN_SCALE_MULT", 0.85, cast=float)
+        )
+    except Exception:
+        tighten_min_scale_mult = 0.85
+    relax_min_scale_add = max(0.0, min(relax_min_scale_add, 0.5))
+    tighten_min_scale_mult = max(0.2, min(tighten_min_scale_mult, 1.0))
+
+    pacing_samples = int(float(slo_derisk_details.get("pacing_samples", 0) or 0.0))
+    pacing_hit_pct = float(slo_derisk_details.get("order_pacing_cap_hit_rate_pct", 0.0) or 0.0)
+    reject_rate_pct = float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0)
+    pacing_breached = bool(slo_derisk_details.get("pacing_breached", False))
+    pending_breached = bool(slo_derisk_details.get("pending_breached", False))
+
+    details.update(
+        {
+            "pacing_samples": int(pacing_samples),
+            "pacing_hit_rate_pct": float(pacing_hit_pct),
+            "reject_rate_pct": float(reject_rate_pct),
+            "pacing_breached": bool(pacing_breached),
+            "pending_breached": bool(pending_breached),
+            "min_samples": int(min_samples),
+            "pacing_clear_pct": float(pacing_clear_pct),
+            "pacing_tighten_pct": float(pacing_tighten_pct),
+            "reject_clear_pct": float(reject_clear_pct),
+        }
+    )
+
+    tuned_spread_soft = max(0.1, float(spread_soft_bps))
+    tuned_spread_hard = max(tuned_spread_soft + 0.1, float(spread_hard_bps))
+    tuned_vol_soft = max(0.0001, float(volume_soft_participation))
+    tuned_vol_hard = max(tuned_vol_soft + 0.0001, float(volume_hard_participation))
+    tuned_min_scale = max(0.05, min(float(min_scale), 1.0))
+
+    if pacing_samples < min_samples:
+        details["mode"] = "insufficient_samples"
+    elif pacing_breached or pending_breached or pacing_hit_pct >= pacing_tighten_pct:
+        details["mode"] = "tightened"
+        tuned_spread_soft = max(0.1, tuned_spread_soft * tighten_mult)
+        tuned_spread_hard = max(tuned_spread_soft + 0.1, tuned_spread_hard * tighten_mult)
+        tuned_vol_soft = max(0.0001, tuned_vol_soft * tighten_mult)
+        tuned_vol_hard = max(tuned_vol_soft + 0.0001, tuned_vol_hard * tighten_mult)
+        tuned_min_scale = max(0.05, min(tuned_min_scale * tighten_min_scale_mult, 1.0))
+    elif pacing_hit_pct <= pacing_clear_pct and reject_rate_pct <= reject_clear_pct:
+        details["mode"] = "relaxed"
+        tuned_spread_soft = max(0.1, tuned_spread_soft * relax_mult)
+        tuned_spread_hard = max(tuned_spread_soft + 0.1, tuned_spread_hard * relax_mult)
+        tuned_vol_soft = min(1.0, max(0.0001, tuned_vol_soft * relax_mult))
+        tuned_vol_hard = min(1.0, max(tuned_vol_soft + 0.0001, tuned_vol_hard * relax_mult))
+        tuned_min_scale = min(1.0, max(tuned_min_scale, tuned_min_scale + relax_min_scale_add))
+
+    details.update(
+        {
+            "spread_soft_bps": float(tuned_spread_soft),
+            "spread_hard_bps": float(tuned_spread_hard),
+            "volume_soft_participation": float(tuned_vol_soft),
+            "volume_hard_participation": float(tuned_vol_hard),
+            "min_scale": float(tuned_min_scale),
+        }
+    )
+    return (
+        float(tuned_spread_soft),
+        float(tuned_spread_hard),
+        float(tuned_vol_soft),
+        float(tuned_vol_hard),
+        float(tuned_min_scale),
+        details,
+    )
 
 
 def _current_position_qty(ctx: Any, symbol: str) -> int:
@@ -9791,6 +10128,9 @@ class BotState:
     coverage_recovery_providers: list[str] = field(default_factory=list)
     execution_metrics: "ExecutionCycleMetrics" = field(default_factory=ExecutionCycleMetrics)
     _last_adaptive_order_cap_signature: tuple[int | None, str, float] | None = None
+    _last_capacity_throttle_adaptive_signature: (
+        tuple[str, float, float, float, float, float] | None
+    ) = None
     _strategies_loaded: bool = False
 
     # Intraday price reliability metadata populated from fetch_minute_df_safe
@@ -38324,8 +38664,8 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     slo_derisk_scale = 1.0
     slo_derisk_details: dict[str, Any] = {}
     if bool(get_env("AI_TRADING_DERISK_ON_SLO_BREACH_ENABLED", True, cast=bool)):
-        mode = str(get_env("AI_TRADING_DERISK_SLO_MODE", "block", cast=str) or "block").strip().lower()
-        if mode not in {"block", "scale"}:
+        mode = str(get_env("AI_TRADING_DERISK_SLO_MODE", "adaptive", cast=str) or "adaptive").strip().lower()
+        if mode not in {"block", "scale", "adaptive"}:
             mode = "block"
         min_samples = max(1, int(get_env("AI_TRADING_DERISK_SLO_MIN_SAMPLES", 5, cast=int)))
         max_reject_rate_pct = float(
@@ -38514,16 +38854,30 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "breached": breached,
         }
         if breached:
-            if mode == "block":
+            effective_mode, effective_scale_mult, mode_details = _resolve_slo_derisk_effective_mode(
+                configured_mode=mode,
+                reject_breached=reject_breached,
+                drift_breached=drift_breached,
+                slippage_breached=slippage_breached,
+                calibration_ece_breached=calibration_ece_breached,
+                calibration_brier_breached=calibration_brier_breached,
+                feature_drift_breached=feature_drift_breached,
+                label_drift_breached=label_drift_breached,
+                residual_drift_breached=residual_drift_breached,
+                pacing_breached=pacing_breached,
+                pending_breached=pending_breached,
+                pacing_hit_rate_pct=pacing_cap_hit_rate_pct,
+                pending_oldest_age_sec=pending_oldest_age_sec,
+            )
+            slo_derisk_details.update(mode_details)
+            slo_derisk_details["effective_mode"] = effective_mode
+            if effective_mode == "block":
                 state.halt_trading = True
                 state.halt_reason = "DERISK_SLO_BREACH_BLOCK"
             else:
-                configured_scale = float(
-                    get_env("AI_TRADING_DERISK_SLO_SCALE_MULT", 0.5, cast=float)
-                )
-                configured_scale = max(0.05, min(configured_scale, 1.0))
-                slo_derisk_scale = min(slo_derisk_scale, configured_scale)
-                slo_derisk_details["scale_mult"] = configured_scale
+                effective_scale_mult = max(0.05, min(float(effective_scale_mult), 1.0))
+                slo_derisk_scale = min(slo_derisk_scale, effective_scale_mult)
+                slo_derisk_details["scale_mult"] = effective_scale_mult
             logger.warning("DERISK_SLO_BREACH", extra=slo_derisk_details)
 
     expected_net_edge_cycle = 0.0
@@ -38619,6 +38973,33 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     capacity_min_scale = float(get_env("AI_TRADING_CAPACITY_MIN_SCALE", 0.25, cast=float))
     capacity_min_scale = max(0.05, min(capacity_min_scale, 1.0))
+    (
+        capacity_spread_soft_bps,
+        capacity_spread_hard_bps,
+        capacity_volume_soft_participation,
+        capacity_volume_hard_participation,
+        capacity_min_scale,
+        capacity_adaptive_details,
+    ) = _resolve_capacity_throttle_adaptive_params(
+        spread_soft_bps=float(capacity_spread_soft_bps),
+        spread_hard_bps=float(capacity_spread_hard_bps),
+        volume_soft_participation=float(capacity_volume_soft_participation),
+        volume_hard_participation=float(capacity_volume_hard_participation),
+        min_scale=float(capacity_min_scale),
+        slo_derisk_details=slo_derisk_details,
+    )
+    capacity_adaptive_signature = (
+        str(capacity_adaptive_details.get("mode") or "steady"),
+        round(float(capacity_adaptive_details.get("spread_soft_bps", capacity_spread_soft_bps) or capacity_spread_soft_bps), 3),
+        round(float(capacity_adaptive_details.get("spread_hard_bps", capacity_spread_hard_bps) or capacity_spread_hard_bps), 3),
+        round(float(capacity_adaptive_details.get("volume_soft_participation", capacity_volume_soft_participation) or capacity_volume_soft_participation), 5),
+        round(float(capacity_adaptive_details.get("volume_hard_participation", capacity_volume_hard_participation) or capacity_volume_hard_participation), 5),
+        round(float(capacity_adaptive_details.get("min_scale", capacity_min_scale) or capacity_min_scale), 3),
+    )
+    if capacity_adaptive_signature != getattr(state, "_last_capacity_throttle_adaptive_signature", None):
+        if bool(capacity_adaptive_details.get("enabled", False)):
+            logger.info("CAPACITY_THROTTLE_ADAPTIVE_PARAMS", extra=dict(capacity_adaptive_details))
+        state._last_capacity_throttle_adaptive_signature = capacity_adaptive_signature
     thin_spread_bps = float(get_env("AI_TRADING_LIQ_THIN_SPREAD_BPS", 25, cast=float))
     thin_vol_mult = float(get_env("AI_TRADING_LIQ_THIN_VOL_MULT", 1.8, cast=float))
     primary_feed_derisk = _resolve_primary_feed_derisk_state(runtime)

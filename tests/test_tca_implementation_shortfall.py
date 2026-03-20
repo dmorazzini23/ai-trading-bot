@@ -159,6 +159,43 @@ def test_reconcile_pending_tca_with_fill_ignores_already_resolved(tmp_path: Path
     assert len(rows) == 2
 
 
+def test_reconcile_pending_tca_with_fill_supports_fallback_identifiers(tmp_path: Path) -> None:
+    path = tmp_path / "tca_records.jsonl"
+    submit_ts = datetime(2026, 3, 13, 15, 0, tzinfo=UTC)
+    pending = {
+        "ts": submit_ts.isoformat(),
+        "broker_order_id": "broker-oid-77",
+        "symbol": "META",
+        "side": "buy",
+        "decision_price": 450.0,
+        "qty": 2.0,
+        "pending_event": True,
+        "benchmark": {"mid_at_arrival": 450.0, "submit_ts": submit_ts.isoformat()},
+    }
+    path.write_text(json.dumps(pending) + "\n", encoding="utf-8")
+
+    reconciled, reason = reconcile_pending_tca_with_fill(
+        str(path),
+        client_order_id=None,
+        order_id=None,
+        fallback_identifiers=["broker-oid-77"],
+        symbol="META",
+        side="buy",
+        fill_price=451.0,
+        fill_qty=2.0,
+        status="filled",
+        fill_ts=datetime(2026, 3, 13, 15, 0, 2, tzinfo=UTC),
+        source="unit_test",
+    )
+
+    assert reconciled is True
+    assert reason == "reconciled"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 2
+    assert rows[-1]["pending_event"] is False
+    assert rows[-1]["fill_price"] == 451.0
+
+
 def test_finalize_stale_pending_tca_appends_terminal_nonfill_row(tmp_path: Path) -> None:
     path = tmp_path / "tca_records.jsonl"
     old_ts = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
@@ -242,3 +279,124 @@ def test_finalize_stale_pending_tca_skips_when_fill_already_resolved(tmp_path: P
     assert summary["finalized"] == 0
     rows = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(rows) == 2
+
+
+def test_finalize_stale_pending_tca_skips_when_fill_events_contains_match(tmp_path: Path) -> None:
+    tca_path = tmp_path / "tca_records.jsonl"
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    ts = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+    pending = {
+        "ts": ts.isoformat(),
+        "client_order_id": "cid-900",
+        "order_id": "oid-900",
+        "symbol": "AAPL",
+        "side": "buy",
+        "decision_price": 100.0,
+        "qty": 10.0,
+        "pending_event": True,
+        "benchmark": {"mid_at_arrival": 100.0, "submit_ts": ts.isoformat()},
+    }
+    fill_event = {
+        "ts": datetime(2026, 3, 17, 10, 2, tzinfo=UTC).isoformat(),
+        "event": "fill_recorded",
+        "symbol": "AAPL",
+        "side": "buy",
+        "client_order_id": "cid-900",
+        "order_id": "oid-900",
+        "fill_price": 100.5,
+        "fill_qty": 10.0,
+    }
+    tca_path.write_text(json.dumps(pending) + "\n", encoding="utf-8")
+    fill_events_path.write_text(json.dumps(fill_event) + "\n", encoding="utf-8")
+
+    summary = finalize_stale_pending_tca(
+        str(tca_path),
+        stale_after_seconds=3600.0,
+        now=datetime(2026, 3, 18, 12, 0, tzinfo=UTC),
+        max_records=10,
+        source="unit_finalize",
+        fill_events_path=str(fill_events_path),
+    )
+
+    assert summary["ok"] is True
+    assert summary["finalized"] == 0
+    assert summary["skipped_fill_event_match"] == 1
+
+
+def test_finalize_stale_pending_tca_compacts_matched_pending_rows(tmp_path: Path) -> None:
+    tca_path = tmp_path / "tca_records.jsonl"
+    fill_events_path = tmp_path / "fill_events.jsonl"
+    ts = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+    pending_resolved = {
+        "ts": ts.isoformat(),
+        "client_order_id": "cid-compact-1",
+        "order_id": "oid-compact-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "decision_price": 100.0,
+        "qty": 10.0,
+        "pending_event": True,
+    }
+    resolved = {
+        "ts": datetime(2026, 3, 17, 10, 1, tzinfo=UTC).isoformat(),
+        "client_order_id": "cid-compact-1",
+        "order_id": "oid-compact-1",
+        "symbol": "AAPL",
+        "side": "buy",
+        "pending_event": False,
+        "status": "filled",
+        "fill_price": 100.5,
+        "fill_vwap": 100.5,
+    }
+    pending_fill_event = {
+        "ts": ts.isoformat(),
+        "client_order_id": "cid-compact-2",
+        "order_id": "oid-compact-2",
+        "symbol": "MSFT",
+        "side": "sell",
+        "decision_price": 200.0,
+        "qty": 5.0,
+        "pending_event": True,
+    }
+    fill_event = {
+        "ts": datetime(2026, 3, 17, 10, 2, tzinfo=UTC).isoformat(),
+        "event": "fill_recorded",
+        "symbol": "MSFT",
+        "side": "sell",
+        "client_order_id": "cid-compact-2",
+        "order_id": "oid-compact-2",
+        "fill_price": 199.5,
+        "fill_qty": 5.0,
+    }
+    tca_path.write_text(
+        "\n".join(
+            [
+                json.dumps(pending_resolved),
+                json.dumps(resolved),
+                json.dumps(pending_fill_event),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fill_events_path.write_text(json.dumps(fill_event) + "\n", encoding="utf-8")
+
+    summary = finalize_stale_pending_tca(
+        str(tca_path),
+        stale_after_seconds=3600.0,
+        now=datetime(2026, 3, 18, 12, 0, tzinfo=UTC),
+        max_records=10,
+        source="unit_compact",
+        fill_events_path=str(fill_events_path),
+        compact_matched_pending=True,
+    )
+
+    assert summary["ok"] is True
+    assert summary["finalized"] == 0
+    assert summary["compacted_resolved_matches"] == 1
+    assert summary["compacted_fill_event_matches"] == 1
+    assert summary["pending_remaining"] == 0
+    rows = [json.loads(line) for line in tca_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    compacted = [row for row in rows if row.get("pending_compacted") is True]
+    assert len(compacted) == 2
+    assert all(row.get("pending_event") is False for row in compacted)

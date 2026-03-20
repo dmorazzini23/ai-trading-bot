@@ -2219,8 +2219,10 @@ class ExecutionEngine:
         self._tca_stale_finalize_last_run_mono: float = 0.0
         self._symbol_loss_streak: dict[str, int] = {}
         self._symbol_loss_cooldown_until: dict[str, float] = {}
+        self._symbol_reentry_cooldown_until: dict[tuple[str, str], float] = {}
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
         self._cancel_ratio_adaptive_context: dict[str, Any] = {}
+        self._pacing_relax_new_orders_cap: int | None = None
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -2610,6 +2612,176 @@ class ExecutionEngine:
         if value is None:
             return 0.0
         return max(0.0, min(float(value), 3600.0))
+
+    def _symbol_reentry_cooldown_seconds(self) -> float:
+        """Return same-side symbol re-entry cooldown in seconds."""
+
+        value = _config_float("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", None)
+        if value is None:
+            value = _config_float("EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", 300.0)
+        if value is None:
+            value = 300.0
+        if not math.isfinite(float(value)):
+            value = 300.0
+        return max(0.0, min(float(value), 3600.0))
+
+    def _opening_min_notional_dollars(self) -> float:
+        """Return minimum opening notional required before submitting an order."""
+
+        value = _config_float("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL", None)
+        if value is None:
+            value = _config_float("EXECUTION_OPENING_MIN_NOTIONAL", None)
+        if value is None:
+            return 0.0
+        if not math.isfinite(float(value)):
+            return 0.0
+        return max(0.0, min(float(value), 1_000_000.0))
+
+    def _symbol_reentry_cooldown_allows_opening(
+        self,
+        *,
+        symbol: str,
+        side: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Return whether same-side symbol re-entry cooldown currently allows opening."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        symbol_token = str(symbol or "").strip().upper()
+        side_token = self._normalized_order_side(side)
+        if not symbol_token or side_token not in {"buy", "sell"}:
+            return True, {"enabled": True, "reason": "symbol_or_side_missing"}
+
+        cooldown_seconds = self._symbol_reentry_cooldown_seconds()
+        if cooldown_seconds <= 0.0:
+            return True, {
+                "enabled": True,
+                "reason": "cooldown_zero",
+                "symbol": symbol_token,
+                "side": side_token,
+            }
+
+        cooldown_until_raw = getattr(self, "_symbol_reentry_cooldown_until", {}) or {}
+        cooldown_until = (
+            cooldown_until_raw
+            if isinstance(cooldown_until_raw, dict)
+            else {}
+        )
+        key = (symbol_token, side_token)
+        expiry = _safe_float(cooldown_until.get(key)) or 0.0
+        now_mono = float(monotonic_time())
+        if expiry <= now_mono:
+            if expiry > 0.0:
+                cooldown_until.pop(key, None)
+                self._symbol_reentry_cooldown_until = cooldown_until
+            return True, {
+                "enabled": True,
+                "reason": "cooldown_inactive",
+                "symbol": symbol_token,
+                "side": side_token,
+            }
+
+        remaining = max(expiry - now_mono, 0.0)
+        return False, {
+            "enabled": True,
+            "reason": "symbol_reentry_cooldown",
+            "symbol": symbol_token,
+            "side": side_token,
+            "remaining_seconds": round(float(remaining), 3),
+            "cooldown_seconds": round(float(cooldown_seconds), 3),
+        }
+
+    def _arm_symbol_reentry_cooldown_from_fill(
+        self,
+        *,
+        symbol: str,
+        side: str,
+    ) -> None:
+        """Arm same-side symbol re-entry cooldown after an opening fill."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+
+        symbol_token = str(symbol or "").strip().upper()
+        side_token = self._normalized_order_side(side)
+        if not symbol_token or side_token not in {"buy", "sell"}:
+            return
+
+        cooldown_seconds = self._symbol_reentry_cooldown_seconds()
+        if cooldown_seconds <= 0.0:
+            return
+
+        now_mono = float(monotonic_time())
+        cooldown_until_raw = getattr(self, "_symbol_reentry_cooldown_until", {}) or {}
+        cooldown_until = (
+            cooldown_until_raw
+            if isinstance(cooldown_until_raw, dict)
+            else {}
+        )
+        key = (symbol_token, side_token)
+        previous_until = _safe_float(cooldown_until.get(key)) or 0.0
+        next_until = max(previous_until, now_mono + float(cooldown_seconds))
+        cooldown_until[key] = next_until
+        self._symbol_reentry_cooldown_until = cooldown_until
+        logger.info(
+            "SYMBOL_REENTRY_COOLDOWN_ARMED",
+            extra={
+                "symbol": symbol_token,
+                "side": side_token,
+                "cooldown_seconds": float(cooldown_seconds),
+            },
+        )
+
+    def _opening_min_notional_allows_order(
+        self,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Return whether opening-order notional clears configured minimum."""
+
+        min_notional = self._opening_min_notional_dollars()
+        if min_notional <= 0.0:
+            return True, {"enabled": False, "reason": "disabled"}
+
+        symbol_token = str(order.get("symbol") or "").strip().upper()
+        side_token = self._normalized_order_side(order.get("side"))
+        qty = _safe_float(order.get("quantity"))
+        if qty is None:
+            qty = _safe_float(order.get("qty"))
+        price_hint = _safe_float(order.get("price_hint"))
+        if qty is None or qty <= 0.0 or price_hint is None or price_hint <= 0.0:
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_inputs",
+                "symbol": symbol_token or None,
+                "side": side_token or None,
+            }
+
+        notional = abs(float(qty) * float(price_hint))
+        if notional >= float(min_notional):
+            return True, {
+                "enabled": True,
+                "reason": "above_min_notional",
+                "symbol": symbol_token,
+                "side": side_token,
+                "order_notional": float(notional),
+                "min_notional": float(min_notional),
+            }
+
+        return False, {
+            "enabled": True,
+            "reason": "opening_min_notional",
+            "symbol": symbol_token,
+            "side": side_token,
+            "order_notional": float(notional),
+            "min_notional": float(min_notional),
+        }
 
     def _service_phase(self) -> str:
         """Resolve current service phase from runtime context with telemetry fallback."""
@@ -3067,6 +3239,19 @@ class ExecutionEngine:
         )
         if configured_cap is not None:
             configured_cap = max(1, int(configured_cap))
+        pacing_relax_cap: int | None = None
+        pacing_relax_cap_raw = getattr(self, "_pacing_relax_new_orders_cap", None)
+        if pacing_relax_cap_raw not in (None, ""):
+            try:
+                candidate = int(pacing_relax_cap_raw)
+            except (TypeError, ValueError):
+                candidate = 0
+            if candidate > 0:
+                pacing_relax_cap = candidate
+        if configured_cap is not None and pacing_relax_cap is not None:
+            configured_cap = max(int(configured_cap), int(pacing_relax_cap))
+        elif configured_cap is None and pacing_relax_cap is not None:
+            configured_cap = int(pacing_relax_cap)
         bootstrap_cap = self._bootstrap_new_orders_cap()
         adaptive_cap: int | None = None
         adaptive_cap_raw = getattr(self, "_adaptive_new_orders_cap", None)
@@ -3093,6 +3278,8 @@ class ExecutionEngine:
         if configured_cap is not None:
             cap_sources.append("configured")
             cap_values.append(configured_cap)
+        if pacing_relax_cap is not None:
+            cap_sources.append("pacing_relax")
         if bootstrap_cap is not None:
             cap_sources.append("bootstrap")
             cap_values.append(bootstrap_cap)
@@ -3115,8 +3302,15 @@ class ExecutionEngine:
             return True
         return bool(enabled)
 
-    def _update_cancel_ratio_adaptive_cap(self, *, cancel_ratio: float, submitted: int) -> None:
-        """Adjust per-cycle opening-order cap when cancel ratio is elevated."""
+    def _update_cancel_ratio_adaptive_cap(
+        self,
+        *,
+        cancel_ratio: float,
+        submitted: int,
+        pacing_cap_hit_rate_pct: float = 0.0,
+        reject_rate_pct: float = 0.0,
+    ) -> None:
+        """Adjust per-cycle opening-order cap using cancel and pacing telemetry."""
 
         previous_cap_raw = getattr(self, "_cancel_ratio_adaptive_new_orders_cap", None)
         previous_cap: int | None = None
@@ -3169,11 +3363,90 @@ class ExecutionEngine:
             state = "insufficient_samples"
 
         self._cancel_ratio_adaptive_new_orders_cap = updated_cap
+        relax_enabled = _resolve_bool_env("AI_TRADING_ORDER_PACING_RELAX_ENABLED")
+        if relax_enabled is None:
+            relax_enabled = True
+        relax_previous_raw = getattr(self, "_pacing_relax_new_orders_cap", None)
+        relax_previous: int | None = None
+        if relax_previous_raw not in (None, ""):
+            try:
+                parsed_relax = int(relax_previous_raw)
+            except (TypeError, ValueError):
+                parsed_relax = 0
+            if parsed_relax > 0:
+                relax_previous = parsed_relax
+        relax_cap = relax_previous
+        relax_state = "unchanged"
+        if not relax_enabled:
+            relax_cap = None
+            relax_state = "disabled"
+        else:
+            relax_trigger_pct = _config_float("AI_TRADING_ORDER_PACING_RELAX_TRIGGER_PCT", 12.0)
+            if relax_trigger_pct is None or not math.isfinite(float(relax_trigger_pct)):
+                relax_trigger_pct = 12.0
+            relax_trigger_pct = max(0.0, min(float(relax_trigger_pct), 100.0))
+            relax_clear_pct = _config_float("AI_TRADING_ORDER_PACING_RELAX_CLEAR_PCT", 4.0)
+            if relax_clear_pct is None or not math.isfinite(float(relax_clear_pct)):
+                relax_clear_pct = 4.0
+            relax_clear_pct = max(0.0, min(float(relax_clear_pct), relax_trigger_pct))
+            relax_max_cancel_ratio = _config_float(
+                "AI_TRADING_ORDER_PACING_RELAX_MAX_CANCEL_RATIO",
+                0.45,
+            )
+            if relax_max_cancel_ratio is None or not math.isfinite(float(relax_max_cancel_ratio)):
+                relax_max_cancel_ratio = 0.45
+            relax_max_cancel_ratio = max(0.0, min(float(relax_max_cancel_ratio), 1.0))
+            relax_max_reject_rate_pct = _config_float(
+                "AI_TRADING_ORDER_PACING_RELAX_MAX_REJECT_RATE_PCT",
+                3.0,
+            )
+            if relax_max_reject_rate_pct is None or not math.isfinite(float(relax_max_reject_rate_pct)):
+                relax_max_reject_rate_pct = 3.0
+            relax_max_reject_rate_pct = max(0.0, min(float(relax_max_reject_rate_pct), 100.0))
+            relax_min_submitted = _config_int("AI_TRADING_ORDER_PACING_RELAX_MIN_SUBMITTED", 8)
+            if relax_min_submitted is None:
+                relax_min_submitted = 8
+            relax_min_submitted = max(1, min(int(relax_min_submitted), 1000))
+            relax_cap_value = _config_int_alias(
+                ("AI_TRADING_ORDER_PACING_RELAX_CAP", "AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE"),
+                3,
+            )
+            if relax_cap_value is None:
+                relax_cap_value = 3
+            relax_cap_value = max(1, min(int(relax_cap_value), 25))
+
+            quality_ok = (
+                float(cancel_ratio) <= float(relax_max_cancel_ratio)
+                and float(reject_rate_pct) <= float(relax_max_reject_rate_pct)
+            )
+            if (
+                int(submitted) >= int(relax_min_submitted)
+                and float(pacing_cap_hit_rate_pct) >= float(relax_trigger_pct)
+                and quality_ok
+                and updated_cap is None
+            ):
+                relax_cap = int(relax_cap_value)
+                relax_state = "triggered"
+            elif (
+                relax_previous is not None
+                and (
+                    float(pacing_cap_hit_rate_pct) <= float(relax_clear_pct)
+                    or not quality_ok
+                    or updated_cap is not None
+                )
+            ):
+                relax_cap = None
+                relax_state = "recovered"
+            elif int(submitted) < int(relax_min_submitted):
+                relax_state = "insufficient_samples"
+        self._pacing_relax_new_orders_cap = relax_cap
         context = {
             "enabled": bool(enabled),
             "state": state,
             "cancel_ratio": float(cancel_ratio),
             "submitted": int(max(int(submitted), 0)),
+            "pacing_cap_hit_rate_pct": float(pacing_cap_hit_rate_pct),
+            "reject_rate_pct": float(reject_rate_pct),
             "trigger": float(trigger),
             "clear": float(clear),
             "scale": float(scale),
@@ -3181,9 +3454,13 @@ class ExecutionEngine:
             "min_submitted": int(min_submitted),
             "cap": int(updated_cap) if updated_cap is not None else None,
             "previous_cap": int(previous_cap) if previous_cap is not None else None,
+            "pacing_relax_enabled": bool(relax_enabled),
+            "pacing_relax_state": str(relax_state),
+            "pacing_relax_cap": int(relax_cap) if relax_cap is not None else None,
+            "pacing_relax_previous_cap": int(relax_previous) if relax_previous is not None else None,
         }
         self._cancel_ratio_adaptive_context = context
-        if updated_cap != previous_cap:
+        if updated_cap != previous_cap or relax_cap != relax_previous:
             logger.info("ORDER_PACING_CANCEL_RATIO_CAP_UPDATED", extra=context)
 
     def _max_new_orders_per_cycle(self) -> int | None:
@@ -3693,9 +3970,13 @@ class ExecutionEngine:
         )
         fill_ratio = (float(filled) / float(submitted)) if submitted > 0 else 0.0
         cancel_ratio = (float(cancelled) / float(submitted)) if submitted > 0 else 0.0
+        attempted = submitted + failed
+        reject_rate_pct = (float(failed) / float(attempted) * 100.0) if attempted > 0 else 0.0
         self._update_cancel_ratio_adaptive_cap(
             cancel_ratio=float(cancel_ratio),
             submitted=int(submitted),
+            pacing_cap_hit_rate_pct=float(pacing_cap_hit_rate_pct),
+            reject_rate_pct=float(reject_rate_pct),
         )
         cancel_ratio_adaptive_cap = getattr(
             self,
@@ -3709,8 +3990,6 @@ class ExecutionEngine:
         )
         if not isinstance(cancel_ratio_adaptive_context, Mapping):
             cancel_ratio_adaptive_context = {}
-        attempted = submitted + failed
-        reject_rate_pct = (float(failed) / float(attempted) * 100.0) if attempted > 0 else 0.0
         drift_values = [
             abs(float(item.get("execution_drift_bps", 0.0)))
             for item, _status in normalized_outcomes
@@ -4327,6 +4606,7 @@ class ExecutionEngine:
         signal: Any | None,
         timestamp: datetime,
         runtime_payload: Mapping[str, Any] | None = None,
+        closing_position: bool | None = None,
     ) -> None:
         """Persist canonical fill-derived record for learning and truth reporting."""
 
@@ -4416,6 +4696,11 @@ class ExecutionEngine:
             symbol=symbol,
             slippage_bps=slippage_bps,
         )
+        if closing_position is False:
+            self._arm_symbol_reentry_cooldown_from_fill(
+                symbol=symbol,
+                side=side_normalized,
+            )
         runtime_source = None
         if runtime_payload is not None:
             source_value = runtime_payload.get("source")
@@ -4475,6 +4760,8 @@ class ExecutionEngine:
                 else None
             ),
             order_id=str(order_id) if order_id not in (None, "") else None,
+            symbol=str(symbol),
+            side=str(side),
             fill_price=float(fill_price),
             fill_qty=float(fill_qty),
             status=status_token,
@@ -4643,6 +4930,18 @@ class ExecutionEngine:
             source_token = (
                 str(source).strip() if source not in (None, "") else "backfill_fill_events"
             )
+            fallback_ids: list[str] = []
+            for key in (
+                "broker_order_id",
+                "alpaca_order_id",
+                "fill_id",
+                "execution_id",
+                "id",
+            ):
+                value = row.get(key)
+                if value in (None, ""):
+                    continue
+                fallback_ids.append(str(value))
             resolved, _reason = reconcile_pending_tca_with_fill(
                 str(tca_path),
                 client_order_id=(
@@ -4651,12 +4950,24 @@ class ExecutionEngine:
                     else None
                 ),
                 order_id=str(order_id) if order_id not in (None, "") else None,
+                fallback_identifiers=fallback_ids,
+                symbol=str(row.get("symbol") or ""),
+                side=str(row.get("side") or ""),
                 fill_price=float(fill_price),
                 fill_qty=float(fill_qty),
                 status=status_token,
                 fill_ts=fill_ts,
                 fee_amount=fee_amount,
                 source=source_token,
+                allow_symbol_qty_fallback=True,
+                fallback_window_seconds=float(
+                    _config_float("AI_TRADING_TCA_BACKFILL_SYMBOL_FALLBACK_WINDOW_SEC", 12.0 * 3600.0)
+                    or (12.0 * 3600.0)
+                ),
+                qty_tolerance_ratio=float(
+                    _config_float("AI_TRADING_TCA_BACKFILL_SYMBOL_FALLBACK_QTY_TOLERANCE", 0.05)
+                    or 0.05
+                ),
             )
             if resolved:
                 reconciled_count += 1
@@ -4695,10 +5006,25 @@ class ExecutionEngine:
             return {"enabled": True, "reason": "interval_not_elapsed"}
         self._tca_stale_finalize_last_run_mono = now_mono
 
-        stale_after_s = (
-            _config_float("AI_TRADING_TCA_FINALIZE_STALE_AFTER_SEC", 86400.0) or 86400.0
-        )
+        stale_after_s = _config_float("AI_TRADING_TCA_FINALIZE_STALE_AFTER_SEC", 86400.0) or 86400.0
         max_records = _config_int("AI_TRADING_TCA_FINALIZE_STALE_MAX_RECORDS", 500)
+        backlog_trigger = _config_int("AI_TRADING_TCA_FINALIZE_STALE_BACKLOG_TRIGGER", 1000)
+        backlog_stale_after_s = (
+            _config_float("AI_TRADING_TCA_FINALIZE_STALE_BACKLOG_STALE_AFTER_SEC", 6.0 * 3600.0)
+            or (6.0 * 3600.0)
+        )
+        backlog_max_records = _config_int("AI_TRADING_TCA_FINALIZE_STALE_BACKLOG_MAX_RECORDS", 3000)
+        fill_match_window_seconds = (
+            _config_float("AI_TRADING_TCA_FINALIZE_FILL_MATCH_WINDOW_SEC", 24.0 * 3600.0)
+            or (24.0 * 3600.0)
+        )
+        fill_qty_tolerance_ratio = (
+            _config_float("AI_TRADING_TCA_FINALIZE_FILL_QTY_TOLERANCE", 0.05) or 0.05
+        )
+        fill_events_max_records = _config_int("AI_TRADING_TCA_FINALIZE_FILL_EVENTS_MAX_ROWS", 200000)
+        compact_matched_pending = _resolve_bool_env("AI_TRADING_TCA_COMPACT_MATCHED_PENDING_ENABLED")
+        if compact_matched_pending is None:
+            compact_matched_pending = True
         source_token = (
             str(_runtime_env("AI_TRADING_TCA_FINALIZE_STALE_SOURCE", "runtime_stale_nonfill"))
             .strip()
@@ -4708,21 +5034,100 @@ class ExecutionEngine:
             str(_runtime_env("AI_TRADING_TCA_PATH", "runtime/tca_records.jsonl") or "runtime/tca_records.jsonl"),
             default_relative="runtime/tca_records.jsonl",
         )
+        fill_events_path = resolve_runtime_artifact_path(
+            str(_runtime_env("AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl") or "runtime/fill_events.jsonl"),
+            default_relative="runtime/fill_events.jsonl",
+        )
         summary = finalize_stale_pending_tca(
             str(tca_path),
             stale_after_seconds=float(stale_after_s),
             max_records=int(max(max_records, 0)),
             source=source_token,
+            fill_events_path=str(fill_events_path),
+            fill_match_window_seconds=float(fill_match_window_seconds),
+            fill_qty_tolerance_ratio=float(fill_qty_tolerance_ratio),
+            fill_events_max_records=int(max(fill_events_max_records or 0, 0)),
+            compact_matched_pending=bool(compact_matched_pending),
         )
+        pending_backlog = int(summary.get("scanned_pending", 0) or 0)
+        try:
+            backlog_trigger_value = int(backlog_trigger or 0)
+        except (TypeError, ValueError):
+            backlog_trigger_value = 0
+        if backlog_trigger_value > 0 and pending_backlog >= backlog_trigger_value:
+            tightened_stale_after = min(float(stale_after_s), float(backlog_stale_after_s))
+            tightened_max_records = max(int(max_records or 0), int(backlog_max_records or 0))
+            if (
+                tightened_stale_after < float(stale_after_s)
+                or tightened_max_records > int(max(max_records or 0, 0))
+            ):
+                backlog_summary = finalize_stale_pending_tca(
+                    str(tca_path),
+                    stale_after_seconds=float(tightened_stale_after),
+                    max_records=int(max(tightened_max_records, 0)),
+                    source=source_token,
+                    fill_events_path=str(fill_events_path),
+                    fill_match_window_seconds=float(fill_match_window_seconds),
+                    fill_qty_tolerance_ratio=float(fill_qty_tolerance_ratio),
+                    fill_events_max_records=int(max(fill_events_max_records or 0, 0)),
+                    compact_matched_pending=bool(compact_matched_pending),
+                )
+                if bool(backlog_summary.get("ok", False)):
+                    summary["finalized"] = int(summary.get("finalized", 0) or 0) + int(
+                        backlog_summary.get("finalized", 0) or 0
+                    )
+                    summary["compacted_resolved_matches"] = int(
+                        summary.get("compacted_resolved_matches", 0) or 0
+                    ) + int(backlog_summary.get("compacted_resolved_matches", 0) or 0)
+                    summary["compacted_fill_event_matches"] = int(
+                        summary.get("compacted_fill_event_matches", 0) or 0
+                    ) + int(backlog_summary.get("compacted_fill_event_matches", 0) or 0)
+                    summary["skipped_not_stale"] = int(
+                        backlog_summary.get("skipped_not_stale", summary.get("skipped_not_stale", 0)) or 0
+                    )
+                    summary["skipped_already_resolved"] = int(
+                        backlog_summary.get(
+                            "skipped_already_resolved", summary.get("skipped_already_resolved", 0)
+                        )
+                        or 0
+                    )
+                    summary["skipped_fill_event_match"] = int(
+                        backlog_summary.get(
+                            "skipped_fill_event_match", summary.get("skipped_fill_event_match", 0)
+                        )
+                        or 0
+                    )
+                    summary["stale_after_seconds"] = float(backlog_summary.get("stale_after_seconds", tightened_stale_after) or tightened_stale_after)
+                    summary["max_records"] = int(backlog_summary.get("max_records", tightened_max_records) or tightened_max_records)
+                    summary["pending_remaining"] = int(
+                        backlog_summary.get("pending_remaining", summary.get("pending_remaining", 0)) or 0
+                    )
+                    summary["backlog_mode"] = {
+                        "enabled": True,
+                        "trigger": int(backlog_trigger_value),
+                        "pending_backlog": int(pending_backlog),
+                        "tightened_stale_after_seconds": float(tightened_stale_after),
+                        "tightened_max_records": int(tightened_max_records),
+                        "extra_finalized": int(backlog_summary.get("finalized", 0) or 0),
+                    }
         finalized_count = int(summary.get("finalized", 0) or 0)
-        if finalized_count > 0:
+        compacted_count = int(summary.get("compacted_resolved_matches", 0) or 0) + int(
+            summary.get("compacted_fill_event_matches", 0) or 0
+        )
+        if finalized_count > 0 or compacted_count > 0:
             logger.info(
                 "TCA_PENDING_NONFILL_FINALIZE_RUNTIME",
                 extra={
                     "path": str(tca_path),
                     "finalized": finalized_count,
-                    "stale_after_seconds": float(stale_after_s),
-                    "max_records": int(max(max_records, 0)),
+                    "compacted_matched_pending": int(compacted_count),
+                    "compacted_resolved_matches": int(summary.get("compacted_resolved_matches", 0) or 0),
+                    "compacted_fill_event_matches": int(summary.get("compacted_fill_event_matches", 0) or 0),
+                    "stale_after_seconds": float(summary.get("stale_after_seconds", stale_after_s) or stale_after_s),
+                    "max_records": int(summary.get("max_records", max(max_records or 0, 0)) or max(max_records or 0, 0)),
+                    "pending_backlog": int(summary.get("scanned_pending", 0) or 0),
+                    "pending_remaining": int(summary.get("pending_remaining", 0) or 0),
+                    "fill_match_skips": int(summary.get("skipped_fill_event_match", 0) or 0),
                 },
             )
         return summary
@@ -9023,6 +9428,7 @@ class ExecutionEngine:
                 signal=signal,
                 timestamp=fill_timestamp,
                 runtime_payload=runtime_fill_payload,
+                closing_position=bool(closing_position),
             )
         outcome_reason: str | None = None
         if order_status_lower == "rejected":
@@ -11168,6 +11574,63 @@ class ExecutionEngine:
                     extra=skip_payload | {"detail": "symbol_loss_cooldown"},
                 )
                 return False
+            reentry_allowed, reentry_context = self._symbol_reentry_cooldown_allows_opening(
+                symbol=str(order.get("symbol") or ""),
+                side=str(order.get("side") or ""),
+            )
+            if not reentry_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "symbol_reentry_cooldown",
+                    "context": reentry_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_SYMBOL_REENTRY_COOLDOWN", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "symbol_reentry_cooldown",
+                    reentry_context,
+                    extra=skip_payload | {"detail": "symbol_reentry_cooldown"},
+                )
+                return False
+            opening_notional_allowed, opening_notional_context = self._opening_min_notional_allows_order(order)
+            if not opening_notional_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "opening_min_notional",
+                    "context": opening_notional_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_MIN_NOTIONAL", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "opening_min_notional",
+                    opening_notional_context,
+                    extra=skip_payload | {"detail": "opening_min_notional"},
+                )
+                return False
 
         snapshot_payload: Mapping[str, Any] = (
             account_snapshot if isinstance(account_snapshot, Mapping) else {}
@@ -12503,6 +12966,7 @@ class ExecutionEngine:
                         signal=signal,
                         timestamp=fill_timestamp,
                         runtime_payload=runtime_fill_payload,
+                        closing_position=bool(entry.get("closing_position")),
                     )
 
                 store.pop(key, None)

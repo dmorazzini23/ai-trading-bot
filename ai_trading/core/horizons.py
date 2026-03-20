@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ai_trading.config.management import get_trading_config
+from ai_trading.config.management import get_env, get_trading_config
 from ai_trading.core.netting import SleeveConfig
 
 VALID_TIMEFRAMES = {"1Min", "5Min", "15Min", "1Hour", "1Day"}
@@ -26,6 +26,37 @@ def _split_horizons(raw: Iterable[str]) -> list[tuple[str, str]]:
 
 def _cfg_value(cfg: object, name: str, default):
     return getattr(cfg, name, default)
+
+
+def _resolve_sleeve_symbol_cap(cfg: object, raw_cap: float) -> float:
+    """Return sleeve symbol cap aligned to global risk cap when enabled."""
+
+    try:
+        align_enabled = bool(
+            get_env("AI_TRADING_SLEEVE_SYMBOL_CAP_ALIGN_ENABLED", True, cast=bool)
+        )
+    except Exception:
+        align_enabled = True
+    cap = max(0.0, float(raw_cap or 0.0))
+    if not align_enabled:
+        return cap
+
+    global_cap = float(_cfg_value(cfg, "global_max_symbol_dollars", 0.0) or 0.0)
+    if global_cap <= 0.0:
+        return cap
+    try:
+        align_mult = float(
+            get_env("AI_TRADING_SLEEVE_SYMBOL_CAP_ALIGN_MULTIPLIER", 1.0, cast=float)
+        )
+    except Exception:
+        align_mult = 1.0
+    align_mult = max(0.1, min(align_mult, 5.0))
+    effective_global_cap = max(0.0, global_cap * align_mult)
+    if effective_global_cap <= 0.0:
+        return cap
+    if cap <= 0.0:
+        return effective_global_cap
+    return min(cap, effective_global_cap)
 
 
 def build_sleeve_configs(cfg=None) -> list[SleeveConfig]:
@@ -56,7 +87,10 @@ def build_sleeve_configs(cfg=None) -> list[SleeveConfig]:
                 turnover_cap_dollars=float(_cfg_value(cfg, f"{prefix}_turnover_cap_dollars", 0.0)),
                 cost_k=float(_cfg_value(cfg, f"{prefix}_cost_k", 1.5)),
                 edge_scale_bps=float(_cfg_value(cfg, f"{prefix}_edge_scale_bps", 20.0)),
-                max_symbol_dollars=float(_cfg_value(cfg, f"{prefix}_max_symbol_dollars", 10000.0)),
+                max_symbol_dollars=_resolve_sleeve_symbol_cap(
+                    cfg,
+                    float(_cfg_value(cfg, f"{prefix}_max_symbol_dollars", 10000.0)),
+                ),
                 max_gross_dollars=float(_cfg_value(cfg, f"{prefix}_max_gross_dollars", 50000.0)),
             )
         )
