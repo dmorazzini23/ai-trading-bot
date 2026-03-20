@@ -13,6 +13,7 @@ production deployments receive notifications about outages.
 """
 
 import logging
+import math
 import os
 import time
 import random
@@ -242,6 +243,63 @@ def _resolve_health_passes_required() -> int:
             exc_info=exc,
         )
         return 4
+
+
+def _resolve_primary_recovery_bias_settings() -> tuple[bool, int, float]:
+    """Resolve optional bias to recover from Yahoo backup to Alpaca faster."""
+
+    try:
+        enabled_raw = _env_value(
+            "AI_TRADING_PROVIDER_PRIMARY_RECOVERY_BIAS_ENABLED",
+            False,
+            cast=bool,
+        )
+    except Exception:
+        enabled_raw = False
+    if isinstance(enabled_raw, bool):
+        enabled = enabled_raw
+    else:
+        enabled = str(enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        min_passes = int(
+            get_env(
+                "AI_TRADING_PROVIDER_PRIMARY_RECOVERY_MIN_PASSES",
+                2,
+                cast=int,
+            )
+        )
+    except Exception:
+        min_passes = 2
+    min_passes = max(min_passes, 1)
+    try:
+        cooldown_scale = float(
+            get_env(
+                "AI_TRADING_PROVIDER_PRIMARY_RECOVERY_COOLDOWN_SCALE",
+                0.5,
+                cast=float,
+            )
+        )
+    except Exception:
+        cooldown_scale = 0.5
+    if not math.isfinite(cooldown_scale):
+        cooldown_scale = 0.5
+    cooldown_scale = max(0.0, min(cooldown_scale, 1.0))
+    return enabled, min_passes, cooldown_scale
+
+
+def _primary_recovery_bias_applicable(*, primary: str, backup: str, active: str) -> bool:
+    """Return True when active backup is Yahoo and primary is Alpaca."""
+
+    primary_norm = _normalize_provider(primary)
+    backup_norm = _normalize_provider(backup)
+    active_norm = _normalize_provider(active)
+    if not primary_norm.startswith("alpaca"):
+        return False
+    if not backup_norm:
+        return False
+    if active_norm != backup_norm:
+        return False
+    return canonical_provider(backup_norm) == "yahoo"
 
 
 def _resolve_safe_mode_recovery_passes() -> int:
@@ -2344,6 +2402,8 @@ class ProviderMonitor:
             _as_int(state.get("cooldown", cooldown_default), cooldown_default),
         )
         last_switch_dt = last_switch if isinstance(last_switch, datetime) else now
+        required_passes = max(int(self.recovery_passes_required), 1)
+        required_stay = max(cooldown_seconds, int(max(float(self.min_recovery_seconds), 0.0)))
         allow_recovery = False
         cooldown_ok = False
         stay_reason = "healthy" if healthy else (reason or "unhealthy")
@@ -2361,9 +2421,31 @@ class ProviderMonitor:
             consecutive += 1
             state["consecutive_passes"] = consecutive
             if using_backup:
-                allow_recovery = consecutive >= max(int(self.recovery_passes_required), 1)
+                if _primary_recovery_bias_applicable(
+                    primary=primary,
+                    backup=backup,
+                    active=active,
+                ):
+                    (
+                        primary_recovery_bias_enabled,
+                        primary_recovery_min_passes,
+                        primary_recovery_cooldown_scale,
+                    ) = _resolve_primary_recovery_bias_settings()
+                    if primary_recovery_bias_enabled:
+                        required_passes = min(required_passes, int(primary_recovery_min_passes))
+                        scaled_stay = int(round(float(required_stay) * float(primary_recovery_cooldown_scale)))
+                        required_stay = min(required_stay, max(scaled_stay, 0))
+                        state["primary_recovery_bias"] = {
+                            "enabled": True,
+                            "required_passes": int(required_passes),
+                            "required_stay_sec": int(required_stay),
+                        }
+                    else:
+                        state.pop("primary_recovery_bias", None)
+                else:
+                    state.pop("primary_recovery_bias", None)
+                allow_recovery = consecutive >= required_passes
                 elapsed = (now - last_switch_dt).total_seconds()
-                required_stay = max(cooldown_seconds, int(max(float(self.min_recovery_seconds), 0.0)))
                 cooldown_ok = allow_recovery and elapsed >= required_stay
                 if window_locked and not hard_fail:
                     cooldown_ok = False
@@ -2375,6 +2457,7 @@ class ProviderMonitor:
                     switch_reason = reason or "recovered"
         else:
             state["consecutive_passes"] = 0
+            state.pop("primary_recovery_bias", None)
             cooldown_ok = not using_backup and (not window_locked or hard_fail)
             stay_reason = reason or "unhealthy"
             switch_reason = reason or "unhealthy"
@@ -2467,7 +2550,7 @@ class ProviderMonitor:
         state["cooldown"] = cooldown_default
         stay_provider = active if not using_backup else backup
         cooldown_for_log = (
-            max(cooldown_seconds, int(max(float(self.min_recovery_seconds), 0.0)))
+            int(required_stay)
             if using_backup and healthy
             else cooldown_default
         )

@@ -18406,6 +18406,46 @@ def _clip_delta_to_symbol_notional_cap(
     return int(adjusted_delta), details
 
 
+def _clip_sell_qty_to_available_position(
+    *,
+    symbol: str,
+    current_shares: int,
+    requested_qty: int,
+    exec_engine: Any | None,
+) -> tuple[int, dict[str, Any] | None]:
+    """Clip sell quantity to currently available long shares before submit."""
+
+    requested_qty_int = max(int(requested_qty), 0)
+    current_qty_int = int(current_shares)
+    if requested_qty_int <= 0 or current_qty_int <= 0:
+        return requested_qty_int, None
+
+    open_sell_qty = 0.0
+    if exec_engine is not None and hasattr(exec_engine, "open_order_totals"):
+        try:
+            _, open_sell_qty_raw = exec_engine.open_order_totals(symbol)
+            open_sell_qty = max(float(_safe_float(open_sell_qty_raw) or 0.0), 0.0)
+        except Exception:
+            open_sell_qty = 0.0
+    reserved_shares = int(math.ceil(open_sell_qty - 1e-9))
+    available_qty = max(current_qty_int - max(reserved_shares, 0), 0)
+    if requested_qty_int <= available_qty:
+        return requested_qty_int, None
+
+    adjusted_qty = int(max(available_qty, 0))
+    context = {
+        "symbol": str(symbol or "").upper(),
+        "requested_qty": int(requested_qty_int),
+        "available_qty": int(available_qty),
+        "current_shares": int(current_qty_int),
+        "open_sell_qty": float(open_sell_qty),
+        "reserved_shares": int(max(reserved_shares, 0)),
+        "adjusted_qty": int(adjusted_qty),
+    }
+    logger.warning("PRE_SUBMIT_SELL_QTY_CLIPPED_AVAILABLE_POSITION", extra=context)
+    return adjusted_qty, context
+
+
 # --------------------------------------------------------------------------- #
 # Buying power enforcement helpers
 
@@ -39719,6 +39759,34 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             continue
 
         side = "buy" if delta_shares > 0 else "sell"
+        if side == "sell":
+            requested_sell_qty = abs(int(delta_shares))
+            adjusted_sell_qty, sell_qty_clip_context = _clip_sell_qty_to_available_position(
+                symbol=symbol,
+                current_shares=int(current_shares),
+                requested_qty=requested_sell_qty,
+                exec_engine=exec_engine,
+            )
+            if adjusted_sell_qty <= 0:
+                gates.append("PRE_SUBMIT_INSUFFICIENT_POSITION_AVAILABLE")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    metrics={"pre_submit_sell_qty_clip": sell_qty_clip_context or {}},
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
+            if adjusted_sell_qty != requested_sell_qty:
+                delta_shares = -int(adjusted_sell_qty)
+                net_target.target_shares = current_shares + delta_shares
+                net_target.target_dollars = net_target.target_shares * price
+                gates.append("PRE_SUBMIT_SELL_QTY_CLIP_AVAILABLE_POSITION")
+                if sell_qty_clip_context:
+                    symbol_snapshot["pre_submit_sell_qty_clip"] = dict(sell_qty_clip_context)
         opening_trade = abs(current_shares + delta_shares) > abs(current_shares)
         if exec_engine is not None:
             if opening_trade:
@@ -39918,6 +39986,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     default=0.0,
                 ),
                 factor_post_ratio=float(factor_post_ratio),
+                reject_rate_pct=float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0),
                 safety_tier=safety_tier,
             ),
         )

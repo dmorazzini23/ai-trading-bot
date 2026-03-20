@@ -93,6 +93,8 @@ KNOWN_POLICY_KEYS: frozenset[str] = frozenset(
         "AI_TRADING_POLICY_ATTACK_MIN_NET_EDGE_BPS",
         "AI_TRADING_POLICY_ATTACK_REQUIRE_ZERO_PENDING",
         "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER",
+        "AI_TRADING_POLICY_ATTACK_RELAX_REJECT_RATE_PCT",
+        "AI_TRADING_POLICY_ATTACK_RELAX_SIZE_MULTIPLIER",
     }
 )
 
@@ -194,6 +196,8 @@ class SafetyPolicy:
     attack_min_net_edge_bps: float
     attack_require_zero_pending: bool
     attack_size_multiplier: float
+    attack_relax_reject_rate_pct: float
+    attack_relax_size_multiplier: float
 
 
 @dataclass(frozen=True)
@@ -254,6 +258,7 @@ class ExecutionCandidate:
     portfolio_post_gross_dollars: float
     sleeve_post_notional_dollars: float
     factor_post_ratio: float
+    reject_rate_pct: float = 0.0
     safety_tier: SafetyTier = SafetyTier.NORMAL
 
 
@@ -678,6 +683,18 @@ def compile_effective_policy(cfg: Any, env: Mapping[str, str] | None = None) -> 
             min_value=1.0,
             max_value=3.0,
         ),
+        attack_relax_reject_rate_pct=_as_float(
+            env_values.get("AI_TRADING_POLICY_ATTACK_RELAX_REJECT_RATE_PCT"),
+            2.0,
+            min_value=0.0,
+            max_value=100.0,
+        ),
+        attack_relax_size_multiplier=_as_float(
+            env_values.get("AI_TRADING_POLICY_ATTACK_RELAX_SIZE_MULTIPLIER"),
+            1.05,
+            min_value=1.0,
+            max_value=3.0,
+        ),
     )
 
     source_pairs = sorted(
@@ -846,7 +863,16 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
         if proposed_abs > current_abs:
             reasons.append("SAFETY_TIER_SAFE_BLOCK")
     elif candidate.safety_tier is SafetyTier.ATTACK and qty != 0:
-        qty = _scale_qty(qty, policy.safety.attack_size_multiplier)
+        attack_scale = float(policy.safety.attack_size_multiplier)
+        reject_rate = max(0.0, float(candidate.reject_rate_pct))
+        relax_threshold = max(0.0, float(policy.safety.attack_relax_reject_rate_pct))
+        relax_scale = max(1.0, float(policy.safety.attack_relax_size_multiplier))
+        if reject_rate <= relax_threshold:
+            bounded_relax_scale = min(attack_scale, relax_scale)
+            if bounded_relax_scale < attack_scale - 1e-9:
+                attack_scale = bounded_relax_scale
+                reasons.append("SAFETY_TIER_ATTACK_SCALE_RELAXED")
+        qty = _scale_qty(qty, attack_scale)
         reasons.append("SAFETY_TIER_ATTACK_SCALE")
 
     if qty == 0 and "ZERO_QTY" not in reasons:
