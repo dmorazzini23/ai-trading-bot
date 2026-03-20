@@ -1268,6 +1268,141 @@ def test_select_candidate_threshold_can_be_disabled(
     assert selected["threshold"] == pytest.approx(0.5)
 
 
+def test_select_candidate_threshold_blocks_low_support_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = pd.DataFrame({"regime": ["regular", "regular"], "realized_edge_bps": [2.0, -1.0]})
+    oof_probs = np.asarray([0.7, 0.3], dtype=float)
+    fold_predictions = [(np.arange(2, dtype=int), oof_probs.copy())]
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_REQUIRE_MIN_SUPPORT", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "10")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
+
+    monkeypatch.setattr(after_hours, "_candidate_threshold_grid", lambda _default: [0.4, 0.6])
+
+    def _fake_fold_metrics(
+        *,
+        edge: np.ndarray,
+        regimes: np.ndarray,
+        oof_probabilities: np.ndarray,
+        fold_predictions: list[tuple[np.ndarray, np.ndarray]],
+        threshold: float,
+    ) -> dict[str, object]:
+        del edge, regimes, oof_probabilities, fold_predictions
+        if threshold < 0.5:
+            return {
+                "threshold": float(threshold),
+                "support": 6,
+                "mean_expectancy_bps": 6.0,
+                "max_drawdown_bps": 200.0,
+                "turnover_ratio": 0.3,
+                "mean_hit_rate": 0.6,
+                "hit_rate_stability": 0.8,
+                "profitable_fold_count": 1,
+                "profitable_fold_ratio": 1.0,
+                "regime_metrics": {},
+            }
+        return {
+            "threshold": float(threshold),
+            "support": 3,
+            "mean_expectancy_bps": 2.0,
+            "max_drawdown_bps": 150.0,
+            "turnover_ratio": 0.2,
+            "mean_hit_rate": 0.55,
+            "hit_rate_stability": 0.75,
+            "profitable_fold_count": 1,
+            "profitable_fold_ratio": 1.0,
+            "regime_metrics": {},
+        }
+
+    monkeypatch.setattr(after_hours, "_fold_oof_threshold_metrics", _fake_fold_metrics)
+    monkeypatch.setattr(
+        after_hours,
+        "_candidate_threshold_selection_score",
+        lambda metrics: float(metrics["mean_expectancy_bps"]),
+    )
+
+    selected = after_hours._select_candidate_threshold(
+        dataset=dataset,
+        oof_probabilities=oof_probs,
+        fold_predictions=fold_predictions,
+        default_threshold=0.5,
+    )
+
+    assert selected == {}
+
+
+def test_select_candidate_threshold_allows_low_support_fallback_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = pd.DataFrame({"regime": ["regular", "regular"], "realized_edge_bps": [2.0, -1.0]})
+    oof_probs = np.asarray([0.7, 0.3], dtype=float)
+    fold_predictions = [(np.arange(2, dtype=int), oof_probs.copy())]
+
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_REQUIRE_MIN_SUPPORT", "0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", "10")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", "0.0")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_THRESHOLD_MAX_DRAWDOWN_BPS", "999999")
+    monkeypatch.setenv("AI_TRADING_EDGE_TARGET_MAX_TURNOVER_RATIO", "1.0")
+
+    monkeypatch.setattr(after_hours, "_candidate_threshold_grid", lambda _default: [0.4, 0.6])
+
+    def _fake_fold_metrics(
+        *,
+        edge: np.ndarray,
+        regimes: np.ndarray,
+        oof_probabilities: np.ndarray,
+        fold_predictions: list[tuple[np.ndarray, np.ndarray]],
+        threshold: float,
+    ) -> dict[str, object]:
+        del edge, regimes, oof_probabilities, fold_predictions
+        if threshold < 0.5:
+            return {
+                "threshold": float(threshold),
+                "support": 6,
+                "mean_expectancy_bps": 6.0,
+                "max_drawdown_bps": 200.0,
+                "turnover_ratio": 0.3,
+                "mean_hit_rate": 0.6,
+                "hit_rate_stability": 0.8,
+                "profitable_fold_count": 1,
+                "profitable_fold_ratio": 1.0,
+                "regime_metrics": {},
+            }
+        return {
+            "threshold": float(threshold),
+            "support": 3,
+            "mean_expectancy_bps": 2.0,
+            "max_drawdown_bps": 150.0,
+            "turnover_ratio": 0.2,
+            "mean_hit_rate": 0.55,
+            "hit_rate_stability": 0.75,
+            "profitable_fold_count": 1,
+            "profitable_fold_ratio": 1.0,
+            "regime_metrics": {},
+        }
+
+    monkeypatch.setattr(after_hours, "_fold_oof_threshold_metrics", _fake_fold_metrics)
+    monkeypatch.setattr(
+        after_hours,
+        "_candidate_threshold_selection_score",
+        lambda metrics: float(metrics["mean_expectancy_bps"]),
+    )
+
+    selected = after_hours._select_candidate_threshold(
+        dataset=dataset,
+        oof_probabilities=oof_probs,
+        fold_predictions=fold_predictions,
+        default_threshold=0.5,
+    )
+
+    assert selected["threshold"] == pytest.approx(0.4)
+    assert selected["support"] == 6
+
+
 def test_promotion_gate_bundle_requires_profitable_folds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1366,6 +1501,118 @@ def test_promotion_gate_bundle_requires_prior_model_improvement_margin(
     assert promotion["prior_model_comparison"]["gate"] is False
     assert promotion["gate_passed"] is False
     assert promotion["status"] == "shadow"
+
+
+def test_champion_challenger_ab_gate_passes_on_meaningful_uplift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=120,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+        fold_expectancy_bps=(2.6, 2.3, 2.5, 2.4, 2.7),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_SIGNIFICANCE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MIN_FOLDS", "4")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MIN_DELTA_BPS", "0.8")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MAX_P_VALUE", "0.25")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_MATCHING_RUNTIME_ASSUMPTIONS", "1")
+
+    bundle = after_hours._champion_challenger_ab_gate_bundle(
+        best=best,
+        prior_metrics={
+            "fold_expectancy_bps": [0.8, 1.0, 0.9, 1.1, 0.7],
+            "runtime_performance_thresholds": {
+                "trade_fill_source": "all",
+                "lookback_days": 5,
+                "min_used_days": 3,
+                "min_closed_trades": 50,
+                "min_profit_factor": 0.9,
+                "min_win_rate": 0.5,
+                "min_net_pnl": -500.0,
+                "min_acceptance_rate": 0.02,
+                "min_expected_net_edge_bps": -50.0,
+            },
+        },
+        runtime_performance_gate={
+            "thresholds": {
+                "trade_fill_source": "all",
+                "lookback_days": 5,
+                "min_used_days": 3,
+                "min_closed_trades": 50,
+                "min_profit_factor": 0.9,
+                "min_win_rate": 0.5,
+                "min_net_pnl": -500.0,
+                "min_acceptance_rate": 0.02,
+                "min_expected_net_edge_bps": -50.0,
+            }
+        },
+    )
+
+    assert bundle["enabled"] is True
+    assert bundle["required_for_promotion"] is True
+    assert bundle["gate_passed"] is True
+    assert bundle["reason"] == "stat_sig_pass"
+    assert bundle["observed"]["delta_expectancy_bps"] > 0.8
+    assert bundle["observed"]["p_value"] <= 0.25
+
+
+def test_champion_challenger_ab_gate_blocks_assumption_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="logreg",
+        fold_count=5,
+        profitable_fold_count=4,
+        profitable_fold_ratio=0.8,
+        support=120,
+        mean_expectancy_bps=1.4,
+        max_drawdown_bps=220.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.55,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.5, 0.6], dtype=float),
+        fold_expectancy_bps=(1.6, 1.5, 1.4, 1.5, 1.6),
+    )
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_SIGNIFICANCE", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_MATCHING_RUNTIME_ASSUMPTIONS", "1")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_AB_ALLOW_MISSING_PRIOR", "0")
+
+    bundle = after_hours._champion_challenger_ab_gate_bundle(
+        best=best,
+        prior_metrics={
+            "fold_expectancy_bps": [0.9, 1.0, 1.1, 0.8, 1.0],
+            "runtime_performance_thresholds": {
+                "trade_fill_source": "live",
+                "lookback_days": 5,
+            },
+        },
+        runtime_performance_gate={
+            "thresholds": {
+                "trade_fill_source": "all",
+                "lookback_days": 5,
+            }
+        },
+    )
+
+    assert bundle["enabled"] is True
+    assert bundle["required_for_promotion"] is True
+    assert bundle["gate_passed"] is False
+    assert bundle["reason"] == "runtime_assumptions_mismatch"
+    assert bundle["observed"]["runtime_assumptions_match"] is False
+    assert "trade_fill_source" in bundle["observed"]["runtime_assumptions_mismatch"]
 
 
 def test_phase1_week1_gate_bundle_reports_blockers(

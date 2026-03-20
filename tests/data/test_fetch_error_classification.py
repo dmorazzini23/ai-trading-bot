@@ -43,3 +43,25 @@ def test_classify_empty_bars_reason():
 def test_classify_backup_cooldown_reason():
     reason, _ = data_fetcher._classify_fallback_reason("backup_cooldown_active", {})
     assert reason == "backup_cooldown_active"
+
+
+def test_classify_unauthorized_sip_from_feed_status():
+    reason, details = data_fetcher._classify_fallback_reason(
+        "ignored",
+        {"http_status": 403, "feed": "sip"},
+    )
+    assert reason == "unauthorized_sip"
+    assert details["http_status"] == 403
+    assert details["feed"] == "sip"
+
+
+def test_classify_unauthorized_sip_from_entitlement_message():
+    reason, _ = data_fetcher._classify_fallback_reason(
+        None,
+        {
+            "http_status": 403,
+            "message": "subscription does not permit querying recent SIP data",
+            "feed": "iex",
+        },
+    )
+    assert reason == "unauthorized_sip"

@@ -109,6 +109,85 @@ def test_pending_new_timeout_policy_idempotent_per_cycle(monkeypatch):
     assert third_applied is True
 
 
+def test_pending_new_timeout_policy_ladder_replaces_then_cancels(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-ladder-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+        limit_price="100.0",
+        client_order_id="cid-ladder-1",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    canceled: list[str] = []
+    replaced: list[dict[str, Any]] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+
+    def _replace(**kwargs):
+        replaced.append(dict(kwargs))
+        return {"id": "ord-repl-1"}
+
+    engine._replace_limit_order_with_marketable = _replace
+    engine._engine_cycle_index = 1
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "1")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_WIDEN_STEP_BPS", "5")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS", "1")
+
+    first_applied = engine._apply_pending_new_timeout_policy()
+    engine._engine_cycle_index = 2
+    second_applied = engine._apply_pending_new_timeout_policy()
+
+    assert first_applied is True
+    assert second_applied is True
+    assert len(replaced) == 1
+    assert canceled == ["ord-ladder-1"]
+
+
+def test_pending_new_timeout_policy_hard_timeout_forces_cancel(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-hard-1",
+        symbol="AAPL",
+        side="buy",
+        qty="1",
+        status="pending_new",
+        type="limit",
+        limit_price="101.0",
+        client_order_id="cid-hard-1",
+        created_at=now_dt - timedelta(seconds=180),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    canceled: list[str] = []
+    replaced: list[dict[str, Any]] = []
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+    engine._replace_limit_order_with_marketable = lambda **kwargs: replaced.append(dict(kwargs))
+    engine._engine_cycle_index = 1
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "60")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "3")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS", "1")
+
+    applied = engine._apply_pending_new_timeout_policy()
+
+    assert applied is True
+    assert canceled == ["ord-hard-1"]
+    assert replaced == []
+
+
 def test_pending_new_timeout_policy_defaults_to_cancel(monkeypatch):
     engine = _engine_stub()
     now_dt = datetime.now(UTC)
@@ -1082,6 +1161,36 @@ def test_symbol_loss_cooldown_triggers_and_expires(monkeypatch):
     assert context_after["reason"] == "cooldown_inactive"
 
 
+def test_symbol_loss_cooldown_triggers_from_realized_loss(monkeypatch):
+    engine = _engine_stub()
+    clock = {"value": 200.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_TRIGGER_STREAK", "5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_REALIZED_TRIGGER_STREAK", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MIN_SLIPPAGE_BPS", "10.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MIN_REALIZED_PNL", "-25.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MINUTES", "1")
+
+    engine._update_symbol_loss_cooldown_from_fill(
+        symbol="AAPL",
+        slippage_bps=0.5,
+        realized_pnl=-30.0,
+    )
+    allowed_before, _ = engine._symbol_loss_cooldown_allows_opening(symbol="AAPL")
+    assert allowed_before is True
+
+    engine._update_symbol_loss_cooldown_from_fill(
+        symbol="AAPL",
+        slippage_bps=0.5,
+        realized_pnl=-40.0,
+    )
+    allowed_after, context_after = engine._symbol_loss_cooldown_allows_opening(symbol="AAPL")
+    assert allowed_after is False
+    assert context_after["reason"] == "symbol_loss_cooldown"
+    assert context_after["cooldown_reason"] == "realized_loss_streak"
+
+
 def test_order_ack_timeout_recovery_clears_state(monkeypatch):
     engine = _engine_stub()
     engine._last_order_ack_timeout_mono = 10.0
@@ -1522,6 +1631,7 @@ def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     monkeypatch.setenv("AI_TRADING_EXEC_KPI_ALERTS_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_KPI_MIN_FILL_RATIO", "0.90")
     monkeypatch.setenv("AI_TRADING_KPI_MAX_CANCEL_RATIO", "0.10")
+    monkeypatch.setenv("AI_TRADING_KPI_MAX_CANCEL_NEW_RATIO", "0.10")
     monkeypatch.setenv("AI_TRADING_KPI_MAX_MEDIAN_PENDING_SEC", "5")
     monkeypatch.setenv("AI_TRADING_KPI_PENDING_AGE_ALERT_SEC", "60")
 
@@ -1540,6 +1650,7 @@ def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):
     assert any(record.message == "EXECUTION_KPI_SNAPSHOT" for record in caplog.records)
     assert "ALERT_EXEC_KPI_LOW_FILL_RATIO" in emitted
     assert "ALERT_EXEC_KPI_HIGH_CANCEL_RATIO" in emitted
+    assert "ALERT_EXEC_KPI_HIGH_CANCEL_NEW_RATIO" in emitted
     assert "ALERT_EXEC_KPI_MEDIAN_PENDING_HIGH" in emitted
     assert "ALERT_EXEC_KPI_OPEN_PENDING_AGED" in emitted
 

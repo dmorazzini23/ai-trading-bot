@@ -235,6 +235,7 @@ class CandidateMetrics:
     hit_rate_stability: float
     regime_metrics: dict[str, dict[str, float]]
     oof_probabilities: np.ndarray
+    fold_expectancy_bps: tuple[float, ...] = field(default_factory=tuple)
     brier_score: float = 1.0
     regime_calibration: dict[str, dict[str, float]] = field(default_factory=dict)
     selected_threshold: float = 0.5
@@ -953,6 +954,10 @@ def _evaluate_candidate(
         hit_rate_stability=float(selected_metrics.get("hit_rate_stability", 0.0) or 0.0),
         regime_metrics=regime_metrics,
         oof_probabilities=oof_probs,
+        fold_expectancy_bps=tuple(
+            float(value)
+            for value in list(selected_metrics.get("fold_expectancy_bps", []) or [])
+        ),
         brier_score=float(brier_score),
         regime_calibration=regime_calibration,
         selected_threshold=float(selected_threshold),
@@ -1930,6 +1935,7 @@ def _fold_oof_threshold_metrics(
     return {
         "threshold": float(threshold),
         "support": int(total_support),
+        "fold_expectancy_bps": [float(value) for value in fold_edges],
         "mean_expectancy_bps": float(mean(fold_edges)) if fold_edges else 0.0,
         "max_drawdown_bps": float(max(fold_dd)) if fold_dd else 0.0,
         "turnover_ratio": float(mean(fold_turnover)) if fold_turnover else 0.0,
@@ -2033,6 +2039,13 @@ def _select_candidate_threshold(
         1,
         int(get_env("AI_TRADING_AFTER_HOURS_MIN_THRESHOLD_SUPPORT", 25, cast=int)),
     )
+    require_min_support = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_CANDIDATE_THRESHOLD_REQUIRE_MIN_SUPPORT",
+            True,
+            cast=bool,
+        )
+    )
     min_expectancy_bps = float(
         get_env("AI_TRADING_AFTER_HOURS_THRESHOLD_MIN_EXPECTANCY_BPS", 0.0, cast=float)
     )
@@ -2071,7 +2084,8 @@ def _select_candidate_threshold(
         if comparison_key > best_any_key:
             best_any_key = comparison_key
             best_any = metrics
-        if int(metrics["support"]) > 0 and comparison_key > best_fallback_key:
+        fallback_support_min = int(min_support) if require_min_support else 1
+        if int(metrics["support"]) >= fallback_support_min and comparison_key > best_fallback_key:
             best_fallback_key = comparison_key
             best_fallback = metrics
         feasible = (
@@ -2083,7 +2097,19 @@ def _select_candidate_threshold(
         if feasible and comparison_key > best_feasible_key:
             best_feasible_key = comparison_key
             best_feasible = metrics
-    return dict(best_feasible or best_fallback or best_any or {})
+    selected = best_feasible or best_fallback
+    if selected is None and not require_min_support:
+        selected = best_any
+    if selected is None and require_min_support:
+        logger.warning(
+            "AFTER_HOURS_CANDIDATE_THRESHOLD_MIN_SUPPORT_UNMET",
+            extra={
+                "min_support": int(min_support),
+                "best_observed_support": int((best_any or {}).get("support", 0) or 0),
+                "candidate_count": int(len(threshold_candidates)),
+            },
+        )
+    return dict(selected or {})
 
 
 def _run_sensitivity_sweep(
@@ -2274,6 +2300,54 @@ def _prior_metrics_from_report_payload(
     if isinstance(model_payload, Mapping):
         model_id = model_payload.get("model_id")
         governance_status = model_payload.get("governance_status")
+    fold_expectancy_bps: tuple[float, ...] = ()
+    candidate_payload = payload.get("candidate_metrics")
+    if isinstance(candidate_payload, list):
+        selected_candidate: Mapping[str, Any] | None = None
+        for row in candidate_payload:
+            if not isinstance(row, Mapping):
+                continue
+            if bool(row.get("selected", False)):
+                selected_candidate = row
+                break
+        if selected_candidate is None:
+            for row in candidate_payload:
+                if not isinstance(row, Mapping):
+                    continue
+                if int(row.get("rank", 0) or 0) == 1:
+                    selected_candidate = row
+                    break
+        if isinstance(selected_candidate, Mapping):
+            raw_folds = selected_candidate.get("fold_expectancy_bps")
+            if isinstance(raw_folds, (list, tuple)):
+                values: list[float] = []
+                for item in raw_folds:
+                    try:
+                        numeric = float(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(numeric):
+                        values.append(float(numeric))
+                fold_expectancy_bps = tuple(values)
+    if not fold_expectancy_bps:
+        raw_metric_folds = metrics.get("fold_expectancy_bps")
+        if isinstance(raw_metric_folds, (list, tuple)):
+            values = []
+            for item in raw_metric_folds:
+                try:
+                    numeric = float(item)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numeric):
+                    values.append(float(numeric))
+            fold_expectancy_bps = tuple(values)
+    runtime_perf_payload = payload.get("runtime_performance_gate")
+    runtime_perf_thresholds = (
+        dict(runtime_perf_payload.get("thresholds", {}))
+        if isinstance(runtime_perf_payload, Mapping)
+        and isinstance(runtime_perf_payload.get("thresholds", {}), Mapping)
+        else {}
+    )
     return {
         "report_path": str(report_path),
         "model_id": model_id,
@@ -2286,7 +2360,9 @@ def _prior_metrics_from_report_payload(
         "fold_count": int(metrics.get("fold_count", 0) or 0),
         "profitable_fold_count": int(metrics.get("profitable_fold_count", 0) or 0),
         "profitable_fold_ratio": float(metrics.get("profitable_fold_ratio", 0.0) or 0.0),
+        "fold_expectancy_bps": fold_expectancy_bps,
         "regime_calibration": payload.get("regime_calibration"),
+        "runtime_performance_thresholds": runtime_perf_thresholds,
         "ts": payload.get("ts"),
     }
 
@@ -2354,6 +2430,231 @@ def _load_prior_model_metrics(*, report_dir: Path) -> dict[str, Any] | None:
     result.pop("is_production", None)
     result.pop("parsed_ts", None)
     return result
+
+
+def _runtime_assumptions_signature(
+    thresholds: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(thresholds, Mapping):
+        return {}
+
+    def _as_float(value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return float(parsed)
+
+    def _as_int(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    signature: dict[str, Any] = {}
+    fill_source = str(thresholds.get("trade_fill_source", "") or "").strip().lower()
+    if fill_source:
+        signature["trade_fill_source"] = fill_source
+    for key in (
+        "lookback_days",
+        "min_used_days",
+        "min_closed_trades",
+    ):
+        parsed_int = _as_int(thresholds.get(key))
+        if parsed_int is not None:
+            signature[key] = int(parsed_int)
+    for key in (
+        "min_profit_factor",
+        "min_win_rate",
+        "min_net_pnl",
+        "min_acceptance_rate",
+        "min_expected_net_edge_bps",
+    ):
+        parsed_float = _as_float(thresholds.get(key))
+        if parsed_float is not None:
+            signature[key] = float(round(parsed_float, 8))
+    return signature
+
+
+def _champion_challenger_ab_gate_bundle(
+    *,
+    best: CandidateMetrics,
+    prior_metrics: Mapping[str, Any] | None,
+    runtime_performance_gate: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    enabled = bool(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_ENABLED", True, cast=bool))
+    required_for_promotion = bool(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_SIGNIFICANCE", True, cast=bool)
+    )
+    min_folds = max(
+        2,
+        int(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MIN_FOLDS", 3, cast=int)),
+    )
+    min_delta_bps = float(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MIN_DELTA_BPS", 1.0, cast=float)
+    )
+    max_p_value = _clamp(
+        float(get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_MAX_P_VALUE", 0.2, cast=float)),
+        low=0.0,
+        high=1.0,
+    )
+    require_matching_runtime_assumptions = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_AB_REQUIRE_MATCHING_RUNTIME_ASSUMPTIONS",
+            True,
+            cast=bool,
+        )
+    )
+    allow_missing_prior = bool(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_AB_ALLOW_MISSING_PRIOR", True, cast=bool)
+    )
+    thresholds = {
+        "min_folds": int(min_folds),
+        "min_delta_bps": float(min_delta_bps),
+        "max_p_value": float(max_p_value),
+        "require_matching_runtime_assumptions": bool(require_matching_runtime_assumptions),
+        "allow_missing_prior": bool(allow_missing_prior),
+    }
+    if not enabled:
+        return {
+            "enabled": False,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": True,
+            "reason": "disabled",
+            "thresholds": thresholds,
+            "observed": {},
+        }
+
+    challenger_folds = tuple(float(v) for v in best.fold_expectancy_bps if math.isfinite(float(v)))
+    challenger_count = len(challenger_folds)
+    challenger_mean = float(mean(challenger_folds)) if challenger_folds else float(best.mean_expectancy_bps)
+    observed: dict[str, Any] = {
+        "challenger_fold_count": int(challenger_count),
+        "challenger_mean_expectancy_bps": float(challenger_mean),
+    }
+    if challenger_count < min_folds:
+        return {
+            "enabled": True,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": False,
+            "reason": "insufficient_challenger_folds",
+            "thresholds": thresholds,
+            "observed": observed,
+        }
+
+    if not isinstance(prior_metrics, Mapping):
+        return {
+            "enabled": True,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": bool(allow_missing_prior),
+            "reason": "missing_prior_metrics",
+            "thresholds": thresholds,
+            "observed": observed,
+        }
+
+    raw_prior_folds = prior_metrics.get("fold_expectancy_bps")
+    champion_folds: list[float] = []
+    if isinstance(raw_prior_folds, (list, tuple)):
+        for item in raw_prior_folds:
+            try:
+                numeric = float(item)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(numeric):
+                champion_folds.append(float(numeric))
+    champion_count = len(champion_folds)
+    if champion_count < min_folds:
+        return {
+            "enabled": True,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": bool(allow_missing_prior),
+            "reason": "insufficient_prior_folds",
+            "thresholds": thresholds,
+            "observed": {
+                **observed,
+                "champion_fold_count": int(champion_count),
+            },
+        }
+    champion_mean = float(mean(champion_folds))
+
+    current_runtime_signature = _runtime_assumptions_signature(
+        runtime_performance_gate.get("thresholds", {})
+        if isinstance(runtime_performance_gate, Mapping)
+        else {}
+    )
+    prior_runtime_signature = _runtime_assumptions_signature(
+        prior_metrics.get("runtime_performance_thresholds", {})
+        if isinstance(prior_metrics, Mapping)
+        else {}
+    )
+    runtime_assumptions_match = True
+    assumptions_mismatch: dict[str, dict[str, Any]] = {}
+    if require_matching_runtime_assumptions and current_runtime_signature and prior_runtime_signature:
+        compare_keys = sorted(set(current_runtime_signature) | set(prior_runtime_signature))
+        for key in compare_keys:
+            current_value = current_runtime_signature.get(key)
+            prior_value = prior_runtime_signature.get(key)
+            if current_value != prior_value:
+                runtime_assumptions_match = False
+                assumptions_mismatch[str(key)] = {
+                    "current": current_value,
+                    "prior": prior_value,
+                }
+        if not runtime_assumptions_match:
+            return {
+                "enabled": True,
+                "required_for_promotion": required_for_promotion,
+                "gate_passed": False,
+                "reason": "runtime_assumptions_mismatch",
+                "thresholds": thresholds,
+                "observed": {
+                    **observed,
+                    "champion_fold_count": int(champion_count),
+                    "champion_mean_expectancy_bps": float(champion_mean),
+                    "runtime_assumptions_match": False,
+                    "runtime_assumptions_mismatch": assumptions_mismatch,
+                    "runtime_assumptions_current": current_runtime_signature,
+                    "runtime_assumptions_prior": prior_runtime_signature,
+                },
+            }
+
+    challenger_array = np.asarray(challenger_folds, dtype=float)
+    champion_array = np.asarray(champion_folds, dtype=float)
+    delta_bps = float(challenger_mean - champion_mean)
+    challenger_var = float(np.var(challenger_array, ddof=1)) if challenger_count > 1 else 0.0
+    champion_var = float(np.var(champion_array, ddof=1)) if champion_count > 1 else 0.0
+    stderr = math.sqrt(
+        max(0.0, challenger_var / max(challenger_count, 1) + champion_var / max(champion_count, 1))
+    )
+    if stderr <= 1e-9:
+        z_score = 0.0
+        p_value = 0.0 if delta_bps > 0.0 else 1.0
+    else:
+        z_score = float(delta_bps / stderr)
+        p_value = float(max(0.0, min(1.0, 1.0 - (0.5 * (1.0 + math.erf(z_score / math.sqrt(2.0)))))))
+    statistically_meaningful = bool(delta_bps >= min_delta_bps and p_value <= max_p_value)
+    return {
+        "enabled": True,
+        "required_for_promotion": required_for_promotion,
+        "gate_passed": bool(statistically_meaningful),
+        "reason": "stat_sig_pass" if statistically_meaningful else "stat_sig_not_met",
+        "thresholds": thresholds,
+        "observed": {
+            **observed,
+            "champion_fold_count": int(champion_count),
+            "champion_mean_expectancy_bps": float(champion_mean),
+            "delta_expectancy_bps": float(delta_bps),
+            "stderr": float(stderr),
+            "z_score": float(z_score),
+            "p_value": float(p_value),
+            "runtime_assumptions_match": bool(runtime_assumptions_match),
+            "runtime_assumptions_mismatch": assumptions_mismatch,
+            "runtime_assumptions_current": current_runtime_signature,
+            "runtime_assumptions_prior": prior_runtime_signature,
+        },
+    }
 
 
 def _promotion_gate_bundle(
@@ -2727,7 +3028,28 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         "min_expected_net_edge_bps": _threshold_float("MIN_EXPECTED_NET_EDGE_BPS", -50.0),
         "min_used_days": max(0, _threshold_int("MIN_USED_DAYS", 0)),
         "lookback_days": max(0, _threshold_int("LOOKBACK_DAYS", 0)),
-        "trade_fill_source": _threshold_str("TRADE_FILL_SOURCE", "all"),
+        "trade_fill_source": _threshold_str("TRADE_FILL_SOURCE", "auto_live"),
+        "auto_live_min_closed_trades": max(
+            1,
+            _threshold_int(
+                "AUTO_LIVE_MIN_CLOSED_TRADES",
+                _threshold_int("MIN_CLOSED_TRADES", 20),
+            ),
+        ),
+        "auto_live_min_used_days": max(
+            1,
+            _threshold_int(
+                "AUTO_LIVE_MIN_USED_DAYS",
+                max(1, _threshold_int("MIN_USED_DAYS", 0)),
+            ),
+        ),
+        "auto_live_min_available_days": max(
+            1,
+            _threshold_int(
+                "AUTO_LIVE_MIN_AVAILABLE_DAYS",
+                max(1, _threshold_int("MIN_USED_DAYS", 0)),
+            ),
+        ),
         "require_pnl_available": _threshold_bool("REQUIRE_PNL_AVAILABLE", True),
         "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", False),
     }
@@ -3083,6 +3405,7 @@ def _serialize_candidate_metrics(
                 "brier_score": item.brier_score,
                 "selected_threshold": item.selected_threshold,
                 "selection_score": _candidate_selection_score(item, weights=selection_weights),
+                "fold_expectancy_bps": [float(value) for value in item.fold_expectancy_bps],
                 "regime_metrics": item.regime_metrics,
                 "regime_calibration": item.regime_calibration,
             }
@@ -3834,12 +4157,21 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         regime_calibration=best.regime_calibration,
     )
     runtime_performance_gate = _runtime_performance_go_no_go_gate()
+    champion_challenger_ab = _champion_challenger_ab_gate_bundle(
+        best=best,
+        prior_metrics=prior_model_metrics,
+        runtime_performance_gate=runtime_performance_gate,
+    )
     roadmap_additional_gates: dict[str, bool] = {}
     if bool(phase1_week1.get("required_for_promotion", False)):
         roadmap_additional_gates["phase1_week1"] = bool(phase1_week1.get("gate_passed", False))
     if bool(runtime_performance_gate.get("enabled", False)):
         roadmap_additional_gates["runtime_performance"] = bool(
             runtime_performance_gate.get("gate_passed", False)
+        )
+    if bool(champion_challenger_ab.get("required_for_promotion", False)):
+        roadmap_additional_gates["champion_challenger_ab"] = bool(
+            champion_challenger_ab.get("gate_passed", False)
         )
     promotion = _promotion_gate_bundle(
         best=best,
@@ -3874,6 +4206,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "prior_model_comparison": dict(promotion.get("prior_model_comparison", {})),
             "consecutive_passes": dict(promotion.get("consecutive_passes", {})),
             "runtime_performance_gate": runtime_performance_gate,
+            "champion_challenger_ab": champion_challenger_ab,
         },
     )
 
@@ -3968,13 +4301,18 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "selection_score": _candidate_selection_score(best, weights=selection_weights),
                 "profitable_fold_count": best.profitable_fold_count,
                 "profitable_fold_ratio": best.profitable_fold_ratio,
+                "fold_expectancy_bps": [float(value) for value in best.fold_expectancy_bps],
                 "promotion_consecutive_passes": int(promotion_streak.get("count", 0) or 0),
                 "promotion_consecutive_required": int(promotion_streak.get("required", 1) or 1),
             },
             "prior_model_metrics": prior_model_metrics,
             "sensitivity_sweep": sensitivity_sweep,
-            "roadmap": {"phase_1_week_1": phase1_week1},
+            "roadmap": {
+                "phase_1_week_1": phase1_week1,
+                "champion_challenger_ab": champion_challenger_ab,
+            },
             "runtime_performance_gate": runtime_performance_gate,
+            "champion_challenger_ab": champion_challenger_ab,
         },
     )
     require_runtime_promotion_gate = bool(
@@ -4045,6 +4383,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "fold_count": best.fold_count,
             "profitable_fold_count": best.profitable_fold_count,
             "profitable_fold_ratio": best.profitable_fold_ratio,
+            "fold_expectancy_bps": [float(value) for value in best.fold_expectancy_bps],
             "support": best.support,
         },
         "fill_quality": fill_quality,
@@ -4057,8 +4396,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "sensitivity_sweep": sensitivity_sweep,
         "edge_gates": gate_map,
         "promotion": promotion,
-        "roadmap": {"phase_1_week_1": phase1_week1},
+        "roadmap": {
+            "phase_1_week_1": phase1_week1,
+            "champion_challenger_ab": champion_challenger_ab,
+        },
         "runtime_performance_gate": runtime_performance_gate,
+        "champion_challenger_ab": champion_challenger_ab,
         "prior_model_metrics": prior_model_metrics,
         "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
@@ -4150,8 +4493,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "promoted_model_path": promoted_model_path,
         "promoted_manifest_path": promoted_manifest_path,
         "promotion": promotion,
-        "roadmap": {"phase_1_week_1": phase1_week1},
+        "roadmap": {
+            "phase_1_week_1": phase1_week1,
+            "champion_challenger_ab": champion_challenger_ab,
+        },
         "runtime_performance_gate": runtime_performance_gate,
+        "champion_challenger_ab": champion_challenger_ab,
         "rl_overlay": rl_overlay,
     }
 

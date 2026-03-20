@@ -31346,6 +31346,12 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         )
     except Exception:
         include_daily_fallback = False
+    try:
+        exit_only_on_degraded = bool(
+            get_env("AI_TRADING_PRIMARY_FEED_DERISK_EXIT_ONLY_ON_DEGRADED", True, cast=bool)
+        )
+    except Exception:
+        exit_only_on_degraded = True
 
     try:
         provider_state = runtime_state.observe_data_provider_state()
@@ -31397,8 +31403,9 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         state_map[_PRIMARY_FEED_DERISK_SINCE_TS_KEY] = None
 
     triggered = bool(degraded_active and duration_s >= trigger_after_s)
-    block = bool(triggered and mode == "block")
-    scale = float(scale_mult if triggered and mode == "scale" else 1.0)
+    exit_only = bool(enabled and exit_only_on_degraded and degraded_active)
+    block = bool((triggered and mode == "block") or exit_only)
+    scale = float(scale_mult if triggered and mode == "scale" and not block else 1.0)
     return {
         "enabled": bool(enabled),
         "mode": mode,
@@ -31407,6 +31414,8 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         "triggered": bool(triggered),
         "block": bool(block),
         "scale": float(scale),
+        "exit_only": bool(exit_only),
+        "exit_only_on_degraded": bool(exit_only_on_degraded),
         "fallback_active": bool(fallback_active),
         "quote_quality_failed": bool(quote_quality_failed),
         "quote_synthetic": bool(quote_synthetic),
@@ -36123,6 +36132,141 @@ def _maybe_update_allocation_state(
     state.last_allocation_update_date = now.date()
 
 
+def _symbol_adaptive_sizing_profiles(
+    state: BotState,
+    *,
+    symbols: Sequence[str],
+) -> dict[str, dict[str, float]]:
+    """Build per-symbol sizing multipliers from recent realized expectancy/slippage."""
+
+    if not bool(
+        get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_ENABLED", True, cast=bool)
+    ):
+        return {}
+    symbol_set = {
+        str(symbol or "").strip().upper()
+        for symbol in symbols
+        if str(symbol or "").strip()
+    }
+    if not symbol_set:
+        return {}
+
+    min_scale_raw = float(
+        get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_MIN_SCALE", 0.35, cast=float)
+    )
+    min_scale = max(0.05, min(min_scale_raw, 1.0))
+    expectancy_floor_bps = float(
+        get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_EXPECTANCY_FLOOR_BPS", 0.0, cast=float)
+    )
+    expectancy_penalty_cap_bps = max(
+        1.0,
+        float(
+            get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_EXPECTANCY_PENALTY_CAP_BPS", 25.0, cast=float)
+        ),
+    )
+    slippage_penalty_cap_bps = max(
+        0.5,
+        float(
+            get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_SLIPPAGE_PENALTY_CAP_BPS", 8.0, cast=float)
+        ),
+    )
+    min_samples = max(
+        1,
+        int(get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_MIN_SAMPLES", 12, cast=int)),
+    )
+    window_trades = max(
+        min_samples,
+        int(get_env("AI_TRADING_SYMBOL_ADAPTIVE_SIZING_WINDOW_TRADES", 80, cast=int)),
+    )
+    max_records = max(
+        2000,
+        int(
+            get_env(
+                "AI_TRADING_SYMBOL_ADAPTIVE_SIZING_MAX_TCA_RECORDS",
+                window_trades * max(len(symbol_set), 1) * 8,
+                cast=int,
+            )
+        ),
+    )
+    records = _read_jsonl_records(
+        str(_resolved_tca_path()),
+        max_records=max_records,
+    )
+    by_symbol_is_bps: dict[str, list[float]] = {}
+    for row in records:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if symbol not in symbol_set:
+            continue
+        if bool(row.get("pending_event")):
+            continue
+        status = str(row.get("status", "")).strip().lower()
+        if status in {"rejected", "canceled", "cancelled", "expired", "done_for_day"}:
+            continue
+        try:
+            is_bps = float(row.get("is_bps"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(is_bps):
+            continue
+        by_symbol_is_bps.setdefault(symbol, []).append(float(is_bps))
+
+    feedback = getattr(state, "_tca_feedback_components", {}) or {}
+    symbol_cost_penalties: dict[str, float] = {}
+    if isinstance(feedback, MappingABC):
+        raw_penalties = feedback.get("symbol_cost_penalty_bps")
+        if isinstance(raw_penalties, MappingABC):
+            for key, raw_value in raw_penalties.items():
+                try:
+                    symbol_cost_penalties[str(key).strip().upper()] = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+
+    profiles: dict[str, dict[str, float]] = {}
+    for symbol in symbol_set:
+        values = by_symbol_is_bps.get(symbol, [])
+        recent = values[-window_trades:]
+        sample_count = len(recent)
+        mean_is_bps = float(sum(recent) / sample_count) if sample_count > 0 else 0.0
+        expectancy_bps = -mean_is_bps
+
+        expectancy_scale = 1.0
+        if sample_count >= min_samples and expectancy_bps < expectancy_floor_bps:
+            deficit = min(
+                expectancy_penalty_cap_bps,
+                max(expectancy_floor_bps - expectancy_bps, 0.0),
+            )
+            expectancy_scale = max(
+                min_scale,
+                1.0 - (deficit / expectancy_penalty_cap_bps) * (1.0 - min_scale),
+            )
+
+        penalty_bps = max(0.0, float(symbol_cost_penalties.get(symbol, 0.0) or 0.0))
+        slippage_scale = 1.0
+        if penalty_bps > 0.0:
+            scaled_penalty = min(penalty_bps, slippage_penalty_cap_bps)
+            slippage_scale = max(
+                min_scale,
+                1.0 - (scaled_penalty / slippage_penalty_cap_bps) * (1.0 - min_scale),
+            )
+
+        combined_scale = max(
+            min_scale,
+            min(expectancy_scale, slippage_scale, 1.0),
+        )
+        if combined_scale >= 0.999:
+            continue
+        profiles[symbol] = {
+            "scale": float(combined_scale),
+            "samples": float(sample_count),
+            "mean_is_bps": float(mean_is_bps),
+            "mean_expectancy_bps": float(expectancy_bps),
+            "expectancy_scale": float(expectancy_scale),
+            "slippage_scale": float(slippage_scale),
+            "symbol_cost_penalty_bps": float(penalty_bps),
+        }
+    return profiles
+
+
 def _replay_schedule_due(state: BotState, *, now: datetime, market_open_now: bool) -> bool:
     if not bool(get_env("AI_TRADING_REPLAY_ENABLED", False, cast=bool)):
         return False
@@ -39033,6 +39177,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         sector = str(get_sector(exposure_symbol) or "UNKNOWN").upper()
         sector_gross[sector] = sector_gross.get(sector, 0.0) + notional
 
+    symbol_adaptive_profiles = _symbol_adaptive_sizing_profiles(
+        state,
+        symbols=list(targets.keys()),
+    )
+
     for symbol, net_target in targets.items():
         liq_features = latest_liquidity.get(
             symbol,
@@ -39461,6 +39610,32 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         "primary_feed_derisk": primary_feed_derisk,
                     }
 
+        adaptive_profile = symbol_adaptive_profiles.get(symbol)
+        if adaptive_profile and delta_shares != 0:
+            adaptive_scale = _safe_float(adaptive_profile.get("scale")) or 1.0
+            adaptive_scale = max(0.05, min(adaptive_scale, 1.0))
+            if adaptive_scale < 1.0:
+                scaled_qty = int(round(float(delta_shares) * adaptive_scale))
+                if scaled_qty == 0:
+                    gates.append("SYMBOL_EXPECTANCY_SLIPPAGE_BLOCK")
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        metrics={"symbol_adaptive_sizing": dict(adaptive_profile)},
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+                if scaled_qty != delta_shares:
+                    delta_shares = int(scaled_qty)
+                    net_target.target_shares = current_shares + delta_shares
+                    net_target.target_dollars = net_target.target_shares * price
+                    gates.append("SYMBOL_EXPECTANCY_SLIPPAGE_SCALE")
+                    symbol_snapshot["symbol_adaptive_sizing"] = dict(adaptive_profile)
+
         requested_delta_shares = int(delta_shares)
         reversal_clamp_reason: str | None = None
         if current_shares > 0 and delta_shares < 0 and abs(delta_shares) > current_shares:
@@ -39544,12 +39719,135 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             continue
 
         side = "buy" if delta_shares > 0 else "sell"
+        opening_trade = abs(current_shares + delta_shares) > abs(current_shares)
+        if exec_engine is not None:
+            if opening_trade:
+                min_notional_fn = getattr(exec_engine, "_opening_min_notional_dollars", None)
+                if callable(min_notional_fn):
+                    try:
+                        opening_min_notional = float(min_notional_fn() or 0.0)
+                    except Exception:
+                        opening_min_notional = 0.0
+                    if opening_min_notional > 0.0:
+                        opening_notional = abs(float(delta_shares) * float(price))
+                        if opening_notional < opening_min_notional:
+                            gates.append("ENTRY_CONSTRAINED_MIN_NOTIONAL_PRECHECK")
+                            record = DecisionRecord(
+                                symbol=symbol,
+                                bar_ts=net_target.bar_ts,
+                                sleeves=net_target.proposals,
+                                net_target=net_target,
+                                gates=gates,
+                                metrics={
+                                    "opening_min_notional": {
+                                        "order_notional": float(opening_notional),
+                                        "min_notional": float(opening_min_notional),
+                                    }
+                                },
+                                config_snapshot=symbol_snapshot,
+                            )
+                            _write_decision_record(record, decision_path)
+                            continue
+
+                cooldown_fn = getattr(exec_engine, "_symbol_reentry_cooldown_allows_opening", None)
+                if callable(cooldown_fn):
+                    try:
+                        cooldown_allowed, cooldown_context = cooldown_fn(symbol=symbol, side=side)
+                    except Exception:
+                        cooldown_allowed, cooldown_context = True, {}
+                    if not bool(cooldown_allowed):
+                        gates.append("ENTRY_CONSTRAINED_SYMBOL_REENTRY_COOLDOWN_PRECHECK")
+                        record = DecisionRecord(
+                            symbol=symbol,
+                            bar_ts=net_target.bar_ts,
+                            sleeves=net_target.proposals,
+                            net_target=net_target,
+                            gates=gates,
+                            metrics={"symbol_reentry_cooldown": cooldown_context},
+                            config_snapshot=symbol_snapshot,
+                        )
+                        _write_decision_record(record, decision_path)
+                        continue
+
+            duplicate_fn = getattr(exec_engine, "_should_suppress_duplicate_intent", None)
+            if callable(duplicate_fn):
+                try:
+                    duplicate_suppressed = bool(duplicate_fn(symbol, side))
+                except Exception:
+                    duplicate_suppressed = False
+                if duplicate_suppressed:
+                    gates.append("DUPLICATE_INTENT_PRECHECK")
+                    record = DecisionRecord(
+                        symbol=symbol,
+                        bar_ts=net_target.bar_ts,
+                        sleeves=net_target.proposals,
+                        net_target=net_target,
+                        gates=gates,
+                        config_snapshot=symbol_snapshot,
+                    )
+                    _write_decision_record(record, decision_path)
+                    continue
+
         expected_edge_total = sum(
             max(float(proposal.expected_edge_bps), 0.0) for proposal in net_target.proposals
         )
         expected_cost_total = sum(
             max(float(proposal.expected_cost_bps), 0.0) for proposal in net_target.proposals
         )
+        cost_aware_guard_enabled = bool(
+            get_env("AI_TRADING_EXECUTION_COST_AWARE_ENTRY_GUARD_ENABLED", True, cast=bool)
+        )
+        if cost_aware_guard_enabled and opening_trade:
+            spread_bps_est = max(float(liq_features.spread_bps), 0.0)
+            slippage_bps_est = max(
+                0.0,
+                float(
+                    get_env(
+                        "AI_TRADING_EXECUTION_COST_AWARE_SLIPPAGE_BPS",
+                        _slippage_setting_bps(),
+                        cast=float,
+                    )
+                ),
+            )
+            fee_bps_est = max(0.0, float(effective_policy.objective.fee_bps))
+            borrow_bps_est = max(0.0, float(effective_policy.objective.borrow_bps))
+            edge_margin_bps = max(
+                0.0,
+                float(
+                    get_env(
+                        "AI_TRADING_EXECUTION_COST_AWARE_EDGE_MARGIN_BPS",
+                        1.0,
+                        cast=float,
+                    )
+                ),
+            )
+            quote_cost_bps = spread_bps_est + slippage_bps_est + fee_bps_est + borrow_bps_est
+            effective_cost_floor = max(float(expected_cost_total), float(quote_cost_bps))
+            required_edge_bps = float(effective_cost_floor + edge_margin_bps)
+            if float(expected_edge_total) < required_edge_bps:
+                gates.append("COST_AWARE_ENTRY_GUARD")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    metrics={
+                        "cost_aware_entry_guard": {
+                            "expected_edge_bps": float(expected_edge_total),
+                            "expected_cost_bps": float(expected_cost_total),
+                            "spread_bps": float(spread_bps_est),
+                            "slippage_bps": float(slippage_bps_est),
+                            "fee_bps": float(fee_bps_est),
+                            "borrow_bps": float(borrow_bps_est),
+                            "edge_margin_bps": float(edge_margin_bps),
+                            "required_edge_bps": float(required_edge_bps),
+                        }
+                    },
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
         calibration_samples = int(
             max(
                 float(slo_derisk_details.get("calibration_ece_samples", 0) or 0.0),

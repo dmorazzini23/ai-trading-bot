@@ -346,6 +346,65 @@ def test_submit_market_order_preflight_uses_short_side_for_opening_sell(monkeypa
     assert observed["quantity"] == 1
 
 
+def test_submit_market_order_clips_sell_to_available_position(monkeypatch):
+    engine: Any = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine._get_account_snapshot = lambda: None
+    engine._check_capital_and_risk = lambda account: None
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {
+        "total_execution_time": 0.0,
+        "total_orders": 0,
+        "successful_orders": 0,
+        "failed_orders": 0,
+    }
+    engine._position_quantity = lambda symbol: 5 if symbol == "AAPL" else 0
+    engine.open_order_totals = lambda symbol: (0.0, 3.0) if symbol == "AAPL" else (0.0, 0.0)
+
+    class DummyClient:
+        @staticmethod
+        def get_asset(symbol):
+            _ = symbol
+            return type(
+                "Asset",
+                (),
+                {"shortable": True, "marginable": True, "easy_to_borrow": True},
+            )()
+
+    engine.trading_client = DummyClient()
+    observed: dict[str, Any] = {}
+
+    def fake_preflight(symbol, side, price_hint, quantity, trading_client, account=None):
+        observed["symbol"] = symbol
+        observed["side"] = side
+        observed["quantity"] = quantity
+        return lt.CapacityCheck(True, int(quantity), None)
+
+    monkeypatch.setattr(lt, "preflight_capacity", fake_preflight)
+
+    def _fake_retry(_fn, payload):
+        observed["submit_qty"] = payload.get("quantity")
+        return {"id": "ok"}
+
+    monkeypatch.setattr(engine, "_execute_with_retry", _fake_retry)
+
+    result = engine.submit_market_order(
+        "AAPL",
+        "sell",
+        4,
+        closing_position=True,
+    )
+
+    assert result == {"id": "ok"}
+    assert observed["symbol"] == "AAPL"
+    assert observed["side"] == "sell"
+    assert observed["quantity"] == 2
+    assert observed["submit_qty"] == 2
+
+
 def test_preflight_capacity_respects_global_open_order_cap(monkeypatch):
     monkeypatch.setenv("EXECUTION_MAX_OPEN_ORDERS_GLOBAL", "1")
     monkeypatch.delenv("EXECUTION_MAX_OPEN_ORDERS_PER_SYMBOL", raising=False)

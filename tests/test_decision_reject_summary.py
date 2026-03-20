@@ -222,6 +222,7 @@ def test_netting_cycle_duplicate_intent_does_not_inflate_orders_attempted(monkey
     monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_PARTICIPATION_CAP_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_ALPHA_DECAY_DEWEIGHT_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_COST_AWARE_ENTRY_GUARD_ENABLED", "0")
     monkeypatch.setattr(
         "ai_trading.data.fetch.get_bars_batch",
         lambda symbols, timeframe, start, end: {str(sym).upper(): df for sym in symbols},
@@ -457,6 +458,7 @@ def test_netting_cycle_pacing_headroom_uses_submitted_orders(monkeypatch) -> Non
     monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_PARTICIPATION_CAP_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_ALPHA_DECAY_DEWEIGHT_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_COST_AWARE_ENTRY_GUARD_ENABLED", "0")
     monkeypatch.setattr(
         "ai_trading.data.fetch.get_bars_batch",
         lambda symbols, timeframe, start, end: {str(sym).upper(): df for sym in symbols},

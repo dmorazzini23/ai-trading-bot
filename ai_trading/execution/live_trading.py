@@ -2195,6 +2195,7 @@ class ExecutionEngine:
         self._cycle_reserved_opening_notional = Decimal("0")
         self._pending_new_actions_this_cycle: int = 0
         self._pending_new_policy_last_cycle_index: int | None = None
+        self._pending_new_ladder_replacements: dict[str, int] = {}
         self._engine_started_mono: float = float(monotonic_time())
         self._engine_cycle_index: int = 0
         self._capacity_exhausted_cycle: bool = False
@@ -2219,6 +2220,7 @@ class ExecutionEngine:
         self._tca_stale_finalize_last_run_mono: float = 0.0
         self._symbol_loss_streak: dict[str, int] = {}
         self._symbol_loss_cooldown_until: dict[str, float] = {}
+        self._symbol_loss_cooldown_reason: dict[str, str] = {}
         self._symbol_reentry_cooldown_until: dict[tuple[str, str], float] = {}
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
         self._cancel_ratio_adaptive_context: dict[str, Any] = {}
@@ -2347,6 +2349,7 @@ class ExecutionEngine:
 
         self._pending_new_policy_last_cycle_index = None
         self._pending_new_actions_this_cycle = 0
+        self._pending_new_ladder_replacements = {}
         self._cycle_maintenance_actions = 0
 
     def end_cycle(self) -> None:
@@ -2422,7 +2425,7 @@ class ExecutionEngine:
             return list(orders or [])
         return []
 
-    def _pending_new_policy_config(self) -> tuple[str, float, int, int]:
+    def _pending_new_policy_config(self) -> dict[str, Any]:
         """Resolve pending-new timeout policy settings from environment."""
 
         policy_raw: Any = None
@@ -2437,6 +2440,8 @@ class ExecutionEngine:
         policy = str(policy_raw or "cancel").strip().lower()
         if policy in {"", "0", "false", "no", "none", "off", "disabled"}:
             policy = "off"
+        elif policy in {"ladder", "cancel_replace_ladder", "replace_cancel_ladder"}:
+            policy = "ladder"
         elif policy in {"replace", "replace_widen", "widen"}:
             policy = "replace_widen"
         elif policy != "cancel":
@@ -2471,7 +2476,61 @@ class ExecutionEngine:
             replace_widen_bps = int(getattr(self, "marketable_limit_slippage_bps", 10))
         replace_widen_bps = max(0, min(int(replace_widen_bps), 1000))
 
-        return policy, timeout_s, max_actions, replace_widen_bps
+        hard_timeout_s = _config_float(
+            "AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC",
+            None,
+        )
+        if hard_timeout_s is None:
+            hard_timeout_s = _config_float(
+                "EXECUTION_PENDING_NEW_HARD_TIMEOUT_SEC",
+                None,
+            )
+        if hard_timeout_s is None:
+            hard_timeout_s = max(timeout_s * 2.0, timeout_s + 60.0)
+        hard_timeout_s = max(float(timeout_s), min(float(hard_timeout_s), 7200.0))
+
+        ladder_max_replacements = _config_int_alias(
+            (
+                "AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS",
+                "EXECUTION_PENDING_NEW_LADDER_MAX_REPLACEMENTS",
+            ),
+            2,
+        )
+        if ladder_max_replacements is None:
+            ladder_max_replacements = 2
+        ladder_max_replacements = max(0, min(int(ladder_max_replacements), 8))
+
+        ladder_widen_step_bps = _config_int_alias(
+            (
+                "AI_TRADING_PENDING_NEW_LADDER_WIDEN_STEP_BPS",
+                "EXECUTION_PENDING_NEW_LADDER_WIDEN_STEP_BPS",
+            ),
+            5,
+        )
+        if ladder_widen_step_bps is None:
+            ladder_widen_step_bps = 5
+        ladder_widen_step_bps = max(0, min(int(ladder_widen_step_bps), 200))
+
+        cancel_after_max_replacements = _resolve_bool_env(
+            "AI_TRADING_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS"
+        )
+        if cancel_after_max_replacements is None:
+            cancel_after_max_replacements = _resolve_bool_env(
+                "EXECUTION_PENDING_NEW_LADDER_CANCEL_AFTER_MAX_REPLACEMENTS"
+            )
+        if cancel_after_max_replacements is None:
+            cancel_after_max_replacements = True
+
+        return {
+            "policy": policy,
+            "timeout_s": float(timeout_s),
+            "hard_timeout_s": float(hard_timeout_s),
+            "max_actions": int(max_actions),
+            "replace_widen_bps": int(replace_widen_bps),
+            "ladder_max_replacements": int(ladder_max_replacements),
+            "ladder_widen_step_bps": int(ladder_widen_step_bps),
+            "cancel_after_max_replacements": bool(cancel_after_max_replacements),
+        }
 
     def _apply_pending_new_timeout_policy(self) -> bool:
         """Apply pending-new timeout actions for stale broker-open orders."""
@@ -2481,17 +2540,33 @@ class ExecutionEngine:
             return False
         self._pending_new_policy_last_cycle_index = cycle_index
 
-        policy, timeout_s, max_actions, replace_widen_bps = self._pending_new_policy_config()
+        policy_cfg = self._pending_new_policy_config()
+        policy = str(policy_cfg.get("policy") or "off").strip().lower()
+        timeout_s = float(policy_cfg.get("timeout_s") or 0.0)
+        hard_timeout_s = float(policy_cfg.get("hard_timeout_s") or timeout_s)
+        max_actions = int(policy_cfg.get("max_actions") or 0)
+        replace_widen_bps = int(policy_cfg.get("replace_widen_bps") or 0)
+        ladder_max_replacements = int(policy_cfg.get("ladder_max_replacements") or 0)
+        ladder_widen_step_bps = int(policy_cfg.get("ladder_widen_step_bps") or 0)
+        cancel_after_max_replacements = bool(
+            policy_cfg.get("cancel_after_max_replacements", True)
+        )
         if policy == "off" or max_actions <= 0:
             return False
         open_orders = self._list_open_orders_snapshot()
         if not open_orders:
+            self._pending_new_ladder_replacements = {}
             return False
 
         now_dt = datetime.now(UTC)
         actions_taken = 0
         stale_detected = 0
         stale_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
+        replacement_attempts_raw = getattr(self, "_pending_new_ladder_replacements", {}) or {}
+        replacement_attempts = (
+            replacement_attempts_raw if isinstance(replacement_attempts_raw, dict) else {}
+        )
+        open_attempt_keys: set[str] = set()
 
         for order in open_orders:
             if actions_taken >= max_actions:
@@ -2508,22 +2583,47 @@ class ExecutionEngine:
             symbol = str(_extract_value(order, "symbol") or "").strip().upper()
             side = self._normalized_order_side(_extract_value(order, "side"))
             quantity = _safe_int(_extract_value(order, "qty", "quantity", "remaining_qty"), 0)
+            client_order_id = _extract_value(order, "client_order_id")
+            attempt_key = (
+                str(client_order_id or "").strip()
+                or str(order_id or "").strip()
+                or f"{symbol}:{side}"
+            )
+            open_attempt_keys.add(attempt_key)
+            attempts = int(max(_safe_int(replacement_attempts.get(attempt_key), 0) or 0, 0))
+            hard_timeout_reached = bool(age_s is not None and age_s >= hard_timeout_s)
             if not order_id:
                 continue
 
             action = "cancel"
             action_success = False
-            if (
-                policy == "replace_widen"
+            replacement_allowed = (
+                policy in {"replace_widen", "ladder"}
                 and symbol
                 and side in {"buy", "sell"}
                 and quantity > 0
+                and not hard_timeout_reached
+            )
+            max_replacements_for_order = 1 if policy == "replace_widen" else max(
+                0,
+                int(ladder_max_replacements),
+            )
+            if (
+                replacement_allowed
+                and attempts < max_replacements_for_order
             ):
                 order_type = str(_extract_value(order, "type", "order_type") or "").strip().lower()
                 limit_price = _safe_float(
                     _extract_value(order, "limit_price", "price", "stop_price")
                 )
                 if order_type in {"limit", "stop_limit"} and limit_price is not None:
+                    replace_slippage_bps = int(
+                        max(
+                            0,
+                            replace_widen_bps
+                            + (max(0, attempts) * max(0, int(ladder_widen_step_bps))),
+                        )
+                    )
                     snapshot: dict[str, Any] = {
                         "symbol": symbol,
                         "side": side,
@@ -2540,16 +2640,27 @@ class ExecutionEngine:
                         side=side,
                         qty=quantity,
                         existing_order_id=order_id,
-                        client_order_id=_extract_value(order, "client_order_id"),
+                        client_order_id=client_order_id,
                         order_data_snapshot=snapshot,
                         limit_price=limit_price,
-                        slippage_bps=replace_widen_bps,
+                        slippage_bps=replace_slippage_bps,
                     )
                     if replacement is not None:
                         action = "replace_widen"
                         action_success = True
+                        replacement_attempts[attempt_key] = attempts + 1
 
-            if not action_success:
+            should_cancel = bool(
+                policy == "cancel"
+                or hard_timeout_reached
+                or (
+                    policy == "ladder"
+                    and cancel_after_max_replacements
+                    and attempts >= max_replacements_for_order
+                )
+                or (policy == "replace_widen" and not action_success)
+            )
+            if not action_success and should_cancel:
                 try:
                     self._cancel_order_alpaca(str(order_id))
                 except Exception:
@@ -2562,33 +2673,44 @@ class ExecutionEngine:
                             "order_id": str(order_id),
                             "status": status,
                             "age_s": round(age_s, 3) if age_s is not None else None,
+                            "hard_timeout_s": float(hard_timeout_s),
+                            "attempts": int(attempts),
                         },
                         exc_info=True,
                     )
                     continue
                 action = "cancel"
                 action_success = True
+                replacement_attempts.pop(attempt_key, None)
 
-            if action_success:
-                actions_taken += 1
-                self._pending_new_actions_this_cycle += 1
-                self._cycle_maintenance_actions = int(
-                    getattr(self, "_cycle_maintenance_actions", 0)
-                ) + 1
-                logger.warning(
-                    "PENDING_NEW_TIMEOUT_ACTION",
-                    extra={
-                        "policy": policy,
-                        "action": action,
-                        "symbol": symbol or None,
-                        "order_id": str(order_id),
-                        "status": status,
-                        "age_s": round(age_s, 3) if age_s is not None else None,
-                        "timeout_s": timeout_s,
-                        "actions_taken": actions_taken,
-                        "max_actions": max_actions,
-                    },
-                )
+            if not action_success:
+                continue
+
+            actions_taken += 1
+            self._pending_new_actions_this_cycle += 1
+            self._cycle_maintenance_actions = int(
+                getattr(self, "_cycle_maintenance_actions", 0)
+            ) + 1
+            logger.warning(
+                "PENDING_NEW_TIMEOUT_ACTION",
+                extra={
+                    "policy": policy,
+                    "action": action,
+                    "symbol": symbol or None,
+                    "order_id": str(order_id),
+                    "client_order_id": (
+                        str(client_order_id) if client_order_id not in (None, "") else None
+                    ),
+                    "status": status,
+                    "age_s": round(age_s, 3) if age_s is not None else None,
+                    "timeout_s": float(timeout_s),
+                    "hard_timeout_s": float(hard_timeout_s),
+                    "attempts": int(attempts),
+                    "max_replacements": int(max_replacements_for_order),
+                    "actions_taken": actions_taken,
+                    "max_actions": max_actions,
+                },
+            )
 
         if stale_detected > actions_taken and actions_taken >= max_actions:
             logger.info(
@@ -2601,6 +2723,13 @@ class ExecutionEngine:
                     "timeout_s": timeout_s,
                 },
             )
+        if replacement_attempts:
+            replacement_attempts = {
+                str(key): int(value)
+                for key, value in replacement_attempts.items()
+                if str(key) in open_attempt_keys
+            }
+        self._pending_new_ladder_replacements = replacement_attempts
         return actions_taken > 0
 
     def _duplicate_intent_window_seconds(self) -> float:
@@ -3671,6 +3800,12 @@ class ExecutionEngine:
         ack_timed_out: bool = False,
         execution_drift_bps: float | None = None,
         realized_slippage_bps: float | None = None,
+        filled_qty: float | None = None,
+        fill_price: float | None = None,
+        expected_price: float | None = None,
+        turnover_notional: float | None = None,
+        realized_net_edge_bps: float | None = None,
+        fill_source: str | None = None,
     ) -> None:
         """Append a normalized order outcome entry for cycle-level KPI reporting."""
 
@@ -3718,6 +3853,29 @@ class ExecutionEngine:
                 parsed_slippage = None
             if parsed_slippage is not None and math.isfinite(parsed_slippage):
                 payload["realized_slippage_bps"] = abs(parsed_slippage)
+        parsed_filled_qty = _safe_float(filled_qty)
+        parsed_fill_price = _safe_float(fill_price)
+        parsed_expected_price = _safe_float(expected_price)
+        parsed_turnover_notional = _safe_float(turnover_notional)
+        parsed_realized_net_edge_bps = _safe_float(realized_net_edge_bps)
+        if (
+            parsed_turnover_notional is None
+            and parsed_filled_qty is not None
+            and parsed_fill_price is not None
+        ):
+            parsed_turnover_notional = abs(float(parsed_filled_qty) * float(parsed_fill_price))
+        if parsed_filled_qty is not None and math.isfinite(float(parsed_filled_qty)):
+            payload["filled_qty"] = float(parsed_filled_qty)
+        if parsed_fill_price is not None and math.isfinite(float(parsed_fill_price)):
+            payload["fill_price"] = float(parsed_fill_price)
+        if parsed_expected_price is not None and math.isfinite(float(parsed_expected_price)):
+            payload["expected_price"] = float(parsed_expected_price)
+        if parsed_turnover_notional is not None and math.isfinite(float(parsed_turnover_notional)):
+            payload["turnover_notional"] = float(parsed_turnover_notional)
+        if parsed_realized_net_edge_bps is not None and math.isfinite(float(parsed_realized_net_edge_bps)):
+            payload["realized_net_edge_bps"] = float(parsed_realized_net_edge_bps)
+        if fill_source not in (None, ""):
+            payload["fill_source"] = str(fill_source).strip().lower()
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
 
@@ -3968,8 +4126,49 @@ class ExecutionEngine:
         median_pending_s = (
             float(statistics.median(pending_durations)) if pending_durations else 0.0
         )
+        filled_durations = [
+            float(item.get("duration_s", 0.0))
+            for item, status in normalized_outcomes
+            if status == "filled" and float(item.get("duration_s", 0.0) or 0.0) > 0.0
+        ]
+        median_time_to_fill_s = (
+            float(statistics.median(filled_durations)) if filled_durations else 0.0
+        )
+        mean_time_to_fill_s = (
+            float(statistics.mean(filled_durations)) if filled_durations else 0.0
+        )
+        turnover_notional = sum(
+            abs(float(item.get("turnover_notional", 0.0) or 0.0))
+            for item, status in normalized_outcomes
+            if status == "filled"
+        )
+        live_realized_net_edge_values: list[float] = []
+        for item, status in normalized_outcomes:
+            if status != "filled":
+                continue
+            fill_source = str(item.get("fill_source") or "").strip().lower()
+            source_is_live = fill_source in {
+                "",
+                "live",
+                "initial",
+                "poll",
+                "final",
+                "manual_probe",
+            }
+            if not source_is_live:
+                continue
+            edge_bps = _safe_float(item.get("realized_net_edge_bps"))
+            if edge_bps is None or not math.isfinite(float(edge_bps)):
+                continue
+            live_realized_net_edge_values.append(float(edge_bps))
+        live_realized_net_edge_bps = (
+            float(statistics.mean(live_realized_net_edge_values))
+            if live_realized_net_edge_values
+            else None
+        )
         fill_ratio = (float(filled) / float(submitted)) if submitted > 0 else 0.0
         cancel_ratio = (float(cancelled) / float(submitted)) if submitted > 0 else 0.0
+        cancel_new_ratio = cancel_ratio
         attempted = submitted + failed
         reject_rate_pct = (float(failed) / float(attempted) * 100.0) if attempted > 0 else 0.0
         self._update_cancel_ratio_adaptive_cap(
@@ -4058,6 +4257,7 @@ class ExecutionEngine:
                 "order_pacing_cap_hit_rate_pct": round(pacing_cap_hit_rate_pct, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
+                "cancel_new_ratio": round(cancel_new_ratio, 4),
                 "cancel_ratio_adaptive_cap": (
                     int(cancel_ratio_adaptive_cap)
                     if cancel_ratio_adaptive_cap not in (None, "")
@@ -4068,6 +4268,17 @@ class ExecutionEngine:
                 "execution_drift_bps": round(cycle_execution_drift_bps, 4),
                 "realized_slippage_bps": round(cycle_realized_slippage_bps, 4),
                 "median_pending_s": round(median_pending_s, 3),
+                "median_time_to_fill_s": round(median_time_to_fill_s, 3),
+                "mean_time_to_fill_s": round(mean_time_to_fill_s, 3),
+                "live_realized_net_edge_bps": (
+                    round(float(live_realized_net_edge_bps), 4)
+                    if live_realized_net_edge_bps is not None
+                    else None
+                ),
+                "live_realized_net_edge_samples": int(
+                    len(live_realized_net_edge_values)
+                ),
+                "turnover_notional": round(float(turnover_notional), 4),
                 "open_pending_count": len(pending_open_ages),
                 "oldest_pending_s": round(oldest_pending_s, 3),
                 "broker_lock_active": bool(broker_lock_active),
@@ -4089,8 +4300,24 @@ class ExecutionEngine:
 
         min_fill_ratio = _config_float("AI_TRADING_KPI_MIN_FILL_RATIO", 0.25)
         max_cancel_ratio = _config_float("AI_TRADING_KPI_MAX_CANCEL_RATIO", 0.75)
+        max_cancel_new_ratio = _config_float(
+            "AI_TRADING_KPI_MAX_CANCEL_NEW_RATIO",
+            max_cancel_ratio if max_cancel_ratio is not None else 0.75,
+        )
         max_median_pending_s = _config_float("AI_TRADING_KPI_MAX_MEDIAN_PENDING_SEC", 30.0)
         max_open_pending_age_s = _config_float("AI_TRADING_KPI_PENDING_AGE_ALERT_SEC", 120.0)
+        max_time_to_fill_s = _config_float(
+            "AI_TRADING_KPI_MAX_MEDIAN_TIME_TO_FILL_SEC",
+            45.0,
+        )
+        min_live_realized_net_edge_bps = _config_float(
+            "AI_TRADING_KPI_MIN_LIVE_REALIZED_NET_EDGE_BPS",
+            -10.0,
+        )
+        max_turnover_notional = _config_float(
+            "AI_TRADING_KPI_MAX_TURNOVER_NOTIONAL_PER_CYCLE",
+            0.0,
+        )
 
         from ai_trading.monitoring.alerts import emit_runtime_alert
 
@@ -4112,6 +4339,17 @@ class ExecutionEngine:
                 details={
                     "cancel_ratio": round(cancel_ratio, 4),
                     "threshold": float(max_cancel_ratio),
+                    "submitted": submitted,
+                    "cancelled": cancelled,
+                },
+            )
+        if max_cancel_new_ratio is not None and cancel_new_ratio > float(max_cancel_new_ratio):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_HIGH_CANCEL_NEW_RATIO",
+                severity="warning",
+                details={
+                    "cancel_new_ratio": round(cancel_new_ratio, 4),
+                    "threshold": float(max_cancel_new_ratio),
                     "submitted": submitted,
                     "cancelled": cancelled,
                 },
@@ -4138,6 +4376,51 @@ class ExecutionEngine:
                     "oldest_pending_s": round(oldest_pending_s, 3),
                     "threshold": float(max_open_pending_age_s),
                     "open_pending_count": len(pending_open_ages),
+                },
+            )
+        if (
+            max_time_to_fill_s is not None
+            and filled > 0
+            and median_time_to_fill_s > float(max_time_to_fill_s)
+        ):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_TIME_TO_FILL_HIGH",
+                severity="warning",
+                details={
+                    "median_time_to_fill_s": round(median_time_to_fill_s, 3),
+                    "threshold": float(max_time_to_fill_s),
+                    "filled": int(filled),
+                },
+            )
+        if (
+            min_live_realized_net_edge_bps is not None
+            and live_realized_net_edge_bps is not None
+            and live_realized_net_edge_bps < float(min_live_realized_net_edge_bps)
+        ):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_LIVE_NET_EDGE_LOW",
+                severity="warning",
+                details={
+                    "live_realized_net_edge_bps": round(
+                        float(live_realized_net_edge_bps),
+                        4,
+                    ),
+                    "threshold": float(min_live_realized_net_edge_bps),
+                    "samples": int(len(live_realized_net_edge_values)),
+                },
+            )
+        if (
+            max_turnover_notional is not None
+            and float(max_turnover_notional) > 0.0
+            and float(turnover_notional) > float(max_turnover_notional)
+        ):
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_TURNOVER_HIGH",
+                severity="warning",
+                details={
+                    "turnover_notional": round(float(turnover_notional), 4),
+                    "threshold": float(max_turnover_notional),
+                    "submitted": int(submitted),
                 },
             )
 
@@ -4692,9 +4975,17 @@ class ExecutionEngine:
         fill_event_payload["event"] = "fill_recorded"
         fill_event_payload["entry_time"] = timestamp.isoformat()
         self._record_runtime_fill_event(fill_event_payload)
+        realized_pnl: float | None = None
+        if runtime_payload is not None:
+            for pnl_key in ("realized_pnl", "realized_pl", "pnl", "net_pnl"):
+                candidate = _safe_float(runtime_payload.get(pnl_key))
+                if candidate is not None:
+                    realized_pnl = float(candidate)
+                    break
         self._update_symbol_loss_cooldown_from_fill(
             symbol=symbol,
             slippage_bps=slippage_bps,
+            realized_pnl=realized_pnl,
         )
         if closing_position is False:
             self._arm_symbol_reentry_cooldown_from_fill(
@@ -6024,6 +6315,43 @@ class ExecutionEngine:
                     price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
                 except Exception:
                     price_hint = None
+        if side_lower == "sell":
+            adjusted_qty, clip_context = self._clip_sell_quantity_to_available_position(
+                symbol=symbol,
+                requested_qty=int(quantity),
+                closing_position=closing_position,
+                order_type="market",
+                client_order_id=(
+                    None if client_order_id in (None, "") else str(client_order_id)
+                ),
+            )
+            if adjusted_qty <= 0:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": symbol,
+                    "side": side_lower,
+                    "quantity": quantity,
+                    "client_order_id": client_order_id,
+                    "asset_class": asset_class,
+                    "price_hint": str(price_hint) if price_hint is not None else None,
+                    "order_type": "market",
+                    "using_fallback_price": using_fallback_price,
+                    "reason": "insufficient_position_available",
+                    "context": clip_context or {},
+                }
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "insufficient_position_available",
+                    clip_context or {},
+                    extra=skip_payload | {"detail": "insufficient_position_available"},
+                )
+                return None
+            if adjusted_qty != int(quantity):
+                quantity = int(adjusted_qty)
 
         resolved_tif = self._resolve_time_in_force(kwargs.get("time_in_force"))
         kwargs["time_in_force"] = resolved_tif
@@ -6653,6 +6981,43 @@ class ExecutionEngine:
                     price_hint = _safe_decimal(raw_notional) / Decimal(quantity)
                 except Exception:
                     price_hint = None
+        if side_lower == "sell":
+            adjusted_qty, clip_context = self._clip_sell_quantity_to_available_position(
+                symbol=symbol,
+                requested_qty=int(quantity),
+                closing_position=closing_position,
+                order_type="limit",
+                client_order_id=(
+                    None if client_order_id in (None, "") else str(client_order_id)
+                ),
+            )
+            if adjusted_qty <= 0:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": symbol,
+                    "side": side_lower,
+                    "quantity": quantity,
+                    "client_order_id": client_order_id,
+                    "asset_class": asset_class,
+                    "price_hint": str(price_hint) if price_hint is not None else None,
+                    "order_type": "limit",
+                    "using_fallback_price": using_fallback_price,
+                    "reason": "insufficient_position_available",
+                    "context": clip_context or {},
+                }
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "insufficient_position_available",
+                    clip_context or {},
+                    extra=skip_payload | {"detail": "insufficient_position_available"},
+                )
+                return None
+            if adjusted_qty != int(quantity):
+                quantity = int(adjusted_qty)
 
         resolved_tif = self._resolve_time_in_force(kwargs.get("time_in_force"))
         kwargs["time_in_force"] = resolved_tif
@@ -9414,8 +9779,10 @@ class ExecutionEngine:
                         parsed_fill_ts = parsed_fill_ts.replace(tzinfo=UTC)
                     fill_timestamp = parsed_fill_ts.astimezone(UTC)
             runtime_fill_payload = final_order if isinstance(final_order, Mapping) else None
+            runtime_source = "live"
             if isinstance(runtime_fill_payload, dict):
                 runtime_fill_payload.setdefault("source", "live")
+                runtime_source = str(runtime_fill_payload.get("source") or "live")
             self._persist_fill_derived_trade_record(
                 symbol=symbol,
                 side=mapped_side,
@@ -9430,6 +9797,26 @@ class ExecutionEngine:
                 runtime_payload=runtime_fill_payload,
                 closing_position=bool(closing_position),
             )
+        else:
+            runtime_source = None
+        realized_net_edge_bps: float | None = None
+        if (
+            resolved_fill_price is not None
+            and float(resolved_fill_price) > 0.0
+            and benchmark_price is not None
+            and float(benchmark_price) > 0.0
+        ):
+            fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
+            try:
+                fill_px = float(resolved_fill_price)
+                bench_px = float(benchmark_price)
+                if mapped_side == "buy":
+                    improvement_bps = ((bench_px - fill_px) / bench_px) * 10000.0
+                else:
+                    improvement_bps = ((fill_px - bench_px) / bench_px) * 10000.0
+                realized_net_edge_bps = float(improvement_bps - float(fee_bps))
+            except (TypeError, ValueError, ZeroDivisionError):
+                realized_net_edge_bps = None
         outcome_reason: str | None = None
         if order_status_lower == "rejected":
             outcome_reason = parsed_rejection or "rejected"
@@ -9444,6 +9831,21 @@ class ExecutionEngine:
             ack_timed_out=bool(ack_timed_out),
             execution_drift_bps=execution_drift_bps,
             realized_slippage_bps=realized_slippage_bps,
+            filled_qty=float(filled_qty or 0.0) if filled_qty is not None else None,
+            fill_price=float(resolved_fill_price) if resolved_fill_price is not None else None,
+            expected_price=float(benchmark_price) if benchmark_price is not None else None,
+            turnover_notional=(
+                abs(float(filled_qty or 0.0) * float(resolved_fill_price))
+                if (
+                    resolved_fill_price is not None
+                    and float(resolved_fill_price) > 0.0
+                    and filled_qty is not None
+                    and float(filled_qty) > 0.0
+                )
+                else None
+            ),
+            realized_net_edge_bps=realized_net_edge_bps,
+            fill_source=runtime_source,
         )
         self._last_submit_outcome = {
             "status": outcome_status,
@@ -9733,6 +10135,51 @@ class ExecutionEngine:
         if normalized_side == "sell":
             return -qty_int
         return qty_int
+
+    def _clip_sell_quantity_to_available_position(
+        self,
+        *,
+        symbol: str,
+        requested_qty: int,
+        closing_position: bool,
+        order_type: str,
+        client_order_id: str | None,
+    ) -> tuple[int, dict[str, Any] | None]:
+        """Clip sell quantity to currently available long shares when applicable."""
+
+        if requested_qty <= 0:
+            return 0, None
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return requested_qty, None
+
+        position_qty = int(self._position_quantity(symbol_token))
+        # Opening short sells should not be clipped to long inventory.
+        if position_qty <= 0:
+            return requested_qty, None
+
+        _, open_sell_qty = self.open_order_totals(symbol_token)
+        open_sell_qty_val = max(_safe_float(open_sell_qty) or 0.0, 0.0)
+        reserved_shares = int(math.ceil(open_sell_qty_val - 1e-9))
+        available_qty = max(position_qty - max(reserved_shares, 0), 0)
+        if requested_qty <= available_qty:
+            return requested_qty, None
+
+        context: dict[str, Any] = {
+            "symbol": symbol_token,
+            "requested_qty": int(requested_qty),
+            "available_qty": int(available_qty),
+            "position_qty": int(position_qty),
+            "open_sell_qty": float(open_sell_qty_val),
+            "reserved_shares": int(max(reserved_shares, 0)),
+            "closing_position": bool(closing_position),
+            "client_order_id": client_order_id,
+            "order_type": str(order_type),
+        }
+        adjusted_qty = int(max(available_qty, 0))
+        context["adjusted_qty"] = adjusted_qty
+        logger.warning("ORDER_QTY_CLIPPED_TO_AVAILABLE_POSITION", extra=context)
+        return adjusted_qty, context
 
     def _resolve_position_before(self, symbol: str) -> int | None:
         """Return best-effort position quantity prior to order submission."""
@@ -11065,22 +11512,30 @@ class ExecutionEngine:
             if isinstance(cooldown_until_raw, Mapping)
             else {}
         )
+        cooldown_reason_raw = getattr(self, "_symbol_loss_cooldown_reason", {}) or {}
+        cooldown_reason_map = (
+            cooldown_reason_raw if isinstance(cooldown_reason_raw, dict) else {}
+        )
         cooldown_expiry = _safe_float(cooldown_until.get(symbol_token)) or 0.0
         now_mono = float(monotonic_time())
         if cooldown_expiry <= now_mono:
             if cooldown_expiry > 0.0 and isinstance(cooldown_until_raw, dict):
                 cooldown_until_raw.pop(symbol_token, None)
+            if isinstance(cooldown_reason_map, dict):
+                cooldown_reason_map.pop(symbol_token, None)
             return True, {
                 "enabled": True,
                 "reason": "cooldown_inactive",
                 "symbol": symbol_token,
             }
         remaining = max(cooldown_expiry - now_mono, 0.0)
+        cooldown_reason = str(cooldown_reason_map.get(symbol_token) or "slippage_streak")
         return False, {
             "enabled": True,
             "reason": "symbol_loss_cooldown",
             "symbol": symbol_token,
             "remaining_seconds": round(float(remaining), 3),
+            "cooldown_reason": cooldown_reason,
         }
 
     def _update_symbol_loss_cooldown_from_fill(
@@ -11088,6 +11543,7 @@ class ExecutionEngine:
         *,
         symbol: str,
         slippage_bps: float | None,
+        realized_pnl: float | None = None,
     ) -> None:
         """Track consecutive costly fills and arm a temporary symbol cooldown."""
 
@@ -11100,15 +11556,35 @@ class ExecutionEngine:
         if not symbol_token:
             return
         slippage_val = _safe_float(slippage_bps)
-        if slippage_val is None or not math.isfinite(slippage_val):
+        if slippage_val is not None and not math.isfinite(slippage_val):
+            slippage_val = None
+        realized_pnl_val = _safe_float(realized_pnl)
+        if realized_pnl_val is not None and not math.isfinite(realized_pnl_val):
+            realized_pnl_val = None
+        if slippage_val is None and realized_pnl_val is None:
             return
 
         trigger_streak = _config_int("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_TRIGGER_STREAK", 3) or 3
         trigger_streak = max(1, int(trigger_streak))
+        realized_trigger_streak = (
+            _config_int(
+                "AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_REALIZED_TRIGGER_STREAK",
+                trigger_streak,
+            )
+            or trigger_streak
+        )
+        realized_trigger_streak = max(1, int(realized_trigger_streak))
         min_loss_bps = _config_float("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MIN_SLIPPAGE_BPS", 4.0)
         if min_loss_bps is None:
             min_loss_bps = 4.0
         min_loss_bps = max(0.0, float(min_loss_bps))
+        min_realized_pnl = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MIN_REALIZED_PNL",
+            -50.0,
+        )
+        if min_realized_pnl is None:
+            min_realized_pnl = -50.0
+        min_realized_pnl = min(float(min_realized_pnl), -0.01)
         cooldown_minutes = _config_float("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_MINUTES", 30.0)
         if cooldown_minutes is None:
             cooldown_minutes = 30.0
@@ -11117,8 +11593,21 @@ class ExecutionEngine:
         streak_raw = getattr(self, "_symbol_loss_streak", {}) or {}
         streak_map = streak_raw if isinstance(streak_raw, dict) else {}
         current_streak = int(max(_safe_int(streak_map.get(symbol_token), 0), 0))
-        costly_fill = float(slippage_val) >= float(min_loss_bps)
-        if costly_fill:
+        slippage_costly = (
+            slippage_val is not None and float(slippage_val) >= float(min_loss_bps)
+        )
+        realized_costly = (
+            realized_pnl_val is not None and float(realized_pnl_val) <= float(min_realized_pnl)
+        )
+        trigger_reason = "mixed_loss_signals"
+        trigger_threshold = trigger_streak
+        if realized_costly and not slippage_costly:
+            trigger_reason = "realized_loss_streak"
+            trigger_threshold = realized_trigger_streak
+        elif slippage_costly and not realized_costly:
+            trigger_reason = "slippage_streak"
+            trigger_threshold = trigger_streak
+        if slippage_costly or realized_costly:
             current_streak += 1
             streak_map[symbol_token] = current_streak
         else:
@@ -11126,27 +11615,38 @@ class ExecutionEngine:
             self._symbol_loss_streak = streak_map
             return
 
-        if current_streak < trigger_streak:
+        if current_streak < trigger_threshold:
             self._symbol_loss_streak = streak_map
             return
 
         now_mono = float(monotonic_time())
         cooldown_until_raw = getattr(self, "_symbol_loss_cooldown_until", {}) or {}
         cooldown_until = cooldown_until_raw if isinstance(cooldown_until_raw, dict) else {}
+        cooldown_reason_raw = getattr(self, "_symbol_loss_cooldown_reason", {}) or {}
+        cooldown_reason_map = (
+            cooldown_reason_raw if isinstance(cooldown_reason_raw, dict) else {}
+        )
         previous_until = _safe_float(cooldown_until.get(symbol_token)) or 0.0
         next_until = max(previous_until, now_mono + cooldown_seconds)
         cooldown_until[symbol_token] = next_until
+        cooldown_reason_map[symbol_token] = trigger_reason
         streak_map[symbol_token] = 0
         self._symbol_loss_cooldown_until = cooldown_until
+        self._symbol_loss_cooldown_reason = cooldown_reason_map
         self._symbol_loss_streak = streak_map
         logger.warning(
             "SYMBOL_LOSS_COOLDOWN_TRIGGERED",
             extra={
                 "symbol": symbol_token,
-                "trigger_streak": int(trigger_streak),
+                "trigger_streak": int(trigger_threshold),
                 "cooldown_seconds": float(cooldown_seconds),
-                "slippage_bps": float(slippage_val),
+                "slippage_bps": float(slippage_val) if slippage_val is not None else None,
                 "min_slippage_bps": float(min_loss_bps),
+                "realized_pnl": (
+                    float(realized_pnl_val) if realized_pnl_val is not None else None
+                ),
+                "min_realized_pnl": float(min_realized_pnl),
+                "trigger_reason": trigger_reason,
             },
         )
 
@@ -12367,7 +12867,21 @@ class ExecutionEngine:
                 exc_info=True,
             )
         replacement_payload["limit_price"] = snapped_replacement_price
-        replacement_payload["client_order_id"] = f"{_stable_order_id(symbol, side)}-ttl"
+        raw_client_order_id = str(
+            client_order_id or _stable_order_id(symbol, side)
+        ).strip()
+        if not raw_client_order_id:
+            raw_client_order_id = _stable_order_id(symbol, side)
+        safe_client_order_id = "".join(
+            ch for ch in raw_client_order_id if (ch.isalnum() or ch in {"-", "_", "."})
+        )
+        if not safe_client_order_id:
+            safe_client_order_id = _stable_order_id(symbol, side)
+        ttl_suffix = f"-ttl{int(time.monotonic() * 1000) % 100000:05d}"
+        max_base_len = max(1, 48 - len(ttl_suffix))
+        replacement_payload["client_order_id"] = (
+            f"{safe_client_order_id[:max_base_len]}{ttl_suffix}"
+        )[:48]
         if existing_order_id:
             try:
                 self._cancel_order_alpaca(existing_order_id)

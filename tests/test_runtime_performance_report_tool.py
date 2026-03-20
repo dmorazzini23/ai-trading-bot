@@ -340,6 +340,103 @@ def test_build_report_enriches_direct_rows_with_tca_costs(tmp_path: Path) -> Non
     assert trade["daily_expectancy"][0]["slippage_cost"] == pytest.approx(1.106, rel=1e-6)
 
 
+def test_build_report_includes_broker_open_position_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps([{"symbol": "AAPL", "side": "buy", "pnl": 10.0}]),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 10,
+                "total_accepted_records": 4,
+                "total_rejected_records": 6,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        rpt,
+        "_summarize_broker_open_positions",
+        lambda: {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": 2,
+            "broker_open_positions": {"AAPL": 5.0, "MSFT": -3.0},
+            "broker_open_positions_error": None,
+        },
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    trade = report["trade_history"]
+    assert trade["broker_open_positions_available"] is True
+    assert trade["broker_open_position_count"] == 2
+    assert trade["broker_open_positions"] == {"AAPL": 5.0, "MSFT": -3.0}
+
+
+def test_build_report_reports_reconstructed_open_position_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 10,
+                    "entry_price": 100.0,
+                    "entry_time": "2026-03-01T15:00:00+00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 0,
+                "total_accepted_records": 0,
+                "total_rejected_records": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        rpt,
+        "_summarize_broker_open_positions",
+        lambda: {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": 1,
+            "broker_open_positions": {"AAPL": 10.0},
+            "broker_open_positions_error": None,
+        },
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    trade = report["trade_history"]
+    assert trade["pnl_available"] is False
+    assert trade["reconstructed_open_lot_count"] == 1
+    assert trade["reconstructed_open_position_count"] == 1
+    assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
+    assert trade["open_lot_count"] == 1
+    assert trade["open_positions"] == {"AAPL": 10.0}
+
+
 def test_build_report_ignores_non_fill_tca_status_rows(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
@@ -830,6 +927,272 @@ def test_evaluate_go_no_go_trade_fill_source_normalises_backfill_alias() -> None
         decision["observed"]["trade_metric_scope"]["fill_source"]
         == "reconcile_backfill"
     )
+
+
+def test_evaluate_go_no_go_auto_live_prefers_live_when_sufficient() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "daily_trade_stats_by_fill_source": {
+                "live": [
+                    {
+                        "date": "2026-03-10",
+                        "trades": 40,
+                        "wins": 24,
+                        "losses": 16,
+                        "gross_win_pnl": 150.0,
+                        "gross_loss_pnl": 100.0,
+                        "net_pnl": 50.0,
+                    },
+                    {
+                        "date": "2026-03-11",
+                        "trades": 35,
+                        "wins": 20,
+                        "losses": 15,
+                        "gross_win_pnl": 120.0,
+                        "gross_loss_pnl": 80.0,
+                        "net_pnl": 40.0,
+                    },
+                ],
+                "all": [
+                    {
+                        "date": "2026-03-10",
+                        "trades": 100,
+                        "wins": 55,
+                        "losses": 45,
+                        "gross_win_pnl": 260.0,
+                        "gross_loss_pnl": 200.0,
+                        "net_pnl": 60.0,
+                    }
+                ],
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "auto_live",
+            "auto_live_min_closed_trades": 20,
+            "auto_live_min_used_days": 2,
+            "auto_live_min_available_days": 2,
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["thresholds"]["requested_trade_fill_source"] == "auto_live"
+    assert decision["thresholds"]["trade_fill_source"] == "live"
+    assert decision["observed"]["trade_fill_source"] == "live"
+    assert decision["observed"]["auto_live_selection"]["selected"] == "live"
+    assert decision["observed"]["auto_live_selection"]["used_live"] is True
+
+
+def test_evaluate_go_no_go_auto_live_falls_back_to_all_when_live_insufficient() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "daily_trade_stats_by_fill_source": {
+                "live": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 4,
+                        "wins": 2,
+                        "losses": 2,
+                        "gross_win_pnl": 10.0,
+                        "gross_loss_pnl": 8.0,
+                        "net_pnl": 2.0,
+                    }
+                ],
+                "all": [
+                    {
+                        "date": "2026-03-10",
+                        "trades": 50,
+                        "wins": 30,
+                        "losses": 20,
+                        "gross_win_pnl": 100.0,
+                        "gross_loss_pnl": 70.0,
+                        "net_pnl": 30.0,
+                    },
+                    {
+                        "date": "2026-03-11",
+                        "trades": 55,
+                        "wins": 31,
+                        "losses": 24,
+                        "gross_win_pnl": 120.0,
+                        "gross_loss_pnl": 80.0,
+                        "net_pnl": 40.0,
+                    },
+                ],
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "auto_live",
+            "auto_live_min_closed_trades": 20,
+            "auto_live_min_used_days": 2,
+            "auto_live_min_available_days": 2,
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["thresholds"]["requested_trade_fill_source"] == "auto_live"
+    assert decision["thresholds"]["trade_fill_source"] == "all"
+    assert decision["observed"]["trade_fill_source"] == "all"
+    assert decision["observed"]["auto_live_selection"]["selected"] == "all"
+    assert decision["observed"]["auto_live_selection"]["used_live"] is False
+
+
+def test_main_resolves_runtime_paths_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_dir = tmp_path / "data"
+    runtime_dir = data_dir / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    trade_history_path = runtime_dir / "trade_history.json"
+    gate_summary_path = runtime_dir / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps([{"symbol": "AAPL", "side": "buy", "pnl": 1.0}]),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 10,
+                "total_accepted_records": 2,
+                "total_rejected_records": 8,
+                "total_expected_net_edge_bps": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+        "runtime/trade_history.json",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        "runtime/gate_effectiveness_summary.json",
+    )
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_GATE_LOG_PATH", "")
+
+    exit_code = rpt.main(["--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["trade_history"]["path"] == str(trade_history_path.resolve())
+    assert payload["gate_effectiveness"]["path"] == str(gate_summary_path.resolve())
+    assert payload["trade_history"]["exists"] is True
+    assert payload["gate_effectiveness"]["exists"] is True
+
+
+def test_main_go_no_go_uses_env_threshold_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_dir = tmp_path / "data"
+    runtime_dir = data_dir / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    trade_history_path = runtime_dir / "trade_history.json"
+    gate_summary_path = runtime_dir / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {"symbol": "AAPL", "side": "buy", "pnl": 1.0},
+                {"symbol": "MSFT", "side": "buy", "pnl": -1.0},
+                {"symbol": "NVDA", "side": "buy", "pnl": 1.0},
+                {"symbol": "GOOGL", "side": "buy", "pnl": -1.0},
+                {"symbol": "AMZN", "side": "buy", "pnl": 1.0},
+                {"symbol": "META", "side": "buy", "pnl": -1.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 100,
+                "total_accepted_records": 2,
+                "total_rejected_records": 98,
+                "total_expected_net_edge_bps": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+        "runtime/trade_history.json",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        "runtime/gate_effectiveness_summary.json",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES", "5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", "0.8")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.4")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "-10")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE",
+        "0.01",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+        "-5",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS", "7")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS", "0")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID",
+        "1",
+    )
+
+    exit_code = rpt.main(["--json", "--go-no-go"])
+    payload = json.loads(capsys.readouterr().out)
+    decision = payload["go_no_go"]
+
+    assert exit_code == 0
+    assert decision["gate_passed"] is True
+    assert decision["thresholds"]["min_closed_trades"] == 5
+    assert decision["thresholds"]["min_profit_factor"] == pytest.approx(0.8)
+    assert decision["thresholds"]["min_acceptance_rate"] == pytest.approx(0.01)
+    assert decision["thresholds"]["lookback_days"] == 7
 
 
 def test_main_fail_on_no_go_returns_nonzero(tmp_path: Path) -> None:

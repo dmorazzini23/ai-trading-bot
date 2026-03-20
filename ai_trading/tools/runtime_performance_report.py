@@ -12,7 +12,13 @@ from statistics import median
 import sys
 from typing import Any, Mapping, Sequence
 
+from ai_trading.config.management import get_env, is_test_runtime
+from ai_trading.env import ensure_dotenv_loaded
+from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
+
 _DEFAULT_TRADE_HISTORY_PATH = "runtime/trade_history.parquet"
+_DEFAULT_GATE_SUMMARY_PATH = "runtime/gate_effectiveness_summary.json"
+_DEFAULT_GATE_LOG_PATH = "runtime/gate_effectiveness.jsonl"
 _DEFAULT_TCA_PATH = "runtime/tca_records.jsonl"
 
 
@@ -36,6 +42,346 @@ def _as_int(value: Any) -> int | None:
         return int(parsed)
     except (TypeError, ValueError):
         return None
+
+
+def _env_text(name: str, default: str) -> str:
+    value = str(get_env(name, default, cast=str) or "").strip()
+    return value or default
+
+
+def _normalise_cli_path(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def resolve_runtime_report_paths(
+    *,
+    trade_history_path: str | None = None,
+    gate_summary_path: str | None = None,
+    gate_log_path: str | None = None,
+    tca_path: str | None = None,
+) -> dict[str, Path | None]:
+    """Resolve runtime report paths with env/runtime-root parity."""
+
+    default_trade_history = _env_text(
+        "AI_TRADING_TRADE_HISTORY_PATH",
+        _DEFAULT_TRADE_HISTORY_PATH,
+    )
+    configured_trade_history = _env_text(
+        "AI_TRADING_RUNTIME_PERF_TRADE_HISTORY_PATH",
+        default_trade_history,
+    )
+    configured_gate_summary = _env_text(
+        "AI_TRADING_RUNTIME_PERF_GATE_SUMMARY_PATH",
+        _DEFAULT_GATE_SUMMARY_PATH,
+    )
+    configured_gate_log = str(
+        get_env("AI_TRADING_RUNTIME_PERF_GATE_LOG_PATH", "", cast=str) or ""
+    ).strip()
+    configured_tca = _env_text(
+        "AI_TRADING_RUNTIME_PERF_TCA_PATH",
+        _env_text("AI_TRADING_TCA_PATH", _DEFAULT_TCA_PATH),
+    )
+
+    trade_history_raw = (
+        _normalise_cli_path(trade_history_path)
+        or configured_trade_history
+        or default_trade_history
+    )
+    gate_summary_raw = (
+        _normalise_cli_path(gate_summary_path)
+        or configured_gate_summary
+        or _DEFAULT_GATE_SUMMARY_PATH
+    )
+    gate_log_raw = _normalise_cli_path(gate_log_path)
+    if gate_log_raw is None:
+        gate_log_raw = configured_gate_log or ""
+    tca_raw = _normalise_cli_path(tca_path)
+    if tca_raw is None:
+        tca_raw = configured_tca
+
+    resolved_gate_log: Path | None = None
+    if gate_log_raw:
+        resolved_gate_log = resolve_runtime_artifact_path(
+            gate_log_raw,
+            default_relative=_DEFAULT_GATE_LOG_PATH,
+        )
+    resolved_tca: Path | None = None
+    if tca_raw:
+        resolved_tca = resolve_runtime_artifact_path(
+            tca_raw,
+            default_relative=_DEFAULT_TCA_PATH,
+        )
+
+    return {
+        "trade_history": resolve_runtime_artifact_path(
+            trade_history_raw,
+            default_relative=default_trade_history,
+        ),
+        "gate_summary": resolve_runtime_artifact_path(
+            gate_summary_raw,
+            default_relative=_DEFAULT_GATE_SUMMARY_PATH,
+        ),
+        "gate_log": resolved_gate_log,
+        "tca": resolved_tca,
+    }
+
+
+def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
+    """Resolve go/no-go defaults from runtime env with execution-prefix precedence."""
+
+    min_closed_trades = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_CLOSED_TRADES",
+            None,
+            cast=int,
+        )
+    )
+    if min_closed_trades is None:
+        min_closed_trades = _as_int(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
+        )
+    min_profit_factor = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR",
+            None,
+            cast=float,
+        )
+    )
+    if min_profit_factor is None:
+        min_profit_factor = _as_float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1, cast=float)
+        )
+    min_win_rate = _as_float(
+        get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", None, cast=float)
+    )
+    if min_win_rate is None:
+        min_win_rate = _as_float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5, cast=float)
+        )
+    min_net_pnl = _as_float(
+        get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", None, cast=float)
+    )
+    if min_net_pnl is None:
+        min_net_pnl = _as_float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_NET_PNL", 0.0, cast=float)
+        )
+    min_acceptance_rate = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE",
+            None,
+            cast=float,
+        )
+    )
+    if min_acceptance_rate is None:
+        min_acceptance_rate = _as_float(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float)
+        )
+    min_expected_net_edge_bps = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+            None,
+            cast=float,
+        )
+    )
+    if min_expected_net_edge_bps is None:
+        min_expected_net_edge_bps = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
+                -50.0,
+                cast=float,
+            )
+        )
+    lookback_days = _as_int(
+        get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS", None, cast=int)
+    )
+    if lookback_days is None:
+        lookback_days = _as_int(
+            get_env("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", 5, cast=int)
+        )
+    min_used_days = _as_int(
+        get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS", None, cast=int)
+    )
+    if min_used_days is None:
+        min_used_days = _as_int(
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0, cast=int)
+        )
+    require_pnl_available = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE",
+        None,
+        cast=bool,
+    )
+    if require_pnl_available is None:
+        require_pnl_available = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE",
+                True,
+                cast=bool,
+            )
+        )
+    require_gate_valid = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID",
+        None,
+        cast=bool,
+    )
+    if require_gate_valid is None:
+        require_gate_valid = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID",
+                False,
+                cast=bool,
+            )
+        )
+    trade_fill_source = str(
+        (
+            get_env(
+                "AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                None,
+                cast=str,
+            )
+            or get_env(
+                "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
+                "all",
+                cast=str,
+            )
+            or "all"
+        )
+    ).strip() or "all"
+    auto_live_min_closed_trades = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_CLOSED_TRADES",
+            None,
+            cast=int,
+        )
+    )
+    if auto_live_min_closed_trades is None:
+        auto_live_min_closed_trades = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_MIN_CLOSED_TRADES",
+                None,
+                cast=int,
+            )
+        )
+    auto_live_min_used_days = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_USED_DAYS",
+            None,
+            cast=int,
+        )
+    )
+    if auto_live_min_used_days is None:
+        auto_live_min_used_days = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_MIN_USED_DAYS",
+                None,
+                cast=int,
+            )
+        )
+    auto_live_min_available_days = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_AVAILABLE_DAYS",
+            None,
+            cast=int,
+        )
+    )
+    if auto_live_min_available_days is None:
+        auto_live_min_available_days = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_MIN_AVAILABLE_DAYS",
+                None,
+                cast=int,
+            )
+        )
+    return {
+        "min_closed_trades": int(max(0, min_closed_trades or 20)),
+        "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.1),
+        "min_win_rate": float(max(0.0, min(1.0, min_win_rate if min_win_rate is not None else 0.5))),
+        "min_net_pnl": float(min_net_pnl if min_net_pnl is not None else 0.0),
+        "min_acceptance_rate": float(
+            max(0.0, min(1.0, min_acceptance_rate if min_acceptance_rate is not None else 0.05))
+        ),
+        "min_expected_net_edge_bps": float(
+            min_expected_net_edge_bps if min_expected_net_edge_bps is not None else -50.0
+        ),
+        "min_used_days": int(max(0, min_used_days or 0)),
+        "lookback_days": int(max(0, lookback_days or 5)),
+        "trade_fill_source": trade_fill_source,
+        "auto_live_min_closed_trades": int(
+            max(1, auto_live_min_closed_trades or min_closed_trades or 20)
+        ),
+        "auto_live_min_used_days": int(
+            max(1, auto_live_min_used_days or min_used_days or 1)
+        ),
+        "auto_live_min_available_days": int(
+            max(
+                1,
+                auto_live_min_available_days
+                or auto_live_min_used_days
+                or min_used_days
+                or 1,
+            )
+        ),
+        "require_pnl_available": bool(require_pnl_available),
+        "require_gate_valid": bool(require_gate_valid),
+    }
+
+
+def _summarize_broker_open_positions() -> dict[str, Any]:
+    """Best-effort broker snapshot for current open positions."""
+
+    if is_test_runtime(include_pytest_module=True):
+        return {
+            "broker_open_positions_available": False,
+            "broker_open_position_count": 0,
+            "broker_open_positions": {},
+            "broker_open_positions_error": "disabled_in_test_runtime",
+        }
+
+    try:
+        from ai_trading.alpaca_api import _get_rest
+
+        client = _get_rest(bars=False)
+        positions_raw: Any
+        if hasattr(client, "get_all_positions"):
+            positions_raw = client.get_all_positions() or []
+        elif hasattr(client, "list_positions"):
+            positions_raw = client.list_positions() or []
+        else:
+            return {
+                "broker_open_positions_available": False,
+                "broker_open_position_count": 0,
+                "broker_open_positions": {},
+                "broker_open_positions_error": "positions_method_unavailable",
+            }
+
+        broker_positions: dict[str, float] = {}
+        for row in positions_raw:
+            if isinstance(row, Mapping):
+                symbol_raw = row.get("symbol")
+                qty_raw = row.get("qty")
+            else:
+                symbol_raw = getattr(row, "symbol", None)
+                qty_raw = getattr(row, "qty", None)
+            symbol = str(symbol_raw or "").strip().upper()
+            qty = _as_float(qty_raw)
+            if not symbol or qty is None or qty == 0:
+                continue
+            broker_positions[symbol] = qty
+
+        broker_positions = dict(sorted(broker_positions.items()))
+        return {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": len(broker_positions),
+            "broker_open_positions": broker_positions,
+            "broker_open_positions_error": None,
+        }
+    except Exception as exc:
+        return {
+            "broker_open_positions_available": False,
+            "broker_open_position_count": 0,
+            "broker_open_positions": {},
+            "broker_open_positions_error": str(exc),
+        }
 
 
 def _normalise_iso_date(value: Any) -> str | None:
@@ -132,6 +478,14 @@ def _normalise_trade_fill_source(value: Any) -> str:
     token = str(value or "").strip().lower()
     if token in {"", "all", "any", "*", "overall"}:
         return "all"
+    if token in {
+        "auto_live",
+        "auto-live",
+        "live_if_sufficient",
+        "live-when-sufficient",
+        "prefer_live",
+    }:
+        return "auto_live"
     if token in {"reconcile", "backfill", "broker_reconcile"}:
         return "reconcile_backfill"
     if token in {"live", "reconcile_backfill", "unknown", "mixed"}:
@@ -798,13 +1152,17 @@ def _aggregate_closed_trades(
     open_positions: dict[str, float],
     open_lot_count: int,
 ) -> dict[str, Any]:
+    reconstructed_open_positions = dict(sorted(open_positions.items()))
     summary: dict[str, Any] = {
         "records": records_count,
         "pnl_source": source,
         "pnl_records": len(closed_trades),
         "closed_trades": len(closed_trades),
+        "reconstructed_open_lot_count": int(open_lot_count),
+        "reconstructed_open_position_count": int(len(reconstructed_open_positions)),
+        "reconstructed_open_positions": reconstructed_open_positions,
         "open_lot_count": int(open_lot_count),
-        "open_positions": open_positions,
+        "open_positions": reconstructed_open_positions,
     }
     if not closed_trades:
         summary["pnl_available"] = False
@@ -1061,6 +1419,7 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
         "exists": path.exists(),
         "records": 0,
     }
+    summary.update(_summarize_broker_open_positions())
     if tca_path is not None:
         summary["tca_path"] = str(tca_path)
         summary["tca_exists"] = bool(tca_path.exists())
@@ -1320,8 +1679,24 @@ def evaluate_go_no_go(
     if lookback_days is None:
         lookback_days = 0
     lookback_days = max(0, int(lookback_days))
-    trade_fill_source = _normalise_trade_fill_source(
+    requested_trade_fill_source = _normalise_trade_fill_source(
         threshold_map.get("trade_fill_source")
+    )
+    trade_fill_source = requested_trade_fill_source
+    auto_live_min_closed_trades = max(
+        1,
+        _as_int(threshold_map.get("auto_live_min_closed_trades"))
+        or int(min_closed_trades),
+    )
+    auto_live_min_used_days = max(
+        1,
+        _as_int(threshold_map.get("auto_live_min_used_days"))
+        or int(max(min_used_days, 1)),
+    )
+    auto_live_min_available_days = max(
+        1,
+        _as_int(threshold_map.get("auto_live_min_available_days"))
+        or int(auto_live_min_used_days),
     )
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
@@ -1334,6 +1709,76 @@ def evaluate_go_no_go(
     gate = report.get("gate_effectiveness", {})
     if not isinstance(gate, Mapping):
         gate = {}
+
+    auto_live_context: dict[str, Any] = {
+        "enabled": requested_trade_fill_source == "auto_live",
+        "requested": requested_trade_fill_source,
+        "selected": trade_fill_source,
+        "used_live": False,
+        "reason": "not_requested",
+    }
+    if requested_trade_fill_source == "auto_live":
+        rows_by_source = trade.get("daily_trade_stats_by_fill_source")
+        live_rows: list[dict[str, Any]] = []
+        if isinstance(rows_by_source, Mapping):
+            candidate_rows = rows_by_source.get("live")
+            if isinstance(candidate_rows, list):
+                live_rows = [
+                    dict(row) for row in candidate_rows if isinstance(row, Mapping)
+                ]
+
+        live_rows_used = live_rows
+        live_available_days = 0
+        live_used_days = 0
+        if lookback_days > 0:
+            live_rows_used, live_available_days = _select_recent_daily_rows(
+                live_rows,
+                lookback_days=lookback_days,
+            )
+            live_used_days = len(live_rows_used)
+        else:
+            live_available_days = len(
+                {
+                    str(row.get("date"))
+                    for row in live_rows
+                    if str(row.get("date", "")).strip()
+                }
+            )
+            live_used_days = live_available_days
+
+        live_aggregated = _aggregate_trade_metric_rows(live_rows_used)
+        live_closed_trades = int(live_aggregated.get("closed_trades", 0) or 0)
+        live_has_pnl = bool(trade.get("pnl_available")) and live_closed_trades > 0
+        live_sufficient = bool(
+            live_has_pnl
+            and live_closed_trades >= auto_live_min_closed_trades
+            and live_used_days >= auto_live_min_used_days
+            and live_available_days >= auto_live_min_available_days
+        )
+        trade_fill_source = "live" if live_sufficient else "all"
+        auto_live_context = {
+            "enabled": True,
+            "requested": requested_trade_fill_source,
+            "selected": trade_fill_source,
+            "used_live": bool(live_sufficient),
+            "reason": (
+                "live_sufficient"
+                if live_sufficient
+                else "live_insufficient_fallback_all"
+            ),
+            "lookback_days": int(lookback_days),
+            "thresholds": {
+                "min_closed_trades": int(auto_live_min_closed_trades),
+                "min_used_days": int(auto_live_min_used_days),
+                "min_available_days": int(auto_live_min_available_days),
+            },
+            "observed": {
+                "closed_trades": int(live_closed_trades),
+                "used_days": int(live_used_days),
+                "available_days": int(live_available_days),
+                "pnl_available": bool(live_has_pnl),
+            },
+        }
 
     pnl_available = bool(trade.get("pnl_available"))
     closed_trades = _as_int(trade.get("closed_trades"))
@@ -1553,6 +1998,10 @@ def evaluate_go_no_go(
             "min_used_days": int(min_used_days),
             "lookback_days": int(lookback_days),
             "trade_fill_source": trade_fill_source,
+            "requested_trade_fill_source": requested_trade_fill_source,
+            "auto_live_min_closed_trades": int(auto_live_min_closed_trades),
+            "auto_live_min_used_days": int(auto_live_min_used_days),
+            "auto_live_min_available_days": int(auto_live_min_available_days),
             "require_pnl_available": bool(require_pnl_available),
             "require_gate_valid": bool(require_gate_valid),
         },
@@ -1568,6 +2017,8 @@ def evaluate_go_no_go(
             "acceptance_rate": acceptance_rate,
             "expected_net_edge_bps": expected_net_edge_bps,
             "trade_fill_source": trade_fill_source,
+            "requested_trade_fill_source": requested_trade_fill_source,
+            "auto_live_selection": auto_live_context,
             "trade_metric_scope": trade_metric_scope,
             "gate_metric_scope": gate_metric_scope,
         },
@@ -1592,9 +2043,25 @@ def format_text_report(report: dict[str, Any]) -> str:
                 f"- Profit factor: {trade.get('profit_factor')}",
                 f"- Total fee cost: {float(trade.get('total_fee_cost', 0.0) or 0.0):.4f}",
                 f"- Total slippage cost: {float(trade.get('total_slippage_cost', 0.0) or 0.0):.4f}",
-                f"- Open lots (unrealized): {trade.get('open_lot_count')}",
+                (
+                    "- Reconstructed open lots (unrealized): "
+                    f"{trade.get('reconstructed_open_lot_count', trade.get('open_lot_count'))}"
+                ),
+                (
+                    "- Reconstructed open symbols: "
+                    f"{trade.get('reconstructed_open_position_count', len(trade.get('open_positions') or {}))}"
+                ),
             ]
         )
+        broker_available = bool(trade.get("broker_open_positions_available"))
+        broker_count = _as_int(trade.get("broker_open_position_count")) or 0
+        lines.append(
+            f"- Broker open positions: {int(broker_count)} (available={broker_available})"
+        )
+        if not broker_available:
+            broker_error = str(trade.get("broker_open_positions_error") or "").strip()
+            if broker_error:
+                lines.append(f"- Broker positions note: {broker_error}")
         cost_attr = trade.get("cost_attribution")
         if isinstance(cost_attr, Mapping):
             lines.append(
@@ -1689,22 +2156,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--trade-history",
-        default=_DEFAULT_TRADE_HISTORY_PATH,
+        default=None,
         help="Path to canonical trade history (parquet/pickle/json/jsonl/csv).",
     )
     parser.add_argument(
         "--gate-summary",
-        default="runtime/gate_effectiveness_summary.json",
+        default=None,
         help="Path to gate effectiveness summary json.",
     )
     parser.add_argument(
         "--gate-log-path",
-        default="",
+        default=None,
         help="Optional path to per-cycle gate effectiveness jsonl (for rolling checks).",
     )
     parser.add_argument(
         "--tca-path",
-        default=_DEFAULT_TCA_PATH,
+        default=None,
         help="Optional path to TCA jsonl for fee/slippage enrichment.",
     )
     parser.add_argument(
@@ -1736,6 +2203,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Rolling trading-day window for go/no-go metrics; 0 or unset uses full history.",
     )
     parser.add_argument(
+        "--trade-fill-source",
+        default=None,
+        help="Optional go/no-go trade fill source selector (all/live/reconcile_backfill).",
+    )
+    parser.add_argument(
         "--require-gate-valid",
         action="store_true",
         help="Require gate summary validity for go/no-go.",
@@ -1747,17 +2219,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    ensure_dotenv_loaded()
+    paths = resolve_runtime_report_paths(
+        trade_history_path=args.trade_history,
+        gate_summary_path=args.gate_summary,
+        gate_log_path=args.gate_log_path,
+        tca_path=args.tca_path,
+    )
+
     report = build_report(
-        trade_history_path=Path(args.trade_history),
-        gate_summary_path=Path(args.gate_summary),
-        tca_path=(Path(args.tca_path) if args.tca_path else None),
-        gate_log_path=(Path(args.gate_log_path) if str(args.gate_log_path).strip() else None),
+        trade_history_path=Path(
+            paths.get("trade_history") or _DEFAULT_TRADE_HISTORY_PATH
+        ),
+        gate_summary_path=Path(
+            paths.get("gate_summary") or _DEFAULT_GATE_SUMMARY_PATH
+        ),
+        tca_path=(Path(paths["tca"]) if isinstance(paths.get("tca"), Path) else None),
+        gate_log_path=(
+            Path(paths["gate_log"])
+            if isinstance(paths.get("gate_log"), Path)
+            else None
+        ),
     )
     if args.go_no_go or args.fail_on_no_go:
-        thresholds = {
-            "require_pnl_available": not bool(args.allow_missing_pnl),
-            "require_gate_valid": bool(args.require_gate_valid),
-        }
+        thresholds = resolve_runtime_gonogo_thresholds()
+        if args.allow_missing_pnl:
+            thresholds["require_pnl_available"] = False
+        if args.require_gate_valid:
+            thresholds["require_gate_valid"] = True
+        if args.trade_fill_source is not None:
+            thresholds["trade_fill_source"] = str(args.trade_fill_source).strip()
         for key in (
             "min_closed_trades",
             "min_profit_factor",

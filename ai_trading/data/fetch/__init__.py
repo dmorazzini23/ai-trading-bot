@@ -1821,10 +1821,21 @@ def _classify_fallback_reason(
     )
     if provider_hint:
         details["provider"] = str(provider_hint)
-    for key in ("symbol", "timeframe", "interval", "attempt"):
+    for key in ("symbol", "timeframe", "interval", "attempt", "feed", "requested_feed"):
         value = metadata.get(key)
         if value is not None and key not in details:
             details[key] = value
+    feed_hint_raw = metadata.get("feed") or metadata.get("requested_feed")
+    feed_hint = ""
+    if feed_hint_raw not in (None, ""):
+        try:
+            feed_hint = str(feed_hint_raw).strip().lower()
+        except Exception:
+            feed_hint = ""
+        if feed_hint.startswith("alpaca_"):
+            feed_hint = feed_hint.split("_", 1)[1]
+        if feed_hint:
+            details["feed"] = feed_hint
     http_status = metadata.get("http_status") or metadata.get("status_code")
     status_int = _coerce_int(http_status)
     if status_int is not None:
@@ -1867,18 +1878,6 @@ def _classify_fallback_reason(
         limit_ratio = _resolve_gap_ratio_limit()
         details["gap_over_limit"] = gap_ratio >= limit_ratio
 
-    status_reason: str | None = None
-    if status_int == 429:
-        status_reason = "rate_limited"
-    elif status_int in {401, 403}:
-        status_reason = "auth_error"
-    elif status_int is not None and 500 <= status_int <= 599:
-        status_reason = "server_error"
-    elif status_int is not None and 400 <= status_int < 500:
-        status_reason = "bad_request"
-    if status_reason:
-        return status_reason, details
-
     fallback_reason = metadata.get("fallback_reason")
     combined_reason = " ".join(
         filter(
@@ -1887,10 +1886,35 @@ def _classify_fallback_reason(
                 str(fallback_reason or ""),
                 str(reason_hint or ""),
                 str(metadata.get("reason") or ""),
+                str(message or ""),
             ),
         ),
     ).strip()
     combined_lower = combined_reason.lower()
+
+    status_reason: str | None = None
+    if status_int == 429:
+        status_reason = "rate_limited"
+    elif status_int in {401, 403}:
+        sip_auth_error = False
+        if feed_hint == "sip":
+            sip_auth_error = True
+        elif "sip" in combined_lower and (
+            "unauthorized" in combined_lower
+            or "forbidden" in combined_lower
+            or "subscription" in combined_lower
+            or "entitlement" in combined_lower
+            or "not permit" in combined_lower
+        ):
+            sip_auth_error = True
+        status_reason = "unauthorized_sip" if sip_auth_error else "auth_error"
+    elif status_int is not None and 500 <= status_int <= 599:
+        status_reason = "server_error"
+    elif status_int is not None and 400 <= status_int < 500:
+        status_reason = "bad_request"
+    if status_reason:
+        return status_reason, details
+
     if details.get("gap_over_limit"):
         return "gap_ratio_exceeded", details
     if "timestamp" in combined_lower and "missing" in combined_lower:
@@ -9754,19 +9778,32 @@ def _fetch_bars(
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
             reason_tag = "alpaca_unauthorized"
-            if _feed == "sip":
+            status_text = str(text or "").strip().lower()
+            sip_entitlement_denied = (
+                "sip" in status_text
+                and (
+                    "subscription" in status_text
+                    or "entitlement" in status_text
+                    or "not permit" in status_text
+                    or "forbidden" in status_text
+                    or "unauthorized" in status_text
+                )
+            )
+            if _feed == "sip" or sip_entitlement_denied:
                 reason_tag = "alpaca_sip_unauthorized"
             _state["fallback_reason"] = reason_tag
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
             provider_id = "alpaca"
-            if _feed in {"sip", "iex"}:
+            if reason_tag == "alpaca_sip_unauthorized":
+                provider_id = "alpaca_sip"
+            elif _feed in {"sip", "iex"}:
                 provider_id = f"alpaca_{_feed}"
             provider_monitor.record_failure(provider_id, "unauthorized")
             _record_alpaca_failure_event(symbol, timeframe=_interval)
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             _emit_fetch_attempt_log(status=status, error="unauthorized", extra=log_extra_with_remaining)
-            if _feed == "sip":
+            if reason_tag == "alpaca_sip_unauthorized":
                 retry_after_header = None
                 headers_obj = getattr(resp, "headers", None)
                 if isinstance(headers_obj, Mapping):
