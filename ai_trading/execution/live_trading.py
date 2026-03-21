@@ -189,6 +189,11 @@ from ai_trading.execution.engine import (
     KNOWN_EXECUTE_ORDER_KWARGS,
     OrderManager,
 )
+from ai_trading.execution.order_policy import (
+    MarketData,
+    OrderUrgency,
+    get_smart_router,
+)
 from ai_trading.meta_learning.persistence import record_trade_fill
 from ai_trading.runtime.artifacts import resolve_runtime_artifact_path
 
@@ -2196,6 +2201,8 @@ class ExecutionEngine:
         self._pending_new_actions_this_cycle: int = 0
         self._pending_new_policy_last_cycle_index: int | None = None
         self._pending_new_ladder_replacements: dict[str, int] = {}
+        self._pending_new_replace_last_mono: dict[str, float] = {}
+        self._pending_new_replacements_this_cycle: int = 0
         self._engine_started_mono: float = float(monotonic_time())
         self._engine_cycle_index: int = 0
         self._capacity_exhausted_cycle: bool = False
@@ -2225,6 +2232,19 @@ class ExecutionEngine:
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
         self._cancel_ratio_adaptive_context: dict[str, Any] = {}
         self._pacing_relax_new_orders_cap: int | None = None
+        self._opening_provider_ready_since_mono: float = 0.0
+        self._position_tracker_last_sync_mono: float = 0.0
+        self._symbol_slippage_budget_cache_until_mono: float = 0.0
+        self._symbol_slippage_budget_cache: dict[str, tuple[bool, dict[str, Any]]] = {}
+        self._markout_feedback_bps: deque[float] = deque(maxlen=512)
+        self._slippage_feedback_bps: deque[float] = deque(maxlen=512)
+        self._markout_feedback_last_context: dict[str, Any] = {
+            "sample_count": 0,
+            "mean_bps": 0.0,
+            "toxic": False,
+            "threshold_bps": -4.0,
+            "min_samples": 12,
+        }
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -2286,9 +2306,11 @@ class ExecutionEngine:
         self._cycle_order_pacing_cap_logged = False
         self._pending_new_actions_this_cycle = 0
         self._pending_new_policy_last_cycle_index = None
+        self._pending_new_replacements_this_cycle = 0
         self._cycle_order_outcomes = []
         self._capacity_exhausted_cycle = False
         self._capacity_exhausted_reason = None
+        self._opening_provider_ready_since_mono = 0.0
         try:
             with self._cycle_reserved_intents_lock:
                 self._cycle_reserved_intents.clear()
@@ -2350,6 +2372,8 @@ class ExecutionEngine:
         self._pending_new_policy_last_cycle_index = None
         self._pending_new_actions_this_cycle = 0
         self._pending_new_ladder_replacements = {}
+        self._pending_new_replace_last_mono = {}
+        self._pending_new_replacements_this_cycle = 0
         self._cycle_maintenance_actions = 0
 
     def end_cycle(self) -> None:
@@ -2521,6 +2545,25 @@ class ExecutionEngine:
         if cancel_after_max_replacements is None:
             cancel_after_max_replacements = True
 
+        replace_min_interval_s = _config_float(
+            "AI_TRADING_PENDING_NEW_REPLACE_MIN_INTERVAL_SEC",
+            20.0,
+        )
+        if replace_min_interval_s is None:
+            replace_min_interval_s = 20.0
+        replace_min_interval_s = max(0.0, min(float(replace_min_interval_s), 1800.0))
+
+        replace_max_per_cycle = _config_int_alias(
+            (
+                "AI_TRADING_PENDING_NEW_REPLACE_MAX_PER_CYCLE",
+                "EXECUTION_PENDING_NEW_REPLACE_MAX_PER_CYCLE",
+            ),
+            max(1, min(int(max_actions), 2)),
+        )
+        if replace_max_per_cycle is None:
+            replace_max_per_cycle = max(1, min(int(max_actions), 2))
+        replace_max_per_cycle = max(0, min(int(replace_max_per_cycle), max(1, int(max_actions))))
+
         return {
             "policy": policy,
             "timeout_s": float(timeout_s),
@@ -2530,6 +2573,8 @@ class ExecutionEngine:
             "ladder_max_replacements": int(ladder_max_replacements),
             "ladder_widen_step_bps": int(ladder_widen_step_bps),
             "cancel_after_max_replacements": bool(cancel_after_max_replacements),
+            "replace_min_interval_s": float(replace_min_interval_s),
+            "replace_max_per_cycle": int(replace_max_per_cycle),
         }
 
     def _apply_pending_new_timeout_policy(self) -> bool:
@@ -2551,20 +2596,50 @@ class ExecutionEngine:
         cancel_after_max_replacements = bool(
             policy_cfg.get("cancel_after_max_replacements", True)
         )
+        replace_min_interval_s = max(
+            0.0,
+            float(policy_cfg.get("replace_min_interval_s") or 0.0),
+        )
+        replace_max_per_cycle = max(
+            0,
+            int(policy_cfg.get("replace_max_per_cycle") or 0),
+        )
+        base_replace_widen_bps = int(replace_widen_bps)
+        base_replace_min_interval_s = float(replace_min_interval_s)
+        base_replace_max_per_cycle = int(replace_max_per_cycle)
+        (
+            replace_widen_bps,
+            replace_min_interval_s,
+            replace_max_per_cycle,
+            dynamic_replace_context,
+        ) = self._pending_new_dynamic_controls(
+            base_replace_widen_bps=base_replace_widen_bps,
+            base_replace_min_interval_s=base_replace_min_interval_s,
+            base_replace_max_per_cycle=base_replace_max_per_cycle,
+        )
         if policy == "off" or max_actions <= 0:
             return False
         open_orders = self._list_open_orders_snapshot()
         if not open_orders:
             self._pending_new_ladder_replacements = {}
+            self._pending_new_replace_last_mono = {}
             return False
 
         now_dt = datetime.now(UTC)
+        now_mono = float(monotonic_time())
         actions_taken = 0
         stale_detected = 0
         stale_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
         replacement_attempts_raw = getattr(self, "_pending_new_ladder_replacements", {}) or {}
         replacement_attempts = (
             replacement_attempts_raw if isinstance(replacement_attempts_raw, dict) else {}
+        )
+        replacement_last_raw = getattr(self, "_pending_new_replace_last_mono", {}) or {}
+        replacement_last = (
+            replacement_last_raw if isinstance(replacement_last_raw, dict) else {}
+        )
+        replacements_this_cycle = int(
+            max(_safe_int(getattr(self, "_pending_new_replacements_this_cycle", 0), 0), 0)
         )
         open_attempt_keys: set[str] = set()
 
@@ -2597,6 +2672,7 @@ class ExecutionEngine:
 
             action = "cancel"
             action_success = False
+            replacement_suppressed = False
             replacement_allowed = (
                 policy in {"replace_widen", "ladder"}
                 and symbol
@@ -2612,11 +2688,66 @@ class ExecutionEngine:
                 replacement_allowed
                 and attempts < max_replacements_for_order
             ):
+                guard_reason: str | None = None
+                guard_remaining_s: float | None = None
+                if (
+                    replace_max_per_cycle > 0
+                    and replacements_this_cycle >= replace_max_per_cycle
+                ):
+                    guard_reason = "cycle_cap"
+                else:
+                    last_replace_mono = _safe_float(replacement_last.get(attempt_key)) or 0.0
+                    if (
+                        replace_min_interval_s > 0.0
+                        and last_replace_mono > 0.0
+                    ):
+                        elapsed_replace_s = max(now_mono - last_replace_mono, 0.0)
+                        if elapsed_replace_s < replace_min_interval_s:
+                            guard_reason = "min_interval"
+                            guard_remaining_s = max(
+                                replace_min_interval_s - elapsed_replace_s,
+                                0.0,
+                            )
+                if guard_reason is not None:
+                    replacement_suppressed = True
+                    logger.info(
+                        "PENDING_NEW_REPLACE_GUARD_BLOCK",
+                        extra={
+                            "policy": policy,
+                            "reason": guard_reason,
+                            "remaining_s": (
+                                round(float(guard_remaining_s), 3)
+                                if guard_remaining_s is not None
+                                else None
+                            ),
+                            "symbol": symbol or None,
+                            "order_id": str(order_id),
+                            "client_order_id": (
+                                str(client_order_id)
+                                if client_order_id not in (None, "")
+                                else None
+                            ),
+                            "status": status,
+                            "age_s": round(age_s, 3) if age_s is not None else None,
+                            "attempts": int(attempts),
+                            "max_replacements": int(max_replacements_for_order),
+                            "replacements_this_cycle": int(replacements_this_cycle),
+                            "replace_max_per_cycle": int(replace_max_per_cycle),
+                            "replace_min_interval_s": float(replace_min_interval_s),
+                            "dynamic_stress": _safe_float(
+                                dynamic_replace_context.get("stress")
+                            ),
+                        },
+                    )
                 order_type = str(_extract_value(order, "type", "order_type") or "").strip().lower()
                 limit_price = _safe_float(
                     _extract_value(order, "limit_price", "price", "stop_price")
                 )
-                if order_type in {"limit", "stop_limit"} and limit_price is not None:
+                if (
+                    not replacement_suppressed
+                    and order_type in {"limit", "stop_limit"}
+                    and limit_price is not None
+                ):
                     replace_slippage_bps = int(
                         max(
                             0,
@@ -2649,6 +2780,8 @@ class ExecutionEngine:
                         action = "replace_widen"
                         action_success = True
                         replacement_attempts[attempt_key] = attempts + 1
+                        replacement_last[attempt_key] = now_mono
+                        replacements_this_cycle += 1
 
             should_cancel = bool(
                 policy == "cancel"
@@ -2658,7 +2791,11 @@ class ExecutionEngine:
                     and cancel_after_max_replacements
                     and attempts >= max_replacements_for_order
                 )
-                or (policy == "replace_widen" and not action_success)
+                or (
+                    policy == "replace_widen"
+                    and not action_success
+                    and not replacement_suppressed
+                )
             )
             if not action_success and should_cancel:
                 try:
@@ -2682,6 +2819,7 @@ class ExecutionEngine:
                 action = "cancel"
                 action_success = True
                 replacement_attempts.pop(attempt_key, None)
+                replacement_last.pop(attempt_key, None)
 
             if not action_success:
                 continue
@@ -2709,6 +2847,7 @@ class ExecutionEngine:
                     "max_replacements": int(max_replacements_for_order),
                     "actions_taken": actions_taken,
                     "max_actions": max_actions,
+                    "dynamic_stress": _safe_float(dynamic_replace_context.get("stress")),
                 },
             )
 
@@ -2729,7 +2868,17 @@ class ExecutionEngine:
                 for key, value in replacement_attempts.items()
                 if str(key) in open_attempt_keys
             }
+        if replacement_last:
+            replacement_last = {
+                str(key): float(value)
+                for key, value in replacement_last.items()
+                if str(key) in open_attempt_keys and _safe_float(value) is not None
+            }
         self._pending_new_ladder_replacements = replacement_attempts
+        self._pending_new_replace_last_mono = replacement_last
+        self._pending_new_replacements_this_cycle = int(
+            max(replacements_this_cycle, 0)
+        )
         return actions_taken > 0
 
     def _duplicate_intent_window_seconds(self) -> float:
@@ -2967,6 +3116,36 @@ class ExecutionEngine:
             value = 600.0
         return max(0.0, min(float(value), 7200.0))
 
+    def _opening_provider_ready_min_seconds(self) -> float:
+        value = _config_float("AI_TRADING_EXECUTION_OPENING_PROVIDER_READY_MIN_SEC", 15.0)
+        if value is None:
+            value = 15.0
+        if not math.isfinite(float(value)):
+            value = 15.0
+        return max(0.0, min(float(value), 300.0))
+
+    def _opening_provider_ready_max_quote_age_ms(self) -> float:
+        value = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_PROVIDER_READY_MAX_QUOTE_AGE_MS",
+            2500.0,
+        )
+        if value is None:
+            value = 2500.0
+        if not math.isfinite(float(value)):
+            value = 2500.0
+        return max(0.0, min(float(value), 120000.0))
+
+    def _opening_provider_ready_state_staleness_sec(self) -> float:
+        value = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_PROVIDER_READY_STATE_STALE_SEC",
+            45.0,
+        )
+        if value is None:
+            value = 45.0
+        if not math.isfinite(float(value)):
+            value = 45.0
+        return max(0.0, min(float(value), 1800.0))
+
     def _opening_provider_guard_elapsed_seconds(self) -> float | None:
         """Best-effort seconds elapsed since regular-market open."""
 
@@ -3029,6 +3208,23 @@ class ExecutionEngine:
         provider_active = str(provider_snapshot.get("active") or "").strip().lower()
         using_backup = bool(provider_snapshot.get("using_backup"))
         provider_safe_mode = bool(provider_snapshot.get("safe_mode"))
+        quote_fresh_ms = _safe_float(provider_snapshot.get("quote_fresh_ms"))
+        provider_updated_raw = provider_snapshot.get("updated")
+        provider_updated_age_s: float | None = None
+        if provider_updated_raw not in (None, ""):
+            try:
+                provider_updated_text = str(provider_updated_raw).strip()
+                if provider_updated_text.endswith("Z"):
+                    provider_updated_text = f"{provider_updated_text[:-1]}+00:00"
+                provider_updated_dt = datetime.fromisoformat(provider_updated_text)
+                if provider_updated_dt.tzinfo is None:
+                    provider_updated_dt = provider_updated_dt.replace(tzinfo=UTC)
+                provider_updated_age_s = max(
+                    (datetime.now(UTC) - provider_updated_dt.astimezone(UTC)).total_seconds(),
+                    0.0,
+                )
+            except Exception:
+                provider_updated_age_s = None
         provider_disabled = False
         try:
             provider_disabled = bool(
@@ -3047,6 +3243,28 @@ class ExecutionEngine:
             "unknown",
         }
         active_is_primary = provider_active.startswith("alpaca") if provider_active else False
+        warmup_statuses = {
+            "",
+            "unknown",
+            "warming_up",
+            "warmup",
+            "initializing",
+            "starting",
+            "bootstrapping",
+        }
+        provider_warming = provider_status in warmup_statuses
+        quote_age_limit_ms = self._opening_provider_ready_max_quote_age_ms()
+        quote_stale = (
+            quote_fresh_ms is not None
+            and quote_age_limit_ms > 0.0
+            and quote_fresh_ms > quote_age_limit_ms
+        )
+        provider_state_staleness_limit_s = self._opening_provider_ready_state_staleness_sec()
+        provider_state_stale = (
+            provider_updated_age_s is not None
+            and provider_state_staleness_limit_s > 0.0
+            and provider_updated_age_s > provider_state_staleness_limit_s
+        )
         degraded = (
             bool(is_safe_mode_active())
             or provider_safe_mode
@@ -3054,19 +3272,55 @@ class ExecutionEngine:
             or provider_degraded
             or using_backup
             or (provider_active not in {"", "unknown"} and not active_is_primary)
+            or provider_warming
+            or quote_stale
+            or provider_state_stale
         )
+        readiness_min_s = self._opening_provider_ready_min_seconds()
         if not degraded:
-            return False, None
+            ready_since = float(
+                getattr(self, "_opening_provider_ready_since_mono", 0.0) or 0.0
+            )
+            now_mono = float(monotonic_time())
+            if ready_since <= 0.0:
+                self._opening_provider_ready_since_mono = now_mono
+                ready_since = now_mono
+            ready_elapsed_s = max(now_mono - ready_since, 0.0)
+            if readiness_min_s <= 0.0 or ready_elapsed_s >= readiness_min_s:
+                return False, None
+            detail = (
+                "opening_provider_guard"
+                " reason=provider_readiness_warmup"
+                f" elapsed_s={round(float(elapsed_s), 1)}"
+                f" window_s={round(float(window_s), 1)}"
+                f" ready_elapsed_s={round(float(ready_elapsed_s), 1)}"
+                f" ready_min_s={round(float(readiness_min_s), 1)}"
+                f" provider_status={provider_status or 'unknown'}"
+                f" active={provider_active or 'unknown'}"
+                f" using_backup={bool(using_backup)}"
+                f" quote_fresh_ms={round(float(quote_fresh_ms), 3) if quote_fresh_ms is not None else None}"
+                f" quote_age_limit_ms={round(float(quote_age_limit_ms), 3)}"
+            )
+            return True, detail
+        self._opening_provider_ready_since_mono = 0.0
 
         detail = (
             "opening_provider_guard"
             f" elapsed_s={round(float(elapsed_s), 1)}"
             f" window_s={round(float(window_s), 1)}"
+            f" ready_min_s={round(float(readiness_min_s), 1)}"
             f" provider_status={provider_status or 'unknown'}"
             f" active={provider_active or 'unknown'}"
             f" using_backup={bool(using_backup)}"
             f" safe_mode={bool(provider_safe_mode or is_safe_mode_active())}"
             f" disabled={bool(provider_disabled)}"
+            f" provider_warming={bool(provider_warming)}"
+            f" quote_stale={bool(quote_stale)}"
+            f" quote_fresh_ms={round(float(quote_fresh_ms), 3) if quote_fresh_ms is not None else None}"
+            f" quote_age_limit_ms={round(float(quote_age_limit_ms), 3)}"
+            f" provider_state_stale={bool(provider_state_stale)}"
+            f" provider_updated_age_s={round(float(provider_updated_age_s), 3) if provider_updated_age_s is not None else None}"
+            f" provider_state_stale_limit_s={round(float(provider_state_staleness_limit_s), 3)}"
         )
         return True, detail
 
@@ -3788,6 +4042,425 @@ class ExecutionEngine:
             self._recent_order_intents = intents
         intents[key] = monotonic_time()
 
+    @staticmethod
+    def _coerce_finite_float(value: Any) -> float | None:
+        """Return finite float when value is numeric, otherwise ``None``."""
+
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return parsed
+
+    def _execution_slippage_volatility_bps(self) -> float:
+        """Return rolling slippage volatility proxy in bps."""
+
+        slippage_raw = getattr(self, "_slippage_feedback_bps", None)
+        if not isinstance(slippage_raw, deque) or len(slippage_raw) < 2:
+            return 0.0
+        values: list[float] = []
+        for candidate in slippage_raw:
+            parsed = self._coerce_finite_float(candidate)
+            if parsed is None:
+                continue
+            values.append(abs(parsed))
+        if len(values) < 2:
+            return 0.0
+        try:
+            return float(statistics.pstdev(values))
+        except statistics.StatisticsError:
+            return 0.0
+
+    def _observe_markout_feedback(self) -> dict[str, Any]:
+        """Return latest rolling markout feedback context."""
+
+        context_raw = getattr(self, "_markout_feedback_last_context", None)
+        if isinstance(context_raw, Mapping):
+            context = dict(context_raw)
+        else:
+            context = {}
+        history_raw = getattr(self, "_markout_feedback_bps", None)
+        history_count = len(history_raw) if isinstance(history_raw, deque) else 0
+        context.setdefault("sample_count", int(history_count))
+        context.setdefault("mean_bps", 0.0)
+        context.setdefault("toxic", False)
+        context.setdefault("threshold_bps", -4.0)
+        context.setdefault("min_samples", 12)
+        return context
+
+    def _update_markout_feedback(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        status: str,
+        realized_net_edge_bps: float | None,
+        realized_slippage_bps: float | None,
+        fill_source: str | None,
+    ) -> None:
+        """Update rolling markout/slippage feedback from live fills."""
+
+        slippage_history_raw = getattr(self, "_slippage_feedback_bps", None)
+        if not isinstance(slippage_history_raw, deque):
+            slippage_history_raw = deque(maxlen=512)
+            self._slippage_feedback_bps = slippage_history_raw
+        markout_history_raw = getattr(self, "_markout_feedback_bps", None)
+        if not isinstance(markout_history_raw, deque):
+            markout_history_raw = deque(maxlen=512)
+            self._markout_feedback_bps = markout_history_raw
+
+        parsed_slippage = self._coerce_finite_float(realized_slippage_bps)
+        if parsed_slippage is not None:
+            slippage_history_raw.append(abs(float(parsed_slippage)))
+
+        status_token = _normalize_status(status) or str(status or "").strip().lower()
+        if status_token not in {"filled", "partially_filled"}:
+            return
+        source_token = str(fill_source or "").strip().lower()
+        source_is_live = source_token in {
+            "",
+            "live",
+            "initial",
+            "poll",
+            "final",
+            "manual_probe",
+        }
+        if not source_is_live:
+            return
+        parsed_edge = self._coerce_finite_float(realized_net_edge_bps)
+        if parsed_edge is None:
+            return
+
+        min_samples = max(1, _config_int("AI_TRADING_MARKOUT_FEEDBACK_MIN_SAMPLES", 12) or 12)
+        threshold_bps = self._coerce_finite_float(
+            _config_float("AI_TRADING_MARKOUT_TOXIC_THRESHOLD_BPS", -4.0)
+        )
+        if threshold_bps is None:
+            threshold_bps = -4.0
+        markout_history_raw.append(float(parsed_edge))
+        mean_bps = float(statistics.mean(markout_history_raw)) if markout_history_raw else 0.0
+        toxic = len(markout_history_raw) >= int(min_samples) and mean_bps <= float(threshold_bps)
+        context = {
+            "sample_count": int(len(markout_history_raw)),
+            "mean_bps": float(mean_bps),
+            "toxic": bool(toxic),
+            "threshold_bps": float(threshold_bps),
+            "min_samples": int(min_samples),
+        }
+        self._markout_feedback_last_context = dict(context)
+        logger.info(
+            "MARKOUT_FEEDBACK_UPDATE",
+            extra={
+                "symbol": str(symbol) if symbol else None,
+                "side": str(side) if side else None,
+                "status": status_token,
+                "fill_source": source_token or "live",
+                "realized_net_edge_bps": float(parsed_edge),
+                "markout_mean_bps": float(mean_bps),
+                "markout_samples": int(len(markout_history_raw)),
+                "markout_toxic": bool(toxic),
+            },
+        )
+        if self._runtime_exec_event_persistence_enabled():
+            self._append_runtime_jsonl(
+                env_key="AI_TRADING_MARKOUT_EVENTS_PATH",
+                default_relative="runtime/markout_feedback.jsonl",
+                payload={
+                    "event": "markout_feedback",
+                    "symbol": str(symbol) if symbol else None,
+                    "side": str(side) if side else None,
+                    "status": status_token,
+                    "fill_source": source_token or "live",
+                    "realized_net_edge_bps": float(parsed_edge),
+                    "markout_mean_bps": float(mean_bps),
+                    "markout_samples": int(len(markout_history_raw)),
+                    "markout_toxic": bool(toxic),
+                },
+                failure_log="MARKOUT_FEEDBACK_WRITE_FAILED",
+            )
+
+    def _pending_new_dynamic_controls(
+        self,
+        *,
+        base_replace_widen_bps: int,
+        base_replace_min_interval_s: float,
+        base_replace_max_per_cycle: int,
+    ) -> tuple[int, float, int, dict[str, Any]]:
+        """Derive dynamic pending-new replace controls from live microstructure."""
+
+        dynamic_enabled = _resolve_bool_env("AI_TRADING_PENDING_NEW_DYNAMIC_ENABLED")
+        if dynamic_enabled is None:
+            dynamic_enabled = True
+        context: dict[str, Any] = {
+            "enabled": bool(dynamic_enabled),
+            "base_replace_widen_bps": int(base_replace_widen_bps),
+            "base_replace_min_interval_s": float(base_replace_min_interval_s),
+            "base_replace_max_per_cycle": int(base_replace_max_per_cycle),
+        }
+        if not dynamic_enabled:
+            return (
+                int(base_replace_widen_bps),
+                float(base_replace_min_interval_s),
+                int(base_replace_max_per_cycle),
+                context,
+            )
+
+        quote_state = runtime_state.observe_quote_status()
+        bid = self._coerce_finite_float(quote_state.get("bid"))
+        ask = self._coerce_finite_float(quote_state.get("ask"))
+        quote_age_ms = self._coerce_finite_float(quote_state.get("quote_age_ms"))
+        spread_bps: float | None = None
+        if (
+            bid is not None
+            and ask is not None
+            and bid > 0.0
+            and ask > bid
+        ):
+            mid = (bid + ask) / 2.0
+            if mid > 0.0:
+                spread_bps = ((ask - bid) / mid) * 10000.0
+
+        slippage_vol_bps = self._execution_slippage_volatility_bps()
+        markout_context = self._observe_markout_feedback()
+        markout_toxic = bool(markout_context.get("toxic"))
+        spread_stress = min(
+            max(((spread_bps or 0.0) - 6.0) / 18.0, 0.0),
+            1.0,
+        )
+        age_stress = min(
+            max(((quote_age_ms or 0.0) - 1200.0) / 5000.0, 0.0),
+            1.0,
+        )
+        vol_stress = min(
+            max((float(slippage_vol_bps) - 4.0) / 20.0, 0.0),
+            1.0,
+        )
+        stress = max(spread_stress, age_stress, vol_stress)
+        if markout_toxic:
+            stress = min(1.0, stress + 0.2)
+
+        effective_widen_bps = int(round(float(base_replace_widen_bps) * (1.0 - 0.45 * stress)))
+        if base_replace_widen_bps > 0:
+            effective_widen_bps = max(1, effective_widen_bps)
+        effective_widen_bps = max(0, min(effective_widen_bps, 1000))
+
+        effective_replace_min_interval_s = float(base_replace_min_interval_s) * (1.0 + 1.5 * stress)
+        effective_replace_min_interval_s = max(
+            float(base_replace_min_interval_s),
+            min(float(effective_replace_min_interval_s), 1800.0),
+        )
+
+        effective_replace_max_per_cycle = int(
+            round(float(base_replace_max_per_cycle) * (1.0 - 0.6 * stress))
+        )
+        if base_replace_max_per_cycle > 0 and stress < 0.9:
+            effective_replace_max_per_cycle = max(1, effective_replace_max_per_cycle)
+        effective_replace_max_per_cycle = max(
+            0,
+            min(effective_replace_max_per_cycle, int(base_replace_max_per_cycle)),
+        )
+
+        context.update(
+            {
+                "spread_bps": float(spread_bps) if spread_bps is not None else None,
+                "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
+                "slippage_volatility_bps": float(slippage_vol_bps),
+                "markout_toxic": bool(markout_toxic),
+                "stress": float(stress),
+                "effective_replace_widen_bps": int(effective_widen_bps),
+                "effective_replace_min_interval_s": float(effective_replace_min_interval_s),
+                "effective_replace_max_per_cycle": int(effective_replace_max_per_cycle),
+            }
+        )
+        return (
+            int(effective_widen_bps),
+            float(effective_replace_min_interval_s),
+            int(effective_replace_max_per_cycle),
+            context,
+        )
+
+    def _estimate_passive_fill_probability(
+        self,
+        *,
+        side: str,
+        bid: float | None,
+        ask: float | None,
+        quote_age_ms: float | None,
+        spread_bps_hint: float | None,
+        degrade_active: bool,
+        gap_ratio: float | None,
+        markout_context: Mapping[str, Any] | None = None,
+    ) -> tuple[float, dict[str, Any]]:
+        """Estimate passive fill probability for non-immediate limit orders."""
+
+        spread_bps = self._coerce_finite_float(spread_bps_hint)
+        if spread_bps is None:
+            if (
+                bid is not None
+                and ask is not None
+                and bid > 0.0
+                and ask > bid
+            ):
+                mid = (bid + ask) / 2.0
+                if mid > 0.0:
+                    spread_bps = ((ask - bid) / mid) * 10000.0
+        spread_component = min(max(((spread_bps or 0.0) - 4.0) / 20.0, 0.0), 0.55)
+        age_component = min(max(((quote_age_ms or 0.0) - 500.0) / 3500.0, 0.0), 0.25)
+        degrade_component = 0.15 if degrade_active else 0.0
+        gap_component = min(abs(float(gap_ratio or 0.0)) * 2.0, 0.2)
+        markout_component = 0.0
+        if isinstance(markout_context, Mapping) and bool(markout_context.get("toxic")):
+            markout_mean = self._coerce_finite_float(markout_context.get("mean_bps")) or 0.0
+            markout_component = min(max(abs(markout_mean) / 20.0, 0.0), 0.15)
+
+        base_probability = 0.82
+        probability = base_probability - spread_component - age_component - degrade_component
+        probability -= gap_component + markout_component
+        probability = max(0.01, min(float(probability), 0.99))
+        context = {
+            "side": str(side or "").lower(),
+            "spread_bps": float(spread_bps) if spread_bps is not None else None,
+            "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
+            "degraded_feed": bool(degrade_active),
+            "gap_ratio": float(gap_ratio) if gap_ratio is not None else None,
+            "components": {
+                "spread": float(spread_component),
+                "quote_age": float(age_component),
+                "degraded_feed": float(degrade_component),
+                "gap_ratio": float(gap_component),
+                "markout_toxicity": float(markout_component),
+            },
+            "estimated_fill_probability": float(probability),
+        }
+        return float(probability), context
+
+    def _resolve_smart_order_route(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: int,
+        order_type: str,
+        limit_price: float | None,
+        bid: float | None,
+        ask: float | None,
+        quote_age_ms: float | None,
+        degrade_active: bool,
+        markout_context: Mapping[str, Any] | None,
+        manual_limit_requested: bool,
+    ) -> dict[str, Any]:
+        """Return smart-router order route decision for live submits."""
+
+        route_order_type = str(order_type or "limit").strip().lower() or "limit"
+        route_time_in_force: str | None = None
+        route_limit_price = self._coerce_finite_float(limit_price)
+        context: dict[str, Any] = {
+            "enabled": False,
+            "applied": False,
+            "requested_order_type": route_order_type,
+            "resolved_order_type": route_order_type,
+            "resolved_time_in_force": None,
+            "resolved_limit_price": route_limit_price,
+            "reason": "disabled",
+        }
+        router_enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SMART_ROUTER_ENABLED")
+        if router_enabled is None:
+            router_enabled = True
+        context["enabled"] = bool(router_enabled)
+        if not router_enabled or route_order_type not in {"limit", "stop_limit"}:
+            return context
+        if (
+            bid is None
+            or ask is None
+            or not math.isfinite(float(bid))
+            or not math.isfinite(float(ask))
+            or float(ask) <= float(bid)
+            or float(bid) <= 0.0
+        ):
+            context["reason"] = "missing_quote"
+            return context
+
+        mid = (float(bid) + float(ask)) / 2.0
+        spread_bps = ((float(ask) - float(bid)) / mid) * 10000.0 if mid > 0.0 else 0.0
+        urgency = OrderUrgency.MEDIUM
+        if degrade_active or (quote_age_ms is not None and float(quote_age_ms) > 2500.0):
+            urgency = OrderUrgency.HIGH
+        elif spread_bps >= 8.0:
+            urgency = OrderUrgency.HIGH
+        if isinstance(markout_context, Mapping) and bool(markout_context.get("toxic")):
+            urgency = OrderUrgency.URGENT
+
+        try:
+            market_data = MarketData(
+                symbol=str(symbol or "").upper(),
+                bid=float(bid),
+                ask=float(ask),
+                mid=float(mid),
+                spread_bps=float(spread_bps),
+                volume_ratio=1.0,
+            )
+            request = get_smart_router().create_order_request(
+                symbol=str(symbol or "").upper(),
+                side=str(side or "").lower(),
+                quantity=float(max(int(quantity), 0)),
+                market_data=market_data,
+                urgency=urgency,
+            )
+        except Exception:
+            logger.debug(
+                "SMART_ORDER_ROUTER_FAILED",
+                extra={"symbol": symbol, "side": side},
+                exc_info=True,
+            )
+            context["reason"] = "router_failed"
+            return context
+
+        recommended_type = str(request.get("type") or "").strip().lower()
+        recommended_tif = str(request.get("time_in_force") or "").strip().lower()
+        recommended_limit = self._coerce_finite_float(request.get("limit_price"))
+        context.update(
+            {
+                "recommended_type": recommended_type or None,
+                "recommended_time_in_force": recommended_tif or None,
+                "recommended_limit_price": recommended_limit,
+                "spread_bps": float(spread_bps),
+                "urgency": urgency.value,
+            }
+        )
+
+        if recommended_type == "ioc":
+            route_time_in_force = "ioc"
+            if recommended_limit is not None:
+                route_limit_price = recommended_limit
+            context["reason"] = "router_ioc"
+            context["applied"] = True
+        elif recommended_type in {"marketable_limit", "limit"}:
+            if recommended_tif in {"day", "gtc", "ioc", "fok"}:
+                route_time_in_force = recommended_tif
+            if not manual_limit_requested and recommended_limit is not None:
+                route_limit_price = recommended_limit
+                context["applied"] = True
+            context["reason"] = "router_marketable_limit"
+        elif (
+            recommended_type == "market"
+            and not manual_limit_requested
+            and bool(_resolve_bool_env("AI_TRADING_EXECUTION_SMART_ROUTER_ALLOW_MARKET_ESCALATION"))
+        ):
+            route_order_type = "market"
+            route_limit_price = None
+            route_time_in_force = "day"
+            context["reason"] = "router_market_escalation"
+            context["applied"] = True
+        else:
+            context["reason"] = "router_no_change"
+
+        context["resolved_order_type"] = route_order_type
+        context["resolved_time_in_force"] = route_time_in_force
+        context["resolved_limit_price"] = route_limit_price
+        return context
+
     def _record_cycle_order_outcome(
         self,
         *,
@@ -4244,6 +4917,12 @@ class ExecutionEngine:
                 float(getattr(self, "_broker_locked_until", 0.0) or 0.0) - monotonic_time(),
                 0.0,
             )
+        markout_context = self._observe_markout_feedback()
+        markout_mean_bps = _safe_float(markout_context.get("mean_bps"))
+        markout_sample_count = _safe_int(markout_context.get("sample_count"), 0) or 0
+        markout_toxic = bool(markout_context.get("toxic"))
+        markout_threshold_bps = _safe_float(markout_context.get("threshold_bps"))
+        slippage_volatility_bps = self._execution_slippage_volatility_bps()
 
         logger.info(
             "EXECUTION_KPI_SNAPSHOT",
@@ -4287,6 +4966,19 @@ class ExecutionEngine:
                 "pending_new_actions": int(
                     max(getattr(self, "_pending_new_actions_this_cycle", 0), 0)
                 ),
+                "markout_mean_bps": (
+                    round(float(markout_mean_bps), 4)
+                    if markout_mean_bps is not None
+                    else None
+                ),
+                "markout_sample_count": int(max(markout_sample_count, 0)),
+                "markout_toxic": bool(markout_toxic),
+                "markout_threshold_bps": (
+                    round(float(markout_threshold_bps), 4)
+                    if markout_threshold_bps is not None
+                    else None
+                ),
+                "slippage_volatility_bps": round(float(slippage_volatility_bps), 4),
             },
         )
 
@@ -8539,6 +9231,212 @@ class ExecutionEngine:
             )
             return None
 
+        markout_context = self._observe_markout_feedback()
+        smart_route_context: dict[str, Any] = {
+            "enabled": False,
+            "applied": False,
+            "reason": "not_evaluated",
+        }
+        if not closing_position and order_type_normalized in {"limit", "stop_limit"}:
+            smart_route_context = self._resolve_smart_order_route(
+                symbol=symbol,
+                side=mapped_side,
+                quantity=int(quantity),
+                order_type=order_type_normalized,
+                limit_price=_safe_float(resolved_limit_price),
+                bid=bid_val,
+                ask=ask_val,
+                quote_age_ms=quote_age_ms,
+                degrade_active=bool(degrade_active),
+                markout_context=markout_context,
+                manual_limit_requested=bool(manual_limit_requested),
+            )
+            resolved_route_type = str(
+                smart_route_context.get("resolved_order_type") or order_type_normalized
+            ).strip().lower() or order_type_normalized
+            resolved_route_tif = smart_route_context.get("resolved_time_in_force")
+            resolved_route_limit = _safe_float(
+                smart_route_context.get("resolved_limit_price")
+            )
+            if resolved_route_type in {"market", "limit", "stop_limit"}:
+                order_type_normalized = resolved_route_type
+            if resolved_route_tif not in (None, ""):
+                kwargs["time_in_force"] = str(resolved_route_tif)
+            if order_type_normalized in {"limit", "stop_limit"}:
+                if resolved_route_limit is not None:
+                    resolved_limit_price = resolved_route_limit
+                    price_for_limit = resolved_route_limit
+                    kwargs["price"] = resolved_route_limit
+            else:
+                resolved_limit_price = None
+                price_for_limit = None
+                kwargs.pop("price", None)
+            if bool(smart_route_context.get("applied")):
+                logger.info(
+                    "SMART_ORDER_ROUTE_APPLIED",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "requested_order_type": smart_route_context.get(
+                            "requested_order_type"
+                        ),
+                        "resolved_order_type": order_type_normalized,
+                        "resolved_time_in_force": kwargs.get("time_in_force"),
+                        "resolved_limit_price": (
+                            float(resolved_limit_price)
+                            if resolved_limit_price is not None
+                            else None
+                        ),
+                        "reason": smart_route_context.get("reason"),
+                        "urgency": smart_route_context.get("urgency"),
+                        "spread_bps": _safe_float(
+                            smart_route_context.get("spread_bps")
+                        ),
+                    },
+                )
+
+        if not closing_position and order_type_normalized in {"limit", "stop_limit"}:
+            spread_bps_hint: float | None = None
+            if (
+                bid_val is not None
+                and ask_val is not None
+                and bid_val > 0.0
+                and ask_val > bid_val
+            ):
+                mid = (bid_val + ask_val) / 2.0
+                if mid > 0.0:
+                    spread_bps_hint = ((ask_val - bid_val) / mid) * 10000.0
+            fill_probability, fill_probability_context = (
+                self._estimate_passive_fill_probability(
+                    side=mapped_side,
+                    bid=bid_val,
+                    ask=ask_val,
+                    quote_age_ms=quote_age_ms,
+                    spread_bps_hint=spread_bps_hint,
+                    degrade_active=bool(degrade_active),
+                    gap_ratio=gap_ratio_value,
+                    markout_context=markout_context,
+                )
+            )
+            logger.info(
+                "PASSIVE_FILL_PROBABILITY_ESTIMATE",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "order_type": order_type_normalized,
+                    "fill_probability": round(float(fill_probability), 4),
+                    "threshold": round(
+                        float(
+                            _config_float(
+                                "AI_TRADING_EXECUTION_PASSIVE_FILL_MIN_PROB", 0.35
+                            )
+                            or 0.35
+                        ),
+                        4,
+                    ),
+                    "spread_bps": _safe_float(fill_probability_context.get("spread_bps")),
+                    "quote_age_ms": _safe_float(fill_probability_context.get("quote_age_ms")),
+                    "degraded_feed": bool(fill_probability_context.get("degraded_feed")),
+                    "markout_toxic": bool(markout_context.get("toxic")),
+                },
+            )
+            min_fill_probability = _config_float(
+                "AI_TRADING_EXECUTION_PASSIVE_FILL_MIN_PROB",
+                0.35,
+            )
+            if min_fill_probability is None:
+                min_fill_probability = 0.35
+            min_fill_probability = max(0.01, min(float(min_fill_probability), 0.99))
+            if float(fill_probability) < float(min_fill_probability):
+                action_token = str(
+                    _runtime_env(
+                        "AI_TRADING_EXECUTION_PASSIVE_FILL_LOW_PROB_ACTION",
+                        "ioc",
+                    )
+                    or "ioc"
+                ).strip().lower()
+                if action_token in {"none", "off", "disabled"}:
+                    action_token = "none"
+                elif action_token in {"market", "marketable_market"}:
+                    action_token = "market"
+                elif action_token in {"skip", "block"}:
+                    action_token = "skip"
+                else:
+                    action_token = "ioc"
+                if action_token == "market" and manual_limit_requested:
+                    action_token = "ioc"
+                if action_token == "market":
+                    order_type_normalized = "market"
+                    resolved_limit_price = None
+                    price_for_limit = None
+                    kwargs.pop("price", None)
+                elif action_token == "ioc":
+                    kwargs["time_in_force"] = "ioc"
+                    if (
+                        not manual_limit_requested
+                        and bid_val is not None
+                        and ask_val is not None
+                        and bid_val > 0.0
+                        and ask_val > 0.0
+                    ):
+                        if mapped_side in {"buy", "cover"}:
+                            baseline_limit = _safe_float(resolved_limit_price) or 0.0
+                            resolved_limit_price = max(float(ask_val), baseline_limit)
+                        else:
+                            baseline_limit = _safe_float(resolved_limit_price)
+                            if baseline_limit is None or baseline_limit <= 0.0:
+                                resolved_limit_price = float(bid_val)
+                            else:
+                                resolved_limit_price = min(
+                                    float(bid_val),
+                                    float(baseline_limit),
+                                )
+                        price_for_limit = resolved_limit_price
+                        kwargs["price"] = resolved_limit_price
+                elif action_token == "skip":
+                    self._skip_submit(
+                        symbol=symbol,
+                        side=mapped_side,
+                        reason="passive_fill_probability_low",
+                        order_type=order_type_normalized,
+                        detail="passive_fill_probability_below_threshold",
+                        context={
+                            "fill_probability": round(float(fill_probability), 6),
+                            "threshold": float(min_fill_probability),
+                            "action": action_token,
+                            "components": fill_probability_context.get("components"),
+                        },
+                        submit_started_at=submit_started_at,
+                    )
+                    return None
+                if action_token != "none":
+                    logger.info(
+                        "PASSIVE_FILL_PROBABILITY_ACTION",
+                        extra={
+                            "symbol": symbol,
+                            "side": mapped_side,
+                            "action": action_token,
+                            "fill_probability": round(float(fill_probability), 4),
+                            "threshold": round(float(min_fill_probability), 4),
+                            "resolved_order_type": order_type_normalized,
+                            "resolved_time_in_force": kwargs.get("time_in_force"),
+                            "resolved_limit_price": (
+                                float(resolved_limit_price)
+                                if resolved_limit_price is not None
+                                else None
+                            ),
+                        },
+                    )
+            if isinstance(annotations, dict):
+                annotations["passive_fill_probability"] = round(
+                    float(fill_probability), 6
+                )
+                annotations["passive_fill_probability_context"] = (
+                    fill_probability_context
+                )
+        if isinstance(annotations, dict):
+            annotations["smart_route_context"] = smart_route_context
+
         def _finite_positive_float(value: Any) -> float | None:
             try:
                 parsed = float(value)
@@ -9847,6 +10745,14 @@ class ExecutionEngine:
             realized_net_edge_bps=realized_net_edge_bps,
             fill_source=runtime_source,
         )
+        self._update_markout_feedback(
+            symbol=symbol,
+            side=mapped_side,
+            status=outcome_status,
+            realized_net_edge_bps=realized_net_edge_bps,
+            realized_slippage_bps=realized_slippage_bps,
+            fill_source=runtime_source,
+        )
         self._last_submit_outcome = {
             "status": outcome_status,
             "reason": None,
@@ -10119,6 +11025,18 @@ class ExecutionEngine:
                     )
                     position_obj = None
         if position_obj is None:
+            tracker = getattr(self, "_position_tracker", None)
+            if isinstance(tracker, Mapping):
+                cached_qty = tracker.get(str(symbol).upper(), tracker.get(symbol))
+                if cached_qty is not None:
+                    try:
+                        return int(cached_qty)
+                    except (TypeError, ValueError):
+                        logger.debug(
+                            "POSITION_QTY_CACHE_PARSE_FAILED",
+                            extra={"symbol": symbol, "qty_raw": cached_qty},
+                            exc_info=True,
+                        )
             return 0
         qty_raw = _extract_value(position_obj, "qty", "quantity", "position")
         try:
@@ -10272,6 +11190,7 @@ class ExecutionEngine:
             if normalized_side == "sell":
                 qty_abs = -qty_abs
             tracker[symbol_key] = qty_abs
+        self._position_tracker_last_sync_mono = float(monotonic_time())
 
     def _submit_cover_order(self, symbol: str, requested_qty: int) -> bool:
         client = getattr(self, "trading_client", None)
@@ -11116,7 +12035,14 @@ class ExecutionEngine:
 
         merged = dict(locked)
         changed = False
-        int_keys = ("min_closed_trades", "min_used_days", "lookback_days")
+        int_keys = (
+            "min_closed_trades",
+            "min_used_days",
+            "lookback_days",
+            "auto_live_min_closed_trades",
+            "auto_live_min_used_days",
+            "auto_live_min_available_days",
+        )
         for key in int_keys:
             current_val = _safe_int(threshold_map.get(key), -1)
             previous_val = _safe_int(locked.get(key), -1)
@@ -11152,7 +12078,7 @@ class ExecutionEngine:
                 changed = True
             merged[key] = float(strict_float)
 
-        for key in ("require_pnl_available", "require_gate_valid"):
+        for key in ("require_pnl_available", "require_gate_valid", "auto_live_fail_closed"):
             previous_val = bool(locked.get(key))
             current_val = bool(threshold_map.get(key))
             strict_val = bool(previous_val or current_val)
@@ -11446,6 +12372,14 @@ class ExecutionEngine:
             dict(trade_payload_raw) if isinstance(trade_payload_raw, Mapping) else {}
         )
         fill_source = str(thresholds.get("trade_fill_source") or "all").strip().lower() or "all"
+        if fill_source in {
+            "auto_live",
+            "auto-live",
+            "live_if_sufficient",
+            "live-when-sufficient",
+            "prefer_live",
+        }:
+            fill_source = "live"
         daily_rows_raw: Any = trade_payload.get("daily_trade_stats")
         if fill_source != "all":
             by_source_raw = trade_payload.get("daily_trade_stats_by_fill_source")
@@ -11489,6 +12423,362 @@ class ExecutionEngine:
             "today_net_pnl": float(net_pnl),
             "trade_fill_source": fill_source,
         }
+
+    def _runtime_intraday_slippage_kill_switch_allows_openings(
+        self,
+        *,
+        report: Mapping[str, Any],
+        thresholds: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Block new entries when current-day slippage drag breaches threshold."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_ENABLED"
+        )
+        if enabled is None:
+            enabled = False
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        max_drag = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_MAX_DRAG",
+            None,
+        )
+        if max_drag is None:
+            return True, {"enabled": False, "reason": "threshold_unset"}
+        max_drag = max(0.0, float(max_drag))
+        min_trades = _config_int(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_MIN_TRADES",
+            12,
+        )
+        min_trades = max(1, int(min_trades if min_trades is not None else 12))
+
+        tz_name = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_TZ",
+                "America/New_York",
+            )
+            or "America/New_York"
+        ).strip() or "America/New_York"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz_name = "America/New_York"
+            tz = ZoneInfo(tz_name)
+        today = datetime.now(tz).date().isoformat()
+
+        trade_payload_raw = report.get("trade_history")
+        trade_payload = (
+            dict(trade_payload_raw) if isinstance(trade_payload_raw, Mapping) else {}
+        )
+        fill_source = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_FILL_SOURCE",
+                thresholds.get("trade_fill_source", "all"),
+            )
+            or "all"
+        ).strip().lower() or "all"
+        if fill_source in {
+            "auto_live",
+            "auto-live",
+            "live_if_sufficient",
+            "live-when-sufficient",
+            "prefer_live",
+        }:
+            fill_source = "live"
+        daily_rows_raw: Any = trade_payload.get("daily_trade_stats")
+        if fill_source != "all":
+            by_source_raw = trade_payload.get("daily_trade_stats_by_fill_source")
+            if isinstance(by_source_raw, Mapping):
+                candidate = by_source_raw.get(fill_source)
+                if isinstance(candidate, list):
+                    daily_rows_raw = candidate
+        daily_rows: list[dict[str, Any]] = []
+        if isinstance(daily_rows_raw, list):
+            daily_rows = [dict(row) for row in daily_rows_raw if isinstance(row, Mapping)]
+
+        today_row = next((row for row in daily_rows if str(row.get("date") or "") == today), None)
+        if today_row is None:
+            return True, {
+                "enabled": True,
+                "reason": "no_today_trade_row",
+                "timezone": tz_name,
+                "today": today,
+                "threshold_slippage_drag": float(max_drag),
+                "trade_fill_source": fill_source,
+                "min_trades": int(min_trades),
+            }
+
+        today_trades = _safe_int(today_row.get("trades"), 0)
+        if int(today_trades) < int(min_trades):
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_today_trades",
+                "timezone": tz_name,
+                "today": today,
+                "threshold_slippage_drag": float(max_drag),
+                "trade_fill_source": fill_source,
+                "min_trades": int(min_trades),
+                "today_trades": int(today_trades),
+            }
+
+        slippage_cost = _safe_float(today_row.get("slippage_cost"))
+        if slippage_cost is None:
+            return True, {
+                "enabled": True,
+                "reason": "today_slippage_unavailable",
+                "timezone": tz_name,
+                "today": today,
+                "threshold_slippage_drag": float(max_drag),
+                "trade_fill_source": fill_source,
+                "min_trades": int(min_trades),
+                "today_trades": int(today_trades),
+            }
+
+        slippage_drag = abs(float(slippage_cost))
+        allowed = float(slippage_drag) <= float(max_drag)
+        return allowed, {
+            "enabled": True,
+            "reason": "ok" if allowed else "intraday_slippage_drag_breach",
+            "timezone": tz_name,
+            "today": today,
+            "threshold_slippage_drag": float(max_drag),
+            "today_slippage_drag": float(slippage_drag),
+            "trade_fill_source": fill_source,
+            "min_trades": int(min_trades),
+            "today_trades": int(today_trades),
+        }
+
+    def _symbol_intraday_slippage_budget_allows_opening(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Block symbol openings when same-symbol intraday slippage drag exceeds budget."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        max_drag = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG",
+            None,
+        )
+        if max_drag is None:
+            return True, {"enabled": False, "reason": "threshold_unset"}
+        max_drag = max(0.0, float(max_drag))
+        min_fills = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS",
+            3,
+        )
+        min_fills = max(1, int(min_fills if min_fills is not None else 3))
+        cache_ttl_s = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_CACHE_TTL_SEC",
+            30.0,
+        )
+        if cache_ttl_s is None or not math.isfinite(float(cache_ttl_s)):
+            cache_ttl_s = 30.0
+        cache_ttl_s = max(1.0, min(float(cache_ttl_s), 300.0))
+        scan_lines = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SCAN_LINES",
+            8000,
+        )
+        scan_lines = max(200, min(int(scan_lines if scan_lines is not None else 8000), 100000))
+
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+
+        tz_name = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TZ",
+                "America/New_York",
+            )
+            or "America/New_York"
+        ).strip() or "America/New_York"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz_name = "America/New_York"
+            tz = ZoneInfo(tz_name)
+        today = datetime.now(tz).date().isoformat()
+        now_mono = float(monotonic_time())
+        cache_key = f"{symbol_token}:{today}:{tz_name}:{max_drag}:{min_fills}:{scan_lines}"
+        cache_until = float(
+            getattr(self, "_symbol_slippage_budget_cache_until_mono", 0.0) or 0.0
+        )
+        cache_raw = getattr(self, "_symbol_slippage_budget_cache", {}) or {}
+        cache = cache_raw if isinstance(cache_raw, dict) else {}
+        if now_mono < cache_until:
+            cached_value = cache.get(cache_key)
+            if (
+                isinstance(cached_value, tuple)
+                and len(cached_value) == 2
+                and isinstance(cached_value[1], Mapping)
+            ):
+                return bool(cached_value[0]), dict(cached_value[1])
+
+        fills_path = resolve_runtime_artifact_path(
+            str(
+                _runtime_env(
+                    "AI_TRADING_FILL_EVENTS_PATH",
+                    "runtime/fill_events.jsonl",
+                )
+                or "runtime/fill_events.jsonl"
+            ),
+            default_relative="runtime/fill_events.jsonl",
+        )
+        if not fills_path.exists():
+            context = {
+                "enabled": True,
+                "reason": "fill_events_missing",
+                "symbol": symbol_token,
+                "today": today,
+                "timezone": tz_name,
+                "path": str(fills_path),
+                "threshold_symbol_slippage_drag": float(max_drag),
+                "min_fills": int(min_fills),
+            }
+            cache[cache_key] = (True, dict(context))
+            self._symbol_slippage_budget_cache = cache
+            self._symbol_slippage_budget_cache_until_mono = now_mono + cache_ttl_s
+            return True, context
+
+        try:
+            raw_lines = fills_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError as exc:
+            context = {
+                "enabled": True,
+                "reason": "fill_events_unreadable",
+                "symbol": symbol_token,
+                "today": today,
+                "timezone": tz_name,
+                "path": str(fills_path),
+                "error": str(exc),
+                "threshold_symbol_slippage_drag": float(max_drag),
+                "min_fills": int(min_fills),
+            }
+            cache[cache_key] = (True, dict(context))
+            self._symbol_slippage_budget_cache = cache
+            self._symbol_slippage_budget_cache_until_mono = now_mono + cache_ttl_s
+            return True, context
+        if len(raw_lines) > scan_lines:
+            raw_lines = raw_lines[-scan_lines:]
+
+        def _parse_fill_day(raw_value: Any) -> str | None:
+            if raw_value in (None, ""):
+                return None
+            if isinstance(raw_value, datetime):
+                fill_dt = raw_value
+                if fill_dt.tzinfo is None:
+                    fill_dt = fill_dt.replace(tzinfo=UTC)
+                return fill_dt.astimezone(tz).date().isoformat()
+            text = str(raw_value).strip()
+            if not text:
+                return None
+            if text.endswith("Z"):
+                text = f"{text[:-1]}+00:00"
+            try:
+                fill_dt = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+            if fill_dt.tzinfo is None:
+                fill_dt = fill_dt.replace(tzinfo=UTC)
+            return fill_dt.astimezone(tz).date().isoformat()
+
+        symbol_fills = 0
+        symbol_slippage_drag = 0.0
+        for raw_line in raw_lines:
+            payload = raw_line.strip()
+            if not payload:
+                continue
+            try:
+                row = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("event") or "").strip().lower() != "fill_recorded":
+                continue
+            row_symbol = str(row.get("symbol") or "").strip().upper()
+            if row_symbol != symbol_token:
+                continue
+            fill_day = _parse_fill_day(row.get("entry_time") or row.get("ts"))
+            if fill_day != today:
+                continue
+
+            fill_price = _safe_float(row.get("fill_price"))
+            if fill_price is None:
+                fill_price = _safe_float(row.get("entry_price"))
+            fill_qty = _safe_float(row.get("fill_qty"))
+            if fill_qty is None:
+                fill_qty = _safe_float(row.get("qty"))
+            if (fill_price or 0.0) <= 0.0 or (fill_qty or 0.0) <= 0.0:
+                continue
+
+            slippage_bps = _safe_float(row.get("slippage_bps"))
+            if slippage_bps is None:
+                expected_price = _safe_float(row.get("expected_price"))
+                if expected_price is not None and expected_price > 0.0:
+                    side_token = self._normalized_order_side(row.get("side")) or "buy"
+                    try:
+                        if side_token == "sell":
+                            slippage_bps = (
+                                (float(expected_price) - float(fill_price))
+                                / float(expected_price)
+                            ) * 10000.0
+                        else:
+                            slippage_bps = (
+                                (float(fill_price) - float(expected_price))
+                                / float(expected_price)
+                            ) * 10000.0
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        slippage_bps = None
+            if slippage_bps is None:
+                continue
+
+            symbol_fills += 1
+            symbol_slippage_drag += abs(
+                float(fill_qty) * float(fill_price) * (float(slippage_bps) / 10000.0)
+            )
+
+        if int(symbol_fills) < int(min_fills):
+            context = {
+                "enabled": True,
+                "reason": "insufficient_symbol_fills",
+                "symbol": symbol_token,
+                "today": today,
+                "timezone": tz_name,
+                "threshold_symbol_slippage_drag": float(max_drag),
+                "min_fills": int(min_fills),
+                "symbol_fills": int(symbol_fills),
+                "symbol_slippage_drag": float(symbol_slippage_drag),
+            }
+            cache[cache_key] = (True, dict(context))
+            self._symbol_slippage_budget_cache = cache
+            self._symbol_slippage_budget_cache_until_mono = now_mono + cache_ttl_s
+            return True, context
+
+        allowed = float(symbol_slippage_drag) <= float(max_drag)
+        context = {
+            "enabled": True,
+            "reason": "ok" if allowed else "symbol_intraday_slippage_drag_breach",
+            "symbol": symbol_token,
+            "today": today,
+            "timezone": tz_name,
+            "threshold_symbol_slippage_drag": float(max_drag),
+            "today_symbol_slippage_drag": float(symbol_slippage_drag),
+            "min_fills": int(min_fills),
+            "symbol_fills": int(symbol_fills),
+        }
+        cache[cache_key] = (bool(allowed), dict(context))
+        self._symbol_slippage_budget_cache = cache
+        self._symbol_slippage_budget_cache_until_mono = now_mono + cache_ttl_s
+        return bool(allowed), context
 
     def _symbol_loss_cooldown_allows_opening(
         self,
@@ -11805,6 +13095,42 @@ class ExecutionEngine:
                 "all",
             )
         trade_fill_source = str(trade_fill_source_raw or "all").strip() or "all"
+        auto_live_min_closed_trades = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_CLOSED_TRADES",
+            None,
+        )
+        if auto_live_min_closed_trades is None:
+            auto_live_min_closed_trades = _config_int(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_MIN_CLOSED_TRADES",
+                None,
+            )
+        auto_live_min_used_days = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_USED_DAYS",
+            None,
+        )
+        if auto_live_min_used_days is None:
+            auto_live_min_used_days = _config_int(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_MIN_USED_DAYS",
+                None,
+            )
+        auto_live_min_available_days = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_AVAILABLE_DAYS",
+            None,
+        )
+        if auto_live_min_available_days is None:
+            auto_live_min_available_days = _config_int(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_MIN_AVAILABLE_DAYS",
+                None,
+            )
+        auto_live_fail_closed = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED"
+        )
+        if auto_live_fail_closed is None:
+            auto_live_fail_closed = _resolve_bool_env(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED"
+            )
+        if auto_live_fail_closed is None:
+            auto_live_fail_closed = False
         thresholds = {
             "min_closed_trades": int(
                 min_closed_trades if min_closed_trades is not None else 20
@@ -11827,6 +13153,35 @@ class ExecutionEngine:
             "min_used_days": int(max(0, min_used_days if min_used_days is not None else 0)),
             "lookback_days": int(max(0, lookback_days if lookback_days is not None else 0)),
             "trade_fill_source": trade_fill_source,
+            "auto_live_min_closed_trades": int(
+                max(
+                    1,
+                    auto_live_min_closed_trades
+                    if auto_live_min_closed_trades is not None
+                    else (min_closed_trades if min_closed_trades is not None else 20),
+                )
+            ),
+            "auto_live_min_used_days": int(
+                max(
+                    1,
+                    auto_live_min_used_days
+                    if auto_live_min_used_days is not None
+                    else (min_used_days if min_used_days is not None else 1),
+                )
+            ),
+            "auto_live_min_available_days": int(
+                max(
+                    1,
+                    auto_live_min_available_days
+                    if auto_live_min_available_days is not None
+                    else (
+                        auto_live_min_used_days
+                        if auto_live_min_used_days is not None
+                        else (min_used_days if min_used_days is not None else 1)
+                    ),
+                )
+            ),
+            "auto_live_fail_closed": bool(auto_live_fail_closed),
             "require_pnl_available": True,
             "require_gate_valid": False,
         }
@@ -11867,6 +13222,11 @@ class ExecutionEngine:
             )
             decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
             allowed = bool(decision.get("gate_passed"))
+            effective_thresholds = (
+                dict(decision.get("thresholds", {}))
+                if isinstance(decision.get("thresholds"), Mapping)
+                else dict(thresholds)
+            )
             context = {
                 "enabled": True,
                 "gate_passed": allowed,
@@ -11901,7 +13261,7 @@ class ExecutionEngine:
             if allowed:
                 intraday_allowed, intraday_context = self._runtime_intraday_pnl_kill_switch_allows_openings(
                     report=report,
-                    thresholds=thresholds,
+                    thresholds=effective_thresholds,
                 )
                 context["intraday_pnl_kill_switch"] = intraday_context
                 if not intraday_allowed:
@@ -11916,6 +13276,26 @@ class ExecutionEngine:
                     context["failed_checks"] = failed_checks
                     context["gate_passed"] = False
                     context["reason"] = "intraday_net_pnl_kill_switch"
+            if allowed:
+                slippage_allowed, slippage_context = (
+                    self._runtime_intraday_slippage_kill_switch_allows_openings(
+                        report=report,
+                        thresholds=effective_thresholds,
+                    )
+                )
+                context["intraday_slippage_kill_switch"] = slippage_context
+                if not slippage_allowed:
+                    allowed = False
+                    existing_failed_checks = context.get("failed_checks", [])
+                    failed_checks = (
+                        [str(item) for item in existing_failed_checks]
+                        if isinstance(existing_failed_checks, Sequence)
+                        else []
+                    )
+                    failed_checks.append("intraday_slippage_kill_switch")
+                    context["failed_checks"] = failed_checks
+                    context["gate_passed"] = False
+                    context["reason"] = "intraday_slippage_kill_switch"
         except Exception as exc:
             allowed = not bool(fail_closed)
             context = {
@@ -12072,6 +13452,37 @@ class ExecutionEngine:
                     "symbol_loss_cooldown",
                     symbol_cooldown_context,
                     extra=skip_payload | {"detail": "symbol_loss_cooldown"},
+                )
+                return False
+            symbol_slippage_allowed, symbol_slippage_context = (
+                self._symbol_intraday_slippage_budget_allows_opening(
+                    symbol=str(order.get("symbol") or ""),
+                )
+            )
+            if not symbol_slippage_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "symbol_intraday_slippage_budget",
+                    "context": symbol_slippage_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_SYMBOL_SLIPPAGE_BUDGET", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "symbol_intraday_slippage_budget",
+                    symbol_slippage_context,
+                    extra=skip_payload | {"detail": "symbol_intraday_slippage_budget"},
                 )
                 return False
             reentry_allowed, reentry_context = self._symbol_reentry_cooldown_allows_opening(
@@ -13079,6 +14490,13 @@ class ExecutionEngine:
         )
         self._broker_sync = snapshot
         self._open_order_qty_index = qty_index
+        try:
+            self._update_position_tracker_snapshot(list(positions_tuple))
+        except Exception:
+            logger.debug(
+                "BROKER_SYNC_POSITION_TRACKER_UPDATE_FAILED",
+                exc_info=True,
+            )
         return snapshot
 
     def synchronize_broker_state(self) -> BrokerSyncResult:

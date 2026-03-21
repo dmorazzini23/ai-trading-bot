@@ -54,6 +54,7 @@ def test_runtime_performance_go_no_go_gate_enabled(monkeypatch) -> None:
     assert thresholds.get("lookback_days") == 5
     assert thresholds.get("min_used_days") == 3
     assert thresholds.get("trade_fill_source") == "live"
+    assert thresholds.get("auto_live_fail_closed") is True
 
 
 def test_runtime_performance_go_no_go_gate_prefers_after_hours_threshold_overrides(

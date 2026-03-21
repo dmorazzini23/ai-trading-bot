@@ -22,6 +22,7 @@ def test_update_broker_snapshot_tracks_open_quantities() -> None:
     assert snapshot.open_buy_by_symbol["AAPL"] == 10
     assert snapshot.open_sell_by_symbol["AAPL"] == 4
     assert engine.open_order_totals("AAPL") == (10, 4)
+    assert getattr(engine, "_position_tracker", {}).get("AAPL") == 6
     # Synchronize should return cached snapshot without mutation.
     assert engine.synchronize_broker_state() is snapshot
 
@@ -63,6 +64,7 @@ def test_live_engine_fetches_broker_state() -> None:
     assert snapshot.open_orders
     assert snapshot.positions
     assert engine.open_order_totals("AMD") == (3, 1)
+    assert getattr(engine, "_position_tracker", {}).get("AMD") == 2
 
 
 def test_live_engine_preserves_fractional_open_order_quantities() -> None:

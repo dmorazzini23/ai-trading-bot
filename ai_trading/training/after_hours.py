@@ -3050,6 +3050,7 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
                 max(1, _threshold_int("MIN_USED_DAYS", 0)),
             ),
         ),
+        "auto_live_fail_closed": _threshold_bool("AUTO_LIVE_FAIL_CLOSED", True),
         "require_pnl_available": _threshold_bool("REQUIRE_PNL_AVAILABLE", True),
         "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", False),
     }

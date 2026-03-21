@@ -263,6 +263,135 @@ def test_build_report_separates_live_and_reconcile_fill_expectancy(tmp_path: Pat
     assert trade["daily_expectancy_reconcile_backfill"][0]["net_pnl"] == pytest.approx(-10.0)
 
 
+def test_build_order_source_lookup_prefers_live_source_over_reconcile(tmp_path: Path) -> None:
+    order_events_path = tmp_path / "order_events.jsonl"
+    order_events_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T14:30:00+00:00",
+                        "order_id": "mixed-order",
+                        "source": "initial",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T14:31:00+00:00",
+                        "order_id": "mixed-order",
+                        "source": "broker_reconcile",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T14:32:00+00:00",
+                        "order_id": "mixed-order",
+                        "source": None,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-02T14:30:00+00:00",
+                        "order_id": "reconcile-only-order",
+                        "source": "broker_reconcile",
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    lookup = rpt._build_order_source_lookup(order_events_path)
+
+    assert lookup["mixed-order"] == "live"
+    assert lookup["reconcile-only-order"] == "reconcile_backfill"
+
+
+def test_build_report_prefers_live_lookup_when_row_source_is_reconcile(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    order_events_path = tmp_path / "order_events.jsonl"
+
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 1,
+                    "entry_price": 100.0,
+                    "entry_time": "2026-02-03T14:30:00+00:00",
+                    "order_id": "mix-live-1",
+                    "source": "broker_reconcile",
+                },
+                {
+                    "symbol": "AAPL",
+                    "side": "sell",
+                    "qty": 1,
+                    "entry_price": 101.0,
+                    "entry_time": "2026-02-03T15:30:00+00:00",
+                    "order_id": "mix-live-2",
+                    "source": "broker_reconcile",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    order_events_path.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "ts": "2026-02-03T14:30:10+00:00",
+                        "order_id": "mix-live-1",
+                        "source": "initial",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-03T14:31:10+00:00",
+                        "order_id": "mix-live-1",
+                        "source": "broker_reconcile",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-03T15:30:10+00:00",
+                        "order_id": "mix-live-2",
+                        "source": "initial",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ts": "2026-02-03T15:31:10+00:00",
+                        "order_id": "mix-live-2",
+                        "source": "broker_reconcile",
+                    }
+                ),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 0, "total_accepted_records": 0, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+    trade = report["trade_history"]
+
+    assert trade["closed_trades"] == 1
+    assert trade["closed_trades_by_fill_source"].get("live", 0) == 1
+    assert trade["closed_trades_by_fill_source"].get("reconcile_backfill", 0) == 0
+
+
 def test_build_report_enriches_direct_rows_with_tca_costs(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
@@ -435,6 +564,62 @@ def test_build_report_reports_reconstructed_open_position_counts(
     assert trade["reconstructed_open_positions"] == {"AAPL": 10.0}
     assert trade["open_lot_count"] == 1
     assert trade["open_positions"] == {"AAPL": 10.0}
+    reconciliation = trade["open_position_reconciliation"]
+    assert reconciliation["available"] is True
+    assert reconciliation["symbol_mismatch_count"] == 0
+
+
+def test_build_report_flags_broker_vs_reconstructed_position_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 10,
+                    "entry_price": 100.0,
+                    "entry_time": "2026-03-01T15:00:00+00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 0,
+                "total_accepted_records": 0,
+                "total_rejected_records": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        rpt,
+        "_summarize_broker_open_positions",
+        lambda: {
+            "broker_open_positions_available": True,
+            "broker_open_position_count": 1,
+            "broker_open_positions": {"AAPL": 7.0},
+            "broker_open_positions_error": None,
+        },
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    reconciliation = report["trade_history"]["open_position_reconciliation"]
+    assert reconciliation["available"] is True
+    assert reconciliation["symbol_mismatch_count"] == 1
+    assert reconciliation["top_mismatches"][0]["symbol"] == "AAPL"
+    assert reconciliation["top_mismatches"][0]["delta_qty"] == pytest.approx(3.0)
 
 
 def test_build_report_ignores_non_fill_tca_status_rows(tmp_path: Path) -> None:
@@ -1067,6 +1252,74 @@ def test_evaluate_go_no_go_auto_live_falls_back_to_all_when_live_insufficient() 
     assert decision["observed"]["trade_fill_source"] == "all"
     assert decision["observed"]["auto_live_selection"]["selected"] == "all"
     assert decision["observed"]["auto_live_selection"]["used_live"] is False
+
+
+def test_evaluate_go_no_go_auto_live_fail_closed_blocks_when_live_insufficient() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "daily_trade_stats_by_fill_source": {
+                "live": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 4,
+                        "wins": 2,
+                        "losses": 2,
+                        "gross_win_pnl": 10.0,
+                        "gross_loss_pnl": 8.0,
+                        "net_pnl": 2.0,
+                    }
+                ],
+                "all": [
+                    {
+                        "date": "2026-03-10",
+                        "trades": 50,
+                        "wins": 30,
+                        "losses": 20,
+                        "gross_win_pnl": 100.0,
+                        "gross_loss_pnl": 70.0,
+                        "net_pnl": 30.0,
+                    }
+                ],
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "auto_live",
+            "auto_live_min_closed_trades": 20,
+            "auto_live_min_used_days": 2,
+            "auto_live_min_available_days": 2,
+            "auto_live_fail_closed": True,
+            "min_closed_trades": 1,
+            "min_profit_factor": 0.1,
+            "min_win_rate": 0.0,
+            "min_net_pnl": -1_000.0,
+            "min_acceptance_rate": 0.0,
+            "min_expected_net_edge_bps": -1_000.0,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "live_samples_sufficient" in decision["failed_checks"]
+    assert decision["thresholds"]["requested_trade_fill_source"] == "auto_live"
+    assert decision["thresholds"]["trade_fill_source"] == "live"
+    assert decision["thresholds"]["auto_live_fail_closed"] is True
+    assert decision["observed"]["auto_live_selection"]["selected"] == "live"
+    assert decision["observed"]["auto_live_selection"]["used_live"] is False
+    assert (
+        decision["observed"]["auto_live_selection"]["reason"]
+        == "live_insufficient_fail_closed"
+    )
 
 
 def test_main_resolves_runtime_paths_from_env(

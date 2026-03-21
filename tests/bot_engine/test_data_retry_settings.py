@@ -244,6 +244,44 @@ def test_capacity_throttle_adaptive_params_relax_when_quality_is_good(monkeypatc
     assert min_scale >= 0.25
 
 
+def test_capacity_throttle_adaptive_params_tighten_on_microstructure_stress(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_MIN_SAMPLES", "50")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PENDING_SOFT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PENDING_HARD_SEC", "90")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_STRESS_TIGHTEN_MULT", "0.75")
+    monkeypatch.setenv("AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_STRESS_MIN_SCALE_MULT", "0.70")
+
+    (
+        spread_soft,
+        spread_hard,
+        vol_soft,
+        vol_hard,
+        min_scale,
+        details,
+    ) = bot_engine._resolve_capacity_throttle_adaptive_params(
+        spread_soft_bps=12.0,
+        spread_hard_bps=30.0,
+        volume_soft_participation=0.05,
+        volume_hard_participation=0.20,
+        min_scale=0.25,
+        slo_derisk_details={
+            "pacing_samples": 2,
+            "order_pacing_cap_hit_rate_pct": 1.0,
+            "pending_samples": 3,
+            "pending_oldest_age_sec": 120.0,
+        },
+    )
+
+    assert details["mode"] == "tightened"
+    assert details["microstructure_stress"] is True
+    assert spread_soft < 12.0
+    assert spread_hard < 30.0
+    assert vol_soft < 0.05
+    assert vol_hard < 0.20
+    assert min_scale <= 0.25
+
+
 def test_slo_derisk_effective_mode_relaxes_block_for_friction_only(monkeypatch):
     monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_ENABLED", "1")
     monkeypatch.setenv("AI_TRADING_DERISK_SLO_BLOCK_RELAX_SCALE_MULT", "0.72")

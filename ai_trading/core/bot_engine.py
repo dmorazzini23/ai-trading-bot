@@ -2173,12 +2173,92 @@ def _resolve_capacity_throttle_adaptive_params(
         tighten_min_scale_mult = 0.85
     relax_min_scale_add = max(0.0, min(relax_min_scale_add, 0.5))
     tighten_min_scale_mult = max(0.2, min(tighten_min_scale_mult, 1.0))
+    try:
+        pending_soft_sec = float(
+            get_env(
+                "AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PENDING_SOFT_SEC",
+                45.0,
+                cast=float,
+            )
+        )
+    except Exception:
+        pending_soft_sec = 45.0
+    try:
+        pending_hard_sec = float(
+            get_env(
+                "AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_PENDING_HARD_SEC",
+                120.0,
+                cast=float,
+            )
+        )
+    except Exception:
+        pending_hard_sec = 120.0
+    pending_soft_sec = max(0.0, min(float(pending_soft_sec), 3600.0))
+    pending_hard_sec = max(float(pending_soft_sec), min(float(pending_hard_sec), 7200.0))
+    try:
+        slippage_soft_bps = float(
+            get_env(
+                "AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_SLIPPAGE_SOFT_BPS",
+                10.0,
+                cast=float,
+            )
+        )
+    except Exception:
+        slippage_soft_bps = 10.0
+    try:
+        slippage_hard_bps = float(
+            get_env(
+                "AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_SLIPPAGE_HARD_BPS",
+                16.0,
+                cast=float,
+            )
+        )
+    except Exception:
+        slippage_hard_bps = 16.0
+    slippage_soft_bps = max(0.0, min(float(slippage_soft_bps), 250.0))
+    slippage_hard_bps = max(float(slippage_soft_bps), min(float(slippage_hard_bps), 500.0))
+    try:
+        stress_tighten_mult = float(
+            get_env(
+                "AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_STRESS_TIGHTEN_MULT",
+                0.82,
+                cast=float,
+            )
+        )
+    except Exception:
+        stress_tighten_mult = 0.82
+    try:
+        stress_min_scale_mult = float(
+            get_env(
+                "AI_TRADING_CAPACITY_THROTTLE_ADAPTIVE_STRESS_MIN_SCALE_MULT",
+                0.80,
+                cast=float,
+            )
+        )
+    except Exception:
+        stress_min_scale_mult = 0.80
+    stress_tighten_mult = max(0.25, min(float(stress_tighten_mult), 1.0))
+    stress_min_scale_mult = max(0.2, min(float(stress_min_scale_mult), 1.0))
 
     pacing_samples = int(float(slo_derisk_details.get("pacing_samples", 0) or 0.0))
     pacing_hit_pct = float(slo_derisk_details.get("order_pacing_cap_hit_rate_pct", 0.0) or 0.0)
     reject_rate_pct = float(slo_derisk_details.get("reject_rate_pct", 0.0) or 0.0)
+    pending_samples = int(float(slo_derisk_details.get("pending_samples", 0) or 0.0))
+    pending_oldest_age_sec = float(slo_derisk_details.get("pending_oldest_age_sec", 0.0) or 0.0)
+    slippage_samples = int(float(slo_derisk_details.get("slippage_samples", 0) or 0.0))
+    slippage_bps = float(slo_derisk_details.get("slippage_bps", 0.0) or 0.0)
     pacing_breached = bool(slo_derisk_details.get("pacing_breached", False))
     pending_breached = bool(slo_derisk_details.get("pending_breached", False))
+    pending_latency_stress = bool(
+        pending_samples >= 1 and pending_oldest_age_sec >= pending_soft_sec
+    )
+    pending_latency_severe = bool(
+        pending_samples >= 1 and pending_oldest_age_sec >= pending_hard_sec
+    )
+    slippage_stress = bool(slippage_samples >= min_samples and slippage_bps >= slippage_soft_bps)
+    slippage_severe = bool(slippage_samples >= min_samples and slippage_bps >= slippage_hard_bps)
+    microstructure_stress = bool(pending_latency_stress or slippage_stress)
+    microstructure_severe = bool(pending_latency_severe or slippage_severe)
 
     details.update(
         {
@@ -2187,10 +2267,24 @@ def _resolve_capacity_throttle_adaptive_params(
             "reject_rate_pct": float(reject_rate_pct),
             "pacing_breached": bool(pacing_breached),
             "pending_breached": bool(pending_breached),
+            "pending_samples": int(pending_samples),
+            "pending_oldest_age_sec": float(pending_oldest_age_sec),
+            "slippage_samples": int(slippage_samples),
+            "slippage_bps": float(slippage_bps),
             "min_samples": int(min_samples),
             "pacing_clear_pct": float(pacing_clear_pct),
             "pacing_tighten_pct": float(pacing_tighten_pct),
             "reject_clear_pct": float(reject_clear_pct),
+            "pending_soft_sec": float(pending_soft_sec),
+            "pending_hard_sec": float(pending_hard_sec),
+            "slippage_soft_bps": float(slippage_soft_bps),
+            "slippage_hard_bps": float(slippage_hard_bps),
+            "pending_latency_stress": bool(pending_latency_stress),
+            "pending_latency_severe": bool(pending_latency_severe),
+            "slippage_stress": bool(slippage_stress),
+            "slippage_severe": bool(slippage_severe),
+            "microstructure_stress": bool(microstructure_stress),
+            "microstructure_severe": bool(microstructure_severe),
         }
     )
 
@@ -2200,7 +2294,19 @@ def _resolve_capacity_throttle_adaptive_params(
     tuned_vol_hard = max(tuned_vol_soft + 0.0001, float(volume_hard_participation))
     tuned_min_scale = max(0.05, min(float(min_scale), 1.0))
 
-    if pacing_samples < min_samples:
+    if microstructure_stress:
+        details["mode"] = "tightened"
+        active_tighten_mult = min(tighten_mult, stress_tighten_mult)
+        active_min_scale_mult = min(tighten_min_scale_mult, stress_min_scale_mult)
+        if microstructure_severe:
+            active_tighten_mult = min(active_tighten_mult, 0.85 * stress_tighten_mult)
+            active_min_scale_mult = min(active_min_scale_mult, 0.9 * stress_min_scale_mult)
+        tuned_spread_soft = max(0.1, tuned_spread_soft * active_tighten_mult)
+        tuned_spread_hard = max(tuned_spread_soft + 0.1, tuned_spread_hard * active_tighten_mult)
+        tuned_vol_soft = max(0.0001, tuned_vol_soft * active_tighten_mult)
+        tuned_vol_hard = max(tuned_vol_soft + 0.0001, tuned_vol_hard * active_tighten_mult)
+        tuned_min_scale = max(0.05, min(tuned_min_scale * active_min_scale_mult, 1.0))
+    elif pacing_samples < min_samples:
         details["mode"] = "insufficient_samples"
     elif pacing_breached or pending_breached or pacing_hit_pct >= pacing_tighten_pct:
         details["mode"] = "tightened"
@@ -23382,7 +23488,31 @@ def _entry_expected_edge_gate(
         price=price,
     )
     cost_components = _estimate_entry_cost_components_bps(quote_details)
-    required_bps = get_min_expected_edge_bps() + cost_components["total_cost_bps"]
+    cost_multiplier = max(
+        1.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_COST_AWARE_COST_MULTIPLIER",
+                1.0,
+                cast=float,
+            )
+        ),
+    )
+    min_edge_to_cost_ratio = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_EXECUTION_COST_AWARE_MIN_EDGE_TO_COST_RATIO",
+                1.0,
+                cast=float,
+            )
+        ),
+    )
+    effective_cost_bps = float(cost_components["total_cost_bps"]) * float(cost_multiplier)
+    required_bps = max(
+        get_min_expected_edge_bps() + effective_cost_bps,
+        effective_cost_bps * min_edge_to_cost_ratio,
+    )
     if fallback_used:
         required_bps += get_fallback_expected_edge_penalty_bps()
     if expected_bps + 1e-9 >= required_bps:
@@ -23403,6 +23533,9 @@ def _entry_expected_edge_gate(
             "slippage_bps": round(cost_components["slippage_bps"], 4),
             "age_penalty_bps": round(cost_components["age_penalty_bps"], 4),
             "cost_buffer_bps": round(cost_components["cost_buffer_bps"], 4),
+            "cost_multiplier": round(float(cost_multiplier), 4),
+            "edge_to_cost_min_ratio": round(float(min_edge_to_cost_ratio), 4),
+            "effective_cost_bps": round(float(effective_cost_bps), 4),
         },
     )
     return False
@@ -39889,9 +40022,35 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     )
                 ),
             )
+            cost_multiplier = max(
+                1.0,
+                float(
+                    get_env(
+                        "AI_TRADING_EXECUTION_COST_AWARE_COST_MULTIPLIER",
+                        1.0,
+                        cast=float,
+                    )
+                ),
+            )
+            min_edge_to_cost_ratio = max(
+                0.0,
+                float(
+                    get_env(
+                        "AI_TRADING_EXECUTION_COST_AWARE_MIN_EDGE_TO_COST_RATIO",
+                        1.0,
+                        cast=float,
+                    )
+                ),
+            )
             quote_cost_bps = spread_bps_est + slippage_bps_est + fee_bps_est + borrow_bps_est
-            effective_cost_floor = max(float(expected_cost_total), float(quote_cost_bps))
-            required_edge_bps = float(effective_cost_floor + edge_margin_bps)
+            effective_cost_floor = (
+                max(float(expected_cost_total), float(quote_cost_bps))
+                * float(cost_multiplier)
+            )
+            required_edge_bps = max(
+                float(effective_cost_floor + edge_margin_bps),
+                float(effective_cost_floor * min_edge_to_cost_ratio),
+            )
             if float(expected_edge_total) < required_edge_bps:
                 gates.append("COST_AWARE_ENTRY_GUARD")
                 record = DecisionRecord(
@@ -39909,6 +40068,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             "fee_bps": float(fee_bps_est),
                             "borrow_bps": float(borrow_bps_est),
                             "edge_margin_bps": float(edge_margin_bps),
+                            "cost_multiplier": float(cost_multiplier),
+                            "edge_to_cost_min_ratio": float(min_edge_to_cost_ratio),
+                            "effective_cost_floor_bps": float(effective_cost_floor),
                             "required_edge_bps": float(required_edge_bps),
                         }
                     },

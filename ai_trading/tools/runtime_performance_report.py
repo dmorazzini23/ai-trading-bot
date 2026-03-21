@@ -292,6 +292,19 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=int,
             )
         )
+    auto_live_fail_closed = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED",
+        None,
+        cast=bool,
+    )
+    if auto_live_fail_closed is None:
+        auto_live_fail_closed = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED",
+                False,
+                cast=bool,
+            )
+        )
     return {
         "min_closed_trades": int(max(0, min_closed_trades or 20)),
         "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.1),
@@ -321,6 +334,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 or 1,
             )
         ),
+        "auto_live_fail_closed": bool(auto_live_fail_closed),
         "require_pnl_available": bool(require_pnl_available),
         "require_gate_valid": bool(require_gate_valid),
     }
@@ -461,6 +475,10 @@ def _normalise_fill_source(value: Any) -> str:
     token = str(value or "").strip().lower()
     if not token:
         return "unknown"
+    if token in {"unknown", "none", "null", "nan"}:
+        return "unknown"
+    if token in {"live", "reconcile_backfill", "mixed"}:
+        return token
     if token in {"broker_reconcile", "reconcile", "backfill"}:
         return "reconcile_backfill"
     if token.startswith("broker_reconcile"):
@@ -470,6 +488,15 @@ def _normalise_fill_source(value: Any) -> str:
     if "reconcile" in token:
         return "reconcile_backfill"
     return "live"
+
+
+def _fill_source_priority(value: Any) -> int:
+    source = _normalise_fill_source(value)
+    if source == "live":
+        return 2
+    if source == "reconcile_backfill":
+        return 1
+    return 0
 
 
 def _normalise_trade_fill_source(value: Any) -> str:
@@ -525,17 +552,22 @@ def _aggregate_trade_metric_rows(
 
 
 def _build_order_source_lookup(path: Path) -> dict[str, str]:
-    latest: dict[str, tuple[str, str]] = {}
+    selected: dict[str, tuple[int, str, str]] = {}
     for row in _load_json_lines(path):
         order_id = str(row.get("order_id") or "").strip()
         if not order_id:
             continue
         ts = str(row.get("ts") or "")
         source = _normalise_fill_source(row.get("source"))
-        previous = latest.get(order_id)
-        if previous is None or ts >= previous[0]:
-            latest[order_id] = (ts, source)
-    return {order_id: source for order_id, (_ts, source) in latest.items()}
+        priority = _fill_source_priority(source)
+        previous = selected.get(order_id)
+        if (
+            previous is None
+            or priority > previous[0]
+            or (priority == previous[0] and ts >= previous[1])
+        ):
+            selected[order_id] = (priority, ts, source)
+    return {order_id: source for order_id, (_priority, _ts, source) in selected.items()}
 
 
 def _load_trade_rows(path: Path) -> list[dict[str, Any]]:
@@ -750,9 +782,11 @@ def _as_fill_event(
         return None
     order_id_raw = row.get("order_id")
     order_id = None if order_id_raw in (None, "") else str(order_id_raw)
-    source_hint = row.get("source")
-    if source_hint in (None, "") and order_id and order_source_lookup:
-        source_hint = order_source_lookup.get(order_id)
+    source_hint = _normalise_fill_source(row.get("source"))
+    if order_id and order_source_lookup:
+        lookup_source = _normalise_fill_source(order_source_lookup.get(order_id))
+        if _fill_source_priority(lookup_source) > _fill_source_priority(source_hint):
+            source_hint = lookup_source
     fill_source = _normalise_fill_source(source_hint)
     fee_amount = _resolve_fee_amount(row, qty, price)
     slippage_bps = _resolve_slippage_bps(row, side, price)
@@ -1151,8 +1185,89 @@ def _aggregate_closed_trades(
     closed_trades: list[dict[str, Any]],
     open_positions: dict[str, float],
     open_lot_count: int,
+    broker_open_positions: Mapping[str, Any] | None = None,
+    broker_open_positions_available: bool = False,
 ) -> dict[str, Any]:
     reconstructed_open_positions = dict(sorted(open_positions.items()))
+
+    def _build_open_position_reconciliation() -> dict[str, Any]:
+        if not broker_open_positions_available or not isinstance(broker_open_positions, Mapping):
+            return {
+                "available": False,
+                "reason": "broker_positions_unavailable",
+            }
+        broker_positions = {
+            str(symbol).strip().upper(): float(qty)
+            for symbol, qty in broker_open_positions.items()
+            if str(symbol).strip() and _as_float(qty) is not None
+        }
+        reconstructed_positions = {
+            str(symbol).strip().upper(): float(qty)
+            for symbol, qty in reconstructed_open_positions.items()
+            if str(symbol).strip() and _as_float(qty) is not None
+        }
+        mismatches: list[dict[str, Any]] = []
+        only_reconstructed: list[str] = []
+        only_broker: list[str] = []
+        tolerance = 1e-6
+        for symbol in sorted(set(reconstructed_positions) | set(broker_positions)):
+            reconstructed_qty = reconstructed_positions.get(symbol)
+            broker_qty = broker_positions.get(symbol)
+            if reconstructed_qty is None:
+                only_broker.append(symbol)
+                mismatches.append(
+                    {
+                        "symbol": symbol,
+                        "reconstructed_qty": 0.0,
+                        "broker_qty": float(broker_qty or 0.0),
+                        "delta_qty": float(-(broker_qty or 0.0)),
+                        "reason": "missing_in_reconstructed",
+                    }
+                )
+                continue
+            if broker_qty is None:
+                only_reconstructed.append(symbol)
+                mismatches.append(
+                    {
+                        "symbol": symbol,
+                        "reconstructed_qty": float(reconstructed_qty),
+                        "broker_qty": 0.0,
+                        "delta_qty": float(reconstructed_qty),
+                        "reason": "missing_in_broker",
+                    }
+                )
+                continue
+            delta_qty = float(reconstructed_qty) - float(broker_qty)
+            if abs(delta_qty) > tolerance:
+                mismatches.append(
+                    {
+                        "symbol": symbol,
+                        "reconstructed_qty": float(reconstructed_qty),
+                        "broker_qty": float(broker_qty),
+                        "delta_qty": float(delta_qty),
+                        "reason": "quantity_mismatch",
+                    }
+                )
+        max_abs_delta = max((abs(float(item["delta_qty"])) for item in mismatches), default=0.0)
+        return {
+            "available": True,
+            "symbol_mismatch_count": int(len(mismatches)),
+            "matched_symbol_count": int(
+                max(
+                    len(set(reconstructed_positions) | set(broker_positions)) - len(mismatches),
+                    0,
+                )
+            ),
+            "only_reconstructed_count": int(len(only_reconstructed)),
+            "only_broker_count": int(len(only_broker)),
+            "max_abs_delta_qty": float(max_abs_delta),
+            "top_mismatches": sorted(
+                mismatches,
+                key=lambda item: abs(float(item.get("delta_qty", 0.0))),
+                reverse=True,
+            )[:10],
+        }
+
     summary: dict[str, Any] = {
         "records": records_count,
         "pnl_source": source,
@@ -1163,6 +1278,7 @@ def _aggregate_closed_trades(
         "reconstructed_open_positions": reconstructed_open_positions,
         "open_lot_count": int(open_lot_count),
         "open_positions": reconstructed_open_positions,
+        "open_position_reconciliation": _build_open_position_reconciliation(),
     }
     if not closed_trades:
         summary["pnl_available"] = False
@@ -1346,6 +1462,8 @@ def _aggregate_closed_trades(
                     "gross_win_pnl": gross_win_pnl,
                     "gross_loss_pnl": gross_loss_pnl,
                     "net_pnl": float(bucket.get("net_pnl", 0.0) or 0.0),
+                    "fee_cost": float(bucket.get("fee_cost", 0.0) or 0.0),
+                    "slippage_cost": float(bucket.get("slippage_cost", 0.0) or 0.0),
                     "win_rate": win_rate,
                     "profit_factor": profit_factor,
                 }
@@ -1459,6 +1577,8 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
             closed_trades=direct_trades,
             open_positions={},
             open_lot_count=0,
+            broker_open_positions=summary.get("broker_open_positions"),
+            broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
         )
         if cost_enrichment is not None:
             aggregated["cost_enrichment"] = cost_enrichment
@@ -1477,6 +1597,8 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
             closed_trades=closed_trades,
             open_positions=open_positions,
             open_lot_count=open_lot_count,
+            broker_open_positions=summary.get("broker_open_positions"),
+            broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
         )
     )
     return summary
@@ -1698,6 +1820,18 @@ def evaluate_go_no_go(
         _as_int(threshold_map.get("auto_live_min_available_days"))
         or int(auto_live_min_used_days),
     )
+    auto_live_fail_closed_raw = threshold_map.get("auto_live_fail_closed")
+    if isinstance(auto_live_fail_closed_raw, str):
+        auto_live_fail_closed = auto_live_fail_closed_raw.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    elif auto_live_fail_closed_raw is None:
+        auto_live_fail_closed = False
+    else:
+        auto_live_fail_closed = bool(auto_live_fail_closed_raw)
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
     )
@@ -1755,17 +1889,22 @@ def evaluate_go_no_go(
             and live_used_days >= auto_live_min_used_days
             and live_available_days >= auto_live_min_available_days
         )
-        trade_fill_source = "live" if live_sufficient else "all"
+        if live_sufficient:
+            trade_fill_source = "live"
+            auto_live_reason = "live_sufficient"
+        elif auto_live_fail_closed:
+            trade_fill_source = "live"
+            auto_live_reason = "live_insufficient_fail_closed"
+        else:
+            trade_fill_source = "all"
+            auto_live_reason = "live_insufficient_fallback_all"
         auto_live_context = {
             "enabled": True,
             "requested": requested_trade_fill_source,
             "selected": trade_fill_source,
             "used_live": bool(live_sufficient),
-            "reason": (
-                "live_sufficient"
-                if live_sufficient
-                else "live_insufficient_fallback_all"
-            ),
+            "reason": auto_live_reason,
+            "fail_closed": bool(auto_live_fail_closed),
             "lookback_days": int(lookback_days),
             "thresholds": {
                 "min_closed_trades": int(auto_live_min_closed_trades),
@@ -1982,6 +2121,8 @@ def evaluate_go_no_go(
             else (not require_gate_valid)
         ),
     }
+    if requested_trade_fill_source == "auto_live" and bool(auto_live_fail_closed):
+        checks["live_samples_sufficient"] = bool(auto_live_context.get("used_live", False))
 
     failed_checks = [name for name, passed in checks.items() if not bool(passed)]
     return {
@@ -2002,6 +2143,7 @@ def evaluate_go_no_go(
             "auto_live_min_closed_trades": int(auto_live_min_closed_trades),
             "auto_live_min_used_days": int(auto_live_min_used_days),
             "auto_live_min_available_days": int(auto_live_min_available_days),
+            "auto_live_fail_closed": bool(auto_live_fail_closed),
             "require_pnl_available": bool(require_pnl_available),
             "require_gate_valid": bool(require_gate_valid),
         },

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import json
 from datetime import UTC, datetime, timedelta
 import logging
@@ -22,9 +23,13 @@ def _engine_stub() -> Any:
     engine._recent_order_intents = {}
     engine._pending_new_actions_this_cycle = 0
     engine._pending_new_policy_last_cycle_index = None
+    engine._pending_new_replace_last_mono = {}
+    engine._pending_new_replacements_this_cycle = 0
     engine.marketable_limit_slippage_bps = 10
     engine._capacity_broker = lambda client: client
     engine._open_order_qty_index = {}
+    engine._position_tracker = {}
+    engine._position_tracker_last_sync_mono = 0.0
     engine._pending_orders = {}
     engine._cancel_ratio_adaptive_new_orders_cap = None
     engine._cancel_ratio_adaptive_context = {}
@@ -37,6 +42,18 @@ def _engine_stub() -> Any:
     engine._symbol_loss_streak = {}
     engine._symbol_loss_cooldown_until = {}
     engine._symbol_reentry_cooldown_until = {}
+    engine._opening_provider_ready_since_mono = 0.0
+    engine._symbol_slippage_budget_cache_until_mono = 0.0
+    engine._symbol_slippage_budget_cache = {}
+    engine._markout_feedback_bps = deque(maxlen=512)
+    engine._slippage_feedback_bps = deque(maxlen=512)
+    engine._markout_feedback_last_context = {
+        "sample_count": 0,
+        "mean_bps": 0.0,
+        "toxic": False,
+        "threshold_bps": -4.0,
+        "min_samples": 12,
+    }
     engine._tca_fill_backfill_last_run_mono = 0.0
     engine._tca_fill_backfill_offset = 0
     engine._tca_fill_backfill_bootstrapped = False
@@ -186,6 +203,99 @@ def test_pending_new_timeout_policy_hard_timeout_forces_cancel(monkeypatch):
     assert applied is True
     assert canceled == ["ord-hard-1"]
     assert replaced == []
+
+
+def test_pending_new_timeout_policy_replace_churn_guard_blocks_rapid_replace(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-guard-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+        limit_price="100.0",
+        client_order_id="cid-guard-1",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    replaced: list[dict[str, Any]] = []
+    canceled: list[str] = []
+    monotonic_clock = {"value": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: monotonic_clock["value"])
+
+    def _replace(**kwargs):
+        replaced.append(dict(kwargs))
+        return {"id": f"ord-repl-{len(replaced)}"}
+
+    engine._replace_limit_order_with_marketable = _replace
+    engine._cancel_order_alpaca = lambda order_id: canceled.append(str(order_id))
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_REPLACE_MAX_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_REPLACE_MIN_INTERVAL_SEC", "120")
+
+    engine._engine_cycle_index = 1
+    first_applied = engine._apply_pending_new_timeout_policy()
+    engine._engine_cycle_index = 2
+    monotonic_clock["value"] = 130.0
+    second_applied = engine._apply_pending_new_timeout_policy()
+
+    assert first_applied is True
+    assert second_applied is False
+    assert len(replaced) == 1
+    assert canceled == []
+
+
+def test_pending_new_timeout_policy_applies_dynamic_replace_controls(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    stale_order = SimpleNamespace(
+        id="ord-dyn-1",
+        symbol="AAPL",
+        side="buy",
+        qty="2",
+        status="pending_new",
+        type="limit",
+        limit_price="100.0",
+        client_order_id="cid-dyn-1",
+        created_at=now_dt - timedelta(seconds=120),
+    )
+    engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
+    replaced: list[dict[str, Any]] = []
+    engine._cancel_order_alpaca = lambda *_args, **_kwargs: None
+    engine._replace_limit_order_with_marketable = (
+        lambda **kwargs: replaced.append(dict(kwargs)) or {"id": "ord-dyn-repl"}
+    )
+    monkeypatch.setattr(
+        engine,
+        "_pending_new_dynamic_controls",
+        lambda **_: (
+            2,
+            0.0,
+            2,
+            {"enabled": True, "stress": 0.75},
+        ),
+    )
+
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_POLICY", "ladder")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_HARD_TIMEOUT_SEC", "600")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_MAX_ACTIONS_PER_CYCLE", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_MAX_REPLACEMENTS", "2")
+    monkeypatch.setenv("AI_TRADING_PENDING_NEW_LADDER_WIDEN_STEP_BPS", "5")
+
+    engine._engine_cycle_index = 3
+    applied = engine._apply_pending_new_timeout_policy()
+
+    assert applied is True
+    assert replaced
+    assert replaced[0]["slippage_bps"] == 2
 
 
 def test_pending_new_timeout_policy_defaults_to_cancel(monkeypatch):
@@ -441,6 +551,7 @@ def test_opening_provider_guard_allows_openings_when_provider_healthy(monkeypatc
     engine = _engine_stub()
     engine.ctx = SimpleNamespace(state={"service_phase": "active"})
     monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_PROVIDER_READY_MIN_SEC", "0")
     monkeypatch.setattr(engine, "_opening_provider_guard_enabled", lambda: True)
     monkeypatch.setattr(
         engine,
@@ -464,6 +575,40 @@ def test_opening_provider_guard_allows_openings_when_provider_healthy(monkeypatc
 
     assert allowed is True
     assert detail is None
+
+
+def test_opening_provider_guard_requires_readiness_warmup(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "active"})
+    monotonic_clock = {"value": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: monotonic_clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PHASE_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_PROVIDER_READY_MIN_SEC", "30")
+    monkeypatch.setattr(engine, "_opening_provider_guard_enabled", lambda: True)
+    monkeypatch.setattr(engine, "_opening_provider_guard_elapsed_seconds", lambda: 120.0)
+    monkeypatch.setattr(
+        lt.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "status": "healthy",
+            "active": "alpaca",
+            "using_backup": False,
+            "safe_mode": False,
+            "quote_fresh_ms": 300.0,
+            "updated": datetime.now(UTC).isoformat(),
+        },
+    )
+    monkeypatch.setattr(lt.provider_monitor, "is_disabled", lambda _provider: False)
+    monkeypatch.setattr(lt, "is_safe_mode_active", lambda: False)
+
+    allowed_first, detail_first = engine._execution_phase_allows_submits(closing_position=False)
+    monotonic_clock["value"] = 140.0
+    allowed_second, detail_second = engine._execution_phase_allows_submits(closing_position=False)
+
+    assert allowed_first is False
+    assert detail_first is not None and "provider_readiness_warmup" in detail_first
+    assert allowed_second is True
+    assert detail_second is None
 
 
 def test_pre_execution_order_checks_blocks_openings_when_exposure_overloaded(monkeypatch):
@@ -532,6 +677,61 @@ def test_pre_execution_order_checks_blocks_openings_for_symbol_reentry_cooldown(
     )
     monkeypatch.setattr(engine, "_exposure_normalization_context", lambda *_args, **_kwargs: {})
     engine._arm_symbol_reentry_cooldown_from_fill(symbol="AAPL", side="buy")
+
+    order = {
+        "symbol": "AAPL",
+        "side": "buy",
+        "quantity": 1,
+        "price_hint": "200.0",
+        "client_order_id": "cid-1",
+        "closing_position": False,
+        "account_snapshot": {},
+    }
+
+    allowed = engine._pre_execution_order_checks(order)
+
+    assert allowed is False
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+
+
+def test_pre_execution_order_checks_blocks_openings_for_symbol_slippage_budget(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL", "0")
+    monkeypatch.setattr(
+        engine,
+        "_enforce_opposite_side_policy",
+        lambda *_args, **_kwargs: (True, None),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_evaluate_pdt_preflight",
+        lambda *_args, **_kwargs: (False, None, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_gonogo_openings_allowed",
+        lambda: (True, {"enabled": False}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_exposure_normalization_settings",
+        lambda: {"block_openings": False},
+    )
+    monkeypatch.setattr(engine, "_exposure_normalization_context", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        engine,
+        "_symbol_intraday_slippage_budget_allows_opening",
+        lambda **_: (
+            False,
+            {
+                "enabled": True,
+                "reason": "symbol_intraday_slippage_drag_breach",
+                "symbol": "AAPL",
+            },
+        ),
+    )
 
     order = {
         "symbol": "AAPL",
@@ -1137,6 +1337,116 @@ def test_runtime_gonogo_intraday_pnl_kill_switch_blocks(monkeypatch):
     assert context["reason"] == "intraday_loss_breach"
 
 
+def test_runtime_gonogo_intraday_slippage_kill_switch_blocks(monkeypatch):
+    engine = _engine_stub()
+    today = datetime.now(UTC).date().isoformat()
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_MAX_DRAG",
+        "25",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_MIN_TRADES",
+        "5",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_TZ",
+        "UTC",
+    )
+    allowed, context = engine._runtime_intraday_slippage_kill_switch_allows_openings(
+        report={
+            "trade_history": {
+                "daily_trade_stats": [
+                    {
+                        "date": today,
+                        "trades": 10,
+                        "slippage_cost": 40.0,
+                    }
+                ]
+            }
+        },
+        thresholds={"trade_fill_source": "all"},
+    )
+
+    assert allowed is False
+    assert context["reason"] == "intraday_slippage_drag_breach"
+
+
+def test_symbol_intraday_slippage_budget_blocks_symbol_when_drag_breaches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine = _engine_stub()
+    today = datetime.now(UTC).date().isoformat()
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    fill_events_path = runtime_dir / "fill_events.jsonl"
+    fill_events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 200.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 100.0,
+                        "entry_time": f"{today}T14:30:00+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "fill_recorded",
+                        "symbol": "AAPL",
+                        "side": "buy",
+                        "fill_price": 210.0,
+                        "fill_qty": 10.0,
+                        "slippage_bps": 100.0,
+                        "entry_time": f"{today}T15:00:00+00:00",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "AI_TRADING_FILL_EVENTS_PATH",
+        "runtime/fill_events.jsonl",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MAX_DRAG",
+        "30",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS",
+        "2",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TZ",
+        "UTC",
+    )
+
+    allowed, context = engine._symbol_intraday_slippage_budget_allows_opening(
+        symbol="AAPL"
+    )
+
+    assert allowed is False
+    assert context["reason"] == "symbol_intraday_slippage_drag_breach"
+    assert context["symbol_fills"] == 2
+    assert context["today_symbol_slippage_drag"] > 30.0
+
+
 def test_symbol_loss_cooldown_triggers_and_expires(monkeypatch):
     engine = _engine_stub()
     clock = {"value": 100.0}
@@ -1727,3 +2037,122 @@ def test_execution_kpi_snapshot_records_slo_metrics(monkeypatch):
     assert drift_samples == pytest.approx([7.5])
     assert slippage_samples == pytest.approx([6.25])
     assert pacing_cap_hit_rate_samples == pytest.approx([0.0])
+
+
+def test_update_markout_feedback_tracks_only_live_sources(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: False,
+    )
+
+    engine._update_markout_feedback(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        realized_net_edge_bps=-5.0,
+        realized_slippage_bps=4.0,
+        fill_source="reconcile_backfill",
+    )
+    assert len(engine._markout_feedback_bps) == 0
+    assert len(engine._slippage_feedback_bps) == 1
+
+    engine._update_markout_feedback(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        realized_net_edge_bps=-6.0,
+        realized_slippage_bps=5.0,
+        fill_source="live",
+    )
+    assert len(engine._markout_feedback_bps) == 1
+    assert engine._markout_feedback_last_context["sample_count"] == 1
+
+
+def test_execution_kpi_snapshot_includes_markout_feedback_fields(caplog):
+    engine = _engine_stub()
+    engine._cycle_order_outcomes = [
+        {"status": "filled", "duration_s": 0.3, "ack_timed_out": False},
+    ]
+    engine._list_open_orders_snapshot = lambda: []
+    engine._markout_feedback_last_context = {
+        "sample_count": 8,
+        "mean_bps": -3.25,
+        "toxic": True,
+        "threshold_bps": -4.0,
+        "min_samples": 6,
+    }
+    engine._slippage_feedback_bps = deque([1.0, 3.0, 5.0, 7.0], maxlen=512)
+
+    caplog.set_level(logging.INFO)
+    engine._emit_cycle_execution_kpis()
+
+    record = next(rec for rec in caplog.records if rec.message == "EXECUTION_KPI_SNAPSHOT")
+    assert record.markout_sample_count == 8
+    assert record.markout_toxic is True
+    assert record.markout_mean_bps == pytest.approx(-3.25)
+    assert record.slippage_volatility_bps > 0.0
+
+
+def test_resolve_smart_order_route_applies_ioc_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+
+    class _Router:
+        @staticmethod
+        def create_order_request(**_kwargs: Any) -> dict[str, Any]:
+            return {
+                "type": "ioc",
+                "time_in_force": "IOC",
+                "limit_price": 101.25,
+            }
+
+    monkeypatch.setattr(lt, "get_smart_router", lambda: _Router())
+    context = engine._resolve_smart_order_route(
+        symbol="AAPL",
+        side="buy",
+        quantity=5,
+        order_type="limit",
+        limit_price=100.9,
+        bid=100.8,
+        ask=101.0,
+        quote_age_ms=300.0,
+        degrade_active=False,
+        markout_context={"toxic": False},
+        manual_limit_requested=False,
+    )
+
+    assert context["enabled"] is True
+    assert context["applied"] is True
+    assert context["resolved_order_type"] == "limit"
+    assert context["resolved_time_in_force"] == "ioc"
+
+
+def test_estimate_passive_fill_probability_penalizes_toxic_markout() -> None:
+    engine = _engine_stub()
+    baseline_prob, _ = engine._estimate_passive_fill_probability(
+        side="buy",
+        bid=100.0,
+        ask=100.2,
+        quote_age_ms=400.0,
+        spread_bps_hint=None,
+        degrade_active=False,
+        gap_ratio=0.01,
+        markout_context={"toxic": False, "mean_bps": 1.0},
+    )
+    toxic_prob, context = engine._estimate_passive_fill_probability(
+        side="buy",
+        bid=100.0,
+        ask=100.2,
+        quote_age_ms=400.0,
+        spread_bps_hint=None,
+        degrade_active=False,
+        gap_ratio=0.01,
+        markout_context={"toxic": True, "mean_bps": -12.0},
+    )
+
+    assert toxic_prob < baseline_prob
+    components = context["components"]
+    assert components["markout_toxicity"] > 0.0

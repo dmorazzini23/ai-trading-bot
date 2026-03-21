@@ -1347,6 +1347,8 @@ class ExecutionEngine:
         self._order_signal_meta: dict[str, _SignalMeta] = {}
         # In-memory fallback for position tracking when broker data is unavailable
         self._position_ledger: dict[str, int] = {}
+        self._position_tracker: dict[str, float] = {}
+        self._position_tracker_last_sync_mono: float = 0.0
         self.execution_stats = {
             "total_orders": 0,
             "filled_orders": 0,
@@ -1785,7 +1787,74 @@ class ExecutionEngine:
         )
         self._broker_sync = snapshot
         self._open_order_qty_index = qty_index
+        try:
+            self._update_position_tracker_snapshot(positions_tuple)
+        except Exception:
+            self.logger.debug(
+                "BROKER_SYNC_POSITION_TRACKER_UPDATE_FAILED",
+                exc_info=True,
+            )
         return snapshot
+
+    def _update_position_tracker_snapshot(self, positions: Iterable[Any]) -> None:
+        """Refresh position tracker from latest broker position snapshot."""
+
+        tracker = getattr(self, "_position_tracker", None)
+        if not isinstance(tracker, dict):
+            tracker = {}
+            self._position_tracker = tracker
+        else:
+            tracker.clear()
+
+        def _extract_value(payload: Any, *keys: str) -> Any:
+            if isinstance(payload, Mapping):
+                for key in keys:
+                    value = payload.get(key)
+                    if value not in (None, ""):
+                        return value
+                return None
+            for key in keys:
+                if hasattr(payload, key):
+                    value = getattr(payload, key)
+                    if value not in (None, ""):
+                        return value
+            return None
+
+        def _normalize_qty(raw: Any, side: Any) -> float | None:
+            if raw in (None, ""):
+                return None
+            try:
+                qty = float(raw)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(qty):
+                return None
+
+            side_token = str(side).strip().lower() if side is not None else ""
+            if side_token in {"sell", "sell_short", "sellshort", "short"}:
+                qty = -abs(qty)
+            elif side_token in {"buy", "long"}:
+                qty = abs(qty)
+            elif qty == 0:
+                qty = 0.0
+            return float(int(qty)) if float(qty).is_integer() else float(qty)
+
+        for position in positions:
+            symbol_raw = _extract_value(position, "symbol")
+            if symbol_raw in (None, ""):
+                continue
+            symbol = str(symbol_raw).strip().upper()
+            if not symbol:
+                continue
+            qty = _normalize_qty(
+                _extract_value(position, "qty", "quantity", "position", "current_qty"),
+                _extract_value(position, "side"),
+            )
+            if qty is None:
+                continue
+            tracker[symbol] = qty
+
+        self._position_tracker_last_sync_mono = float(monotonic_time())
 
     def synchronize_broker_state(self) -> BrokerSyncResult:
         """Return the latest broker snapshot (no-op for base engine)."""
