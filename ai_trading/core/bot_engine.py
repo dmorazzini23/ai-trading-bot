@@ -31500,6 +31500,20 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
     trigger_after_s = max(0.0, min(trigger_after_s, 86400.0))
 
     try:
+        block_after_s = float(
+            get_env(
+                "AI_TRADING_PRIMARY_FEED_DERISK_BLOCK_AFTER_SEC",
+                900.0,
+                cast=float,
+            )
+        )
+    except Exception:
+        block_after_s = 900.0
+    if not math.isfinite(block_after_s):
+        block_after_s = 900.0
+    block_after_s = max(0.0, min(block_after_s, 86400.0))
+
+    try:
         scale_mult = float(
             get_env(
                 "AI_TRADING_PRIMARY_FEED_DERISK_SCALE_MULT",
@@ -31555,7 +31569,8 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         reasons.append("synthetic_quote")
     if quote_stale:
         reasons.append("stale_quote")
-    reason = ",".join(dict.fromkeys(reasons)) if reasons else None
+    reason_tokens = list(dict.fromkeys(reasons))
+    reason = ",".join(reason_tokens) if reason_tokens else None
 
     now_ts = float(time.time())
     state_map = _ensure_runtime_state(runtime)
@@ -31577,15 +31592,25 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
 
     triggered = bool(degraded_active and duration_s >= trigger_after_s)
     exit_only = bool(enabled and exit_only_on_degraded and degraded_active)
-    block = bool((triggered and mode == "block") or exit_only)
+    prolonged_block = bool(
+        degraded_active
+        and block_after_s > 0.0
+        and duration_s >= block_after_s
+    )
+    block = bool((triggered and mode == "block") or exit_only or prolonged_block)
     scale = float(scale_mult if triggered and mode == "scale" and not block else 1.0)
+    if prolonged_block and "prolonged_degraded_feed" not in reason_tokens:
+        reason_tokens.append("prolonged_degraded_feed")
+    reason = ",".join(reason_tokens) if reason_tokens else None
     return {
         "enabled": bool(enabled),
         "mode": mode,
         "trigger_after_s": float(trigger_after_s),
+        "block_after_s": float(block_after_s),
         "duration_s": float(duration_s),
         "triggered": bool(triggered),
         "block": bool(block),
+        "prolonged_block": bool(prolonged_block),
         "scale": float(scale),
         "exit_only": bool(exit_only),
         "exit_only_on_degraded": bool(exit_only_on_degraded),
@@ -40017,7 +40042,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(
                     get_env(
                         "AI_TRADING_EXECUTION_COST_AWARE_EDGE_MARGIN_BPS",
-                        1.0,
+                        2.0,
                         cast=float,
                     )
                 ),
@@ -40027,7 +40052,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(
                     get_env(
                         "AI_TRADING_EXECUTION_COST_AWARE_COST_MULTIPLIER",
-                        1.0,
+                        1.15,
                         cast=float,
                     )
                 ),
@@ -40037,7 +40062,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(
                     get_env(
                         "AI_TRADING_EXECUTION_COST_AWARE_MIN_EDGE_TO_COST_RATIO",
-                        1.0,
+                        1.2,
                         cast=float,
                     )
                 ),

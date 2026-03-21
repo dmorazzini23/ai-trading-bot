@@ -167,6 +167,80 @@ def test_health_connectivity_mode_requires_known_broker_status(monkeypatch):
     assert payload["reason"] == "broker_status_unknown"
 
 
+def test_health_market_closed_offhours_reports_healthy(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "warming_up",
+        "data_status": "warming_up",
+        "reason": "market_closed",
+    }
+    broker_state = {
+        "status": "connected",
+        "connected": True,
+        "latency_ms": 15.0,
+        "last_error": None,
+    }
+    service_state = {
+        "status": "warming_up",
+        "reason": "startup_complete_pending_runtime_health",
+        "phase": "active",
+    }
+    quote_state = {"status": "unknown"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["status"] == "healthy"
+    assert payload["reason"] == "market_closed"
+
+
+def test_health_market_closed_does_not_hide_unknown_broker(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "warming_up",
+        "data_status": "warming_up",
+        "reason": "market_closed",
+    }
+    broker_state = {
+        "status": "unknown",
+        "connected": None,
+        "latency_ms": None,
+        "last_error": None,
+    }
+    service_state = {
+        "status": "warming_up",
+        "reason": "startup_complete_pending_runtime_health",
+    }
+    quote_state = {"status": "unknown"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is False
+    assert payload["status"] == "degraded"
+
+
 def test_health_payload_does_not_report_healthy_when_ok_is_false(monkeypatch):
     provider_state = {
         "primary": "alpaca",

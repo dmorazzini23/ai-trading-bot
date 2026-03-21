@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 from datetime import datetime
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from ai_trading import main
@@ -15,6 +16,17 @@ def test_run_cycle_skips_when_market_closed(monkeypatch):
     monkeypatch.setattr(main, "_is_market_open_base", lambda: False)
     monkeypatch.setenv("ALLOW_AFTER_HOURS", "0")
     sync_calls = {"count": 0}
+    broker_status_updates: list[dict[str, object]] = []
+    provider_status_updates: list[dict[str, object]] = []
+
+    def _capture_broker_status(**kwargs: object) -> None:
+        broker_status_updates.append(dict(kwargs))
+
+    def _capture_provider_status(**kwargs: object) -> None:
+        provider_status_updates.append(dict(kwargs))
+
+    monkeypatch.setattr(main.runtime_state, "update_broker_status", _capture_broker_status)
+    monkeypatch.setattr(main.runtime_state, "update_data_provider_state", _capture_provider_status)
 
     class _StubExecutionEngine:
         def synchronize_broker_state(self):
@@ -22,7 +34,7 @@ def test_run_cycle_skips_when_market_closed(monkeypatch):
             return types.SimpleNamespace(open_orders=[], positions=[])
 
     runtime_obj = types.SimpleNamespace(execution_engine=_StubExecutionEngine())
-    stub_bot_engine = types.ModuleType("ai_trading.core.bot_engine")
+    stub_bot_engine = cast(Any, types.ModuleType("ai_trading.core.bot_engine"))
 
     class _StubBotState:
         pass
@@ -31,7 +43,7 @@ def test_run_cycle_skips_when_market_closed(monkeypatch):
     stub_bot_engine.get_ctx = lambda: types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", stub_bot_engine)
 
-    stub_runtime = types.ModuleType("ai_trading.core.runtime")
+    stub_runtime = cast(Any, types.ModuleType("ai_trading.core.runtime"))
     stub_runtime.build_runtime = lambda _cfg: runtime_obj
     stub_runtime.enhance_runtime_with_context = lambda runtime, _ctx: runtime
     monkeypatch.setitem(sys.modules, "ai_trading.core.runtime", stub_runtime)
@@ -44,6 +56,12 @@ def test_run_cycle_skips_when_market_closed(monkeypatch):
     main.run_cycle()
 
     assert sync_calls["count"] == 1
+    assert broker_status_updates
+    assert broker_status_updates[-1]["status"] == "connected"
+    assert broker_status_updates[-1]["connected"] is True
+    assert provider_status_updates
+    assert provider_status_updates[-1]["status"] == "warming_up"
+    assert provider_status_updates[-1]["data_status"] == "warming_up"
 
 
 def test_run_cycle_calls_market_close_helper_when_closed(monkeypatch):

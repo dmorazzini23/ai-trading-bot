@@ -2461,6 +2461,10 @@ def _runtime_assumptions_signature(
         "lookback_days",
         "min_used_days",
         "min_closed_trades",
+        "auto_live_min_closed_trades",
+        "auto_live_min_used_days",
+        "auto_live_min_available_days",
+        "max_open_position_mismatch_count",
     ):
         parsed_int = _as_int(thresholds.get(key))
         if parsed_int is not None:
@@ -2471,10 +2475,21 @@ def _runtime_assumptions_signature(
         "min_net_pnl",
         "min_acceptance_rate",
         "min_expected_net_edge_bps",
+        "max_open_position_delta_ratio",
+        "max_open_position_abs_delta_qty",
+        "max_slippage_drag_bps",
     ):
         parsed_float = _as_float(thresholds.get(key))
         if parsed_float is not None:
             signature[key] = float(round(parsed_float, 8))
+    for key in (
+        "auto_live_fail_closed",
+        "require_pnl_available",
+        "require_gate_valid",
+        "require_open_position_reconciliation",
+    ):
+        if key in thresholds:
+            signature[key] = bool(thresholds.get(key))
     return signature
 
 
@@ -3020,39 +3035,59 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
         return str(value or default).strip() or str(default)
 
     thresholds = {
-        "min_closed_trades": _threshold_int("MIN_CLOSED_TRADES", 20),
-        "min_profit_factor": _threshold_float("MIN_PROFIT_FACTOR", 1.1),
-        "min_win_rate": _threshold_float("MIN_WIN_RATE", 0.5),
+        "min_closed_trades": _threshold_int("MIN_CLOSED_TRADES", 50),
+        "min_profit_factor": _threshold_float("MIN_PROFIT_FACTOR", 1.0),
+        "min_win_rate": _threshold_float("MIN_WIN_RATE", 0.52),
         "min_net_pnl": _threshold_float("MIN_NET_PNL", 0.0),
-        "min_acceptance_rate": _threshold_float("MIN_ACCEPTANCE_RATE", 0.05),
+        "min_acceptance_rate": _threshold_float("MIN_ACCEPTANCE_RATE", 0.02),
         "min_expected_net_edge_bps": _threshold_float("MIN_EXPECTED_NET_EDGE_BPS", -50.0),
-        "min_used_days": max(0, _threshold_int("MIN_USED_DAYS", 0)),
-        "lookback_days": max(0, _threshold_int("LOOKBACK_DAYS", 0)),
+        "min_used_days": max(0, _threshold_int("MIN_USED_DAYS", 4)),
+        "lookback_days": max(0, _threshold_int("LOOKBACK_DAYS", 5)),
         "trade_fill_source": _threshold_str("TRADE_FILL_SOURCE", "auto_live"),
         "auto_live_min_closed_trades": max(
             1,
             _threshold_int(
                 "AUTO_LIVE_MIN_CLOSED_TRADES",
-                _threshold_int("MIN_CLOSED_TRADES", 20),
+                150,
             ),
         ),
         "auto_live_min_used_days": max(
             1,
             _threshold_int(
                 "AUTO_LIVE_MIN_USED_DAYS",
-                max(1, _threshold_int("MIN_USED_DAYS", 0)),
+                max(1, _threshold_int("MIN_USED_DAYS", 4)),
             ),
         ),
         "auto_live_min_available_days": max(
             1,
             _threshold_int(
                 "AUTO_LIVE_MIN_AVAILABLE_DAYS",
-                max(1, _threshold_int("MIN_USED_DAYS", 0)),
+                max(1, _threshold_int("MIN_USED_DAYS", 4)),
             ),
         ),
         "auto_live_fail_closed": _threshold_bool("AUTO_LIVE_FAIL_CLOSED", True),
         "require_pnl_available": _threshold_bool("REQUIRE_PNL_AVAILABLE", True),
-        "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", False),
+        "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", True),
+        "require_open_position_reconciliation": _threshold_bool(
+            "REQUIRE_OPEN_POSITION_RECONCILIATION",
+            True,
+        ),
+        "max_open_position_delta_ratio": _threshold_float(
+            "MAX_OPEN_POSITION_DELTA_RATIO",
+            0.2,
+        ),
+        "max_open_position_mismatch_count": max(
+            0,
+            _threshold_int("MAX_OPEN_POSITION_MISMATCH_COUNT", 25),
+        ),
+        "max_open_position_abs_delta_qty": _threshold_float(
+            "MAX_OPEN_POSITION_ABS_DELTA_QTY",
+            50.0,
+        ),
+        "max_slippage_drag_bps": _threshold_float(
+            "MAX_SLIPPAGE_DRAG_BPS",
+            18.0,
+        ),
     }
 
     try:

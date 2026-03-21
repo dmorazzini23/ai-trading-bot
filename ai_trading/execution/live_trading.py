@@ -12042,6 +12042,7 @@ class ExecutionEngine:
             "auto_live_min_closed_trades",
             "auto_live_min_used_days",
             "auto_live_min_available_days",
+            "max_open_position_mismatch_count",
         )
         for key in int_keys:
             current_val = _safe_int(threshold_map.get(key), -1)
@@ -12059,6 +12060,9 @@ class ExecutionEngine:
             "min_net_pnl",
             "min_acceptance_rate",
             "min_expected_net_edge_bps",
+            "max_open_position_delta_ratio",
+            "max_open_position_abs_delta_qty",
+            "max_slippage_drag_bps",
         )
         for key in float_keys:
             current_raw = _safe_float(threshold_map.get(key))
@@ -12078,7 +12082,12 @@ class ExecutionEngine:
                 changed = True
             merged[key] = float(strict_float)
 
-        for key in ("require_pnl_available", "require_gate_valid", "auto_live_fail_closed"):
+        for key in (
+            "require_pnl_available",
+            "require_gate_valid",
+            "auto_live_fail_closed",
+            "require_open_position_reconciliation",
+        ):
             previous_val = bool(locked.get(key))
             current_val = bool(threshold_map.get(key))
             strict_val = bool(previous_val or current_val)
@@ -12547,6 +12556,64 @@ class ExecutionEngine:
             "trade_fill_source": fill_source,
             "min_trades": int(min_trades),
             "today_trades": int(today_trades),
+        }
+
+    def _runtime_pending_new_pressure_allows_openings(self) -> tuple[bool, dict[str, Any]]:
+        """Block new openings while pending-new pressure indicates weak microstructure."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        min_pending_orders = _config_int(
+            "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MIN_PENDING_ORDERS",
+            8,
+        )
+        min_pending_orders = max(1, int(min_pending_orders if min_pending_orders is not None else 8))
+        max_oldest_age_s = _config_float(
+            "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MAX_OLDEST_AGE_SEC",
+            90.0,
+        )
+        if max_oldest_age_s is None or not math.isfinite(float(max_oldest_age_s)):
+            max_oldest_age_s = 90.0
+        max_oldest_age_s = max(1.0, min(float(max_oldest_age_s), 3600.0))
+
+        now_dt = datetime.now(UTC)
+        pending_statuses = {"new", "pending_new", "accepted", "acknowledged", "pending_replace"}
+        pending_ages: list[float] = []
+        pending_count = 0
+        for order in self._list_open_orders_snapshot():
+            status = _normalize_status(_extract_value(order, "status"))
+            if status not in pending_statuses:
+                continue
+            pending_count += 1
+            age_seconds = self._order_age_seconds(order, now_dt)
+            if age_seconds is not None and math.isfinite(float(age_seconds)):
+                pending_ages.append(max(0.0, float(age_seconds)))
+
+        if pending_count < min_pending_orders:
+            return True, {
+                "enabled": True,
+                "reason": "below_pending_order_threshold",
+                "pending_new_count": int(pending_count),
+                "threshold_pending_new_count": int(min_pending_orders),
+                "oldest_pending_new_age_sec": (
+                    float(max(pending_ages)) if pending_ages else None
+                ),
+                "threshold_oldest_age_sec": float(max_oldest_age_s),
+            }
+
+        oldest_age = float(max(pending_ages)) if pending_ages else float(max_oldest_age_s)
+        allowed = float(oldest_age) <= float(max_oldest_age_s)
+        return allowed, {
+            "enabled": True,
+            "reason": "ok" if allowed else "pending_new_pressure_breach",
+            "pending_new_count": int(pending_count),
+            "threshold_pending_new_count": int(min_pending_orders),
+            "oldest_pending_new_age_sec": float(oldest_age),
+            "threshold_oldest_age_sec": float(max_oldest_age_s),
         }
 
     def _symbol_intraday_slippage_budget_allows_opening(
@@ -13021,19 +13088,19 @@ class ExecutionEngine:
             None,
         )
         if min_closed_trades is None:
-            min_closed_trades = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20)
+            min_closed_trades = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 50)
         min_profit_factor = _config_float(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_PROFIT_FACTOR",
             None,
         )
         if min_profit_factor is None:
-            min_profit_factor = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1)
+            min_profit_factor = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.0)
         min_win_rate = _config_float(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE",
             None,
         )
         if min_win_rate is None:
-            min_win_rate = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5)
+            min_win_rate = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.52)
         min_net_pnl = _config_float("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", None)
         if min_net_pnl is None:
             min_net_pnl = _config_float("AI_TRADING_RUNTIME_GONOGO_MIN_NET_PNL", 0.0)
@@ -13044,7 +13111,7 @@ class ExecutionEngine:
         if min_acceptance_rate is None:
             min_acceptance_rate = _config_float(
                 "AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE",
-                0.05,
+                0.02,
             )
         min_expected_net_edge_bps = _config_float(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EXPECTED_NET_EDGE_BPS",
@@ -13066,7 +13133,7 @@ class ExecutionEngine:
             None,
         )
         if min_used_days is None:
-            min_used_days = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0)
+            min_used_days = _config_int("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 4)
         trade_fill_source_raw: Any = None
         if _config_get_env is not None:
             try:
@@ -13092,9 +13159,9 @@ class ExecutionEngine:
         if trade_fill_source_raw in (None, ""):
             trade_fill_source_raw = _runtime_env(
                 "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
-                "all",
+                "auto_live",
             )
-        trade_fill_source = str(trade_fill_source_raw or "all").strip() or "all"
+        trade_fill_source = str(trade_fill_source_raw or "auto_live").strip() or "auto_live"
         auto_live_min_closed_trades = _config_int(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_CLOSED_TRADES",
             None,
@@ -13130,35 +13197,80 @@ class ExecutionEngine:
                 "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED"
             )
         if auto_live_fail_closed is None:
-            auto_live_fail_closed = False
+            auto_live_fail_closed = True
+        require_open_position_reconciliation = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION"
+        )
+        if require_open_position_reconciliation is None:
+            require_open_position_reconciliation = _resolve_bool_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION"
+            )
+        if require_open_position_reconciliation is None:
+            require_open_position_reconciliation = True
+        max_open_position_delta_ratio = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO",
+            None,
+        )
+        if max_open_position_delta_ratio is None:
+            max_open_position_delta_ratio = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO",
+                0.2,
+            )
+        max_open_position_mismatch_count = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_MISMATCH_COUNT",
+            None,
+        )
+        if max_open_position_mismatch_count is None:
+            max_open_position_mismatch_count = _config_int(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_MISMATCH_COUNT",
+                25,
+            )
+        max_open_position_abs_delta_qty = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_ABS_DELTA_QTY",
+            None,
+        )
+        if max_open_position_abs_delta_qty is None:
+            max_open_position_abs_delta_qty = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_ABS_DELTA_QTY",
+                50.0,
+            )
+        max_slippage_drag_bps = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_SLIPPAGE_DRAG_BPS",
+            None,
+        )
+        if max_slippage_drag_bps is None:
+            max_slippage_drag_bps = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_SLIPPAGE_DRAG_BPS",
+                18.0,
+            )
         thresholds = {
             "min_closed_trades": int(
-                min_closed_trades if min_closed_trades is not None else 20
+                min_closed_trades if min_closed_trades is not None else 50
             ),
             "min_profit_factor": float(
-                min_profit_factor if min_profit_factor is not None else 1.1
+                min_profit_factor if min_profit_factor is not None else 1.0
             ),
             "min_win_rate": float(
-                min_win_rate if min_win_rate is not None else 0.5
+                min_win_rate if min_win_rate is not None else 0.52
             ),
             "min_net_pnl": float(
                 min_net_pnl if min_net_pnl is not None else 0.0
             ),
             "min_acceptance_rate": float(
-                min_acceptance_rate if min_acceptance_rate is not None else 0.05
+                min_acceptance_rate if min_acceptance_rate is not None else 0.02
             ),
             "min_expected_net_edge_bps": float(
                 min_expected_net_edge_bps if min_expected_net_edge_bps is not None else -50.0
             ),
-            "min_used_days": int(max(0, min_used_days if min_used_days is not None else 0)),
-            "lookback_days": int(max(0, lookback_days if lookback_days is not None else 0)),
+            "min_used_days": int(max(0, min_used_days if min_used_days is not None else 4)),
+            "lookback_days": int(max(0, lookback_days if lookback_days is not None else 5)),
             "trade_fill_source": trade_fill_source,
             "auto_live_min_closed_trades": int(
                 max(
                     1,
                     auto_live_min_closed_trades
                     if auto_live_min_closed_trades is not None
-                    else (min_closed_trades if min_closed_trades is not None else 20),
+                    else 150,
                 )
             ),
             "auto_live_min_used_days": int(
@@ -13166,7 +13278,7 @@ class ExecutionEngine:
                     1,
                     auto_live_min_used_days
                     if auto_live_min_used_days is not None
-                    else (min_used_days if min_used_days is not None else 1),
+                    else (min_used_days if min_used_days is not None else 4),
                 )
             ),
             "auto_live_min_available_days": int(
@@ -13177,13 +13289,28 @@ class ExecutionEngine:
                     else (
                         auto_live_min_used_days
                         if auto_live_min_used_days is not None
-                        else (min_used_days if min_used_days is not None else 1)
+                        else (min_used_days if min_used_days is not None else 4)
                     ),
                 )
             ),
             "auto_live_fail_closed": bool(auto_live_fail_closed),
+            "require_open_position_reconciliation": bool(
+                require_open_position_reconciliation
+            ),
+            "max_open_position_delta_ratio": float(
+                max(0.0, max_open_position_delta_ratio if max_open_position_delta_ratio is not None else 0.2)
+            ),
+            "max_open_position_mismatch_count": int(
+                max(0, max_open_position_mismatch_count if max_open_position_mismatch_count is not None else 25)
+            ),
+            "max_open_position_abs_delta_qty": float(
+                max(0.0, max_open_position_abs_delta_qty if max_open_position_abs_delta_qty is not None else 50.0)
+            ),
+            "max_slippage_drag_bps": float(
+                max(0.0, max_slippage_drag_bps if max_slippage_drag_bps is not None else 18.0)
+            ),
             "require_pnl_available": True,
-            "require_gate_valid": False,
+            "require_gate_valid": True,
         }
         require_pnl_available = _resolve_bool_env(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE"
@@ -13296,6 +13423,23 @@ class ExecutionEngine:
                     context["failed_checks"] = failed_checks
                     context["gate_passed"] = False
                     context["reason"] = "intraday_slippage_kill_switch"
+            if allowed:
+                pressure_allowed, pressure_context = (
+                    self._runtime_pending_new_pressure_allows_openings()
+                )
+                context["pending_new_pressure_guard"] = pressure_context
+                if not pressure_allowed:
+                    allowed = False
+                    existing_failed_checks = context.get("failed_checks", [])
+                    failed_checks = (
+                        [str(item) for item in existing_failed_checks]
+                        if isinstance(existing_failed_checks, Sequence)
+                        else []
+                    )
+                    failed_checks.append("pending_new_pressure_guard")
+                    context["failed_checks"] = failed_checks
+                    context["gate_passed"] = False
+                    context["reason"] = "pending_new_pressure_guard"
         except Exception as exc:
             allowed = not bool(fail_closed)
             context = {

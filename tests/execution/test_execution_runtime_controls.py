@@ -269,9 +269,11 @@ def test_pending_new_timeout_policy_applies_dynamic_replace_controls(monkeypatch
     engine.trading_client = SimpleNamespace(list_orders=lambda status="open": [stale_order])
     replaced: list[dict[str, Any]] = []
     engine._cancel_order_alpaca = lambda *_args, **_kwargs: None
-    engine._replace_limit_order_with_marketable = (
-        lambda **kwargs: replaced.append(dict(kwargs)) or {"id": "ord-dyn-repl"}
-    )
+    def _replace_limit_order_with_marketable(**kwargs: Any) -> dict[str, str]:
+        replaced.append(dict(kwargs))
+        return {"id": "ord-dyn-repl"}
+
+    engine._replace_limit_order_with_marketable = _replace_limit_order_with_marketable
     monkeypatch.setattr(
         engine,
         "_pending_new_dynamic_controls",
@@ -1000,8 +1002,15 @@ def test_runtime_gonogo_precheck_blocks_openings_when_gate_fails(monkeypatch, tm
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS", "0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE", "all")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION",
+        "0",
+    )
     monkeypatch.setattr(
         engine,
         "_enforce_opposite_side_policy",
@@ -1094,6 +1103,8 @@ def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path)
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS", "0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_ENFORCE_IN_PAPER", "1")
@@ -1136,8 +1147,18 @@ def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, t
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", "0.5")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", "0.0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", "0.05")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS", "0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", "0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_GONOGO_LOOKBACK_DAYS", "0")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE", "1")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_GATE_VALID", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOCK_THRESHOLDS_INTRADAY", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE", "all")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION",
+        "0",
+    )
     monkeypatch.setattr(
         engine,
         "_enforce_opposite_side_policy",
@@ -1373,6 +1394,54 @@ def test_runtime_gonogo_intraday_slippage_kill_switch_blocks(monkeypatch):
 
     assert allowed is False
     assert context["reason"] == "intraday_slippage_drag_breach"
+
+
+def test_runtime_pending_new_pressure_guard_blocks_openings(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    orders = [
+        SimpleNamespace(status="pending_new", created_at=now_dt - timedelta(seconds=180))
+        for _ in range(10)
+    ]
+    monkeypatch.setattr(engine, "_list_open_orders_snapshot", lambda: list(orders))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MIN_PENDING_ORDERS",
+        "8",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MAX_OLDEST_AGE_SEC",
+        "90",
+    )
+
+    allowed, context = engine._runtime_pending_new_pressure_allows_openings()
+
+    assert allowed is False
+    assert context["reason"] == "pending_new_pressure_breach"
+
+
+def test_runtime_pending_new_pressure_guard_allows_when_pending_is_light(monkeypatch):
+    engine = _engine_stub()
+    now_dt = datetime.now(UTC)
+    orders = [
+        SimpleNamespace(status="pending_new", created_at=now_dt - timedelta(seconds=30))
+        for _ in range(3)
+    ]
+    monkeypatch.setattr(engine, "_list_open_orders_snapshot", lambda: list(orders))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MIN_PENDING_ORDERS",
+        "8",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_PENDING_NEW_PRESSURE_GUARD_MAX_OLDEST_AGE_SEC",
+        "90",
+    )
+
+    allowed, context = engine._runtime_pending_new_pressure_allows_openings()
+
+    assert allowed is True
+    assert context["reason"] == "below_pending_order_threshold"
 
 
 def test_symbol_intraday_slippage_budget_blocks_symbol_when_drag_breaches(

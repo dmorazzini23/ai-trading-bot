@@ -140,3 +140,36 @@ def test_runtime_performance_go_no_go_gate_resolves_runtime_paths(
         tmp_path / "data-root" / "runtime" / "gate_effectiveness_summary.json"
     ).resolve()
     assert captured["gate_log_path"] is None
+
+
+def test_runtime_performance_go_no_go_gate_defaults_enable_reconciliation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_RUNTIME_GONOGO_ENABLED", "1")
+    captured: dict[str, object] = {}
+
+    def _build_report(**_kwargs):
+        return {"trade_history": {"pnl_available": True}, "gate_effectiveness": {"valid": True}}
+
+    def _evaluate_go_no_go(report, *, thresholds=None):
+        captured["report"] = report
+        captured["thresholds"] = dict(thresholds or {})
+        return {
+            "gate_passed": True,
+            "checks": {},
+            "failed_checks": [],
+            "thresholds": dict(thresholds or {}),
+            "observed": {},
+        }
+
+    monkeypatch.setattr(rpt, "build_report", _build_report)
+    monkeypatch.setattr(rpt, "evaluate_go_no_go", _evaluate_go_no_go)
+
+    result = after_hours._runtime_performance_go_no_go_gate()
+
+    assert result["enabled"] is True
+    thresholds = captured["thresholds"]
+    assert isinstance(thresholds, dict)
+    assert thresholds.get("trade_fill_source") == "auto_live"
+    assert thresholds.get("auto_live_fail_closed") is True
+    assert thresholds.get("require_open_position_reconciliation") is True

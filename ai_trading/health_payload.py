@@ -154,6 +154,12 @@ def build_runtime_health_payload(
 
     service_status = service_state.get("status", "unknown")
     service_reason = service_state.get("reason")
+    provider_reason_normalized = str(provider_state.get("reason") or "").strip().lower()
+    service_reason_normalized = str(service_reason or "").strip().lower()
+    market_closed_mode = (
+        provider_reason_normalized == "market_closed"
+        or service_reason_normalized == "market_closed"
+    )
     provider_disabled = provider_status_normalized in {"down", "disabled", "failed", "unreachable"}
     provider_unknown = provider_status_normalized in {"", "unknown"}
     broker_down = broker_status_normalized in {"unreachable", "down", "failed"}
@@ -181,12 +187,26 @@ def build_runtime_health_payload(
         )
         broker_connectivity_ok = broker_status_normalized in {"reachable", "ready", "connected"}
         overall_ok = provider_connectivity_ok and broker_connectivity_ok
+    offhours_market_closed_ready = (
+        market_closed_mode
+        and broker_healthy
+        and not broker_down
+        and not broker_degraded
+        and not data_degraded
+        and not provider_disabled
+        and not bool(provider_payload.get("using_backup"))
+    )
+    if offhours_market_closed_ready:
+        overall_ok = True
+        degraded = False
     if force_ok_for_pytest:
         overall_ok = True
     if not overall_ok:
         degraded = True
 
-    if degraded:
+    if offhours_market_closed_ready:
+        resolved_status = "healthy"
+    elif degraded:
         resolved_status = "degraded"
     elif healthy_status_mode == "healthy":
         resolved_status = "healthy"
@@ -214,7 +234,9 @@ def build_runtime_health_payload(
         "data_status": data_status,
         "model_liveness": model_liveness,
     }
-    if service_reason:
+    if offhours_market_closed_ready:
+        payload["reason"] = "market_closed"
+    elif service_reason:
         payload.setdefault("reason", service_reason)
     degrade_reason = provider_payload.get("reason")
     if degraded and degrade_reason:

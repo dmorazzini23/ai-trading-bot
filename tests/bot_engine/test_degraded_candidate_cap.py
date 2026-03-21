@@ -172,6 +172,48 @@ def test_primary_feed_derisk_state_triggers_after_contiguous_fallback(monkeypatc
     assert second["duration_s"] == pytest.approx(32.0)
 
 
+def test_primary_feed_derisk_state_blocks_after_prolonged_degrade(monkeypatch):
+    runtime = SimpleNamespace(state={})
+    clock = {"value": 100.0}
+    monkeypatch.setattr(bot_engine.time, "time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_EXIT_ONLY_ON_DEGRADED", "0")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_MODE", "scale")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_AFTER_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_BLOCK_AFTER_SEC", "45")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_SCALE_MULT", "0.4")
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "using_backup": True,
+            "reason": "upstream_unavailable",
+            "timeframes": {"1Min": True},
+            "status": "degraded",
+        },
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_quote_status",
+        lambda: {"synthetic": False, "quote_age_ms": 100.0},
+    )
+
+    bot_engine._resolve_primary_feed_derisk_state(runtime)
+    clock["value"] = 132.0
+    scaled = bot_engine._resolve_primary_feed_derisk_state(runtime)
+    assert scaled["triggered"] is True
+    assert scaled["block"] is False
+    assert scaled["scale"] == pytest.approx(0.4)
+
+    clock["value"] = 151.0
+    blocked = bot_engine._resolve_primary_feed_derisk_state(runtime)
+    assert blocked["triggered"] is True
+    assert blocked["prolonged_block"] is True
+    assert blocked["block"] is True
+    assert blocked["scale"] == pytest.approx(1.0)
+    assert "prolonged_degraded_feed" in str(blocked.get("reason") or "")
+
+
 def test_primary_feed_derisk_state_exit_only_blocks_new_exposure(monkeypatch):
     runtime = SimpleNamespace(state={})
     monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "1")

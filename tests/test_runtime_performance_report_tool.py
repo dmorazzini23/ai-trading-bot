@@ -469,6 +469,15 @@ def test_build_report_enriches_direct_rows_with_tca_costs(tmp_path: Path) -> Non
     assert trade["daily_expectancy"][0]["slippage_cost"] == pytest.approx(1.106, rel=1e-6)
 
 
+def test_resolve_fee_amount_uses_env_fallback_bps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_FEE_BPS_FALLBACK", "12")
+    rpt._runtime_fee_bps_fallback.cache_clear()
+    amount, source = rpt._resolve_fee_amount_with_source({}, qty=10.0, price=100.0)
+    assert amount == pytest.approx(1.2)
+    assert source == "env_fee_bps_fallback"
+    rpt._runtime_fee_bps_fallback.cache_clear()
+
+
 def test_build_report_includes_broker_open_position_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -743,6 +752,9 @@ def test_evaluate_go_no_go_uses_thresholds() -> None:
             "min_net_pnl": 0.0,
             "min_acceptance_rate": 0.1,
             "min_expected_net_edge_bps": 0.0,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
             "require_pnl_available": True,
             "require_gate_valid": True,
         },
@@ -900,6 +912,9 @@ def test_evaluate_go_no_go_lookback_days_uses_recent_window_metrics() -> None:
             "min_acceptance_rate": 0.05,
             "min_expected_net_edge_bps": -50.0,
             "lookback_days": 1,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
             "require_pnl_available": True,
             "require_gate_valid": True,
         },
@@ -987,6 +1002,9 @@ def test_evaluate_go_no_go_lookback_days_enforces_min_used_days() -> None:
             "min_expected_net_edge_bps": -50.0,
             "lookback_days": 5,
             "min_used_days": 3,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
             "require_pnl_available": True,
             "require_gate_valid": True,
         },
@@ -1100,6 +1118,7 @@ def test_evaluate_go_no_go_trade_fill_source_normalises_backfill_alias() -> None
             "min_net_pnl": 0.0,
             "min_acceptance_rate": 0.05,
             "min_expected_net_edge_bps": -50.0,
+            "require_open_position_reconciliation": False,
             "require_pnl_available": True,
             "require_gate_valid": True,
         },
@@ -1166,12 +1185,14 @@ def test_evaluate_go_no_go_auto_live_prefers_live_when_sufficient() -> None:
             "auto_live_min_closed_trades": 20,
             "auto_live_min_used_days": 2,
             "auto_live_min_available_days": 2,
+            "auto_live_fail_closed": False,
             "min_closed_trades": 10,
             "min_profit_factor": 1.0,
             "min_win_rate": 0.5,
             "min_net_pnl": 0.0,
             "min_acceptance_rate": 0.05,
             "min_expected_net_edge_bps": -50.0,
+            "require_open_position_reconciliation": False,
             "require_pnl_available": True,
             "require_gate_valid": True,
         },
@@ -1236,12 +1257,14 @@ def test_evaluate_go_no_go_auto_live_falls_back_to_all_when_live_insufficient() 
             "auto_live_min_closed_trades": 20,
             "auto_live_min_used_days": 2,
             "auto_live_min_available_days": 2,
+            "auto_live_fail_closed": False,
             "min_closed_trades": 10,
             "min_profit_factor": 1.0,
             "min_win_rate": 0.5,
             "min_net_pnl": 0.0,
             "min_acceptance_rate": 0.05,
             "min_expected_net_edge_bps": -50.0,
+            "require_open_position_reconciliation": False,
             "require_pnl_available": True,
             "require_gate_valid": True,
         },
@@ -1320,6 +1343,86 @@ def test_evaluate_go_no_go_auto_live_fail_closed_blocks_when_live_insufficient()
         decision["observed"]["auto_live_selection"]["reason"]
         == "live_insufficient_fail_closed"
     )
+
+
+def test_evaluate_go_no_go_fails_when_slippage_drag_bps_exceeds_threshold() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 100,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 120.0,
+            "slippage_drag_bps": 26.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 15.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "max_slippage_drag_bps": 10.0,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "slippage_drag_bps" in decision["failed_checks"]
+
+
+def test_evaluate_go_no_go_fails_on_open_position_reconciliation_when_required() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 100,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 120.0,
+            "open_position_reconciliation": {
+                "available": True,
+                "abs_delta_ratio": 0.45,
+                "max_abs_delta_qty": 120.0,
+                "symbol_mismatch_count": 30,
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 15.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "require_open_position_reconciliation": True,
+            "max_open_position_delta_ratio": 0.2,
+            "max_open_position_mismatch_count": 25,
+            "max_open_position_abs_delta_qty": 50.0,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "open_position_reconciliation_consistent" in decision["failed_checks"]
 
 
 def test_main_resolves_runtime_paths_from_env(
@@ -1427,6 +1530,15 @@ def test_main_go_no_go_uses_env_threshold_defaults(
     )
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_LOOKBACK_DAYS", "7")
     monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_USED_DAYS", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_TRADE_FILL_SOURCE", "all")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED",
+        "0",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION",
+        "0",
+    )
     monkeypatch.setenv(
         "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE",
         "1",

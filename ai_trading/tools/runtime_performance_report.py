@@ -6,6 +6,7 @@ import argparse
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 import json
 from pathlib import Path
 from statistics import median
@@ -52,6 +53,21 @@ def _env_text(name: str, default: str) -> str:
 def _normalise_cli_path(value: str | None) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+@lru_cache(maxsize=1)
+def _runtime_fee_bps_fallback() -> float:
+    """Resolve fee-bps fallback used when fee fields are unavailable."""
+
+    for env_name, default in (
+        ("AI_TRADING_RUNTIME_PERF_FEE_BPS_FALLBACK", None),
+        ("AI_TRADING_ESTIMATED_FEE_BPS", None),
+        ("AI_TRADING_POLICY_FEE_BPS", 0.0),
+    ):
+        value = _as_float(get_env(env_name, default, cast=float))
+        if value is not None and value > 0.0:
+            return float(value)
+    return 0.0
 
 
 def resolve_runtime_report_paths(
@@ -139,7 +155,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     )
     if min_closed_trades is None:
         min_closed_trades = _as_int(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 20, cast=int)
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_CLOSED_TRADES", 50, cast=int)
         )
     min_profit_factor = _as_float(
         get_env(
@@ -150,14 +166,14 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     )
     if min_profit_factor is None:
         min_profit_factor = _as_float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.1, cast=float)
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_PROFIT_FACTOR", 1.0, cast=float)
         )
     min_win_rate = _as_float(
         get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE", None, cast=float)
     )
     if min_win_rate is None:
         min_win_rate = _as_float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.5, cast=float)
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.52, cast=float)
         )
     min_net_pnl = _as_float(
         get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", None, cast=float)
@@ -175,7 +191,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     )
     if min_acceptance_rate is None:
         min_acceptance_rate = _as_float(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.05, cast=float)
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_ACCEPTANCE_RATE", 0.02, cast=float)
         )
     min_expected_net_edge_bps = _as_float(
         get_env(
@@ -204,7 +220,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     )
     if min_used_days is None:
         min_used_days = _as_int(
-            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 0, cast=int)
+            get_env("AI_TRADING_RUNTIME_GONOGO_MIN_USED_DAYS", 4, cast=int)
         )
     require_pnl_available = get_env(
         "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_PNL_AVAILABLE",
@@ -228,7 +244,7 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         require_gate_valid = bool(
             get_env(
                 "AI_TRADING_RUNTIME_GONOGO_REQUIRE_GATE_VALID",
-                False,
+                True,
                 cast=bool,
             )
         )
@@ -241,12 +257,12 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
             )
             or get_env(
                 "AI_TRADING_RUNTIME_GONOGO_TRADE_FILL_SOURCE",
-                "all",
+                "auto_live",
                 cast=str,
             )
-            or "all"
+            or "auto_live"
         )
-    ).strip() or "all"
+    ).strip() or "auto_live"
     auto_live_min_closed_trades = _as_int(
         get_env(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_AUTO_LIVE_MIN_CLOSED_TRADES",
@@ -301,29 +317,106 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         auto_live_fail_closed = bool(
             get_env(
                 "AI_TRADING_RUNTIME_GONOGO_AUTO_LIVE_FAIL_CLOSED",
-                False,
+                True,
                 cast=bool,
             )
         )
+    require_open_position_reconciliation = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION",
+        None,
+        cast=bool,
+    )
+    if require_open_position_reconciliation is None:
+        require_open_position_reconciliation = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION",
+                True,
+                cast=bool,
+            )
+        )
+    max_open_position_delta_ratio = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO",
+            None,
+            cast=float,
+        )
+    )
+    if max_open_position_delta_ratio is None:
+        max_open_position_delta_ratio = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO",
+                0.2,
+                cast=float,
+            )
+        )
+    max_open_position_mismatch_count = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_MISMATCH_COUNT",
+            None,
+            cast=int,
+        )
+    )
+    if max_open_position_mismatch_count is None:
+        max_open_position_mismatch_count = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_MISMATCH_COUNT",
+                25,
+                cast=int,
+            )
+        )
+    max_open_position_abs_delta_qty = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_ABS_DELTA_QTY",
+            None,
+            cast=float,
+        )
+    )
+    if max_open_position_abs_delta_qty is None:
+        max_open_position_abs_delta_qty = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_ABS_DELTA_QTY",
+                50.0,
+                cast=float,
+            )
+        )
+    max_slippage_drag_bps = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_SLIPPAGE_DRAG_BPS",
+            None,
+            cast=float,
+        )
+    )
+    if max_slippage_drag_bps is None:
+        max_slippage_drag_bps = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_SLIPPAGE_DRAG_BPS",
+                18.0,
+                cast=float,
+            )
+        )
     return {
-        "min_closed_trades": int(max(0, min_closed_trades or 20)),
-        "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.1),
-        "min_win_rate": float(max(0.0, min(1.0, min_win_rate if min_win_rate is not None else 0.5))),
+        "min_closed_trades": int(max(0, min_closed_trades or 50)),
+        "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.0),
+        "min_win_rate": float(max(0.0, min(1.0, min_win_rate if min_win_rate is not None else 0.52))),
         "min_net_pnl": float(min_net_pnl if min_net_pnl is not None else 0.0),
         "min_acceptance_rate": float(
-            max(0.0, min(1.0, min_acceptance_rate if min_acceptance_rate is not None else 0.05))
+            max(0.0, min(1.0, min_acceptance_rate if min_acceptance_rate is not None else 0.02))
         ),
         "min_expected_net_edge_bps": float(
             min_expected_net_edge_bps if min_expected_net_edge_bps is not None else -50.0
         ),
-        "min_used_days": int(max(0, min_used_days or 0)),
-        "lookback_days": int(max(0, lookback_days or 5)),
+        "min_used_days": int(
+            max(0, min_used_days if min_used_days is not None else 4)
+        ),
+        "lookback_days": int(
+            max(0, lookback_days if lookback_days is not None else 5)
+        ),
         "trade_fill_source": trade_fill_source,
         "auto_live_min_closed_trades": int(
-            max(1, auto_live_min_closed_trades or min_closed_trades or 20)
+            max(1, auto_live_min_closed_trades or 150)
         ),
         "auto_live_min_used_days": int(
-            max(1, auto_live_min_used_days or min_used_days or 1)
+            max(1, auto_live_min_used_days or min_used_days or 4)
         ),
         "auto_live_min_available_days": int(
             max(
@@ -331,12 +424,25 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 auto_live_min_available_days
                 or auto_live_min_used_days
                 or min_used_days
-                or 1,
+                or 4,
             )
         ),
         "auto_live_fail_closed": bool(auto_live_fail_closed),
         "require_pnl_available": bool(require_pnl_available),
         "require_gate_valid": bool(require_gate_valid),
+        "require_open_position_reconciliation": bool(require_open_position_reconciliation),
+        "max_open_position_delta_ratio": float(
+            max(0.0, max_open_position_delta_ratio if max_open_position_delta_ratio is not None else 0.2)
+        ),
+        "max_open_position_mismatch_count": int(
+            max(0, max_open_position_mismatch_count if max_open_position_mismatch_count is not None else 25)
+        ),
+        "max_open_position_abs_delta_qty": float(
+            max(0.0, max_open_position_abs_delta_qty if max_open_position_abs_delta_qty is not None else 50.0)
+        ),
+        "max_slippage_drag_bps": float(
+            max(0.0, max_slippage_drag_bps if max_slippage_drag_bps is not None else 18.0)
+        ),
     }
 
 
@@ -663,6 +769,9 @@ def _resolve_fee_amount_with_source(
     fee_bps = _as_float(row.get("fee_bps"))
     if fee_bps is not None and fee_bps > 0:
         return abs(qty * price * (fee_bps / 10000.0)), "fee_bps"
+    fallback_fee_bps = _runtime_fee_bps_fallback()
+    if fallback_fee_bps > 0:
+        return abs(qty * price * (fallback_fee_bps / 10000.0)), "env_fee_bps_fallback"
     return 0.0, None
 
 
@@ -1249,6 +1358,21 @@ def _aggregate_closed_trades(
                     }
                 )
         max_abs_delta = max((abs(float(item["delta_qty"])) for item in mismatches), default=0.0)
+        total_abs_delta_qty = float(
+            sum(abs(float(item.get("delta_qty", 0.0) or 0.0)) for item in mismatches)
+        )
+        total_reconstructed_abs_qty = float(
+            sum(abs(float(value)) for value in reconstructed_positions.values())
+        )
+        total_broker_abs_qty = float(
+            sum(abs(float(value)) for value in broker_positions.values())
+        )
+        dominant_total_abs_qty = max(total_reconstructed_abs_qty, total_broker_abs_qty)
+        abs_delta_ratio = (
+            float(total_abs_delta_qty / dominant_total_abs_qty)
+            if dominant_total_abs_qty > 0.0
+            else 0.0
+        )
         return {
             "available": True,
             "symbol_mismatch_count": int(len(mismatches)),
@@ -1261,6 +1385,10 @@ def _aggregate_closed_trades(
             "only_reconstructed_count": int(len(only_reconstructed)),
             "only_broker_count": int(len(only_broker)),
             "max_abs_delta_qty": float(max_abs_delta),
+            "total_abs_delta_qty": float(total_abs_delta_qty),
+            "total_reconstructed_abs_qty": float(total_reconstructed_abs_qty),
+            "total_broker_abs_qty": float(total_broker_abs_qty),
+            "abs_delta_ratio": float(abs_delta_ratio),
             "top_mismatches": sorted(
                 mismatches,
                 key=lambda item: abs(float(item.get("delta_qty", 0.0))),
@@ -1304,6 +1432,7 @@ def _aggregate_closed_trades(
     nonzero_slippage_trades = 0
     fee_sources: dict[str, int] = defaultdict(int)
     slippage_sources: dict[str, int] = defaultdict(int)
+    total_entry_notional = 0.0
     for row in closed_trades:
         side = str(row.get("side", "unknown") or "unknown").strip().lower()
         symbol = str(row.get("symbol", "UNKNOWN") or "UNKNOWN").strip().upper()
@@ -1325,6 +1454,7 @@ def _aggregate_closed_trades(
         pnl_by_fill_source[fill_source] += net_pnl
         total_fee_cost += fee_cost
         total_slippage_cost += slippage_cost
+        total_entry_notional += notional
         if fee_source:
             key = str(fee_source)
             fee_attributed_trades += 1
@@ -1500,6 +1630,12 @@ def _aggregate_closed_trades(
             "profit_factor": profit_factor,
             "total_fee_cost": total_fee_cost,
             "total_slippage_cost": total_slippage_cost,
+            "total_entry_notional": float(total_entry_notional),
+            "slippage_drag_bps": (
+                float(abs(total_slippage_cost) / total_entry_notional * 10000.0)
+                if total_entry_notional > 0.0
+                else None
+            ),
             "cost_attribution": {
                 "fee_attributed_trades": int(fee_attributed_trades),
                 "slippage_attributed_trades": int(slippage_attributed_trades),
@@ -1773,20 +1909,23 @@ def evaluate_go_no_go(
 ) -> dict[str, Any]:
     threshold_map = dict(thresholds or {})
 
-    min_closed_trades = max(0, _as_int(threshold_map.get("min_closed_trades")) or 20)
+    min_closed_trades_raw = _as_int(threshold_map.get("min_closed_trades"))
+    min_closed_trades = max(
+        0, int(min_closed_trades_raw if min_closed_trades_raw is not None else 50)
+    )
     min_profit_factor = _as_float(threshold_map.get("min_profit_factor"))
     if min_profit_factor is None:
-        min_profit_factor = 1.1
+        min_profit_factor = 1.0
     min_win_rate = _as_float(threshold_map.get("min_win_rate"))
     if min_win_rate is None:
-        min_win_rate = 0.5
+        min_win_rate = 0.52
     min_win_rate = max(0.0, min(1.0, float(min_win_rate)))
     min_net_pnl = _as_float(threshold_map.get("min_net_pnl"))
     if min_net_pnl is None:
         min_net_pnl = 0.0
     min_acceptance_rate = _as_float(threshold_map.get("min_acceptance_rate"))
     if min_acceptance_rate is None:
-        min_acceptance_rate = 0.05
+        min_acceptance_rate = 0.02
     min_acceptance_rate = max(0.0, min(1.0, float(min_acceptance_rate)))
     min_expected_net_edge_bps = _as_float(
         threshold_map.get("min_expected_net_edge_bps")
@@ -1802,23 +1941,41 @@ def evaluate_go_no_go(
         lookback_days = 0
     lookback_days = max(0, int(lookback_days))
     requested_trade_fill_source = _normalise_trade_fill_source(
-        threshold_map.get("trade_fill_source")
+        threshold_map.get("trade_fill_source", "auto_live")
     )
     trade_fill_source = requested_trade_fill_source
+    auto_live_min_closed_trades_raw = _as_int(
+        threshold_map.get("auto_live_min_closed_trades")
+    )
     auto_live_min_closed_trades = max(
         1,
-        _as_int(threshold_map.get("auto_live_min_closed_trades"))
-        or int(min_closed_trades),
+        int(
+            auto_live_min_closed_trades_raw
+            if auto_live_min_closed_trades_raw is not None
+            else 150
+        ),
+    )
+    auto_live_min_used_days_raw = _as_int(
+        threshold_map.get("auto_live_min_used_days")
     )
     auto_live_min_used_days = max(
         1,
-        _as_int(threshold_map.get("auto_live_min_used_days"))
-        or int(max(min_used_days, 1)),
+        int(
+            auto_live_min_used_days_raw
+            if auto_live_min_used_days_raw is not None
+            else max(min_used_days, 1)
+        ),
+    )
+    auto_live_min_available_days_raw = _as_int(
+        threshold_map.get("auto_live_min_available_days")
     )
     auto_live_min_available_days = max(
         1,
-        _as_int(threshold_map.get("auto_live_min_available_days"))
-        or int(auto_live_min_used_days),
+        int(
+            auto_live_min_available_days_raw
+            if auto_live_min_available_days_raw is not None
+            else auto_live_min_used_days
+        ),
     )
     auto_live_fail_closed_raw = threshold_map.get("auto_live_fail_closed")
     if isinstance(auto_live_fail_closed_raw, str):
@@ -1829,13 +1986,38 @@ def evaluate_go_no_go(
             "on",
         }
     elif auto_live_fail_closed_raw is None:
-        auto_live_fail_closed = False
+        auto_live_fail_closed = True
     else:
         auto_live_fail_closed = bool(auto_live_fail_closed_raw)
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
     )
-    require_gate_valid = bool(threshold_map.get("require_gate_valid", False))
+    require_gate_valid = bool(threshold_map.get("require_gate_valid", True))
+    require_open_position_reconciliation = bool(
+        threshold_map.get("require_open_position_reconciliation", True)
+    )
+    max_open_position_delta_ratio = _as_float(
+        threshold_map.get("max_open_position_delta_ratio")
+    )
+    if max_open_position_delta_ratio is None:
+        max_open_position_delta_ratio = 0.2
+    max_open_position_delta_ratio = max(0.0, float(max_open_position_delta_ratio))
+    max_open_position_mismatch_count = _as_int(
+        threshold_map.get("max_open_position_mismatch_count")
+    )
+    if max_open_position_mismatch_count is None:
+        max_open_position_mismatch_count = 25
+    max_open_position_mismatch_count = max(0, int(max_open_position_mismatch_count))
+    max_open_position_abs_delta_qty = _as_float(
+        threshold_map.get("max_open_position_abs_delta_qty")
+    )
+    if max_open_position_abs_delta_qty is None:
+        max_open_position_abs_delta_qty = 50.0
+    max_open_position_abs_delta_qty = max(0.0, float(max_open_position_abs_delta_qty))
+    max_slippage_drag_bps = _as_float(threshold_map.get("max_slippage_drag_bps"))
+    if max_slippage_drag_bps is None:
+        max_slippage_drag_bps = 18.0
+    max_slippage_drag_bps = max(0.0, float(max_slippage_drag_bps))
 
     trade = report.get("trade_history", {})
     if not isinstance(trade, Mapping):
@@ -2077,6 +2259,33 @@ def evaluate_go_no_go(
             gate_used_days = len({str(row.get("date")) for row in gate_rows if isinstance(row, Mapping)})
 
     enforce_used_days = bool(lookback_days > 0 and min_used_days > 0)
+    slippage_drag_bps = _as_float(trade.get("slippage_drag_bps"))
+    open_position_reconciliation_raw = trade.get("open_position_reconciliation")
+    open_position_reconciliation = (
+        dict(open_position_reconciliation_raw)
+        if isinstance(open_position_reconciliation_raw, Mapping)
+        else {}
+    )
+    reconciliation_available = bool(open_position_reconciliation.get("available"))
+    reconciliation_ratio = _as_float(
+        open_position_reconciliation.get("abs_delta_ratio")
+    )
+    if reconciliation_ratio is None:
+        reconciliation_ratio = 0.0
+    reconciliation_max_abs_delta_qty = _as_float(
+        open_position_reconciliation.get("max_abs_delta_qty")
+    ) or 0.0
+    reconciliation_mismatch_count = (
+        _as_int(open_position_reconciliation.get("symbol_mismatch_count")) or 0
+    )
+    reconciliation_consistent = bool(
+        reconciliation_ratio <= float(max_open_position_delta_ratio)
+        and reconciliation_max_abs_delta_qty <= float(max_open_position_abs_delta_qty)
+        and reconciliation_mismatch_count <= int(max_open_position_mismatch_count)
+    )
+    slippage_drag_ok = bool(
+        slippage_drag_bps is None or slippage_drag_bps <= float(max_slippage_drag_bps)
+    )
 
     checks = {
         "pnl_available": (pnl_available if require_pnl_available else True),
@@ -2120,6 +2329,21 @@ def evaluate_go_no_go(
             if gate_valid
             else (not require_gate_valid)
         ),
+        "slippage_drag_bps": (
+            slippage_drag_ok
+            if require_pnl_available
+            else True
+        ),
+        "open_position_reconciliation_available": (
+            reconciliation_available
+            if require_open_position_reconciliation
+            else True
+        ),
+        "open_position_reconciliation_consistent": (
+            reconciliation_consistent
+            if (reconciliation_available and require_open_position_reconciliation)
+            else (not require_open_position_reconciliation)
+        ),
     }
     if requested_trade_fill_source == "auto_live" and bool(auto_live_fail_closed):
         checks["live_samples_sufficient"] = bool(auto_live_context.get("used_live", False))
@@ -2146,6 +2370,13 @@ def evaluate_go_no_go(
             "auto_live_fail_closed": bool(auto_live_fail_closed),
             "require_pnl_available": bool(require_pnl_available),
             "require_gate_valid": bool(require_gate_valid),
+            "require_open_position_reconciliation": bool(
+                require_open_position_reconciliation
+            ),
+            "max_open_position_delta_ratio": float(max_open_position_delta_ratio),
+            "max_open_position_mismatch_count": int(max_open_position_mismatch_count),
+            "max_open_position_abs_delta_qty": float(max_open_position_abs_delta_qty),
+            "max_slippage_drag_bps": float(max_slippage_drag_bps),
         },
         "observed": {
             "pnl_available": pnl_available,
@@ -2158,6 +2389,15 @@ def evaluate_go_no_go(
             "gate_valid": gate_valid,
             "acceptance_rate": acceptance_rate,
             "expected_net_edge_bps": expected_net_edge_bps,
+            "slippage_drag_bps": slippage_drag_bps,
+            "open_position_reconciliation_available": bool(reconciliation_available),
+            "open_position_reconciliation_ratio": float(reconciliation_ratio),
+            "open_position_reconciliation_max_abs_delta_qty": float(
+                reconciliation_max_abs_delta_qty
+            ),
+            "open_position_reconciliation_mismatch_count": int(
+                reconciliation_mismatch_count
+            ),
             "trade_fill_source": trade_fill_source,
             "requested_trade_fill_source": requested_trade_fill_source,
             "auto_live_selection": auto_live_context,
@@ -2186,6 +2426,10 @@ def format_text_report(report: dict[str, Any]) -> str:
                 f"- Total fee cost: {float(trade.get('total_fee_cost', 0.0) or 0.0):.4f}",
                 f"- Total slippage cost: {float(trade.get('total_slippage_cost', 0.0) or 0.0):.4f}",
                 (
+                    "- Slippage drag (bps): "
+                    f"{_as_float(trade.get('slippage_drag_bps'))}"
+                ),
+                (
                     "- Reconstructed open lots (unrealized): "
                     f"{trade.get('reconstructed_open_lot_count', trade.get('open_lot_count'))}"
                 ),
@@ -2204,6 +2448,15 @@ def format_text_report(report: dict[str, Any]) -> str:
             broker_error = str(trade.get("broker_open_positions_error") or "").strip()
             if broker_error:
                 lines.append(f"- Broker positions note: {broker_error}")
+        reconciliation = trade.get("open_position_reconciliation")
+        if isinstance(reconciliation, Mapping):
+            lines.append(
+                "- Open-position reconciliation: "
+                f"available={bool(reconciliation.get('available'))} "
+                f"mismatches={int(_as_int(reconciliation.get('symbol_mismatch_count')) or 0)} "
+                f"max_abs_delta_qty={float(_as_float(reconciliation.get('max_abs_delta_qty')) or 0.0):.4f} "
+                f"abs_delta_ratio={float(_as_float(reconciliation.get('abs_delta_ratio')) or 0.0):.4f}"
+            )
         cost_attr = trade.get("cost_attribution")
         if isinstance(cost_attr, Mapping):
             lines.append(
@@ -2337,6 +2590,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-net-pnl", type=float, default=None)
     parser.add_argument("--min-acceptance-rate", type=float, default=None)
     parser.add_argument("--min-expected-net-edge-bps", type=float, default=None)
+    parser.add_argument("--max-slippage-drag-bps", type=float, default=None)
+    parser.add_argument("--max-open-position-delta-ratio", type=float, default=None)
+    parser.add_argument("--max-open-position-mismatch-count", type=int, default=None)
+    parser.add_argument("--max-open-position-abs-delta-qty", type=float, default=None)
     parser.add_argument("--min-used-days", type=int, default=None)
     parser.add_argument(
         "--lookback-days",
@@ -2353,6 +2610,11 @@ def main(argv: list[str] | None = None) -> int:
         "--require-gate-valid",
         action="store_true",
         help="Require gate summary validity for go/no-go.",
+    )
+    parser.add_argument(
+        "--require-open-position-reconciliation",
+        action="store_true",
+        help="Require broker-vs-reconstructed open-position reconciliation checks.",
     )
     parser.add_argument(
         "--allow-missing-pnl",
@@ -2389,6 +2651,8 @@ def main(argv: list[str] | None = None) -> int:
             thresholds["require_pnl_available"] = False
         if args.require_gate_valid:
             thresholds["require_gate_valid"] = True
+        if args.require_open_position_reconciliation:
+            thresholds["require_open_position_reconciliation"] = True
         if args.trade_fill_source is not None:
             thresholds["trade_fill_source"] = str(args.trade_fill_source).strip()
         for key in (
@@ -2398,6 +2662,10 @@ def main(argv: list[str] | None = None) -> int:
             "min_net_pnl",
             "min_acceptance_rate",
             "min_expected_net_edge_bps",
+            "max_slippage_drag_bps",
+            "max_open_position_delta_ratio",
+            "max_open_position_mismatch_count",
+            "max_open_position_abs_delta_qty",
             "min_used_days",
             "lookback_days",
         ):

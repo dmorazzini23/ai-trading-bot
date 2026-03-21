@@ -1651,6 +1651,18 @@ def run_cycle() -> None:
                 ):
                     logger.info("MARKET_CLOSED_SKIP_CYCLE")
                 try:
+                    runtime_state.update_data_provider_state(
+                        status="warming_up",
+                        data_status="warming_up",
+                        reason="market_closed",
+                        timeframe="1Min",
+                    )
+                except Exception:
+                    logger.debug(
+                        "MARKET_CLOSED_PROVIDER_RUNTIME_STATE_UPDATE_FAILED",
+                        exc_info=True,
+                    )
+                try:
                     post_sync_enabled = bool(getattr(cfg, "post_submit_broker_sync", True))
                 except (TypeError, ValueError):
                     post_sync_enabled = True
@@ -1691,6 +1703,17 @@ def run_cycle() -> None:
                                     positions_count = len(getattr(snapshot, "positions", ()) or ())
                                 except Exception:
                                     positions_count = 0
+                                try:
+                                    runtime_state.update_broker_status(
+                                        connected=bool(snapshot is not None),
+                                        last_error=None if snapshot is not None else "broker_sync_unavailable",
+                                        status="connected" if snapshot is not None else "unknown",
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "MARKET_CLOSED_BROKER_SYNC_RUNTIME_STATE_UPDATE_FAILED",
+                                        exc_info=True,
+                                    )
                                 logger.info(
                                     "BROKER_SYNC",
                                     extra={
