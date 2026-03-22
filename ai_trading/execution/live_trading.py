@@ -13441,13 +13441,19 @@ class ExecutionEngine:
                     context["gate_passed"] = False
                     context["reason"] = "pending_new_pressure_guard"
         except Exception as exc:
-            allowed = not bool(fail_closed)
+            fail_closed_effective = bool(fail_closed)
+            fail_closed_forced = False
+            if not fail_closed_effective and not _pytest_mode_active():
+                fail_closed_effective = True
+                fail_closed_forced = True
+            allowed = not fail_closed_effective
             context = {
                 "enabled": True,
                 "gate_passed": allowed,
                 "failed_checks": ["runtime_gonogo_eval_failed"],
                 "reason": "runtime_gonogo_eval_failed",
                 "error": str(exc),
+                "fail_closed_forced": bool(fail_closed_forced),
                 "after_close_tighten": after_close_tighten_context,
                 "threshold_lock": threshold_lock_context,
                 "paths": {
@@ -13460,7 +13466,9 @@ class ExecutionEngine:
                 extra={
                     "cause": exc.__class__.__name__,
                     "detail": str(exc),
-                    "fail_closed": bool(fail_closed),
+                    "fail_closed": bool(fail_closed_effective),
+                    "fail_closed_requested": bool(fail_closed),
+                    "fail_closed_forced": bool(fail_closed_forced),
                     "allowed": bool(allowed),
                 },
             )

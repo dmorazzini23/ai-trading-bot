@@ -6868,23 +6868,33 @@ ALPACA_API_KEY = None
 ALPACA_SECRET_KEY = None
 TRADING_MODE_ENV = DEFAULT_TRADING_MODE
 
-# AI-AGENT-REF: optional pybreaker dependency
-try:  # pragma: no cover - optional dependency
+# AI-AGENT-REF: pybreaker is required for runtime circuit-breaker behavior.
+_PYBREAKER_AVAILABLE = True
+try:  # pragma: no cover - dependency import
     import pybreaker  # type: ignore
-except ImportError:  # pragma: no cover - fallback  # AI-AGENT-REF: optional pybreaker
+except ImportError:  # pragma: no cover - fallback
+    _PYBREAKER_AVAILABLE = False
+
+    class _FailClosedCircuitBreaker:
+        """Fail-closed placeholder when ``pybreaker`` is unavailable."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.state = "unavailable"
+            self.fail_counter = 0
+            self.last_failure = "PYBREAKER_UNAVAILABLE"
+
+        def call(self, func: Callable[..., Any]) -> Callable[..., Any]:
+            @functools.wraps(func)
+            def _wrapped(*a: Any, **kw: Any) -> Any:
+                raise RuntimeError("PYBREAKER_UNAVAILABLE")
+
+            return _wrapped
+
+        def __call__(self, func: Callable[..., Any]) -> Callable[..., Any]:
+            return self.call(func)
 
     class pybreaker:  # type: ignore
-            class CircuitBreaker:
-                def __init__(self, *args, **kwargs):
-                    pass
-                def call(self, func):
-                    def _wrapped(*a, **kw):
-                        return func(*a, **kw)
-
-                    return _wrapped
-
-                def __call__(self, func):
-                    return self.call(func)
+        CircuitBreaker = _FailClosedCircuitBreaker
 
 
 # AI-AGENT-REF: optional prometheus_client dependency via adapter
@@ -34560,6 +34570,11 @@ def _enforce_dependency_preflight(runtime) -> None:
     if execution_mode not in {"paper", "live"}:
         return
     require_dependency(
+        _PYBREAKER_AVAILABLE,
+        "pybreaker is required for paper/live trading",
+        execution_mode=execution_mode,
+    )
+    require_dependency(
         not _REQUESTS_STUB,
         "requests is required for paper/live trading",
         execution_mode=execution_mode,
@@ -37926,6 +37941,16 @@ def _run_reconciliation_if_due(state: BotState, runtime, cfg: TradingConfig, now
     except Exception as exc:
         error_info = classify_exception(exc, dependency="broker_positions")
         breakers.record_failure("broker_positions", error_info)
+        state.recon_halt = True
+        state.halt_reason = str(error_info.reason_code or "RECON_ERROR_HALT")
+        logger.error(
+            "RECONCILIATION_ERROR_HALT",
+            extra={
+                "reason_code": state.halt_reason,
+                "error_type": exc.__class__.__name__,
+                "detail": str(exc),
+            },
+        )
         _handle_error(error_info, state=state, ctx=runtime)
         state.last_recon_ts = now
         return False
@@ -38968,7 +38993,29 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                         targets[symbol].reasons.append(reason)
 
     ledger: OrderLedger | None = None
-    if bool(getattr(cfg, "ledger_enabled", False)):
+    execution_mode = str(getattr(cfg, "execution_mode", "sim") or "sim").strip().lower()
+    intent_store_enabled = bool(get_env("AI_TRADING_OMS_INTENT_STORE_ENABLED", True, cast=bool))
+    ledger_enabled = bool(getattr(cfg, "ledger_enabled", False))
+    if execution_mode == "live":
+        emit_once(
+            logger,
+            "OMS_DURABILITY_HIERARCHY",
+            "info",
+            "OMS durability hierarchy resolved",
+            authoritative_store="intent_store" if intent_store_enabled else "ledger",
+            intent_store_enabled=intent_store_enabled,
+            ledger_enabled=ledger_enabled,
+            execution_mode=execution_mode,
+        )
+    if ledger_enabled:
+        if execution_mode == "live" and intent_store_enabled:
+            emit_once(
+                logger,
+                "OMS_LEDGER_AUXILIARY_MODE",
+                "info",
+                "JSONL OMS ledger is auxiliary; intent store is authoritative",
+                ledger_path=str(getattr(cfg, "ledger_path", "runtime/oms_ledger.jsonl")),
+            )
         ledger = getattr(state, "_oms_ledger", None)
         if ledger is None:
             ledger_path = _resolve_runtime_artifact_path(

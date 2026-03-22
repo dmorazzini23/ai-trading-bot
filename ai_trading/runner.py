@@ -8,10 +8,22 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from ai_trading.config.management import get_env, is_test_runtime
 from ai_trading.core import bot_engine
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _allow_test_api_stub() -> bool:
+    """Return ``True`` when runner may attach a synthetic API stub.
+
+    Production startup must fail closed when an API client cannot be attached.
+    A synthetic stub is only allowed for explicit test/runtime harnesses.
+    """
+
+    allow_stub = bool(get_env("AI_TRADING_RUNNER_ALLOW_API_STUB_IN_TESTS", True, cast=bool))
+    return allow_stub and bool(is_test_runtime(include_pytest_module=False))
 
 
 def start(api: Any | None = None):
@@ -47,6 +59,8 @@ def start(api: Any | None = None):
                 logger.debug("RUNNER_FALLBACK_CONTEXT_SET_FAILED", exc_info=True)
     else:
         inner = inner_ctx
+    if inner is None:
+        raise RuntimeError("RUNNER_CONTEXT_UNAVAILABLE")
 
     existing_api = None
     if inner is not None:
@@ -67,9 +81,14 @@ def start(api: Any | None = None):
         except Exception:
             existing_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
         if existing_api is None:
-            # Fallback to a minimal stub to satisfy tests when Alpaca
-            # clients are unavailable or intentionally absent.
-            setattr(inner, "api", object())
+            if _allow_test_api_stub():
+                logger.warning(
+                    "RUNNER_API_STUBBED_TEST_MODE",
+                    extra={"reason": "api_attach_failed"},
+                )
+                setattr(inner, "api", object())
+            else:
+                raise RuntimeError("RUNNER_API_ATTACH_FAILED")
     final_api = None
     if inner is not None:
         final_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")

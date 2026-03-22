@@ -613,8 +613,20 @@ class OrderManager:
         enabled = _env_bool("AI_TRADING_OMS_INTENT_STORE_ENABLED", True)
         allow_in_tests = _env_bool("AI_TRADING_OMS_INTENT_STORE_IN_TESTS", False)
         execution_mode = str(get_env("EXECUTION_MODE", "paper") or "").strip().lower()
+        ledger_enabled = _env_bool("AI_TRADING_LEDGER_ENABLED", True)
         database_url = str(get_env("DATABASE_URL", "") or "").strip()
         allow_sqlite_live = _env_bool("AI_TRADING_OMS_INTENT_STORE_ALLOW_SQLITE_LIVE", False)
+        if execution_mode == "live":
+            emit_once(
+                logger,
+                "OMS_DURABILITY_HIERARCHY",
+                "info",
+                "OMS durability hierarchy resolved",
+                authoritative_store="intent_store" if enabled else "jsonl_ledger",
+                intent_store_enabled=bool(enabled),
+                ledger_enabled=bool(ledger_enabled),
+                execution_mode=execution_mode,
+            )
         if not enabled:
             return
         if self._test_mode and not allow_in_tests:

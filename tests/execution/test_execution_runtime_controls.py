@@ -1117,6 +1117,30 @@ def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path)
     assert "profit_factor" in context["failed_checks"]
 
 
+def test_runtime_gonogo_eval_failure_forces_fail_closed_outside_pytest(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_FAIL_CLOSED", "0")
+    monkeypatch.setattr(lt, "_pytest_mode_active", lambda: False)
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is False
+    assert context["reason"] == "runtime_gonogo_eval_failed"
+    assert context["fail_closed_forced"] is True
+    assert "runtime_gonogo_eval_failed" in context["failed_checks"]
+
+
 def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, tmp_path):
     engine = _engine_stub()
     _write_runtime_gonogo_artifacts(

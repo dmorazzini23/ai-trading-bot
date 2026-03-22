@@ -1,6 +1,5 @@
 from __future__ import annotations
 'Circuit breakers and safety mechanisms for production trading.'
-import functools
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -14,23 +13,6 @@ from ai_trading.utils.time import safe_utcnow
 
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 from ..core.constants import PERFORMANCE_THRESHOLDS
-
-class CircuitBreaker:
-    """Simple decorator-friendly circuit breaker."""
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def call(self, fn):
-
-        @functools.wraps(fn)
-        def _wrapped(*a, **k):
-            return fn(*a, **k)
-        return _wrapped
-
-    def __call__(self, fn):
-        return self.call(fn)
-DEFAULT_BREAKER = CircuitBreaker()
 
 class CircuitBreakerState(Enum):
     """Circuit breaker state enumeration."""
