@@ -2218,6 +2218,7 @@ class ExecutionEngine:
         self._runtime_gonogo_cache_context: dict[str, Any] = {}
         self._runtime_gonogo_threshold_lock_session: str = ""
         self._runtime_gonogo_locked_thresholds: dict[str, Any] = {}
+        self._runtime_gonogo_reconciliation_retry_last_mono: float = 0.0
         self._last_order_ack_timeout_mono: float = 0.0
         self._last_order_ack_timeout_order_id: str | None = None
         self._last_order_ack_timeout_client_order_id: str | None = None
@@ -2244,6 +2245,22 @@ class ExecutionEngine:
             "toxic": False,
             "threshold_bps": -4.0,
             "min_samples": 12,
+        }
+        self._execution_quality_window: deque[dict[str, Any]] = deque(maxlen=128)
+        self._execution_quality_last_context: dict[str, Any] = {
+            "enabled": False,
+            "state": "uninitialized",
+            "scale": 1.0,
+            "pause_active": False,
+            "pause_remaining_s": 0.0,
+        }
+        self._execution_quality_pause_until_mono: float = 0.0
+        self._execution_quality_recovery_streak: int = 0
+        self._opening_ramp_last_context: dict[str, Any] = {
+            "enabled": False,
+            "state": "inactive",
+            "order_cap_scale": 1.0,
+            "required_edge_add_bps": 0.0,
         }
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
@@ -2475,8 +2492,8 @@ class ExecutionEngine:
         if timeout_s is None:
             timeout_s = _config_float("ORDER_TTL_SECONDS", None)
         if timeout_s is None:
-            timeout_s = float(max(getattr(self, "order_ttl_seconds", 0), 30))
-        timeout_s = max(5.0, min(float(timeout_s), 3600.0))
+            timeout_s = float(max(getattr(self, "order_ttl_seconds", 0), 20))
+        timeout_s = max(8.0, min(float(timeout_s), 3600.0))
 
         max_actions = _config_int_alias(
             (
@@ -2510,7 +2527,7 @@ class ExecutionEngine:
                 None,
             )
         if hard_timeout_s is None:
-            hard_timeout_s = max(timeout_s * 2.0, timeout_s + 60.0)
+            hard_timeout_s = max(timeout_s * 1.5, timeout_s + 30.0)
         hard_timeout_s = max(float(timeout_s), min(float(hard_timeout_s), 7200.0))
 
         ladder_max_replacements = _config_int_alias(
@@ -2547,10 +2564,10 @@ class ExecutionEngine:
 
         replace_min_interval_s = _config_float(
             "AI_TRADING_PENDING_NEW_REPLACE_MIN_INTERVAL_SEC",
-            20.0,
+            30.0,
         )
         if replace_min_interval_s is None:
-            replace_min_interval_s = 20.0
+            replace_min_interval_s = 30.0
         replace_min_interval_s = max(0.0, min(float(replace_min_interval_s), 1800.0))
 
         replace_max_per_cycle = _config_int_alias(
@@ -2558,10 +2575,10 @@ class ExecutionEngine:
                 "AI_TRADING_PENDING_NEW_REPLACE_MAX_PER_CYCLE",
                 "EXECUTION_PENDING_NEW_REPLACE_MAX_PER_CYCLE",
             ),
-            max(1, min(int(max_actions), 2)),
+            1,
         )
         if replace_max_per_cycle is None:
-            replace_max_per_cycle = max(1, min(int(max_actions), 2))
+            replace_max_per_cycle = 1
         replace_max_per_cycle = max(0, min(int(replace_max_per_cycle), max(1, int(max_actions))))
 
         return {
@@ -2783,6 +2800,11 @@ class ExecutionEngine:
                         replacement_last[attempt_key] = now_mono
                         replacements_this_cycle += 1
 
+            cancel_on_replace_suppressed = bool(
+                replacement_suppressed
+                and age_s is not None
+                and age_s >= (float(timeout_s) + max(float(replace_min_interval_s), 15.0))
+            )
             should_cancel = bool(
                 policy == "cancel"
                 or hard_timeout_reached
@@ -2796,6 +2818,7 @@ class ExecutionEngine:
                     and not action_success
                     and not replacement_suppressed
                 )
+                or cancel_on_replace_suppressed
             )
             if not action_success and should_cancel:
                 try:
@@ -3675,6 +3698,43 @@ class ExecutionEngine:
         if backlog_cap is not None:
             cap_sources.append("pending_backlog")
             cap_values.append(backlog_cap)
+        opening_ramp_context = self._opening_ramp_context()
+        opening_ramp_cap: int | None = None
+        opening_ramp_scale = _safe_float(opening_ramp_context.get("order_cap_scale"))
+        if bool(opening_ramp_context.get("enabled")) and opening_ramp_scale is not None:
+            opening_ramp_scale = max(0.05, min(float(opening_ramp_scale), 1.0))
+            if opening_ramp_scale < 0.999:
+                opening_ramp_base_cap = configured_cap
+                if opening_ramp_base_cap is None:
+                    opening_ramp_base_cap_raw = _config_int(
+                        "AI_TRADING_EXECUTION_OPENING_RAMP_BASE_CAP",
+                        6,
+                    )
+                    if opening_ramp_base_cap_raw is None:
+                        opening_ramp_base_cap_raw = 6
+                    opening_ramp_base_cap = max(1, min(int(opening_ramp_base_cap_raw), 500))
+                else:
+                    opening_ramp_base_cap = max(1, min(int(opening_ramp_base_cap), 500))
+                opening_ramp_cap = max(
+                    1,
+                    int(math.floor(float(opening_ramp_base_cap) * float(opening_ramp_scale))),
+                )
+                opening_ramp_context = dict(opening_ramp_context)
+                opening_ramp_context["base_cap"] = int(opening_ramp_base_cap)
+                opening_ramp_context["resolved_cap"] = int(opening_ramp_cap)
+                self._opening_ramp_last_context = dict(opening_ramp_context)
+        if opening_ramp_cap is not None:
+            cap_sources.append("opening_ramp")
+            cap_values.append(int(opening_ramp_cap))
+        baseline_cap = min(cap_values) if cap_values else configured_cap
+        execution_quality_cap, execution_quality_context = self._execution_quality_order_cap(
+            baseline_cap=baseline_cap
+        )
+        if execution_quality_cap is not None:
+            cap_sources.append("execution_quality")
+            cap_values.append(int(execution_quality_cap))
+        if isinstance(execution_quality_context, Mapping):
+            self._execution_quality_last_context = dict(execution_quality_context)
         if not cap_values:
             return None, "none"
         return min(cap_values), "+".join(cap_sources)
@@ -4073,6 +4133,432 @@ class ExecutionEngine:
         except statistics.StatisticsError:
             return 0.0
 
+    def _execution_slippage_mean_bps(self) -> float | None:
+        """Return rolling mean realized slippage in bps when samples exist."""
+
+        slippage_raw = getattr(self, "_slippage_feedback_bps", None)
+        if not isinstance(slippage_raw, deque):
+            return None
+        values: list[float] = []
+        for candidate in slippage_raw:
+            parsed = self._coerce_finite_float(candidate)
+            if parsed is None:
+                continue
+            values.append(abs(parsed))
+        if not values:
+            return None
+        return float(statistics.mean(values))
+
+    def _cost_aware_entry_adaptive_context(self) -> dict[str, Any]:
+        """Return global adaptive edge add-on for cost-aware entry guard."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_ENABLED")
+        if enabled is None:
+            enabled = True
+        slippage_mean_bps = self._execution_slippage_mean_bps()
+        slippage_vol_bps = self._execution_slippage_volatility_bps()
+        markout_context = self._observe_markout_feedback()
+        markout_mean_bps = self._coerce_finite_float(markout_context.get("mean_bps")) or 0.0
+        markout_samples = max(0, _safe_int(markout_context.get("sample_count"), 0))
+        slippage_samples = 0
+        slippage_raw = getattr(self, "_slippage_feedback_bps", None)
+        if isinstance(slippage_raw, deque):
+            slippage_samples = int(len(slippage_raw))
+        min_samples = _config_int("AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_MIN_SAMPLES", 20)
+        if min_samples is None:
+            min_samples = 20
+        min_samples = max(1, min(int(min_samples), 2000))
+        slippage_weight = _config_float(
+            "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_SLIPPAGE_WEIGHT",
+            0.7,
+        )
+        if slippage_weight is None:
+            slippage_weight = 0.7
+        slippage_weight = max(0.0, min(float(slippage_weight), 4.0))
+        vol_weight = _config_float(
+            "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_VOLATILITY_WEIGHT",
+            0.35,
+        )
+        if vol_weight is None:
+            vol_weight = 0.35
+        vol_weight = max(0.0, min(float(vol_weight), 4.0))
+        toxicity_weight = _config_float(
+            "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_TOXICITY_WEIGHT",
+            0.85,
+        )
+        if toxicity_weight is None:
+            toxicity_weight = 0.85
+        toxicity_weight = max(0.0, min(float(toxicity_weight), 6.0))
+        add_bps_cap = _config_float(
+            "AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_MAX_ADD_BPS",
+            12.0,
+        )
+        if add_bps_cap is None:
+            add_bps_cap = 12.0
+        add_bps_cap = max(0.0, min(float(add_bps_cap), 100.0))
+        toxic_component = max(-float(markout_mean_bps), 0.0)
+        sufficient_samples = bool(slippage_samples >= min_samples and markout_samples >= min_samples)
+        additional_required_edge_bps = 0.0
+        if bool(enabled) and sufficient_samples:
+            additional_required_edge_bps = min(
+                add_bps_cap,
+                (
+                    max(float(slippage_mean_bps or 0.0), 0.0) * slippage_weight
+                    + max(float(slippage_vol_bps), 0.0) * vol_weight
+                    + toxic_component * toxicity_weight
+                ),
+            )
+        return {
+            "enabled": bool(enabled),
+            "sufficient_samples": bool(sufficient_samples),
+            "min_samples": int(min_samples),
+            "slippage_samples": int(slippage_samples),
+            "markout_samples": int(markout_samples),
+            "slippage_mean_bps": (
+                float(slippage_mean_bps) if slippage_mean_bps is not None else None
+            ),
+            "slippage_volatility_bps": float(slippage_vol_bps),
+            "markout_mean_bps": float(markout_mean_bps),
+            "additional_required_edge_bps": float(additional_required_edge_bps),
+            "max_add_bps": float(add_bps_cap),
+            "weights": {
+                "slippage": float(slippage_weight),
+                "volatility": float(vol_weight),
+                "toxicity": float(toxicity_weight),
+            },
+        }
+
+    def _opening_ramp_context(self) -> dict[str, Any]:
+        """Return opening-window cap/edge ramp context."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_OPENING_RAMP_ENABLED")
+        if enabled is None:
+            enabled = True
+        window_s = _config_float("AI_TRADING_EXECUTION_OPENING_RAMP_WINDOW_SEC", 1500.0)
+        if window_s is None:
+            window_s = 1500.0
+        if not math.isfinite(float(window_s)):
+            window_s = 1500.0
+        window_s = max(0.0, min(float(window_s), 7200.0))
+        min_scale = _config_float("AI_TRADING_EXECUTION_OPENING_RAMP_MIN_SCALE", 0.5)
+        if min_scale is None:
+            min_scale = 0.5
+        min_scale = max(0.05, min(float(min_scale), 1.0))
+        curve_power = _config_float("AI_TRADING_EXECUTION_OPENING_RAMP_CURVE_POWER", 1.15)
+        if curve_power is None:
+            curve_power = 1.15
+        curve_power = max(0.3, min(float(curve_power), 4.0))
+        max_edge_add_bps = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_RAMP_MAX_EDGE_ADD_BPS",
+            4.0,
+        )
+        if max_edge_add_bps is None:
+            max_edge_add_bps = 4.0
+        max_edge_add_bps = max(0.0, min(float(max_edge_add_bps), 100.0))
+        elapsed_s = self._opening_provider_guard_elapsed_seconds()
+        if (
+            not bool(enabled)
+            or window_s <= 0.0
+            or elapsed_s is None
+            or float(elapsed_s) >= float(window_s)
+        ):
+            context = {
+                "enabled": bool(enabled),
+                "state": "inactive",
+                "elapsed_s": float(elapsed_s) if elapsed_s is not None else None,
+                "window_s": float(window_s),
+                "order_cap_scale": 1.0,
+                "required_edge_add_bps": 0.0,
+            }
+            self._opening_ramp_last_context = dict(context)
+            return context
+        progress = max(0.0, min(float(elapsed_s) / float(window_s), 1.0))
+        progress_curve = progress**float(curve_power)
+        scale = min_scale + ((1.0 - min_scale) * progress_curve)
+        scale = max(min_scale, min(float(scale), 1.0))
+        required_edge_add_bps = max(
+            0.0,
+            min(float(max_edge_add_bps) * (1.0 - progress_curve), float(max_edge_add_bps)),
+        )
+        context = {
+            "enabled": True,
+            "state": "active",
+            "elapsed_s": float(elapsed_s),
+            "window_s": float(window_s),
+            "progress": float(progress),
+            "progress_curve": float(progress_curve),
+            "order_cap_scale": float(scale),
+            "required_edge_add_bps": float(required_edge_add_bps),
+        }
+        self._opening_ramp_last_context = dict(context)
+        return context
+
+    def _execution_quality_context(self) -> dict[str, Any]:
+        """Return latest execution-quality governor context."""
+
+        context_raw = getattr(self, "_execution_quality_last_context", None)
+        context = dict(context_raw) if isinstance(context_raw, Mapping) else {}
+        context.setdefault("enabled", False)
+        context.setdefault("state", "uninitialized")
+        context.setdefault("scale", 1.0)
+        pause_until = _safe_float(getattr(self, "_execution_quality_pause_until_mono", 0.0)) or 0.0
+        now_mono = float(monotonic_time())
+        pause_active = bool(pause_until > now_mono)
+        context["pause_active"] = bool(pause_active)
+        context["pause_remaining_s"] = max(pause_until - now_mono, 0.0) if pause_active else 0.0
+        context["pause_until_mono"] = float(pause_until)
+        return context
+
+    def _update_execution_quality_governor(
+        self,
+        *,
+        fill_ratio: float,
+        filled_durations: Sequence[float],
+        submitted: int,
+    ) -> None:
+        """Update rolling execution-quality governor from per-cycle outcomes."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_QUALITY_GOVERNOR_ENABLED")
+        if enabled is None:
+            enabled = True
+        window_raw = getattr(self, "_execution_quality_window", None)
+        if not isinstance(window_raw, deque):
+            window_raw = deque(maxlen=128)
+            self._execution_quality_window = window_raw
+        if not bool(enabled):
+            self._execution_quality_pause_until_mono = 0.0
+            self._execution_quality_recovery_streak = 0
+            self._execution_quality_last_context = {
+                "enabled": False,
+                "state": "disabled",
+                "scale": 1.0,
+                "pause_active": False,
+                "pause_remaining_s": 0.0,
+            }
+            return
+        min_submitted = _config_int("AI_TRADING_EXECUTION_QUALITY_MIN_SUBMITTED", 6)
+        if min_submitted is None:
+            min_submitted = 6
+        min_submitted = max(1, min(int(min_submitted), 500))
+        warn_fill_ratio = _config_float("AI_TRADING_EXECUTION_QUALITY_FILL_RATIO_WARN", 0.4)
+        if warn_fill_ratio is None:
+            warn_fill_ratio = 0.4
+        pause_fill_ratio = _config_float("AI_TRADING_EXECUTION_QUALITY_FILL_RATIO_PAUSE", 0.22)
+        if pause_fill_ratio is None:
+            pause_fill_ratio = 0.22
+        warn_fill_ratio = max(0.01, min(float(warn_fill_ratio), 0.99))
+        pause_fill_ratio = max(0.01, min(float(pause_fill_ratio), warn_fill_ratio))
+        warn_p95_fill_s = _config_float("AI_TRADING_EXECUTION_QUALITY_P95_FILL_SEC_WARN", 45.0)
+        if warn_p95_fill_s is None:
+            warn_p95_fill_s = 45.0
+        pause_p95_fill_s = _config_float("AI_TRADING_EXECUTION_QUALITY_P95_FILL_SEC_PAUSE", 95.0)
+        if pause_p95_fill_s is None:
+            pause_p95_fill_s = 95.0
+        warn_p95_fill_s = max(1.0, min(float(warn_p95_fill_s), 3600.0))
+        pause_p95_fill_s = max(float(warn_p95_fill_s), min(float(pause_p95_fill_s), 7200.0))
+        scale_min = _config_float("AI_TRADING_EXECUTION_QUALITY_SCALE_MIN", 0.35)
+        if scale_min is None:
+            scale_min = 0.35
+        scale_min = max(0.05, min(float(scale_min), 1.0))
+        lookback_cycles = _config_int("AI_TRADING_EXECUTION_QUALITY_LOOKBACK_CYCLES", 8)
+        if lookback_cycles is None:
+            lookback_cycles = 8
+        lookback_cycles = max(1, min(int(lookback_cycles), 128))
+        pause_cooldown_s = _config_float("AI_TRADING_EXECUTION_QUALITY_PAUSE_COOLDOWN_SEC", 180.0)
+        if pause_cooldown_s is None:
+            pause_cooldown_s = 180.0
+        pause_cooldown_s = max(10.0, min(float(pause_cooldown_s), 3600.0))
+        recovery_cycles = _config_int("AI_TRADING_EXECUTION_QUALITY_RECOVERY_CYCLES", 2)
+        if recovery_cycles is None:
+            recovery_cycles = 2
+        recovery_cycles = max(1, min(int(recovery_cycles), 20))
+
+        p95_fill_s: float | None = None
+        clean_durations = sorted(
+            max(float(item), 0.0)
+            for item in filled_durations
+            if isinstance(item, (int, float)) and math.isfinite(float(item))
+        )
+        if clean_durations:
+            p95_index = max(0, min(math.ceil(len(clean_durations) * 0.95) - 1, len(clean_durations) - 1))
+            p95_fill_s = float(clean_durations[p95_index])
+
+        now_mono = float(monotonic_time())
+        parsed_fill_ratio = max(0.0, min(float(fill_ratio), 1.0))
+        if int(submitted) >= int(min_submitted):
+            window_raw.append(
+                {
+                    "ts_mono": float(now_mono),
+                    "fill_ratio": float(parsed_fill_ratio),
+                    "p95_fill_s": float(p95_fill_s) if p95_fill_s is not None else None,
+                    "submitted": int(submitted),
+                }
+            )
+        recent_samples = list(window_raw)[-lookback_cycles:]
+        rolling_fill_ratio = (
+            float(statistics.mean(sample["fill_ratio"] for sample in recent_samples))
+            if recent_samples
+            else float(parsed_fill_ratio)
+        )
+        rolling_p95_values = [
+            float(sample["p95_fill_s"])
+            for sample in recent_samples
+            if sample.get("p95_fill_s") is not None
+        ]
+        rolling_p95_fill_s = (
+            float(statistics.median(rolling_p95_values))
+            if rolling_p95_values
+            else p95_fill_s
+        )
+        fill_stress = 0.0
+        if rolling_fill_ratio < warn_fill_ratio and warn_fill_ratio > pause_fill_ratio:
+            fill_stress = min(
+                max(
+                    (warn_fill_ratio - float(rolling_fill_ratio))
+                    / (warn_fill_ratio - pause_fill_ratio),
+                    0.0,
+                ),
+                1.0,
+            )
+        latency_stress = 0.0
+        if (
+            rolling_p95_fill_s is not None
+            and rolling_p95_fill_s > warn_p95_fill_s
+            and pause_p95_fill_s > warn_p95_fill_s
+        ):
+            latency_stress = min(
+                max(
+                    (float(rolling_p95_fill_s) - warn_p95_fill_s)
+                    / (pause_p95_fill_s - warn_p95_fill_s),
+                    0.0,
+                ),
+                1.0,
+            )
+        stress = max(float(fill_stress), float(latency_stress))
+        scale = max(float(scale_min), min(1.0 - ((1.0 - float(scale_min)) * stress), 1.0))
+        pause_until = _safe_float(getattr(self, "_execution_quality_pause_until_mono", 0.0)) or 0.0
+        recovery_streak = max(0, _safe_int(getattr(self, "_execution_quality_recovery_streak", 0), 0))
+        pause_breach = bool(
+            rolling_fill_ratio <= float(pause_fill_ratio)
+            or (
+                rolling_p95_fill_s is not None
+                and float(rolling_p95_fill_s) >= float(pause_p95_fill_s)
+            )
+        )
+        recovery_good = bool(
+            rolling_fill_ratio >= float(warn_fill_ratio)
+            and (
+                rolling_p95_fill_s is None
+                or float(rolling_p95_fill_s) <= float(warn_p95_fill_s)
+            )
+        )
+        if pause_breach:
+            pause_until = now_mono + float(pause_cooldown_s)
+            recovery_streak = 0
+            state = "paused"
+        elif pause_until > now_mono:
+            if recovery_good:
+                recovery_streak += 1
+                if recovery_streak >= int(recovery_cycles):
+                    pause_until = 0.0
+                    recovery_streak = 0
+                    state = "scaled" if stress > 0.0 else "normal"
+                else:
+                    state = "paused"
+            else:
+                recovery_streak = 0
+                state = "paused"
+        else:
+            recovery_streak = 0
+            state = "scaled" if stress > 0.0 else "normal"
+        self._execution_quality_pause_until_mono = float(pause_until)
+        self._execution_quality_recovery_streak = int(recovery_streak)
+        pause_active = bool(float(pause_until) > now_mono)
+        effective_scale = 0.0 if pause_active else float(scale)
+        context = {
+            "enabled": True,
+            "state": str(state),
+            "scale": float(effective_scale),
+            "stress": float(stress),
+            "fill_ratio": float(parsed_fill_ratio),
+            "fill_ratio_rolling": float(rolling_fill_ratio),
+            "p95_fill_s": float(p95_fill_s) if p95_fill_s is not None else None,
+            "p95_fill_s_rolling": (
+                float(rolling_p95_fill_s) if rolling_p95_fill_s is not None else None
+            ),
+            "submitted": int(submitted),
+            "min_submitted": int(min_submitted),
+            "lookback_cycles": int(lookback_cycles),
+            "samples": int(len(recent_samples)),
+            "pause_active": bool(pause_active),
+            "pause_remaining_s": max(float(pause_until) - now_mono, 0.0) if pause_active else 0.0,
+            "pause_until_mono": float(pause_until),
+            "recovery_streak": int(recovery_streak),
+            "recovery_cycles": int(recovery_cycles),
+            "thresholds": {
+                "fill_ratio_warn": float(warn_fill_ratio),
+                "fill_ratio_pause": float(pause_fill_ratio),
+                "p95_fill_s_warn": float(warn_p95_fill_s),
+                "p95_fill_s_pause": float(pause_p95_fill_s),
+                "scale_min": float(scale_min),
+                "pause_cooldown_s": float(pause_cooldown_s),
+            },
+        }
+        self._execution_quality_last_context = context
+
+    def _execution_quality_order_cap(self, *, baseline_cap: int | None) -> tuple[int | None, dict[str, Any]]:
+        """Return cap contribution from rolling execution quality controls."""
+
+        context = self._execution_quality_context()
+        if not bool(context.get("enabled")):
+            return None, context
+        scale = self._coerce_finite_float(context.get("scale"))
+        if scale is None:
+            scale = 1.0
+        pause_active = bool(context.get("pause_active"))
+        base_cap = baseline_cap
+        if base_cap is None:
+            fallback_cap = _config_int("AI_TRADING_EXECUTION_QUALITY_BASE_CAP", 6)
+            if fallback_cap is None:
+                fallback_cap = 6
+            base_cap = max(1, min(int(fallback_cap), 500))
+        else:
+            base_cap = max(1, min(int(base_cap), 500))
+        if pause_active:
+            return 0, context | {"reason": "execution_quality_pause", "base_cap": int(base_cap)}
+        if scale >= 0.999:
+            return None, context | {"reason": "normal", "base_cap": int(base_cap)}
+        scaled_cap = max(1, int(math.floor(float(base_cap) * max(float(scale), 0.05))))
+        return (
+            int(min(scaled_cap, int(base_cap))),
+            context | {"reason": "scaled", "base_cap": int(base_cap)},
+        )
+
+    def _execution_quality_allows_openings(self) -> tuple[bool, dict[str, Any]]:
+        """Return whether global execution-quality pause currently blocks openings."""
+
+        context = self._execution_quality_context()
+        if not bool(context.get("enabled")):
+            return True, {"enabled": False, "reason": "disabled"}
+        if bool(context.get("pause_active")):
+            return False, {
+                "enabled": True,
+                "reason": "execution_quality_pause",
+                "state": context.get("state"),
+                "scale": context.get("scale"),
+                "pause_remaining_s": context.get("pause_remaining_s"),
+                "fill_ratio_rolling": context.get("fill_ratio_rolling"),
+                "p95_fill_s_rolling": context.get("p95_fill_s_rolling"),
+            }
+        return True, {
+            "enabled": True,
+            "reason": "ok",
+            "state": context.get("state"),
+            "scale": context.get("scale"),
+            "fill_ratio_rolling": context.get("fill_ratio_rolling"),
+            "p95_fill_s_rolling": context.get("p95_fill_s_rolling"),
+        }
+
     def _observe_markout_feedback(self) -> dict[str, Any]:
         """Return latest rolling markout feedback context."""
 
@@ -4239,23 +4725,25 @@ class ExecutionEngine:
         )
         stress = max(spread_stress, age_stress, vol_stress)
         if markout_toxic:
-            stress = min(1.0, stress + 0.2)
+            stress = min(1.0, stress + 0.3)
 
         effective_widen_bps = int(round(float(base_replace_widen_bps) * (1.0 - 0.45 * stress)))
         if base_replace_widen_bps > 0:
             effective_widen_bps = max(1, effective_widen_bps)
         effective_widen_bps = max(0, min(effective_widen_bps, 1000))
 
-        effective_replace_min_interval_s = float(base_replace_min_interval_s) * (1.0 + 1.5 * stress)
+        effective_replace_min_interval_s = float(base_replace_min_interval_s) * (1.0 + 2.0 * stress)
         effective_replace_min_interval_s = max(
             float(base_replace_min_interval_s),
             min(float(effective_replace_min_interval_s), 1800.0),
         )
 
         effective_replace_max_per_cycle = int(
-            round(float(base_replace_max_per_cycle) * (1.0 - 0.6 * stress))
+            round(float(base_replace_max_per_cycle) * (1.0 - 0.75 * stress))
         )
-        if base_replace_max_per_cycle > 0 and stress < 0.9:
+        if stress >= 0.75:
+            effective_replace_max_per_cycle = 0
+        elif base_replace_max_per_cycle > 0:
             effective_replace_max_per_cycle = max(1, effective_replace_max_per_cycle)
         effective_replace_max_per_cycle = max(
             0,
@@ -4844,6 +5332,12 @@ class ExecutionEngine:
         cancel_new_ratio = cancel_ratio
         attempted = submitted + failed
         reject_rate_pct = (float(failed) / float(attempted) * 100.0) if attempted > 0 else 0.0
+        self._update_execution_quality_governor(
+            fill_ratio=float(fill_ratio),
+            filled_durations=filled_durations,
+            submitted=int(submitted),
+        )
+        execution_quality_context = self._execution_quality_context()
         self._update_cancel_ratio_adaptive_cap(
             cancel_ratio=float(cancel_ratio),
             submitted=int(submitted),
@@ -4979,6 +5473,35 @@ class ExecutionEngine:
                     else None
                 ),
                 "slippage_volatility_bps": round(float(slippage_volatility_bps), 4),
+                "execution_quality_state": str(
+                    execution_quality_context.get("state") or "unknown"
+                ),
+                "execution_quality_scale": round(
+                    float(_safe_float(execution_quality_context.get("scale")) or 1.0),
+                    4,
+                ),
+                "execution_quality_pause_active": bool(
+                    execution_quality_context.get("pause_active")
+                ),
+                "execution_quality_pause_remaining_s": round(
+                    float(
+                        _safe_float(execution_quality_context.get("pause_remaining_s"))
+                        or 0.0
+                    ),
+                    3,
+                ),
+                "execution_quality_fill_ratio_rolling": (
+                    round(float(value), 4)
+                    if (value := _safe_float(execution_quality_context.get("fill_ratio_rolling")))
+                    is not None
+                    else None
+                ),
+                "execution_quality_p95_fill_s_rolling": (
+                    round(float(value), 4)
+                    if (value := _safe_float(execution_quality_context.get("p95_fill_s_rolling")))
+                    is not None
+                    else None
+                ),
             },
         )
 
@@ -11920,6 +12443,242 @@ class ExecutionEngine:
             return 1
         return 0
 
+    def _runtime_gonogo_reconciliation_retry_enabled(self) -> bool:
+        """Return True when a one-shot reconciliation retry is enabled."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED"
+        )
+        if enabled is None:
+            enabled = _resolve_bool_env(
+                "AI_TRADING_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED"
+            )
+        if enabled is None:
+            return True
+        return bool(enabled)
+
+    def _runtime_gonogo_reconciliation_retry_cooldown_s(self) -> float:
+        """Return cooldown between reconciliation retry attempts."""
+
+        cooldown = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_COOLDOWN_SEC",
+            None,
+        )
+        if cooldown is None:
+            cooldown = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_RECONCILIATION_RETRY_COOLDOWN_SEC",
+                300.0,
+            )
+        try:
+            value = float(cooldown if cooldown is not None else 300.0)
+        except (TypeError, ValueError):
+            value = 300.0
+        if not math.isfinite(value):
+            value = 300.0
+        return max(10.0, min(value, 3600.0))
+
+    @staticmethod
+    def _runtime_gonogo_reconciliation_retry_eligible(
+        failed_checks: Sequence[str],
+    ) -> bool:
+        """Return True when failures are limited to reconciliation checks."""
+
+        if not failed_checks:
+            return False
+        allowed_checks = {
+            "open_position_reconciliation_consistent",
+            "open_position_reconciliation_available",
+        }
+        return all(check in allowed_checks for check in failed_checks)
+
+    def _attempt_runtime_gonogo_reconciliation_retry(
+        self,
+        *,
+        failed_checks: Sequence[str],
+        observed: Mapping[str, Any] | None,
+        thresholds: Mapping[str, Any],
+        trade_history_path: Path,
+        gate_summary_path: Path,
+        gate_log_path: Path | None,
+        performance_report_module: Any,
+        now_mono: float,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Run a bounded one-shot reconciliation retry and re-evaluate go/no-go."""
+
+        retry_context: dict[str, Any] = {
+            "enabled": bool(self._runtime_gonogo_reconciliation_retry_enabled()),
+            "eligible": False,
+            "attempted": False,
+        }
+        if not bool(retry_context["enabled"]):
+            retry_context["reason"] = "disabled"
+            return None, retry_context
+
+        normalized_failed_checks = [
+            str(item).strip()
+            for item in failed_checks
+            if str(item).strip()
+        ]
+        retry_context["failed_checks_before"] = list(normalized_failed_checks)
+        if not self._runtime_gonogo_reconciliation_retry_eligible(
+            normalized_failed_checks
+        ):
+            retry_context["reason"] = "non_reconciliation_failure"
+            return None, retry_context
+        retry_context["eligible"] = True
+
+        observed_map = dict(observed) if isinstance(observed, Mapping) else {}
+        mismatch_count = max(
+            0,
+            _safe_int(
+                observed_map.get("open_position_reconciliation_mismatch_count"),
+                0,
+            ),
+        )
+        max_abs_delta_qty = _safe_float(
+            observed_map.get("open_position_reconciliation_max_abs_delta_qty")
+        )
+        if max_abs_delta_qty is None:
+            max_abs_delta_qty = 0.0
+
+        max_mismatch_threshold = max(
+            0,
+            _safe_int(thresholds.get("max_open_position_mismatch_count"), 25),
+        )
+        max_abs_delta_threshold = max(
+            0.0,
+            _safe_float(thresholds.get("max_open_position_abs_delta_qty")) or 50.0,
+        )
+        max_retry_mismatch = _config_int(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_MAX_MISMATCH_COUNT",
+            None,
+        )
+        if max_retry_mismatch is None:
+            max_retry_mismatch = _config_int(
+                "AI_TRADING_RUNTIME_GONOGO_RECONCILIATION_RETRY_MAX_MISMATCH_COUNT",
+                min(max_mismatch_threshold, 3),
+            )
+        max_retry_abs_delta = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_MAX_ABS_DELTA_QTY",
+            None,
+        )
+        if max_retry_abs_delta is None:
+            max_retry_abs_delta = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_RECONCILIATION_RETRY_MAX_ABS_DELTA_QTY",
+                max(max_abs_delta_threshold * 2.0, 25.0),
+            )
+        retry_context["limits"] = {
+            "max_mismatch_count": int(
+                max(0, max_retry_mismatch if max_retry_mismatch is not None else 3)
+            ),
+            "max_abs_delta_qty": float(
+                max(0.0, max_retry_abs_delta if max_retry_abs_delta is not None else 25.0)
+            ),
+        }
+        if (
+            mismatch_count > int(retry_context["limits"]["max_mismatch_count"])
+            or max_abs_delta_qty > float(retry_context["limits"]["max_abs_delta_qty"])
+        ):
+            retry_context["reason"] = "mismatch_outside_retry_bounds"
+            retry_context["observed"] = {
+                "mismatch_count": int(mismatch_count),
+                "max_abs_delta_qty": float(max_abs_delta_qty),
+            }
+            return None, retry_context
+
+        cooldown_s = self._runtime_gonogo_reconciliation_retry_cooldown_s()
+        last_retry_mono = float(
+            getattr(
+                self,
+                "_runtime_gonogo_reconciliation_retry_last_mono",
+                0.0,
+            )
+            or 0.0
+        )
+        if last_retry_mono > 0.0 and (now_mono - last_retry_mono) < cooldown_s:
+            retry_context["reason"] = "cooldown_active"
+            retry_context["remaining_s"] = round(
+                float(max(cooldown_s - (now_mono - last_retry_mono), 0.0)),
+                3,
+            )
+            return None, retry_context
+
+        self._runtime_gonogo_reconciliation_retry_last_mono = float(now_mono)
+        retry_context["attempted"] = True
+
+        sync_fn = getattr(self, "synchronize_broker_state", None)
+        if callable(sync_fn):
+            try:
+                snapshot = sync_fn()
+                retry_context["broker_sync"] = {
+                    "open_orders": int(
+                        len(getattr(snapshot, "open_orders", ()) or ())
+                    ),
+                    "positions": int(len(getattr(snapshot, "positions", ()) or ())),
+                }
+            except Exception as exc:
+                retry_context["broker_sync_error"] = str(exc)
+
+        backfill_fn = getattr(self, "_backfill_pending_tca_from_fill_events", None)
+        if callable(backfill_fn):
+            try:
+                backfill_result = backfill_fn()
+            except Exception as exc:
+                retry_context["tca_backfill_error"] = str(exc)
+            else:
+                if isinstance(backfill_result, Mapping):
+                    retry_context["tca_backfill"] = dict(backfill_result)
+
+        finalize_fn = getattr(self, "_finalize_stale_pending_tca_events", None)
+        if callable(finalize_fn):
+            try:
+                finalize_result = finalize_fn()
+            except Exception as exc:
+                retry_context["tca_finalize_error"] = str(exc)
+            else:
+                if isinstance(finalize_result, Mapping):
+                    retry_context["tca_finalize"] = dict(finalize_result)
+
+        try:
+            retry_report = performance_report_module.build_report(
+                trade_history_path=trade_history_path,
+                gate_summary_path=gate_summary_path,
+                gate_log_path=gate_log_path,
+            )
+            retry_decision_raw = performance_report_module.evaluate_go_no_go(
+                retry_report,
+                thresholds=thresholds,
+            )
+        except Exception as exc:
+            retry_context["reason"] = "reevaluation_failed"
+            retry_context["error"] = str(exc)
+            return None, retry_context
+
+        retry_decision = (
+            dict(retry_decision_raw)
+            if isinstance(retry_decision_raw, Mapping)
+            else None
+        )
+        if retry_decision is None:
+            retry_context["reason"] = "reevaluation_invalid"
+            return None, retry_context
+
+        failed_checks_after_raw = retry_decision.get("failed_checks")
+        failed_checks_after = (
+            [
+                str(item).strip()
+                for item in failed_checks_after_raw
+                if str(item).strip()
+            ]
+            if isinstance(failed_checks_after_raw, Sequence)
+            and not isinstance(failed_checks_after_raw, (str, bytes))
+            else []
+        )
+        retry_context["reason"] = "reevaluated"
+        retry_context["failed_checks_after"] = list(failed_checks_after)
+        retry_context["gate_passed_after"] = bool(retry_decision.get("gate_passed"))
+        return retry_decision, retry_context
+
     def _apply_after_close_runtime_gonogo_overrides(
         self,
         thresholds: Mapping[str, Any],
@@ -12061,6 +12820,7 @@ class ExecutionEngine:
             "min_acceptance_rate",
             "min_expected_net_edge_bps",
             "max_open_position_delta_ratio",
+            "max_open_position_delta_ratio_hard",
             "max_open_position_abs_delta_qty",
             "max_slippage_drag_bps",
         )
@@ -13198,6 +13958,15 @@ class ExecutionEngine:
             )
         if auto_live_fail_closed is None:
             auto_live_fail_closed = True
+        exclude_reconcile_backfill_from_metrics = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_EXCLUDE_RECONCILE_BACKFILL_FROM_METRICS"
+        )
+        if exclude_reconcile_backfill_from_metrics is None:
+            exclude_reconcile_backfill_from_metrics = _resolve_bool_env(
+                "AI_TRADING_RUNTIME_GONOGO_EXCLUDE_RECONCILE_BACKFILL_FROM_METRICS"
+            )
+        if exclude_reconcile_backfill_from_metrics is None:
+            exclude_reconcile_backfill_from_metrics = True
         require_open_position_reconciliation = _resolve_bool_env(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION"
         )
@@ -13216,6 +13985,25 @@ class ExecutionEngine:
                 "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO",
                 0.2,
             )
+        max_open_position_delta_ratio_hard = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO_HARD",
+            None,
+        )
+        if max_open_position_delta_ratio_hard is None:
+            max_open_position_delta_ratio_hard = _config_float(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO_HARD",
+                None,
+            )
+        if max_open_position_delta_ratio_hard is None:
+            ratio_soft = float(
+                max(
+                    0.0,
+                    max_open_position_delta_ratio
+                    if max_open_position_delta_ratio is not None
+                    else 0.2,
+                )
+            )
+            max_open_position_delta_ratio_hard = max(0.5, ratio_soft * 1.5)
         max_open_position_mismatch_count = _config_int(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_MISMATCH_COUNT",
             None,
@@ -13294,11 +14082,22 @@ class ExecutionEngine:
                 )
             ),
             "auto_live_fail_closed": bool(auto_live_fail_closed),
+            "exclude_reconcile_backfill_from_metrics": bool(
+                exclude_reconcile_backfill_from_metrics
+            ),
             "require_open_position_reconciliation": bool(
                 require_open_position_reconciliation
             ),
             "max_open_position_delta_ratio": float(
                 max(0.0, max_open_position_delta_ratio if max_open_position_delta_ratio is not None else 0.2)
+            ),
+            "max_open_position_delta_ratio_hard": float(
+                max(
+                    0.0,
+                    max_open_position_delta_ratio_hard
+                    if max_open_position_delta_ratio_hard is not None
+                    else 0.5,
+                )
             ),
             "max_open_position_mismatch_count": int(
                 max(0, max_open_position_mismatch_count if max_open_position_mismatch_count is not None else 25)
@@ -13367,6 +14166,60 @@ class ExecutionEngine:
                     "gate_summary": str(gate_summary_path),
                 },
             }
+            if not allowed:
+                failed_checks_raw = context.get("failed_checks", [])
+                failed_checks = (
+                    [
+                        str(item).strip()
+                        for item in failed_checks_raw
+                        if str(item).strip()
+                    ]
+                    if isinstance(failed_checks_raw, Sequence)
+                    and not isinstance(failed_checks_raw, (str, bytes))
+                    else []
+                )
+                observed_raw = context.get("observed")
+                observed = (
+                    dict(observed_raw)
+                    if isinstance(observed_raw, Mapping)
+                    else None
+                )
+                retry_decision, retry_context = (
+                    self._attempt_runtime_gonogo_reconciliation_retry(
+                        failed_checks=failed_checks,
+                        observed=observed,
+                        thresholds=effective_thresholds,
+                        trade_history_path=trade_history_path,
+                        gate_summary_path=gate_summary_path,
+                        gate_log_path=gate_log_path,
+                        performance_report_module=performance_report,
+                        now_mono=now_mono,
+                    )
+                )
+                context["reconciliation_retry"] = retry_context
+                if isinstance(retry_decision, Mapping):
+                    allowed = bool(retry_decision.get("gate_passed"))
+                    context["gate_passed"] = bool(allowed)
+                    retry_failed_checks_raw = retry_decision.get("failed_checks")
+                    context["failed_checks"] = (
+                        [
+                            str(item).strip()
+                            for item in retry_failed_checks_raw
+                            if str(item).strip()
+                        ]
+                        if isinstance(retry_failed_checks_raw, Sequence)
+                        and not isinstance(retry_failed_checks_raw, (str, bytes))
+                        else []
+                    )
+                    retry_thresholds_raw = retry_decision.get("thresholds")
+                    if isinstance(retry_thresholds_raw, Mapping):
+                        context["thresholds"] = dict(retry_thresholds_raw)
+                        effective_thresholds = dict(retry_thresholds_raw)
+                    retry_observed_raw = retry_decision.get("observed")
+                    if isinstance(retry_observed_raw, Mapping):
+                        context["observed"] = dict(retry_observed_raw)
+                    if allowed:
+                        context["reason"] = "reconciliation_retry_passed"
             if allowed:
                 hourly_allowed, hourly_context = self._runtime_gonogo_hourly_guard_allows_openings(
                     gate_log_path=resolved_gate_log_path,
@@ -13575,6 +14428,33 @@ class ExecutionEngine:
                     "runtime_gonogo_gate",
                     gonogo_context,
                     extra=skip_payload | {"detail": "runtime_gonogo_gate"},
+                )
+                return False
+            quality_allowed, quality_context = self._execution_quality_allows_openings()
+            if not quality_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "execution_quality_pause",
+                    "context": quality_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_EXECUTION_QUALITY", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "execution_quality_pause",
+                    quality_context,
+                    extra=skip_payload | {"detail": "execution_quality_pause"},
                 )
                 return False
             symbol_cooldown_allowed, symbol_cooldown_context = self._symbol_loss_cooldown_allows_opening(

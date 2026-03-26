@@ -45,6 +45,19 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _as_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _env_text(name: str, default: str) -> str:
     value = str(get_env(name, default, cast=str) or "").strip()
     return value or default
@@ -321,6 +334,19 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=bool,
             )
         )
+    exclude_reconcile_backfill_from_metrics = get_env(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_EXCLUDE_RECONCILE_BACKFILL_FROM_METRICS",
+        None,
+        cast=bool,
+    )
+    if exclude_reconcile_backfill_from_metrics is None:
+        exclude_reconcile_backfill_from_metrics = bool(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_EXCLUDE_RECONCILE_BACKFILL_FROM_METRICS",
+                True,
+                cast=bool,
+            )
+        )
     require_open_position_reconciliation = get_env(
         "AI_TRADING_EXECUTION_RUNTIME_GONOGO_REQUIRE_OPEN_POSITION_RECONCILIATION",
         None,
@@ -379,6 +405,34 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=float,
             )
         )
+    max_open_position_delta_ratio_hard = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO_HARD",
+            None,
+            cast=float,
+        )
+    )
+    if max_open_position_delta_ratio_hard is None:
+        max_open_position_delta_ratio_hard = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MAX_OPEN_POSITION_DELTA_RATIO_HARD",
+                None,
+                cast=float,
+            )
+        )
+    if max_open_position_delta_ratio_hard is None:
+        ratio_soft_default = float(
+            max(
+                0.0,
+                max_open_position_delta_ratio
+                if max_open_position_delta_ratio is not None
+                else 0.2,
+            )
+        )
+        max_open_position_delta_ratio_hard = max(
+            0.5,
+            ratio_soft_default * 1.5,
+        )
     max_slippage_drag_bps = _as_float(
         get_env(
             "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MAX_SLIPPAGE_DRAG_BPS",
@@ -428,11 +482,22 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
             )
         ),
         "auto_live_fail_closed": bool(auto_live_fail_closed),
+        "exclude_reconcile_backfill_from_metrics": bool(
+            exclude_reconcile_backfill_from_metrics
+        ),
         "require_pnl_available": bool(require_pnl_available),
         "require_gate_valid": bool(require_gate_valid),
         "require_open_position_reconciliation": bool(require_open_position_reconciliation),
         "max_open_position_delta_ratio": float(
             max(0.0, max_open_position_delta_ratio if max_open_position_delta_ratio is not None else 0.2)
+        ),
+        "max_open_position_delta_ratio_hard": float(
+            max(
+                0.0,
+                max_open_position_delta_ratio_hard
+                if max_open_position_delta_ratio_hard is not None
+                else 0.5,
+            )
         ),
         "max_open_position_mismatch_count": int(
             max(0, max_open_position_mismatch_count if max_open_position_mismatch_count is not None else 25)
@@ -1886,6 +1951,108 @@ def summarize_gate_effectiveness(
     return summary
 
 
+def summarize_execution_vs_alpha(
+    *,
+    trade_summary: Mapping[str, Any],
+    gate_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Summarize realized edge, expected edge, and estimated execution drag."""
+
+    total_entry_notional = _as_float(trade_summary.get("total_entry_notional")) or 0.0
+    net_pnl = _as_float(trade_summary.get("pnl_sum"))
+    realized_net_edge_bps = None
+    if net_pnl is not None and total_entry_notional > 0.0:
+        realized_net_edge_bps = float(net_pnl / total_entry_notional * 10000.0)
+    slippage_drag_bps = _as_float(trade_summary.get("slippage_drag_bps"))
+    pre_execution_edge_bps_est = None
+    if realized_net_edge_bps is not None and slippage_drag_bps is not None:
+        pre_execution_edge_bps_est = float(realized_net_edge_bps + slippage_drag_bps)
+    execution_capture_ratio = None
+    if (
+        realized_net_edge_bps is not None
+        and pre_execution_edge_bps_est is not None
+        and pre_execution_edge_bps_est > 0.0
+    ):
+        execution_capture_ratio = float(realized_net_edge_bps / pre_execution_edge_bps_est)
+    execution_drag_share = None
+    if slippage_drag_bps is not None and pre_execution_edge_bps_est is not None:
+        denom = abs(float(pre_execution_edge_bps_est))
+        if denom > 0.0:
+            execution_drag_share = float(slippage_drag_bps / denom)
+
+    expected_edge_sum_bps = _as_float(gate_summary.get("total_expected_net_edge_bps"))
+    accepted_records = _as_int(gate_summary.get("accepted_records")) or 0
+    expected_edge_per_accept_bps = None
+    if expected_edge_sum_bps is not None and accepted_records > 0:
+        expected_edge_per_accept_bps = float(expected_edge_sum_bps / float(accepted_records))
+    realization_gap_bps = None
+    if realized_net_edge_bps is not None and expected_edge_per_accept_bps is not None:
+        realization_gap_bps = float(realized_net_edge_bps - expected_edge_per_accept_bps)
+
+    daily_trade_rows_raw = trade_summary.get("daily_expectancy")
+    daily_gate_rows_raw = gate_summary.get("daily_gate_stats")
+    daily_trade_rows = (
+        [dict(row) for row in daily_trade_rows_raw if isinstance(row, Mapping)]
+        if isinstance(daily_trade_rows_raw, list)
+        else []
+    )
+    daily_gate_rows = (
+        [dict(row) for row in daily_gate_rows_raw if isinstance(row, Mapping)]
+        if isinstance(daily_gate_rows_raw, list)
+        else []
+    )
+    trade_by_date = {
+        str(row.get("date")): row
+        for row in daily_trade_rows
+        if str(row.get("date", "")).strip()
+    }
+    gate_by_date = {
+        str(row.get("date")): row
+        for row in daily_gate_rows
+        if str(row.get("date", "")).strip()
+    }
+    daily_dates = sorted(set(trade_by_date.keys()) | set(gate_by_date.keys()))
+    daily: list[dict[str, Any]] = []
+    for date_key in daily_dates:
+        trade_row = trade_by_date.get(date_key, {})
+        gate_row = gate_by_date.get(date_key, {})
+        day_realized = _as_float(trade_row.get("net_edge_bps"))
+        day_expected_sum = _as_float(gate_row.get("total_expected_net_edge_bps"))
+        day_accepted = _as_int(gate_row.get("accepted_records")) or 0
+        day_expected_per_accept = None
+        if day_expected_sum is not None and day_accepted > 0:
+            day_expected_per_accept = float(day_expected_sum / float(day_accepted))
+        day_gap = None
+        if day_realized is not None and day_expected_per_accept is not None:
+            day_gap = float(day_realized - day_expected_per_accept)
+        daily.append(
+            {
+                "date": date_key,
+                "realized_net_edge_bps": day_realized,
+                "expected_edge_per_accept_bps": day_expected_per_accept,
+                "realization_gap_bps": day_gap,
+                "trades": _as_int(trade_row.get("trades")) or 0,
+                "accepted_records": int(day_accepted),
+            }
+        )
+
+    return {
+        "available": bool(
+            realized_net_edge_bps is not None
+            or expected_edge_per_accept_bps is not None
+            or slippage_drag_bps is not None
+        ),
+        "realized_net_edge_bps": realized_net_edge_bps,
+        "pre_execution_edge_bps_est": pre_execution_edge_bps_est,
+        "slippage_drag_bps": slippage_drag_bps,
+        "execution_capture_ratio": execution_capture_ratio,
+        "execution_drag_share": execution_drag_share,
+        "expected_edge_per_accept_bps": expected_edge_per_accept_bps,
+        "realization_gap_bps": realization_gap_bps,
+        "daily": daily,
+    }
+
+
 def build_report(
     *,
     trade_history_path: Path,
@@ -1893,11 +2060,17 @@ def build_report(
     tca_path: Path | None = None,
     gate_log_path: Path | None = None,
 ) -> dict[str, Any]:
+    trade_summary = summarize_trade_history(trade_history_path, tca_path=tca_path)
+    gate_summary = summarize_gate_effectiveness(
+        gate_summary_path,
+        gate_log_path=gate_log_path,
+    )
     return {
-        "trade_history": summarize_trade_history(trade_history_path, tca_path=tca_path),
-        "gate_effectiveness": summarize_gate_effectiveness(
-            gate_summary_path,
-            gate_log_path=gate_log_path,
+        "trade_history": trade_summary,
+        "gate_effectiveness": gate_summary,
+        "execution_vs_alpha": summarize_execution_vs_alpha(
+            trade_summary=trade_summary,
+            gate_summary=gate_summary,
         ),
     }
 
@@ -1989,6 +2162,11 @@ def evaluate_go_no_go(
         auto_live_fail_closed = True
     else:
         auto_live_fail_closed = bool(auto_live_fail_closed_raw)
+    exclude_reconcile_backfill_from_metrics = _as_bool(
+        threshold_map.get("exclude_reconcile_backfill_from_metrics")
+    )
+    if exclude_reconcile_backfill_from_metrics is None:
+        exclude_reconcile_backfill_from_metrics = True
     require_pnl_available = bool(
         threshold_map.get("require_pnl_available", True)
     )
@@ -2002,6 +2180,18 @@ def evaluate_go_no_go(
     if max_open_position_delta_ratio is None:
         max_open_position_delta_ratio = 0.2
     max_open_position_delta_ratio = max(0.0, float(max_open_position_delta_ratio))
+    max_open_position_delta_ratio_hard = _as_float(
+        threshold_map.get("max_open_position_delta_ratio_hard")
+    )
+    if max_open_position_delta_ratio_hard is None:
+        max_open_position_delta_ratio_hard = max(
+            0.5,
+            float(max_open_position_delta_ratio) * 1.5,
+        )
+    max_open_position_delta_ratio_hard = max(
+        0.0,
+        float(max_open_position_delta_ratio_hard),
+    )
     max_open_position_mismatch_count = _as_int(
         threshold_map.get("max_open_position_mismatch_count")
     )
@@ -2167,11 +2357,43 @@ def evaluate_go_no_go(
                 "fill_source": trade_fill_source,
                 "reason": "daily_trade_stats_by_fill_source_unavailable",
             }
+    elif bool(exclude_reconcile_backfill_from_metrics):
+        rows_by_source = trade.get("daily_trade_stats_by_fill_source")
+        filtered_rows: list[Mapping[str, Any]] = []
+        if isinstance(rows_by_source, Mapping):
+            for source_name, candidate_rows in rows_by_source.items():
+                if _normalise_fill_source(source_name) == "reconcile_backfill":
+                    continue
+                if not isinstance(candidate_rows, list):
+                    continue
+                filtered_rows.extend(
+                    row for row in candidate_rows if isinstance(row, Mapping)
+                )
+        if filtered_rows:
+            source_trade_rows = filtered_rows
+            aggregated = _aggregate_trade_metric_rows(source_trade_rows)
+            closed_trades = int(aggregated["closed_trades"])
+            profit_factor = _as_float(aggregated["profit_factor"])
+            win_rate = float(aggregated["win_rate"])
+            net_pnl = float(aggregated["net_pnl"])
+            pnl_available = bool(trade.get("pnl_available")) and closed_trades > 0
+            trade_metric_scope = {
+                "mode": "full_history",
+                "fill_source": "all",
+                "excluded_fill_sources": ["reconcile_backfill"],
+                "available_days": len(
+                    {
+                        str(row.get("date"))
+                        for row in source_trade_rows
+                        if str(row.get("date", "")).strip()
+                    }
+                ),
+            }
 
     if lookback_days > 0:
         trade_rows_source: Any = (
             source_trade_rows
-            if trade_fill_source != "all"
+            if source_trade_rows is not None
             else trade.get("daily_trade_stats")
         )
         recent_trade_rows, trade_available_days = _select_recent_daily_rows(
@@ -2249,7 +2471,7 @@ def evaluate_go_no_go(
     else:
         trade_rows = (
             source_trade_rows
-            if trade_fill_source != "all"
+            if source_trade_rows is not None
             else trade.get("daily_trade_stats")
         )
         if isinstance(trade_rows, list):
@@ -2278,10 +2500,24 @@ def evaluate_go_no_go(
     reconciliation_mismatch_count = (
         _as_int(open_position_reconciliation.get("symbol_mismatch_count")) or 0
     )
-    reconciliation_consistent = bool(
+    reconciliation_ratio_soft_ok = bool(
         reconciliation_ratio <= float(max_open_position_delta_ratio)
-        and reconciliation_max_abs_delta_qty <= float(max_open_position_abs_delta_qty)
-        and reconciliation_mismatch_count <= int(max_open_position_mismatch_count)
+    )
+    reconciliation_ratio_hard_ok = bool(
+        reconciliation_ratio <= float(max_open_position_delta_ratio_hard)
+    )
+    reconciliation_abs_ok = bool(
+        reconciliation_max_abs_delta_qty <= float(max_open_position_abs_delta_qty)
+    )
+    reconciliation_mismatch_ok = bool(
+        reconciliation_mismatch_count <= int(max_open_position_mismatch_count)
+    )
+    # Ratio can spike when gross exposure is light. Keep absolute/mismatch
+    # constraints as the primary gate and treat ratio as a hard guardrail.
+    reconciliation_consistent = bool(
+        reconciliation_abs_ok
+        and reconciliation_mismatch_ok
+        and reconciliation_ratio_hard_ok
     )
     slippage_drag_ok = bool(
         slippage_drag_bps is None or slippage_drag_bps <= float(max_slippage_drag_bps)
@@ -2368,12 +2604,18 @@ def evaluate_go_no_go(
             "auto_live_min_used_days": int(auto_live_min_used_days),
             "auto_live_min_available_days": int(auto_live_min_available_days),
             "auto_live_fail_closed": bool(auto_live_fail_closed),
+            "exclude_reconcile_backfill_from_metrics": bool(
+                exclude_reconcile_backfill_from_metrics
+            ),
             "require_pnl_available": bool(require_pnl_available),
             "require_gate_valid": bool(require_gate_valid),
             "require_open_position_reconciliation": bool(
                 require_open_position_reconciliation
             ),
             "max_open_position_delta_ratio": float(max_open_position_delta_ratio),
+            "max_open_position_delta_ratio_hard": float(
+                max_open_position_delta_ratio_hard
+            ),
             "max_open_position_mismatch_count": int(max_open_position_mismatch_count),
             "max_open_position_abs_delta_qty": float(max_open_position_abs_delta_qty),
             "max_slippage_drag_bps": float(max_slippage_drag_bps),
@@ -2398,6 +2640,16 @@ def evaluate_go_no_go(
             "open_position_reconciliation_mismatch_count": int(
                 reconciliation_mismatch_count
             ),
+            "open_position_reconciliation_ratio_soft_ok": bool(
+                reconciliation_ratio_soft_ok
+            ),
+            "open_position_reconciliation_ratio_hard_ok": bool(
+                reconciliation_ratio_hard_ok
+            ),
+            "open_position_reconciliation_abs_ok": bool(reconciliation_abs_ok),
+            "open_position_reconciliation_mismatch_ok": bool(
+                reconciliation_mismatch_ok
+            ),
             "trade_fill_source": trade_fill_source,
             "requested_trade_fill_source": requested_trade_fill_source,
             "auto_live_selection": auto_live_context,
@@ -2410,6 +2662,7 @@ def evaluate_go_no_go(
 def format_text_report(report: dict[str, Any]) -> str:
     trade = report.get("trade_history", {})
     gate = report.get("gate_effectiveness", {})
+    attribution = report.get("execution_vs_alpha", {})
     lines = [
         "Runtime Performance Report",
         f"- Trade history file: {trade.get('path')} (exists={trade.get('exists')})",
@@ -2541,6 +2794,14 @@ def format_text_report(report: dict[str, Any]) -> str:
         failed = go_no_go.get("failed_checks", [])
         if isinstance(failed, list) and failed:
             lines.append(f"- Failed checks: {', '.join(str(item) for item in failed)}")
+    if isinstance(attribution, Mapping) and attribution.get("available"):
+        lines.append(
+            "- Execution vs alpha: "
+            f"realized_edge_bps={attribution.get('realized_net_edge_bps')} "
+            f"pre_exec_edge_bps={attribution.get('pre_execution_edge_bps_est')} "
+            f"slippage_drag_bps={attribution.get('slippage_drag_bps')} "
+            f"capture_ratio={attribution.get('execution_capture_ratio')}"
+        )
 
     return "\n".join(lines)
 
@@ -2592,6 +2853,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-expected-net-edge-bps", type=float, default=None)
     parser.add_argument("--max-slippage-drag-bps", type=float, default=None)
     parser.add_argument("--max-open-position-delta-ratio", type=float, default=None)
+    parser.add_argument(
+        "--max-open-position-delta-ratio-hard",
+        type=float,
+        default=None,
+    )
     parser.add_argument("--max-open-position-mismatch-count", type=int, default=None)
     parser.add_argument("--max-open-position-abs-delta-qty", type=float, default=None)
     parser.add_argument("--min-used-days", type=int, default=None)
@@ -2664,6 +2930,7 @@ def main(argv: list[str] | None = None) -> int:
             "min_expected_net_edge_bps",
             "max_slippage_drag_bps",
             "max_open_position_delta_ratio",
+            "max_open_position_delta_ratio_hard",
             "max_open_position_mismatch_count",
             "max_open_position_abs_delta_qty",
             "min_used_days",

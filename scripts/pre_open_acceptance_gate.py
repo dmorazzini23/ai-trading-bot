@@ -138,8 +138,10 @@ def _refresh_runtime_reports(repo_dir: Path, *, refresh: bool) -> Step:
 
 
 def _evaluate_runtime_gonogo() -> Step:
+    from ai_trading.env import ensure_dotenv_loaded
     from ai_trading.tools import runtime_performance_report as runtime_perf_report
 
+    ensure_dotenv_loaded()
     paths = runtime_perf_report.resolve_runtime_report_paths()
     trade_history_path = paths.get("trade_history")
     gate_summary_path = paths.get("gate_summary")

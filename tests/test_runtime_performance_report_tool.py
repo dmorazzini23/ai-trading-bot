@@ -81,6 +81,59 @@ def test_build_report_treats_reward_as_realized_pnl(tmp_path: Path) -> None:
     assert trade["closed_trades"] == 2
 
 
+def test_build_report_includes_execution_vs_alpha_attribution(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "AAPL",
+                    "side": "buy",
+                    "qty": 5,
+                    "entry_price": 100.0,
+                    "entry_time": "2026-03-20T14:30:00+00:00",
+                    "fee_bps": 0.0,
+                    "slippage_bps": 4.0,
+                },
+                {
+                    "symbol": "AAPL",
+                    "side": "sell",
+                    "qty": 5,
+                    "entry_price": 103.0,
+                    "entry_time": "2026-03-20T15:30:00+00:00",
+                    "fee_bps": 0.0,
+                    "slippage_bps": 2.0,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 100,
+                "total_accepted_records": 20,
+                "total_rejected_records": 80,
+                "total_expected_net_edge_bps": 200.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    attribution = report["execution_vs_alpha"]
+    assert attribution["available"] is True
+    assert attribution["realized_net_edge_bps"] is not None
+    assert attribution["slippage_drag_bps"] is not None
+    assert attribution["expected_edge_per_accept_bps"] == pytest.approx(10.0)
+    assert isinstance(attribution["daily"], list)
+
+
 def test_format_text_report_handles_missing_inputs(tmp_path: Path) -> None:
     report = rpt.build_report(
         trade_history_path=tmp_path / "missing_trade_history.json",
@@ -1083,6 +1136,159 @@ def test_evaluate_go_no_go_trade_fill_source_uses_source_specific_rows() -> None
     assert observed["trade_metric_scope"]["fill_source"] == "live"
 
 
+def test_evaluate_go_no_go_all_excludes_reconcile_backfill_by_default() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 24,
+            "profit_factor": 2.6,
+            "win_rate": 16 / 24,
+            "pnl_sum": 80.0,
+            "daily_trade_stats": [
+                {
+                    "date": "2026-03-11",
+                    "trades": 24,
+                    "wins": 16,
+                    "losses": 8,
+                    "gross_win_pnl": 130.0,
+                    "gross_loss_pnl": 50.0,
+                    "net_pnl": 80.0,
+                }
+            ],
+            "daily_trade_stats_by_fill_source": {
+                "live": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 4,
+                        "wins": 1,
+                        "losses": 3,
+                        "gross_win_pnl": 10.0,
+                        "gross_loss_pnl": 20.0,
+                        "net_pnl": -10.0,
+                    }
+                ],
+                "reconcile_backfill": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 20,
+                        "wins": 15,
+                        "losses": 5,
+                        "gross_win_pnl": 120.0,
+                        "gross_loss_pnl": 30.0,
+                        "net_pnl": 90.0,
+                    }
+                ],
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "all",
+            "min_closed_trades": 1,
+            "min_profit_factor": 1.5,
+            "min_win_rate": 0.6,
+            "min_net_pnl": 10.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "profit_factor" in decision["failed_checks"]
+    assert "win_rate" in decision["failed_checks"]
+    assert "net_pnl" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["trade_fill_source"] == "all"
+    assert observed["closed_trades"] == 4
+    assert observed["trade_metric_scope"]["excluded_fill_sources"] == [
+        "reconcile_backfill"
+    ]
+
+
+def test_evaluate_go_no_go_all_can_include_reconcile_backfill_when_enabled() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 24,
+            "profit_factor": 2.6,
+            "win_rate": 16 / 24,
+            "pnl_sum": 80.0,
+            "daily_trade_stats": [
+                {
+                    "date": "2026-03-11",
+                    "trades": 24,
+                    "wins": 16,
+                    "losses": 8,
+                    "gross_win_pnl": 130.0,
+                    "gross_loss_pnl": 50.0,
+                    "net_pnl": 80.0,
+                }
+            ],
+            "daily_trade_stats_by_fill_source": {
+                "live": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 4,
+                        "wins": 1,
+                        "losses": 3,
+                        "gross_win_pnl": 10.0,
+                        "gross_loss_pnl": 20.0,
+                        "net_pnl": -10.0,
+                    }
+                ],
+                "reconcile_backfill": [
+                    {
+                        "date": "2026-03-11",
+                        "trades": 20,
+                        "wins": 15,
+                        "losses": 5,
+                        "gross_win_pnl": 120.0,
+                        "gross_loss_pnl": 30.0,
+                        "net_pnl": 90.0,
+                    }
+                ],
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "trade_fill_source": "all",
+            "exclude_reconcile_backfill_from_metrics": False,
+            "min_closed_trades": 1,
+            "min_profit_factor": 1.5,
+            "min_win_rate": 0.6,
+            "min_net_pnl": 10.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": -50.0,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is True
+    observed = decision["observed"]
+    assert observed["trade_fill_source"] == "all"
+    assert observed["closed_trades"] == 24
+
+
 def test_evaluate_go_no_go_trade_fill_source_normalises_backfill_alias() -> None:
     report = {
         "trade_history": {
@@ -1379,6 +1585,103 @@ def test_evaluate_go_no_go_fails_when_slippage_drag_bps_exceeds_threshold() -> N
 
     assert decision["gate_passed"] is False
     assert "slippage_drag_bps" in decision["failed_checks"]
+
+
+def test_evaluate_go_no_go_allows_ratio_soft_breach_when_abs_and_mismatch_are_small() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 100,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 120.0,
+            "open_position_reconciliation": {
+                "available": True,
+                "abs_delta_ratio": 0.45,
+                "max_abs_delta_qty": 10.0,
+                "symbol_mismatch_count": 1,
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 15.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "trade_fill_source": "all",
+            "require_open_position_reconciliation": True,
+            "max_open_position_delta_ratio": 0.2,
+            "max_open_position_delta_ratio_hard": 0.5,
+            "max_open_position_mismatch_count": 25,
+            "max_open_position_abs_delta_qty": 50.0,
+        },
+    )
+
+    assert decision["gate_passed"] is True
+    assert "open_position_reconciliation_consistent" not in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["open_position_reconciliation_ratio_soft_ok"] is False
+    assert observed["open_position_reconciliation_ratio_hard_ok"] is True
+
+
+def test_evaluate_go_no_go_fails_when_open_position_ratio_breaches_hard_limit() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 100,
+            "profit_factor": 1.4,
+            "win_rate": 0.6,
+            "pnl_sum": 120.0,
+            "open_position_reconciliation": {
+                "available": True,
+                "abs_delta_ratio": 0.55,
+                "max_abs_delta_qty": 10.0,
+                "symbol_mismatch_count": 1,
+            },
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 15.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.01,
+            "min_expected_net_edge_bps": -50.0,
+            "require_gate_valid": True,
+            "require_pnl_available": True,
+            "trade_fill_source": "all",
+            "require_open_position_reconciliation": True,
+            "max_open_position_delta_ratio": 0.2,
+            "max_open_position_delta_ratio_hard": 0.5,
+            "max_open_position_mismatch_count": 25,
+            "max_open_position_abs_delta_qty": 50.0,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "open_position_reconciliation_consistent" in decision["failed_checks"]
+    observed = decision["observed"]
+    assert observed["open_position_reconciliation_ratio_hard_ok"] is False
 
 
 def test_evaluate_go_no_go_fails_on_open_position_reconciliation_when_required() -> None:

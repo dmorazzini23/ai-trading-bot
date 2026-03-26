@@ -3066,6 +3066,10 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             ),
         ),
         "auto_live_fail_closed": _threshold_bool("AUTO_LIVE_FAIL_CLOSED", True),
+        "exclude_reconcile_backfill_from_metrics": _threshold_bool(
+            "EXCLUDE_RECONCILE_BACKFILL_FROM_METRICS",
+            True,
+        ),
         "require_pnl_available": _threshold_bool("REQUIRE_PNL_AVAILABLE", True),
         "require_gate_valid": _threshold_bool("REQUIRE_GATE_VALID", True),
         "require_open_position_reconciliation": _threshold_bool(

@@ -31544,6 +31544,16 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
     except Exception:
         include_daily_fallback = False
     try:
+        suppress_on_healthy_backup = bool(
+            get_env(
+                "AI_TRADING_PRIMARY_FEED_DERISK_SUPPRESS_ON_HEALTHY_BACKUP",
+                True,
+                cast=bool,
+            )
+        )
+    except Exception:
+        suppress_on_healthy_backup = True
+    try:
         exit_only_on_degraded = bool(
             get_env("AI_TRADING_PRIMARY_FEED_DERISK_EXIT_ONLY_ON_DEGRADED", True, cast=bool)
         )
@@ -31568,10 +31578,45 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
     quote_synthetic = bool(quote_state.get("synthetic"))
     quote_stale = quote_age_ms is not None and quote_age_ms > quote_age_limit_ms
     quote_quality_failed = bool(quote_synthetic or quote_stale)
+    provider_status = (
+        str(provider_state.get("status") or "").strip().lower()
+        if isinstance(provider_state, MappingABC)
+        else ""
+    )
+    provider_data_status = (
+        str(provider_state.get("data_status") or "").strip().lower()
+        if isinstance(provider_state, MappingABC)
+        else ""
+    )
+    provider_reason_token = (
+        str(provider_state.get("reason") or "").strip().lower()
+        if isinstance(provider_state, MappingABC)
+        else ""
+    )
+    hard_reason_tokens = (
+        "unavailable",
+        "offline",
+        "halt",
+        "disabled",
+        "timeout",
+        "error",
+        "stale",
+        "gap",
+    )
+    backup_healthy = bool(
+        fallback_active
+        and not quote_quality_failed
+        and provider_status in {"degraded", "healthy", "ok", "unknown"}
+        and provider_data_status in {"ready", "healthy", "ok"}
+        and not any(token in provider_reason_token for token in hard_reason_tokens)
+    )
+    fallback_derisk_suppressed = bool(
+        suppress_on_healthy_backup and backup_healthy
+    )
 
     reasons: list[str] = []
     provider_reason = provider_state.get("reason") if isinstance(provider_state, MappingABC) else None
-    if fallback_active:
+    if fallback_active and not fallback_derisk_suppressed:
         reasons.append(
             str(provider_reason or "minute_fallback_active")
         )
@@ -31584,7 +31629,9 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
 
     now_ts = float(time.time())
     state_map = _ensure_runtime_state(runtime)
-    degraded_active = bool(enabled and (fallback_active or quote_quality_failed))
+    degraded_active = bool(
+        enabled and ((fallback_active and not fallback_derisk_suppressed) or quote_quality_failed)
+    )
     since_raw = state_map.get(_PRIMARY_FEED_DERISK_SINCE_TS_KEY)
     try:
         since_ts = float(since_raw) if since_raw not in (None, "") else 0.0
@@ -31625,6 +31672,9 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         "exit_only": bool(exit_only),
         "exit_only_on_degraded": bool(exit_only_on_degraded),
         "fallback_active": bool(fallback_active),
+        "fallback_derisk_suppressed": bool(fallback_derisk_suppressed),
+        "suppress_on_healthy_backup": bool(suppress_on_healthy_backup),
+        "backup_healthy": bool(backup_healthy),
         "quote_quality_failed": bool(quote_quality_failed),
         "quote_synthetic": bool(quote_synthetic),
         "quote_stale": bool(quote_stale),
@@ -31634,6 +31684,9 @@ def _resolve_primary_feed_derisk_state(runtime: Any) -> dict[str, Any]:
         if isinstance(provider_state, MappingABC)
         else None,
         "provider_status": provider_state.get("status")
+        if isinstance(provider_state, MappingABC)
+        else None,
+        "provider_data_status": provider_state.get("data_status")
         if isinstance(provider_state, MappingABC)
         else None,
         "reason": reason,
@@ -40071,6 +40124,47 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             get_env("AI_TRADING_EXECUTION_COST_AWARE_ENTRY_GUARD_ENABLED", True, cast=bool)
         )
         if cost_aware_guard_enabled and opening_trade:
+            adaptive_cost_context: dict[str, Any] = {}
+            adaptive_cost_add_bps = 0.0
+            opening_ramp_context: dict[str, Any] = {}
+            opening_ramp_add_bps = 0.0
+            if exec_engine is not None:
+                adaptive_cost_hook = getattr(exec_engine, "_cost_aware_entry_adaptive_context", None)
+                if callable(adaptive_cost_hook):
+                    try:
+                        adaptive_cost_result = adaptive_cost_hook()
+                    except Exception:
+                        adaptive_cost_result = {}
+                    if isinstance(adaptive_cost_result, Mapping):
+                        adaptive_cost_context = dict(adaptive_cost_result)
+                        try:
+                            adaptive_cost_add_bps = max(
+                                0.0,
+                                float(
+                                    adaptive_cost_context.get("additional_required_edge_bps", 0.0)
+                                    or 0.0
+                                ),
+                            )
+                        except (TypeError, ValueError):
+                            adaptive_cost_add_bps = 0.0
+                opening_ramp_hook = getattr(exec_engine, "_opening_ramp_context", None)
+                if callable(opening_ramp_hook):
+                    try:
+                        opening_ramp_result = opening_ramp_hook()
+                    except Exception:
+                        opening_ramp_result = {}
+                    if isinstance(opening_ramp_result, Mapping):
+                        opening_ramp_context = dict(opening_ramp_result)
+                        try:
+                            opening_ramp_add_bps = max(
+                                0.0,
+                                float(
+                                    opening_ramp_context.get("required_edge_add_bps", 0.0)
+                                    or 0.0
+                                ),
+                            )
+                        except (TypeError, ValueError):
+                            opening_ramp_add_bps = 0.0
             spread_bps_est = max(float(liq_features.spread_bps), 0.0)
             slippage_bps_est = max(
                 0.0,
@@ -40123,6 +40217,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 float(effective_cost_floor + edge_margin_bps),
                 float(effective_cost_floor * min_edge_to_cost_ratio),
             )
+            required_edge_bps += float(adaptive_cost_add_bps + opening_ramp_add_bps)
             if float(expected_edge_total) < required_edge_bps:
                 gates.append("COST_AWARE_ENTRY_GUARD")
                 record = DecisionRecord(
@@ -40143,7 +40238,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                             "cost_multiplier": float(cost_multiplier),
                             "edge_to_cost_min_ratio": float(min_edge_to_cost_ratio),
                             "effective_cost_floor_bps": float(effective_cost_floor),
+                            "adaptive_cost_add_bps": float(adaptive_cost_add_bps),
+                            "opening_ramp_add_bps": float(opening_ramp_add_bps),
                             "required_edge_bps": float(required_edge_bps),
+                            "adaptive_cost_context": adaptive_cost_context,
+                            "opening_ramp_context": opening_ramp_context,
                         }
                     },
                     config_snapshot=symbol_snapshot,

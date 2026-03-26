@@ -54,10 +54,32 @@ def _engine_stub() -> Any:
         "threshold_bps": -4.0,
         "min_samples": 12,
     }
+    engine._execution_quality_window = deque(maxlen=128)
+    engine._execution_quality_last_context = {
+        "enabled": False,
+        "state": "uninitialized",
+        "scale": 1.0,
+        "pause_active": False,
+        "pause_remaining_s": 0.0,
+    }
+    engine._execution_quality_pause_until_mono = 0.0
+    engine._execution_quality_recovery_streak = 0
+    engine._opening_ramp_last_context = {
+        "enabled": False,
+        "state": "inactive",
+        "order_cap_scale": 1.0,
+        "required_edge_add_bps": 0.0,
+    }
     engine._tca_fill_backfill_last_run_mono = 0.0
     engine._tca_fill_backfill_offset = 0
     engine._tca_fill_backfill_bootstrapped = False
     return engine
+
+
+@pytest.fixture(autouse=True)
+def _disable_new_global_controls(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_GOVERNOR_ENABLED", "0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RAMP_ENABLED", "0")
 
 
 def test_pending_new_timeout_policy_cancel(monkeypatch, caplog):
@@ -1141,6 +1163,78 @@ def test_runtime_gonogo_eval_failure_forces_fail_closed_outside_pytest(monkeypat
     assert "runtime_gonogo_eval_failed" in context["failed_checks"]
 
 
+def test_runtime_gonogo_reconciliation_retry_can_recover_gate(monkeypatch):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_GONOGO_RECONCILIATION_RETRY_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    eval_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: {"trade_history": {}, "gate_effectiveness": {}},
+    )
+
+    def _evaluate_go_no_go(*_args, **_kwargs):
+        eval_calls["count"] += 1
+        if eval_calls["count"] == 1:
+            return {
+                "gate_passed": False,
+                "failed_checks": ["open_position_reconciliation_consistent"],
+                "thresholds": {
+                    "max_open_position_mismatch_count": 25,
+                    "max_open_position_abs_delta_qty": 50.0,
+                },
+                "observed": {
+                    "open_position_reconciliation_mismatch_count": 1,
+                    "open_position_reconciliation_max_abs_delta_qty": 20.0,
+                },
+            }
+        return {
+            "gate_passed": True,
+            "failed_checks": [],
+            "thresholds": {},
+            "observed": {},
+        }
+
+    monkeypatch.setattr(runtime_perf_report, "evaluate_go_no_go", _evaluate_go_no_go)
+    sync_calls = {"count": 0}
+    def _sync_state() -> SimpleNamespace:
+        sync_calls["count"] = sync_calls["count"] + 1
+        return SimpleNamespace(open_orders=(), positions=())
+
+    monkeypatch.setattr(engine, "synchronize_broker_state", _sync_state)
+    monkeypatch.setattr(
+        engine,
+        "_backfill_pending_tca_from_fill_events",
+        lambda: {"enabled": True, "reason": "no_new_fill_events"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_finalize_stale_pending_tca_events",
+        lambda: {"enabled": True, "reason": "interval_not_elapsed"},
+    )
+
+    allowed, context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is True
+    assert sync_calls["count"] == 1
+    assert eval_calls["count"] == 2
+    retry = context["reconciliation_retry"]
+    assert retry["attempted"] is True
+    assert retry["gate_passed_after"] is True
+    assert context["reason"] == "reconciliation_retry_passed"
+
+
 def test_runtime_gonogo_precheck_allows_openings_when_gate_passes(monkeypatch, tmp_path):
     engine = _engine_stub()
     _write_runtime_gonogo_artifacts(
@@ -1713,6 +1807,83 @@ def test_resolve_order_submit_cap_applies_pacing_relax_floor(monkeypatch):
 
     assert cap == 4
     assert source == "configured+pacing_relax"
+
+
+def test_pending_new_policy_tightens_default_replace_cadence(monkeypatch):
+    engine = _engine_stub()
+    monkeypatch.delenv("AI_TRADING_PENDING_NEW_REPLACE_MIN_INTERVAL_SEC", raising=False)
+    monkeypatch.delenv("AI_TRADING_PENDING_NEW_REPLACE_MAX_PER_CYCLE", raising=False)
+    monkeypatch.delenv("AI_TRADING_PENDING_NEW_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("ORDER_TTL_SECONDS", raising=False)
+
+    cfg = engine._pending_new_policy_config()
+
+    assert cfg["replace_min_interval_s"] == pytest.approx(30.0)
+    assert cfg["replace_max_per_cycle"] == 1
+    assert cfg["timeout_s"] >= 20.0
+
+
+def test_resolve_order_submit_cap_includes_opening_ramp(monkeypatch):
+    engine = _engine_stub()
+    engine.ctx = SimpleNamespace(state={"service_phase": "runtime"})
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RAMP_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RAMP_WINDOW_SEC", "1200")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_RAMP_MIN_SCALE", "0.4")
+    monkeypatch.setenv("AI_TRADING_MAX_NEW_ORDERS_PER_CYCLE", "10")
+    monkeypatch.setattr(engine, "_opening_provider_guard_elapsed_seconds", lambda: 120.0)
+
+    cap, source = engine._resolve_order_submit_cap()
+
+    assert cap is not None
+    assert int(cap) < 10
+    assert "opening_ramp" in source
+
+
+def test_execution_quality_pause_blocks_openings(monkeypatch):
+    engine = _engine_stub()
+    clock = {"value": 100.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_GOVERNOR_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_MIN_SUBMITTED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_LOOKBACK_CYCLES", "2")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_FILL_RATIO_WARN", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_FILL_RATIO_PAUSE", "0.3")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_P95_FILL_SEC_WARN", "20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_P95_FILL_SEC_PAUSE", "40")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_QUALITY_PAUSE_COOLDOWN_SEC", "90")
+
+    engine._update_execution_quality_governor(
+        fill_ratio=0.1,
+        filled_durations=[45.0, 60.0, 75.0],
+        submitted=8,
+    )
+    allowed, context = engine._execution_quality_allows_openings()
+
+    assert allowed is False
+    assert context["reason"] == "execution_quality_pause"
+    assert context["pause_remaining_s"] > 0.0
+
+
+def test_cost_aware_entry_adaptive_context_uses_live_feedback(monkeypatch):
+    engine = _engine_stub()
+    engine._slippage_feedback_bps = deque([3.0, 5.0, 7.0, 9.0], maxlen=512)
+    engine._markout_feedback_bps = deque([-6.0, -5.0, -4.0, -3.0], maxlen=512)
+    engine._markout_feedback_last_context = {
+        "sample_count": 24,
+        "mean_bps": -4.5,
+        "toxic": True,
+        "threshold_bps": -4.0,
+        "min_samples": 12,
+    }
+    monkeypatch.setenv("AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_COST_AWARE_ADAPTIVE_MIN_SAMPLES", "3")
+
+    context = engine._cost_aware_entry_adaptive_context()
+
+    assert context["enabled"] is True
+    assert context["sufficient_samples"] is True
+    assert context["slippage_mean_bps"] == pytest.approx(6.0)
+    assert context["additional_required_edge_bps"] > 0.0
 
 
 def test_cancel_ratio_adaptive_cap_triggers_and_recovers(monkeypatch):

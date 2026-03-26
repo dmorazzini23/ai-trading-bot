@@ -274,6 +274,42 @@ def test_primary_feed_derisk_state_resets_when_fallback_clears(monkeypatch):
     assert runtime.state.get(bot_engine._PRIMARY_FEED_DERISK_SINCE_TS_KEY) is None
 
 
+def test_primary_feed_derisk_suppresses_when_backup_is_healthy(monkeypatch):
+    runtime = SimpleNamespace(state={})
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_AFTER_SEC", "30")
+    monkeypatch.setenv("AI_TRADING_PRIMARY_FEED_DERISK_EXIT_ONLY_ON_DEGRADED", "0")
+    monkeypatch.setenv(
+        "AI_TRADING_PRIMARY_FEED_DERISK_SUPPRESS_ON_HEALTHY_BACKUP",
+        "1",
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_data_provider_state",
+        lambda: {
+            "using_backup": True,
+            "reason": "data_available_via_backup",
+            "timeframes": {"1Min": True},
+            "status": "degraded",
+            "data_status": "ready",
+        },
+    )
+    monkeypatch.setattr(
+        bot_engine.runtime_state,
+        "observe_quote_status",
+        lambda: {"synthetic": False, "quote_age_ms": 100.0},
+    )
+
+    state = bot_engine._resolve_primary_feed_derisk_state(runtime)
+
+    assert state["fallback_active"] is True
+    assert state["backup_healthy"] is True
+    assert state["fallback_derisk_suppressed"] is True
+    assert state["triggered"] is False
+    assert state["block"] is False
+    assert state["duration_s"] == pytest.approx(0.0)
+
+
 def test_process_symbols_skips_when_degraded(symbol_processing_env, caplog):
     runtime, _state = symbol_processing_env
     runtime._data_degraded = True
