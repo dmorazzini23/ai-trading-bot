@@ -1602,6 +1602,8 @@ def _pre_rank_execution_candidates(
 
     weights: Mapping[str, Any] | None = None
     runtime_rank: Mapping[str, Any] | None = None
+    prerank_cycle = 0
+    last_selected_cycles: dict[str, int] = {}
     if runtime is not None:
         candidate = getattr(runtime, "portfolio_weights", None)
         if isinstance(candidate, Mapping):
@@ -1609,6 +1611,27 @@ def _pre_rank_execution_candidates(
         rank_candidate = getattr(runtime, "execution_candidate_rank", None)
         if isinstance(rank_candidate, Mapping):
             runtime_rank = rank_candidate
+        cycle_candidate = getattr(runtime, "_execution_prerank_cycle_idx", 0)
+        try:
+            prerank_cycle = max(int(cycle_candidate), 0) + 1
+        except (TypeError, ValueError):
+            prerank_cycle = 1
+        try:
+            setattr(runtime, "_execution_prerank_cycle_idx", prerank_cycle)
+        except Exception:
+            logger.debug("EXECUTION_CANDIDATE_PRERANK_CYCLE_SET_FAILED", exc_info=True)
+        history_candidate = getattr(runtime, "_execution_candidate_last_selected_cycle", None)
+        if isinstance(history_candidate, Mapping):
+            for raw_symbol, raw_cycle in history_candidate.items():
+                symbol = str(raw_symbol).strip().upper()
+                if not symbol:
+                    continue
+                try:
+                    parsed_cycle = int(raw_cycle)
+                except (TypeError, ValueError):
+                    continue
+                if parsed_cycle > 0:
+                    last_selected_cycles[symbol] = parsed_cycle
 
     def _weight(sym: str) -> float:
         if not weights:
@@ -1631,24 +1654,132 @@ def _pre_rank_execution_candidates(
             return 0.0
         return rank
 
+    def _rotation_key(sym: str) -> int:
+        """Return deterministic cycle-local tie-break key to avoid alpha-only bias."""
+
+        cycle_seed = max(int(prerank_cycle), 1)
+        digest = hashlib.blake2b(
+            f"{cycle_seed}:{sym}".encode("utf-8"),
+            digest_size=8,
+        ).digest()
+        return int.from_bytes(digest, byteorder="big", signed=False)
+
     rank_source = "input_order"
     if runtime_rank:
         ranked = sorted(
             deduped,
-            key=lambda sym: (-_runtime_rank_score(sym), -_weight(sym), sym),
+            key=lambda sym: (
+                -_runtime_rank_score(sym),
+                -_weight(sym),
+                _rotation_key(sym),
+                sym,
+            ),
         )
         rank_source = "runtime_rank"
     elif weights:
-        ranked = sorted(deduped, key=lambda sym: (-_weight(sym), sym))
+        ranked = sorted(deduped, key=lambda sym: (-_weight(sym), _rotation_key(sym), sym))
         rank_source = "portfolio_weights"
     else:
         ranked = list(deduped)
+
+    exploration_enabled = False
+    exploration_slots = 0
+    exploration_symbols: list[str] = []
     if top_n is None or len(ranked) <= top_n:
         selected = ranked
         dropped: list[str] = []
     else:
         selected = ranked[:top_n]
         dropped = ranked[top_n:]
+        if runtime is not None and runtime_rank:
+            try:
+                exploration_enabled = bool(
+                    get_env(
+                        "AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_ENABLED",
+                        False,
+                        cast=bool,
+                    )
+                )
+            except Exception:
+                exploration_enabled = False
+        if exploration_enabled and top_n > 1 and dropped:
+            try:
+                exploration_fraction = float(
+                    get_env(
+                        "AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_FRAC",
+                        0.2,
+                        cast=float,
+                    )
+                )
+            except Exception:
+                exploration_fraction = 0.2
+            exploration_fraction = max(0.0, min(exploration_fraction, 0.9))
+            try:
+                exploration_min = int(
+                    get_env(
+                        "AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_MIN",
+                        2,
+                        cast=int,
+                    )
+                )
+            except Exception:
+                exploration_min = 2
+            exploration_min = max(1, min(exploration_min, max(top_n - 1, 1)))
+            try:
+                exploration_stale_cycles = int(
+                    get_env(
+                        "AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_STALE_CYCLES",
+                        3,
+                        cast=int,
+                    )
+                )
+            except Exception:
+                exploration_stale_cycles = 3
+            exploration_stale_cycles = max(1, min(exploration_stale_cycles, 1000))
+            fraction_slots = (
+                int(math.ceil(float(top_n) * exploration_fraction))
+                if exploration_fraction > 0.0
+                else 0
+            )
+            exploration_slots = max(exploration_min, fraction_slots)
+            exploration_slots = max(0, min(exploration_slots, top_n - 1, len(dropped)))
+            if exploration_slots > 0:
+
+                def _stale_age(sym: str) -> int:
+                    last_cycle = max(0, int(last_selected_cycles.get(sym, 0)))
+                    cycle_now = max(int(prerank_cycle), 1)
+                    return max(cycle_now - last_cycle, cycle_now if last_cycle <= 0 else 0)
+
+                stale_pool = [
+                    sym
+                    for sym in dropped
+                    if _stale_age(sym) >= int(exploration_stale_cycles)
+                ]
+                stale_pool_set = set(stale_pool)
+                fallback_pool = [sym for sym in dropped if sym not in stale_pool_set]
+                exploration_pool = stale_pool + fallback_pool
+                exploration_pool.sort(
+                    key=lambda sym: (
+                        -_stale_age(sym),
+                        -_runtime_rank_score(sym),
+                        _rotation_key(sym),
+                        sym,
+                    )
+                )
+                exploration_symbols = exploration_pool[:exploration_slots]
+                if exploration_symbols:
+                    keep_count = max(0, top_n - len(exploration_symbols))
+                    selected = selected[:keep_count] + exploration_symbols
+                    selected_set = set(selected)
+                    dropped = [sym for sym in ranked if sym not in selected_set]
+
+    if runtime is not None and prerank_cycle > 0:
+        for symbol in selected:
+            last_selected_cycles[str(symbol).strip().upper()] = int(prerank_cycle)
+        try:
+            setattr(runtime, "_execution_candidate_last_selected_cycle", last_selected_cycles)
+        except Exception:
+            logger.debug("EXECUTION_CANDIDATE_PRERANK_HISTORY_SET_FAILED", exc_info=True)
     logger.info(
         "EXECUTION_CANDIDATE_PRERANK",
         extra={
@@ -1660,6 +1791,10 @@ def _pre_rank_execution_candidates(
             "adaptive_submit_cap": adaptive_submit_cap,
             "adaptive_submit_cap_source": adaptive_submit_cap_source,
             "rank_source": rank_source,
+            "prerank_cycle": int(prerank_cycle),
+            "exploration_enabled": bool(exploration_enabled),
+            "exploration_slots": int(exploration_slots),
+            "exploration_sample": exploration_symbols[:10],
             "selected_sample": selected[:10],
             "dropped_sample": dropped[:10],
         },

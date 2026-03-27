@@ -11,6 +11,7 @@ from ai_trading.core import bot_engine
 def _disable_shadow_snapshot_by_default(monkeypatch):
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_ENABLED", "0")
     monkeypatch.setenv("AI_TRADING_ML_SHADOW_PRERANK_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_ENABLED", "0")
 
 
 def test_data_retry_settings_clamped_and_logged(monkeypatch, caplog):
@@ -104,6 +105,31 @@ def test_pre_rank_execution_candidates_prefers_runtime_rank(monkeypatch):
     )
 
     assert ranked == ["AAPL", "GOOG"]
+
+
+def test_pre_rank_execution_candidates_can_explore_unseen_symbols(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", "2")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_FRAC", "0.5")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_MIN", "1")
+    monkeypatch.setenv("AI_TRADING_EXEC_CANDIDATE_TOP_N_EXPLORATION_STALE_CYCLES", "1")
+    runtime = type(
+        "_Runtime",
+        (),
+        {
+            "portfolio_weights": {"MSFT": 0.1, "AAPL": 0.2, "GOOG": 0.3},
+            "execution_candidate_rank": {"AAPL": 5.0, "GOOG": 4.0},
+        },
+    )()
+
+    ranked = bot_engine._pre_rank_execution_candidates(
+        ["MSFT", "AAPL", "GOOG"],
+        runtime=runtime,
+    )
+
+    assert ranked[0] == "AAPL"
+    assert "MSFT" in ranked
+    assert len(ranked) == 2
 
 
 def test_pre_rank_execution_candidates_records_shadow_snapshot_when_enabled(monkeypatch):
