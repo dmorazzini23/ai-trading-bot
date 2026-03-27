@@ -107,17 +107,64 @@ def _build_deltas(payload: dict[str, Any]) -> list[_DeltaRow]:
     return rows
 
 
-def _load_trade_history(path: Path) -> tuple[pd.DataFrame, str]:
+def _is_parquet_path(path: Path) -> bool:
+    return path.suffix.lower() in {".parquet", ".pq"}
+
+
+def _pickle_sidecar_path(path: Path) -> Path:
+    suffix = path.suffix if path.suffix else ""
+    return path.with_suffix(f"{suffix}.pkl")
+
+
+def _normalize_trade_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    if normalized.empty:
+        return normalized
+    for column in (
+        "entry_time",
+        "exit_time",
+        "timestamp",
+        "filled_at",
+        "executed_at",
+        "updated_at",
+        "ts",
+    ):
+        if column in normalized.columns:
+            normalized[column] = pd.to_datetime(
+                normalized[column],
+                errors="coerce",
+                utc=True,
+            )
+    for column in (
+        "qty",
+        "fill_qty",
+        "entry_price",
+        "fill_price",
+        "expected_price",
+        "slippage_bps",
+        "fee_amount",
+        "fee_bps",
+        "confidence",
+    ):
+        if column in normalized.columns:
+            normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    return normalized
+
+
+def _load_trade_history(path: Path) -> tuple[pd.DataFrame, str, str]:
     suffix = path.suffix.lower()
     if suffix in {".parquet", ".pq"}:
         try:
-            return pd.read_parquet(path), "parquet"
+            return pd.read_parquet(path), "parquet", "parquet"
         except Exception:
-            return pd.read_pickle(path), "pickle"
+            sidecar = _pickle_sidecar_path(path)
+            if sidecar.exists():
+                return pd.read_pickle(sidecar), "pickle_sidecar", "parquet"
+            return pd.read_pickle(path), "pickle_alias", "parquet"
     if suffix in {".pkl", ".pickle"}:
-        return pd.read_pickle(path), "pickle"
+        return pd.read_pickle(path), "pickle", "pickle"
     if suffix == ".csv":
-        return pd.read_csv(path), "csv"
+        return pd.read_csv(path), "csv", "csv"
     raise ValueError(f"Unsupported trade history format: {path}")
 
 
@@ -195,14 +242,15 @@ def _repair_rows(deltas: list[_DeltaRow], last_price: dict[str, float]) -> list[
 
 
 def _write_trade_history(path: Path, fmt: str, frame: pd.DataFrame) -> None:
+    normalized = _normalize_trade_history_frame(frame)
     if fmt == "parquet":
-        frame.to_parquet(path, index=False)  # pragma: no cover (best effort)
+        normalized.to_parquet(path, index=False)  # pragma: no cover (best effort)
         return
     if fmt == "pickle":
-        frame.to_pickle(path)
+        normalized.to_pickle(path)
         return
     if fmt == "csv":
-        frame.to_csv(path, index=False)
+        normalized.to_csv(path, index=False)
         return
     raise ValueError(f"Unsupported write format: {fmt}")
 
@@ -239,10 +287,12 @@ def main() -> int:
             args.output_json.write_text(output, encoding="utf-8")
         return 0
 
-    frame, fmt = _load_trade_history(trade_history_path)
+    frame, loaded_fmt, write_fmt = _load_trade_history(trade_history_path)
     price_map = _last_price_by_symbol(frame)
     repair_rows = _repair_rows(deltas, price_map)
     summary["repair_rows"] = len(repair_rows)
+    summary["loaded_format"] = loaded_fmt
+    summary["write_format"] = write_fmt
     summary["status"] = "dry_run"
 
     if args.apply:
@@ -258,14 +308,17 @@ def main() -> int:
             )
         else:
             frame_out = frame
-        if fmt == "parquet":
+        if write_fmt == "parquet":
             try:
                 _write_trade_history(trade_history_path, "parquet", frame_out)
-            except Exception:
-                _write_trade_history(trade_history_path, "pickle", frame_out)
-                summary["write_fallback"] = "pickle"
+            except Exception as exc:
+                sidecar = _pickle_sidecar_path(trade_history_path)
+                _write_trade_history(sidecar, "pickle", frame_out)
+                summary["write_fallback"] = "pickle_sidecar"
+                summary["write_fallback_path"] = str(sidecar)
+                summary["write_fallback_cause"] = str(exc)
         else:
-            _write_trade_history(trade_history_path, fmt, frame_out)
+            _write_trade_history(trade_history_path, write_fmt, frame_out)
         summary["status"] = "applied"
         summary["rows_before"] = int(len(frame))
         summary["rows_after"] = int(len(frame_out))

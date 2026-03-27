@@ -62,8 +62,11 @@ def test_trade_persistence_updates_canonical_history(
     caplog.clear()
     engine._handle_execution_event(order, "completed")
 
-    assert canonical_path.exists()
-    frame = pd.read_parquet(canonical_path)
+    pickle_sidecar = canonical_path.with_suffix(".parquet.pkl")
+    assert canonical_path.exists() or pickle_sidecar.exists()
+    frame, source = persistence.load_trade_history(sync_from_broker=False)
+    assert source == "canonical"
+    assert frame is not None
     assert len(frame) >= 1
     latest = frame.iloc[-1]
     assert float(latest["expected_price"]) == pytest.approx(150.0)
@@ -121,11 +124,12 @@ def test_load_trade_history_falls_back_to_pickle_when_parquet_unavailable(
     assert frame.iloc[0]["symbol"] == "AAPL"
 
 
-def test_record_trade_fill_falls_back_to_pickle_when_parquet_unavailable_outside_pytest(
+def test_record_trade_fill_falls_back_to_pickle_sidecar_when_parquet_unavailable_outside_pytest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     canonical_path = tmp_path / "trade_history.parquet"
+    pickle_sidecar = canonical_path.with_suffix(".parquet.pkl")
 
     import ai_trading.meta_learning.persistence as persistence
 
@@ -153,7 +157,8 @@ def test_record_trade_fill_falls_back_to_pickle_when_parquet_unavailable_outside
         }
     )
 
-    assert canonical_path.exists()
+    assert pickle_sidecar.exists()
+    assert not canonical_path.exists()
     frame, source = persistence.load_trade_history(sync_from_broker=False)
     assert source == "canonical"
     assert frame is not None
@@ -228,6 +233,8 @@ def test_trade_persistence_prefers_broker_reported_fee(
     )
     engine._handle_execution_event(order, "completed")
 
-    frame = pd.read_parquet(canonical_path)
+    frame, source = persistence.load_trade_history(sync_from_broker=False)
+    assert source == "canonical"
+    assert frame is not None
     latest = frame.iloc[-1]
     assert float(latest["fee_amount"]) == pytest.approx(1.25)

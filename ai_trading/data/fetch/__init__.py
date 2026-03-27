@@ -2029,13 +2029,12 @@ _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
 _FALLBACK_SUPPRESS_UNTIL: dict[tuple[str, str], float] = {}
 _BACKUP_SKIP_UNTIL: dict[tuple[str, str], datetime] = {}
 _BACKUP_PRIMARY_PROBE_AT: dict[tuple[str, str], datetime] = {}
-_BACKUP_SKIP_WINDOW = timedelta(minutes=10)
+_DEFAULT_BACKUP_SKIP_WINDOW_SECONDS = 600
 _GLOBAL_BACKUP_SKIP_UNTIL: dict[str, datetime] = {}
 _BACKUP_PRIMARY_PROBE_LAST_SEEN_AT: dict[str, datetime] = {}
 _BACKUP_SKIP_ACTIVE_SINCE: dict[str, datetime] = {}
 _BACKUP_PRIMARY_PROBE_ALERT_AT: dict[str, datetime] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
-_FALLBACK_TTL_SECONDS = int(get_env("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
 # symbol/timeframe per cycle. The mapping is pruned as cycles advance to avoid
 # unbounded growth.
@@ -2048,6 +2047,37 @@ _YF_WARNING_MAX_CYCLES = 6
 
 _SAFE_MODE_CYCLE_STATE: dict[str, Any] = {"cycle_id": None, "reason": None, "version": 0}
 _SAFE_MODE_LOGGED: set[str] = set()
+
+
+def _fallback_ttl_seconds() -> int:
+    """Return fallback-provider TTL in seconds.
+
+    Prefer ``ALPACA_FALLBACK_TTL_SECONDS`` and retain ``FALLBACK_TTL_SECONDS``
+    as a compatibility fallback.
+    """
+
+    primary_raw = get_env("ALPACA_FALLBACK_TTL_SECONDS", "", cast=str, resolve_aliases=False)
+    if primary_raw not in (None, ""):
+        try:
+            return max(int(primary_raw), 0)
+        except (TypeError, ValueError):
+            pass
+    legacy_raw = get_env("FALLBACK_TTL_SECONDS", "", cast=str, resolve_aliases=False)
+    if legacy_raw not in (None, ""):
+        try:
+            return max(int(legacy_raw), 0)
+        except (TypeError, ValueError):
+            pass
+    seconds = _env_int("ALPACA_FALLBACK_TTL_SECONDS", 180)
+    return max(seconds, 0)
+
+
+def _backup_skip_window() -> timedelta:
+    """Return per-symbol backup skip duration."""
+
+    seconds = _env_int("AI_TRADING_BACKUP_SKIP_SECONDS", _DEFAULT_BACKUP_SKIP_WINDOW_SECONDS)
+    seconds = max(0, min(seconds, 3600))
+    return timedelta(seconds=seconds)
 
 
 def _global_backup_skip_enabled(timeframe: str) -> bool:
@@ -2984,9 +3014,9 @@ def _mark_fallback(
     now_monotonic = monotonic_time()
     decision_window = getattr(provider_monitor, "decision_window_seconds", 120)
     try:
-        cooldown_hint = max(float(decision_window), float(_FALLBACK_TTL_SECONDS))
+        cooldown_hint = max(float(decision_window), float(_fallback_ttl_seconds()))
     except (TypeError, ValueError):
-        cooldown_hint = float(_FALLBACK_TTL_SECONDS)
+        cooldown_hint = float(_fallback_ttl_seconds())
     suppress_until = _FALLBACK_SUPPRESS_UNTIL.get(window_key, 0.0)
     should_emit = (
         key not in _FALLBACK_WINDOWS
@@ -3098,7 +3128,7 @@ def _mark_fallback(
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     except Exception:
         now_s = int(_time_now())
-    cooldown_seconds = max(30, _FALLBACK_TTL_SECONDS)
+    cooldown_seconds = max(30, _fallback_ttl_seconds())
     try:
         monitor = provider_monitor
         if monitor is not None:
@@ -3237,7 +3267,7 @@ def _set_backup_skip(symbol: str, timeframe: str, *, until: datetime | float | N
         until_dt = global_until
     else:
         try:
-            until_dt = now_dt + _BACKUP_SKIP_WINDOW
+            until_dt = now_dt + _backup_skip_window()
         except Exception:
             until_dt = datetime.now(tz=UTC)
     _BACKUP_SKIP_UNTIL[key] = until_dt
@@ -8337,7 +8367,7 @@ def _fetch_bars(
             if from_feed and to_feed and to_feed != from_feed:
                 _record_feed_switch(symbol, _interval, from_feed, to_feed)
             try:
-                skip_until = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
+                skip_until = datetime.now(tz=UTC) + _backup_skip_window()
             except Exception:
                 skip_until = None
             _set_backup_skip(symbol, _interval, until=skip_until)
@@ -11969,7 +11999,7 @@ def get_minute_df(
             return
         backup_skip_engaged = True
         try:
-            skip_until = datetime.now(tz=UTC) + _BACKUP_SKIP_WINDOW
+            skip_until = datetime.now(tz=UTC) + _backup_skip_window()
         except Exception:
             skip_until = None
         _set_backup_skip(symbol, "1Min", until=skip_until)

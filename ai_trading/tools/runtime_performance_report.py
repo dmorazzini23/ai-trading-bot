@@ -21,6 +21,7 @@ _DEFAULT_TRADE_HISTORY_PATH = "runtime/trade_history.parquet"
 _DEFAULT_GATE_SUMMARY_PATH = "runtime/gate_effectiveness_summary.json"
 _DEFAULT_GATE_LOG_PATH = "runtime/gate_effectiveness.jsonl"
 _DEFAULT_TCA_PATH = "runtime/tca_records.jsonl"
+_DEFAULT_FILL_EVENTS_PATH = "runtime/fill_events.jsonl"
 
 
 def _as_float(value: Any) -> float | None:
@@ -89,6 +90,7 @@ def resolve_runtime_report_paths(
     gate_summary_path: str | None = None,
     gate_log_path: str | None = None,
     tca_path: str | None = None,
+    fill_events_path: str | None = None,
 ) -> dict[str, Path | None]:
     """Resolve runtime report paths with env/runtime-root parity."""
 
@@ -111,6 +113,10 @@ def resolve_runtime_report_paths(
         "AI_TRADING_RUNTIME_PERF_TCA_PATH",
         _env_text("AI_TRADING_TCA_PATH", _DEFAULT_TCA_PATH),
     )
+    configured_fill_events = _env_text(
+        "AI_TRADING_RUNTIME_PERF_FILL_EVENTS_PATH",
+        _env_text("AI_TRADING_FILL_EVENTS_PATH", _DEFAULT_FILL_EVENTS_PATH),
+    )
 
     trade_history_raw = (
         _normalise_cli_path(trade_history_path)
@@ -128,6 +134,9 @@ def resolve_runtime_report_paths(
     tca_raw = _normalise_cli_path(tca_path)
     if tca_raw is None:
         tca_raw = configured_tca
+    fill_events_raw = _normalise_cli_path(fill_events_path)
+    if fill_events_raw is None:
+        fill_events_raw = configured_fill_events
 
     resolved_gate_log: Path | None = None
     if gate_log_raw:
@@ -141,6 +150,12 @@ def resolve_runtime_report_paths(
             tca_raw,
             default_relative=_DEFAULT_TCA_PATH,
         )
+    resolved_fill_events: Path | None = None
+    if fill_events_raw:
+        resolved_fill_events = resolve_runtime_artifact_path(
+            fill_events_raw,
+            default_relative=_DEFAULT_FILL_EVENTS_PATH,
+        )
 
     return {
         "trade_history": resolve_runtime_artifact_path(
@@ -153,6 +168,7 @@ def resolve_runtime_report_paths(
         ),
         "gate_log": resolved_gate_log,
         "tca": resolved_tca,
+        "fill_events": resolved_fill_events,
     }
 
 
@@ -1361,8 +1377,18 @@ def _aggregate_closed_trades(
     open_lot_count: int,
     broker_open_positions: Mapping[str, Any] | None = None,
     broker_open_positions_available: bool = False,
+    reconciliation_open_positions: Mapping[str, Any] | None = None,
+    reconciliation_source: str = "trade_history",
 ) -> dict[str, Any]:
     reconstructed_open_positions = dict(sorted(open_positions.items()))
+    if isinstance(reconciliation_open_positions, Mapping):
+        reconciliation_positions = {
+            str(symbol).strip().upper(): float(qty)
+            for symbol, qty in reconciliation_open_positions.items()
+            if str(symbol).strip() and _as_float(qty) is not None
+        }
+    else:
+        reconciliation_positions = dict(reconstructed_open_positions)
 
     def _build_open_position_reconciliation() -> dict[str, Any]:
         if not broker_open_positions_available or not isinstance(broker_open_positions, Mapping):
@@ -1375,17 +1401,12 @@ def _aggregate_closed_trades(
             for symbol, qty in broker_open_positions.items()
             if str(symbol).strip() and _as_float(qty) is not None
         }
-        reconstructed_positions = {
-            str(symbol).strip().upper(): float(qty)
-            for symbol, qty in reconstructed_open_positions.items()
-            if str(symbol).strip() and _as_float(qty) is not None
-        }
         mismatches: list[dict[str, Any]] = []
         only_reconstructed: list[str] = []
         only_broker: list[str] = []
         tolerance = 1e-6
-        for symbol in sorted(set(reconstructed_positions) | set(broker_positions)):
-            reconstructed_qty = reconstructed_positions.get(symbol)
+        for symbol in sorted(set(reconciliation_positions) | set(broker_positions)):
+            reconstructed_qty = reconciliation_positions.get(symbol)
             broker_qty = broker_positions.get(symbol)
             if reconstructed_qty is None:
                 only_broker.append(symbol)
@@ -1427,7 +1448,7 @@ def _aggregate_closed_trades(
             sum(abs(float(item.get("delta_qty", 0.0) or 0.0)) for item in mismatches)
         )
         total_reconstructed_abs_qty = float(
-            sum(abs(float(value)) for value in reconstructed_positions.values())
+            sum(abs(float(value)) for value in reconciliation_positions.values())
         )
         total_broker_abs_qty = float(
             sum(abs(float(value)) for value in broker_positions.values())
@@ -1440,10 +1461,12 @@ def _aggregate_closed_trades(
         )
         return {
             "available": True,
+            "source": str(reconciliation_source or "trade_history"),
             "symbol_mismatch_count": int(len(mismatches)),
             "matched_symbol_count": int(
                 max(
-                    len(set(reconstructed_positions) | set(broker_positions)) - len(mismatches),
+                    len(set(reconciliation_positions) | set(broker_positions))
+                    - len(mismatches),
                     0,
                 )
             ),
@@ -1471,6 +1494,10 @@ def _aggregate_closed_trades(
         "reconstructed_open_positions": reconstructed_open_positions,
         "open_lot_count": int(open_lot_count),
         "open_positions": reconstructed_open_positions,
+        "reconciliation_open_positions_source": str(
+            reconciliation_source or "trade_history"
+        ),
+        "reconciliation_open_position_count": int(len(reconciliation_positions)),
         "open_position_reconciliation": _build_open_position_reconciliation(),
     }
     if not closed_trades:
@@ -1732,7 +1759,70 @@ def _aggregate_closed_trades(
     return summary
 
 
-def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict[str, Any]:
+def _normalise_position_map(values: Mapping[str, Any] | None) -> dict[str, float]:
+    if not isinstance(values, Mapping):
+        return {}
+    return {
+        str(symbol).strip().upper(): float(qty)
+        for symbol, qty in values.items()
+        if str(symbol).strip() and _as_float(qty) is not None
+    }
+
+
+def _position_delta_score(
+    candidate_positions: Mapping[str, float],
+    broker_positions: Mapping[str, float],
+) -> tuple[float, int, float]:
+    tolerance = 1e-6
+    mismatch_count = 0
+    total_abs_delta = 0.0
+    max_abs_delta = 0.0
+    for symbol in set(candidate_positions) | set(broker_positions):
+        delta = float(candidate_positions.get(symbol, 0.0)) - float(
+            broker_positions.get(symbol, 0.0)
+        )
+        abs_delta = abs(delta)
+        if abs_delta <= tolerance:
+            continue
+        mismatch_count += 1
+        total_abs_delta += abs_delta
+        if abs_delta > max_abs_delta:
+            max_abs_delta = abs_delta
+    return float(total_abs_delta), int(mismatch_count), float(max_abs_delta)
+
+
+def _choose_reconciliation_positions(
+    *,
+    trade_positions: Mapping[str, Any],
+    fill_positions: Mapping[str, Any],
+    broker_positions: Mapping[str, Any] | None,
+    broker_available: bool,
+) -> tuple[dict[str, float] | None, str]:
+    trade_map = _normalise_position_map(trade_positions)
+    fill_map = _normalise_position_map(fill_positions)
+    if not fill_map:
+        return None, "trade_history"
+    if not trade_map:
+        return fill_map, "fill_events"
+    if not broker_available:
+        return None, "trade_history"
+    broker_map = _normalise_position_map(broker_positions)
+    if not broker_map:
+        return None, "trade_history"
+
+    trade_score = _position_delta_score(trade_map, broker_map)
+    fill_score = _position_delta_score(fill_map, broker_map)
+    if fill_score < trade_score:
+        return fill_map, "fill_events"
+    return None, "trade_history"
+
+
+def summarize_trade_history(
+    path: Path,
+    *,
+    tca_path: Path | None = None,
+    fill_events_path: Path | None = None,
+) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "path": str(path),
         "exists": path.exists(),
@@ -1742,6 +1832,24 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
     if tca_path is not None:
         summary["tca_path"] = str(tca_path)
         summary["tca_exists"] = bool(tca_path.exists())
+    resolved_fill_events_path = fill_events_path
+    if resolved_fill_events_path is None:
+        sibling_fill_events = path.parent / "fill_events.jsonl"
+        configured_fill_events = _env_text(
+            "AI_TRADING_RUNTIME_PERF_FILL_EVENTS_PATH",
+            _env_text("AI_TRADING_FILL_EVENTS_PATH", _DEFAULT_FILL_EVENTS_PATH),
+        )
+        configured_fill_events_path = resolve_runtime_artifact_path(
+            configured_fill_events,
+            default_relative=_DEFAULT_FILL_EVENTS_PATH,
+        )
+        resolved_fill_events_path = (
+            sibling_fill_events
+            if sibling_fill_events.exists()
+            else configured_fill_events_path
+        )
+    summary["fill_events_path"] = str(resolved_fill_events_path)
+    summary["fill_events_exists"] = bool(resolved_fill_events_path.exists())
     if not path.exists():
         return summary
 
@@ -1758,6 +1866,46 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
     summary["order_events_path"] = str(order_events_path)
     summary["order_events_exists"] = bool(order_events_path.exists())
     summary["order_source_records"] = int(len(order_source_lookup))
+
+    fill_records: list[dict[str, Any]] = []
+    fill_events: list[_FillEvent] = []
+    fill_open_positions: dict[str, float] = {}
+    fill_open_lot_count = 0
+    if resolved_fill_events_path.exists():
+        fill_records = _load_trade_rows(resolved_fill_events_path)
+        summary["fill_events_records"] = int(len(fill_records))
+        if fill_records:
+            fill_events = _extract_fill_events(
+                fill_records,
+                order_source_lookup=order_source_lookup,
+            )
+            if fill_events:
+                (
+                    _fill_closed_trades,
+                    fill_open_positions,
+                    fill_open_lot_count,
+                ) = _reconstruct_closed_trades(fill_events)
+    else:
+        summary["fill_events_records"] = 0
+    trade_events = _extract_fill_events(records, order_source_lookup=order_source_lookup)
+    trade_closed_reconstructed: list[dict[str, Any]] = []
+    trade_open_positions: dict[str, float] = {}
+    trade_open_lot_count = 0
+    if trade_events:
+        (
+            trade_closed_reconstructed,
+            trade_open_positions,
+            trade_open_lot_count,
+        ) = _reconstruct_closed_trades(trade_events)
+    (
+        reconciliation_positions,
+        reconciliation_source,
+    ) = _choose_reconciliation_positions(
+        trade_positions=trade_open_positions,
+        fill_positions=fill_open_positions,
+        broker_positions=summary.get("broker_open_positions"),
+        broker_available=bool(summary.get("broker_open_positions_available")),
+    )
 
     direct_trades = _direct_closed_trades(
         records,
@@ -1776,30 +1924,32 @@ def summarize_trade_history(path: Path, *, tca_path: Path | None = None) -> dict
             records_count=len(records),
             source="direct_pnl_rows",
             closed_trades=direct_trades,
-            open_positions={},
-            open_lot_count=0,
+            open_positions=trade_open_positions,
+            open_lot_count=int(trade_open_lot_count),
             broker_open_positions=summary.get("broker_open_positions"),
             broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
+            reconciliation_open_positions=reconciliation_positions,
+            reconciliation_source=reconciliation_source,
         )
         if cost_enrichment is not None:
             aggregated["cost_enrichment"] = cost_enrichment
         summary.update(aggregated)
         return summary
 
-    events = _extract_fill_events(records, order_source_lookup=order_source_lookup)
-    if not events:
+    if not trade_events:
         summary["pnl_available"] = False
         return summary
-    closed_trades, open_positions, open_lot_count = _reconstruct_closed_trades(events)
     summary.update(
         _aggregate_closed_trades(
             records_count=len(records),
             source="fifo_reconstructed_from_fills",
-            closed_trades=closed_trades,
-            open_positions=open_positions,
-            open_lot_count=open_lot_count,
+            closed_trades=trade_closed_reconstructed,
+            open_positions=trade_open_positions,
+            open_lot_count=trade_open_lot_count,
             broker_open_positions=summary.get("broker_open_positions"),
             broker_open_positions_available=bool(summary.get("broker_open_positions_available")),
+            reconciliation_open_positions=reconciliation_positions,
+            reconciliation_source=reconciliation_source,
         )
     )
     return summary
@@ -2059,8 +2209,13 @@ def build_report(
     gate_summary_path: Path,
     tca_path: Path | None = None,
     gate_log_path: Path | None = None,
+    fill_events_path: Path | None = None,
 ) -> dict[str, Any]:
-    trade_summary = summarize_trade_history(trade_history_path, tca_path=tca_path)
+    trade_summary = summarize_trade_history(
+        trade_history_path,
+        tca_path=tca_path,
+        fill_events_path=fill_events_path,
+    )
     gate_summary = summarize_gate_effectiveness(
         gate_summary_path,
         gate_log_path=gate_log_path,
@@ -2831,6 +2986,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional path to TCA jsonl for fee/slippage enrichment.",
     )
     parser.add_argument(
+        "--fill-events-path",
+        default=None,
+        help="Optional path to fill events jsonl used for reconciliation.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit JSON instead of text.",
@@ -2895,6 +3055,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_summary_path=args.gate_summary,
         gate_log_path=args.gate_log_path,
         tca_path=args.tca_path,
+        fill_events_path=args.fill_events_path,
     )
 
     report = build_report(
@@ -2908,6 +3069,11 @@ def main(argv: list[str] | None = None) -> int:
         gate_log_path=(
             Path(paths["gate_log"])
             if isinstance(paths.get("gate_log"), Path)
+            else None
+        ),
+        fill_events_path=(
+            Path(paths["fill_events"])
+            if isinstance(paths.get("fill_events"), Path)
             else None
         ),
     )

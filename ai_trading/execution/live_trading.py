@@ -14293,6 +14293,64 @@ class ExecutionEngine:
                     context["failed_checks"] = failed_checks
                     context["gate_passed"] = False
                     context["reason"] = "pending_new_pressure_guard"
+            if not allowed:
+                failed_checks_raw = context.get("failed_checks", [])
+                failed_checks = (
+                    [str(item).strip() for item in failed_checks_raw if str(item).strip()]
+                    if isinstance(failed_checks_raw, Sequence)
+                    and not isinstance(failed_checks_raw, (str, bytes))
+                    else []
+                )
+                if any(
+                    check
+                    in {
+                        "open_position_reconciliation_consistent",
+                        "open_position_reconciliation_available",
+                    }
+                    for check in failed_checks
+                ):
+                    observed_raw = context.get("observed")
+                    observed = (
+                        dict(observed_raw)
+                        if isinstance(observed_raw, Mapping)
+                        else {}
+                    )
+                    paths_payload: dict[str, Any] = {}
+                    paths_raw = context.get("paths")
+                    if isinstance(paths_raw, Mapping):
+                        paths_payload = {
+                            str(key): value
+                            for key, value in paths_raw.items()
+                        }
+                    logger.error(
+                        "RUNTIME_GONOGO_RECONCILIATION_BREACH_BLOCK",
+                        extra={
+                            "failed_checks": list(failed_checks),
+                            "mismatch_count": int(
+                                _safe_int(
+                                    observed.get(
+                                        "open_position_reconciliation_mismatch_count"
+                                    ),
+                                    0,
+                                )
+                            ),
+                            "max_abs_delta_qty": float(
+                                _safe_float(
+                                    observed.get(
+                                        "open_position_reconciliation_max_abs_delta_qty"
+                                    )
+                                )
+                                or 0.0
+                            ),
+                            "reconciliation_ratio": float(
+                                _safe_float(
+                                    observed.get("open_position_reconciliation_ratio")
+                                )
+                                or 0.0
+                            ),
+                            "paths": paths_payload,
+                        },
+                    )
         except Exception as exc:
             fail_closed_effective = bool(fail_closed)
             fail_closed_forced = False

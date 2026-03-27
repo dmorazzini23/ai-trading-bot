@@ -100,6 +100,26 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
     assert tf_key in data_fetcher._SKIPPED_SYMBOLS
 
 
+def test_fallback_ttl_prefers_alpaca_env_key(monkeypatch):
+    monkeypatch.setenv("FALLBACK_TTL_SECONDS", "31")
+    monkeypatch.setenv("ALPACA_FALLBACK_TTL_SECONDS", "211")
+    assert data_fetcher._fallback_ttl_seconds() == 211
+
+    monkeypatch.delenv("ALPACA_FALLBACK_TTL_SECONDS", raising=False)
+    assert data_fetcher._fallback_ttl_seconds() == 31
+
+
+def test_backup_skip_window_uses_env_override(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_BACKUP_SKIP_SECONDS", "30")
+    tf_key = ("AAPL", "1Min")
+    data_fetcher._set_backup_skip(*tf_key)
+
+    skip_until = data_fetcher._BACKUP_SKIP_UNTIL.get(tf_key)
+    assert isinstance(skip_until, datetime)
+    remaining = skip_until - datetime.now(UTC)
+    assert timedelta(seconds=15) <= remaining <= timedelta(seconds=35)
+
+
 def test_backup_skip_window_rechecks_primary_on_probe_due(monkeypatch):
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(minutes=1)

@@ -235,6 +235,8 @@ protobuf==6.32.0
     # via yfinance
 psutil==5.9.8
     # via -r requirements.txt
+pyarrow==17.0.0
+    # via -r requirements.txt
 pybreaker==1.4.0
     # via -r requirements.txt
 pycparser==2.22
