@@ -464,6 +464,21 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
                 cast=float,
             )
         )
+    min_execution_capture_ratio = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_EXECUTION_CAPTURE_RATIO",
+            None,
+            cast=float,
+        )
+    )
+    if min_execution_capture_ratio is None:
+        min_execution_capture_ratio = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_EXECUTION_CAPTURE_RATIO",
+                0.08,
+                cast=float,
+            )
+        )
     return {
         "min_closed_trades": int(max(0, min_closed_trades or 50)),
         "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.0),
@@ -523,6 +538,15 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         ),
         "max_slippage_drag_bps": float(
             max(0.0, max_slippage_drag_bps if max_slippage_drag_bps is not None else 18.0)
+        ),
+        "min_execution_capture_ratio": float(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    min_execution_capture_ratio if min_execution_capture_ratio is not None else 0.08,
+                ),
+            )
         ),
     }
 
@@ -2363,6 +2387,15 @@ def evaluate_go_no_go(
     if max_slippage_drag_bps is None:
         max_slippage_drag_bps = 18.0
     max_slippage_drag_bps = max(0.0, float(max_slippage_drag_bps))
+    min_execution_capture_ratio = _as_float(
+        threshold_map.get("min_execution_capture_ratio")
+    )
+    if min_execution_capture_ratio is None:
+        min_execution_capture_ratio = 0.08
+    min_execution_capture_ratio = max(
+        0.0,
+        min(1.0, float(min_execution_capture_ratio)),
+    )
 
     trade = report.get("trade_history", {})
     if not isinstance(trade, Mapping):
@@ -2637,6 +2670,16 @@ def evaluate_go_no_go(
 
     enforce_used_days = bool(lookback_days > 0 and min_used_days > 0)
     slippage_drag_bps = _as_float(trade.get("slippage_drag_bps"))
+    execution_attribution_raw = report.get("execution_vs_alpha")
+    execution_attribution = (
+        dict(execution_attribution_raw)
+        if isinstance(execution_attribution_raw, Mapping)
+        else {}
+    )
+    execution_capture_ratio = _as_float(
+        execution_attribution.get("execution_capture_ratio")
+    )
+    execution_drag_share = _as_float(execution_attribution.get("execution_drag_share"))
     open_position_reconciliation_raw = trade.get("open_position_reconciliation")
     open_position_reconciliation = (
         dict(open_position_reconciliation_raw)
@@ -2676,6 +2719,10 @@ def evaluate_go_no_go(
     )
     slippage_drag_ok = bool(
         slippage_drag_bps is None or slippage_drag_bps <= float(max_slippage_drag_bps)
+    )
+    execution_capture_ratio_ok = bool(
+        execution_capture_ratio is None
+        or execution_capture_ratio >= float(min_execution_capture_ratio)
     )
 
     checks = {
@@ -2722,6 +2769,11 @@ def evaluate_go_no_go(
         ),
         "slippage_drag_bps": (
             slippage_drag_ok
+            if require_pnl_available
+            else True
+        ),
+        "execution_capture_ratio": (
+            execution_capture_ratio_ok
             if require_pnl_available
             else True
         ),
@@ -2774,6 +2826,7 @@ def evaluate_go_no_go(
             "max_open_position_mismatch_count": int(max_open_position_mismatch_count),
             "max_open_position_abs_delta_qty": float(max_open_position_abs_delta_qty),
             "max_slippage_drag_bps": float(max_slippage_drag_bps),
+            "min_execution_capture_ratio": float(min_execution_capture_ratio),
         },
         "observed": {
             "pnl_available": pnl_available,
@@ -2787,6 +2840,8 @@ def evaluate_go_no_go(
             "acceptance_rate": acceptance_rate,
             "expected_net_edge_bps": expected_net_edge_bps,
             "slippage_drag_bps": slippage_drag_bps,
+            "execution_capture_ratio": execution_capture_ratio,
+            "execution_drag_share": execution_drag_share,
             "open_position_reconciliation_available": bool(reconciliation_available),
             "open_position_reconciliation_ratio": float(reconciliation_ratio),
             "open_position_reconciliation_max_abs_delta_qty": float(
@@ -3011,6 +3066,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-net-pnl", type=float, default=None)
     parser.add_argument("--min-acceptance-rate", type=float, default=None)
     parser.add_argument("--min-expected-net-edge-bps", type=float, default=None)
+    parser.add_argument("--min-execution-capture-ratio", type=float, default=None)
     parser.add_argument("--max-slippage-drag-bps", type=float, default=None)
     parser.add_argument("--max-open-position-delta-ratio", type=float, default=None)
     parser.add_argument(
@@ -3094,6 +3150,7 @@ def main(argv: list[str] | None = None) -> int:
             "min_net_pnl",
             "min_acceptance_rate",
             "min_expected_net_edge_bps",
+            "min_execution_capture_ratio",
             "max_slippage_drag_bps",
             "max_open_position_delta_ratio",
             "max_open_position_delta_ratio_hard",

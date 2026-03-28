@@ -2348,6 +2348,37 @@ def _prior_metrics_from_report_payload(
         and isinstance(runtime_perf_payload.get("thresholds", {}), Mapping)
         else {}
     )
+    runtime_execution_quality: dict[str, Any] = {}
+    if isinstance(runtime_perf_payload, Mapping):
+        observed_runtime = runtime_perf_payload.get("observed")
+        execution_vs_alpha = runtime_perf_payload.get("execution_vs_alpha")
+        if isinstance(observed_runtime, Mapping) or isinstance(execution_vs_alpha, Mapping):
+            observed_map = dict(observed_runtime) if isinstance(observed_runtime, Mapping) else {}
+            attribution_map = (
+                dict(execution_vs_alpha) if isinstance(execution_vs_alpha, Mapping) else {}
+            )
+            capture_ratio = _as_float(observed_map.get("execution_capture_ratio"))
+            if capture_ratio is None:
+                capture_ratio = _as_float(attribution_map.get("execution_capture_ratio"))
+            slippage_drag_bps = _as_float(observed_map.get("slippage_drag_bps"))
+            if slippage_drag_bps is None:
+                slippage_drag_bps = _as_float(attribution_map.get("slippage_drag_bps"))
+            runtime_execution_quality = {
+                "execution_capture_ratio": capture_ratio,
+                "slippage_drag_bps": slippage_drag_bps,
+            }
+    live_exec_gate_payload = payload.get("live_execution_quality_gate")
+    if isinstance(live_exec_gate_payload, Mapping):
+        observed_live_exec = live_exec_gate_payload.get("observed")
+        if isinstance(observed_live_exec, Mapping):
+            runtime_execution_quality = {
+                "execution_capture_ratio": _as_float(
+                    observed_live_exec.get("execution_capture_ratio")
+                ),
+                "slippage_drag_bps": _as_float(
+                    observed_live_exec.get("slippage_drag_bps")
+                ),
+            }
     return {
         "report_path": str(report_path),
         "model_id": model_id,
@@ -2363,6 +2394,7 @@ def _prior_metrics_from_report_payload(
         "fold_expectancy_bps": fold_expectancy_bps,
         "regime_calibration": payload.get("regime_calibration"),
         "runtime_performance_thresholds": runtime_perf_thresholds,
+        "runtime_execution_quality": runtime_execution_quality,
         "ts": payload.get("ts"),
     }
 
@@ -3103,6 +3135,11 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             gate_log_path=gate_log_path,
         )
         decision = performance_report.evaluate_go_no_go(report, thresholds=thresholds)
+        execution_vs_alpha = (
+            dict(report.get("execution_vs_alpha", {}))
+            if isinstance(report.get("execution_vs_alpha"), Mapping)
+            else {}
+        )
     except Exception as exc:
         logger.warning(
             "AFTER_HOURS_RUNTIME_GONOGO_FAILED",
@@ -3120,6 +3157,7 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
                 "trade_history": str(trade_history_path),
                 "gate_summary": str(gate_summary_path),
             },
+            "execution_vs_alpha": {},
         }
 
     return {
@@ -3133,6 +3171,205 @@ def _runtime_performance_go_no_go_gate() -> dict[str, Any]:
             "trade_history": str(trade_history_path),
             "gate_summary": str(gate_summary_path),
         },
+        "execution_vs_alpha": execution_vs_alpha,
+    }
+
+
+def _live_execution_quality_improvement_gate(
+    *,
+    runtime_performance_gate: Mapping[str, Any] | None,
+    prior_metrics: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Evaluate live execution quality improvements for promotion gating."""
+
+    enabled = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_GATE_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    required_for_promotion = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_GATE_REQUIRED",
+            False,
+            cast=bool,
+        )
+    )
+    min_capture_ratio = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_MIN_CAPTURE_RATIO",
+                0.10,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    max_slippage_drag_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_MAX_SLIPPAGE_DRAG_BPS",
+                9.0,
+                cast=float,
+            )
+        ),
+    )
+    min_capture_delta = _clamp(
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_MIN_CAPTURE_DELTA",
+                0.0,
+                cast=float,
+            )
+        ),
+        low=0.0,
+        high=1.0,
+    )
+    min_slippage_improvement_bps = max(
+        0.0,
+        float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_MIN_SLIPPAGE_IMPROVEMENT_BPS",
+                0.0,
+                cast=float,
+            )
+        ),
+    )
+    allow_missing_prior = bool(
+        get_env(
+            "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_ALLOW_MISSING_PRIOR",
+            True,
+            cast=bool,
+        )
+    )
+    thresholds = {
+        "min_capture_ratio": float(min_capture_ratio),
+        "max_slippage_drag_bps": float(max_slippage_drag_bps),
+        "min_capture_delta": float(min_capture_delta),
+        "min_slippage_improvement_bps": float(min_slippage_improvement_bps),
+        "allow_missing_prior": bool(allow_missing_prior),
+    }
+    if not enabled:
+        return {
+            "enabled": False,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": True,
+            "reason": "disabled",
+            "thresholds": thresholds,
+            "observed": {},
+        }
+    if not isinstance(runtime_performance_gate, Mapping) or not bool(
+        runtime_performance_gate.get("enabled", False)
+    ):
+        return {
+            "enabled": True,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": False,
+            "reason": "runtime_performance_unavailable",
+            "thresholds": thresholds,
+            "observed": {},
+        }
+    checks_payload = runtime_performance_gate.get("checks")
+    checks = dict(checks_payload) if isinstance(checks_payload, Mapping) else {}
+    observed_payload = runtime_performance_gate.get("observed")
+    observed_runtime = dict(observed_payload) if isinstance(observed_payload, Mapping) else {}
+    attribution_payload = runtime_performance_gate.get("execution_vs_alpha")
+    attribution = dict(attribution_payload) if isinstance(attribution_payload, Mapping) else {}
+
+    live_samples_sufficient = bool(checks.get("live_samples_sufficient", True))
+    capture_ratio = _as_float(
+        observed_runtime.get("execution_capture_ratio")
+    )
+    if capture_ratio is None:
+        capture_ratio = _as_float(attribution.get("execution_capture_ratio"))
+    slippage_drag_bps = _as_float(observed_runtime.get("slippage_drag_bps"))
+    if slippage_drag_bps is None:
+        slippage_drag_bps = _as_float(attribution.get("slippage_drag_bps"))
+    capture_floor = bool(
+        capture_ratio is not None and float(capture_ratio) >= float(min_capture_ratio)
+    )
+    slippage_floor = bool(
+        slippage_drag_bps is not None
+        and float(slippage_drag_bps) <= float(max_slippage_drag_bps)
+    )
+    prior_quality = (
+        dict(prior_metrics.get("runtime_execution_quality", {}))
+        if isinstance(prior_metrics, Mapping)
+        and isinstance(prior_metrics.get("runtime_execution_quality"), Mapping)
+        else {}
+    )
+    prior_capture_ratio = _as_float(prior_quality.get("execution_capture_ratio"))
+    prior_slippage_drag_bps = _as_float(prior_quality.get("slippage_drag_bps"))
+    prior_available = bool(
+        prior_capture_ratio is not None and prior_slippage_drag_bps is not None
+    )
+    delta_capture_ok = True
+    delta_slippage_ok = True
+    if prior_available:
+        delta_capture_ok = bool(
+            capture_ratio is not None
+            and float(capture_ratio)
+            >= float(prior_capture_ratio) + float(min_capture_delta)
+        )
+        delta_slippage_ok = bool(
+            slippage_drag_bps is not None
+            and float(slippage_drag_bps)
+            <= float(prior_slippage_drag_bps) - float(min_slippage_improvement_bps)
+        )
+    elif not allow_missing_prior:
+        delta_capture_ok = False
+        delta_slippage_ok = False
+
+    gate_passed = bool(
+        live_samples_sufficient
+        and capture_floor
+        and slippage_floor
+        and delta_capture_ok
+        and delta_slippage_ok
+    )
+    reason = "pass" if gate_passed else "live_exec_quality_not_met"
+    if not live_samples_sufficient:
+        reason = "live_samples_insufficient"
+    elif not capture_floor:
+        reason = "capture_ratio_floor"
+    elif not slippage_floor:
+        reason = "slippage_drag_floor"
+    elif not delta_capture_ok:
+        reason = "capture_ratio_delta"
+    elif not delta_slippage_ok:
+        reason = "slippage_drag_delta"
+    observed = {
+        "live_samples_sufficient": bool(live_samples_sufficient),
+        "execution_capture_ratio": (
+            float(capture_ratio) if capture_ratio is not None else None
+        ),
+        "slippage_drag_bps": (
+            float(slippage_drag_bps) if slippage_drag_bps is not None else None
+        ),
+        "capture_ratio_floor_passed": bool(capture_floor),
+        "slippage_drag_floor_passed": bool(slippage_floor),
+        "prior_available": bool(prior_available),
+        "prior_execution_capture_ratio": (
+            float(prior_capture_ratio) if prior_capture_ratio is not None else None
+        ),
+        "prior_slippage_drag_bps": (
+            float(prior_slippage_drag_bps)
+            if prior_slippage_drag_bps is not None
+            else None
+        ),
+        "capture_ratio_delta_passed": bool(delta_capture_ok),
+        "slippage_drag_delta_passed": bool(delta_slippage_ok),
+    }
+    return {
+        "enabled": True,
+        "required_for_promotion": required_for_promotion,
+        "gate_passed": bool(gate_passed),
+        "reason": reason,
+        "thresholds": thresholds,
+        "observed": observed,
     }
 
 
@@ -4197,6 +4434,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         regime_calibration=best.regime_calibration,
     )
     runtime_performance_gate = _runtime_performance_go_no_go_gate()
+    live_execution_quality_gate = _live_execution_quality_improvement_gate(
+        runtime_performance_gate=runtime_performance_gate,
+        prior_metrics=prior_model_metrics,
+    )
     champion_challenger_ab = _champion_challenger_ab_gate_bundle(
         best=best,
         prior_metrics=prior_model_metrics,
@@ -4208,6 +4449,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     if bool(runtime_performance_gate.get("enabled", False)):
         roadmap_additional_gates["runtime_performance"] = bool(
             runtime_performance_gate.get("gate_passed", False)
+        )
+    if bool(live_execution_quality_gate.get("required_for_promotion", False)):
+        roadmap_additional_gates["live_execution_quality"] = bool(
+            live_execution_quality_gate.get("gate_passed", False)
         )
     if bool(champion_challenger_ab.get("required_for_promotion", False)):
         roadmap_additional_gates["champion_challenger_ab"] = bool(
@@ -4246,6 +4491,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "prior_model_comparison": dict(promotion.get("prior_model_comparison", {})),
             "consecutive_passes": dict(promotion.get("consecutive_passes", {})),
             "runtime_performance_gate": runtime_performance_gate,
+            "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
         },
     )
@@ -4349,9 +4595,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "sensitivity_sweep": sensitivity_sweep,
             "roadmap": {
                 "phase_1_week_1": phase1_week1,
+                "live_execution_quality": live_execution_quality_gate,
                 "champion_challenger_ab": champion_challenger_ab,
             },
             "runtime_performance_gate": runtime_performance_gate,
+            "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
         },
     )
@@ -4438,9 +4686,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "promotion": promotion,
         "roadmap": {
             "phase_1_week_1": phase1_week1,
+            "live_execution_quality": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
         },
         "runtime_performance_gate": runtime_performance_gate,
+        "live_execution_quality_gate": live_execution_quality_gate,
         "champion_challenger_ab": champion_challenger_ab,
         "prior_model_metrics": prior_model_metrics,
         "training_data_delta": training_data_delta,

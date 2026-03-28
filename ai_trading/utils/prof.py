@@ -33,6 +33,20 @@ def _clock_seconds() -> float:
 def _monotonic_ns() -> int:
     """Return a monotonic clock reading in nanoseconds."""
 
+    # Respect explicit monkeypatches on ``time.monotonic`` first so tests can
+    # deterministically drive elapsed budget math.
+    monotonic = getattr(time, "monotonic", None)
+    monotonic_module = str(getattr(monotonic, "__module__", "") or "")
+    if (
+        callable(monotonic)
+        and monotonic_module != "time"
+        and not _is_freezegun_clock(monotonic)
+    ):
+        try:
+            return int(float(monotonic()) * 1_000_000_000)
+        except (OSError, ValueError):
+            pass
+
     perf_counter_ns = getattr(time, "perf_counter_ns", None)
     if callable(perf_counter_ns) and not _is_freezegun_clock(perf_counter_ns):
         try:
@@ -40,7 +54,6 @@ def _monotonic_ns() -> int:
         except (OSError, ValueError):
             pass
 
-    monotonic = getattr(time, "monotonic", None)
     if callable(monotonic) and not _is_freezegun_clock(monotonic):
         try:
             return int(float(monotonic()) * 1_000_000_000)

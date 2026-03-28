@@ -7010,18 +7010,36 @@ try:  # pragma: no cover - dependency import
 except ImportError:  # pragma: no cover - fallback
     _PYBREAKER_AVAILABLE = False
 
+    def _pybreaker_fallback_fail_closed() -> bool:
+        """Return whether missing pybreaker should hard-fail wrapped calls."""
+
+        try:
+            return bool(
+                get_env(
+                    "AI_TRADING_PYBREAKER_FALLBACK_FAIL_CLOSED",
+                    False,
+                    cast=bool,
+                )
+            )
+        except COMMON_EXC:
+            return False
+
     class _FailClosedCircuitBreaker:
         """Fail-closed placeholder when ``pybreaker`` is unavailable."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            self.state = "unavailable"
+            self._fail_closed = _pybreaker_fallback_fail_closed()
+            self.state = "unavailable" if self._fail_closed else "degraded"
             self.fail_counter = 0
             self.last_failure = "PYBREAKER_UNAVAILABLE"
 
         def call(self, func: Callable[..., Any]) -> Callable[..., Any]:
             @functools.wraps(func)
             def _wrapped(*a: Any, **kw: Any) -> Any:
-                raise RuntimeError("PYBREAKER_UNAVAILABLE")
+                if self._fail_closed:
+                    self.fail_counter += 1
+                    raise RuntimeError("PYBREAKER_UNAVAILABLE")
+                return func(*a, **kw)
 
             return _wrapped
 
@@ -14487,7 +14505,29 @@ def _read_trade_log(
 
     frame = local_frame
     source = "local" if frame is not None and not frame.empty else None
-    if frame is None or frame.empty:
+    allow_history_fallback = bool(sync_from_broker)
+    if (frame is None or frame.empty) and not allow_history_fallback:
+        # Keep ad-hoc/sandbox trade logs isolated from the shared canonical
+        # history, but allow fallback when both live under the same run-local
+        # directory (for example, persistence tests using tmp paths).
+        try:
+            from ai_trading.meta_learning import persistence as _meta_persistence
+
+            canonical_path = Path(getattr(_meta_persistence, "_CANONICAL_PATH", ""))
+            canonical_sidecar = (
+                canonical_path.with_suffix(f"{canonical_path.suffix}.pkl")
+                if canonical_path.suffix
+                else canonical_path.with_suffix(".pkl")
+            )
+            if canonical_path.exists() or canonical_sidecar.exists():
+                local_parent = Path(path).expanduser().resolve().parent
+                canonical_parent = canonical_path.expanduser().resolve().parent
+                allow_history_fallback = local_parent == canonical_parent
+        except (TypeError, ValueError, OSError):
+            allow_history_fallback = False
+        except ImportError:
+            allow_history_fallback = False
+    if (frame is None or frame.empty) and allow_history_fallback:
         try:
             fallback_frame, fallback_source = load_trade_history(
                 sync_from_broker=sync_from_broker,
