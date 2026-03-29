@@ -34,6 +34,8 @@ _DEFAULT_PROVIDER_STATE: dict[str, Any] = {
     "backup": None,
     "using_backup": False,
     "reason": None,
+    "reason_code": None,
+    "reason_detail": None,
     "data_status": None,
     "updated": None,
     "status": "unknown",
@@ -85,6 +87,39 @@ def _merge_state(target: dict[str, Any], updates: dict[str, Any]) -> dict[str, A
     return merged
 
 
+def _normalize_provider_reason(reason: Any) -> tuple[str | None, str | None]:
+    if reason in (None, ""):
+        return None, None
+    detail = str(reason).strip()
+    if not detail:
+        return None, None
+    normalized = detail.lower()
+    code = "unknown"
+    if "market_closed" in normalized or "market closed" in normalized:
+        code = "market_closed"
+    elif "startup" in normalized or "warmup" in normalized:
+        code = "startup"
+    elif "timeout" in normalized:
+        code = "timeout"
+    elif any(token in normalized for token in ("unauthorized", "forbidden", "auth", "invalid_api")):
+        code = "auth"
+    elif any(token in normalized for token in ("rate_limited", "too many requests", "429")):
+        code = "rate_limit"
+    elif any(token in normalized for token in ("gap_ratio", "data_gap", "gap_ratio_exceeded")):
+        code = "gap_ratio"
+    elif "stale" in normalized:
+        code = "stale"
+    elif any(token in normalized for token in ("5xx", "server_error", "upstream_unavailable")):
+        code = "upstream_5xx"
+    elif any(token in normalized for token in ("4xx", "invalid_request", "bad_request")):
+        code = "upstream_4xx"
+    elif "backup" in normalized:
+        code = "backup_active"
+    elif "quote" in normalized:
+        code = "quote_quality"
+    return code, detail[:256]
+
+
 def update_data_provider_state(
     *,
     primary: str | None = None,
@@ -92,6 +127,8 @@ def update_data_provider_state(
     backup: str | None = None,
     using_backup: bool | None = None,
     reason: str | None = None,
+    reason_code: str | None = None,
+    reason_detail: str | None = None,
     cooldown_sec: float | None = None,
     status: str | None = None,
     consecutive_failures: int | None = None,
@@ -116,6 +153,17 @@ def update_data_provider_state(
         updates["using_backup"] = bool(using_backup)
     if reason is not None:
         updates["reason"] = reason
+        derived_code, derived_detail = _normalize_provider_reason(reason)
+        if derived_code is not None:
+            updates["reason_code"] = derived_code
+        if derived_detail is not None:
+            updates["reason_detail"] = derived_detail
+    if reason_code is not None:
+        token = str(reason_code).strip().lower()
+        updates["reason_code"] = token or None
+    if reason_detail is not None:
+        detail = str(reason_detail).strip()
+        updates["reason_detail"] = detail[:256] if detail else None
     if cooldown_sec is not None:
         try:
             updates["cooldown_sec"] = max(0.0, float(cooldown_sec))
@@ -133,6 +181,11 @@ def update_data_provider_state(
     if http_code is not None:
         try:
             updates["http_code"] = int(http_code)
+            if "reason_code" not in updates:
+                if int(http_code) >= 500:
+                    updates["reason_code"] = "upstream_5xx"
+                elif int(http_code) >= 400:
+                    updates["reason_code"] = "upstream_4xx"
         except (TypeError, ValueError):
             pass
     if gap_ratio_recent is not None:
@@ -152,6 +205,13 @@ def update_data_provider_state(
             updates["data_status"] = str(data_status)
         except Exception:
             updates["data_status"] = data_status
+    if "reason_code" not in updates:
+        if using_backup is True:
+            updates["reason_code"] = "backup_active"
+        elif status is not None:
+            status_token = str(status).strip().lower()
+            if status_token in {"down", "disabled", "failed", "unreachable"}:
+                updates["reason_code"] = "provider_down"
     timeframe_key: str | None = None
     if timeframe is not None:
         try:

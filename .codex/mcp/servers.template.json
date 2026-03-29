@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "trading-runtime-data": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_runtime_data_server.py"]
+    },
+    "trading-observability": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_observability_server.py"]
+    },
+    "trading-broker": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_broker_server.py"]
+    },
+    "trading-ops": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_ops_server.py"]
+    }
+  }
+}
+

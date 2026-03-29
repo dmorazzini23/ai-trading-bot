@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI Trading Incident Connectors Every Minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=ai-trading-connectors.service
+
+[Install]
+WantedBy=timers.target

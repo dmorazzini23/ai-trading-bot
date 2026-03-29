@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Trading Metrics Forwarder (Prometheus remote_write)
+After=network-online.target ai-trading.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiuser
+Group=aiuser
+Environment=AI_TRADING_PROMETHEUS_LOCAL_PORT=19090
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+ExecStartPre=/usr/bin/install -d -m 700 -o aiuser -g aiuser /var/lib/ai-trading-bot/prometheus
+ExecStart=/usr/bin/prometheus \
+  --config.file=/etc/ai-trading/prometheus-forwarder.yml \
+  --storage.tsdb.path=/var/lib/ai-trading-bot/prometheus \
+  --storage.tsdb.retention.time=12h \
+  --web.listen-address=127.0.0.1:${AI_TRADING_PROMETHEUS_LOCAL_PORT}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/var/lib/ai-trading-bot
+
+[Install]
+WantedBy=multi-user.target

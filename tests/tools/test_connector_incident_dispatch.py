@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+
+_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "connector_incident_dispatch.py"
+_SPEC = importlib.util.spec_from_file_location("connector_incident_dispatch", _SCRIPT_PATH)
+assert _SPEC and _SPEC.loader
+dispatch = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(dispatch)
+
+
+def test_run_dispatch_calls_both_connectors() -> None:
+    calls: dict[str, dict[str, Any]] = {}
+
+    def _slack(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack"] = args
+        return {"sent": True}
+
+    def _linear(args: dict[str, Any]) -> dict[str, Any]:
+        calls["linear"] = args
+        return {"created": False, "reason": "no_runtime_regression_detected"}
+
+    def _slack_eod(args: dict[str, Any]) -> dict[str, Any]:
+        calls["slack_eod"] = args
+        return {"sent": False, "reason": "market_not_closed"}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
+            "AI_TRADING_LINEAR_API_KEY": "lin_key",
+            "AI_TRADING_LINEAR_TEAM_ID": "team123",
+        },
+        slack_notifier=_slack,
+        slack_eod_notifier=_slack_eod,
+        linear_creator=_linear,
+    )
+    assert payload["ok"] is True
+    assert payload["slack"]["attempted"] is True
+    assert payload["slack_eod"]["attempted"] is True
+    assert payload["linear"]["attempted"] is True
+    assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/abc"
+    assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
+    assert calls["slack_eod"]["require_after_hours_training"] is True
+    assert calls["linear"]["team_id"] == "team123"
+
+
+def test_run_dispatch_skips_missing_credentials() -> None:
+    payload = dispatch.run_dispatch(
+        env={},
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        linear_creator=lambda args: {"unused": args},
+    )
+    assert payload["ok"] is True
+    assert payload["slack"]["attempted"] is False
+    assert payload["slack"]["skipped_reason"] == "missing_webhook"
+    assert payload["slack_eod"]["attempted"] is False
+    assert payload["slack_eod"]["skipped_reason"] == "missing_webhook"
+    assert payload["linear"]["attempted"] is False
+    assert payload["linear"]["skipped_reason"] == "missing_api_key_or_team_id"
+
+
+def test_run_dispatch_captures_connector_errors() -> None:
+    def _broken_slack(args: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("slack broken")
+
+    payload = dispatch.run_dispatch(
+        env={"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc"},
+        slack_notifier=_broken_slack,
+        slack_eod_notifier=lambda args: {"sent": False, "reason": "market_not_closed"},
+        linear_creator=lambda args: {"created": False},
+    )
+    assert payload["ok"] is False
+    assert len(payload["errors"]) == 1
+    assert payload["errors"][0]["connector"] == "slack"

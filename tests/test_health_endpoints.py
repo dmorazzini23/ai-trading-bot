@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+from datetime import UTC, datetime
 
 import pytest
 
 import ai_trading.app as app_module
+import ai_trading.health_payload as health_payload_module
 from ai_trading.app import create_app
 from ai_trading.health import HealthCheck
 from ai_trading.telemetry import runtime_state
@@ -241,6 +243,50 @@ def test_health_market_closed_does_not_hide_unknown_broker(monkeypatch):
     assert payload["status"] == "degraded"
 
 
+def test_health_warmup_market_closed_fast_path_allows_unknown_broker(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "alpaca",
+        "using_backup": False,
+        "status": "warming_up",
+        "data_status": "warming_up",
+        "reason": "startup_config_resolved",
+    }
+    broker_state = {
+        "status": "unknown",
+        "connected": None,
+        "latency_ms": None,
+        "last_error": None,
+    }
+    service_state = {
+        "status": "warming_up",
+        "reason": "warmup_cycle",
+        "phase": "warmup",
+        "phase_since": datetime.now(UTC).isoformat(),
+    }
+    quote_state = {"status": "unknown"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(
+        health_payload_module,
+        "_market_is_closed_now",
+        lambda: True,
+    )
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["status"] == "healthy"
+    assert payload["reason"] == "market_closed"
+
+
 def test_health_payload_does_not_report_healthy_when_ok_is_false(monkeypatch):
     provider_state = {
         "primary": "alpaca",
@@ -279,3 +325,39 @@ def test_pytest_detection_silent_without_hints(monkeypatch, caplog):
     caplog.set_level("DEBUG")
     assert app_module._pytest_active() is False
     assert not [record for record in caplog.records if record.message == "PYTEST_DETECT_FALSE"]
+
+
+def test_health_payload_exposes_provider_reason_code(monkeypatch):
+    provider_state = {
+        "primary": "alpaca",
+        "active": "yahoo",
+        "backup": "yahoo",
+        "using_backup": True,
+        "status": "degraded",
+        "data_status": "ready",
+        "reason": "request_timeout",
+        "reason_code": "timeout",
+        "reason_detail": "request_timeout",
+    }
+    broker_state = {
+        "status": "connected",
+        "connected": True,
+        "latency_ms": 10.0,
+        "last_error": None,
+    }
+    service_state = {"status": "ready"}
+    quote_state = {"status": "aligned"}
+    monkeypatch.setattr(runtime_state, "observe_data_provider_state", lambda: provider_state)
+    monkeypatch.setattr(runtime_state, "observe_broker_status", lambda: broker_state)
+    monkeypatch.setattr(runtime_state, "observe_service_status", lambda: service_state)
+    monkeypatch.setattr(runtime_state, "observe_quote_status", lambda: quote_state)
+    monkeypatch.setattr(app_module, "_pytest_active", lambda: False)
+
+    app = create_app()
+    client = app.test_client()
+    response = client.get("/healthz")
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["data_provider"]["reason_code"] == "timeout"
+    assert payload["data_provider"]["reason_detail"] == "request_timeout"

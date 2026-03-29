@@ -1,0 +1,22 @@
+[Unit]
+Description=Dispatch AI Trading Incident Connectors (Slack + Linear)
+After=network-online.target ai-trading.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aiuser
+Group=aiuser
+WorkingDirectory=/home/aiuser/ai-trading-bot
+Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
+ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python /home/aiuser/ai-trading-bot/scripts/connector_incident_dispatch.py
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ai-trading-bot/runtime
+
+[Install]
+WantedBy=multi-user.target

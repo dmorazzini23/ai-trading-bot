@@ -13,6 +13,53 @@ def _safe_observe(observer: Callable[[], Any], default: Any) -> Any:
         return default
 
 
+def _timestamp_age_seconds(raw_value: Any) -> float | None:
+    if raw_value in (None, ""):
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    return max((datetime.now(UTC) - parsed).total_seconds(), 0.0)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    try:
+        from ai_trading.config.management import get_env
+
+        return bool(get_env(name, default, cast=bool))
+    except Exception:
+        return bool(default)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        from ai_trading.config.management import get_env
+
+        raw = get_env(name, default, cast=float)
+        return float(raw if raw is not None else default)
+    except Exception:
+        return float(default)
+
+
+def _market_is_closed_now() -> bool:
+    try:
+        from ai_trading.utils.base import is_market_open as _is_market_open_base
+
+        return not bool(_is_market_open_base())
+    except Exception:
+        return False
+
+
 def _model_liveness_snapshot() -> dict[str, Any]:
     try:
         from ai_trading.monitoring.model_liveness import (
@@ -117,6 +164,8 @@ def build_runtime_health_payload(
     provider_payload: dict[str, Any] = {
         "status": provider_status,
         "reason": provider_state.get("reason"),
+        "reason_code": provider_state.get("reason_code"),
+        "reason_detail": provider_state.get("reason_detail"),
         "http_code": provider_state.get("http_code"),
         "using_backup": bool(provider_state.get("using_backup")),
         "active": provider_state.get("active"),
@@ -156,6 +205,8 @@ def build_runtime_health_payload(
     service_reason = service_state.get("reason")
     provider_reason_normalized = str(provider_state.get("reason") or "").strip().lower()
     service_reason_normalized = str(service_reason or "").strip().lower()
+    service_phase_normalized = str(service_state.get("phase") or "").strip().lower()
+    service_phase_age_s = _timestamp_age_seconds(service_state.get("phase_since"))
     market_closed_mode = (
         provider_reason_normalized == "market_closed"
         or service_reason_normalized == "market_closed"
@@ -196,7 +247,40 @@ def build_runtime_health_payload(
         and not provider_disabled
         and not bool(provider_payload.get("using_backup"))
     )
+    warmup_fast_path_enabled = _env_bool(
+        "AI_TRADING_HEALTH_WARMUP_MARKET_CLOSED_FASTPATH_ENABLED",
+        True,
+    )
+    warmup_fast_path_max_age_s = max(
+        30.0,
+        min(
+            _env_float(
+                "AI_TRADING_HEALTH_WARMUP_MARKET_CLOSED_FASTPATH_MAX_AGE_SEC",
+                420.0,
+            ),
+            3600.0,
+        ),
+    )
+    warmup_market_closed_ready = (
+        warmup_fast_path_enabled
+        and service_phase_normalized == "warmup"
+        and service_reason_normalized == "warmup_cycle"
+        and (market_closed_mode or _market_is_closed_now())
+        and not provider_disabled
+        and not data_degraded
+        and not bool(provider_payload.get("using_backup"))
+        and not broker_down
+        and not broker_degraded
+        and (broker_healthy or broker_unknown)
+        and (
+            service_phase_age_s is None
+            or float(service_phase_age_s) <= float(warmup_fast_path_max_age_s)
+        )
+    )
     if offhours_market_closed_ready:
+        overall_ok = True
+        degraded = False
+    elif warmup_market_closed_ready:
         overall_ok = True
         degraded = False
     if force_ok_for_pytest:
@@ -205,6 +289,8 @@ def build_runtime_health_payload(
         degraded = True
 
     if offhours_market_closed_ready:
+        resolved_status = "healthy"
+    elif warmup_market_closed_ready:
         resolved_status = "healthy"
     elif degraded:
         resolved_status = "degraded"
@@ -235,6 +321,8 @@ def build_runtime_health_payload(
         "model_liveness": model_liveness,
     }
     if offhours_market_closed_ready:
+        payload["reason"] = "market_closed"
+    elif warmup_market_closed_ready:
         payload["reason"] = "market_closed"
     elif service_reason:
         payload.setdefault("reason", service_reason)
@@ -308,11 +396,13 @@ def build_api_health_payload(
     shadow = False
 
     try:
-        from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
+        from ai_trading.alpaca_api import ALPACA_AVAILABLE as alpaca_sdk_available
     except Exception as exc:  # pragma: no cover - defensive
         alpaca_import_ok = False
         errors.append(str(exc) or exc.__class__.__name__)
         sdk_ok = False
+    else:
+        sdk_ok = bool(alpaca_sdk_available)
 
     if alpaca_import_ok:
         try:

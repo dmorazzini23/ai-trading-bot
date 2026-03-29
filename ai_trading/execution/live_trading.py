@@ -2194,6 +2194,7 @@ class ExecutionEngine:
         self._skip_last_logged_at: dict[str, float] = {}
         self._skip_detail_last_logged_at: dict[str, float] = {}
         self._recent_order_intents: dict[tuple[str, str], float] = {}
+        self._recent_client_order_ids: dict[str, float] = {}
         self._cycle_reserved_intents: set[tuple[str, str]] = set()
         self._cycle_reserved_intents_lock = Lock()
         self._capacity_reservation_lock = Lock()
@@ -2265,6 +2266,18 @@ class ExecutionEngine:
             "order_cap_scale": 1.0,
             "required_edge_add_bps": 0.0,
         }
+        self._execution_learning_state: dict[str, Any] = (
+            self._default_execution_learning_state()
+        )
+        self._execution_learning_last_persist_mono: float = 0.0
+        self._execution_learning_updates_since_persist: int = 0
+        self._execution_autotune_cache_until_mono: float = 0.0
+        self._execution_autotune_cache: dict[str, Any] = {}
+        self._execution_autotune_last_generated_date: str = ""
+        self._execution_autotune_last_refresh_mono: float = 0.0
+        self._execution_learning_eod_force_date: str = ""
+        self._execution_vs_alpha_alert_last_mono: float = 0.0
+        self._execution_vs_alpha_alert_active: bool = False
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
@@ -2282,6 +2295,9 @@ class ExecutionEngine:
             self._api_key, self._api_secret = key, secret
             _update_credential_state(bool(key), bool(secret))
         self._refresh_settings()
+        self._load_execution_learning_state()
+        self._ensure_execution_learning_bootstrap_artifacts()
+        self._refresh_execution_daily_autotune(force=False)
         if self._explicit_mode is not None:
             self.execution_mode = str(self._explicit_mode).lower()
         if self._explicit_shadow is not None:
@@ -2320,6 +2336,8 @@ class ExecutionEngine:
         """Cache the Alpaca account snapshot for this trading cycle."""
 
         self._engine_cycle_index = int(max(getattr(self, "_engine_cycle_index", 0), 0)) + 1
+        self._refresh_execution_daily_autotune(force=False)
+        self._ensure_close_session_execution_artifacts()
         self._cycle_submitted_orders = 0
         self._cycle_new_orders_submitted = 0
         self._cycle_maintenance_actions = 0
@@ -4139,6 +4157,100 @@ class ExecutionEngine:
             self._recent_order_intents = intents
         intents[key] = monotonic_time()
 
+    def _duplicate_client_order_id_window_seconds(self) -> float:
+        """Return duplicate client-order-id suppression window in seconds."""
+
+        value = _config_float("AI_TRADING_CLIENT_ORDER_ID_DEDUPE_WINDOW_SEC", 900.0)
+        if value is None or not math.isfinite(float(value)):
+            value = 900.0
+        return max(0.0, min(float(value), 86400.0))
+
+    def _prune_recent_client_order_ids(self, *, now_ts: float | None = None) -> None:
+        """Drop stale client-order-id entries outside the configured dedupe window."""
+
+        store = getattr(self, "_recent_client_order_ids", None)
+        if not isinstance(store, dict):
+            self._recent_client_order_ids = {}
+            return
+        window_s = self._duplicate_client_order_id_window_seconds()
+        if window_s <= 0.0:
+            store.clear()
+            return
+        current_ts = float(monotonic_time() if now_ts is None else now_ts)
+        stale_keys: list[str] = []
+        for key, value in store.items():
+            try:
+                age_s = max(current_ts - float(value), 0.0)
+            except (TypeError, ValueError):
+                age_s = window_s + 1.0
+            if age_s >= window_s:
+                stale_keys.append(str(key))
+        for key in stale_keys:
+            store.pop(key, None)
+
+    def _should_suppress_duplicate_client_order_id(
+        self,
+        *,
+        client_order_id: str | None,
+        symbol: str | None = None,
+        side: str | None = None,
+    ) -> bool:
+        """Return ``True`` when client-order-id replay should be blocked."""
+
+        enabled = _resolve_bool_env("AI_TRADING_CLIENT_ORDER_ID_DEDUPE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return False
+
+        token = str(client_order_id or "").strip()
+        if not token:
+            return False
+        window_s = self._duplicate_client_order_id_window_seconds()
+        if window_s <= 0.0:
+            return False
+        store = getattr(self, "_recent_client_order_ids", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._recent_client_order_ids = store
+
+        now_ts = float(monotonic_time())
+        self._prune_recent_client_order_ids(now_ts=now_ts)
+        last_ts_raw = store.get(token)
+        if last_ts_raw is None:
+            return False
+        try:
+            age_s = max(now_ts - float(last_ts_raw), 0.0)
+        except (TypeError, ValueError):
+            age_s = 0.0
+        if age_s >= window_s:
+            return False
+        logger.warning(
+            "ORDER_SUBMIT_DUPLICATE_CLIENT_ORDER_ID_SUPPRESSED",
+            extra={
+                "client_order_id": token,
+                "symbol": str(symbol or "").upper() or None,
+                "side": str(side or "").lower() or None,
+                "age_s": round(float(age_s), 3),
+                "window_s": round(float(window_s), 3),
+            },
+        )
+        return True
+
+    def _record_client_order_id_submission(self, client_order_id: str | None) -> None:
+        """Persist latest submit timestamp for client-order-id replay suppression."""
+
+        token = str(client_order_id or "").strip()
+        if not token:
+            return
+        store = getattr(self, "_recent_client_order_ids", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._recent_client_order_ids = store
+        now_ts = float(monotonic_time())
+        self._prune_recent_client_order_ids(now_ts=now_ts)
+        store[token] = now_ts
+
     @staticmethod
     def _coerce_finite_float(value: Any) -> float | None:
         """Return finite float when value is numeric, otherwise ``None``."""
@@ -4388,6 +4500,11 @@ class ExecutionEngine:
         markout_toxic = bool(
             markout_context.get("toxic") if isinstance(markout_context, Mapping) else False
         )
+        tod_context = self._execution_time_of_day_regime()
+        session_regime = str(tod_context.get("session_regime") or "").strip().lower() or "offhours"
+        session_stress_add = self._coerce_finite_float(
+            tod_context.get("profile_stress_add")
+        ) or 0.0
         spread_stress = min(max(((spread_bps or 0.0) - 5.0) / 20.0, 0.0), 1.0)
         age_stress = min(max(((quote_age_ms or 0.0) - 900.0) / 4500.0, 0.0), 1.0)
         slippage_stress = min(max((float(slippage_mean_bps) - 4.0) / 14.0, 0.0), 1.0)
@@ -4399,6 +4516,10 @@ class ExecutionEngine:
             + (0.24 * slippage_stress)
             + (0.16 * vol_stress)
             + (0.12 * toxicity_stress)
+        )
+        profile_score = min(
+            1.0,
+            max(0.0, float(profile_score) + float(session_stress_add)),
         )
         if bool(degrade_active):
             profile_score = min(1.0, profile_score + 0.2)
@@ -4416,6 +4537,14 @@ class ExecutionEngine:
             "profile_score": float(profile_score),
             "stress_score": float(profile_score),
             "degraded_feed": bool(degrade_active),
+            "session_regime": session_regime,
+            "session_profile_stress_add": float(session_stress_add),
+            "session_urgency_bias_add": int(
+                _safe_int(tod_context.get("urgency_bias_add"), 0)
+            ),
+            "session_passive_penalty_add": float(
+                self._coerce_finite_float(tod_context.get("passive_penalty_add")) or 0.0
+            ),
             "inputs": {
                 "spread_bps": float(spread_bps) if spread_bps is not None else None,
                 "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
@@ -4423,6 +4552,7 @@ class ExecutionEngine:
                 "slippage_volatility_bps": float(slippage_vol_bps),
                 "markout_toxic": bool(markout_toxic),
                 "markout_mean_bps": float(markout_mean_bps),
+                "session_regime": session_regime,
             },
         }
 
@@ -4757,6 +4887,1015 @@ class ExecutionEngine:
             "p95_fill_s_rolling": context.get("p95_fill_s_rolling"),
         }
 
+    @staticmethod
+    def _default_execution_learning_state() -> dict[str, Any]:
+        """Return normalized default execution-learning state payload."""
+
+        return {
+            "version": 1,
+            "updated_at": None,
+            "global": {
+                "samples": 0,
+                "fills": 0,
+                "fill_rate": 0.0,
+                "slippage_samples": 0,
+                "mean_slippage_bps": 0.0,
+                "edge_samples": 0,
+                "mean_net_edge_bps": 0.0,
+            },
+            "buckets": {},
+        }
+
+    def _execution_learning_state_path(self) -> Path:
+        """Resolve runtime path for execution-learning persistence."""
+
+        configured = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_LEARNING_STATE_PATH",
+                "runtime/execution_learning_state.json",
+            )
+            or "runtime/execution_learning_state.json"
+        ).strip() or "runtime/execution_learning_state.json"
+        return cast(
+            Path,
+            resolve_runtime_artifact_path(
+                configured,
+                default_relative="runtime/execution_learning_state.json",
+            ),
+        )
+
+    def _execution_autotune_path(self) -> Path:
+        """Resolve runtime path for daily execution autotune payload."""
+
+        configured = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_AUTOTUNE_PATH",
+                "runtime/execution_autotune.json",
+            )
+            or "runtime/execution_autotune.json"
+        ).strip() or "runtime/execution_autotune.json"
+        return cast(
+            Path,
+            resolve_runtime_artifact_path(
+                configured,
+                default_relative="runtime/execution_autotune.json",
+            ),
+        )
+
+    def _load_execution_learning_state(self) -> None:
+        """Load persisted execution-learning state when available."""
+
+        path = self._execution_learning_state_path()
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug(
+                "EXECUTION_LEARNING_STATE_LOAD_FAILED",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
+            return
+        if not isinstance(raw, Mapping):
+            return
+        state = self._default_execution_learning_state()
+        updated_at = raw.get("updated_at")
+        if updated_at not in (None, ""):
+            state["updated_at"] = str(updated_at)
+
+        def _normalize_entry(payload: Mapping[str, Any]) -> dict[str, Any]:
+            samples = max(0, _safe_int(payload.get("samples"), 0))
+            fills = max(0, min(samples, _safe_int(payload.get("fills"), 0)))
+            slippage_samples = max(0, _safe_int(payload.get("slippage_samples"), 0))
+            edge_samples = max(0, _safe_int(payload.get("edge_samples"), 0))
+            mean_slippage = _safe_float(payload.get("mean_slippage_bps"))
+            mean_edge = _safe_float(payload.get("mean_net_edge_bps"))
+            return {
+                "samples": int(samples),
+                "fills": int(fills),
+                "fill_rate": (
+                    float(fills) / float(samples)
+                    if samples > 0
+                    else 0.0
+                ),
+                "slippage_samples": int(slippage_samples),
+                "mean_slippage_bps": (
+                    float(mean_slippage) if mean_slippage is not None else 0.0
+                ),
+                "edge_samples": int(edge_samples),
+                "mean_net_edge_bps": (
+                    float(mean_edge) if mean_edge is not None else 0.0
+                ),
+            }
+
+        global_raw = raw.get("global")
+        if isinstance(global_raw, Mapping):
+            state["global"] = _normalize_entry(global_raw)
+        buckets_raw = raw.get("buckets")
+        buckets: dict[str, dict[str, Any]] = {}
+        if isinstance(buckets_raw, Mapping):
+            for key_raw, value in buckets_raw.items():
+                if not isinstance(value, Mapping):
+                    continue
+                key = str(key_raw or "").strip().lower()
+                if not key:
+                    continue
+                entry = _normalize_entry(value)
+                if int(entry.get("samples", 0)) <= 0:
+                    continue
+                buckets[key] = entry
+        state["buckets"] = buckets
+        self._execution_learning_state = state
+
+    def _persist_execution_learning_state(self, *, force: bool = False) -> None:
+        """Persist execution-learning state to runtime storage."""
+
+        auto_write = _resolve_bool_env("AI_TRADING_EXECUTION_LEARNING_AUTO_WRITE")
+        if auto_write is None:
+            auto_write = True
+        if not bool(auto_write):
+            return
+        now_mono = float(monotonic_time())
+        min_interval_s = _config_float(
+            "AI_TRADING_EXECUTION_LEARNING_PERSIST_MIN_INTERVAL_SEC",
+            30.0,
+        )
+        if min_interval_s is None or not math.isfinite(float(min_interval_s)):
+            min_interval_s = 30.0
+        min_interval_s = max(1.0, min(float(min_interval_s), 3600.0))
+        min_updates = _config_int(
+            "AI_TRADING_EXECUTION_LEARNING_PERSIST_MIN_UPDATES",
+            5,
+        )
+        if min_updates is None:
+            min_updates = 5
+        min_updates = max(1, min(int(min_updates), 500))
+        updates_since_last = int(
+            max(getattr(self, "_execution_learning_updates_since_persist", 0), 0)
+        )
+        last_persist_mono = float(
+            getattr(self, "_execution_learning_last_persist_mono", 0.0) or 0.0
+        )
+        if (
+            not force
+            and updates_since_last < int(min_updates)
+            and (now_mono - last_persist_mono) < float(min_interval_s)
+        ):
+            return
+
+        state_raw = getattr(self, "_execution_learning_state", None)
+        if not isinstance(state_raw, Mapping):
+            return
+        payload = dict(state_raw)
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        path = self._execution_learning_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(f"{path.suffix}.tmp")
+            temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            temp_path.replace(path)
+            self._execution_learning_last_persist_mono = now_mono
+            self._execution_learning_updates_since_persist = 0
+        except Exception:
+            logger.debug(
+                "EXECUTION_LEARNING_STATE_WRITE_FAILED",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
+
+    def _ensure_execution_learning_bootstrap_artifacts(self) -> None:
+        """Bootstrap execution-learning/autotune artifacts before live samples accumulate."""
+
+        learning_enabled = _resolve_bool_env("AI_TRADING_EXECUTION_LEARNING_ENABLED")
+        if learning_enabled is None:
+            learning_enabled = True
+        if not bool(learning_enabled):
+            return
+        bootstrap_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_LEARNING_BOOTSTRAP_WRITE_ENABLED"
+        )
+        if bootstrap_enabled is None:
+            bootstrap_enabled = True
+        if not bool(bootstrap_enabled):
+            return
+
+        learning_path = self._execution_learning_state_path()
+        if not learning_path.exists():
+            self._persist_execution_learning_state(force=True)
+
+        autotune_enabled = _resolve_bool_env("AI_TRADING_EXECUTION_AUTOTUNE_ENABLED")
+        if autotune_enabled is None:
+            autotune_enabled = True
+        auto_write = _resolve_bool_env("AI_TRADING_EXECUTION_AUTOTUNE_AUTO_WRITE")
+        if auto_write is None:
+            auto_write = True
+        if not bool(autotune_enabled) or not bool(auto_write):
+            return
+
+        path = self._execution_autotune_path()
+        if path.exists():
+            return
+
+        state_raw = getattr(self, "_execution_learning_state", None)
+        state = dict(state_raw) if isinstance(state_raw, Mapping) else {}
+        global_raw = state.get("global")
+        global_stats = dict(global_raw) if isinstance(global_raw, Mapping) else {}
+        sample_count = max(0, _safe_int(global_stats.get("samples"), 0))
+        fill_rate = max(0.0, min(1.0, _safe_float(global_stats.get("fill_rate")) or 0.0))
+        mean_slippage_bps = max(
+            0.0,
+            _safe_float(global_stats.get("mean_slippage_bps")) or 0.0,
+        )
+        mean_net_edge_bps = _safe_float(global_stats.get("mean_net_edge_bps")) or 0.0
+        min_samples = _config_int("AI_TRADING_EXECUTION_AUTOTUNE_MIN_SAMPLES", 25)
+        if min_samples is None:
+            min_samples = 25
+        min_samples = max(5, min(int(min_samples), 5000))
+
+        now_utc = datetime.now(UTC)
+        payload = {
+            "generated_at": now_utc.isoformat(),
+            "date": now_utc.date().isoformat(),
+            "enabled": True,
+            "active": False,
+            "reason": "insufficient_samples",
+            "profile_bias": "balanced",
+            "passive_fill_min_prob_add": 0.0,
+            "replace_max_per_cycle_scale": 1.0,
+            "router_aggressiveness_add": 0.0,
+            "sample_count": int(sample_count),
+            "fill_rate": float(fill_rate),
+            "mean_slippage_bps": float(mean_slippage_bps),
+            "mean_net_edge_bps": float(mean_net_edge_bps),
+            "min_samples": int(min_samples),
+            "source": "execution_learning_bootstrap",
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(f"{path.suffix}.tmp")
+            temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            temp_path.replace(path)
+            self._execution_autotune_cache = {
+                "enabled": True,
+                "active": False,
+                "reason": "insufficient_samples",
+                "path": str(path),
+                "generated_at": payload["generated_at"],
+                "age_hours": 0.0,
+                "profile_bias": payload["profile_bias"],
+                "passive_fill_min_prob_add": 0.0,
+                "replace_max_per_cycle_scale": 1.0,
+                "router_aggressiveness_add": 0.0,
+                "sample_count": int(sample_count),
+                "source": payload["source"],
+            }
+            self._execution_autotune_cache_until_mono = float(monotonic_time()) + 30.0
+            logger.info(
+                "EXECUTION_AUTOTUNE_BOOTSTRAP_WRITTEN",
+                extra={
+                    "path": str(path),
+                    "sample_count": int(sample_count),
+                    "min_samples": int(min_samples),
+                },
+            )
+        except Exception:
+            logger.debug(
+                "EXECUTION_AUTOTUNE_BOOTSTRAP_WRITE_FAILED",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
+
+    def _ensure_close_session_execution_artifacts(self) -> None:
+        """Force-write execution-learning artifacts once per market-closed date."""
+
+        if _market_is_open_now():
+            return
+        session_date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        if str(getattr(self, "_execution_learning_eod_force_date", "")) == session_date:
+            return
+        try:
+            self._ensure_execution_learning_bootstrap_artifacts()
+            self._persist_execution_learning_state(force=True)
+            self._refresh_execution_daily_autotune(force=True)
+            learning_path = self._execution_learning_state_path()
+            autotune_path = self._execution_autotune_path()
+            learning_exists = bool(learning_path.exists())
+            autotune_exists = bool(autotune_path.exists())
+            self._execution_learning_eod_force_date = str(session_date)
+            logger.info(
+                "EXECUTION_LEARNING_CLOSE_MAINTENANCE",
+                extra={
+                    "date": str(session_date),
+                    "learning_path": str(learning_path),
+                    "learning_exists": bool(learning_exists),
+                    "autotune_path": str(autotune_path),
+                    "autotune_exists": bool(autotune_exists),
+                },
+            )
+            if not learning_exists or not autotune_exists:
+                logger.warning(
+                    "EXECUTION_LEARNING_CLOSE_MAINTENANCE_MISSING_ARTIFACT",
+                    extra={
+                        "date": str(session_date),
+                        "learning_path": str(learning_path),
+                        "learning_exists": bool(learning_exists),
+                        "autotune_path": str(autotune_path),
+                        "autotune_exists": bool(autotune_exists),
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "EXECUTION_LEARNING_CLOSE_MAINTENANCE_FAILED",
+                extra={"date": str(session_date)},
+                exc_info=True,
+            )
+
+    def _execution_time_of_day_regime(self) -> dict[str, Any]:
+        """Return execution regime context based on New York session clock."""
+
+        now_ny = datetime.now(ZoneInfo("America/New_York"))
+        weekday = int(now_ny.weekday())
+        minute_of_day = int((now_ny.hour * 60) + now_ny.minute)
+        open_minute = (9 * 60) + 30
+        close_minute = 16 * 60
+        session_regime = "offhours"
+        profile_stress_add = 0.0
+        urgency_bias_add = 0
+        passive_penalty_add = 0.0
+        minutes_from_open: int | None = None
+        if weekday < 5 and open_minute <= minute_of_day < close_minute:
+            minutes_from_open = minute_of_day - open_minute
+            minutes_to_close = close_minute - minute_of_day
+            if minutes_from_open < 45:
+                session_regime = "opening"
+                profile_stress_add = 0.05
+                urgency_bias_add = 1
+                passive_penalty_add = 0.03
+            elif minutes_to_close <= 45:
+                session_regime = "closing"
+                profile_stress_add = 0.09
+                urgency_bias_add = 1
+                passive_penalty_add = 0.06
+            else:
+                session_regime = "midday"
+                profile_stress_add = -0.04
+                urgency_bias_add = 0
+                passive_penalty_add = -0.02
+        return {
+            "session_regime": str(session_regime),
+            "weekday": int(weekday),
+            "minute_of_day": int(minute_of_day),
+            "minutes_from_open": int(minutes_from_open) if minutes_from_open is not None else None,
+            "profile_stress_add": float(profile_stress_add),
+            "urgency_bias_add": int(urgency_bias_add),
+            "passive_penalty_add": float(passive_penalty_add),
+        }
+
+    def _execution_learning_bucket_context(
+        self,
+        *,
+        side: str | None,
+        execution_profile_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return normalized execution-learning bucket fields."""
+
+        side_token = str(side or "").strip().lower()
+        if side_token not in {"buy", "sell", "cover", "short"}:
+            side_token = "unknown"
+        profile_token = ""
+        if isinstance(execution_profile_context, Mapping):
+            profile_token = str(execution_profile_context.get("profile") or "").strip().lower()
+        if profile_token not in {"passive", "balanced", "urgent", "protective"}:
+            profile_token = "balanced"
+        session_token = ""
+        if isinstance(execution_profile_context, Mapping):
+            session_token = str(execution_profile_context.get("session_regime") or "").strip().lower()
+        if not session_token:
+            session_token = str(self._execution_time_of_day_regime().get("session_regime") or "offhours")
+        if session_token not in {"opening", "midday", "closing", "offhours"}:
+            session_token = "offhours"
+        bucket_key = f"{session_token}:{profile_token}:{side_token}"
+        return {
+            "bucket_key": str(bucket_key),
+            "session_regime": str(session_token),
+            "profile": str(profile_token),
+            "side": str(side_token),
+        }
+
+    def _execution_learning_snapshot(
+        self,
+        *,
+        side: str | None,
+        execution_profile_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return execution-learning summary for routing and passive controls."""
+
+        bucket_context = self._execution_learning_bucket_context(
+            side=side,
+            execution_profile_context=execution_profile_context,
+        )
+        state_raw = getattr(self, "_execution_learning_state", None)
+        if not isinstance(state_raw, Mapping):
+            state_raw = self._default_execution_learning_state()
+        global_raw = (
+            state_raw.get("global")
+            if isinstance(state_raw, Mapping)
+            else None
+        )
+        global_stats = dict(global_raw) if isinstance(global_raw, Mapping) else {}
+        buckets_raw = (
+            state_raw.get("buckets")
+            if isinstance(state_raw, Mapping)
+            else None
+        )
+        bucket_stats_raw = None
+        if isinstance(buckets_raw, Mapping):
+            bucket_stats_raw = buckets_raw.get(bucket_context["bucket_key"])
+        bucket_stats = (
+            dict(bucket_stats_raw)
+            if isinstance(bucket_stats_raw, Mapping)
+            else {}
+        )
+        return {
+            "bucket": bucket_context,
+            "global": {
+                "samples": max(0, _safe_int(global_stats.get("samples"), 0)),
+                "fill_rate": max(
+                    0.0,
+                    min(1.0, _safe_float(global_stats.get("fill_rate")) or 0.0),
+                ),
+                "mean_slippage_bps": _safe_float(
+                    global_stats.get("mean_slippage_bps")
+                )
+                or 0.0,
+                "mean_net_edge_bps": _safe_float(global_stats.get("mean_net_edge_bps"))
+                or 0.0,
+            },
+            "bucket_stats": {
+                "samples": max(0, _safe_int(bucket_stats.get("samples"), 0)),
+                "fill_rate": max(
+                    0.0,
+                    min(1.0, _safe_float(bucket_stats.get("fill_rate")) or 0.0),
+                ),
+                "mean_slippage_bps": _safe_float(
+                    bucket_stats.get("mean_slippage_bps")
+                )
+                or 0.0,
+                "mean_net_edge_bps": _safe_float(bucket_stats.get("mean_net_edge_bps"))
+                or 0.0,
+            },
+            "updated_at": state_raw.get("updated_at")
+            if isinstance(state_raw, Mapping)
+            else None,
+        }
+
+    def _execution_learning_route_adjustment(
+        self,
+        *,
+        side: str | None,
+        execution_profile_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Derive bounded routing/passive adjustments from live execution learning."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_LEARNING_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return {
+                "enabled": False,
+                "active": False,
+                "reason": "disabled",
+                "router_aggressiveness_add": 0.0,
+                "passive_fill_min_prob_add": 0.0,
+                "replace_max_per_cycle_scale": 1.0,
+                "profile_bias": None,
+            }
+        snapshot = self._execution_learning_snapshot(
+            side=side,
+            execution_profile_context=execution_profile_context,
+        )
+        min_samples = _config_int("AI_TRADING_EXECUTION_LEARNING_MIN_SAMPLES", 24)
+        if min_samples is None:
+            min_samples = 24
+        min_samples = max(5, min(int(min_samples), 5000))
+        global_stats = dict(snapshot.get("global") or {})
+        bucket_stats = dict(snapshot.get("bucket_stats") or {})
+        source = "bucket"
+        source_stats = bucket_stats
+        bucket_samples = max(0, _safe_int(bucket_stats.get("samples"), 0))
+        if bucket_samples < int(min_samples):
+            source = "global"
+            source_stats = global_stats
+        samples = max(0, _safe_int(source_stats.get("samples"), 0))
+        if samples < int(min_samples):
+            return {
+                "enabled": True,
+                "active": False,
+                "reason": "insufficient_samples",
+                "source": source,
+                "samples": int(samples),
+                "min_samples": int(min_samples),
+                "router_aggressiveness_add": 0.0,
+                "passive_fill_min_prob_add": 0.0,
+                "replace_max_per_cycle_scale": 1.0,
+                "profile_bias": None,
+            }
+        fill_rate = max(0.0, min(1.0, _safe_float(source_stats.get("fill_rate")) or 0.0))
+        mean_slippage_bps = max(
+            0.0,
+            _safe_float(source_stats.get("mean_slippage_bps")) or 0.0,
+        )
+        mean_net_edge_bps = _safe_float(source_stats.get("mean_net_edge_bps")) or 0.0
+        target_fill_rate = _config_float(
+            "AI_TRADING_EXECUTION_LEARNING_TARGET_FILL_RATE",
+            0.56,
+        )
+        if target_fill_rate is None:
+            target_fill_rate = 0.56
+        target_fill_rate = max(0.25, min(float(target_fill_rate), 0.95))
+        target_slippage_bps = _config_float(
+            "AI_TRADING_EXECUTION_LEARNING_TARGET_SLIPPAGE_BPS",
+            5.0,
+        )
+        if target_slippage_bps is None:
+            target_slippage_bps = 5.0
+        target_slippage_bps = max(0.5, min(float(target_slippage_bps), 50.0))
+        edge_floor_bps = _config_float(
+            "AI_TRADING_EXECUTION_LEARNING_EDGE_FLOOR_BPS",
+            0.0,
+        )
+        if edge_floor_bps is None:
+            edge_floor_bps = 0.0
+        edge_floor_bps = max(-50.0, min(float(edge_floor_bps), 50.0))
+
+        fill_gap = max(float(target_fill_rate) - float(fill_rate), 0.0)
+        slippage_gap = max(float(mean_slippage_bps) - float(target_slippage_bps), 0.0)
+        edge_gap = max(float(edge_floor_bps) - float(mean_net_edge_bps), 0.0)
+
+        router_aggressiveness_add = min((fill_gap / 0.25) * 1.4, 1.6)
+        if slippage_gap > 0.0:
+            damp = min(slippage_gap / max(float(target_slippage_bps), 1.0), 0.9)
+            router_aggressiveness_add *= max(0.15, 1.0 - damp)
+        passive_fill_min_prob_add = min(
+            ((slippage_gap / 10.0) * 0.22) + ((edge_gap / 12.0) * 0.1),
+            0.35,
+        )
+        replace_max_per_cycle_scale = 1.0 - min(
+            ((slippage_gap / 12.0) * 0.45) + ((edge_gap / 16.0) * 0.25),
+            0.65,
+        )
+        replace_max_per_cycle_scale = max(0.35, min(float(replace_max_per_cycle_scale), 1.2))
+        profile_bias: str | None = None
+        if passive_fill_min_prob_add >= 0.18 or mean_net_edge_bps < float(edge_floor_bps):
+            profile_bias = "protective"
+        elif router_aggressiveness_add >= 0.8 and passive_fill_min_prob_add < 0.08:
+            profile_bias = "balanced"
+        if (
+            fill_rate >= float(target_fill_rate)
+            and mean_slippage_bps <= float(target_slippage_bps) * 0.7
+            and mean_net_edge_bps > float(edge_floor_bps) + 1.0
+        ):
+            passive_fill_min_prob_add = max(float(passive_fill_min_prob_add) - 0.03, 0.0)
+            replace_max_per_cycle_scale = min(
+                1.2,
+                float(replace_max_per_cycle_scale) + 0.1,
+            )
+            if profile_bias is None:
+                profile_bias = "passive"
+
+        return {
+            "enabled": True,
+            "active": True,
+            "reason": "ok",
+            "source": str(source),
+            "samples": int(samples),
+            "fill_rate": float(fill_rate),
+            "mean_slippage_bps": float(mean_slippage_bps),
+            "mean_net_edge_bps": float(mean_net_edge_bps),
+            "target_fill_rate": float(target_fill_rate),
+            "target_slippage_bps": float(target_slippage_bps),
+            "edge_floor_bps": float(edge_floor_bps),
+            "router_aggressiveness_add": float(
+                max(0.0, min(float(router_aggressiveness_add), 2.0))
+            ),
+            "passive_fill_min_prob_add": float(
+                max(0.0, min(float(passive_fill_min_prob_add), 0.5))
+            ),
+            "replace_max_per_cycle_scale": float(replace_max_per_cycle_scale),
+            "profile_bias": profile_bias,
+            "bucket": snapshot.get("bucket"),
+        }
+
+    def _update_execution_learning_feedback(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        status: str | None,
+        fill_source: str | None,
+        realized_net_edge_bps: float | None,
+        realized_slippage_bps: float | None,
+        execution_profile_context: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Update rolling execution-learning stats from live order outcomes."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_LEARNING_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+        status_token = (
+            _normalize_status(status)
+            or str(status or "").strip().lower()
+            or "unknown"
+        )
+        terminal_statuses = {
+            "filled",
+            "partially_filled",
+            "rejected",
+            "canceled",
+            "cancelled",
+            "expired",
+            "done_for_day",
+            "failed",
+        }
+        if status_token not in terminal_statuses:
+            return
+        source_token = str(fill_source or "").strip().lower()
+        source_is_live = source_token in {
+            "",
+            "live",
+            "initial",
+            "poll",
+            "final",
+            "manual_probe",
+        }
+        if not source_is_live:
+            return
+
+        state_raw = getattr(self, "_execution_learning_state", None)
+        if not isinstance(state_raw, Mapping):
+            state_raw = self._default_execution_learning_state()
+        state = dict(state_raw)
+
+        def _normalize_entry(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+            payload_map = dict(payload) if isinstance(payload, Mapping) else {}
+            return {
+                "samples": max(0, _safe_int(payload_map.get("samples"), 0)),
+                "fills": max(0, _safe_int(payload_map.get("fills"), 0)),
+                "fill_rate": max(
+                    0.0,
+                    min(1.0, _safe_float(payload_map.get("fill_rate")) or 0.0),
+                ),
+                "slippage_samples": max(
+                    0,
+                    _safe_int(payload_map.get("slippage_samples"), 0),
+                ),
+                "mean_slippage_bps": _safe_float(
+                    payload_map.get("mean_slippage_bps")
+                )
+                or 0.0,
+                "edge_samples": max(0, _safe_int(payload_map.get("edge_samples"), 0)),
+                "mean_net_edge_bps": _safe_float(
+                    payload_map.get("mean_net_edge_bps")
+                )
+                or 0.0,
+            }
+
+        def _update_entry(entry: dict[str, Any], *, did_fill: bool) -> dict[str, Any]:
+            samples = int(entry.get("samples", 0)) + 1
+            fills = int(entry.get("fills", 0)) + (1 if did_fill else 0)
+            entry["samples"] = int(samples)
+            entry["fills"] = int(max(0, min(fills, samples)))
+            entry["fill_rate"] = (
+                float(entry["fills"]) / float(samples)
+                if samples > 0
+                else 0.0
+            )
+            parsed_slippage = _safe_float(realized_slippage_bps)
+            if parsed_slippage is not None and math.isfinite(float(parsed_slippage)):
+                s_count = int(entry.get("slippage_samples", 0)) + 1
+                prev_mean = float(entry.get("mean_slippage_bps", 0.0) or 0.0)
+                next_mean = prev_mean + ((abs(float(parsed_slippage)) - prev_mean) / float(s_count))
+                entry["slippage_samples"] = int(s_count)
+                entry["mean_slippage_bps"] = float(next_mean)
+            parsed_edge = _safe_float(realized_net_edge_bps)
+            if parsed_edge is not None and math.isfinite(float(parsed_edge)):
+                e_count = int(entry.get("edge_samples", 0)) + 1
+                prev_edge_mean = float(entry.get("mean_net_edge_bps", 0.0) or 0.0)
+                next_edge_mean = prev_edge_mean + ((float(parsed_edge) - prev_edge_mean) / float(e_count))
+                entry["edge_samples"] = int(e_count)
+                entry["mean_net_edge_bps"] = float(next_edge_mean)
+            return entry
+
+        did_fill = status_token in {"filled", "partially_filled"}
+        global_entry = _normalize_entry(state.get("global")) if isinstance(state, Mapping) else _normalize_entry(None)
+        global_entry = _update_entry(global_entry, did_fill=bool(did_fill))
+        state["global"] = global_entry
+
+        bucket_context = self._execution_learning_bucket_context(
+            side=side,
+            execution_profile_context=execution_profile_context,
+        )
+        buckets_raw = state.get("buckets")
+        buckets = dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {}
+        bucket_key = str(bucket_context["bucket_key"])
+        bucket_entry = _normalize_entry(
+            buckets.get(bucket_key) if isinstance(buckets, Mapping) else None
+        )
+        buckets[bucket_key] = _update_entry(bucket_entry, did_fill=bool(did_fill))
+        state["buckets"] = buckets
+        state["updated_at"] = datetime.now(UTC).isoformat()
+        self._execution_learning_state = state
+        self._execution_learning_updates_since_persist = int(
+            max(getattr(self, "_execution_learning_updates_since_persist", 0), 0)
+        ) + 1
+
+        now_mono = float(monotonic_time())
+        last_refresh = float(getattr(self, "_execution_autotune_last_refresh_mono", 0.0) or 0.0)
+        if (now_mono - last_refresh) >= 60.0:
+            self._execution_autotune_last_refresh_mono = now_mono
+            self._refresh_execution_daily_autotune(force=False)
+        self._persist_execution_learning_state(force=False)
+        logger.debug(
+            "EXECUTION_LEARNING_FEEDBACK_UPDATE",
+            extra={
+                "symbol": str(symbol) if symbol else None,
+                "side": str(side) if side else None,
+                "status": status_token,
+                "fill_source": source_token or "live",
+                "bucket_key": bucket_key,
+                "bucket_samples": int(
+                    _safe_int(
+                        (buckets.get(bucket_key) or {}).get("samples")
+                        if isinstance(buckets.get(bucket_key), Mapping)
+                        else 0,
+                        0,
+                    )
+                ),
+            },
+        )
+
+    def _refresh_execution_daily_autotune(self, *, force: bool = False) -> None:
+        """Compute and persist a bounded daily execution auto-tune override."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_AUTOTUNE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+        auto_write = _resolve_bool_env("AI_TRADING_EXECUTION_AUTOTUNE_AUTO_WRITE")
+        if auto_write is None:
+            auto_write = True
+        if not bool(auto_write):
+            return
+        now_utc = datetime.now(UTC)
+        session_date = now_utc.date().isoformat()
+        if (
+            not force
+            and str(getattr(self, "_execution_autotune_last_generated_date", ""))
+            == session_date
+        ):
+            return
+
+        learning_adjustment = self._execution_learning_route_adjustment(
+            side="buy",
+            execution_profile_context={"profile": "balanced", "session_regime": "midday"},
+        )
+        global_stats = {}
+        state_raw = getattr(self, "_execution_learning_state", None)
+        if isinstance(state_raw, Mapping):
+            global_raw = state_raw.get("global")
+            if isinstance(global_raw, Mapping):
+                global_stats = dict(global_raw)
+        samples = max(0, _safe_int(global_stats.get("samples"), 0))
+        fill_rate = max(0.0, min(1.0, _safe_float(global_stats.get("fill_rate")) or 0.0))
+        mean_slippage_bps = max(
+            0.0,
+            _safe_float(global_stats.get("mean_slippage_bps")) or 0.0,
+        )
+        mean_net_edge_bps = _safe_float(global_stats.get("mean_net_edge_bps")) or 0.0
+        min_samples = _config_int("AI_TRADING_EXECUTION_AUTOTUNE_MIN_SAMPLES", 25)
+        if min_samples is None:
+            min_samples = 25
+        min_samples = max(5, min(int(min_samples), 5000))
+        if not force and samples < int(min_samples):
+            self._ensure_execution_learning_bootstrap_artifacts()
+            return
+        target_slippage_bps = _config_float(
+            "AI_TRADING_EXECUTION_AUTOTUNE_TARGET_SLIPPAGE_BPS",
+            5.0,
+        )
+        if target_slippage_bps is None:
+            target_slippage_bps = 5.0
+        target_slippage_bps = max(0.5, min(float(target_slippage_bps), 50.0))
+        target_fill_rate = _config_float(
+            "AI_TRADING_EXECUTION_AUTOTUNE_TARGET_FILL_RATE",
+            0.56,
+        )
+        if target_fill_rate is None:
+            target_fill_rate = 0.56
+        target_fill_rate = max(0.25, min(float(target_fill_rate), 0.95))
+
+        fill_gap = max(float(target_fill_rate) - float(fill_rate), 0.0)
+        slippage_gap = max(float(mean_slippage_bps) - float(target_slippage_bps), 0.0)
+        passive_add = float(learning_adjustment.get("passive_fill_min_prob_add") or 0.0)
+        router_add = float(learning_adjustment.get("router_aggressiveness_add") or 0.0)
+        replace_scale = float(learning_adjustment.get("replace_max_per_cycle_scale") or 1.0)
+        if samples >= 40:
+            passive_add = min(
+                max(passive_add, min((slippage_gap / 10.0) * 0.2, 0.25)),
+                0.45,
+            )
+            if slippage_gap > 0.0:
+                replace_scale = max(
+                    0.35,
+                    min(float(replace_scale), 1.0 - min(slippage_gap / 15.0, 0.5)),
+                )
+            elif fill_gap > 0.0:
+                router_add = min(max(router_add, min((fill_gap / 0.3) * 1.0, 1.25)), 2.0)
+                replace_scale = min(1.15, float(replace_scale) + 0.05)
+        profile_bias = str(learning_adjustment.get("profile_bias") or "").strip().lower()
+        if profile_bias not in {"passive", "balanced", "protective"}:
+            if slippage_gap > 0.0 or mean_net_edge_bps < 0.0:
+                profile_bias = "protective"
+            elif fill_gap > 0.0 and slippage_gap <= 0.0:
+                profile_bias = "balanced"
+            else:
+                profile_bias = "passive"
+        payload = {
+            "generated_at": now_utc.isoformat(),
+            "date": session_date,
+            "enabled": True,
+            "profile_bias": str(profile_bias),
+            "passive_fill_min_prob_add": float(max(0.0, min(passive_add, 0.5))),
+            "replace_max_per_cycle_scale": float(max(0.3, min(replace_scale, 1.2))),
+            "router_aggressiveness_add": float(max(0.0, min(router_add, 2.5))),
+            "sample_count": int(samples),
+            "fill_rate": float(fill_rate),
+            "mean_slippage_bps": float(mean_slippage_bps),
+            "mean_net_edge_bps": float(mean_net_edge_bps),
+            "source": "execution_learning_daily_autotune",
+        }
+        path = self._execution_autotune_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(f"{path.suffix}.tmp")
+            temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            temp_path.replace(path)
+            self._execution_autotune_last_generated_date = str(session_date)
+            self._execution_autotune_cache = {
+                "enabled": True,
+                "active": True,
+                "reason": "ok",
+                "path": str(path),
+                "generated_at": payload["generated_at"],
+                "age_hours": 0.0,
+                "profile_bias": payload["profile_bias"],
+                "passive_fill_min_prob_add": payload["passive_fill_min_prob_add"],
+                "replace_max_per_cycle_scale": payload["replace_max_per_cycle_scale"],
+                "router_aggressiveness_add": payload["router_aggressiveness_add"],
+                "sample_count": payload["sample_count"],
+                "source": payload["source"],
+            }
+            self._execution_autotune_cache_until_mono = float(monotonic_time()) + 30.0
+            logger.info(
+                "EXECUTION_AUTOTUNE_REFRESHED",
+                extra={
+                    "path": str(path),
+                    "date": session_date,
+                    "profile_bias": payload["profile_bias"],
+                    "sample_count": int(samples),
+                    "passive_fill_min_prob_add": payload["passive_fill_min_prob_add"],
+                    "replace_max_per_cycle_scale": payload["replace_max_per_cycle_scale"],
+                    "router_aggressiveness_add": payload["router_aggressiveness_add"],
+                },
+            )
+        except Exception:
+            logger.debug(
+                "EXECUTION_AUTOTUNE_WRITE_FAILED",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
+
+    def _current_execution_autotune_override(self) -> dict[str, Any]:
+        """Return active daily execution autotune override context."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_AUTOTUNE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return {"enabled": False, "active": False, "reason": "disabled"}
+
+        now_mono = float(monotonic_time())
+        cache_ttl_s = _config_float(
+            "AI_TRADING_EXECUTION_AUTOTUNE_CACHE_TTL_SEC",
+            30.0,
+        )
+        if cache_ttl_s is None or not math.isfinite(float(cache_ttl_s)):
+            cache_ttl_s = 30.0
+        cache_ttl_s = max(1.0, min(float(cache_ttl_s), 300.0))
+        cache_until = float(
+            getattr(self, "_execution_autotune_cache_until_mono", 0.0) or 0.0
+        )
+        cached_raw = getattr(self, "_execution_autotune_cache", {}) or {}
+        cached = dict(cached_raw) if isinstance(cached_raw, Mapping) else {}
+        if now_mono <= cache_until and cached:
+            return cached
+
+        path = self._execution_autotune_path()
+        if not path.exists():
+            payload = {
+                "enabled": True,
+                "active": False,
+                "reason": "missing",
+                "path": str(path),
+            }
+            self._execution_autotune_cache = dict(payload)
+            self._execution_autotune_cache_until_mono = now_mono + cache_ttl_s
+            return payload
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            payload = {
+                "enabled": True,
+                "active": False,
+                "reason": "unreadable",
+                "path": str(path),
+                "error": str(exc),
+            }
+            self._execution_autotune_cache = dict(payload)
+            self._execution_autotune_cache_until_mono = now_mono + cache_ttl_s
+            return payload
+        if not isinstance(raw, Mapping):
+            payload = {
+                "enabled": True,
+                "active": False,
+                "reason": "invalid_payload",
+                "path": str(path),
+            }
+            self._execution_autotune_cache = dict(payload)
+            self._execution_autotune_cache_until_mono = now_mono + cache_ttl_s
+            return payload
+
+        max_age_hours = _config_float(
+            "AI_TRADING_EXECUTION_AUTOTUNE_MAX_AGE_HOURS",
+            48.0,
+        )
+        if max_age_hours is None or not math.isfinite(float(max_age_hours)):
+            max_age_hours = 48.0
+        max_age_hours = max(1.0, min(float(max_age_hours), 240.0))
+        generated_raw = raw.get("generated_at")
+        generated_dt: datetime | None = None
+        if generated_raw not in (None, ""):
+            try:
+                generated_text = str(generated_raw).strip()
+                if generated_text.endswith("Z"):
+                    generated_text = f"{generated_text[:-1]}+00:00"
+                generated_dt = datetime.fromisoformat(generated_text)
+                if generated_dt.tzinfo is None:
+                    generated_dt = generated_dt.replace(tzinfo=UTC)
+                generated_dt = generated_dt.astimezone(UTC)
+            except Exception:
+                generated_dt = None
+        age_hours = None
+        if generated_dt is not None:
+            age_hours = max(
+                (datetime.now(UTC) - generated_dt).total_seconds() / 3600.0,
+                0.0,
+            )
+        active = bool(raw.get("enabled", True))
+        if "active" in raw:
+            active = bool(raw.get("active"))
+        inactive_reason = str(raw.get("reason") or "").strip().lower() or "inactive"
+        if age_hours is not None and age_hours > float(max_age_hours):
+            active = False
+            inactive_reason = "stale"
+        payload = {
+            "enabled": True,
+            "active": bool(active),
+            "reason": "ok" if active else inactive_reason,
+            "path": str(path),
+            "generated_at": raw.get("generated_at"),
+            "age_hours": float(age_hours) if age_hours is not None else None,
+            "profile_bias": str(raw.get("profile_bias") or "").strip().lower() or None,
+            "passive_fill_min_prob_add": self._coerce_finite_float(
+                raw.get("passive_fill_min_prob_add")
+            ),
+            "replace_max_per_cycle_scale": self._coerce_finite_float(
+                raw.get("replace_max_per_cycle_scale")
+            ),
+            "router_aggressiveness_add": self._coerce_finite_float(
+                raw.get("router_aggressiveness_add")
+            ),
+            "sample_count": _safe_int(raw.get("sample_count"), 0),
+            "source": str(raw.get("source") or "").strip().lower() or None,
+        }
+        self._execution_autotune_cache = dict(payload)
+        self._execution_autotune_cache_until_mono = now_mono + cache_ttl_s
+        return payload
+
     def _markout_execution_override_path(self) -> Path:
         """Resolve runtime path for markout-derived execution overrides."""
 
@@ -4767,9 +5906,12 @@ class ExecutionEngine:
             )
             or "runtime/markout_execution_override.json"
         ).strip() or "runtime/markout_execution_override.json"
-        return resolve_runtime_artifact_path(
-            configured,
-            default_relative="runtime/markout_execution_override.json",
+        return cast(
+            Path,
+            resolve_runtime_artifact_path(
+                configured,
+                default_relative="runtime/markout_execution_override.json",
+            ),
         )
 
     def _current_markout_execution_override(self) -> dict[str, Any]:
@@ -5190,6 +6332,42 @@ class ExecutionEngine:
                 0,
                 min(int(base_replace_max_per_cycle), int(scaled_cap)),
             )
+        autotune_override = self._current_execution_autotune_override()
+        autotune_scale = self._coerce_finite_float(
+            autotune_override.get("replace_max_per_cycle_scale")
+        )
+        if (
+            bool(autotune_override.get("active"))
+            and autotune_scale is not None
+            and base_replace_max_per_cycle > 0
+        ):
+            scaled_cap = int(
+                round(float(effective_replace_max_per_cycle) * max(float(autotune_scale), 0.05))
+            )
+            effective_replace_max_per_cycle = max(
+                0,
+                min(int(base_replace_max_per_cycle), int(scaled_cap)),
+            )
+
+        learning_adjustment = self._execution_learning_route_adjustment(
+            side=None,
+            execution_profile_context=None,
+        )
+        learning_scale = self._coerce_finite_float(
+            learning_adjustment.get("replace_max_per_cycle_scale")
+        )
+        if (
+            bool(learning_adjustment.get("active"))
+            and learning_scale is not None
+            and base_replace_max_per_cycle > 0
+        ):
+            scaled_cap = int(
+                round(float(effective_replace_max_per_cycle) * max(float(learning_scale), 0.05))
+            )
+            effective_replace_max_per_cycle = max(
+                0,
+                min(int(base_replace_max_per_cycle), int(scaled_cap)),
+            )
 
         context.update(
             {
@@ -5206,6 +6384,18 @@ class ExecutionEngine:
                 ),
                 "markout_execution_override_scale": (
                     float(override_scale) if override_scale is not None else None
+                ),
+                "execution_autotune_override_active": bool(
+                    autotune_override.get("active")
+                ),
+                "execution_autotune_override_scale": (
+                    float(autotune_scale) if autotune_scale is not None else None
+                ),
+                "execution_learning_adjustment_active": bool(
+                    learning_adjustment.get("active")
+                ),
+                "execution_learning_replace_scale": (
+                    float(learning_scale) if learning_scale is not None else None
                 ),
             }
         )
@@ -5345,9 +6535,134 @@ class ExecutionEngine:
         window_raw.append(float(now_mono))
         self._pending_new_symbol_replace_mono = windows
 
+    def _queue_pressure_context(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        quote_age_ms: float | None,
+        spread_bps: float | None,
+        execution_profile_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Estimate queue/replace pressure to penalize fragile passive behavior."""
+
+        symbol_token = str(symbol or "").strip().upper()
+        pending_orders_raw = getattr(self, "_pending_orders", None)
+        pending_orders = (
+            dict(pending_orders_raw)
+            if isinstance(pending_orders_raw, Mapping)
+            else {}
+        )
+        pending_statuses = {
+            "new",
+            "pending_new",
+            "accepted",
+            "acknowledged",
+            "submitted",
+            "pending_replace",
+        }
+        pending_total = 0
+        pending_symbol = 0
+        for _, payload in pending_orders.items():
+            if not isinstance(payload, Mapping):
+                continue
+            status_token = _normalize_status(payload.get("status")) or str(
+                payload.get("status") or ""
+            ).strip().lower()
+            if status_token not in pending_statuses:
+                continue
+            pending_total += 1
+            if symbol_token and str(payload.get("symbol") or "").strip().upper() == symbol_token:
+                pending_symbol += 1
+        replace_cycle = max(
+            0,
+            _safe_int(getattr(self, "_pending_new_replacements_this_cycle", 0), 0),
+        )
+        replace_symbol_window = 0
+        symbol_windows_raw = getattr(self, "_pending_new_symbol_replace_mono", None)
+        if isinstance(symbol_windows_raw, Mapping) and symbol_token:
+            symbol_window_raw = symbol_windows_raw.get(symbol_token)
+            if isinstance(symbol_window_raw, deque):
+                now_mono = float(monotonic_time())
+                window_s = _config_float(
+                    "AI_TRADING_PENDING_NEW_SYMBOL_REPLACE_WINDOW_SEC",
+                    300.0,
+                )
+                if window_s is None or not math.isfinite(float(window_s)):
+                    window_s = 300.0
+                window_s = max(1.0, min(float(window_s), 3600.0))
+                replace_symbol_window = sum(
+                    1
+                    for ts in symbol_window_raw
+                    if (now_mono - float(_safe_float(ts) or 0.0)) <= float(window_s)
+                )
+        pending_score = min(float(pending_total) / 8.0, 1.0)
+        symbol_score = min(float(pending_symbol) / 3.0, 1.0)
+        replace_score = min(float(replace_cycle) / 3.0, 1.0)
+        churn_score = min(float(replace_symbol_window) / 4.0, 1.0)
+        age_score = min(max(((quote_age_ms or 0.0) - 1200.0) / 5000.0, 0.0), 1.0)
+        spread_score = min(max(((spread_bps or 0.0) - 7.0) / 22.0, 0.0), 1.0)
+        profile_name = (
+            str(
+                execution_profile_context.get("profile")
+                if isinstance(execution_profile_context, Mapping)
+                else ""
+            )
+            .strip()
+            .lower()
+        )
+        profile_score = 0.0
+        if profile_name == "protective":
+            profile_score = 0.35
+        elif profile_name == "urgent":
+            profile_score = 0.18
+        elif profile_name == "passive":
+            profile_score = -0.1
+        pressure_score = (
+            (0.28 * pending_score)
+            + (0.18 * symbol_score)
+            + (0.17 * replace_score)
+            + (0.15 * churn_score)
+            + (0.12 * age_score)
+            + (0.10 * spread_score)
+            + profile_score
+        )
+        pressure_score = max(0.0, min(float(pressure_score), 1.0))
+        if pressure_score >= 0.78:
+            pressure_level = "extreme"
+        elif pressure_score >= 0.55:
+            pressure_level = "high"
+        elif pressure_score >= 0.3:
+            pressure_level = "moderate"
+        else:
+            pressure_level = "low"
+        return {
+            "symbol": symbol_token or None,
+            "side": str(side or "").strip().lower() or None,
+            "pending_total": int(pending_total),
+            "pending_symbol": int(pending_symbol),
+            "replace_cycle": int(replace_cycle),
+            "replace_symbol_window": int(replace_symbol_window),
+            "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
+            "spread_bps": float(spread_bps) if spread_bps is not None else None,
+            "profile": profile_name or None,
+            "pressure_score": float(pressure_score),
+            "pressure_level": str(pressure_level),
+            "components": {
+                "pending_total": float(pending_score),
+                "pending_symbol": float(symbol_score),
+                "replace_cycle": float(replace_score),
+                "replace_symbol_window": float(churn_score),
+                "quote_age": float(age_score),
+                "spread": float(spread_score),
+                "execution_profile": float(profile_score),
+            },
+        }
+
     def _estimate_passive_fill_probability(
         self,
         *,
+        symbol: str | None = None,
         side: str,
         bid: float | None,
         ask: float | None,
@@ -5357,6 +6672,7 @@ class ExecutionEngine:
         gap_ratio: float | None,
         markout_context: Mapping[str, Any] | None = None,
         execution_profile_context: Mapping[str, Any] | None = None,
+        queue_pressure_context: Mapping[str, Any] | None = None,
     ) -> tuple[float, dict[str, Any]]:
         """Estimate passive fill probability for non-immediate limit orders."""
 
@@ -5375,31 +6691,88 @@ class ExecutionEngine:
         age_component = min(max(((quote_age_ms or 0.0) - 500.0) / 3500.0, 0.0), 0.25)
         degrade_component = 0.15 if degrade_active else 0.0
         gap_component = min(abs(float(gap_ratio or 0.0)) * 2.0, 0.2)
+        queue_context = (
+            dict(queue_pressure_context)
+            if isinstance(queue_pressure_context, Mapping)
+            else self._queue_pressure_context(
+                symbol=symbol,
+                side=side,
+                quote_age_ms=quote_age_ms,
+                spread_bps=spread_bps,
+                execution_profile_context=execution_profile_context,
+            )
+        )
+        queue_pressure_score = max(
+            0.0,
+            min(1.0, self._coerce_finite_float(queue_context.get("pressure_score")) or 0.0),
+        )
+        queue_component = min(float(queue_pressure_score) * 0.22, 0.3)
         markout_component = 0.0
         if isinstance(markout_context, Mapping) and bool(markout_context.get("toxic")):
             markout_mean = self._coerce_finite_float(markout_context.get("mean_bps")) or 0.0
             markout_component = min(max(abs(markout_mean) / 20.0, 0.0), 0.15)
         profile_component = 0.0
         profile_name = ""
+        session_regime = ""
+        session_component = 0.0
         if isinstance(execution_profile_context, Mapping):
             profile_name = str(execution_profile_context.get("profile") or "").strip().lower()
+            session_regime = str(
+                execution_profile_context.get("session_regime") or ""
+            ).strip().lower()
             if profile_name == "protective":
                 profile_component = 0.2
             elif profile_name == "urgent":
                 profile_component = 0.1
             elif profile_name == "passive":
                 profile_component = -0.03
+            tod_penalty = self._coerce_finite_float(
+                execution_profile_context.get("session_passive_penalty_add")
+            )
+            if tod_penalty is not None:
+                session_component = float(tod_penalty)
+        if not session_regime:
+            tod_context = self._execution_time_of_day_regime()
+            session_regime = str(tod_context.get("session_regime") or "").strip().lower()
+            session_component = (
+                self._coerce_finite_float(tod_context.get("passive_penalty_add")) or 0.0
+            )
+
+        learning_adjustment = self._execution_learning_route_adjustment(
+            side=side,
+            execution_profile_context=execution_profile_context,
+        )
+        learning_component = self._coerce_finite_float(
+            learning_adjustment.get("passive_fill_min_prob_add")
+        ) or 0.0
+        autotune_override = self._current_execution_autotune_override()
+        autotune_component = 0.0
+        if bool(autotune_override.get("active")):
+            autotune_component = self._coerce_finite_float(
+                autotune_override.get("passive_fill_min_prob_add")
+            ) or 0.0
 
         base_probability = 0.82
         probability = base_probability - spread_component - age_component - degrade_component
-        probability -= gap_component + markout_component + profile_component
+        probability -= (
+            gap_component
+            + markout_component
+            + profile_component
+            + queue_component
+            + session_component
+            + learning_component
+            + autotune_component
+        )
         probability = max(0.01, min(float(probability), 0.99))
         context = {
+            "symbol": str(symbol).upper() if symbol else None,
             "side": str(side or "").lower(),
             "spread_bps": float(spread_bps) if spread_bps is not None else None,
             "quote_age_ms": float(quote_age_ms) if quote_age_ms is not None else None,
             "degraded_feed": bool(degrade_active),
             "gap_ratio": float(gap_ratio) if gap_ratio is not None else None,
+            "session_regime": session_regime or None,
+            "queue_pressure": queue_context,
             "components": {
                 "spread": float(spread_component),
                 "quote_age": float(age_component),
@@ -5407,8 +6780,18 @@ class ExecutionEngine:
                 "gap_ratio": float(gap_component),
                 "markout_toxicity": float(markout_component),
                 "execution_profile": float(profile_component),
+                "queue_pressure": float(queue_component),
+                "session_regime": float(session_component),
+                "learning": float(learning_component),
+                "autotune": float(autotune_component),
             },
             "execution_profile": profile_name or None,
+            "learning_adjustment": learning_adjustment,
+            "autotune_override": (
+                autotune_override if bool(autotune_override.get("active")) else None
+            ),
+            "learning_passive_fill_min_prob_add": float(learning_component),
+            "autotune_passive_fill_min_prob_add": float(autotune_component),
             "estimated_fill_probability": float(probability),
         }
         return float(probability), context
@@ -5427,6 +6810,7 @@ class ExecutionEngine:
         degrade_active: bool,
         markout_context: Mapping[str, Any] | None,
         execution_profile_context: Mapping[str, Any] | None = None,
+        queue_pressure_context: Mapping[str, Any] | None = None,
         manual_limit_requested: bool = False,
     ) -> dict[str, Any]:
         """Return smart-router order route decision for live submits."""
@@ -5476,7 +6860,30 @@ class ExecutionEngine:
             str(profile_context.get("profile") or "balanced").strip().lower()
             or "balanced"
         )
+        session_regime = str(
+            profile_context.get("session_regime") or ""
+        ).strip().lower() or "offhours"
+        queue_context = (
+            dict(queue_pressure_context)
+            if isinstance(queue_pressure_context, Mapping)
+            else self._queue_pressure_context(
+                symbol=symbol,
+                side=side,
+                quote_age_ms=quote_age_ms,
+                spread_bps=spread_bps,
+                execution_profile_context=profile_context,
+            )
+        )
+        queue_pressure_score = max(
+            0.0,
+            min(1.0, self._coerce_finite_float(queue_context.get("pressure_score")) or 0.0),
+        )
         markout_override = self._current_markout_execution_override()
+        autotune_override = self._current_execution_autotune_override()
+        learning_adjustment = self._execution_learning_route_adjustment(
+            side=side,
+            execution_profile_context=profile_context,
+        )
         profile_bias = str(markout_override.get("profile_bias") or "").strip().lower()
         urgency = OrderUrgency.MEDIUM
         if degrade_active or (quote_age_ms is not None and float(quote_age_ms) > 2500.0):
@@ -5493,6 +6900,44 @@ class ExecutionEngine:
             urgency = OrderUrgency.URGENT
         if bool(markout_override.get("active")) and profile_bias == "protective":
             urgency = OrderUrgency.URGENT
+        if bool(autotune_override.get("active")):
+            autotune_bias = str(autotune_override.get("profile_bias") or "").strip().lower()
+            if autotune_bias == "protective":
+                urgency = OrderUrgency.URGENT
+            elif autotune_bias == "passive" and urgency == OrderUrgency.HIGH:
+                urgency = OrderUrgency.MEDIUM
+
+        urgency_order = [
+            OrderUrgency.LOW,
+            OrderUrgency.MEDIUM,
+            OrderUrgency.HIGH,
+            OrderUrgency.URGENT,
+        ]
+        urgency_rank = {
+            OrderUrgency.LOW: 0,
+            OrderUrgency.MEDIUM: 1,
+            OrderUrgency.HIGH: 2,
+            OrderUrgency.URGENT: 3,
+        }
+        rank = int(urgency_rank.get(urgency, 1))
+        if queue_pressure_score >= 0.75:
+            rank += 1
+        session_bias = _safe_int(profile_context.get("session_urgency_bias_add"), 0)
+        rank += int(max(session_bias, 0))
+        router_aggressiveness_add = (
+            self._coerce_finite_float(markout_override.get("router_aggressiveness_add")) or 0.0
+        )
+        if bool(autotune_override.get("active")):
+            router_aggressiveness_add += (
+                self._coerce_finite_float(autotune_override.get("router_aggressiveness_add")) or 0.0
+            )
+        if bool(learning_adjustment.get("active")):
+            router_aggressiveness_add += (
+                self._coerce_finite_float(learning_adjustment.get("router_aggressiveness_add")) or 0.0
+            )
+        rank += int(math.floor(max(float(router_aggressiveness_add), 0.0)))
+        rank = max(0, min(int(rank), len(urgency_order) - 1))
+        urgency = urgency_order[rank]
 
         try:
             market_data = MarketData(
@@ -5530,9 +6975,20 @@ class ExecutionEngine:
                 "spread_bps": float(spread_bps),
                 "urgency": urgency.value,
                 "execution_profile": profile_name,
+                "session_regime": session_regime,
                 "execution_profile_context": profile_context,
+                "queue_pressure_context": queue_context,
                 "markout_execution_override_active": bool(markout_override.get("active")),
                 "markout_execution_profile_bias": profile_bias or None,
+                "execution_autotune_override_active": bool(
+                    autotune_override.get("active")
+                ),
+                "execution_autotune_profile_bias": str(
+                    autotune_override.get("profile_bias") or ""
+                ).strip().lower()
+                or None,
+                "execution_learning_adjustment": learning_adjustment,
+                "router_aggressiveness_add": float(router_aggressiveness_add),
             }
         )
 
@@ -5601,6 +7057,12 @@ class ExecutionEngine:
         turnover_notional: float | None = None,
         realized_net_edge_bps: float | None = None,
         fill_source: str | None = None,
+        execution_profile: str | None = None,
+        session_regime: str | None = None,
+        queue_pressure_score: float | None = None,
+        queue_pressure_level: str | None = None,
+        passive_fill_probability: float | None = None,
+        route_urgency: str | None = None,
     ) -> None:
         """Append a normalized order outcome entry for cycle-level KPI reporting."""
 
@@ -5671,6 +7133,26 @@ class ExecutionEngine:
             payload["realized_net_edge_bps"] = float(parsed_realized_net_edge_bps)
         if fill_source not in (None, ""):
             payload["fill_source"] = str(fill_source).strip().lower()
+        if execution_profile not in (None, ""):
+            payload["execution_profile"] = str(execution_profile).strip().lower()
+        if session_regime not in (None, ""):
+            payload["session_regime"] = str(session_regime).strip().lower()
+        parsed_queue_pressure_score = _safe_float(queue_pressure_score)
+        if (
+            parsed_queue_pressure_score is not None
+            and math.isfinite(float(parsed_queue_pressure_score))
+        ):
+            payload["queue_pressure_score"] = float(parsed_queue_pressure_score)
+        if queue_pressure_level not in (None, ""):
+            payload["queue_pressure_level"] = str(queue_pressure_level).strip().lower()
+        parsed_fill_probability = _safe_float(passive_fill_probability)
+        if (
+            parsed_fill_probability is not None
+            and math.isfinite(float(parsed_fill_probability))
+        ):
+            payload["passive_fill_probability"] = float(parsed_fill_probability)
+        if route_urgency not in (None, ""):
+            payload["route_urgency"] = str(route_urgency).strip().lower()
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
 
@@ -7270,7 +8752,7 @@ class ExecutionEngine:
                     "fill_match_skips": int(summary.get("skipped_fill_event_match", 0) or 0),
                 },
             )
-        return summary
+        return cast(dict[str, Any], summary)
 
     def _pdt_lockout_active(self, account: Any | None) -> bool:
         """Return ``True`` when the PDT lockout should block new openings."""
@@ -10452,11 +11934,20 @@ class ExecutionEngine:
             degrade_active=bool(degrade_active),
             markout_context=markout_context,
         )
+        queue_pressure_context = self._queue_pressure_context(
+            symbol=symbol,
+            side=mapped_side,
+            quote_age_ms=quote_age_ms,
+            spread_bps=spread_bps_hint_for_profile,
+            execution_profile_context=execution_profile_context,
+        )
         smart_route_context: dict[str, Any] = {
             "enabled": False,
             "applied": False,
             "reason": "not_evaluated",
         }
+        fill_probability: float | None = None
+        fill_probability_context: dict[str, Any] = {}
         if not closing_position and order_type_normalized in {"limit", "stop_limit"}:
             smart_route_context = self._resolve_smart_order_route(
                 symbol=symbol,
@@ -10470,6 +11961,7 @@ class ExecutionEngine:
                 degrade_active=bool(degrade_active),
                 markout_context=markout_context,
                 execution_profile_context=execution_profile_context,
+                queue_pressure_context=queue_pressure_context,
                 manual_limit_requested=bool(manual_limit_requested),
             )
             resolved_route_type = str(
@@ -10519,6 +12011,7 @@ class ExecutionEngine:
         if not closing_position and order_type_normalized in {"limit", "stop_limit"}:
             fill_probability, fill_probability_context = (
                 self._estimate_passive_fill_probability(
+                    symbol=symbol,
                     side=mapped_side,
                     bid=bid_val,
                     ask=ask_val,
@@ -10528,6 +12021,7 @@ class ExecutionEngine:
                     gap_ratio=gap_ratio_value,
                     markout_context=markout_context,
                     execution_profile_context=execution_profile_context,
+                    queue_pressure_context=queue_pressure_context,
                 )
             )
             logger.info(
@@ -10564,6 +12058,12 @@ class ExecutionEngine:
             )
             if bool(markout_override.get("active")) and min_prob_add is not None:
                 min_fill_probability = float(min_fill_probability) + float(min_prob_add)
+            autotune_override = self._current_execution_autotune_override()
+            autotune_add = self._coerce_finite_float(
+                autotune_override.get("passive_fill_min_prob_add")
+            )
+            if bool(autotune_override.get("active")) and autotune_add is not None:
+                min_fill_probability = float(min_fill_probability) + float(autotune_add)
             min_fill_probability = max(0.01, min(float(min_fill_probability), 0.99))
             if float(fill_probability) < float(min_fill_probability):
                 action_token = str(
@@ -10653,6 +12153,7 @@ class ExecutionEngine:
                     fill_probability_context
                 )
                 annotations["execution_profile_context"] = execution_profile_context
+                annotations["queue_pressure_context"] = queue_pressure_context
         if isinstance(annotations, dict):
             annotations["smart_route_context"] = smart_route_context
 
@@ -11963,6 +13464,26 @@ class ExecutionEngine:
             ),
             realized_net_edge_bps=realized_net_edge_bps,
             fill_source=runtime_source,
+            execution_profile=str(execution_profile_context.get("profile") or "")
+            if isinstance(execution_profile_context, Mapping)
+            else None,
+            session_regime=str(execution_profile_context.get("session_regime") or "")
+            if isinstance(execution_profile_context, Mapping)
+            else None,
+            queue_pressure_score=(
+                _safe_float(queue_pressure_context.get("pressure_score"))
+                if isinstance(queue_pressure_context, Mapping)
+                else None
+            ),
+            queue_pressure_level=(
+                str(queue_pressure_context.get("pressure_level") or "")
+                if isinstance(queue_pressure_context, Mapping)
+                else None
+            ),
+            passive_fill_probability=(
+                float(fill_probability) if fill_probability is not None else None
+            ),
+            route_urgency=str(smart_route_context.get("urgency") or ""),
         )
         self._update_markout_feedback(
             symbol=symbol,
@@ -11971,6 +13492,15 @@ class ExecutionEngine:
             realized_net_edge_bps=realized_net_edge_bps,
             realized_slippage_bps=realized_slippage_bps,
             fill_source=runtime_source,
+        )
+        self._update_execution_learning_feedback(
+            symbol=symbol,
+            side=mapped_side,
+            status=outcome_status,
+            fill_source=runtime_source,
+            realized_net_edge_bps=realized_net_edge_bps,
+            realized_slippage_bps=realized_slippage_bps,
+            execution_profile_context=execution_profile_context,
         )
         self._last_submit_outcome = {
             "status": outcome_status,
@@ -14043,6 +15573,695 @@ class ExecutionEngine:
             "trade_fill_source": fill_source,
         }
 
+    def _runtime_intraday_adaptive_slippage_budget(
+        self,
+        *,
+        report: Mapping[str, Any],
+        thresholds: Mapping[str, Any],
+        base_max_drag: float,
+    ) -> tuple[float, dict[str, Any]]:
+        """Return adaptive slippage budget using execution-capture feedback."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_ENABLED")
+        if enabled is None:
+            enabled = True
+        base_budget = max(0.0, float(base_max_drag))
+        if not bool(enabled):
+            return base_budget, {
+                "enabled": False,
+                "reason": "disabled",
+                "base_threshold_slippage_drag": float(base_budget),
+                "effective_threshold_slippage_drag": float(base_budget),
+                "scale": 1.0,
+            }
+
+        execution_raw = report.get("execution_vs_alpha")
+        execution = dict(execution_raw) if isinstance(execution_raw, Mapping) else {}
+        capture_ratio = _safe_float(execution.get("execution_capture_ratio"))
+        slippage_drag_bps = _safe_float(execution.get("slippage_drag_bps"))
+        realized_edge_bps = _safe_float(execution.get("realized_net_edge_bps"))
+
+        capture_soft_floor = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_CAPTURE_SOFT_FLOOR",
+            None,
+        )
+        if capture_soft_floor is None:
+            capture_soft_floor = _safe_float(thresholds.get("min_execution_capture_ratio"))
+        if capture_soft_floor is None:
+            capture_soft_floor = 0.12
+        capture_soft_floor = max(0.02, min(float(capture_soft_floor), 0.95))
+
+        max_tighten_pct = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_MAX_TIGHTEN_PCT",
+            0.45,
+        )
+        if max_tighten_pct is None:
+            max_tighten_pct = 0.45
+        max_tighten_pct = max(0.0, min(float(max_tighten_pct), 0.85))
+
+        max_relax_pct = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_MAX_RELAX_PCT",
+            0.15,
+        )
+        if max_relax_pct is None:
+            max_relax_pct = 0.15
+        max_relax_pct = max(0.0, min(float(max_relax_pct), 0.35))
+
+        session_tighten_pct = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_OPEN_CLOSE_TIGHTEN_PCT",
+            0.10,
+        )
+        if session_tighten_pct is None:
+            session_tighten_pct = 0.10
+        session_tighten_pct = max(0.0, min(float(session_tighten_pct), 0.35))
+
+        scale = 1.0
+        reason = "baseline"
+        if (
+            capture_ratio is not None
+            and math.isfinite(float(capture_ratio))
+            and float(capture_ratio) < float(capture_soft_floor)
+        ):
+            deficit = (
+                (float(capture_soft_floor) - float(capture_ratio))
+                / max(float(capture_soft_floor), 1e-9)
+            )
+            tighten = min(max(deficit, 0.0), float(max_tighten_pct))
+            scale = max(0.2, 1.0 - float(tighten))
+            reason = "capture_below_floor"
+        elif (
+            capture_ratio is not None
+            and math.isfinite(float(capture_ratio))
+            and float(capture_ratio) > float(capture_soft_floor) * 1.5
+            and slippage_drag_bps is not None
+            and float(slippage_drag_bps) <= float(base_budget) * 0.6
+            and realized_edge_bps is not None
+            and float(realized_edge_bps) > 0.0
+        ):
+            excess = (
+                (float(capture_ratio) - (float(capture_soft_floor) * 1.5))
+                / max(float(capture_soft_floor), 1e-9)
+            )
+            relax = min(max(excess * 0.1, 0.0), float(max_relax_pct))
+            scale = min(1.3, 1.0 + float(relax))
+            reason = "capture_above_floor"
+
+        session_regime = str(
+            self._execution_time_of_day_regime().get("session_regime") or ""
+        ).strip().lower()
+        if session_regime in {"opening", "closing"}:
+            scale = max(0.2, float(scale) * max(0.0, 1.0 - float(session_tighten_pct)))
+            if reason == "baseline":
+                reason = "session_tighten"
+            else:
+                reason = f"{reason}_session_tighten"
+
+        floor_ratio = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_FLOOR_RATIO",
+            0.25,
+        )
+        if floor_ratio is None:
+            floor_ratio = 0.25
+        floor_ratio = max(0.05, min(float(floor_ratio), 1.0))
+        ceil_ratio = _config_float(
+            "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_ADAPTIVE_CEIL_RATIO",
+            1.25,
+        )
+        if ceil_ratio is None:
+            ceil_ratio = 1.25
+        ceil_ratio = max(1.0, min(float(ceil_ratio), 1.5))
+        effective_budget = float(base_budget) * float(scale)
+        effective_budget = max(
+            float(base_budget) * float(floor_ratio),
+            min(float(effective_budget), float(base_budget) * float(ceil_ratio)),
+        )
+        return float(effective_budget), {
+            "enabled": True,
+            "reason": str(reason),
+            "base_threshold_slippage_drag": float(base_budget),
+            "effective_threshold_slippage_drag": float(effective_budget),
+            "scale": float(scale),
+            "capture_ratio": float(capture_ratio) if capture_ratio is not None else None,
+            "capture_soft_floor": float(capture_soft_floor),
+            "slippage_drag_bps": (
+                float(slippage_drag_bps) if slippage_drag_bps is not None else None
+            ),
+            "realized_net_edge_bps": (
+                float(realized_edge_bps) if realized_edge_bps is not None else None
+            ),
+            "session_regime": session_regime or None,
+        }
+
+    def _runtime_execution_capture_guard_context(
+        self,
+        *,
+        report: Mapping[str, Any],
+        thresholds: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build a real-time execution-capture derisk context."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_CAPTURE_GUARD_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return {"enabled": False, "active": False, "reason": "disabled"}
+
+        execution_raw = report.get("execution_vs_alpha")
+        execution = dict(execution_raw) if isinstance(execution_raw, Mapping) else {}
+        capture_ratio = _safe_float(execution.get("execution_capture_ratio"))
+        if capture_ratio is None or not math.isfinite(float(capture_ratio)):
+            return {
+                "enabled": True,
+                "active": False,
+                "reason": "capture_unavailable",
+                "capture_ratio": None,
+            }
+
+        hard_floor = _config_float(
+            "AI_TRADING_EXECUTION_CAPTURE_GUARD_HARD_FLOOR",
+            None,
+        )
+        if hard_floor is None:
+            hard_floor = _safe_float(thresholds.get("min_execution_capture_ratio"))
+        if hard_floor is None:
+            hard_floor = 0.08
+        hard_floor = max(0.01, min(float(hard_floor), 0.95))
+
+        soft_multiplier = _config_float(
+            "AI_TRADING_EXECUTION_CAPTURE_GUARD_SOFT_MULTIPLIER",
+            1.4,
+        )
+        if soft_multiplier is None:
+            soft_multiplier = 1.4
+        soft_multiplier = max(1.0, min(float(soft_multiplier), 3.0))
+        soft_floor = min(float(hard_floor) * float(soft_multiplier), 0.9)
+
+        min_qty_scale = _config_float(
+            "AI_TRADING_EXECUTION_CAPTURE_GUARD_MIN_QTY_SCALE",
+            0.35,
+        )
+        if min_qty_scale is None:
+            min_qty_scale = 0.35
+        min_qty_scale = max(0.1, min(float(min_qty_scale), 1.0))
+
+        block_new_symbols_below = _config_float(
+            "AI_TRADING_EXECUTION_CAPTURE_GUARD_BLOCK_NEW_SYMBOLS_BELOW",
+            max(float(hard_floor), 0.10),
+        )
+        if block_new_symbols_below is None:
+            block_new_symbols_below = max(float(hard_floor), 0.10)
+        block_new_symbols_below = max(0.01, min(float(block_new_symbols_below), 1.0))
+
+        hard_block_floor = _config_float(
+            "AI_TRADING_EXECUTION_CAPTURE_GUARD_HARD_BLOCK_FLOOR",
+            max(0.0, float(hard_floor) * 0.85),
+        )
+        if hard_block_floor is None:
+            hard_block_floor = max(0.0, float(hard_floor) * 0.85)
+        hard_block_floor = max(0.0, min(float(hard_block_floor), float(hard_floor)))
+
+        capture_val = float(capture_ratio)
+        if capture_val >= float(soft_floor):
+            return {
+                "enabled": True,
+                "active": False,
+                "reason": "ok",
+                "capture_ratio": float(capture_val),
+                "soft_floor": float(soft_floor),
+                "hard_floor": float(hard_floor),
+                "hard_block_floor": float(hard_block_floor),
+            }
+
+        scale = max(
+            float(min_qty_scale),
+            min(1.0, float(capture_val) / max(float(soft_floor), 1e-9)),
+        )
+        passive_only = bool(capture_val < max(float(hard_floor), float(soft_floor) * 0.8))
+        block_new_symbols = bool(capture_val < float(block_new_symbols_below))
+        hard_block = bool(capture_val <= float(hard_block_floor))
+        return {
+            "enabled": True,
+            "active": True,
+            "reason": "capture_degraded",
+            "capture_ratio": float(capture_val),
+            "soft_floor": float(soft_floor),
+            "hard_floor": float(hard_floor),
+            "hard_block_floor": float(hard_block_floor),
+            "hard_block": bool(hard_block),
+            "order_qty_scale": float(scale),
+            "passive_only": bool(passive_only),
+            "block_new_symbols": bool(block_new_symbols),
+        }
+
+    def _runtime_symbol_tca_guard_context(
+        self,
+        *,
+        report: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build symbol-level TCA guard context from realized loss drivers."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_TCA_GUARD_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return {"enabled": False, "active": False, "reason": "disabled"}
+
+        trade_raw = report.get("trade_history")
+        trade = dict(trade_raw) if isinstance(trade_raw, Mapping) else {}
+        top_loss_raw = trade.get("top_loss_drivers")
+        top_loss = dict(top_loss_raw) if isinstance(top_loss_raw, Mapping) else {}
+        symbol_rows = top_loss.get("symbols")
+        rows = list(symbol_rows) if isinstance(symbol_rows, list) else []
+
+        min_loss = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_TCA_GUARD_MIN_LOSS_PNL",
+            200.0,
+        )
+        if min_loss is None:
+            min_loss = 200.0
+        min_loss = max(10.0, float(min_loss))
+        max_symbols = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_TCA_GUARD_MAX_SYMBOLS",
+            3,
+        )
+        if max_symbols is None:
+            max_symbols = 3
+        max_symbols = max(1, min(int(max_symbols), 20))
+        only_new_symbols = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_TCA_GUARD_ONLY_NEW_SYMBOLS"
+        )
+        if only_new_symbols is None:
+            only_new_symbols = True
+
+        blocked_symbols: list[str] = []
+        blocked_payload: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            symbol = str(row.get("name") or row.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            net_pnl = _safe_float(row.get("net_pnl"))
+            if net_pnl is None or float(net_pnl) > -float(min_loss):
+                continue
+            blocked_symbols.append(symbol)
+            blocked_payload.append({"symbol": symbol, "net_pnl": float(net_pnl)})
+            if len(blocked_symbols) >= int(max_symbols):
+                break
+
+        if not blocked_symbols:
+            return {
+                "enabled": True,
+                "active": False,
+                "reason": "no_blocked_symbols",
+                "min_loss_pnl": float(min_loss),
+                "max_symbols": int(max_symbols),
+                "only_new_symbols": bool(only_new_symbols),
+                "blocked_symbols": [],
+                "blocked": [],
+            }
+        return {
+            "enabled": True,
+            "active": True,
+            "reason": "negative_symbol_tca",
+            "min_loss_pnl": float(min_loss),
+            "max_symbols": int(max_symbols),
+            "only_new_symbols": bool(only_new_symbols),
+            "blocked_symbols": list(blocked_symbols),
+            "blocked": blocked_payload,
+        }
+
+    def _runtime_preopen_artifact_max_age_seconds(self) -> float:
+        """Return maximum allowed age for runtime artifacts during pre-open checks."""
+
+        value = _config_float(
+            "AI_TRADING_EXECUTION_PREOPEN_READINESS_ARTIFACT_MAX_AGE_SEC",
+            72.0 * 3600.0,
+        )
+        if value is None or not math.isfinite(float(value)):
+            value = 72.0 * 3600.0
+        return max(300.0, min(float(value), 240.0 * 3600.0))
+
+    def _runtime_preopen_artifact_freshness_context(
+        self,
+        *,
+        report: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Summarize runtime artifact freshness used by pre-open readiness."""
+
+        trade_raw = report.get("trade_history")
+        trade_payload = dict(trade_raw) if isinstance(trade_raw, Mapping) else {}
+        gate_raw = report.get("gate_effectiveness")
+        gate_payload = dict(gate_raw) if isinstance(gate_raw, Mapping) else {}
+        raw_targets: list[tuple[str, Any]] = [
+            ("trade_history", trade_payload.get("path")),
+            ("gate_summary", gate_payload.get("path")),
+            ("gate_log", gate_payload.get("gate_log_path")),
+        ]
+
+        now_utc = datetime.now(UTC)
+        max_age_s = self._runtime_preopen_artifact_max_age_seconds()
+        seen_paths: set[str] = set()
+        artifacts: list[dict[str, Any]] = []
+        stale_labels: list[str] = []
+        for label, raw_path in raw_targets:
+            path_text = str(raw_path or "").strip()
+            if not path_text:
+                continue
+            if path_text in seen_paths:
+                continue
+            seen_paths.add(path_text)
+            path_obj = Path(path_text)
+            exists = bool(path_obj.exists())
+            age_s: float | None = None
+            if exists:
+                try:
+                    mtime_dt = datetime.fromtimestamp(path_obj.stat().st_mtime, tz=UTC)
+                    age_s = max((now_utc - mtime_dt).total_seconds(), 0.0)
+                except Exception:
+                    exists = False
+                    age_s = None
+            is_stale = (not exists) or (age_s is not None and age_s > float(max_age_s))
+            if is_stale:
+                stale_labels.append(str(label))
+            artifacts.append(
+                {
+                    "label": str(label),
+                    "path": str(path_obj),
+                    "exists": bool(exists),
+                    "age_s": round(float(age_s), 3) if age_s is not None else None,
+                    "stale": bool(is_stale),
+                }
+            )
+        return {
+            "max_age_s": float(max_age_s),
+            "artifacts": artifacts,
+            "stale_labels": stale_labels,
+        }
+
+    def _execution_vs_alpha_alert_cooldown_seconds(self) -> float:
+        """Return minimum seconds between repeated execution-vs-alpha alerts."""
+
+        value = _config_float("AI_TRADING_EXECUTION_VS_ALPHA_ALERT_COOLDOWN_SEC", 300.0)
+        if value is None or not math.isfinite(float(value)):
+            value = 300.0
+        return max(0.0, min(float(value), 3600.0))
+
+    def _emit_execution_vs_alpha_alerts(
+        self,
+        *,
+        report: Mapping[str, Any],
+        thresholds: Mapping[str, Any],
+        gate_passed: bool,
+    ) -> None:
+        """Emit bounded alerts when capture/slippage drift outside configured limits."""
+
+        execution_raw = report.get("execution_vs_alpha")
+        execution = dict(execution_raw) if isinstance(execution_raw, Mapping) else {}
+        capture_ratio = _safe_float(execution.get("execution_capture_ratio"))
+        slippage_drag_bps = _safe_float(execution.get("slippage_drag_bps"))
+        if capture_ratio is None and slippage_drag_bps is None:
+            return
+        min_capture = _safe_float(thresholds.get("min_execution_capture_ratio"))
+        if min_capture is None:
+            min_capture = 0.08
+        max_slippage = _safe_float(thresholds.get("max_slippage_drag_bps"))
+        if max_slippage is None:
+            max_slippage = 18.0
+        failed_metrics: list[str] = []
+        if capture_ratio is not None and float(capture_ratio) < float(min_capture):
+            failed_metrics.append("execution_capture_ratio")
+        if slippage_drag_bps is not None and float(slippage_drag_bps) > float(max_slippage):
+            failed_metrics.append("slippage_drag_bps")
+
+        now_mono = float(monotonic_time())
+        cooldown_s = self._execution_vs_alpha_alert_cooldown_seconds()
+        active = bool(getattr(self, "_execution_vs_alpha_alert_active", False))
+        last_log_mono = float(getattr(self, "_execution_vs_alpha_alert_last_mono", 0.0) or 0.0)
+        if failed_metrics:
+            should_emit = (
+                not active
+                or cooldown_s <= 0.0
+                or last_log_mono <= 0.0
+                or (now_mono - last_log_mono) >= cooldown_s
+            )
+            self._execution_vs_alpha_alert_active = True
+            if should_emit:
+                self._execution_vs_alpha_alert_last_mono = now_mono
+                logger.warning(
+                    "EXECUTION_VS_ALPHA_ALERT",
+                    extra={
+                        "failed_metrics": failed_metrics,
+                        "execution_capture_ratio": (
+                            float(capture_ratio) if capture_ratio is not None else None
+                        ),
+                        "slippage_drag_bps": (
+                            float(slippage_drag_bps) if slippage_drag_bps is not None else None
+                        ),
+                        "min_execution_capture_ratio": float(min_capture),
+                        "max_slippage_drag_bps": float(max_slippage),
+                        "gate_passed": bool(gate_passed),
+                    },
+                )
+            return
+
+        if active:
+            self._execution_vs_alpha_alert_active = False
+            self._execution_vs_alpha_alert_last_mono = now_mono
+            logger.info(
+                "EXECUTION_VS_ALPHA_ALERT_RECOVERED",
+                extra={
+                    "execution_capture_ratio": (
+                        float(capture_ratio) if capture_ratio is not None else None
+                    ),
+                    "slippage_drag_bps": (
+                        float(slippage_drag_bps) if slippage_drag_bps is not None else None
+                    ),
+                    "min_execution_capture_ratio": float(min_capture),
+                    "max_slippage_drag_bps": float(max_slippage),
+                    "gate_passed": bool(gate_passed),
+                },
+            )
+
+    def _runtime_preopen_readiness_allows_openings(
+        self,
+        *,
+        report: Mapping[str, Any],
+        thresholds: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Require provider/broker/execution sanity near the opening window."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PREOPEN_READINESS_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        if _pytest_mode_active():
+            enforce_in_tests = _resolve_bool_env(
+                "AI_TRADING_EXECUTION_PREOPEN_READINESS_ENFORCE_IN_TESTS"
+            )
+            if enforce_in_tests is None:
+                enforce_in_tests = False
+            if not bool(enforce_in_tests):
+                return True, {"enabled": True, "reason": "pytest_mode"}
+
+        now_ny = datetime.now(ZoneInfo("America/New_York"))
+        if int(now_ny.weekday()) >= 5:
+            return True, {"enabled": True, "reason": "weekend"}
+
+        open_minute = (9 * 60) + 30
+        current_minute = int((now_ny.hour * 60) + now_ny.minute)
+        pre_window_min = _config_int("AI_TRADING_EXECUTION_PREOPEN_READINESS_PRE_WINDOW_MIN", 90)
+        if pre_window_min is None:
+            pre_window_min = 90
+        pre_window_min = max(0, min(int(pre_window_min), 360))
+        post_window_min = _config_int("AI_TRADING_EXECUTION_PREOPEN_READINESS_POST_WINDOW_MIN", 20)
+        if post_window_min is None:
+            post_window_min = 20
+        post_window_min = max(0, min(int(post_window_min), 120))
+        in_window = (
+            int(current_minute) >= int(open_minute - pre_window_min)
+            and int(current_minute) <= int(open_minute + post_window_min)
+        )
+        if not in_window:
+            return True, {
+                "enabled": True,
+                "reason": "outside_window",
+                "window_pre_minutes": int(pre_window_min),
+                "window_post_minutes": int(post_window_min),
+                "minute_of_day": int(current_minute),
+            }
+
+        provider_state = runtime_state.observe_data_provider_state()
+        provider_status = str(provider_state.get("status") or "").strip().lower()
+        provider_ready = (
+            provider_status in {"healthy", "ready"}
+            and not bool(provider_state.get("using_backup"))
+            and str(provider_state.get("data_status") or "").strip().lower()
+            not in {"degraded", "empty"}
+        )
+
+        broker_state = runtime_state.observe_broker_status()
+        broker_status = str(broker_state.get("status") or "").strip().lower()
+        broker_ready = broker_status in {"connected", "reachable", "ready"}
+
+        execution_raw = report.get("execution_vs_alpha")
+        execution = dict(execution_raw) if isinstance(execution_raw, Mapping) else {}
+        capture_ratio = _safe_float(execution.get("execution_capture_ratio"))
+        slippage_drag_bps = _safe_float(execution.get("slippage_drag_bps"))
+
+        min_capture = _safe_float(thresholds.get("min_execution_capture_ratio"))
+        if min_capture is None:
+            min_capture = 0.08
+        max_slippage = _safe_float(thresholds.get("max_slippage_drag_bps"))
+        if max_slippage is None:
+            max_slippage = 18.0
+        capture_ok = (
+            capture_ratio is None
+            or float(capture_ratio) >= max(0.0, float(min_capture) * 0.8)
+        )
+        slippage_ok = (
+            slippage_drag_bps is None
+            or float(slippage_drag_bps) <= max(0.0, float(max_slippage) * 1.25)
+        )
+        artifact_freshness = self._runtime_preopen_artifact_freshness_context(report=report)
+        stale_labels = list(artifact_freshness.get("stale_labels") or [])
+        artifact_fresh = len(stale_labels) == 0
+
+        failed_checks: list[str] = []
+        if not provider_ready:
+            failed_checks.append("provider_not_ready")
+        if not broker_ready:
+            failed_checks.append("broker_not_ready")
+        if not capture_ok:
+            failed_checks.append("capture_ratio_low")
+        if not slippage_ok:
+            failed_checks.append("slippage_drag_high")
+        if not artifact_fresh:
+            failed_checks.append("artifact_freshness")
+        allowed = not failed_checks
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "preopen_readiness_failed",
+            "window_pre_minutes": int(pre_window_min),
+            "window_post_minutes": int(post_window_min),
+            "minute_of_day": int(current_minute),
+            "provider_status": provider_status or "unknown",
+            "provider_ready": bool(provider_ready),
+            "broker_status": broker_status or "unknown",
+            "broker_ready": bool(broker_ready),
+            "capture_ratio": float(capture_ratio) if capture_ratio is not None else None,
+            "slippage_drag_bps": (
+                float(slippage_drag_bps) if slippage_drag_bps is not None else None
+            ),
+            "min_capture_ratio_effective": float(max(0.0, float(min_capture) * 0.8)),
+            "max_slippage_drag_effective": float(max(0.0, float(max_slippage) * 1.25)),
+            "artifact_fresh": bool(artifact_fresh),
+            "artifact_freshness": artifact_freshness,
+            "failed_checks": failed_checks,
+        }
+
+    def _apply_runtime_execution_capture_derisk(
+        self,
+        *,
+        order: Mapping[str, Any] | None,
+        gonogo_context: Mapping[str, Any] | None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Apply capture-driven derisking controls to opening orders."""
+
+        if not isinstance(order, dict):
+            return True, {"enabled": False, "reason": "order_not_mutable"}
+        context_map = (
+            dict(gonogo_context)
+            if isinstance(gonogo_context, Mapping)
+            else {}
+        )
+        capture_raw = context_map.get("execution_capture_guard")
+        capture_guard = dict(capture_raw) if isinstance(capture_raw, Mapping) else {}
+        symbol_raw = context_map.get("symbol_tca_guard")
+        symbol_guard = dict(symbol_raw) if isinstance(symbol_raw, Mapping) else {}
+        if not bool(capture_guard.get("enabled")) and not bool(symbol_guard.get("enabled")):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        symbol = str(order.get("symbol") or "").strip().upper()
+        closing_position = bool(order.get("closing_position"))
+        if not symbol or closing_position:
+            return True, {"enabled": True, "reason": "not_applicable", "symbol": symbol or None}
+
+        if bool(symbol_guard.get("active")):
+            blocked_symbols_raw = symbol_guard.get("blocked_symbols")
+            blocked_symbols = (
+                {
+                    str(item).strip().upper()
+                    for item in blocked_symbols_raw
+                    if str(item).strip()
+                }
+                if isinstance(blocked_symbols_raw, Sequence)
+                and not isinstance(blocked_symbols_raw, (str, bytes))
+                else set()
+            )
+            if symbol in blocked_symbols:
+                only_new = bool(symbol_guard.get("only_new_symbols"))
+                position_qty = int(self._position_quantity(symbol))
+                if (not only_new) or int(position_qty) == 0:
+                    return False, {
+                        "enabled": True,
+                        "reason": "symbol_tca_guard_block",
+                        "symbol": symbol,
+                        "position_qty": int(position_qty),
+                        "symbol_guard": symbol_guard,
+                    }
+
+        if not bool(capture_guard.get("active")):
+            return True, {
+                "enabled": True,
+                "reason": "capture_guard_inactive",
+                "symbol": symbol,
+            }
+
+        position_qty = int(self._position_quantity(symbol))
+        if bool(capture_guard.get("block_new_symbols")) and int(position_qty) == 0:
+            return False, {
+                "enabled": True,
+                "reason": "capture_guard_block_new_symbol",
+                "symbol": symbol,
+                "capture_guard": capture_guard,
+            }
+
+        quantity_raw = order.get("quantity")
+        if quantity_raw in (None, ""):
+            quantity_raw = order.get("qty")
+        quantity_before = max(1, _safe_int(quantity_raw, 1))
+        qty_scale = _safe_float(capture_guard.get("order_qty_scale"))
+        quantity_after = int(quantity_before)
+        if qty_scale is not None and math.isfinite(float(qty_scale)):
+            quantity_after = max(1, int(math.floor(float(quantity_before) * float(qty_scale))))
+        if int(quantity_after) < int(quantity_before):
+            order["quantity"] = int(quantity_after)
+            order["qty"] = int(quantity_after)
+
+        passive_only = bool(capture_guard.get("passive_only"))
+        order_type = str(order.get("order_type") or "").strip().lower()
+        if passive_only and order_type == "market":
+            return False, {
+                "enabled": True,
+                "reason": "capture_guard_passive_only_market_block",
+                "symbol": symbol,
+                "capture_guard": capture_guard,
+            }
+        if passive_only and not order_type:
+            order["order_type"] = "limit"
+
+        return True, {
+            "enabled": True,
+            "reason": "applied" if quantity_after < quantity_before or passive_only else "no_change",
+            "symbol": symbol,
+            "capture_guard": capture_guard,
+            "quantity_before": int(quantity_before),
+            "quantity_after": int(quantity_after),
+            "passive_only": bool(passive_only),
+        }
+
     def _runtime_intraday_slippage_kill_switch_allows_openings(
         self,
         *,
@@ -14066,6 +16285,11 @@ class ExecutionEngine:
         if max_drag is None:
             return True, {"enabled": False, "reason": "threshold_unset"}
         max_drag = max(0.0, float(max_drag))
+        effective_max_drag, adaptive_context = self._runtime_intraday_adaptive_slippage_budget(
+            report=report,
+            thresholds=thresholds,
+            base_max_drag=max_drag,
+        )
         min_trades = _config_int(
             "AI_TRADING_EXECUTION_INTRADAY_SLIPPAGE_KILL_SWITCH_MIN_TRADES",
             12,
@@ -14123,9 +16347,11 @@ class ExecutionEngine:
                 "reason": "no_today_trade_row",
                 "timezone": tz_name,
                 "today": today,
-                "threshold_slippage_drag": float(max_drag),
+                "threshold_slippage_drag": float(effective_max_drag),
+                "threshold_slippage_drag_base": float(max_drag),
                 "trade_fill_source": fill_source,
                 "min_trades": int(min_trades),
+                "adaptive": adaptive_context,
             }
 
         today_trades = _safe_int(today_row.get("trades"), 0)
@@ -14135,10 +16361,12 @@ class ExecutionEngine:
                 "reason": "insufficient_today_trades",
                 "timezone": tz_name,
                 "today": today,
-                "threshold_slippage_drag": float(max_drag),
+                "threshold_slippage_drag": float(effective_max_drag),
+                "threshold_slippage_drag_base": float(max_drag),
                 "trade_fill_source": fill_source,
                 "min_trades": int(min_trades),
                 "today_trades": int(today_trades),
+                "adaptive": adaptive_context,
             }
 
         slippage_cost = _safe_float(today_row.get("slippage_cost"))
@@ -14148,24 +16376,28 @@ class ExecutionEngine:
                 "reason": "today_slippage_unavailable",
                 "timezone": tz_name,
                 "today": today,
-                "threshold_slippage_drag": float(max_drag),
+                "threshold_slippage_drag": float(effective_max_drag),
+                "threshold_slippage_drag_base": float(max_drag),
                 "trade_fill_source": fill_source,
                 "min_trades": int(min_trades),
                 "today_trades": int(today_trades),
+                "adaptive": adaptive_context,
             }
 
         slippage_drag = abs(float(slippage_cost))
-        allowed = float(slippage_drag) <= float(max_drag)
+        allowed = float(slippage_drag) <= float(effective_max_drag)
         return allowed, {
             "enabled": True,
             "reason": "ok" if allowed else "intraday_slippage_drag_breach",
             "timezone": tz_name,
             "today": today,
-            "threshold_slippage_drag": float(max_drag),
+            "threshold_slippage_drag": float(effective_max_drag),
+            "threshold_slippage_drag_base": float(max_drag),
             "today_slippage_drag": float(slippage_drag),
             "trade_fill_source": fill_source,
             "min_trades": int(min_trades),
             "today_trades": int(today_trades),
+            "adaptive": adaptive_context,
         }
 
     def _runtime_pending_new_pressure_allows_openings(self) -> tuple[bool, dict[str, Any]]:
@@ -15040,6 +17272,25 @@ class ExecutionEngine:
                     "gate_summary": str(gate_summary_path),
                 },
             }
+            capture_guard_context = self._runtime_execution_capture_guard_context(
+                report=report,
+                thresholds=effective_thresholds,
+            )
+            context["execution_capture_guard"] = capture_guard_context
+            symbol_tca_guard_context = self._runtime_symbol_tca_guard_context(report=report)
+            context["symbol_tca_guard"] = symbol_tca_guard_context
+            if allowed and bool(capture_guard_context.get("hard_block")):
+                allowed = False
+                existing_failed_checks = context.get("failed_checks", [])
+                failed_checks = (
+                    [str(item) for item in existing_failed_checks]
+                    if isinstance(existing_failed_checks, Sequence)
+                    else []
+                )
+                failed_checks.append("execution_capture_ratio_hard_guard")
+                context["failed_checks"] = failed_checks
+                context["gate_passed"] = False
+                context["reason"] = "execution_capture_ratio_hard_guard"
             if not allowed:
                 failed_checks_raw = context.get("failed_checks", [])
                 failed_checks = (
@@ -15112,6 +17363,24 @@ class ExecutionEngine:
                     context["failed_checks"] = failed_checks
                     context["gate_passed"] = False
                     context["reason"] = "hourly_window_quality"
+            if allowed:
+                preopen_allowed, preopen_context = self._runtime_preopen_readiness_allows_openings(
+                    report=report,
+                    thresholds=effective_thresholds,
+                )
+                context["preopen_readiness"] = preopen_context
+                if not preopen_allowed:
+                    allowed = False
+                    existing_failed_checks = context.get("failed_checks", [])
+                    failed_checks = (
+                        [str(item) for item in existing_failed_checks]
+                        if isinstance(existing_failed_checks, Sequence)
+                        else []
+                    )
+                    failed_checks.append("preopen_readiness")
+                    context["failed_checks"] = failed_checks
+                    context["gate_passed"] = False
+                    context["reason"] = "preopen_readiness"
             if allowed:
                 intraday_allowed, intraday_context = self._runtime_intraday_pnl_kill_switch_allows_openings(
                     report=report,
@@ -15225,6 +17494,11 @@ class ExecutionEngine:
                             "paths": paths_payload,
                         },
                     )
+            self._emit_execution_vs_alpha_alerts(
+                report=report,
+                thresholds=effective_thresholds,
+                gate_passed=bool(allowed),
+            )
         except Exception as exc:
             fail_closed_effective = bool(fail_closed)
             fail_closed_forced = False
@@ -15363,6 +17637,50 @@ class ExecutionEngine:
                     extra=skip_payload | {"detail": "runtime_gonogo_gate"},
                 )
                 return False
+            derisk_allowed, derisk_context = self._apply_runtime_execution_capture_derisk(
+                order=order,
+                gonogo_context=gonogo_context,
+            )
+            if not derisk_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "runtime_capture_derisk",
+                    "context": derisk_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_RUNTIME_CAPTURE_DERISK", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "runtime_capture_derisk",
+                    derisk_context,
+                    extra=skip_payload | {"detail": "runtime_capture_derisk"},
+                )
+                return False
+            if (
+                isinstance(derisk_context, Mapping)
+                and str(derisk_context.get("reason") or "") in {"applied"}
+            ):
+                logger.info(
+                    "RUNTIME_CAPTURE_DERISK_APPLIED",
+                    extra={
+                        "symbol": order.get("symbol"),
+                        "side": order.get("side"),
+                        "quantity_before": derisk_context.get("quantity_before"),
+                        "quantity_after": derisk_context.get("quantity_after"),
+                        "passive_only": bool(derisk_context.get("passive_only")),
+                    },
+                )
             quality_allowed, quality_context = self._execution_quality_allows_openings()
             if not quality_allowed:
                 self.stats.setdefault("capacity_skips", 0)
@@ -15936,6 +18254,17 @@ class ExecutionEngine:
             or order_data.get("close_position")
             or order_data.get("reduce_only")
         )
+        client_order_id_text = str(order_data.get("client_order_id") or "").strip()
+        if self._should_suppress_duplicate_client_order_id(
+            client_order_id=client_order_id_text,
+            symbol=str(order_data.get("symbol") or ""),
+            side=str(order_data.get("side") or ""),
+        ):
+            return {
+                "status": "skipped",
+                "reason": "duplicate_client_order_id",
+                "client_order_id": client_order_id_text or None,
+            }
 
         if not closing_position and self._pdt_lockout_active(account_snapshot):
             daytrade_limit = _safe_int(
@@ -16165,6 +18494,9 @@ class ExecutionEngine:
                         "resp_type": resp_cls,
                         "resp_summary": response_summary,
                     },
+                )
+                self._record_client_order_id_submission(
+                    str(ack_client_id or client_order_id_text or "").strip()
                 )
             return resp
         except (APIError, TimeoutError, ConnectionError) as e:

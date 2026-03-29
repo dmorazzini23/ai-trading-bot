@@ -55,11 +55,16 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
 
 _log = get_logger(__name__)
 
+_PROM_OK: bool
+_PROM_REG: object | None
 if missing("ai_trading.metrics", "metrics"):
     _PROM_OK, _PROM_REG = False, None
 else:
-    from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK
-    from ai_trading.metrics import REGISTRY as _PROM_REG
+    from ai_trading.metrics import PROMETHEUS_AVAILABLE
+    from ai_trading.metrics import REGISTRY
+
+    _PROM_OK = bool(PROMETHEUS_AVAILABLE)
+    _PROM_REG = REGISTRY
 
 _ALPACA_SECTION_DEFAULTS: dict[str, Any] = {
     "sdk_ok": False,
@@ -156,10 +161,10 @@ class _FallbackResponse:
 
 def _install_route_tracker(app: Any) -> dict[str, Any]:
     """Ensure we can serve routes even when Flask is stubbed."""
-    registry = getattr(app, "_route_registry", None)
-    if isinstance(registry, dict):
-        return registry
-    registry = {}
+    existing = getattr(app, "_route_registry", None)
+    if isinstance(existing, dict):
+        return existing
+    registry: dict[str, Any] = {}
     original_route = getattr(app, "route", None)
 
     def _simple_register(rule: str, **_options: Any):
@@ -546,12 +551,15 @@ def create_app():
 
     def _build_healthz_payload() -> dict[str, Any]:
         pytest_mode = _pytest_active()
-        payload = build_canonical_healthz_payload(
+        payload = cast(
+            dict[str, Any],
+            build_canonical_healthz_payload(
             service_name=_SERVICE_NAME,
             force_ok_for_pytest=pytest_mode,
             healthy_status_mode="service",
             ok_mode="connectivity",
             env_error=app.config.get("_ENV_ERR"),
+            ),
         )
         if (not pytest_mode) and (
             _managed_env("PYTEST_RUNNING") or _managed_env("PYTEST_CURRENT_TEST")
@@ -584,6 +592,17 @@ def create_app():
         """Expose Prometheus metrics if available."""
         if not _PROM_OK:
             return ("metrics unavailable", 501)
+        try:
+            from ai_trading.telemetry.runtime_prom_metrics import (
+                refresh_runtime_execution_metrics,
+            )
+
+            refresh_runtime_execution_metrics()
+        except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            _log.debug(
+                "PROM_RUNTIME_METRICS_REFRESH_SKIPPED",
+                extra={"error": str(exc)},
+            )
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
         return generate_latest(_PROM_REG), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
