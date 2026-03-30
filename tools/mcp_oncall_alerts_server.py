@@ -1,7 +1,8 @@
-"""On-call MCP server for PagerDuty/Opsgenie incident escalation."""
+"""On-call MCP server for Jira Service Management incident escalation."""
 
 from __future__ import annotations
 
+import base64
 import importlib
 import json
 import os
@@ -31,9 +32,12 @@ _slack_runtime_incident_snapshot = cast(
 
 _DEFAULT_RUNTIME_ROOT = Path("/var/lib/ai-trading-bot/runtime")
 _DEFAULT_STATE_PATH = _DEFAULT_RUNTIME_ROOT / "oncall_incident_state.json"
-
-_PAGERDUTY_EVENTS_V2 = "https://events.pagerduty.com/v2/enqueue"
-_OPSGENIE_DEFAULT_URL = "https://api.opsgenie.com/v2/alerts"
+_SEVERITY_RANK: dict[str, int] = {
+    "info": 0,
+    "warning": 1,
+    "error": 2,
+    "critical": 3,
+}
 
 
 def _bool_arg(value: Any, default: bool = False) -> bool:
@@ -81,14 +85,14 @@ def _post_json(
     url: str,
     payload: dict[str, Any],
     headers: dict[str, str] | None = None,
-    timeout_s: float = 6.0,
+    timeout_s: float = 8.0,
 ) -> tuple[int, str]:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url=url,
         method="POST",
         data=body,
-        headers={"Content-Type": "application/json", **(headers or {})},
+        headers={"Content-Type": "application/json", "Accept": "application/json", **(headers or {})},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
@@ -112,7 +116,34 @@ def _incident_severity(triggers: list[str]) -> str:
     return "info"
 
 
-def _opsgenie_priority(severity: str) -> str:
+def _normalized_severity(value: Any, *, default: str) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in _SEVERITY_RANK:
+        return candidate
+    return default
+
+
+def _provider_min_severity(provider: str, args: dict[str, Any]) -> str:
+    if provider == "jsm_ticket":
+        return _normalized_severity(
+            args.get("jsm_ticket_min_severity")
+            or os.getenv("AI_TRADING_JSM_TICKET_MIN_SEVERITY", "").strip()
+            or os.getenv("AI_TRADING_ONCALL_MIN_SEVERITY", "").strip(),
+            default="warning",
+        )
+    return _normalized_severity(
+        args.get("jsm_ops_min_severity")
+        or os.getenv("AI_TRADING_JSM_OPS_MIN_SEVERITY", "").strip()
+        or os.getenv("AI_TRADING_ONCALL_MIN_SEVERITY", "").strip(),
+        default="info",
+    )
+
+
+def _meets_min_severity(*, severity: str, min_severity: str) -> bool:
+    return _SEVERITY_RANK[severity] >= _SEVERITY_RANK[min_severity]
+
+
+def _jsm_priority(severity: str) -> str:
     sev = severity.strip().lower()
     if sev == "critical":
         return "P1"
@@ -136,6 +167,8 @@ def _incident_summary(snapshot: dict[str, Any], triggers: list[str]) -> str:
 
 
 def _resolve_providers(args: dict[str, Any]) -> list[str]:
+    known = {"jsm_ops", "jsm_ticket"}
+
     raw = args.get("providers")
     if isinstance(raw, str):
         requested = [chunk.strip().lower() for chunk in raw.split(",") if chunk.strip()]
@@ -144,20 +177,154 @@ def _resolve_providers(args: dict[str, Any]) -> list[str]:
     else:
         requested = []
 
-    known = {"pagerduty", "opsgenie"}
     requested = [provider for provider in requested if provider in known]
     if requested:
         return sorted(set(requested))
 
+    env_providers = str(os.getenv("AI_TRADING_ONCALL_PROVIDERS", "")).strip()
+    if env_providers:
+        from_env = [chunk.strip().lower() for chunk in env_providers.split(",") if chunk.strip()]
+        filtered = [provider for provider in from_env if provider in known]
+        if filtered:
+            return sorted(set(filtered))
+
     providers: list[str] = []
-    if _bool_arg(os.getenv("AI_TRADING_CONNECTOR_PAGERDUTY_ENABLED"), default=False):
-        providers.append("pagerduty")
-    if _bool_arg(os.getenv("AI_TRADING_CONNECTOR_OPSGENIE_ENABLED"), default=False):
-        providers.append("opsgenie")
+    if _bool_arg(os.getenv("AI_TRADING_CONNECTOR_JSM_TICKET_ENABLED"), default=False):
+        providers.append("jsm_ticket")
+    if _bool_arg(os.getenv("AI_TRADING_CONNECTOR_JSM_OPS_ENABLED"), default=True):
+        providers.append("jsm_ops")
     return sorted(set(providers))
 
 
-def _notify_pagerduty(
+def _jsm_alert_url(args: dict[str, Any]) -> str:
+    cloud_id = (
+        str(args.get("jsm_ops_cloud_id") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_CLOUD_ID", "").strip()
+    )
+    base = (
+        str(args.get("jsm_ops_base_url") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_BASE_URL", "").strip()
+    )
+    if base:
+        resolved = base.replace("{cloudId}", cloud_id) if "{cloudId}" in base else base
+        normalized = resolved.rstrip("/")
+        if normalized.endswith("/alerts"):
+            return normalized
+        return f"{normalized}/alerts"
+    if not cloud_id:
+        raise RuntimeError(
+            "missing JSM Ops cloud id (jsm_ops_cloud_id arg or AI_TRADING_JSM_OPS_CLOUD_ID)"
+        )
+    return f"https://api.atlassian.com/jsm/ops/api/{cloud_id}/v1/alerts"
+
+
+def _jsm_auth_headers(args: dict[str, Any]) -> dict[str, str]:
+    api_key = (
+        str(args.get("jsm_ops_api_key") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_API_KEY", "").strip()
+    )
+    if api_key:
+        return {"Authorization": f"GenieKey {api_key}"}
+
+    email = (
+        str(args.get("jsm_ops_email") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_EMAIL", "").strip()
+    )
+    api_token = (
+        str(args.get("jsm_ops_api_token") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_API_TOKEN", "").strip()
+    )
+    if email and api_token:
+        basic = base64.b64encode(f"{email}:{api_token}".encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {basic}"}
+
+    bearer = (
+        str(args.get("jsm_ops_bearer_token") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_BEARER_TOKEN", "").strip()
+    )
+    if bearer:
+        return {"Authorization": f"Bearer {bearer}"}
+
+    raise RuntimeError(
+        "missing JSM Ops auth (set AI_TRADING_JSM_OPS_EMAIL + AI_TRADING_JSM_OPS_API_TOKEN, "
+        "or AI_TRADING_JSM_OPS_BEARER_TOKEN)"
+    )
+
+
+def _jsm_ticket_auth_headers(args: dict[str, Any]) -> dict[str, str]:
+    email = (
+        str(args.get("jsm_ops_email") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_EMAIL", "").strip()
+    )
+    api_token = (
+        str(args.get("jsm_ops_api_token") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_API_TOKEN", "").strip()
+    )
+    if email and api_token:
+        basic = base64.b64encode(f"{email}:{api_token}".encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {basic}"}
+
+    bearer = (
+        str(args.get("jsm_ops_bearer_token") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_BEARER_TOKEN", "").strip()
+    )
+    if bearer:
+        return {"Authorization": f"Bearer {bearer}"}
+
+    raise RuntimeError(
+        "missing JSM ticket auth (set AI_TRADING_JSM_OPS_EMAIL + AI_TRADING_JSM_OPS_API_TOKEN, "
+        "or AI_TRADING_JSM_OPS_BEARER_TOKEN)"
+    )
+
+
+def _jsm_ticket_url(args: dict[str, Any]) -> str:
+    site_url = (
+        str(args.get("jsm_site_url") or "").strip()
+        or os.getenv("AI_TRADING_JSM_SITE_URL", "").strip()
+    )
+    if not site_url:
+        raise RuntimeError("missing JSM site URL (jsm_site_url arg or AI_TRADING_JSM_SITE_URL)")
+    return f"{site_url.rstrip('/')}/rest/api/3/issue"
+
+
+def _parse_csv(raw: str) -> list[str]:
+    return [chunk.strip() for chunk in raw.split(",") if chunk.strip()]
+
+
+def _issue_description_adf(
+    *,
+    snapshot: dict[str, Any],
+    triggers: list[str],
+    fingerprint: str,
+    severity: str,
+) -> dict[str, Any]:
+    checks = ", ".join(list(snapshot.get("go_no_go_failed_checks") or [])) or "none"
+    text = (
+        f"ai-trading runtime incident\n"
+        f"severity={severity}\n"
+        f"fingerprint={fingerprint}\n"
+        f"triggers={','.join(triggers) if triggers else 'none'}\n"
+        f"health={snapshot.get('health_status')} ({snapshot.get('health_reason')})\n"
+        f"broker={snapshot.get('broker_status')}\n"
+        f"provider={snapshot.get('provider_active')} ({snapshot.get('provider_status')})\n"
+        f"capture={snapshot.get('execution_capture_ratio')}\n"
+        f"slippage_drag_bps={snapshot.get('slippage_drag_bps')}\n"
+        f"failed_checks={checks}\n"
+        f"timestamp={snapshot.get('timestamp')}"
+    )
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": text}],
+            }
+        ],
+    }
+
+
+def _notify_jsm_ticket(
     *,
     args: dict[str, Any],
     fingerprint: str,
@@ -165,77 +332,90 @@ def _notify_pagerduty(
     snapshot: dict[str, Any],
     triggers: list[str],
 ) -> dict[str, Any]:
-    routing_key = (
-        str(args.get("pagerduty_routing_key") or "").strip()
-        or os.getenv("AI_TRADING_PAGERDUTY_ROUTING_KEY", "").strip()
+    issue_url = _jsm_ticket_url(args)
+    headers = _jsm_ticket_auth_headers(args)
+    project_key = (
+        str(args.get("jsm_ticket_project_key") or "").strip()
+        or os.getenv("AI_TRADING_JSM_TICKET_PROJECT_KEY", "").strip()
     )
-    if not routing_key:
-        return {"provider": "pagerduty", "sent": False, "reason": "missing_routing_key"}
+    if not project_key:
+        raise RuntimeError(
+            "missing JSM ticket project key (jsm_ticket_project_key arg or AI_TRADING_JSM_TICKET_PROJECT_KEY)"
+        )
+    issue_type = (
+        str(args.get("jsm_ticket_issue_type") or "").strip()
+        or os.getenv("AI_TRADING_JSM_TICKET_ISSUE_TYPE", "").strip()
+        or "Task"
+    )
+    labels_raw = (
+        str(args.get("jsm_ticket_labels") or "").strip()
+        or os.getenv("AI_TRADING_JSM_TICKET_LABELS", "").strip()
+        or "ai-trading,runtime-incident"
+    )
+    labels = sorted(set(_parse_csv(labels_raw) + [f"severity-{severity.lower()}"]))
+    summary = f"[ai-trading] {severity.upper()} runtime incident ({fingerprint[:8]})"
+    payload = {
+        "fields": {
+            "project": {"key": project_key},
+            "summary": summary,
+            "description": _issue_description_adf(
+                snapshot=snapshot,
+                triggers=triggers,
+                fingerprint=fingerprint,
+                severity=severity,
+            ),
+            "issuetype": {"name": issue_type},
+            "labels": labels,
+        }
+    }
+    timeout_s = float(args.get("timeout_s") or 8.0)
+    status_code, body = _post_json(url=issue_url, payload=payload, headers=headers, timeout_s=timeout_s)
+    issue_key: str | None = None
+    issue_id: str | None = None
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            maybe_key = parsed.get("key")
+            maybe_id = parsed.get("id")
+            issue_key = str(maybe_key) if maybe_key is not None else None
+            issue_id = str(maybe_id) if maybe_id is not None else None
+    except json.JSONDecodeError:
+        pass
+    return {
+        "provider": "jsm_ticket",
+        "sent": True,
+        "status_code": status_code,
+        "issue_key": issue_key,
+        "issue_id": issue_id,
+        "response": body,
+    }
+
+
+def _notify_jsm_ops(
+    *,
+    args: dict[str, Any],
+    fingerprint: str,
+    severity: str,
+    snapshot: dict[str, Any],
+    triggers: list[str],
+) -> dict[str, Any]:
+    url = _jsm_alert_url(args)
+    headers = _jsm_auth_headers(args)
+    using_custom_base = bool(
+        str(args.get("jsm_ops_base_url") or "").strip()
+        or os.getenv("AI_TRADING_JSM_OPS_BASE_URL", "").strip()
+    )
 
     source = str(args.get("source") or os.getenv("AI_TRADING_ONCALL_SOURCE", "ai-trading")).strip()
-    component = str(args.get("component") or "runtime").strip()
-    group = str(args.get("group") or "trading-bot").strip()
-
-    payload = {
-        "routing_key": routing_key,
-        "event_action": "trigger",
-        "dedup_key": fingerprint,
-        "payload": {
-            "summary": _incident_summary(snapshot, triggers),
-            "source": source,
-            "severity": severity,
-            "component": component,
-            "group": group,
-            "class": "runtime_incident",
-            "timestamp": str(snapshot.get("timestamp") or utc_now_iso()),
-            "custom_details": {
-                "snapshot": snapshot,
-                "triggers": triggers,
-                "fingerprint": fingerprint,
-            },
-        },
-    }
-    timeout_s = float(args.get("timeout_s") or 6.0)
-    status_code, body = _post_json(url=_PAGERDUTY_EVENTS_V2, payload=payload, timeout_s=timeout_s)
-    return {"provider": "pagerduty", "sent": True, "status_code": status_code, "response": body}
-
-
-def _notify_opsgenie(
-    *,
-    args: dict[str, Any],
-    fingerprint: str,
-    severity: str,
-    snapshot: dict[str, Any],
-    triggers: list[str],
-) -> dict[str, Any]:
-    api_key = (
-        str(args.get("opsgenie_api_key") or "").strip()
-        or os.getenv("AI_TRADING_OPSGENIE_API_KEY", "").strip()
-    )
-    if not api_key:
-        return {"provider": "opsgenie", "sent": False, "reason": "missing_api_key"}
-
-    endpoint = str(args.get("opsgenie_url") or os.getenv("AI_TRADING_OPSGENIE_ALERT_URL", "")).strip()
-    if not endpoint:
-        endpoint = _OPSGENIE_DEFAULT_URL
-
     alias_prefix = str(args.get("alias_prefix") or "ai-trading").strip()
     alias = f"{alias_prefix}:{fingerprint}"
-    source = str(args.get("source") or os.getenv("AI_TRADING_ONCALL_SOURCE", "ai-trading")).strip()
-    tags = ["ai-trading", "runtime"] + sorted(set(triggers))
-    responders = []
-    team = str(args.get("opsgenie_team") or os.getenv("AI_TRADING_OPSGENIE_TEAM", "")).strip()
-    if team:
-        responders = [{"name": team, "type": "team"}]
-
     payload = {
         "message": _incident_summary(snapshot, triggers)[:130],
-        "alias": alias,
         "description": _incident_summary(snapshot, triggers),
-        "priority": _opsgenie_priority(severity),
+        "alias": alias,
+        "priority": _jsm_priority(severity),
         "source": source,
-        "tags": tags,
-        "responders": responders,
+        "tags": ["ai-trading", "runtime"] + sorted(set(triggers)),
         "details": {
             "fingerprint": fingerprint,
             "triggers": ",".join(triggers),
@@ -246,16 +426,18 @@ def _notify_opsgenie(
             "slippage_drag_bps": snapshot.get("slippage_drag_bps"),
         },
     }
-
-    timeout_s = float(args.get("timeout_s") or 6.0)
-    headers = {"Authorization": f"GenieKey {api_key}"}
-    status_code, body = _post_json(
-        url=endpoint,
-        payload=payload,
-        headers=headers,
-        timeout_s=timeout_s,
-    )
-    return {"provider": "opsgenie", "sent": True, "status_code": status_code, "response": body}
+    timeout_s = float(args.get("timeout_s") or 8.0)
+    try:
+        status_code, body = _post_json(url=url, payload=payload, headers=headers, timeout_s=timeout_s)
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc) and not using_custom_base:
+            raise RuntimeError(
+                "JSM Ops cloud alerts endpoint returned 404. "
+                "Set AI_TRADING_JSM_OPS_BASE_URL to your JSM Ops alert API integration URL "
+                "(often from Integrations/API) and authenticate via AI_TRADING_JSM_OPS_API_KEY."
+            ) from exc
+        raise
+    return {"provider": "jsm_ops", "sent": True, "status_code": status_code, "response": body}
 
 
 def tool_runtime_incident_snapshot(args: dict[str, Any]) -> dict[str, Any]:
@@ -309,9 +491,21 @@ def _notify_oncall(args: dict[str, Any], providers: list[str] | None = None) -> 
     severity = _incident_severity(triggers)
     deliveries: list[dict[str, Any]] = []
     for provider in selected:
-        if provider == "pagerduty":
+        min_severity = _provider_min_severity(provider, args)
+        if not force and not _meets_min_severity(severity=severity, min_severity=min_severity):
             deliveries.append(
-                _notify_pagerduty(
+                {
+                    "provider": provider,
+                    "sent": False,
+                    "reason": "severity_below_minimum",
+                    "severity": severity,
+                    "min_severity": min_severity,
+                }
+            )
+            continue
+        if provider == "jsm_ops":
+            deliveries.append(
+                _notify_jsm_ops(
                     args=args,
                     fingerprint=fingerprint,
                     severity=severity,
@@ -319,9 +513,9 @@ def _notify_oncall(args: dict[str, Any], providers: list[str] | None = None) -> 
                     triggers=triggers,
                 )
             )
-        elif provider == "opsgenie":
+        elif provider == "jsm_ticket":
             deliveries.append(
-                _notify_opsgenie(
+                _notify_jsm_ticket(
                     args=args,
                     fingerprint=fingerprint,
                     severity=severity,
@@ -343,7 +537,7 @@ def _notify_oncall(args: dict[str, Any], providers: list[str] | None = None) -> 
                 "snapshot": snapshot,
             },
         )
-    return {
+    response = {
         "sent": sent_any,
         "providers": selected,
         "severity": severity,
@@ -353,18 +547,29 @@ def _notify_oncall(args: dict[str, Any], providers: list[str] | None = None) -> 
         "state_path": str(state_path),
         "snapshot": snapshot,
     }
+    if not sent_any:
+        unsent_reasons = sorted(
+            {
+                str(item.get("reason") or "").strip()
+                for item in deliveries
+                if not bool(item.get("sent")) and str(item.get("reason") or "").strip()
+            }
+        )
+        if unsent_reasons:
+            response["reason"] = unsent_reasons[0] if len(unsent_reasons) == 1 else ",".join(unsent_reasons)
+    return response
 
 
 def tool_notify_oncall_incident(args: dict[str, Any]) -> dict[str, Any]:
     return _notify_oncall(args)
 
 
-def tool_notify_pagerduty_incident(args: dict[str, Any]) -> dict[str, Any]:
-    return _notify_oncall(args, providers=["pagerduty"])
+def tool_notify_jsm_ops_incident(args: dict[str, Any]) -> dict[str, Any]:
+    return _notify_oncall(args, providers=["jsm_ops"])
 
 
-def tool_notify_opsgenie_alert(args: dict[str, Any]) -> dict[str, Any]:
-    return _notify_oncall(args, providers=["opsgenie"])
+def tool_notify_jsm_ticket_issue(args: dict[str, Any]) -> dict[str, Any]:
+    return _notify_oncall(args, providers=["jsm_ticket"])
 
 
 def tool_clear_oncall_state(args: dict[str, Any]) -> dict[str, Any]:
@@ -378,8 +583,8 @@ def tool_clear_oncall_state(args: dict[str, Any]) -> dict[str, Any]:
 TOOLS = {
     "runtime_incident_snapshot": tool_runtime_incident_snapshot,
     "notify_oncall_incident": tool_notify_oncall_incident,
-    "notify_pagerduty_incident": tool_notify_pagerduty_incident,
-    "notify_opsgenie_alert": tool_notify_opsgenie_alert,
+    "notify_jsm_ops_incident": tool_notify_jsm_ops_incident,
+    "notify_jsm_ticket_issue": tool_notify_jsm_ticket_issue,
     "clear_oncall_state": tool_clear_oncall_state,
 }
 
@@ -390,15 +595,15 @@ TOOL_SPECS: list[ToolSpec] = [
     },
     {
         "name": "notify_oncall_incident",
-        "description": "Escalate incident to enabled on-call providers (PagerDuty/Opsgenie).",
+        "description": "Escalate incident to enabled on-call providers (JSM Ops/JSM ticket fallback).",
     },
     {
-        "name": "notify_pagerduty_incident",
-        "description": "Send incident event to PagerDuty Events API v2.",
+        "name": "notify_jsm_ops_incident",
+        "description": "Create incident alert in Jira Service Management (Ops).",
     },
     {
-        "name": "notify_opsgenie_alert",
-        "description": "Create incident alert in Opsgenie Alerts API.",
+        "name": "notify_jsm_ticket_issue",
+        "description": "Create Jira issue fallback for runtime incidents (JSM project ticket).",
     },
     {"name": "clear_oncall_state", "description": "Clear on-call dedupe state."},
 ]
@@ -407,7 +612,7 @@ TOOL_SPECS: list[ToolSpec] = [
 def main(argv: list[str] | None = None) -> int:
     result = run_tool_server(
         argv=argv,
-        description="On-call escalation MCP server",
+        description="On-call escalation MCP server (JSM Ops)",
         tools=TOOLS,
         specs=TOOL_SPECS,
         server_name="trading_oncall_alerts",

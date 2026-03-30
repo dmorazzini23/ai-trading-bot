@@ -9,8 +9,8 @@ User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python /home/aiuser/ai-trading-bot/scripts/connector_incident_dispatch.py
 StandardOutput=journal
 StandardError=journal

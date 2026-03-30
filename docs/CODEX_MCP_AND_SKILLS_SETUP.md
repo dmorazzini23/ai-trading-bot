@@ -115,24 +115,45 @@ python tools/mcp_slack_alerts_server.py \
   --args '{"require_market_closed": true}'
 ```
 
-### PagerDuty / Opsgenie on-call escalation connector
+### Jira Service Management (Ops) on-call escalation connector
 - `AI_TRADING_CONNECTOR_ONCALL_ENABLED` (`1`/`0`, default `0`)
 - `AI_TRADING_ONCALL_ON_CHANGE_ONLY` (`1`/`0`, default `1`)
-- optional provider list: `AI_TRADING_ONCALL_PROVIDERS` (`pagerduty,opsgenie`)
+- optional provider list: `AI_TRADING_ONCALL_PROVIDERS` (`jsm_ops,jsm_ticket`)
 - optional dedupe-state path: `AI_TRADING_ONCALL_STATE_PATH`
-- PagerDuty:
-  - `AI_TRADING_PAGERDUTY_ROUTING_KEY`
-- Opsgenie:
-  - `AI_TRADING_OPSGENIE_API_KEY`
-  - optional `AI_TRADING_OPSGENIE_ALERT_URL` (default `https://api.opsgenie.com/v2/alerts`)
-  - optional `AI_TRADING_OPSGENIE_TEAM`
+- JSM Ops endpoint config:
+  - `AI_TRADING_JSM_OPS_CLOUD_ID` (for default URL rendering)
+  - optional `AI_TRADING_JSM_OPS_BASE_URL` (recommended when using JSM Ops alert API integration URL)
+- JSM Ops auth:
+  - `AI_TRADING_JSM_OPS_API_KEY` (JSM Ops alert API integration key; sent as `GenieKey`)
+  - `AI_TRADING_JSM_OPS_EMAIL` + `AI_TRADING_JSM_OPS_API_TOKEN` (recommended)
+  - or `AI_TRADING_JSM_OPS_BEARER_TOKEN`
+
+If the cloud endpoint returns HTTP `404`, configure `AI_TRADING_JSM_OPS_BASE_URL` +
+`AI_TRADING_JSM_OPS_API_KEY` from your JSM Ops integrations page.
+
+JSM ticket fallback (no Ops alert endpoint required):
+- `AI_TRADING_JSM_SITE_URL` (for example `https://<site>.atlassian.net`)
+- `AI_TRADING_JSM_TICKET_PROJECT_KEY`
+- optional `AI_TRADING_JSM_TICKET_ISSUE_TYPE` (default `Task`)
+- optional `AI_TRADING_JSM_TICKET_LABELS` (CSV, default `ai-trading,runtime-incident`)
+- optional `AI_TRADING_JSM_TICKET_MIN_SEVERITY` (default `warning`; sends only warning/error/critical)
+- auth reuses `AI_TRADING_JSM_OPS_EMAIL` + `AI_TRADING_JSM_OPS_API_TOKEN`
+  (or `AI_TRADING_JSM_OPS_BEARER_TOKEN`)
 
 Example tool call:
 
 ```bash
 python tools/mcp_oncall_alerts_server.py \
   --call notify_oncall_incident \
-  --args '{"providers":"pagerduty,opsgenie"}'
+  --args '{"providers":"jsm_ops"}'
+```
+
+JSM ticket fallback call:
+
+```bash
+python tools/mcp_oncall_alerts_server.py \
+  --call notify_oncall_incident \
+  --args '{"providers":"jsm_ticket"}'
 ```
 
 ### Prometheus/Grafana metrics connector
@@ -286,7 +307,8 @@ Optional dispatch controls:
 - `AI_TRADING_CONNECTOR_SLACK_EOD_FORCE=0`
 - `AI_TRADING_CONNECTOR_ONCALL_ENABLED=0`
 - `AI_TRADING_ONCALL_ON_CHANGE_ONLY=1`
-- `AI_TRADING_ONCALL_PROVIDERS=pagerduty,opsgenie`
+- `AI_TRADING_ONCALL_PROVIDERS=jsm_ops,jsm_ticket`
+- `AI_TRADING_CONNECTOR_JSM_TICKET_ENABLED=0`
 - `AI_TRADING_CONNECTOR_FAIL_ON_ERROR=0` (default fail-open for timer stability)
 
 ## GitHub Workflow Feature
@@ -333,7 +355,7 @@ scripts/ops_runtime_check.sh
 - `mcp_ops_server.py` requires explicit `{"confirm": true}` for restart.
 - `mcp_slack_alerts_server.py` dedupes repeated alerts by fingerprint.
 - `mcp_linear_issues_server.py` dedupes repeated issues by fingerprint.
-- `mcp_oncall_alerts_server.py` adds PagerDuty/Opsgenie escalation with dedupe.
+- `mcp_oncall_alerts_server.py` adds Jira Service Management (Ops) escalation with dedupe, including Jira-ticket fallback.
 - `mcp_infra_cloud_server.py` writes restart actions to infra audit JSONL.
 - Secrets-manager support is available in `scripts/runtime_env_sync.py`.
   See `docs/SECRETS_MANAGER_MIGRATION.md` to move secrets from `.env` into AWS

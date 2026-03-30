@@ -435,7 +435,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         triggers.append("data_provider_backup_active")
 
     broker_status = str(snapshot.get("broker_status") or "unknown").lower()
-    if broker_status not in {"connected", "unknown"}:
+    if broker_status not in {"connected", "reachable", "unknown"}:
         triggers.append("broker_disconnected")
 
     return sorted(set(triggers))

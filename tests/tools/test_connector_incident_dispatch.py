@@ -87,3 +87,31 @@ def test_run_dispatch_captures_connector_errors() -> None:
     assert payload["ok"] is False
     assert len(payload["errors"]) == 1
     assert payload["errors"][0]["connector"] == "slack"
+
+
+def test_run_dispatch_forwards_oncall_jsm_ticket_env() -> None:
+    captured: dict[str, Any] = {}
+
+    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
+        captured.update(args)
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
+            "AI_TRADING_ONCALL_PROVIDERS": "jsm_ticket",
+            "AI_TRADING_JSM_SITE_URL": "https://example.atlassian.net",
+            "AI_TRADING_JSM_TICKET_PROJECT_KEY": "OPS",
+            "AI_TRADING_JSM_TICKET_ISSUE_TYPE": "Task",
+            "AI_TRADING_JSM_TICKET_LABELS": "ai-trading,runtime-incident",
+        },
+        slack_notifier=lambda args: {"unused": args},
+        slack_eod_notifier=lambda args: {"unused": args},
+        linear_creator=lambda args: {"unused": args},
+        oncall_notifier=_oncall,
+    )
+    assert payload["ok"] is True
+    assert payload["oncall"]["attempted"] is True
+    assert captured["providers"] == "jsm_ticket"
+    assert captured["jsm_site_url"] == "https://example.atlassian.net"
+    assert captured["jsm_ticket_project_key"] == "OPS"

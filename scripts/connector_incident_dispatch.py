@@ -224,6 +224,22 @@ def run_dispatch(
                 default=True,
             ),
         }
+        oncall_forward_map = {
+            "jsm_ops_base_url": "AI_TRADING_JSM_OPS_BASE_URL",
+            "jsm_ops_cloud_id": "AI_TRADING_JSM_OPS_CLOUD_ID",
+            "jsm_ops_api_key": "AI_TRADING_JSM_OPS_API_KEY",
+            "jsm_ops_email": "AI_TRADING_JSM_OPS_EMAIL",
+            "jsm_ops_api_token": "AI_TRADING_JSM_OPS_API_TOKEN",
+            "jsm_ops_bearer_token": "AI_TRADING_JSM_OPS_BEARER_TOKEN",
+            "jsm_site_url": "AI_TRADING_JSM_SITE_URL",
+            "jsm_ticket_project_key": "AI_TRADING_JSM_TICKET_PROJECT_KEY",
+            "jsm_ticket_issue_type": "AI_TRADING_JSM_TICKET_ISSUE_TYPE",
+            "jsm_ticket_labels": "AI_TRADING_JSM_TICKET_LABELS",
+        }
+        for arg_name, env_name in oncall_forward_map.items():
+            raw_value = (env_map.get(env_name) or "").strip()
+            if raw_value:
+                oncall_args[arg_name] = raw_value
         providers = (env_map.get("AI_TRADING_ONCALL_PROVIDERS") or "").strip()
         if providers:
             oncall_args["providers"] = providers
