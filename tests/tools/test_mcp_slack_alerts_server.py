@@ -220,7 +220,43 @@ def test_notify_eod_summary_respects_market_closed_gate(monkeypatch) -> None:
     assert result["reason"] == "market_not_closed"
 
 
-def test_notify_eod_summary_blocks_until_training_complete(monkeypatch, tmp_path: Path) -> None:
+def test_notify_eod_summary_sends_when_training_not_complete_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshot: dict[str, Any] = {
+        "report_date": "2026-03-28",
+        "health_reason": "market_closed",
+        "learning": {},
+    }
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        return snapshot
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_eod_summary_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+    result = slack_srv.tool_notify_eod_summary(
+        {
+            "webhook_url": "https://hooks.slack.test/example",
+            "state_path": str(tmp_path / "slack_eod_state.json"),
+            "after_hours_training_marker_path": str(tmp_path / "missing_marker.json"),
+        }
+    )
+    assert result["sent"] is True
+    assert len(posts) == 1
+    gate = result.get("training_gate")
+    assert isinstance(gate, dict)
+    assert gate.get("required") is True
+    assert gate.get("ready") is False
+
+
+def test_notify_eod_summary_blocks_until_training_complete_when_configured(
+    monkeypatch, tmp_path: Path
+) -> None:
     snapshot: dict[str, Any] = {
         "report_date": "2026-03-28",
         "health_reason": "market_closed",
@@ -234,6 +270,7 @@ def test_notify_eod_summary_blocks_until_training_complete(monkeypatch, tmp_path
     result = slack_srv.tool_notify_eod_summary(
         {
             "webhook_url": "https://hooks.slack.test/example",
+            "block_on_training_gate": True,
             "after_hours_training_marker_path": str(tmp_path / "missing_marker.json"),
         }
     )

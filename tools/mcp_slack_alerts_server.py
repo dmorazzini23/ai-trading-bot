@@ -386,6 +386,13 @@ def _capture_ratio_threshold(args: dict[str, Any]) -> float:
     return max(0.0, float(raw))
 
 
+def _block_eod_on_training_gate(args: dict[str, Any]) -> bool:
+    return _bool_arg(
+        args.get("block_on_training_gate"),
+        default=_bool_arg(os.getenv("AI_TRADING_SLACK_EOD_BLOCK_ON_TRAINING_GATE"), default=False),
+    )
+
+
 def _should_suppress_startup_warmup_health_alert(
     snapshot: dict[str, Any], args: dict[str, Any]
 ) -> bool:
@@ -764,6 +771,8 @@ def tool_runtime_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     market_closed = health_reason == "market_closed"
     report_date = str(snapshot.get("report_date") or "").strip()
     training_gate = _after_hours_training_gate(report_date, args)
+    block_on_training_gate = _block_eod_on_training_gate(args)
+    training_ready = bool(training_gate.get("ready", False))
     snapshot["training_gate"] = training_gate
     return {
         "snapshot": snapshot,
@@ -771,10 +780,11 @@ def tool_runtime_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "market_closed": market_closed,
         "report_date": report_date,
         "training_gate": training_gate,
+        "block_on_training_gate": block_on_training_gate,
         "eligible": (
             (not require_market_closed or market_closed)
             and bool(report_date)
-            and bool(training_gate.get("ready", False))
+            and (training_ready or not block_on_training_gate)
         ),
     }
 
@@ -790,6 +800,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
     market_closed = health_reason == "market_closed"
     training_gate = _after_hours_training_gate(report_date, args)
+    block_on_training_gate = _block_eod_on_training_gate(args)
     snapshot["training_gate"] = training_gate
 
     if require_market_closed and not market_closed and not force:
@@ -797,6 +808,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
             "sent": False,
             "reason": "market_not_closed",
             "report_date": report_date,
+            "block_on_training_gate": block_on_training_gate,
             "training_gate": training_gate,
             "snapshot": snapshot,
         }
@@ -805,15 +817,17 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
         return {
             "sent": False,
             "reason": "missing_report_date",
+            "block_on_training_gate": block_on_training_gate,
             "training_gate": training_gate,
             "snapshot": snapshot,
         }
 
-    if not bool(training_gate.get("ready", False)) and not force:
+    if block_on_training_gate and not bool(training_gate.get("ready", False)) and not force:
         return {
             "sent": False,
             "reason": "after_hours_training_not_complete",
             "report_date": report_date,
+            "block_on_training_gate": block_on_training_gate,
             "training_gate": training_gate,
             "snapshot": snapshot,
         }
@@ -827,6 +841,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
             "reason": "already_sent_for_report_date",
             "report_date": report_date,
             "state_path": str(state_path),
+            "block_on_training_gate": block_on_training_gate,
             "training_gate": training_gate,
             "snapshot": snapshot,
         }
@@ -856,6 +871,7 @@ def tool_notify_eod_summary(args: dict[str, Any]) -> dict[str, Any]:
         "fingerprint": fingerprint,
         "report_date": report_date,
         "state_path": str(state_path),
+        "block_on_training_gate": block_on_training_gate,
         "training_gate": training_gate,
         "snapshot": snapshot,
     }
