@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dispatch runtime incident connectors (Slack + Linear) as a periodic job."""
+"""Dispatch runtime incident connectors (Slack + Linear + On-call) as a periodic job."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 SlackIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 SlackEodNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 LinearCreator = Callable[[dict[str, Any]], dict[str, Any]]
+OncallNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def _bool_env(value: str | None, *, default: bool) -> bool:
@@ -32,14 +33,21 @@ def _bool_env(value: str | None, *, default: bool) -> bool:
     return default
 
 
-def _load_connector_callables() -> tuple[SlackIncidentNotifier, SlackEodNotifier, LinearCreator]:
+def _load_connector_callables() -> tuple[
+    SlackIncidentNotifier,
+    SlackEodNotifier,
+    LinearCreator,
+    OncallNotifier,
+]:
     from tools import mcp_linear_issues_server as linear_srv
+    from tools import mcp_oncall_alerts_server as oncall_srv
     from tools import mcp_slack_alerts_server as slack_srv
 
     return (
         slack_srv.tool_notify_incident_channel,
         slack_srv.tool_notify_eod_summary,
         linear_srv.tool_create_regression_issue,
+        oncall_srv.tool_notify_oncall_incident,
     )
 
 
@@ -49,6 +57,7 @@ def run_dispatch(
     slack_notifier: SlackIncidentNotifier,
     slack_eod_notifier: SlackEodNotifier,
     linear_creator: LinearCreator,
+    oncall_notifier: OncallNotifier,
 ) -> dict[str, Any]:
     env_map = os.environ if env is None else env
     summary: dict[str, Any] = {
@@ -56,6 +65,7 @@ def run_dispatch(
         "slack": {"enabled": False, "attempted": False},
         "slack_eod": {"enabled": False, "attempted": False},
         "linear": {"enabled": False, "attempted": False},
+        "oncall": {"enabled": False, "attempted": False},
         "errors": [],
     }
 
@@ -205,6 +215,45 @@ def run_dispatch(
     else:
         summary["linear"]["skipped_reason"] = "disabled"
 
+    oncall_enabled = _bool_env(env_map.get("AI_TRADING_CONNECTOR_ONCALL_ENABLED"), default=False)
+    summary["oncall"]["enabled"] = oncall_enabled
+    if oncall_enabled:
+        oncall_args: dict[str, Any] = {
+            "on_change_only": _bool_env(
+                env_map.get("AI_TRADING_ONCALL_ON_CHANGE_ONLY"),
+                default=True,
+            ),
+        }
+        providers = (env_map.get("AI_TRADING_ONCALL_PROVIDERS") or "").strip()
+        if providers:
+            oncall_args["providers"] = providers
+        state_path = (env_map.get("AI_TRADING_ONCALL_STATE_PATH") or "").strip()
+        if state_path:
+            oncall_args["state_path"] = state_path
+        min_capture = (env_map.get("AI_TRADING_INCIDENT_MIN_CAPTURE_RATIO") or "").strip()
+        if min_capture:
+            try:
+                oncall_args["min_capture_ratio"] = float(min_capture)
+            except ValueError:
+                pass
+        if _bool_env(env_map.get("AI_TRADING_CONNECTOR_ONCALL_FORCE"), default=False):
+            oncall_args["force"] = True
+
+        summary["oncall"]["attempted"] = True
+        try:
+            summary["oncall"]["result"] = oncall_notifier(oncall_args)
+        except Exception as exc:  # pragma: no cover - runtime guard
+            summary["oncall"]["error"] = str(exc)
+            summary["errors"].append(
+                {
+                    "connector": "oncall",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+    else:
+        summary["oncall"]["skipped_reason"] = "disabled"
+
     summary["finished_at"] = datetime.now(UTC).isoformat()
     summary["ok"] = len(summary["errors"]) == 0
     return summary
@@ -212,11 +261,12 @@ def run_dispatch(
 
 def main(argv: list[str] | None = None) -> int:
     _ = argv
-    slack_notifier, slack_eod_notifier, linear_creator = _load_connector_callables()
+    slack_notifier, slack_eod_notifier, linear_creator, oncall_notifier = _load_connector_callables()
     summary = run_dispatch(
         slack_notifier=slack_notifier,
         slack_eod_notifier=slack_eod_notifier,
         linear_creator=linear_creator,
+        oncall_notifier=oncall_notifier,
     )
     print(json.dumps(summary, sort_keys=True))
 

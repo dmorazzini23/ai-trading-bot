@@ -35,15 +35,20 @@ _dotenv, PYTHON_DOTENV_RESOLVED = _ensure_dotenv_module()
 
 
 _ENV_LOADED = False
+_DOTENV_OVERRIDE_DEFAULT = False
 
 
-def load_dotenv_if_present(dotenv_path: str = ".env") -> bool:
+def load_dotenv_if_present(
+    dotenv_path: str = ".env",
+    *,
+    override: bool = _DOTENV_OVERRIDE_DEFAULT,
+) -> bool:
     """Load ``dotenv_path`` when python-dotenv is available."""
 
     if not PYTHON_DOTENV_RESOLVED:
         return False
     try:
-        _dotenv.load_dotenv(dotenv_path=dotenv_path, override=True)  # type: ignore[union-attr]
+        _dotenv.load_dotenv(dotenv_path=dotenv_path, override=override)  # type: ignore[union-attr]
     except Exception:  # pragma: no cover - defensive logging is handled upstream
         logging.getLogger(__name__).debug(
             "DOTENV_LOAD_FAILED",
@@ -54,7 +59,7 @@ def load_dotenv_if_present(dotenv_path: str = ".env") -> bool:
     return True
 
 
-def _log_env_loaded(source: str) -> None:
+def _log_env_loaded(source: str, *, override: bool) -> None:
     try:
         logger = logging.getLogger(__name__)
         if not logger.handlers and not logging.getLogger().handlers:
@@ -62,11 +67,15 @@ def _log_env_loaded(source: str) -> None:
         from ai_trading.logging import get_logger
 
         lg = get_logger(__name__)
+        override_text = "override=True" if override else "override=False"
         if source == "<default>":
-            lg.info("ENV_LOADED_DEFAULT override=True", extra={"key": "env_loaded:default"})
+            lg.info(
+                f"ENV_LOADED_DEFAULT {override_text}",
+                extra={"key": "env_loaded:default"},
+            )
         else:
             lg.info(
-                "ENV_LOADED_FROM override=True",
+                f"ENV_LOADED_FROM {override_text}",
                 extra={"key": f"env_loaded:{source}", "dotenv_path": source},
             )
     except Exception:  # pragma: no cover - keep env init resilient
@@ -88,15 +97,24 @@ def ensure_dotenv_loaded(dotenv_path: str | None = None) -> None:
         return
     set_runtime_env_override("MULTI_LOAD_TEST", "safe_value")
     path = dotenv_path or str(Path(__file__).resolve().parents[2] / ".env")
-    loaded = load_dotenv_if_present(path)
+    runtime_path = str(Path(path).with_name(".env.runtime"))
+    runtime_loaded = False
+    runtime_loaded_now = False
+    if Path(runtime_path).exists():
+        runtime_loaded_now = load_dotenv_if_present(runtime_path, override=True)
+        runtime_loaded = runtime_loaded_now
+    loaded = load_dotenv_if_present(path, override=_DOTENV_OVERRIDE_DEFAULT)
     if not loaded and path != ".env":
-        loaded = load_dotenv_if_present()
+        loaded = load_dotenv_if_present(override=_DOTENV_OVERRIDE_DEFAULT)
         source = "<default>" if loaded else "<none>"
     else:
         source = path if loaded else "<none>"
     _ENV_LOADED = True
+    if runtime_loaded_now:
+        _log_env_loaded(runtime_path, override=True)
     if loaded:
-        _log_env_loaded(source)
+        _log_env_loaded(source, override=_DOTENV_OVERRIDE_DEFAULT)
+    if runtime_loaded or loaded:
         try:
             refresh_alpaca_credentials_cache()
         except Exception:  # pragma: no cover - keep env init resilient

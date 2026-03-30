@@ -8,10 +8,16 @@ This document wires the six operational features into your Codex/VS Code workflo
 3. `tools/mcp_broker_server.py`
 4. `tools/mcp_ops_server.py`
 5. `tools/mcp_slack_alerts_server.py`
-6. `tools/mcp_metrics_query_server.py`
-7. `tools/mcp_linear_issues_server.py`
-8. `.codex/skills/trading-ops-runbook/SKILL.md`
-9. `scripts/github/pr_workflow.sh` + `scripts/ops_runtime_check.sh`
+6. `tools/mcp_oncall_alerts_server.py`
+7. `tools/mcp_metrics_query_server.py`
+8. `tools/mcp_linear_issues_server.py`
+9. `tools/mcp_secrets_manager_server.py`
+10. `tools/mcp_sql_analytics_server.py`
+11. `tools/mcp_market_events_server.py`
+12. `tools/mcp_infra_cloud_server.py`
+13. `.codex/skills/trading-ops-runbook/SKILL.md`
+14. `.codex/skills/trading-ops-shift/SKILL.md`
+15. `scripts/ops_shift_check.py` + `scripts/ops_runtime_check.sh`
 
 ## What Still Requires Manual Registration
 - Registering MCP servers in your Codex client settings.
@@ -45,6 +51,10 @@ Create a client config entry (path depends on your Codex host):
       "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
       "args": ["/home/aiuser/ai-trading-bot/tools/mcp_slack_alerts_server.py"]
     },
+    "trading-oncall-alerts": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_oncall_alerts_server.py"]
+    },
     "trading-metrics-query": {
       "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
       "args": ["/home/aiuser/ai-trading-bot/tools/mcp_metrics_query_server.py"]
@@ -52,6 +62,22 @@ Create a client config entry (path depends on your Codex host):
     "trading-linear-issues": {
       "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
       "args": ["/home/aiuser/ai-trading-bot/tools/mcp_linear_issues_server.py"]
+    },
+    "trading-secrets-manager": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_secrets_manager_server.py"]
+    },
+    "trading-sql-analytics": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_sql_analytics_server.py"]
+    },
+    "trading-market-events": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_market_events_server.py"]
+    },
+    "trading-infra-cloud": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_infra_cloud_server.py"]
     }
   }
 }
@@ -87,6 +113,26 @@ Example tool call:
 python tools/mcp_slack_alerts_server.py \
   --call notify_eod_summary \
   --args '{"require_market_closed": true}'
+```
+
+### PagerDuty / Opsgenie on-call escalation connector
+- `AI_TRADING_CONNECTOR_ONCALL_ENABLED` (`1`/`0`, default `0`)
+- `AI_TRADING_ONCALL_ON_CHANGE_ONLY` (`1`/`0`, default `1`)
+- optional provider list: `AI_TRADING_ONCALL_PROVIDERS` (`pagerduty,opsgenie`)
+- optional dedupe-state path: `AI_TRADING_ONCALL_STATE_PATH`
+- PagerDuty:
+  - `AI_TRADING_PAGERDUTY_ROUTING_KEY`
+- Opsgenie:
+  - `AI_TRADING_OPSGENIE_API_KEY`
+  - optional `AI_TRADING_OPSGENIE_ALERT_URL` (default `https://api.opsgenie.com/v2/alerts`)
+  - optional `AI_TRADING_OPSGENIE_TEAM`
+
+Example tool call:
+
+```bash
+python tools/mcp_oncall_alerts_server.py \
+  --call notify_oncall_incident \
+  --args '{"providers":"pagerduty,opsgenie"}'
 ```
 
 ### Prometheus/Grafana metrics connector
@@ -175,6 +221,40 @@ python tools/mcp_linear_issues_server.py \
   --args '{"dry_run": true}'
 ```
 
+### Secrets manager MCP connector
+- status/readiness:
+  - `python tools/mcp_secrets_manager_server.py --call secrets_backend_status --args '{}'`
+  - `python tools/mcp_secrets_manager_server.py --call aws_secret_inventory --args '{}'`
+- runtime sync:
+  - `python tools/mcp_secrets_manager_server.py --call sync_runtime_env --args '{}'`
+- migration (explicit confirm required):
+  - `python tools/mcp_secrets_manager_server.py --call migrate_local_env_to_aws --args '{"confirm":true,"merge_existing":true}'`
+
+### Read-only SQL analytics MCP connector
+- inspect table:
+  - `python tools/mcp_sql_analytics_server.py --call warehouse_status --args '{}'`
+- query trade/execution history:
+  - `python tools/mcp_sql_analytics_server.py --call query_trade_history_sql --args '{"query":"SELECT symbol, AVG(slippage_bps_norm) FROM trade_history GROUP BY symbol"}'`
+- built-in query examples:
+  - `python tools/mcp_sql_analytics_server.py --call execution_trend_examples --args '{}'`
+
+### Market events MCP connector
+- optional feed endpoint:
+  - `AI_TRADING_MARKET_EVENTS_JSON_URL`
+- tools:
+  - `market_sessions`
+  - `fetch_events`
+  - `market_risk_window`
+
+### Cloud/infra MCP connector
+- tools:
+  - `host_summary`
+  - `service_status`
+  - `journal_errors`
+  - `controlled_restart` (explicit `{"confirm": true}` required)
+  - `restart_audit_tail`
+  - `metadata_probe`
+
 ## Automated Incident Dispatch Timer
 
 Included:
@@ -204,6 +284,9 @@ Optional dispatch controls:
 - `AI_TRADING_CONNECTOR_SLACK_EOD_ENABLED=1`
 - `AI_TRADING_SLACK_EOD_REQUIRE_MARKET_CLOSED=1`
 - `AI_TRADING_CONNECTOR_SLACK_EOD_FORCE=0`
+- `AI_TRADING_CONNECTOR_ONCALL_ENABLED=0`
+- `AI_TRADING_ONCALL_ON_CHANGE_ONLY=1`
+- `AI_TRADING_ONCALL_PROVIDERS=pagerduty,opsgenie`
 - `AI_TRADING_CONNECTOR_FAIL_ON_ERROR=0` (default fail-open for timer stability)
 
 ## GitHub Workflow Feature
@@ -224,6 +307,16 @@ If your Codex host requires global skills:
 mkdir -p "$HOME/.codex/skills/trading-ops-runbook"
 cp -R /home/aiuser/ai-trading-bot/.codex/skills/trading-ops-runbook/* \
   "$HOME/.codex/skills/trading-ops-runbook/"
+
+mkdir -p "$HOME/.codex/skills/trading-ops-shift"
+cp -R /home/aiuser/ai-trading-bot/.codex/skills/trading-ops-shift/* \
+  "$HOME/.codex/skills/trading-ops-shift/"
+```
+
+One-command shift check:
+
+```bash
+python scripts/ops_shift_check.py --phase auto | jq .
 ```
 
 ## Validation
@@ -240,6 +333,11 @@ scripts/ops_runtime_check.sh
 - `mcp_ops_server.py` requires explicit `{"confirm": true}` for restart.
 - `mcp_slack_alerts_server.py` dedupes repeated alerts by fingerprint.
 - `mcp_linear_issues_server.py` dedupes repeated issues by fingerprint.
+- `mcp_oncall_alerts_server.py` adds PagerDuty/Opsgenie escalation with dedupe.
+- `mcp_infra_cloud_server.py` writes restart actions to infra audit JSONL.
+- Secrets-manager support is available in `scripts/runtime_env_sync.py`.
+  See `docs/SECRETS_MANAGER_MIGRATION.md` to move secrets from `.env` into AWS
+  Secrets Manager and render `.env.runtime` at sync time.
 - These server scripts now support true MCP JSON-RPC stdio transport
   (Content-Length framing + `initialize`/`tools/list`/`tools/call`) for strict
   MCP clients.

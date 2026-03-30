@@ -5265,7 +5265,7 @@ def _get_trading_config() -> TradingConfig:
     return cfg
 
 
-def _reload_env(path: str | None = None, *, override: bool = True) -> str | None:
+def _reload_env(path: str | None = None, *, override: bool = False) -> str | None:
     """Reload environment variables and reset log guard."""
     result = config.reload_env(path, override=override)
     _get_trading_config.cache_clear()
@@ -6932,15 +6932,44 @@ def _resolve_alpaca_env():
         ensure_dotenv_loaded()
     except COMMON_EXC:
         pass
-    key = cast(str | None, config.get_env("ALPACA_API_KEY"))
-    secret = cast(str | None, config.get_env("ALPACA_SECRET_KEY"))
-    base_url = cast(
-        str,
+    env_snapshot: Mapping[str, Any] = {}
+    try:
+        env_snapshot = config.merged_env_snapshot()
+    except COMMON_EXC:
+        env_snapshot = {}
+
+    key = _coerce_secret_value(config.get_env("ALPACA_API_KEY"))
+    if not key:
+        key = _coerce_secret_value(
+            config.get_env("ALPACA_API_KEY", None, resolve_aliases=False)
+        )
+    if not key:
+        key = _coerce_secret_value(env_snapshot.get("ALPACA_API_KEY"))
+    secret = _coerce_secret_value(config.get_env("ALPACA_SECRET_KEY"))
+    if not secret:
+        secret = _coerce_secret_value(
+            config.get_env("ALPACA_SECRET_KEY", None, resolve_aliases=False)
+        )
+    if not secret:
+        secret = _coerce_secret_value(env_snapshot.get("ALPACA_SECRET_KEY"))
+    base_url = _coerce_secret_value(
         config.get_env(
             "ALPACA_TRADING_BASE_URL",
             "https://paper-api.alpaca.markets",
-        ),
+        )
     )
+    if not base_url:
+        base_url = _coerce_secret_value(
+            config.get_env(
+                "ALPACA_TRADING_BASE_URL",
+                "https://paper-api.alpaca.markets",
+                resolve_aliases=False,
+            )
+        )
+    if not base_url:
+        base_url = _coerce_secret_value(env_snapshot.get("ALPACA_TRADING_BASE_URL"))
+    if not base_url:
+        base_url = "https://paper-api.alpaca.markets"
     return key, secret, base_url
 
 
@@ -6951,13 +6980,28 @@ def _ensure_alpaca_env_or_raise():
     - Outside SHADOW_MODE, if missing key/secret, raise with a clear message.
     """
     k, s, b = _resolve_alpaca_env()
+    cached_key = _coerce_secret_value(globals().get("ALPACA_API_KEY"))
+    cached_secret = _coerce_secret_value(globals().get("ALPACA_SECRET_KEY"))
+    if not k and cached_key:
+        k = cached_key
+    if not s and cached_secret:
+        s = cached_secret
     # Check for shadow mode
     shadow_mode = is_shadow_mode()
     pytest_running = str(get_env("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
     if shadow_mode:
         return k, s, b
     if not (k and s):
-        logger.critical("Alpaca credentials missing – aborting client initialization")
+        logger.critical(
+            "Alpaca credentials missing – aborting client initialization",
+            extra={
+                "has_key": bool(k),
+                "has_secret": bool(s),
+                "cached_has_key": bool(cached_key),
+                "cached_has_secret": bool(cached_secret),
+                "pytest_running": pytest_running,
+            },
+        )
         raise RuntimeError("Missing Alpaca API credentials")
     return k, s, b
 

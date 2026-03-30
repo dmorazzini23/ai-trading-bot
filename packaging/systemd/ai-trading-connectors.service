@@ -1,5 +1,5 @@
 [Unit]
-Description=Dispatch AI Trading Incident Connectors (Slack + Linear)
+Description=Dispatch AI Trading Incident Connectors (Slack + Linear + On-Call)
 After=network-online.target ai-trading.service
 Wants=network-online.target
 

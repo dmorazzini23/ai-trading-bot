@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, cast
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -116,10 +116,25 @@ _MODEL_SELECTION_WEIGHT_SPECS: tuple[tuple[str, str, float, float, float], ...] 
 )
 def _resolve_after_hours_output_path(path_value: str, *, default_relative: str) -> Path:
     """Resolve output paths relative to writable runtime roots when possible."""
-    return resolve_runtime_artifact_path(
-        path_value,
-        default_relative=default_relative,
+    return cast(
+        Path,
+        resolve_runtime_artifact_path(
+            path_value,
+            default_relative=default_relative,
+        ),
     )
+
+
+def _as_float(value: Any) -> float | None:
+    """Best-effort finite float coercion."""
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
 
 
 def _resolve_writable_output_dir(
@@ -279,9 +294,12 @@ class _FallbackProbabilityModel:
             arr = np.asarray(X, dtype=float)
         if arr.ndim == 1:
             arr = arr.reshape(-1, 1)
-        return np.asarray(
-            np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0),
-            dtype=float,
+        return cast(
+            np.ndarray,
+            np.asarray(
+                np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0),
+                dtype=float,
+            ),
         )
 
     def fit(self, X: Any, y: Any) -> "_FallbackProbabilityModel":
@@ -307,11 +325,11 @@ class _FallbackProbabilityModel:
         logits = Xb @ self._weights
         probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -30.0, 30.0)))
         probs = np.clip(probs, 1e-6, 1.0 - 1e-6)
-        return np.column_stack([1.0 - probs, probs])
+        return cast(np.ndarray, np.column_stack([1.0 - probs, probs]))
 
     def predict(self, X: Any) -> np.ndarray:
         probs = self.predict_proba(X)[:, 1]
-        return (probs >= 0.5).astype(int)
+        return cast(np.ndarray, (probs >= 0.5).astype(int))
 
 
 def _fetch_daily_bars(symbol: str, start_dt: datetime, end_dt: datetime):
@@ -503,7 +521,7 @@ def _estimate_cost_floor_bps(tca_records: list[dict[str, Any]]) -> float:
 
 def _infer_regime(close: np.ndarray) -> np.ndarray:
     if close.size == 0:
-        return np.array([], dtype=object)
+        return cast(np.ndarray, np.array([], dtype=object))
     returns = np.zeros_like(close, dtype=float)
     returns[1:] = np.diff(close) / np.maximum(close[:-1], 1e-9)
     vol = np.full_like(returns, np.nan, dtype=float)
@@ -526,25 +544,25 @@ def _infer_regime(close: np.ndarray) -> np.ndarray:
             labels.append("downtrend")
         else:
             labels.append("sideways")
-    return np.array(labels, dtype=object)
+    return cast(np.ndarray, np.array(labels, dtype=object))
 
 
 def _safe_rsi(close_values: np.ndarray) -> np.ndarray:
     if close_values.size == 0:
-        return np.array([], dtype=float)
+        return cast(np.ndarray, np.array([], dtype=float))
     try:
         out = rsi_indicator(tuple(close_values.tolist()), 14)
     except Exception:
         out = None
     if out is None:
-        return np.zeros_like(close_values, dtype=float)
+        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
     try:
         arr = np.asarray(out, dtype=float)
     except Exception:
-        return np.zeros_like(close_values, dtype=float)
+        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
     if arr.size != close_values.size:
-        return np.zeros_like(close_values, dtype=float)
-    return arr
+        return cast(np.ndarray, np.zeros_like(close_values, dtype=float))
+    return cast(np.ndarray, arr)
 
 
 def _augment_training_features(frame: Any) -> Any:
@@ -720,14 +738,14 @@ def _predict_probabilities(model: Any, X: Any) -> np.ndarray:
         out = model.predict_proba(X)
         arr = np.asarray(out, dtype=float)
         if arr.ndim == 2 and arr.shape[1] >= 2:
-            return arr[:, 1]
+            return cast(np.ndarray, np.asarray(arr[:, 1], dtype=float))
         if arr.ndim == 1:
-            return arr
+            return cast(np.ndarray, np.asarray(arr, dtype=float))
     if hasattr(model, "decision_function"):
         scores = np.asarray(model.decision_function(X), dtype=float)
-        return np.asarray(1.0 / (1.0 + np.exp(-scores)), dtype=float)
+        return cast(np.ndarray, np.asarray(1.0 / (1.0 + np.exp(-scores)), dtype=float))
     preds = np.asarray(model.predict(X), dtype=float)
-    return np.clip(preds, 0.0, 1.0)
+    return cast(np.ndarray, np.clip(preds, 0.0, 1.0))
 
 
 def _max_drawdown_bps(edge_bps: np.ndarray) -> float:
@@ -3780,7 +3798,7 @@ def _build_manifest_metadata(
             "summary": sensitivity_sweep.get("summary", {}),
         },
     }
-    return validate_manifest_metadata(manifest_metadata)
+    return cast(dict[str, Any], validate_manifest_metadata(manifest_metadata))
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -4237,7 +4255,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
 
     # Manual invocations may import this module before loading dotenv.
     # Refresh once at entry so data-provider/credential checks are consistent.
-    reload_env()
+    reload_env(override=False)
     try:
         refresh_default_feed()
     except Exception:

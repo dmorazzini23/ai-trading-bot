@@ -2503,9 +2503,12 @@ def _resolve_rl_runtime_model_target_path() -> Path | None:
         ).strip()
     if not rl_model_path_raw:
         return None
-    return resolve_runtime_artifact_path(
-        rl_model_path_raw,
-        default_relative="models/runtime/rl_agent.zip",
+    return cast(
+        Path,
+        resolve_runtime_artifact_path(
+            rl_model_path_raw,
+            default_relative="models/runtime/rl_agent.zip",
+        ),
     )
 
 
@@ -2582,7 +2585,7 @@ def run_bot(*_a, **_k) -> int:
     logger.info("Application startup - logging configured once")
     try:
         try:
-            reload_env()
+            reload_env(override=False)
         except Exception as exc:  # noqa: BLE001
             logger.critical("ENV_LOAD_FAILED", extra={"error": str(exc)})
             return 1

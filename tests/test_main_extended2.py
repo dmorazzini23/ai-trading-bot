@@ -183,19 +183,27 @@ def test_run_bot_calls_cycle(monkeypatch):
     """run_bot executes a trading cycle in-process."""
     called: dict[str, Any] = {}
     trade_log_calls = {"count": 0}
+    reload_calls: list[dict[str, Any]] = []
 
     def _fake_ensure():
         trade_log_calls["count"] += 1
         main._TRADE_LOG_INITIALIZED = True
 
+    def _fake_reload_env(path=None, override=True):
+        reload_calls.append({"path": path, "override": override})
+        return path
+
     monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("ran", True))
     monkeypatch.setattr(main, "ensure_trade_log_path", _fake_ensure)
+    monkeypatch.setattr(main, "reload_env", _fake_reload_env)
     monkeypatch.setenv("IMPORT_PREFLIGHT_DISABLED", "1")
     main._TRADE_LOG_INITIALIZED = False
 
     assert main.run_bot() == 0
     assert called["ran"]
     assert trade_log_calls["count"] == 1
+    assert reload_calls
+    assert reload_calls[-1]["override"] is False
 
 
 def test_validate_environment_missing(monkeypatch):

@@ -27,20 +27,27 @@ def test_run_dispatch_calls_both_connectors() -> None:
         calls["slack_eod"] = args
         return {"sent": False, "reason": "market_not_closed"}
 
+    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
+        calls["oncall"] = args
+        return {"sent": False, "reason": "no_incident_triggered"}
+
     payload = dispatch.run_dispatch(
         env={
             "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
             "AI_TRADING_LINEAR_API_KEY": "lin_key",
             "AI_TRADING_LINEAR_TEAM_ID": "team123",
+            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
         },
         slack_notifier=_slack,
         slack_eod_notifier=_slack_eod,
         linear_creator=_linear,
+        oncall_notifier=_oncall,
     )
     assert payload["ok"] is True
     assert payload["slack"]["attempted"] is True
     assert payload["slack_eod"]["attempted"] is True
     assert payload["linear"]["attempted"] is True
+    assert payload["oncall"]["attempted"] is True
     assert calls["slack"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["webhook_url"] == "https://hooks.slack.test/abc"
     assert calls["slack_eod"]["require_after_hours_training"] is True
@@ -53,6 +60,7 @@ def test_run_dispatch_skips_missing_credentials() -> None:
         slack_notifier=lambda args: {"unused": args},
         slack_eod_notifier=lambda args: {"unused": args},
         linear_creator=lambda args: {"unused": args},
+        oncall_notifier=lambda args: {"unused": args},
     )
     assert payload["ok"] is True
     assert payload["slack"]["attempted"] is False
@@ -61,6 +69,8 @@ def test_run_dispatch_skips_missing_credentials() -> None:
     assert payload["slack_eod"]["skipped_reason"] == "missing_webhook"
     assert payload["linear"]["attempted"] is False
     assert payload["linear"]["skipped_reason"] == "missing_api_key_or_team_id"
+    assert payload["oncall"]["attempted"] is False
+    assert payload["oncall"]["skipped_reason"] == "disabled"
 
 
 def test_run_dispatch_captures_connector_errors() -> None:
@@ -72,6 +82,7 @@ def test_run_dispatch_captures_connector_errors() -> None:
         slack_notifier=_broken_slack,
         slack_eod_notifier=lambda args: {"sent": False, "reason": "market_not_closed"},
         linear_creator=lambda args: {"created": False},
+        oncall_notifier=lambda args: {"sent": False, "reason": "disabled"},
     )
     assert payload["ok"] is False
     assert len(payload["errors"]) == 1

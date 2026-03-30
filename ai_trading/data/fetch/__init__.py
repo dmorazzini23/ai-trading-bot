@@ -2017,9 +2017,8 @@ def _safe_exception_message(exc: Exception | None, *, limit: int = 200) -> str |
         message = str(message)
     if not message:
         return None
-    if 0 < limit < len(message):
-        return message[:limit]
-    return message
+    final_message = message[:limit] if 0 < limit < len(message) else message
+    return str(final_message)
 
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
@@ -2998,7 +2997,8 @@ def _mark_fallback(
     last_attempt = fetch_state.get("last_fetch_attempt")
     if isinstance(last_attempt, Mapping):
         for key, value in last_attempt.items():
-            log_extra.setdefault(key, value)
+            meta_key = str(key)
+            log_extra.setdefault(meta_key, value)
     _FALLBACK_METADATA[key] = metadata
     fallback_name: str | None = None
     if feed_hint:
@@ -14022,7 +14022,7 @@ def get_bars(
     if S is None:
         from ai_trading.config import management as _cfg
 
-        _cfg.reload_env()
+        _cfg.reload_env(override=False)
         S = _current_settings()
         if S is None:
             raise RuntimeError("Configuration is unavailable")

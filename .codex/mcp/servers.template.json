@@ -15,7 +15,38 @@
     "trading-ops": {
       "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
       "args": ["/home/aiuser/ai-trading-bot/tools/mcp_ops_server.py"]
+    },
+    "trading-slack-alerts": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_slack_alerts_server.py"]
+    },
+    "trading-oncall-alerts": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_oncall_alerts_server.py"]
+    },
+    "trading-metrics-query": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_metrics_query_server.py"]
+    },
+    "trading-linear-issues": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_linear_issues_server.py"]
+    },
+    "trading-secrets-manager": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_secrets_manager_server.py"]
+    },
+    "trading-sql-analytics": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_sql_analytics_server.py"]
+    },
+    "trading-market-events": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_market_events_server.py"]
+    },
+    "trading-infra-cloud": {
+      "command": "/home/aiuser/ai-trading-bot/venv/bin/python",
+      "args": ["/home/aiuser/ai-trading-bot/tools/mcp_infra_cloud_server.py"]
     }
   }
 }
-

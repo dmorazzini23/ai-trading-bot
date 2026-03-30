@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -26,6 +27,9 @@ from urllib.request import urlopen
 DEPRECATED_ENV_KEYS = {
     "AI_TRADING_EXEC_ALLOW_FALLBACK_WITHOUT_NBBO",
 }
+
+_SECRET_KEY_HINT_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|WEBHOOK_URL$|API_KEY$)")
+_SECRETS_BACKEND_NONE = {"", "none", "off", "disabled"}
 
 
 @dataclass
@@ -61,6 +65,48 @@ def _canonical_env_lines(path: Path) -> list[str]:
     return lines
 
 
+def _canonical_env_map(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key or key in DEPRECATED_ENV_KEYS:
+            continue
+        values[key] = value
+    return values
+
+
+def _parse_bool(value: str, *, default: bool = False) -> bool:
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_managed_secret_keys(raw: str) -> set[str]:
+    keys: set[str] = set()
+    for part in raw.split(","):
+        key = part.strip().upper()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _infer_secret_key_names(keys: set[str]) -> set[str]:
+    inferred: set[str] = set()
+    for key in keys:
+        if key == "ALPACA_API_KEY" or _SECRET_KEY_HINT_RE.search(key):
+            inferred.add(key)
+    return inferred
+
+
 def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
     sync_script = repo_dir / "scripts" / "sync_env_runtime.sh"
     if sync:
@@ -84,27 +130,82 @@ def _check_env_sync(repo_dir: Path, *, sync: bool) -> Step:
                     "stdout_tail": proc.stdout[-500:],
                 },
             )
-    env_lines = _canonical_env_lines(repo_dir / ".env")
-    runtime_lines = _canonical_env_lines(repo_dir / ".env.runtime")
-    missing = sorted(set(env_lines) - set(runtime_lines))
-    extra = sorted(set(runtime_lines) - set(env_lines))
-    if missing or extra:
+    env_map = _canonical_env_map(repo_dir / ".env")
+    runtime_map = _canonical_env_map(repo_dir / ".env.runtime")
+    backend = str(env_map.get("AI_TRADING_SECRETS_BACKEND", "none") or "none").strip().lower()
+    if backend in _SECRETS_BACKEND_NONE:
+        missing = sorted(set(env_map) - set(runtime_map))
+        extra = sorted(set(runtime_map) - set(env_map))
+        mismatch = sorted(
+            key
+            for key in set(env_map).intersection(runtime_map)
+            if env_map.get(key) != runtime_map.get(key)
+        )
+        if missing or extra or mismatch:
+            return Step(
+                name="env_sync",
+                status="fail",
+                summary=".env.runtime does not match .env",
+                details={
+                    "missing_from_runtime": missing[:50],
+                    "extra_in_runtime": extra[:50],
+                    "value_mismatch_keys": mismatch[:50],
+                    "env_count": len(env_map),
+                    "runtime_count": len(runtime_map),
+                },
+            )
+        return Step(
+            name="env_sync",
+            status="pass",
+            summary=".env.runtime matches .env",
+            details={"line_count": len(env_map)},
+        )
+
+    managed_keys = _parse_managed_secret_keys(env_map.get("AI_TRADING_MANAGED_SECRET_KEYS", ""))
+    managed_keys.update(_infer_secret_key_names(set(env_map) | set(runtime_map)))
+    compare_keys = sorted((set(env_map) | set(runtime_map)) - managed_keys)
+
+    missing = sorted(key for key in compare_keys if key in env_map and key not in runtime_map)
+    extra = sorted(key for key in compare_keys if key in runtime_map and key not in env_map)
+    mismatch = sorted(
+        key
+        for key in compare_keys
+        if key in env_map and key in runtime_map and env_map.get(key) != runtime_map.get(key)
+    )
+
+    require_managed = _parse_bool(
+        str(env_map.get("AI_TRADING_REQUIRE_MANAGED_SECRETS", "0")),
+        default=False,
+    )
+    missing_managed = sorted(
+        key for key in managed_keys if require_managed and key in env_map and key not in runtime_map
+    )
+
+    if missing or extra or mismatch or missing_managed:
         return Step(
             name="env_sync",
             status="fail",
-            summary=".env.runtime does not match .env",
+            summary=".env.runtime does not match .env (non-secret keys)",
             details={
+                "secrets_backend": backend,
+                "managed_secret_key_count": len(managed_keys),
                 "missing_from_runtime": missing[:50],
                 "extra_in_runtime": extra[:50],
-                "env_count": len(env_lines),
-                "runtime_count": len(runtime_lines),
+                "value_mismatch_keys": mismatch[:50],
+                "missing_required_managed_keys": missing_managed[:50],
+                "env_count": len(env_map),
+                "runtime_count": len(runtime_map),
             },
         )
     return Step(
         name="env_sync",
         status="pass",
-        summary=".env.runtime matches .env",
-        details={"line_count": len(env_lines)},
+        summary=".env.runtime matches .env for non-secret keys",
+        details={
+            "secrets_backend": backend,
+            "managed_secret_key_count": len(managed_keys),
+            "line_count": len(compare_keys),
+        },
     )
 
 
@@ -330,7 +431,7 @@ def main() -> int:
     ]
     fail_count = sum(1 for step in steps if step.status == "fail")
     warn_count = sum(1 for step in steps if step.status == "warn")
-    report = {
+    report: dict[str, Any] = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "repo_dir": str(repo_dir),
         "summary": {

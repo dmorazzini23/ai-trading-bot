@@ -38,6 +38,14 @@ DOLLAR_RISK_LIMIT=0.05
         monkeypatch.delenv(key, raising=False)
 
     management.reload_env(str(env_path))
+    real_reload_env = management.reload_env
+    reload_calls: list[tuple[str | None, bool]] = []
+
+    def _spy_reload_env(path=None, override=True):
+        reload_calls.append((path, bool(override)))
+        return real_reload_env(path, override=override)
+
+    monkeypatch.setattr(management, "reload_env", _spy_reload_env)
 
     real_get_settings = fetch._load_settings
     calls = {"n": 0}
@@ -57,3 +65,5 @@ DOLLAR_RISK_LIMIT=0.05
     df = fetch.get_bars("AAPL", "1Min", start, end)
     assert isinstance(df, pd.DataFrame)
     assert calls["n"] == 2
+    assert reload_calls
+    assert reload_calls[-1] == (None, False)
