@@ -30,6 +30,25 @@ def test_evaluate_incident_triggers_catches_regressions() -> None:
     assert "broker_disconnected" in triggers
 
 
+def test_evaluate_incident_triggers_treats_reachable_broker_as_healthy() -> None:
+    snapshot = {
+        "go_no_go_gate_passed": None,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": None,
+        "slippage_drag_bps": None,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "runtime_health_ok",
+        "provider_status": "healthy",
+        "provider_active": "alpaca",
+        "provider_reason": "data_available_netting",
+        "using_backup": False,
+        "broker_status": "reachable",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(snapshot, {"min_capture_ratio": 0.08})
+    assert "broker_disconnected" not in triggers
+
+
 def test_evaluate_incident_triggers_suppresses_startup_warmup_health() -> None:
     snapshot = {
         "go_no_go_gate_passed": None,
