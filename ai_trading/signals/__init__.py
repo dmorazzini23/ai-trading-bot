@@ -624,7 +624,10 @@ def compute_signal_matrix(df) -> Any | None:
     last_bar = df.index[-1] if not df.empty else None
     if last_bar is not None and last_bar == _LAST_SIGNAL_BAR:
         logger.debug("Reusing cached signal matrix for bar: %s", last_bar)
-        return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else pd.DataFrame()
+        cached_matrix = _LAST_SIGNAL_MATRIX
+        if cached_matrix is not None:
+            return cast(Any, cached_matrix).copy()
+        return pd.DataFrame()
     required = {"close", "high", "low"}
     if not required.issubset(df.columns):
         logger.warning("compute_signal_matrix missing required columns: %s", required - set(df.columns))

@@ -5,7 +5,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, time as dt_time
 import json
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from ai_trading.config.management import get_env
@@ -170,7 +170,7 @@ def _ledger_fingerprints(ledger: Any) -> set[tuple[str, str, int, str]]:
         return seen
     seen = set()
     setattr(ledger, "_pretrade_seen_fingerprints", seen)
-    return seen
+    return cast(set[tuple[str, str, int, str]], seen)
 
 
 def _ledger_position_qty(ledger: Any, symbol: str) -> float | None:

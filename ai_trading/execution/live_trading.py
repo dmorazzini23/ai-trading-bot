@@ -2182,6 +2182,7 @@ class ExecutionEngine:
         self._pending_orders: dict[str, dict[str, Any]] = {}
         self._order_signal_meta: dict[str, _SignalMeta] = {}
         self._last_submit_outcome: dict[str, Any] = {}
+        self._last_pre_execution_order_check_failure: dict[str, Any] = {}
         self._last_initialize_attempt_mono: float = 0.0
         self._last_initialize_success_mono: float = 0.0
         self._last_broker_healthcheck_mono: float = 0.0
@@ -2231,6 +2232,9 @@ class ExecutionEngine:
         self._symbol_loss_streak: dict[str, int] = {}
         self._symbol_loss_cooldown_until: dict[str, float] = {}
         self._symbol_loss_cooldown_reason: dict[str, str] = {}
+        self._symbol_repeat_loss_streak: dict[str, int] = {}
+        self._symbol_repeat_loss_blocklist_until: dict[str, float] = {}
+        self._symbol_repeat_loss_blocklist_reason: dict[str, str] = {}
         self._symbol_reentry_cooldown_until: dict[tuple[str, str], float] = {}
         self._cancel_ratio_adaptive_new_orders_cap: int | None = None
         self._cancel_ratio_adaptive_context: dict[str, Any] = {}
@@ -2240,7 +2244,12 @@ class ExecutionEngine:
         self._symbol_slippage_budget_cache_until_mono: float = 0.0
         self._symbol_slippage_budget_cache: dict[str, tuple[bool, dict[str, Any]]] = {}
         self._markout_feedback_bps: deque[float] = deque(maxlen=512)
+        self._symbol_markout_feedback_bps: dict[str, deque[float]] = {}
         self._slippage_feedback_bps: deque[float] = deque(maxlen=512)
+        self._symbol_live_edge_bps_history: dict[str, deque[float]] = {}
+        self._symbol_session_live_edge_bps_history: dict[str, deque[float]] = {}
+        self._regime_stability_observations: deque[dict[str, Any]] = deque(maxlen=512)
+        self._cost_shock_history: deque[dict[str, Any]] = deque(maxlen=512)
         self._markout_execution_override_cache_until_mono: float = 0.0
         self._markout_execution_override_cache: dict[str, Any] = {}
         self._markout_feedback_last_context: dict[str, Any] = {
@@ -2271,6 +2280,9 @@ class ExecutionEngine:
         )
         self._execution_learning_last_persist_mono: float = 0.0
         self._execution_learning_updates_since_persist: int = 0
+        self._edge_realism_state: dict[str, Any] = self._default_edge_realism_state()
+        self._edge_realism_last_persist_mono: float = 0.0
+        self._edge_realism_updates_since_persist: int = 0
         self._execution_autotune_cache_until_mono: float = 0.0
         self._execution_autotune_cache: dict[str, Any] = {}
         self._execution_autotune_last_generated_date: str = ""
@@ -2295,6 +2307,7 @@ class ExecutionEngine:
             self._api_key, self._api_secret = key, secret
             _update_credential_state(bool(key), bool(secret))
         self._refresh_settings()
+        self._load_edge_realism_state()
         self._load_execution_learning_state()
         self._ensure_execution_learning_bootstrap_artifacts()
         self._refresh_execution_daily_autotune(force=False)
@@ -2359,6 +2372,7 @@ class ExecutionEngine:
         self._cycle_account_fetched = False
         self._cycle_reserved_opening_notional = Decimal("0")
         self._last_submit_outcome = {}
+        self._last_pre_execution_order_check_failure = {}
         account = self._refresh_cycle_account()
         
         # Check PDT status and activate swing mode if needed
@@ -4413,6 +4427,1137 @@ class ExecutionEngine:
                     return float(parsed)
         return None
 
+    @staticmethod
+    def _normalize_probability_score(value: Any) -> float | None:
+        """Normalize confidence/uncertainty style values onto [0, 1] when possible."""
+
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        normalized = float(parsed)
+        if normalized > 1.0 and normalized <= 100.0:
+            normalized = normalized / 100.0
+        if normalized < 0.0 or normalized > 1.0:
+            return None
+        return float(normalized)
+
+    def _order_probability_score(
+        self,
+        order: Mapping[str, Any],
+        *,
+        keys: Sequence[str],
+    ) -> tuple[float | None, str | None]:
+        """Extract a normalized probability-like score from order/annotations/metadata."""
+
+        sources: list[tuple[str, Mapping[str, Any]]] = [("order", order)]
+        annotations = order.get("annotations")
+        if isinstance(annotations, Mapping):
+            sources.append(("annotations", annotations))
+        metadata = order.get("metadata")
+        if isinstance(metadata, Mapping):
+            sources.append(("metadata", metadata))
+        for source_name, payload in sources:
+            for key in keys:
+                if key not in payload:
+                    continue
+                normalized = self._normalize_probability_score(payload.get(key))
+                if normalized is not None:
+                    return float(normalized), f"{source_name}.{key}"
+        return None, None
+
+    def _order_numeric_value(
+        self,
+        order: Mapping[str, Any],
+        *,
+        keys: Sequence[str],
+    ) -> tuple[float | None, str | None]:
+        """Extract a finite numeric value from order/annotations/metadata."""
+
+        sources: list[tuple[str, Mapping[str, Any]]] = [("order", order)]
+        annotations = order.get("annotations")
+        if isinstance(annotations, Mapping):
+            sources.append(("annotations", annotations))
+        metadata = order.get("metadata")
+        if isinstance(metadata, Mapping):
+            sources.append(("metadata", metadata))
+        for source_name, payload in sources:
+            for key in keys:
+                if key not in payload:
+                    continue
+                parsed = self._coerce_finite_float(payload.get(key))
+                if parsed is not None:
+                    return float(parsed), f"{source_name}.{key}"
+        return None, None
+
+    @staticmethod
+    def _session_regime_for_timestamp(
+        value: datetime | None,
+        *,
+        tz_name: str = "America/New_York",
+    ) -> str:
+        """Classify a timestamp into opening/midday/closing/offhours session regime."""
+
+        if value is None:
+            return "offhours"
+        try:
+            tz = ZoneInfo(str(tz_name or "America/New_York"))
+        except Exception:
+            tz = ZoneInfo("America/New_York")
+        try:
+            local_ts = value.astimezone(tz)
+        except Exception:
+            local_ts = value
+            if local_ts.tzinfo is None:
+                local_ts = local_ts.replace(tzinfo=UTC)
+            local_ts = local_ts.astimezone(tz)
+        weekday = int(local_ts.weekday())
+        minute_of_day = int((local_ts.hour * 60) + local_ts.minute)
+        open_minute = (9 * 60) + 30
+        close_minute = 16 * 60
+        if weekday >= 5 or minute_of_day < open_minute or minute_of_day >= close_minute:
+            return "offhours"
+        minutes_from_open = minute_of_day - open_minute
+        minutes_to_close = close_minute - minute_of_day
+        if minutes_from_open < 45:
+            return "opening"
+        if minutes_to_close <= 45:
+            return "closing"
+        return "midday"
+
+    def _session_threshold_override(
+        self,
+        *,
+        base_value: float,
+        market_env_key: str,
+        after_hours_env_key: str,
+        minimum: float,
+        maximum: float,
+    ) -> tuple[float, str, str]:
+        """Resolve a threshold override based on session regime."""
+
+        session_context = self._execution_time_of_day_regime()
+        session_regime = str(session_context.get("session_regime") or "").strip().lower()
+        resolved = float(base_value)
+        source = "base"
+        market_override = _config_float(market_env_key, None)
+        after_hours_override = _config_float(after_hours_env_key, None)
+        if session_regime in {"opening", "midday", "closing"} and market_override is not None:
+            resolved = float(market_override)
+            source = "market_override"
+        elif session_regime == "offhours" and after_hours_override is not None:
+            resolved = float(after_hours_override)
+            source = "after_hours_override"
+        resolved = max(float(minimum), min(float(resolved), float(maximum)))
+        return float(resolved), source, (session_regime or "unknown")
+
+    def _execution_edge_realism_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when expected edge is not realistic versus recent realized edge."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EDGE_REALISM_ENABLED")
+        if enabled is None:
+            enabled = _resolve_bool_env("AI_TRADING_EXECUTION_EDGE_REALISM_GATE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        expected_edge_bps = self._order_expected_edge_bps(order)
+        if expected_edge_bps is None:
+            return True, {
+                "enabled": True,
+                "reason": "expected_edge_missing",
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+            }
+        if float(expected_edge_bps) <= 0.0:
+            return False, {
+                "enabled": True,
+                "reason": "expected_edge_nonpositive",
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+                "expected_edge_bps": float(expected_edge_bps),
+            }
+
+        min_samples = _config_int("AI_TRADING_EDGE_REALISM_MIN_SAMPLES", None)
+        if min_samples is None:
+            min_samples = _config_int("AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SAMPLES", 40)
+        if min_samples is None:
+            min_samples = 40
+        min_samples = max(1, min(int(min_samples), 10000))
+        margin_bps = _config_float("AI_TRADING_EDGE_REALISM_MARGIN_BPS", None)
+        if margin_bps is None:
+            margin_bps = _config_float("AI_TRADING_EXECUTION_EDGE_REALISM_MARGIN_BPS", 1.0)
+        if margin_bps is None:
+            margin_bps = 1.0
+        margin_bps = max(0.0, min(float(margin_bps), 100.0))
+        shrinkage = _config_float("AI_TRADING_EDGE_REALISM_SHRINKAGE", 0.5)
+        if shrinkage is None:
+            shrinkage = 0.5
+        shrinkage = max(0.0, min(float(shrinkage), 1.0))
+        calibrator_enabled = _resolve_bool_env("AI_TRADING_EDGE_REALISM_CALIBRATOR_ENABLED")
+        if calibrator_enabled is None:
+            calibrator_enabled = True
+        base_min_realism_score = _config_float(
+            "AI_TRADING_EDGE_REALISM_MIN_SCORE",
+            None,
+        )
+        if base_min_realism_score is None:
+            base_min_realism_score = _config_float(
+                "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE",
+                0.3,
+            )
+        if base_min_realism_score is None:
+            base_min_realism_score = 0.3
+        market_score_key = "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_MARKET"
+        if _config_float("AI_TRADING_EDGE_REALISM_MIN_SCORE_MARKET", None) is not None:
+            market_score_key = "AI_TRADING_EDGE_REALISM_MIN_SCORE_MARKET"
+        after_hours_score_key = "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_AFTER_HOURS"
+        if (
+            _config_float("AI_TRADING_EDGE_REALISM_MIN_SCORE_AFTER_HOURS", None)
+            is not None
+        ):
+            after_hours_score_key = "AI_TRADING_EDGE_REALISM_MIN_SCORE_AFTER_HOURS"
+        min_realism_score, realism_threshold_source, session_regime = (
+            self._session_threshold_override(
+                base_value=float(base_min_realism_score),
+                market_env_key=market_score_key,
+                after_hours_env_key=after_hours_score_key,
+                minimum=0.0,
+                maximum=2.0,
+            )
+        )
+
+        normalized_side = self._normalized_order_side(order.get("side"))
+        snapshot = self._execution_learning_snapshot(
+            side=normalized_side or str(order.get("side") or ""),
+            execution_profile_context=None,
+        )
+        bucket_stats = dict(snapshot.get("bucket_stats") or {})
+        global_stats = dict(snapshot.get("global") or {})
+        bucket_samples = max(0, _safe_int(bucket_stats.get("samples"), 0))
+        source = "bucket" if bucket_samples >= int(min_samples) else "global"
+        source_stats = bucket_stats if source == "bucket" else global_stats
+        learning_samples = max(0, _safe_int(source_stats.get("samples"), 0))
+        realized_mean_edge_bps = (
+            self._coerce_finite_float(source_stats.get("mean_net_edge_bps")) or 0.0
+        )
+        if learning_samples < int(min_samples):
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_learning_samples",
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+                "source": source,
+                "samples": int(learning_samples),
+                "min_samples": int(min_samples),
+                "expected_edge_bps": float(expected_edge_bps),
+                "mean_realized_net_edge_bps": float(realized_mean_edge_bps),
+            }
+
+        effective_realized_edge_bps = max(float(realized_mean_edge_bps) + float(margin_bps), 0.0)
+        baseline_realism_score = float(effective_realized_edge_bps) / max(
+            float(expected_edge_bps), 0.1
+        )
+        ratio_snapshot = self._edge_realism_ratio_snapshot(
+            order=order,
+            min_samples=int(min_samples),
+        )
+        historical_ratio = self._coerce_finite_float(ratio_snapshot.get("ratio"))
+        blended_realism_score = float(baseline_realism_score)
+        if bool(calibrator_enabled) and historical_ratio is not None:
+            blended_realism_score = (
+                (1.0 - float(shrinkage)) * float(baseline_realism_score)
+            ) + (float(shrinkage) * float(historical_ratio))
+        realism_score = float(max(0.0, blended_realism_score))
+        allowed = float(realism_score) >= float(min_realism_score)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "edge_realism_gate",
+            "symbol": str(order.get("symbol") or "").strip().upper() or None,
+            "source": source,
+            "samples": int(learning_samples),
+            "min_samples": int(min_samples),
+            "expected_edge_bps": float(expected_edge_bps),
+            "mean_realized_net_edge_bps": float(realized_mean_edge_bps),
+            "margin_bps": float(margin_bps),
+            "effective_realized_edge_bps": float(effective_realized_edge_bps),
+            "baseline_edge_realism_score": float(baseline_realism_score),
+            "edge_realism_score": float(realism_score),
+            "required_edge_realism_score": float(min_realism_score),
+            "edge_realism_score_threshold_source": realism_threshold_source,
+            "session_regime": session_regime,
+            "edge_realism_calibrator_enabled": bool(calibrator_enabled),
+            "edge_realism_shrinkage": float(shrinkage),
+            "historical_realized_to_expected_ratio": (
+                float(historical_ratio) if historical_ratio is not None else None
+            ),
+            "historical_ratio_source": ratio_snapshot.get("source"),
+            "historical_ratio_samples": int(ratio_snapshot.get("samples", 0) or 0),
+            "historical_ratio_bucket": ratio_snapshot.get("bucket"),
+        }
+
+    def _execution_prediction_uncertainty_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when model uncertainty is high or confidence is too low."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_PREDICTION_UNCERTAINTY_GATE_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        require_scores = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_PREDICTION_REQUIRE_SCORES"
+        )
+        if require_scores is None:
+            require_scores = False
+        base_min_confidence = _config_float(
+            "AI_TRADING_EXECUTION_PREDICTION_MIN_CONFIDENCE",
+            0.52,
+        )
+        if base_min_confidence is None:
+            base_min_confidence = 0.52
+        min_confidence, min_confidence_source, session_regime = (
+            self._session_threshold_override(
+                base_value=float(base_min_confidence),
+                market_env_key=(
+                    "AI_TRADING_EXECUTION_PREDICTION_MIN_CONFIDENCE_MARKET"
+                ),
+                after_hours_env_key=(
+                    "AI_TRADING_EXECUTION_PREDICTION_MIN_CONFIDENCE_AFTER_HOURS"
+                ),
+                minimum=0.0,
+                maximum=1.0,
+            )
+        )
+        base_max_uncertainty = _config_float(
+            "AI_TRADING_EXECUTION_PREDICTION_MAX_UNCERTAINTY",
+            0.48,
+        )
+        if base_max_uncertainty is None:
+            base_max_uncertainty = 0.48
+        max_uncertainty, max_uncertainty_source, _ = self._session_threshold_override(
+            base_value=float(base_max_uncertainty),
+            market_env_key="AI_TRADING_EXECUTION_PREDICTION_MAX_UNCERTAINTY_MARKET",
+            after_hours_env_key=(
+                "AI_TRADING_EXECUTION_PREDICTION_MAX_UNCERTAINTY_AFTER_HOURS"
+            ),
+            minimum=0.0,
+            maximum=1.0,
+        )
+
+        confidence, confidence_source = self._order_probability_score(
+            order,
+            keys=(
+                "prediction_confidence",
+                "model_confidence",
+                "signal_confidence",
+                "confidence",
+            ),
+        )
+        uncertainty, uncertainty_source = self._order_probability_score(
+            order,
+            keys=(
+                "prediction_uncertainty",
+                "model_uncertainty",
+                "signal_uncertainty",
+                "uncertainty",
+            ),
+        )
+        if confidence is None and uncertainty is not None:
+            confidence = max(0.0, min(1.0, 1.0 - float(uncertainty)))
+            confidence_source = f"derived_from_{uncertainty_source or 'uncertainty'}"
+        if uncertainty is None and confidence is not None:
+            uncertainty = max(0.0, min(1.0, 1.0 - float(confidence)))
+            uncertainty_source = f"derived_from_{confidence_source or 'confidence'}"
+        if confidence is None and uncertainty is None:
+            allowed_missing = not bool(require_scores)
+            return bool(allowed_missing), {
+                "enabled": True,
+                "reason": (
+                    "prediction_scores_missing"
+                    if allowed_missing
+                    else "prediction_scores_required_missing"
+                ),
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+                "required": bool(require_scores),
+                "min_confidence": float(min_confidence),
+                "max_uncertainty": float(max_uncertainty),
+                "min_confidence_threshold_source": min_confidence_source,
+                "max_uncertainty_threshold_source": max_uncertainty_source,
+                "session_regime": session_regime,
+            }
+
+        violations: list[str] = []
+        if confidence is not None and float(confidence) < float(min_confidence):
+            violations.append("low_confidence")
+        if uncertainty is not None and float(uncertainty) > float(max_uncertainty):
+            violations.append("high_uncertainty")
+        allowed = len(violations) == 0
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "prediction_uncertainty_gate",
+            "symbol": str(order.get("symbol") or "").strip().upper() or None,
+            "confidence": float(confidence) if confidence is not None else None,
+            "confidence_source": confidence_source,
+            "min_confidence": float(min_confidence),
+            "uncertainty": float(uncertainty) if uncertainty is not None else None,
+            "uncertainty_source": uncertainty_source,
+            "max_uncertainty": float(max_uncertainty),
+            "min_confidence_threshold_source": min_confidence_source,
+            "max_uncertainty_threshold_source": max_uncertainty_source,
+            "session_regime": session_regime,
+            "violations": violations,
+        }
+
+    def _execution_fill_probability_score_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when a model-provided fill-probability score is too low."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_FILL_PROBABILITY_SCORE_GATE_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        require_score = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_FILL_PROBABILITY_REQUIRE_SCORE"
+        )
+        if require_score is None:
+            require_score = False
+        base_min_score = _config_float(
+            "AI_TRADING_EXECUTION_FILL_PROBABILITY_SCORE_MIN",
+            0.35,
+        )
+        if base_min_score is None:
+            base_min_score = 0.35
+        min_score, min_score_source, session_regime = self._session_threshold_override(
+            base_value=float(base_min_score),
+            market_env_key=(
+                "AI_TRADING_EXECUTION_FILL_PROBABILITY_SCORE_MIN_MARKET"
+            ),
+            after_hours_env_key=(
+                "AI_TRADING_EXECUTION_FILL_PROBABILITY_SCORE_MIN_AFTER_HOURS"
+            ),
+            minimum=0.0,
+            maximum=1.0,
+        )
+
+        score, score_source = self._order_probability_score(
+            order,
+            keys=(
+                "fill_probability_score",
+                "fill_probability",
+                "passive_fill_probability",
+            ),
+        )
+        if score is None:
+            allowed_missing = not bool(require_score)
+            return bool(allowed_missing), {
+                "enabled": True,
+                "reason": (
+                    "fill_probability_score_missing"
+                    if allowed_missing
+                    else "fill_probability_score_required_missing"
+                ),
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+                "required": bool(require_score),
+                "min_fill_probability_score": float(min_score),
+                "fill_probability_score_threshold_source": min_score_source,
+                "session_regime": session_regime,
+            }
+
+        allowed = float(score) >= float(min_score)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "fill_probability_score_gate",
+            "symbol": str(order.get("symbol") or "").strip().upper() or None,
+            "fill_probability_score": float(score),
+            "fill_probability_score_source": score_source,
+            "min_fill_probability_score": float(min_score),
+            "fill_probability_score_threshold_source": min_score_source,
+            "session_regime": session_regime,
+        }
+
+    def _execution_symbol_live_expectancy_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when symbol/session live expectancy degrades below threshold."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_GATE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        symbol = str(order.get("symbol") or "").strip().upper()
+        if not symbol:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+
+        min_samples = _config_int("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_MIN_SAMPLES", 6)
+        if min_samples is None:
+            min_samples = 6
+        min_samples = max(1, min(int(min_samples), 5000))
+        window_fills = _config_int("AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_WINDOW_FILLS", 24)
+        if window_fills is None:
+            window_fills = 24
+        window_fills = max(1, min(int(window_fills), 2000))
+        min_expectancy_bps = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_MIN_BPS",
+            0.0,
+        )
+        if min_expectancy_bps is None:
+            min_expectancy_bps = 0.0
+        min_expectancy_bps = max(-200.0, min(float(min_expectancy_bps), 200.0))
+        require_session = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_REQUIRE_SESSION_MATCH"
+        )
+        if require_session is None:
+            require_session = True
+        allow_symbol_fallback = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_ALLOW_SYMBOL_FALLBACK"
+        )
+        if allow_symbol_fallback is None:
+            allow_symbol_fallback = True
+        session_regime = str(
+            self._execution_time_of_day_regime().get("session_regime") or "offhours"
+        ).strip().lower() or "offhours"
+
+        history_by_symbol_raw = getattr(self, "_symbol_live_edge_bps_history", None)
+        history_by_symbol = (
+            history_by_symbol_raw if isinstance(history_by_symbol_raw, dict) else {}
+        )
+        history_by_symbol_session_raw = getattr(self, "_symbol_session_live_edge_bps_history", None)
+        history_by_symbol_session = (
+            history_by_symbol_session_raw
+            if isinstance(history_by_symbol_session_raw, dict)
+            else {}
+        )
+        history_values: list[float] = []
+        source = "symbol"
+        if bool(require_session):
+            session_key = f"{symbol}:{session_regime}"
+            session_history = history_by_symbol_session.get(session_key)
+            if isinstance(session_history, deque):
+                history_values = [
+                    float(v)
+                    for v in session_history
+                    if isinstance(v, (int, float)) and math.isfinite(float(v))
+                ]
+                source = "symbol_session"
+        if (
+            (not history_values or len(history_values) < int(min_samples))
+            and bool(allow_symbol_fallback)
+        ):
+            symbol_history = history_by_symbol.get(symbol)
+            if isinstance(symbol_history, deque):
+                history_values = [
+                    float(v)
+                    for v in symbol_history
+                    if isinstance(v, (int, float)) and math.isfinite(float(v))
+                ]
+                source = "symbol"
+
+        if not history_values:
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_samples",
+                "symbol": symbol,
+                "session_regime": session_regime,
+                "source": source,
+                "samples": 0,
+                "min_samples": int(min_samples),
+                "required_expectancy_bps": float(min_expectancy_bps),
+            }
+
+        tail_values = history_values[-window_fills:]
+        sample_count = int(len(tail_values))
+        if sample_count < int(min_samples):
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_samples",
+                "symbol": symbol,
+                "session_regime": session_regime,
+                "source": source,
+                "samples": int(sample_count),
+                "min_samples": int(min_samples),
+                "window_fills": int(window_fills),
+                "required_expectancy_bps": float(min_expectancy_bps),
+            }
+        expectancy_bps = float(statistics.mean(tail_values))
+        allowed = float(expectancy_bps) >= float(min_expectancy_bps)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "symbol_live_expectancy_gate",
+            "symbol": symbol,
+            "session_regime": session_regime,
+            "source": source,
+            "samples": int(sample_count),
+            "window_fills": int(window_fills),
+            "symbol_live_expectancy_bps": float(expectancy_bps),
+            "required_expectancy_bps": float(min_expectancy_bps),
+        }
+
+    def _execution_adverse_selection_risk_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when short-horizon adverse-selection risk is elevated."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_ADVERSE_SELECTION_GATE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        min_samples = _config_int("AI_TRADING_EXECUTION_ADVERSE_SELECTION_MIN_SAMPLES", 20)
+        if min_samples is None:
+            min_samples = 20
+        min_samples = max(1, min(int(min_samples), 5000))
+        max_risk_bps = _config_float("AI_TRADING_EXECUTION_ADVERSE_SELECTION_MAX_RISK_BPS", 4.0)
+        if max_risk_bps is None:
+            max_risk_bps = 4.0
+        max_risk_bps = max(0.0, min(float(max_risk_bps), 100.0))
+        symbol_min_samples = _config_int(
+            "AI_TRADING_EXECUTION_ADVERSE_SELECTION_SYMBOL_MIN_SAMPLES",
+            8,
+        )
+        if symbol_min_samples is None:
+            symbol_min_samples = 8
+        symbol_min_samples = max(1, min(int(symbol_min_samples), 5000))
+        symbol_weight = _config_float(
+            "AI_TRADING_EXECUTION_ADVERSE_SELECTION_SYMBOL_WEIGHT",
+            0.6,
+        )
+        if symbol_weight is None:
+            symbol_weight = 0.6
+        symbol_weight = max(0.0, min(float(symbol_weight), 1.0))
+
+        global_context = self._observe_markout_feedback()
+        global_samples = max(0, _safe_int(global_context.get("sample_count"), 0))
+        global_mean_bps = self._coerce_finite_float(global_context.get("mean_bps")) or 0.0
+        global_risk_bps = max(-float(global_mean_bps), 0.0)
+
+        symbol = str(order.get("symbol") or "").strip().upper()
+        symbol_samples = 0
+        symbol_mean_bps: float | None = None
+        symbol_risk_bps: float | None = None
+        if symbol:
+            symbol_markout_raw = getattr(self, "_symbol_markout_feedback_bps", None)
+            symbol_markout_map = (
+                symbol_markout_raw if isinstance(symbol_markout_raw, dict) else {}
+            )
+            symbol_history = symbol_markout_map.get(symbol)
+            if isinstance(symbol_history, deque):
+                values = [
+                    float(v)
+                    for v in symbol_history
+                    if isinstance(v, (int, float)) and math.isfinite(float(v))
+                ]
+                symbol_samples = int(len(values))
+                if values:
+                    symbol_mean_bps = float(statistics.mean(values))
+                    symbol_risk_bps = max(-float(symbol_mean_bps), 0.0)
+
+        if int(global_samples) < int(min_samples) and int(symbol_samples) < int(symbol_min_samples):
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_samples",
+                "symbol": symbol or None,
+                "global_samples": int(global_samples),
+                "required_global_samples": int(min_samples),
+                "symbol_samples": int(symbol_samples),
+                "required_symbol_samples": int(symbol_min_samples),
+                "max_risk_bps": float(max_risk_bps),
+            }
+
+        combined_risk_bps = float(global_risk_bps)
+        risk_source = "global_markout"
+        if symbol_risk_bps is not None and int(symbol_samples) >= int(symbol_min_samples):
+            combined_risk_bps = (
+                (float(symbol_weight) * float(symbol_risk_bps))
+                + ((1.0 - float(symbol_weight)) * float(global_risk_bps))
+            )
+            risk_source = "blended_symbol_global_markout"
+
+        allowed = float(combined_risk_bps) <= float(max_risk_bps)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "adverse_selection_risk_gate",
+            "symbol": symbol or None,
+            "risk_source": risk_source,
+            "adverse_selection_risk_bps": float(combined_risk_bps),
+            "max_adverse_selection_risk_bps": float(max_risk_bps),
+            "global_markout_mean_bps": float(global_mean_bps),
+            "global_markout_samples": int(global_samples),
+            "symbol_markout_mean_bps": float(symbol_mean_bps) if symbol_mean_bps is not None else None,
+            "symbol_markout_samples": int(symbol_samples),
+        }
+
+    def _execution_regime_stability_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings during unstable micro-regime transitions."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_REGIME_STABILITY_GATE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        lookback_seconds = _config_float(
+            "AI_TRADING_EXECUTION_REGIME_STABILITY_LOOKBACK_SECONDS",
+            900.0,
+        )
+        if lookback_seconds is None:
+            lookback_seconds = 900.0
+        lookback_seconds = max(30.0, min(float(lookback_seconds), 6.0 * 3600.0))
+        min_samples = _config_int("AI_TRADING_EXECUTION_REGIME_STABILITY_MIN_SAMPLES", 8)
+        if min_samples is None:
+            min_samples = 8
+        min_samples = max(2, min(int(min_samples), 2000))
+        min_score = _config_float("AI_TRADING_EXECUTION_REGIME_STABILITY_MIN_SCORE", 0.35)
+        if min_score is None:
+            min_score = 0.35
+        min_score = max(0.0, min(float(min_score), 1.0))
+        spread_jump_bps = _config_float(
+            "AI_TRADING_EXECUTION_REGIME_STABILITY_SPREAD_JUMP_BPS",
+            4.0,
+        )
+        if spread_jump_bps is None:
+            spread_jump_bps = 4.0
+        spread_jump_bps = max(0.1, min(float(spread_jump_bps), 100.0))
+
+        tod_context = self._execution_time_of_day_regime()
+        session_regime = str(tod_context.get("session_regime") or "offhours").strip().lower() or "offhours"
+        metadata = order.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        market_regime = str(
+            order.get("market_regime")
+            or metadata_map.get("market_regime")
+            or ""
+        ).strip().lower()
+        volatility_regime = str(
+            order.get("volatility_regime")
+            or metadata_map.get("volatility_regime")
+            or ""
+        ).strip().lower()
+        trend_regime = str(
+            order.get("trend_regime")
+            or metadata_map.get("trend_regime")
+            or ""
+        ).strip().lower()
+        regime_token = f"{session_regime}:{market_regime or 'na'}:{volatility_regime or 'na'}:{trend_regime or 'na'}"
+        spread_bps, spread_source = self._order_numeric_value(
+            order,
+            keys=(
+                "spread_bps",
+                "quote_spread_bps",
+                "current_spread_bps",
+                "spread",
+            ),
+        )
+
+        history_raw = getattr(self, "_regime_stability_observations", None)
+        if not isinstance(history_raw, deque):
+            history_raw = deque(maxlen=512)
+            self._regime_stability_observations = history_raw
+        now_mono = float(monotonic_time())
+        history_raw.append(
+            {
+                "ts_mono": float(now_mono),
+                "regime_token": str(regime_token),
+                "spread_bps": float(spread_bps) if spread_bps is not None else None,
+            }
+        )
+        while history_raw:
+            head_ts = _safe_float((history_raw[0] or {}).get("ts_mono"))
+            if head_ts is None or (float(now_mono) - float(head_ts)) <= float(lookback_seconds):
+                break
+            history_raw.popleft()
+
+        history = list(history_raw)
+        sample_count = int(len(history))
+        if sample_count < int(min_samples):
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_samples",
+                "samples": int(sample_count),
+                "min_samples": int(min_samples),
+                "lookback_seconds": float(lookback_seconds),
+                "session_regime": session_regime,
+                "spread_bps": float(spread_bps) if spread_bps is not None else None,
+                "spread_source": spread_source,
+            }
+
+        transitions = 0
+        spread_jumps = 0
+        prev_token = None
+        prev_spread: float | None = None
+        for row in history:
+            token = str(row.get("regime_token") or "")
+            row_spread = _safe_float(row.get("spread_bps"))
+            if prev_token is not None and token and token != prev_token:
+                transitions += 1
+            if (
+                prev_spread is not None
+                and row_spread is not None
+                and abs(float(row_spread) - float(prev_spread)) >= float(spread_jump_bps)
+            ):
+                spread_jumps += 1
+            prev_token = token or prev_token
+            prev_spread = row_spread if row_spread is not None else prev_spread
+        denominator = max(1, sample_count - 1)
+        transition_rate = float(transitions) / float(denominator)
+        spread_jump_rate = float(spread_jumps) / float(denominator)
+        instability = min(1.0, (0.6 * float(transition_rate)) + (0.4 * float(spread_jump_rate)))
+        stability_score = max(0.0, min(1.0, 1.0 - float(instability)))
+        allowed = float(stability_score) >= float(min_score)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "regime_stability_gate",
+            "session_regime": session_regime,
+            "regime_token": regime_token,
+            "samples": int(sample_count),
+            "lookback_seconds": float(lookback_seconds),
+            "transitions": int(transitions),
+            "spread_jumps": int(spread_jumps),
+            "transition_rate": float(transition_rate),
+            "spread_jump_rate": float(spread_jump_rate),
+            "regime_stability_score": float(stability_score),
+            "required_regime_stability_score": float(min_score),
+            "spread_bps": float(spread_bps) if spread_bps is not None else None,
+            "spread_source": spread_source,
+        }
+
+    def _execution_cost_shock_context(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Detect sudden spread/slippage shocks and return stricter cost context."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_COST_SHOCK_ENABLED")
+        if enabled is None:
+            enabled = True
+        lookback_seconds = _config_float("AI_TRADING_EXECUTION_COST_SHOCK_LOOKBACK_SECONDS", 1800.0)
+        if lookback_seconds is None:
+            lookback_seconds = 1800.0
+        lookback_seconds = max(60.0, min(float(lookback_seconds), 8.0 * 3600.0))
+        min_samples = _config_int("AI_TRADING_EXECUTION_COST_SHOCK_MIN_SAMPLES", 12)
+        if min_samples is None:
+            min_samples = 12
+        min_samples = max(3, min(int(min_samples), 2000))
+        spread_multiplier = _config_float("AI_TRADING_EXECUTION_COST_SHOCK_SPREAD_MULTIPLIER", 1.8)
+        if spread_multiplier is None:
+            spread_multiplier = 1.8
+        spread_multiplier = max(1.0, min(float(spread_multiplier), 10.0))
+        spread_abs_bps = _config_float("AI_TRADING_EXECUTION_COST_SHOCK_SPREAD_ABS_BPS", 2.0)
+        if spread_abs_bps is None:
+            spread_abs_bps = 2.0
+        spread_abs_bps = max(0.1, min(float(spread_abs_bps), 100.0))
+        slippage_multiplier = _config_float("AI_TRADING_EXECUTION_COST_SHOCK_SLIPPAGE_MULTIPLIER", 1.7)
+        if slippage_multiplier is None:
+            slippage_multiplier = 1.7
+        slippage_multiplier = max(1.0, min(float(slippage_multiplier), 10.0))
+        slippage_abs_bps = _config_float("AI_TRADING_EXECUTION_COST_SHOCK_SLIPPAGE_ABS_BPS", 1.5)
+        if slippage_abs_bps is None:
+            slippage_abs_bps = 1.5
+        slippage_abs_bps = max(0.1, min(float(slippage_abs_bps), 100.0))
+        edge_ratio_add = _config_float("AI_TRADING_EXECUTION_COST_SHOCK_EDGE_TO_COST_RATIO_ADD", 0.35)
+        if edge_ratio_add is None:
+            edge_ratio_add = 0.35
+        edge_ratio_add = max(0.0, min(float(edge_ratio_add), 5.0))
+
+        current_spread_bps, spread_source = self._order_numeric_value(
+            order,
+            keys=("spread_bps", "quote_spread_bps", "current_spread_bps", "spread"),
+        )
+        current_slippage_bps = self._execution_slippage_mean_bps()
+
+        history_raw = getattr(self, "_cost_shock_history", None)
+        if not isinstance(history_raw, deque):
+            history_raw = deque(maxlen=512)
+            self._cost_shock_history = history_raw
+        now_mono = float(monotonic_time())
+        history_raw.append(
+            {
+                "ts_mono": float(now_mono),
+                "spread_bps": float(current_spread_bps) if current_spread_bps is not None else None,
+                "slippage_bps": (
+                    float(current_slippage_bps)
+                    if current_slippage_bps is not None and math.isfinite(float(current_slippage_bps))
+                    else None
+                ),
+            }
+        )
+        while history_raw:
+            head_ts = _safe_float((history_raw[0] or {}).get("ts_mono"))
+            if head_ts is None or (float(now_mono) - float(head_ts)) <= float(lookback_seconds):
+                break
+            history_raw.popleft()
+
+        history = list(history_raw)
+        prior = history[:-1] if len(history) > 1 else []
+        spreads = [
+            float(v)
+            for v in (_safe_float(row.get("spread_bps")) for row in prior)
+            if v is not None and math.isfinite(float(v))
+        ]
+        slippages = [
+            float(v)
+            for v in (_safe_float(row.get("slippage_bps")) for row in prior)
+            if v is not None and math.isfinite(float(v))
+        ]
+        baseline_spread = float(statistics.median(spreads)) if spreads else None
+        baseline_slippage = float(statistics.median(slippages)) if slippages else None
+
+        spread_shock = False
+        if (
+            bool(enabled)
+            and current_spread_bps is not None
+            and baseline_spread is not None
+            and len(spreads) >= int(min_samples)
+        ):
+            spread_shock = bool(
+                float(current_spread_bps) >= (max(float(baseline_spread), 0.1) * float(spread_multiplier))
+                and (float(current_spread_bps) - float(baseline_spread)) >= float(spread_abs_bps)
+            )
+
+        slippage_shock = False
+        if (
+            bool(enabled)
+            and current_slippage_bps is not None
+            and baseline_slippage is not None
+            and len(slippages) >= int(min_samples)
+        ):
+            slippage_shock = bool(
+                float(current_slippage_bps) >= (max(float(baseline_slippage), 0.1) * float(slippage_multiplier))
+                and (float(current_slippage_bps) - float(baseline_slippage)) >= float(slippage_abs_bps)
+            )
+
+        active = bool(enabled) and bool(spread_shock or slippage_shock)
+        spread_component = (
+            max(float(current_spread_bps), 0.0) / 2.0
+            if current_spread_bps is not None
+            else 0.0
+        )
+        slippage_component = (
+            max(float(current_slippage_bps), 0.0)
+            if current_slippage_bps is not None and math.isfinite(float(current_slippage_bps))
+            else 0.0
+        )
+        cost_proxy_bps = max(float(spread_component), float(slippage_component), 0.0)
+        return {
+            "enabled": bool(enabled),
+            "active": bool(active),
+            "reason": (
+                "spread_and_slippage_shock"
+                if (spread_shock and slippage_shock)
+                else "spread_shock"
+                if spread_shock
+                else "slippage_shock"
+                if slippage_shock
+                else "normal"
+            ),
+            "history_samples": int(len(history)),
+            "required_samples": int(min_samples),
+            "lookback_seconds": float(lookback_seconds),
+            "spread_source": spread_source,
+            "spread_bps": float(current_spread_bps) if current_spread_bps is not None else None,
+            "slippage_mean_bps": (
+                float(current_slippage_bps)
+                if current_slippage_bps is not None and math.isfinite(float(current_slippage_bps))
+                else None
+            ),
+            "baseline_spread_bps": float(baseline_spread) if baseline_spread is not None else None,
+            "baseline_slippage_bps": float(baseline_slippage) if baseline_slippage is not None else None,
+            "spread_shock": bool(spread_shock),
+            "slippage_shock": bool(slippage_shock),
+            "edge_to_cost_ratio_add": float(edge_ratio_add) if active else 0.0,
+            "cost_proxy_bps": float(cost_proxy_bps),
+        }
+
+    def _execution_portfolio_overlap_risk_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when directional overlap with risky portfolio state is elevated."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PORTFOLIO_OVERLAP_RISK_GATE_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        max_score = _config_float("AI_TRADING_EXECUTION_PORTFOLIO_OVERLAP_RISK_MAX_SCORE", 0.75)
+        if max_score is None:
+            max_score = 0.75
+        max_score = max(0.0, min(float(max_score), 1.0))
+        max_same_side_positions = _config_int(
+            "AI_TRADING_EXECUTION_PORTFOLIO_OVERLAP_MAX_SAME_SIDE_POSITIONS",
+            8,
+        )
+        if max_same_side_positions is None:
+            max_same_side_positions = 8
+        max_same_side_positions = max(1, min(int(max_same_side_positions), 200))
+        max_side_exposure_to_equity = _config_float(
+            "AI_TRADING_EXECUTION_PORTFOLIO_OVERLAP_MAX_SIDE_EXPOSURE_TO_EQUITY",
+            0.65,
+        )
+        if max_side_exposure_to_equity is None:
+            max_side_exposure_to_equity = 0.65
+        max_side_exposure_to_equity = max(0.05, min(float(max_side_exposure_to_equity), 5.0))
+        risky_symbol_penalty = _config_float(
+            "AI_TRADING_EXECUTION_PORTFOLIO_OVERLAP_RISKY_SYMBOL_PENALTY",
+            0.2,
+        )
+        if risky_symbol_penalty is None:
+            risky_symbol_penalty = 0.2
+        risky_symbol_penalty = max(0.0, min(float(risky_symbol_penalty), 0.8))
+
+        symbol = str(order.get("symbol") or "").strip().upper()
+        if not symbol:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+        side_token = self._normalized_order_side(order.get("side")) or "buy"
+        snapshot = self.synchronize_broker_state()
+        positions = tuple(getattr(snapshot, "positions", ()) or ())
+        if not positions:
+            return True, {
+                "enabled": True,
+                "reason": "no_open_positions",
+                "symbol": symbol,
+                "side": side_token,
+            }
+
+        now_mono = float(monotonic_time())
+        risky_symbols: set[str] = set()
+        repeat_block_raw = getattr(self, "_symbol_repeat_loss_blocklist_until", None)
+        repeat_block = repeat_block_raw if isinstance(repeat_block_raw, dict) else {}
+        for sym, until in repeat_block.items():
+            until_value = _safe_float(until)
+            if until_value is not None and float(until_value) > now_mono:
+                risky_symbols.add(str(sym).strip().upper())
+        cooldown_raw = getattr(self, "_symbol_loss_cooldown_until", None)
+        cooldown_map = cooldown_raw if isinstance(cooldown_raw, dict) else {}
+        for sym, until in cooldown_map.items():
+            until_value = _safe_float(until)
+            if until_value is not None and float(until_value) > now_mono:
+                risky_symbols.add(str(sym).strip().upper())
+
+        same_side_positions = 0
+        risky_same_side_positions = 0
+        same_side_notional = 0.0
+        for position in positions:
+            pos_symbol_raw = _extract_value(position, "symbol", "asset_symbol")
+            if pos_symbol_raw in (None, ""):
+                continue
+            pos_symbol = str(pos_symbol_raw).strip().upper()
+            if not pos_symbol:
+                continue
+            qty = _safe_float(_extract_value(position, "qty", "quantity", "position"))
+            pos_side = self._normalized_order_side(_extract_value(position, "side"))
+            if pos_side is None:
+                if qty is not None and qty < 0.0:
+                    pos_side = "sell"
+                elif qty is not None and qty > 0.0:
+                    pos_side = "buy"
+            if pos_side != side_token:
+                continue
+            same_side_positions += 1
+            if pos_symbol in risky_symbols:
+                risky_same_side_positions += 1
+
+            market_value = abs(
+                _safe_float(_extract_value(position, "market_value", "notional")) or 0.0
+            )
+            if market_value <= 0.0 and qty is not None and qty != 0.0:
+                ref_price = _safe_float(
+                    _extract_value(position, "current_price", "avg_entry_price", "avg_entry")
+                )
+                if ref_price is not None and ref_price > 0.0:
+                    market_value = abs(float(qty) * float(ref_price))
+            same_side_notional += abs(float(market_value))
+
+        account_snapshot = order.get("account_snapshot")
+        equity = _safe_float(
+            _extract_value(account_snapshot, "equity", "last_equity", "portfolio_value")
+            if account_snapshot is not None
+            else None
+        )
+        same_side_exposure_to_equity: float | None = None
+        if equity is not None and math.isfinite(float(equity)) and float(equity) > 0.0:
+            same_side_exposure_to_equity = float(same_side_notional) / float(equity)
+
+        position_pressure = min(
+            float(same_side_positions) / float(max_same_side_positions),
+            1.0,
+        )
+        exposure_pressure = 0.0
+        if (
+            same_side_exposure_to_equity is not None
+            and math.isfinite(float(same_side_exposure_to_equity))
+        ):
+            exposure_pressure = min(
+                float(same_side_exposure_to_equity) / float(max_side_exposure_to_equity),
+                1.0,
+            )
+        risky_pressure = 0.0
+        if symbol in risky_symbols:
+            risky_pressure += float(risky_symbol_penalty)
+        if risky_same_side_positions > 0:
+            risky_pressure += min(
+                float(risky_symbol_penalty),
+                (float(risky_same_side_positions) / float(max_same_side_positions))
+                * float(risky_symbol_penalty),
+            )
+        overlap_risk_score = min(
+            1.0,
+            (0.50 * float(position_pressure))
+            + (0.35 * float(exposure_pressure))
+            + float(risky_pressure),
+        )
+        allowed = float(overlap_risk_score) <= float(max_score)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "portfolio_overlap_risk_gate",
+            "symbol": symbol,
+            "side": side_token,
+            "portfolio_overlap_risk": float(overlap_risk_score),
+            "max_portfolio_overlap_risk": float(max_score),
+            "same_side_positions": int(same_side_positions),
+            "max_same_side_positions": int(max_same_side_positions),
+            "same_side_notional": float(same_side_notional),
+            "same_side_exposure_to_equity": (
+                float(same_side_exposure_to_equity)
+                if same_side_exposure_to_equity is not None
+                else None
+            ),
+            "max_side_exposure_to_equity": float(max_side_exposure_to_equity),
+            "risky_symbols_active": int(len(risky_symbols)),
+            "risky_same_side_positions": int(risky_same_side_positions),
+        }
+
     def _execution_entry_edge_budget_allows_opening(
         self,
         *,
@@ -4449,8 +5594,33 @@ class ExecutionEngine:
         opening_add_bps = self._coerce_finite_float(
             opening_context.get("required_edge_add_bps")
         ) or 0.0
+        cost_shock_context = self._execution_cost_shock_context(order=order)
+        base_edge_to_cost_ratio = _config_float(
+            "AI_TRADING_EXECUTION_COST_AWARE_MIN_EDGE_TO_COST_RATIO",
+            None,
+        )
+        edge_to_cost_ratio_source = "AI_TRADING_EXECUTION_COST_AWARE_MIN_EDGE_TO_COST_RATIO"
+        if base_edge_to_cost_ratio is None:
+            base_edge_to_cost_ratio = _config_float("AI_TRADING_EDGE_COST_MIN_RATIO", None)
+            edge_to_cost_ratio_source = "AI_TRADING_EDGE_COST_MIN_RATIO"
+        if base_edge_to_cost_ratio is None:
+            base_edge_to_cost_ratio = 0.0
+            edge_to_cost_ratio_source = "default"
+        base_edge_to_cost_ratio = max(0.0, min(float(base_edge_to_cost_ratio), 20.0))
+        shock_ratio_add = self._coerce_finite_float(cost_shock_context.get("edge_to_cost_ratio_add")) or 0.0
+        effective_edge_to_cost_ratio = max(
+            0.0,
+            min(float(base_edge_to_cost_ratio) + float(shock_ratio_add), 30.0),
+        )
+        cost_proxy_bps = self._coerce_finite_float(cost_shock_context.get("cost_proxy_bps")) or 0.0
+        ratio_required_edge_bps = (
+            float(cost_proxy_bps) * float(effective_edge_to_cost_ratio)
+            if float(effective_edge_to_cost_ratio) > 0.0 and float(cost_proxy_bps) > 0.0
+            else 0.0
+        )
         minimum_edge_bps = max(
             float(base_min_edge_bps + adaptive_add_bps + opening_add_bps),
+            float(ratio_required_edge_bps),
             -100.0,
         )
         allowed = float(expected_edge_bps) >= float(minimum_edge_bps)
@@ -4463,12 +5633,25 @@ class ExecutionEngine:
             "base_min_edge_bps": float(base_min_edge_bps),
             "adaptive_add_bps": float(adaptive_add_bps),
             "opening_add_bps": float(opening_add_bps),
+            "edge_to_cost_ratio_source": str(edge_to_cost_ratio_source),
+            "base_edge_to_cost_ratio": float(base_edge_to_cost_ratio),
+            "effective_edge_to_cost_ratio": float(effective_edge_to_cost_ratio),
+            "cost_proxy_bps": float(cost_proxy_bps),
+            "ratio_required_edge_bps": float(ratio_required_edge_bps),
             "adaptive": {
                 "sufficient_samples": bool(adaptive_context.get("sufficient_samples")),
                 "slippage_mean_bps": adaptive_context.get("slippage_mean_bps"),
                 "markout_mean_bps": adaptive_context.get("markout_mean_bps"),
             },
             "opening_ramp_active": bool(opening_context.get("state") == "active"),
+            "cost_shock": {
+                "active": bool(cost_shock_context.get("active")),
+                "reason": cost_shock_context.get("reason"),
+                "spread_bps": cost_shock_context.get("spread_bps"),
+                "slippage_mean_bps": cost_shock_context.get("slippage_mean_bps"),
+                "baseline_spread_bps": cost_shock_context.get("baseline_spread_bps"),
+                "baseline_slippage_bps": cost_shock_context.get("baseline_slippage_bps"),
+            },
         }
 
     def _execution_profile_context(
@@ -4723,6 +5906,37 @@ class ExecutionEngine:
                 }
             )
         recent_samples = list(window_raw)[-lookback_cycles:]
+        if not recent_samples:
+            self._execution_quality_pause_until_mono = 0.0
+            self._execution_quality_recovery_streak = 0
+            self._execution_quality_last_context = {
+                "enabled": True,
+                "state": "insufficient_samples",
+                "scale": 1.0,
+                "stress": 0.0,
+                "fill_ratio": float(parsed_fill_ratio),
+                "fill_ratio_rolling": None,
+                "p95_fill_s": float(p95_fill_s) if p95_fill_s is not None else None,
+                "p95_fill_s_rolling": None,
+                "submitted": int(submitted),
+                "min_submitted": int(min_submitted),
+                "lookback_cycles": int(lookback_cycles),
+                "samples": 0,
+                "pause_active": False,
+                "pause_remaining_s": 0.0,
+                "pause_until_mono": 0.0,
+                "recovery_streak": 0,
+                "recovery_cycles": int(recovery_cycles),
+                "thresholds": {
+                    "fill_ratio_warn": float(warn_fill_ratio),
+                    "fill_ratio_pause": float(pause_fill_ratio),
+                    "p95_fill_s_warn": float(warn_p95_fill_s),
+                    "p95_fill_s_pause": float(pause_p95_fill_s),
+                    "scale_min": float(scale_min),
+                    "pause_cooldown_s": float(pause_cooldown_s),
+                },
+            }
+            return
         rolling_fill_ratio = (
             float(statistics.mean(sample["fill_ratio"] for sample in recent_samples))
             if recent_samples
@@ -4941,6 +6155,347 @@ class ExecutionEngine:
                 default_relative="runtime/execution_autotune.json",
             ),
         )
+
+    @staticmethod
+    def _default_edge_realism_state() -> dict[str, Any]:
+        """Return normalized default edge-realism calibration state payload."""
+
+        return {
+            "version": 1,
+            "updated_at": None,
+            "global": {
+                "samples": 0,
+                "mean_realized_to_expected_ratio": 1.0,
+                "mean_realized_net_edge_bps": 0.0,
+                "mean_expected_net_edge_bps": 0.0,
+            },
+            "buckets": {},
+        }
+
+    def _edge_realism_state_path(self) -> Path:
+        """Resolve runtime path for edge-realism calibration persistence."""
+
+        configured = str(
+            _runtime_env(
+                "AI_TRADING_EDGE_REALISM_STATE_PATH",
+                "runtime/edge_realism_state.json",
+            )
+            or "runtime/edge_realism_state.json"
+        ).strip() or "runtime/edge_realism_state.json"
+        return cast(
+            Path,
+            resolve_runtime_artifact_path(
+                configured,
+                default_relative="runtime/edge_realism_state.json",
+            ),
+        )
+
+    @staticmethod
+    def _normalize_edge_realism_entry(payload: Mapping[str, Any]) -> dict[str, Any]:
+        samples = max(0, _safe_int(payload.get("samples"), 0))
+        ratio = _safe_float(payload.get("mean_realized_to_expected_ratio"))
+        if ratio is None:
+            ratio = 1.0
+        ratio = max(0.0, min(float(ratio), 5.0))
+        mean_realized = _safe_float(payload.get("mean_realized_net_edge_bps"))
+        if mean_realized is None:
+            mean_realized = 0.0
+        mean_expected = _safe_float(payload.get("mean_expected_net_edge_bps"))
+        if mean_expected is None:
+            mean_expected = 0.0
+        return {
+            "samples": int(samples),
+            "mean_realized_to_expected_ratio": float(ratio),
+            "mean_realized_net_edge_bps": float(mean_realized),
+            "mean_expected_net_edge_bps": float(mean_expected),
+        }
+
+    def _load_edge_realism_state(self) -> None:
+        """Load persisted edge-realism calibration state when available."""
+
+        path = self._edge_realism_state_path()
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug(
+                "EDGE_REALISM_STATE_LOAD_FAILED",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
+            return
+        if not isinstance(raw, Mapping):
+            return
+        state = self._default_edge_realism_state()
+        updated_at = raw.get("updated_at")
+        if updated_at not in (None, ""):
+            state["updated_at"] = str(updated_at)
+        global_raw = raw.get("global")
+        if isinstance(global_raw, Mapping):
+            state["global"] = self._normalize_edge_realism_entry(global_raw)
+        buckets_raw = raw.get("buckets")
+        buckets: dict[str, dict[str, Any]] = {}
+        if isinstance(buckets_raw, Mapping):
+            for key_raw, value in buckets_raw.items():
+                if not isinstance(value, Mapping):
+                    continue
+                key = str(key_raw or "").strip().lower()
+                if not key:
+                    continue
+                entry = self._normalize_edge_realism_entry(value)
+                if int(entry.get("samples", 0)) <= 0:
+                    continue
+                buckets[key] = entry
+        state["buckets"] = buckets
+        self._edge_realism_state = state
+
+    def _persist_edge_realism_state(self, *, force: bool = False) -> None:
+        """Persist edge-realism calibration state to runtime storage."""
+
+        auto_write = _resolve_bool_env("AI_TRADING_EDGE_REALISM_AUTO_WRITE")
+        if auto_write is None:
+            auto_write = True
+        if not bool(auto_write):
+            return
+        now_mono = float(monotonic_time())
+        min_interval_s = _config_float(
+            "AI_TRADING_EDGE_REALISM_PERSIST_MIN_INTERVAL_SEC",
+            60.0,
+        )
+        if min_interval_s is None or not math.isfinite(float(min_interval_s)):
+            min_interval_s = 60.0
+        min_interval_s = max(1.0, min(float(min_interval_s), 3600.0))
+        min_updates = _config_int(
+            "AI_TRADING_EDGE_REALISM_PERSIST_MIN_UPDATES",
+            5,
+        )
+        if min_updates is None:
+            min_updates = 5
+        min_updates = max(1, min(int(min_updates), 500))
+        updates_since_last = int(
+            max(getattr(self, "_edge_realism_updates_since_persist", 0), 0)
+        )
+        last_persist_mono = float(
+            getattr(self, "_edge_realism_last_persist_mono", 0.0) or 0.0
+        )
+        if (
+            not force
+            and updates_since_last < int(min_updates)
+            and (now_mono - last_persist_mono) < float(min_interval_s)
+        ):
+            return
+
+        state_raw = getattr(self, "_edge_realism_state", None)
+        if not isinstance(state_raw, Mapping):
+            return
+        payload = dict(state_raw)
+        payload["updated_at"] = datetime.now(UTC).isoformat()
+        path = self._edge_realism_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_suffix(f"{path.suffix}.tmp")
+            temp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+            temp_path.replace(path)
+            self._edge_realism_last_persist_mono = now_mono
+            self._edge_realism_updates_since_persist = 0
+        except Exception:
+            logger.debug(
+                "EDGE_REALISM_STATE_WRITE_FAILED",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
+
+    def _edge_realism_bucket_context(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        session_regime: str | None = None,
+        market_regime: str | None = None,
+        volatility_regime: str | None = None,
+        timestamp: datetime | None = None,
+    ) -> dict[str, str]:
+        """Build normalized edge-realism bucket fields."""
+
+        symbol_token = str(symbol or "").strip().upper() or "UNKNOWN"
+        side_token = self._normalized_order_side(side) or "unknown"
+        session_token = str(session_regime or "").strip().lower()
+        if not session_token:
+            session_token = str(
+                self._execution_time_of_day_regime().get("session_regime") or "offhours"
+            ).strip().lower()
+        if session_token not in {"opening", "midday", "closing", "offhours"}:
+            session_token = "offhours"
+        market_token = str(market_regime or "").strip().lower() or "na"
+        vol_token = str(volatility_regime or "").strip().lower() or "na"
+        ts = timestamp
+        if ts is None:
+            ts = datetime.now(UTC)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        hour_token = f"{int(ts.astimezone(ZoneInfo('America/New_York')).hour):02d}"
+        bucket_key = (
+            f"{symbol_token}:{side_token}:{session_token}:"
+            f"{hour_token}:{market_token}:{vol_token}"
+        ).lower()
+        return {
+            "bucket_key": str(bucket_key),
+            "symbol": str(symbol_token),
+            "side": str(side_token),
+            "session_regime": str(session_token),
+            "hour_ny": str(hour_token),
+            "market_regime": str(market_token),
+            "volatility_regime": str(vol_token),
+        }
+
+    def _edge_realism_ratio_snapshot(
+        self,
+        *,
+        order: Mapping[str, Any],
+        min_samples: int,
+    ) -> dict[str, Any]:
+        """Return best available historical realized-vs-expected ratio."""
+
+        metadata = order.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        context = self._edge_realism_bucket_context(
+            symbol=str(order.get("symbol") or ""),
+            side=str(order.get("side") or ""),
+            market_regime=str(
+                order.get("market_regime") or metadata_map.get("market_regime") or ""
+            ),
+            volatility_regime=str(
+                order.get("volatility_regime")
+                or metadata_map.get("volatility_regime")
+                or ""
+            ),
+        )
+        state_raw = getattr(self, "_edge_realism_state", None)
+        state = dict(state_raw) if isinstance(state_raw, Mapping) else {}
+        buckets_raw = state.get("buckets")
+        buckets = dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {}
+        bucket_raw = buckets.get(str(context["bucket_key"]))
+        bucket_entry = (
+            self._normalize_edge_realism_entry(bucket_raw)
+            if isinstance(bucket_raw, Mapping)
+            else self._normalize_edge_realism_entry({})
+        )
+        global_raw = state.get("global")
+        global_entry = (
+            self._normalize_edge_realism_entry(global_raw)
+            if isinstance(global_raw, Mapping)
+            else self._normalize_edge_realism_entry({})
+        )
+
+        source = "bucket"
+        selected = bucket_entry
+        if int(bucket_entry.get("samples", 0)) < int(min_samples):
+            source = "global"
+            selected = global_entry
+        selected_samples = int(max(0, _safe_int(selected.get("samples"), 0)))
+        ratio = self._coerce_finite_float(selected.get("mean_realized_to_expected_ratio"))
+        if ratio is not None and selected_samples >= int(min_samples):
+            ratio = max(0.0, min(float(ratio), 5.0))
+        else:
+            ratio = None
+        return {
+            "source": str(source),
+            "ratio": float(ratio) if ratio is not None else None,
+            "samples": int(selected_samples),
+            "bucket": context,
+            "bucket_samples": int(max(0, _safe_int(bucket_entry.get("samples"), 0))),
+            "global_samples": int(max(0, _safe_int(global_entry.get("samples"), 0))),
+        }
+
+    def _update_edge_realism_feedback(
+        self,
+        *,
+        symbol: str | None,
+        side: str | None,
+        session_regime: str | None,
+        market_regime: str | None,
+        volatility_regime: str | None,
+        expected_net_edge_bps: float | None,
+        realized_net_edge_bps: float | None,
+        timestamp: datetime | None = None,
+    ) -> None:
+        """Update realized-vs-expected edge calibration state from live fills."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EDGE_REALISM_CALIBRATOR_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+        expected = self._coerce_finite_float(expected_net_edge_bps)
+        realized = self._coerce_finite_float(realized_net_edge_bps)
+        if expected is None or realized is None:
+            return
+        if float(expected) <= 0.0:
+            return
+        ratio = max(0.0, min(float(realized) / max(float(expected), 0.1), 5.0))
+        state_raw = getattr(self, "_edge_realism_state", None)
+        state = dict(state_raw) if isinstance(state_raw, Mapping) else self._default_edge_realism_state()
+        global_raw = state.get("global")
+        global_entry = (
+            self._normalize_edge_realism_entry(global_raw)
+            if isinstance(global_raw, Mapping)
+            else self._normalize_edge_realism_entry({})
+        )
+        global_samples = int(global_entry.get("samples", 0)) + 1
+        global_ratio = float(global_entry.get("mean_realized_to_expected_ratio", 1.0))
+        global_realized = float(global_entry.get("mean_realized_net_edge_bps", 0.0))
+        global_expected = float(global_entry.get("mean_expected_net_edge_bps", 0.0))
+        global_entry["samples"] = int(global_samples)
+        global_entry["mean_realized_to_expected_ratio"] = float(
+            global_ratio + ((float(ratio) - global_ratio) / float(global_samples))
+        )
+        global_entry["mean_realized_net_edge_bps"] = float(
+            global_realized + ((float(realized) - global_realized) / float(global_samples))
+        )
+        global_entry["mean_expected_net_edge_bps"] = float(
+            global_expected + ((float(expected) - global_expected) / float(global_samples))
+        )
+        state["global"] = global_entry
+
+        context = self._edge_realism_bucket_context(
+            symbol=symbol,
+            side=side,
+            session_regime=session_regime,
+            market_regime=market_regime,
+            volatility_regime=volatility_regime,
+            timestamp=timestamp,
+        )
+        buckets_raw = state.get("buckets")
+        buckets = dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {}
+        bucket_raw = buckets.get(str(context["bucket_key"]))
+        bucket_entry = (
+            self._normalize_edge_realism_entry(bucket_raw)
+            if isinstance(bucket_raw, Mapping)
+            else self._normalize_edge_realism_entry({})
+        )
+        bucket_samples = int(bucket_entry.get("samples", 0)) + 1
+        bucket_ratio = float(bucket_entry.get("mean_realized_to_expected_ratio", 1.0))
+        bucket_realized = float(bucket_entry.get("mean_realized_net_edge_bps", 0.0))
+        bucket_expected = float(bucket_entry.get("mean_expected_net_edge_bps", 0.0))
+        bucket_entry["samples"] = int(bucket_samples)
+        bucket_entry["mean_realized_to_expected_ratio"] = float(
+            bucket_ratio + ((float(ratio) - bucket_ratio) / float(bucket_samples))
+        )
+        bucket_entry["mean_realized_net_edge_bps"] = float(
+            bucket_realized + ((float(realized) - bucket_realized) / float(bucket_samples))
+        )
+        bucket_entry["mean_expected_net_edge_bps"] = float(
+            bucket_expected + ((float(expected) - bucket_expected) / float(bucket_samples))
+        )
+        buckets[str(context["bucket_key"])] = bucket_entry
+        state["buckets"] = buckets
+        state["updated_at"] = datetime.now(UTC).isoformat()
+        self._edge_realism_state = state
+        self._edge_realism_updates_since_persist = int(
+            max(getattr(self, "_edge_realism_updates_since_persist", 0), 0)
+        ) + 1
+        self._persist_edge_realism_state()
 
     def _load_execution_learning_state(self) -> None:
         """Load persisted execution-learning state when available."""
@@ -5606,6 +7161,59 @@ class ExecutionEngine:
         )
         buckets[bucket_key] = _update_entry(bucket_entry, did_fill=bool(did_fill))
         state["buckets"] = buckets
+
+        parsed_edge = _safe_float(realized_net_edge_bps)
+        if (
+            bool(did_fill)
+            and parsed_edge is not None
+            and math.isfinite(float(parsed_edge))
+            and symbol not in (None, "")
+        ):
+            history_maxlen = _config_int(
+                "AI_TRADING_EXECUTION_SYMBOL_LIVE_EXPECTANCY_HISTORY_MAXLEN",
+                256,
+            )
+            if history_maxlen is None:
+                history_maxlen = 256
+            history_maxlen = max(16, min(int(history_maxlen), 4096))
+            symbol_token = str(symbol).strip().upper()
+            if symbol_token:
+                history_map_raw = getattr(self, "_symbol_live_edge_bps_history", None)
+                history_map = history_map_raw if isinstance(history_map_raw, dict) else {}
+                symbol_history = history_map.get(symbol_token)
+                if not isinstance(symbol_history, deque) or symbol_history.maxlen != int(history_maxlen):
+                    existing_values: list[float] = []
+                    if isinstance(symbol_history, deque):
+                        existing_values = [
+                            float(v)
+                            for v in symbol_history
+                            if isinstance(v, (int, float)) and math.isfinite(float(v))
+                        ]
+                    symbol_history = deque(existing_values, maxlen=int(history_maxlen))
+                symbol_history.append(float(parsed_edge))
+                history_map[symbol_token] = symbol_history
+                self._symbol_live_edge_bps_history = history_map
+
+                session_token = str(bucket_context.get("session_regime") or "offhours").strip().lower()
+                if session_token not in {"opening", "midday", "closing", "offhours"}:
+                    session_token = "offhours"
+                session_key = f"{symbol_token}:{session_token}"
+                session_map_raw = getattr(self, "_symbol_session_live_edge_bps_history", None)
+                session_map = session_map_raw if isinstance(session_map_raw, dict) else {}
+                session_history = session_map.get(session_key)
+                if not isinstance(session_history, deque) or session_history.maxlen != int(history_maxlen):
+                    existing_session_values: list[float] = []
+                    if isinstance(session_history, deque):
+                        existing_session_values = [
+                            float(v)
+                            for v in session_history
+                            if isinstance(v, (int, float)) and math.isfinite(float(v))
+                        ]
+                    session_history = deque(existing_session_values, maxlen=int(history_maxlen))
+                session_history.append(float(parsed_edge))
+                session_map[session_key] = session_history
+                self._symbol_session_live_edge_bps_history = session_map
+
         state["updated_at"] = datetime.now(UTC).isoformat()
         self._execution_learning_state = state
         self._execution_learning_updates_since_persist = int(
@@ -6191,6 +7799,29 @@ class ExecutionEngine:
         if threshold_bps is None:
             threshold_bps = -4.0
         markout_history_raw.append(float(parsed_edge))
+        symbol_token = str(symbol or "").strip().upper()
+        if symbol_token:
+            symbol_history_maxlen = _config_int("AI_TRADING_MARKOUT_SYMBOL_HISTORY_MAXLEN", 256)
+            if symbol_history_maxlen is None:
+                symbol_history_maxlen = 256
+            symbol_history_maxlen = max(16, min(int(symbol_history_maxlen), 4096))
+            symbol_history_raw = getattr(self, "_symbol_markout_feedback_bps", None)
+            symbol_history_map = (
+                symbol_history_raw if isinstance(symbol_history_raw, dict) else {}
+            )
+            symbol_history = symbol_history_map.get(symbol_token)
+            if not isinstance(symbol_history, deque) or symbol_history.maxlen != int(symbol_history_maxlen):
+                existing_values: list[float] = []
+                if isinstance(symbol_history, deque):
+                    existing_values = [
+                        float(v)
+                        for v in symbol_history
+                        if isinstance(v, (int, float)) and math.isfinite(float(v))
+                    ]
+                symbol_history = deque(existing_values, maxlen=int(symbol_history_maxlen))
+            symbol_history.append(float(parsed_edge))
+            symbol_history_map[symbol_token] = symbol_history
+            self._symbol_markout_feedback_bps = symbol_history_map
         mean_bps = float(statistics.mean(markout_history_raw)) if markout_history_raw else 0.0
         toxic = len(markout_history_raw) >= int(min_samples) and mean_bps <= float(threshold_bps)
         context = {
@@ -7039,6 +8670,165 @@ class ExecutionEngine:
         context["resolved_limit_price"] = route_limit_price
         return context
 
+    def _apply_execution_policy_router(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        order_type: str,
+        limit_price: float | None,
+        bid: float | None,
+        ask: float | None,
+        fill_probability: float | None,
+        markout_context: Mapping[str, Any] | None,
+    ) -> tuple[str, str | None, float | None, dict[str, Any]]:
+        """Apply policy-driven execution routing using live microstructure context."""
+
+        resolved_order_type = str(order_type or "limit").strip().lower() or "limit"
+        resolved_tif: str | None = None
+        resolved_limit_price = self._coerce_finite_float(limit_price)
+        context: dict[str, Any] = {
+            "enabled": False,
+            "applied": False,
+            "policy": "none",
+            "reason": "disabled",
+            "resolved_order_type": resolved_order_type,
+            "resolved_time_in_force": resolved_tif,
+            "resolved_limit_price": resolved_limit_price,
+        }
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_POLICY_ROUTER_ENABLED")
+        if enabled is None:
+            enabled = False
+        context["enabled"] = bool(enabled)
+        if not bool(enabled):
+            return resolved_order_type, resolved_tif, resolved_limit_price, context
+        if resolved_order_type not in {"limit", "stop_limit"}:
+            context["reason"] = "unsupported_order_type"
+            return resolved_order_type, resolved_tif, resolved_limit_price, context
+
+        min_fill_prob_passive = _config_float(
+            "AI_TRADING_EXECUTION_POLICY_MIN_FILL_PROB_PASSIVE",
+            0.58,
+        )
+        if min_fill_prob_passive is None:
+            min_fill_prob_passive = 0.58
+        min_fill_prob_passive = max(0.0, min(float(min_fill_prob_passive), 1.0))
+        max_adverse_for_passive = _config_float(
+            "AI_TRADING_EXECUTION_POLICY_MAX_ADVERSE_BPS_PASSIVE",
+            2.0,
+        )
+        if max_adverse_for_passive is None:
+            max_adverse_for_passive = 2.0
+        max_adverse_for_passive = max(0.0, min(float(max_adverse_for_passive), 100.0))
+        max_adverse_for_balanced = _config_float(
+            "AI_TRADING_EXECUTION_POLICY_MAX_ADVERSE_BPS_BALANCED",
+            5.0,
+        )
+        if max_adverse_for_balanced is None:
+            max_adverse_for_balanced = 5.0
+        max_adverse_for_balanced = max(
+            float(max_adverse_for_passive),
+            min(float(max_adverse_for_balanced), 200.0),
+        )
+        min_symbol_expectancy_passive = _config_float(
+            "AI_TRADING_EXECUTION_POLICY_MIN_SYMBOL_EXPECTANCY_BPS_PASSIVE",
+            0.0,
+        )
+        if min_symbol_expectancy_passive is None:
+            min_symbol_expectancy_passive = 0.0
+        min_symbol_expectancy_passive = max(
+            -200.0, min(float(min_symbol_expectancy_passive), 200.0)
+        )
+
+        symbol_token = str(symbol or "").strip().upper()
+        side_token = self._normalized_order_side(side) or str(side or "").strip().lower()
+        fill_prob = self._coerce_finite_float(fill_probability)
+        markout_mean_bps = (
+            self._coerce_finite_float((markout_context or {}).get("mean_bps"))
+            if isinstance(markout_context, Mapping)
+            else None
+        )
+        adverse_selection_risk_bps = max(-float(markout_mean_bps or 0.0), 0.0)
+        symbol_expectancy_bps: float | None = None
+        symbol_samples = 0
+        history_by_symbol_raw = getattr(self, "_symbol_live_edge_bps_history", None)
+        history_by_symbol = (
+            history_by_symbol_raw if isinstance(history_by_symbol_raw, Mapping) else {}
+        )
+        symbol_history = history_by_symbol.get(symbol_token)
+        if isinstance(symbol_history, deque):
+            values = [
+                float(v)
+                for v in symbol_history
+                if isinstance(v, (int, float)) and math.isfinite(float(v))
+            ]
+            symbol_samples = len(values)
+            if values:
+                symbol_expectancy_bps = float(statistics.mean(values[-24:]))
+
+        policy = "balanced_limit"
+        reason = "balanced_default"
+        if (
+            fill_prob is not None
+            and fill_prob >= float(min_fill_prob_passive)
+            and float(adverse_selection_risk_bps) <= float(max_adverse_for_passive)
+            and (
+                symbol_expectancy_bps is None
+                or float(symbol_expectancy_bps) >= float(min_symbol_expectancy_passive)
+            )
+        ):
+            policy = "passive_limit"
+            reason = "high_fill_prob_low_adverse"
+            resolved_tif = "day"
+        elif float(adverse_selection_risk_bps) > float(max_adverse_for_balanced):
+            policy = "aggressive_limit"
+            reason = "elevated_adverse_selection"
+            resolved_tif = "ioc"
+            if (
+                bid is not None
+                and ask is not None
+                and math.isfinite(float(bid))
+                and math.isfinite(float(ask))
+                and float(ask) > float(bid)
+                and float(bid) > 0.0
+            ):
+                if side_token in {"buy", "cover"}:
+                    baseline = self._coerce_finite_float(resolved_limit_price) or 0.0
+                    resolved_limit_price = max(float(ask), float(baseline))
+                else:
+                    baseline = self._coerce_finite_float(resolved_limit_price)
+                    if baseline is None or baseline <= 0.0:
+                        resolved_limit_price = float(bid)
+                    else:
+                        resolved_limit_price = min(float(bid), float(baseline))
+
+        context.update(
+            {
+                "applied": bool(policy != "balanced_limit"),
+                "policy": str(policy),
+                "reason": str(reason),
+                "fill_probability": float(fill_prob) if fill_prob is not None else None,
+                "min_fill_probability_passive": float(min_fill_prob_passive),
+                "adverse_selection_risk_bps": float(adverse_selection_risk_bps),
+                "max_adverse_bps_passive": float(max_adverse_for_passive),
+                "max_adverse_bps_balanced": float(max_adverse_for_balanced),
+                "symbol_live_expectancy_bps": (
+                    float(symbol_expectancy_bps)
+                    if symbol_expectancy_bps is not None
+                    else None
+                ),
+                "symbol_live_expectancy_samples": int(symbol_samples),
+                "min_symbol_expectancy_bps_passive": float(
+                    min_symbol_expectancy_passive
+                ),
+                "resolved_order_type": resolved_order_type,
+                "resolved_time_in_force": resolved_tif,
+                "resolved_limit_price": resolved_limit_price,
+            }
+        )
+        return resolved_order_type, resolved_tif, resolved_limit_price, context
+
     def _record_cycle_order_outcome(
         self,
         *,
@@ -7054,11 +8844,14 @@ class ExecutionEngine:
         filled_qty: float | None = None,
         fill_price: float | None = None,
         expected_price: float | None = None,
+        expected_net_edge_bps: float | None = None,
         turnover_notional: float | None = None,
         realized_net_edge_bps: float | None = None,
         fill_source: str | None = None,
         execution_profile: str | None = None,
         session_regime: str | None = None,
+        market_regime: str | None = None,
+        volatility_regime: str | None = None,
         queue_pressure_score: float | None = None,
         queue_pressure_level: str | None = None,
         passive_fill_probability: float | None = None,
@@ -7113,6 +8906,7 @@ class ExecutionEngine:
         parsed_filled_qty = _safe_float(filled_qty)
         parsed_fill_price = _safe_float(fill_price)
         parsed_expected_price = _safe_float(expected_price)
+        parsed_expected_net_edge_bps = _safe_float(expected_net_edge_bps)
         parsed_turnover_notional = _safe_float(turnover_notional)
         parsed_realized_net_edge_bps = _safe_float(realized_net_edge_bps)
         if (
@@ -7127,6 +8921,11 @@ class ExecutionEngine:
             payload["fill_price"] = float(parsed_fill_price)
         if parsed_expected_price is not None and math.isfinite(float(parsed_expected_price)):
             payload["expected_price"] = float(parsed_expected_price)
+        if (
+            parsed_expected_net_edge_bps is not None
+            and math.isfinite(float(parsed_expected_net_edge_bps))
+        ):
+            payload["expected_net_edge_bps"] = float(parsed_expected_net_edge_bps)
         if parsed_turnover_notional is not None and math.isfinite(float(parsed_turnover_notional)):
             payload["turnover_notional"] = float(parsed_turnover_notional)
         if parsed_realized_net_edge_bps is not None and math.isfinite(float(parsed_realized_net_edge_bps)):
@@ -7137,6 +8936,10 @@ class ExecutionEngine:
             payload["execution_profile"] = str(execution_profile).strip().lower()
         if session_regime not in (None, ""):
             payload["session_regime"] = str(session_regime).strip().lower()
+        if market_regime not in (None, ""):
+            payload["market_regime"] = str(market_regime).strip().lower()
+        if volatility_regime not in (None, ""):
+            payload["volatility_regime"] = str(volatility_regime).strip().lower()
         parsed_queue_pressure_score = _safe_float(queue_pressure_score)
         if (
             parsed_queue_pressure_score is not None
@@ -7155,6 +8958,31 @@ class ExecutionEngine:
             payload["route_urgency"] = str(route_urgency).strip().lower()
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
+
+        source_token = str(fill_source or "").strip().lower()
+        source_is_live = source_token in {
+            "",
+            "live",
+            "initial",
+            "poll",
+            "final",
+            "manual_probe",
+        }
+        if (
+            normalized_status in {"filled", "partially_filled"}
+            and source_is_live
+            and parsed_expected_net_edge_bps is not None
+            and parsed_realized_net_edge_bps is not None
+        ):
+            self._update_edge_realism_feedback(
+                symbol=symbol,
+                side=side,
+                session_regime=session_regime,
+                market_regime=market_regime,
+                volatility_regime=volatility_regime,
+                expected_net_edge_bps=parsed_expected_net_edge_bps,
+                realized_net_edge_bps=parsed_realized_net_edge_bps,
+            )
 
     def _skip_submit(
         self,
@@ -7388,6 +9216,12 @@ class ExecutionEngine:
         skip_reason_counts = {key: skip_reason_counts[key] for key in sorted(skip_reason_counts)}
         decision_count = len(normalized_outcomes)
         pacing_cap_hits = int(skip_reason_counts.get("order_pacing_cap", 0))
+        precheck_failure_count = int(
+            skip_reason_counts.get("pre_execution_order_checks_failed", 0)
+        )
+        precheck_failure_ratio = (
+            (float(precheck_failure_count) / float(skipped)) if skipped > 0 else 0.0
+        )
         pacing_cap_hit_rate_pct = (
             (float(pacing_cap_hits) / float(decision_count) * 100.0)
             if decision_count > 0
@@ -7543,6 +9377,8 @@ class ExecutionEngine:
                 "failed": failed,
                 "skipped": skipped,
                 "skip_reason_counts": skip_reason_counts,
+                "precheck_failure_count": int(precheck_failure_count),
+                "precheck_failure_ratio": round(float(precheck_failure_ratio), 4),
                 "order_pacing_cap_hit_rate_pct": round(pacing_cap_hit_rate_pct, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
@@ -7649,16 +9485,57 @@ class ExecutionEngine:
             "AI_TRADING_KPI_MAX_TURNOVER_NOTIONAL_PER_CYCLE",
             0.0,
         )
+        low_fill_min_submitted = _config_int(
+            "AI_TRADING_KPI_LOW_FILL_MIN_SUBMITTED",
+            8,
+        )
+        if low_fill_min_submitted is None:
+            low_fill_min_submitted = 8
+        low_fill_min_submitted = max(1, int(low_fill_min_submitted))
+        precheck_spike_min_count = _config_int(
+            "AI_TRADING_KPI_PRECHECK_FAIL_SPIKE_MIN_COUNT",
+            8,
+        )
+        if precheck_spike_min_count is None:
+            precheck_spike_min_count = 8
+        precheck_spike_min_count = max(1, int(precheck_spike_min_count))
+        precheck_spike_min_ratio = _config_float(
+            "AI_TRADING_KPI_PRECHECK_FAIL_SPIKE_MIN_RATIO",
+            0.60,
+        )
+        if precheck_spike_min_ratio is None:
+            precheck_spike_min_ratio = 0.60
+        precheck_spike_min_ratio = max(0.0, min(float(precheck_spike_min_ratio), 1.0))
+        precheck_spike_min_skipped = _config_int(
+            "AI_TRADING_KPI_PRECHECK_FAIL_SPIKE_MIN_SKIPPED",
+            12,
+        )
+        if precheck_spike_min_skipped is None:
+            precheck_spike_min_skipped = 12
+        precheck_spike_min_skipped = max(1, int(precheck_spike_min_skipped))
+        precheck_spike_critical_ratio = _config_float(
+            "AI_TRADING_KPI_PRECHECK_FAIL_SPIKE_CRITICAL_RATIO",
+            None,
+        )
+        if precheck_spike_critical_ratio is not None:
+            precheck_spike_critical_ratio = max(
+                0.0, min(float(precheck_spike_critical_ratio), 1.0)
+            )
 
         from ai_trading.monitoring.alerts import emit_runtime_alert
 
-        if min_fill_ratio is not None and fill_ratio < float(min_fill_ratio):
+        if (
+            min_fill_ratio is not None
+            and submitted >= int(low_fill_min_submitted)
+            and fill_ratio < float(min_fill_ratio)
+        ):
             emit_runtime_alert(
                 "ALERT_EXEC_KPI_LOW_FILL_RATIO",
                 severity="warning",
                 details={
                     "fill_ratio": round(fill_ratio, 4),
                     "threshold": float(min_fill_ratio),
+                    "min_submitted_threshold": int(low_fill_min_submitted),
                     "submitted": submitted,
                     "filled": filled,
                 },
@@ -7752,6 +9629,32 @@ class ExecutionEngine:
                     "turnover_notional": round(float(turnover_notional), 4),
                     "threshold": float(max_turnover_notional),
                     "submitted": int(submitted),
+                },
+            )
+        if (
+            precheck_failure_count >= int(precheck_spike_min_count)
+            and skipped >= int(precheck_spike_min_skipped)
+            and precheck_failure_ratio >= float(precheck_spike_min_ratio)
+        ):
+            severity = "warning"
+            if (
+                precheck_spike_critical_ratio is not None
+                and precheck_failure_ratio >= float(precheck_spike_critical_ratio)
+            ):
+                severity = "critical"
+            emit_runtime_alert(
+                "ALERT_EXEC_KPI_PRECHECK_FAILURE_SPIKE",
+                severity=severity,
+                details={
+                    "precheck_failure_count": int(precheck_failure_count),
+                    "precheck_failure_ratio": round(float(precheck_failure_ratio), 4),
+                    "threshold_count": int(precheck_spike_min_count),
+                    "threshold_ratio": float(precheck_spike_min_ratio),
+                    "threshold_skipped": int(precheck_spike_min_skipped),
+                    "skipped": int(skipped),
+                    "submitted": int(submitted),
+                    "decision_count": int(decision_count),
+                    "skip_reason_counts": dict(skip_reason_counts),
                 },
             )
 
@@ -11120,11 +13023,27 @@ class ExecutionEngine:
             precheck_order["account_snapshot"] = getattr(self, "_cycle_account", None)
 
         if not self._pre_execution_order_checks(precheck_order):
+            precheck_failure_raw = getattr(
+                self,
+                "_last_pre_execution_order_check_failure",
+                {},
+            )
+            precheck_detail: str | None = None
+            precheck_context: Mapping[str, Any] | None = None
+            if isinstance(precheck_failure_raw, Mapping):
+                detail_candidate = str(precheck_failure_raw.get("reason") or "").strip()
+                if detail_candidate:
+                    precheck_detail = detail_candidate
+                context_candidate = precheck_failure_raw.get("context")
+                if isinstance(context_candidate, Mapping):
+                    precheck_context = context_candidate
             self._skip_submit(
                 symbol=symbol,
                 side=mapped_side,
                 reason="pre_execution_order_checks_failed",
                 order_type=order_type_normalized,
+                detail=precheck_detail,
+                context=precheck_context,
                 submit_started_at=submit_started_at,
             )
             return None
@@ -11946,6 +13865,12 @@ class ExecutionEngine:
             "applied": False,
             "reason": "not_evaluated",
         }
+        execution_policy_route_context: dict[str, Any] = {
+            "enabled": False,
+            "applied": False,
+            "policy": "none",
+            "reason": "not_evaluated",
+        }
         fill_probability: float | None = None
         fill_probability_context: dict[str, Any] = {}
         if not closing_position and order_type_normalized in {"limit", "stop_limit"}:
@@ -12154,8 +14079,84 @@ class ExecutionEngine:
                 )
                 annotations["execution_profile_context"] = execution_profile_context
                 annotations["queue_pressure_context"] = queue_pressure_context
+        if not closing_position and not manual_limit_requested:
+            (
+                resolved_policy_type,
+                resolved_policy_tif,
+                resolved_policy_limit,
+                execution_policy_route_context,
+            ) = self._apply_execution_policy_router(
+                symbol=symbol,
+                side=mapped_side,
+                order_type=order_type_normalized,
+                limit_price=_safe_float(resolved_limit_price),
+                bid=bid_val,
+                ask=ask_val,
+                fill_probability=fill_probability,
+                markout_context=markout_context,
+            )
+            resolved_policy_type = (
+                str(resolved_policy_type or order_type_normalized).strip().lower()
+                or order_type_normalized
+            )
+            if resolved_policy_type in {"market", "limit", "stop_limit"}:
+                order_type_normalized = resolved_policy_type
+            if resolved_policy_tif not in (None, ""):
+                kwargs["time_in_force"] = str(resolved_policy_tif)
+            if order_type_normalized in {"limit", "stop_limit"}:
+                if resolved_policy_limit is not None:
+                    resolved_limit_price = float(resolved_policy_limit)
+                    price_for_limit = float(resolved_policy_limit)
+                    kwargs["price"] = float(resolved_policy_limit)
+            else:
+                resolved_limit_price = None
+                price_for_limit = None
+                kwargs.pop("price", None)
+            if bool(execution_policy_route_context.get("applied")):
+                logger.info(
+                    "EXECUTION_POLICY_ROUTE_APPLIED",
+                    extra={
+                        "symbol": symbol,
+                        "side": mapped_side,
+                        "resolved_order_type": order_type_normalized,
+                        "resolved_time_in_force": kwargs.get("time_in_force"),
+                        "resolved_limit_price": (
+                            float(resolved_limit_price)
+                            if resolved_limit_price is not None
+                            else None
+                        ),
+                        "policy": execution_policy_route_context.get("policy"),
+                        "reason": execution_policy_route_context.get("reason"),
+                        "fill_probability": _safe_float(
+                            execution_policy_route_context.get("fill_probability")
+                        ),
+                        "adverse_selection_risk_bps": _safe_float(
+                            execution_policy_route_context.get(
+                                "adverse_selection_risk_bps"
+                            )
+                        ),
+                        "symbol_live_expectancy_bps": _safe_float(
+                            execution_policy_route_context.get(
+                                "symbol_live_expectancy_bps"
+                            )
+                        ),
+                    },
+                )
+        elif bool(manual_limit_requested):
+            execution_policy_route_context = {
+                "enabled": False,
+                "applied": False,
+                "policy": "none",
+                "reason": "manual_limit_requested",
+                "resolved_order_type": order_type_normalized,
+                "resolved_time_in_force": kwargs.get("time_in_force"),
+                "resolved_limit_price": _safe_float(resolved_limit_price),
+            }
         if isinstance(annotations, dict):
             annotations["smart_route_context"] = smart_route_context
+            annotations["execution_policy_route_context"] = (
+                execution_policy_route_context
+            )
 
         def _finite_positive_float(value: Any) -> float | None:
             try:
@@ -13452,6 +15453,9 @@ class ExecutionEngine:
             filled_qty=float(filled_qty or 0.0) if filled_qty is not None else None,
             fill_price=float(resolved_fill_price) if resolved_fill_price is not None else None,
             expected_price=float(benchmark_price) if benchmark_price is not None else None,
+            expected_net_edge_bps=(
+                float(expected_edge_hint) if expected_edge_hint is not None else None
+            ),
             turnover_notional=(
                 abs(float(filled_qty or 0.0) * float(resolved_fill_price))
                 if (
@@ -13470,6 +15474,16 @@ class ExecutionEngine:
             session_regime=str(execution_profile_context.get("session_regime") or "")
             if isinstance(execution_profile_context, Mapping)
             else None,
+            market_regime=(
+                str(metadata_raw.get("market_regime") or "")
+                if isinstance(metadata_raw, Mapping)
+                else None
+            ),
+            volatility_regime=(
+                str(metadata_raw.get("volatility_regime") or "")
+                if isinstance(metadata_raw, Mapping)
+                else None
+            ),
             queue_pressure_score=(
                 _safe_float(queue_pressure_context.get("pressure_score"))
                 if isinstance(queue_pressure_context, Mapping)
@@ -16262,6 +18276,110 @@ class ExecutionEngine:
             "passive_only": bool(passive_only),
         }
 
+    def _apply_symbol_slippage_budget_derisk(
+        self,
+        *,
+        order: Mapping[str, Any] | None,
+        slippage_context: Mapping[str, Any] | None,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Attempt a quantity size-down before hard-slipping a symbol entry."""
+
+        if not isinstance(order, dict):
+            return False, {"enabled": False, "reason": "order_not_mutable"}
+        context_map = (
+            dict(slippage_context)
+            if isinstance(slippage_context, Mapping)
+            else {}
+        )
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_ENABLED"
+        )
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return False, {"enabled": False, "reason": "disabled"}
+        if bool(order.get("closing_position")):
+            return False, {"enabled": True, "reason": "not_applicable_closing_position"}
+
+        breach_severity = str(context_map.get("breach_severity") or "").strip().lower()
+        if breach_severity != "hard":
+            return False, {
+                "enabled": True,
+                "reason": "not_hard_breach",
+                "breach_severity": breach_severity or "unknown",
+            }
+
+        max_breach_ratio = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_MAX_BREACH_RATIO",
+            2.0,
+        )
+        if max_breach_ratio is None or not math.isfinite(float(max_breach_ratio)):
+            max_breach_ratio = 2.0
+        max_breach_ratio = max(1.0, min(float(max_breach_ratio), 20.0))
+        breach_ratio = _safe_float(context_map.get("breach_ratio_vs_base"))
+        if breach_ratio is not None and float(breach_ratio) > float(max_breach_ratio):
+            return False, {
+                "enabled": True,
+                "reason": "breach_ratio_too_high",
+                "breach_ratio_vs_base": float(breach_ratio),
+                "max_breach_ratio": float(max_breach_ratio),
+            }
+
+        quantity_raw = order.get("quantity")
+        if quantity_raw in (None, ""):
+            quantity_raw = order.get("qty")
+        quantity_before = max(1, _safe_int(quantity_raw, 1))
+        if int(quantity_before) <= 1:
+            return False, {
+                "enabled": True,
+                "reason": "quantity_too_small",
+                "quantity_before": int(quantity_before),
+            }
+
+        size_down_factor = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_FACTOR",
+            0.5,
+        )
+        if size_down_factor is None or not math.isfinite(float(size_down_factor)):
+            size_down_factor = 0.5
+        size_down_factor = max(0.05, min(float(size_down_factor), 0.99))
+        quantity_after = max(
+            1,
+            int(math.floor(float(quantity_before) * float(size_down_factor))),
+        )
+        if int(quantity_after) >= int(quantity_before):
+            return False, {
+                "enabled": True,
+                "reason": "size_down_not_effective",
+                "quantity_before": int(quantity_before),
+                "quantity_after": int(quantity_after),
+                "size_down_factor": float(size_down_factor),
+            }
+        order["quantity"] = int(quantity_after)
+        order["qty"] = int(quantity_after)
+
+        passive_only = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SIZE_DOWN_PASSIVE_ONLY",
+        )
+        if passive_only is None:
+            passive_only = True
+        order_type = str(order.get("order_type") or "").strip().lower()
+        if bool(passive_only) and (not order_type or order_type == "market"):
+            order["order_type"] = "limit"
+
+        return True, {
+            "enabled": True,
+            "reason": "applied",
+            "quantity_before": int(quantity_before),
+            "quantity_after": int(quantity_after),
+            "size_down_factor": float(size_down_factor),
+            "breach_ratio_vs_base": (
+                float(breach_ratio) if breach_ratio is not None else None
+            ),
+            "max_breach_ratio": float(max_breach_ratio),
+            "passive_only": bool(passive_only),
+        }
+
     def _runtime_intraday_slippage_kill_switch_allows_openings(
         self,
         *,
@@ -16480,11 +18598,85 @@ class ExecutionEngine:
         if max_drag is None:
             return True, {"enabled": False, "reason": "threshold_unset"}
         max_drag = max(0.0, float(max_drag))
+        soft_multiplier = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_SOFT_MULTIPLIER",
+            1.0,
+        )
+        if soft_multiplier is None or not math.isfinite(float(soft_multiplier)):
+            soft_multiplier = 1.0
+        soft_multiplier = max(1.0, min(float(soft_multiplier), 10.0))
+        hard_multiplier = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_HARD_MULTIPLIER",
+            1.0,
+        )
+        if hard_multiplier is None or not math.isfinite(float(hard_multiplier)):
+            hard_multiplier = 1.0
+        hard_multiplier = max(1.0, min(float(hard_multiplier), 10.0))
+        hard_multiplier = max(hard_multiplier, soft_multiplier)
+        tolerance_drag = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_TOLERANCE_DRAG",
+            0.0,
+        )
+        if tolerance_drag is None or not math.isfinite(float(tolerance_drag)):
+            tolerance_drag = 0.0
+        tolerance_drag = max(0.0, min(float(tolerance_drag), 1000.0))
+        base_threshold = float(max_drag) + float(tolerance_drag)
+        soft_threshold = (
+            max(float(max_drag) * float(soft_multiplier), float(max_drag))
+            + float(tolerance_drag)
+        )
+        hard_threshold = (
+            max(float(max_drag) * float(hard_multiplier), float(max_drag))
+            + float(tolerance_drag)
+        )
+        hard_threshold = max(hard_threshold, soft_threshold)
         min_fills = _config_int(
             "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_MIN_FILLS",
             3,
         )
         min_fills = max(1, int(min_fills if min_fills is not None else 3))
+        dynamic_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_DYNAMIC_ENABLED"
+        )
+        if dynamic_enabled is None:
+            dynamic_enabled = False
+        dynamic_lookback_fills = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_DYNAMIC_LOOKBACK_FILLS",
+            24,
+        )
+        if dynamic_lookback_fills is None:
+            dynamic_lookback_fills = 24
+        dynamic_lookback_fills = max(4, min(int(dynamic_lookback_fills), 1000))
+        dynamic_min_fills = _config_int(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_DYNAMIC_MIN_FILLS",
+            6,
+        )
+        if dynamic_min_fills is None:
+            dynamic_min_fills = 6
+        dynamic_min_fills = max(2, min(int(dynamic_min_fills), 1000))
+        dynamic_percentile = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_DYNAMIC_PERCENTILE",
+            0.9,
+        )
+        if dynamic_percentile is None:
+            dynamic_percentile = 0.9
+        if float(dynamic_percentile) > 1.0:
+            dynamic_percentile = float(dynamic_percentile) / 100.0
+        dynamic_percentile = max(0.5, min(float(dynamic_percentile), 0.999))
+        dynamic_buffer_drag = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_DYNAMIC_BUFFER_DRAG",
+            2.0,
+        )
+        if dynamic_buffer_drag is None or not math.isfinite(float(dynamic_buffer_drag)):
+            dynamic_buffer_drag = 2.0
+        dynamic_buffer_drag = max(0.0, min(float(dynamic_buffer_drag), 1000.0))
+        dynamic_max_multiplier = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_DYNAMIC_MAX_MULTIPLIER",
+            3.0,
+        )
+        if dynamic_max_multiplier is None or not math.isfinite(float(dynamic_max_multiplier)):
+            dynamic_max_multiplier = 3.0
+        dynamic_max_multiplier = max(1.0, min(float(dynamic_max_multiplier), 20.0))
         cache_ttl_s = _config_float(
             "AI_TRADING_EXECUTION_SYMBOL_INTRADAY_SLIPPAGE_BUDGET_CACHE_TTL_SEC",
             30.0,
@@ -16516,7 +18708,10 @@ class ExecutionEngine:
             tz = ZoneInfo(tz_name)
         today = datetime.now(tz).date().isoformat()
         now_mono = float(monotonic_time())
-        cache_key = f"{symbol_token}:{today}:{tz_name}:{max_drag}:{min_fills}:{scan_lines}"
+        cache_key = (
+            f"{symbol_token}:{today}:{tz_name}:{max_drag}:{soft_multiplier}:"
+            f"{hard_multiplier}:{tolerance_drag}:{min_fills}:{scan_lines}"
+        )
         cache_until = float(
             getattr(self, "_symbol_slippage_budget_cache_until_mono", 0.0) or 0.0
         )
@@ -16550,6 +18745,11 @@ class ExecutionEngine:
                 "timezone": tz_name,
                 "path": str(fills_path),
                 "threshold_symbol_slippage_drag": float(max_drag),
+                "threshold_symbol_slippage_drag_soft": float(soft_threshold),
+                "threshold_symbol_slippage_drag_hard": float(hard_threshold),
+                "threshold_symbol_slippage_drag_tolerance": float(tolerance_drag),
+                "soft_multiplier": float(soft_multiplier),
+                "hard_multiplier": float(hard_multiplier),
                 "min_fills": int(min_fills),
             }
             cache[cache_key] = (True, dict(context))
@@ -16569,6 +18769,11 @@ class ExecutionEngine:
                 "path": str(fills_path),
                 "error": str(exc),
                 "threshold_symbol_slippage_drag": float(max_drag),
+                "threshold_symbol_slippage_drag_soft": float(soft_threshold),
+                "threshold_symbol_slippage_drag_hard": float(hard_threshold),
+                "threshold_symbol_slippage_drag_tolerance": float(tolerance_drag),
+                "soft_multiplier": float(soft_multiplier),
+                "hard_multiplier": float(hard_multiplier),
                 "min_fills": int(min_fills),
             }
             cache[cache_key] = (True, dict(context))
@@ -16601,6 +18806,7 @@ class ExecutionEngine:
 
         symbol_fills = 0
         symbol_slippage_drag = 0.0
+        per_fill_slippage_drag: list[float] = []
         for raw_line in raw_lines:
             payload = raw_line.strip()
             if not payload:
@@ -16651,9 +18857,11 @@ class ExecutionEngine:
                 continue
 
             symbol_fills += 1
-            symbol_slippage_drag += abs(
+            fill_drag = abs(
                 float(fill_qty) * float(fill_price) * (float(slippage_bps) / 10000.0)
             )
+            symbol_slippage_drag += float(fill_drag)
+            per_fill_slippage_drag.append(float(fill_drag))
 
         if int(symbol_fills) < int(min_fills):
             context = {
@@ -16663,6 +18871,11 @@ class ExecutionEngine:
                 "today": today,
                 "timezone": tz_name,
                 "threshold_symbol_slippage_drag": float(max_drag),
+                "threshold_symbol_slippage_drag_soft": float(soft_threshold),
+                "threshold_symbol_slippage_drag_hard": float(hard_threshold),
+                "threshold_symbol_slippage_drag_tolerance": float(tolerance_drag),
+                "soft_multiplier": float(soft_multiplier),
+                "hard_multiplier": float(hard_multiplier),
                 "min_fills": int(min_fills),
                 "symbol_fills": int(symbol_fills),
                 "symbol_slippage_drag": float(symbol_slippage_drag),
@@ -16672,15 +18885,104 @@ class ExecutionEngine:
             self._symbol_slippage_budget_cache_until_mono = now_mono + cache_ttl_s
             return True, context
 
-        allowed = float(symbol_slippage_drag) <= float(max_drag)
+        def _quantile(values: Sequence[float], q: float) -> float | None:
+            if not values:
+                return None
+            ordered = sorted(
+                float(v) for v in values if isinstance(v, (int, float)) and math.isfinite(float(v))
+            )
+            if not ordered:
+                return None
+            if len(ordered) == 1:
+                return float(ordered[0])
+            rank = max(0.0, min(float(q), 1.0)) * float(len(ordered) - 1)
+            lo = int(math.floor(rank))
+            hi = int(math.ceil(rank))
+            if lo == hi:
+                return float(ordered[lo])
+            weight_hi = float(rank - lo)
+            weight_lo = 1.0 - weight_hi
+            return (float(ordered[lo]) * weight_lo) + (float(ordered[hi]) * weight_hi)
+
+        dynamic_threshold: float | None = None
+        dynamic_threshold_source = "disabled"
+        if bool(dynamic_enabled):
+            recent_drags = per_fill_slippage_drag[-int(dynamic_lookback_fills) :]
+            effective_dynamic_min_fills = max(int(min_fills), int(dynamic_min_fills))
+            if len(recent_drags) >= int(effective_dynamic_min_fills):
+                percentile_drag = _quantile(recent_drags, float(dynamic_percentile))
+                if percentile_drag is not None:
+                    dynamic_threshold = float(percentile_drag) + float(dynamic_buffer_drag)
+                    dynamic_threshold_source = "recent_fill_percentile"
+            else:
+                dynamic_threshold_source = "insufficient_dynamic_fills"
+
+        effective_base_threshold = float(base_threshold)
+        if dynamic_threshold is not None:
+            effective_base_threshold = max(
+                float(base_threshold),
+                min(
+                    float(dynamic_threshold),
+                    float(base_threshold) * float(dynamic_max_multiplier),
+                ),
+            )
+        effective_soft_threshold = max(
+            float(effective_base_threshold) * float(soft_multiplier),
+            float(effective_base_threshold),
+        )
+        effective_hard_threshold = max(
+            float(effective_base_threshold) * float(hard_multiplier),
+            float(effective_base_threshold),
+        )
+        effective_hard_threshold = max(float(effective_hard_threshold), float(effective_soft_threshold))
+
+        symbol_slippage_drag_value = float(symbol_slippage_drag)
+        breach_ratio_vs_base = (
+            float(symbol_slippage_drag_value) / float(max_drag)
+            if float(max_drag) > 0.0
+            else None
+        )
+        breach_severity = "hard"
+        reason = "symbol_intraday_slippage_drag_breach"
+        if symbol_slippage_drag_value <= float(effective_base_threshold):
+            breach_severity = "none"
+            reason = "ok"
+        elif symbol_slippage_drag_value <= float(effective_hard_threshold):
+            breach_severity = (
+                "soft"
+                if symbol_slippage_drag_value <= float(effective_soft_threshold)
+                else "elevated"
+            )
+            reason = "soft_breach_allow"
+        allowed = breach_severity != "hard"
         context = {
             "enabled": True,
-            "reason": "ok" if allowed else "symbol_intraday_slippage_drag_breach",
+            "reason": reason,
             "symbol": symbol_token,
             "today": today,
             "timezone": tz_name,
             "threshold_symbol_slippage_drag": float(max_drag),
-            "today_symbol_slippage_drag": float(symbol_slippage_drag),
+            "threshold_symbol_slippage_drag_soft": float(soft_threshold),
+            "threshold_symbol_slippage_drag_hard": float(hard_threshold),
+            "threshold_symbol_slippage_drag_tolerance": float(tolerance_drag),
+            "soft_multiplier": float(soft_multiplier),
+            "hard_multiplier": float(hard_multiplier),
+            "effective_threshold_symbol_slippage_drag": float(effective_base_threshold),
+            "effective_threshold_symbol_slippage_drag_soft": float(effective_soft_threshold),
+            "effective_threshold_symbol_slippage_drag_hard": float(effective_hard_threshold),
+            "dynamic_threshold_enabled": bool(dynamic_enabled),
+            "dynamic_threshold_source": str(dynamic_threshold_source),
+            "dynamic_threshold_symbol_slippage_drag": (
+                float(dynamic_threshold) if dynamic_threshold is not None else None
+            ),
+            "dynamic_threshold_percentile": float(dynamic_percentile),
+            "dynamic_threshold_lookback_fills": int(dynamic_lookback_fills),
+            "dynamic_threshold_min_fills": int(dynamic_min_fills),
+            "dynamic_threshold_buffer_drag": float(dynamic_buffer_drag),
+            "dynamic_threshold_max_multiplier": float(dynamic_max_multiplier),
+            "today_symbol_slippage_drag": float(symbol_slippage_drag_value),
+            "breach_ratio_vs_base": float(breach_ratio_vs_base) if breach_ratio_vs_base is not None else None,
+            "breach_severity": breach_severity,
             "min_fills": int(min_fills),
             "symbol_fills": int(symbol_fills),
         }
@@ -16737,16 +19039,62 @@ class ExecutionEngine:
             "cooldown_reason": cooldown_reason,
         }
 
-    def _update_symbol_loss_cooldown_from_fill(
+    def _symbol_repeat_loss_blocklist_allows_opening(
+        self,
+        *,
+        symbol: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Return whether a repeat-loser temporary blocklist currently blocks the symbol."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_REPEAT_LOSER_BLOCKLIST_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+
+        block_until_raw = getattr(self, "_symbol_repeat_loss_blocklist_until", {}) or {}
+        block_until_map = (
+            dict(block_until_raw)
+            if isinstance(block_until_raw, Mapping)
+            else {}
+        )
+        block_reason_raw = getattr(self, "_symbol_repeat_loss_blocklist_reason", {}) or {}
+        block_reason_map = block_reason_raw if isinstance(block_reason_raw, dict) else {}
+        block_expiry = _safe_float(block_until_map.get(symbol_token)) or 0.0
+        now_mono = float(monotonic_time())
+        if block_expiry <= now_mono:
+            if block_expiry > 0.0 and isinstance(block_until_raw, dict):
+                block_until_raw.pop(symbol_token, None)
+            if isinstance(block_reason_map, dict):
+                block_reason_map.pop(symbol_token, None)
+            return True, {
+                "enabled": True,
+                "reason": "blocklist_inactive",
+                "symbol": symbol_token,
+            }
+        remaining = max(block_expiry - now_mono, 0.0)
+        block_reason = str(block_reason_map.get(symbol_token) or "repeat_loss_streak")
+        return False, {
+            "enabled": True,
+            "reason": "symbol_repeat_loss_blocklist",
+            "symbol": symbol_token,
+            "remaining_seconds": round(float(remaining), 3),
+            "block_reason": block_reason,
+        }
+
+    def _update_symbol_repeat_loss_blocklist_from_fill(
         self,
         *,
         symbol: str,
         slippage_bps: float | None,
         realized_pnl: float | None = None,
     ) -> None:
-        """Track consecutive costly fills and arm a temporary symbol cooldown."""
+        """Update repeat-loser streaks and arm a temporary symbol blocklist."""
 
-        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_ENABLED")
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_REPEAT_LOSER_BLOCKLIST_ENABLED")
         if enabled is None:
             enabled = True
         if not bool(enabled):
@@ -16761,6 +19109,123 @@ class ExecutionEngine:
         if realized_pnl_val is not None and not math.isfinite(realized_pnl_val):
             realized_pnl_val = None
         if slippage_val is None and realized_pnl_val is None:
+            return
+
+        trigger_streak = _config_int(
+            "AI_TRADING_EXECUTION_REPEAT_LOSER_BLOCKLIST_TRIGGER_STREAK",
+            4,
+        )
+        if trigger_streak is None:
+            trigger_streak = 4
+        trigger_streak = max(1, min(int(trigger_streak), 50))
+        min_slippage_bps = _config_float(
+            "AI_TRADING_EXECUTION_REPEAT_LOSER_BLOCKLIST_MIN_SLIPPAGE_BPS",
+            6.0,
+        )
+        if min_slippage_bps is None:
+            min_slippage_bps = 6.0
+        min_slippage_bps = max(0.0, min(float(min_slippage_bps), 1000.0))
+        min_realized_pnl = _config_float(
+            "AI_TRADING_EXECUTION_REPEAT_LOSER_BLOCKLIST_MIN_REALIZED_PNL",
+            -40.0,
+        )
+        if min_realized_pnl is None:
+            min_realized_pnl = -40.0
+        min_realized_pnl = min(float(min_realized_pnl), -0.01)
+        block_minutes = _config_float(
+            "AI_TRADING_EXECUTION_REPEAT_LOSER_BLOCKLIST_MINUTES",
+            240.0,
+        )
+        if block_minutes is None:
+            block_minutes = 240.0
+        block_seconds = max(60.0, min(float(block_minutes) * 60.0, 24.0 * 3600.0))
+
+        slippage_costly = (
+            slippage_val is not None and float(slippage_val) >= float(min_slippage_bps)
+        )
+        realized_costly = (
+            realized_pnl_val is not None and float(realized_pnl_val) <= float(min_realized_pnl)
+        )
+        streak_raw = getattr(self, "_symbol_repeat_loss_streak", {}) or {}
+        streak_map = streak_raw if isinstance(streak_raw, dict) else {}
+        current_streak = int(max(_safe_int(streak_map.get(symbol_token), 0), 0))
+        if slippage_costly or realized_costly:
+            current_streak += 1
+            streak_map[symbol_token] = current_streak
+        else:
+            streak_map[symbol_token] = 0
+            self._symbol_repeat_loss_streak = streak_map
+            return
+
+        if current_streak < int(trigger_streak):
+            self._symbol_repeat_loss_streak = streak_map
+            return
+
+        block_reason = "repeat_loss_signals"
+        if realized_costly and not slippage_costly:
+            block_reason = "repeat_realized_losses"
+        elif slippage_costly and not realized_costly:
+            block_reason = "repeat_slippage_losses"
+
+        now_mono = float(monotonic_time())
+        block_until_raw = getattr(self, "_symbol_repeat_loss_blocklist_until", {}) or {}
+        block_until_map = block_until_raw if isinstance(block_until_raw, dict) else {}
+        block_reason_raw = getattr(self, "_symbol_repeat_loss_blocklist_reason", {}) or {}
+        block_reason_map = block_reason_raw if isinstance(block_reason_raw, dict) else {}
+        previous_until = _safe_float(block_until_map.get(symbol_token)) or 0.0
+        next_until = max(previous_until, now_mono + block_seconds)
+        block_until_map[symbol_token] = next_until
+        block_reason_map[symbol_token] = block_reason
+        streak_map[symbol_token] = 0
+        self._symbol_repeat_loss_blocklist_until = block_until_map
+        self._symbol_repeat_loss_blocklist_reason = block_reason_map
+        self._symbol_repeat_loss_streak = streak_map
+        logger.warning(
+            "SYMBOL_REPEAT_LOSS_BLOCKLIST_TRIGGERED",
+            extra={
+                "symbol": symbol_token,
+                "trigger_streak": int(trigger_streak),
+                "block_seconds": float(block_seconds),
+                "slippage_bps": float(slippage_val) if slippage_val is not None else None,
+                "min_slippage_bps": float(min_slippage_bps),
+                "realized_pnl": (
+                    float(realized_pnl_val) if realized_pnl_val is not None else None
+                ),
+                "min_realized_pnl": float(min_realized_pnl),
+                "block_reason": block_reason,
+            },
+        )
+
+    def _update_symbol_loss_cooldown_from_fill(
+        self,
+        *,
+        symbol: str,
+        slippage_bps: float | None,
+        realized_pnl: float | None = None,
+    ) -> None:
+        """Track consecutive costly fills and arm a temporary symbol cooldown."""
+
+        symbol_token = str(symbol or "").strip().upper()
+        if not symbol_token:
+            return
+        slippage_val = _safe_float(slippage_bps)
+        if slippage_val is not None and not math.isfinite(slippage_val):
+            slippage_val = None
+        realized_pnl_val = _safe_float(realized_pnl)
+        if realized_pnl_val is not None and not math.isfinite(realized_pnl_val):
+            realized_pnl_val = None
+        if slippage_val is None and realized_pnl_val is None:
+            return
+        self._update_symbol_repeat_loss_blocklist_from_fill(
+            symbol=symbol_token,
+            slippage_bps=slippage_val,
+            realized_pnl=realized_pnl_val,
+        )
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
             return
 
         trigger_streak = _config_int("AI_TRADING_EXECUTION_SYMBOL_LOSS_COOLDOWN_TRIGGER_STREAK", 3) or 3
@@ -17541,6 +20006,16 @@ class ExecutionEngine:
     def _pre_execution_order_checks(self, order: Mapping[str, Any] | None = None) -> bool:
         """Run order-specific pre-execution checks."""
 
+        def _mark_precheck_failure(
+            reason: str,
+            context: Mapping[str, Any] | None = None,
+        ) -> None:
+            payload: dict[str, Any] = {"reason": str(reason)}
+            if isinstance(context, Mapping):
+                payload["context"] = dict(context)
+            self._last_pre_execution_order_check_failure = payload
+
+        self._last_pre_execution_order_check_failure = {}
         if order is None:
             return True
 
@@ -17572,6 +20047,16 @@ class ExecutionEngine:
             self.stats["skipped_orders"] += 1
             if skip_payload:
                 logger.info("ORDER_SKIPPED_OPPOSITE_CONFLICT", extra=skip_payload)
+            precheck_reason = "opposite_side_policy"
+            precheck_context: Mapping[str, Any] | None = None
+            if isinstance(skip_payload, Mapping):
+                reason_candidate = str(skip_payload.get("reason") or "").strip()
+                if reason_candidate:
+                    precheck_reason = reason_candidate
+                context_candidate = skip_payload.get("context")
+                if isinstance(context_candidate, Mapping):
+                    precheck_context = context_candidate
+            _mark_precheck_failure(precheck_reason, precheck_context)
             return False
 
         account_snapshot = order.get("account_snapshot")
@@ -17609,6 +20094,7 @@ class ExecutionEngine:
                     exposure_context,
                     extra=skip_payload | {"detail": "exposure_normalization_gate"},
                 )
+                _mark_precheck_failure("exposure_normalization_gate", exposure_context)
                 return False
             gonogo_allowed, gonogo_context = self._runtime_gonogo_openings_allowed()
             if not gonogo_allowed:
@@ -17636,6 +20122,7 @@ class ExecutionEngine:
                     gonogo_context,
                     extra=skip_payload | {"detail": "runtime_gonogo_gate"},
                 )
+                _mark_precheck_failure("runtime_gonogo_gate", gonogo_context)
                 return False
             derisk_allowed, derisk_context = self._apply_runtime_execution_capture_derisk(
                 order=order,
@@ -17666,6 +20153,7 @@ class ExecutionEngine:
                     derisk_context,
                     extra=skip_payload | {"detail": "runtime_capture_derisk"},
                 )
+                _mark_precheck_failure("runtime_capture_derisk", derisk_context)
                 return False
             if (
                 isinstance(derisk_context, Mapping)
@@ -17707,6 +20195,7 @@ class ExecutionEngine:
                     quality_context,
                     extra=skip_payload | {"detail": "execution_quality_pause"},
                 )
+                _mark_precheck_failure("execution_quality_pause", quality_context)
                 return False
             edge_budget_allowed, edge_budget_context = (
                 self._execution_entry_edge_budget_allows_opening(order=order)
@@ -17735,6 +20224,232 @@ class ExecutionEngine:
                     "edge_budget_gate",
                     edge_budget_context,
                     extra=skip_payload | {"detail": "edge_budget_gate"},
+                )
+                _mark_precheck_failure("edge_budget_gate", edge_budget_context)
+                return False
+            edge_realism_allowed, edge_realism_context = (
+                self._execution_edge_realism_allows_opening(order=order)
+            )
+            if not edge_realism_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "edge_realism_gate",
+                    "context": edge_realism_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_EDGE_REALISM", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "edge_realism_gate",
+                    edge_realism_context,
+                    extra=skip_payload | {"detail": "edge_realism_gate"},
+                )
+                _mark_precheck_failure("edge_realism_gate", edge_realism_context)
+                return False
+            uncertainty_allowed, uncertainty_context = (
+                self._execution_prediction_uncertainty_allows_opening(order=order)
+            )
+            if not uncertainty_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "prediction_uncertainty_gate",
+                    "context": uncertainty_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_PREDICTION_UNCERTAINTY", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "prediction_uncertainty_gate",
+                    uncertainty_context,
+                    extra=skip_payload | {"detail": "prediction_uncertainty_gate"},
+                )
+                _mark_precheck_failure(
+                    "prediction_uncertainty_gate",
+                    uncertainty_context,
+                )
+                return False
+            fill_probability_allowed, fill_probability_context = (
+                self._execution_fill_probability_score_allows_opening(order=order)
+            )
+            if not fill_probability_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "fill_probability_score_gate",
+                    "context": fill_probability_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_FILL_PROBABILITY_SCORE", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "fill_probability_score_gate",
+                    fill_probability_context,
+                    extra=skip_payload | {"detail": "fill_probability_score_gate"},
+                )
+                _mark_precheck_failure(
+                    "fill_probability_score_gate",
+                    fill_probability_context,
+                )
+                return False
+            symbol_live_expectancy_allowed, symbol_live_expectancy_context = (
+                self._execution_symbol_live_expectancy_allows_opening(order=order)
+            )
+            if not symbol_live_expectancy_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "symbol_live_expectancy_gate",
+                    "context": symbol_live_expectancy_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_SYMBOL_LIVE_EXPECTANCY", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "symbol_live_expectancy_gate",
+                    symbol_live_expectancy_context,
+                    extra=skip_payload | {"detail": "symbol_live_expectancy_gate"},
+                )
+                _mark_precheck_failure(
+                    "symbol_live_expectancy_gate",
+                    symbol_live_expectancy_context,
+                )
+                return False
+            adverse_selection_allowed, adverse_selection_context = (
+                self._execution_adverse_selection_risk_allows_opening(order=order)
+            )
+            if not adverse_selection_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "adverse_selection_risk_gate",
+                    "context": adverse_selection_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_ADVERSE_SELECTION_RISK", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "adverse_selection_risk_gate",
+                    adverse_selection_context,
+                    extra=skip_payload | {"detail": "adverse_selection_risk_gate"},
+                )
+                _mark_precheck_failure(
+                    "adverse_selection_risk_gate",
+                    adverse_selection_context,
+                )
+                return False
+            regime_stability_allowed, regime_stability_context = (
+                self._execution_regime_stability_allows_opening(order=order)
+            )
+            if not regime_stability_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "regime_stability_gate",
+                    "context": regime_stability_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_REGIME_STABILITY", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "regime_stability_gate",
+                    regime_stability_context,
+                    extra=skip_payload | {"detail": "regime_stability_gate"},
+                )
+                _mark_precheck_failure("regime_stability_gate", regime_stability_context)
+                return False
+            overlap_risk_allowed, overlap_risk_context = (
+                self._execution_portfolio_overlap_risk_allows_opening(order=order)
+            )
+            if not overlap_risk_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "portfolio_overlap_risk_gate",
+                    "context": overlap_risk_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_PORTFOLIO_OVERLAP_RISK", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "portfolio_overlap_risk_gate",
+                    overlap_risk_context,
+                    extra=skip_payload | {"detail": "portfolio_overlap_risk_gate"},
+                )
+                _mark_precheck_failure(
+                    "portfolio_overlap_risk_gate",
+                    overlap_risk_context,
                 )
                 return False
             symbol_cooldown_allowed, symbol_cooldown_context = self._symbol_loss_cooldown_allows_opening(
@@ -17765,13 +20480,14 @@ class ExecutionEngine:
                     symbol_cooldown_context,
                     extra=skip_payload | {"detail": "symbol_loss_cooldown"},
                 )
+                _mark_precheck_failure("symbol_loss_cooldown", symbol_cooldown_context)
                 return False
-            symbol_slippage_allowed, symbol_slippage_context = (
-                self._symbol_intraday_slippage_budget_allows_opening(
+            repeat_loss_block_allowed, repeat_loss_block_context = (
+                self._symbol_repeat_loss_blocklist_allows_opening(
                     symbol=str(order.get("symbol") or ""),
                 )
             )
-            if not symbol_slippage_allowed:
+            if not repeat_loss_block_allowed:
                 self.stats.setdefault("capacity_skips", 0)
                 self.stats.setdefault("skipped_orders", 0)
                 self.stats["capacity_skips"] += 1
@@ -17785,18 +20501,79 @@ class ExecutionEngine:
                     "price_hint": order.get("price_hint"),
                     "order_type": order.get("order_type", "unknown"),
                     "using_fallback_price": bool(order.get("using_fallback_price")),
-                    "reason": "symbol_intraday_slippage_budget",
-                    "context": symbol_slippage_context,
+                    "reason": "symbol_repeat_loss_blocklist",
+                    "context": repeat_loss_block_context,
                 }
-                logger.warning("ENTRY_CONSTRAINED_SYMBOL_SLIPPAGE_BUDGET", extra=skip_payload)
+                logger.warning(
+                    "ENTRY_CONSTRAINED_SYMBOL_REPEAT_LOSS_BLOCKLIST",
+                    extra=skip_payload,
+                )
                 logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
                 logger.warning(
                     "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
-                    "symbol_intraday_slippage_budget",
-                    symbol_slippage_context,
-                    extra=skip_payload | {"detail": "symbol_intraday_slippage_budget"},
+                    "symbol_repeat_loss_blocklist",
+                    repeat_loss_block_context,
+                    extra=skip_payload | {"detail": "symbol_repeat_loss_blocklist"},
+                )
+                _mark_precheck_failure(
+                    "symbol_repeat_loss_blocklist",
+                    repeat_loss_block_context,
                 )
                 return False
+            symbol_slippage_allowed, symbol_slippage_context = (
+                self._symbol_intraday_slippage_budget_allows_opening(
+                    symbol=str(order.get("symbol") or ""),
+                )
+            )
+            if not symbol_slippage_allowed:
+                slippage_derisk_allowed, slippage_derisk_context = (
+                    self._apply_symbol_slippage_budget_derisk(
+                        order=order,
+                        slippage_context=symbol_slippage_context,
+                    )
+                )
+                if slippage_derisk_allowed:
+                    logger.warning(
+                        "ENTRY_DERISKED_SYMBOL_SLIPPAGE_BUDGET",
+                        extra={
+                            "symbol": order.get("symbol"),
+                            "side": order.get("side"),
+                            "client_order_id": order.get("client_order_id"),
+                            "derisk": slippage_derisk_context,
+                            "context": symbol_slippage_context,
+                        },
+                    )
+                else:
+                    self.stats.setdefault("capacity_skips", 0)
+                    self.stats.setdefault("skipped_orders", 0)
+                    self.stats["capacity_skips"] += 1
+                    self.stats["skipped_orders"] += 1
+                    skip_payload = {
+                        "symbol": order.get("symbol"),
+                        "side": order.get("side"),
+                        "quantity": order.get("quantity"),
+                        "client_order_id": order.get("client_order_id"),
+                        "asset_class": order.get("asset_class"),
+                        "price_hint": order.get("price_hint"),
+                        "order_type": order.get("order_type", "unknown"),
+                        "using_fallback_price": bool(order.get("using_fallback_price")),
+                        "reason": "symbol_intraday_slippage_budget",
+                        "context": symbol_slippage_context,
+                        "derisk": slippage_derisk_context,
+                    }
+                    logger.warning("ENTRY_CONSTRAINED_SYMBOL_SLIPPAGE_BUDGET", extra=skip_payload)
+                    logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                    logger.warning(
+                        "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                        "symbol_intraday_slippage_budget",
+                        symbol_slippage_context,
+                        extra=skip_payload | {"detail": "symbol_intraday_slippage_budget"},
+                    )
+                    _mark_precheck_failure(
+                        "symbol_intraday_slippage_budget",
+                        symbol_slippage_context,
+                    )
+                    return False
             reentry_allowed, reentry_context = self._symbol_reentry_cooldown_allows_opening(
                 symbol=str(order.get("symbol") or ""),
                 side=str(order.get("side") or ""),
@@ -17826,6 +20603,7 @@ class ExecutionEngine:
                     reentry_context,
                     extra=skip_payload | {"detail": "symbol_reentry_cooldown"},
                 )
+                _mark_precheck_failure("symbol_reentry_cooldown", reentry_context)
                 return False
             opening_notional_allowed, opening_notional_context = self._opening_min_notional_allows_order(order)
             if not opening_notional_allowed:
@@ -17853,6 +20631,7 @@ class ExecutionEngine:
                     opening_notional_context,
                     extra=skip_payload | {"detail": "opening_min_notional"},
                 )
+                _mark_precheck_failure("opening_min_notional", opening_notional_context)
                 return False
 
         snapshot_payload: Mapping[str, Any] = (
@@ -17919,6 +20698,7 @@ class ExecutionEngine:
                 detail_message,
                 extra=base_extra | {"context": context_payload},
             )
+            _mark_precheck_failure(str(pdt_reason or "pdt_preflight_block"), context_payload)
             return False
 
         return True

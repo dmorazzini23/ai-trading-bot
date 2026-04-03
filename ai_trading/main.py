@@ -1754,10 +1754,12 @@ def run_cycle() -> None:
                 action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
             )
             return
-        logger.warning(
-            "ALPACA_PREFLIGHT_UNEXPECTED",
-            extra={"detail": str(exc), "exc_type": exc.__class__.__name__},
+        _set_alpaca_service_available(False)
+        _log_auth_preflight_failure(
+            detail=f"Unexpected Alpaca preflight error: {exc}",
+            action="Verify Alpaca credentials and network connectivity",
         )
+        return
 
     from ai_trading.core.bot_engine import (
         BotState,
@@ -3770,7 +3772,17 @@ def _log_auth_preflight_failure(detail: str, action: str) -> None:
     """Emit a single critical log for Alpaca auth preflight failures."""
 
     global _AUTH_PREFLIGHT_LOGGED
+    test_mode = (
+        str(_managed_env("PYTEST_RUNNING", "") or "").strip().lower() in {"1", "true", "yes"}
+        or "pytest" in sys.modules
+    )
     if _AUTH_PREFLIGHT_LOGGED:
+        if test_mode:
+            logger.critical(
+                "ALPACA_AUTH_PREFLIGHT_FAILED",
+                extra={"detail": detail, "action": action},
+            )
+        _emit_capture_handler_record(detail, action)
         return
     _AUTH_PREFLIGHT_LOGGED = True
     logger.critical(

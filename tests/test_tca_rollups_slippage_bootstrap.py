@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ai_trading.tca.rollups import calibrate_cost_model_from_tca
@@ -10,12 +11,15 @@ def test_calibrate_cost_model_uses_slippage_bootstrap(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    now_utc = datetime.now(UTC)
+    row_1_ts = (now_utc - timedelta(days=1)).isoformat()
+    row_2_ts = (now_utc - timedelta(days=1) + timedelta(minutes=1)).isoformat()
     slippage_path = tmp_path / "slippage.csv"
     slippage_path.write_text(
         "\n".join(
             [
-                "2026-03-01T13:30:00+00:00,AAPL,buy,1,100.0,100.12,12.0",
-                "2026-03-01T13:31:00+00:00,MSFT,sell,1,250.0,249.6,16.0",
+                f"{row_1_ts},AAPL,buy,1,100.0,100.12,12.0",
+                f"{row_2_ts},MSFT,sell,1,250.0,249.6,16.0",
             ]
         )
         + "\n",

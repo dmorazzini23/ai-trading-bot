@@ -8,6 +8,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
@@ -108,6 +109,120 @@ def _capture_ratio_threshold(args: dict[str, Any]) -> float:
     return max(0.0, float(raw))
 
 
+def _parse_utc(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _regression_family(triggers: list[str]) -> str:
+    trigger_set = set(triggers)
+    if "go_no_go_failed" in trigger_set or "go_no_go_failed_checks" in trigger_set:
+        return "go_no_go"
+    if "broker_disconnected" in trigger_set:
+        return "broker_connectivity"
+    if "execution_capture_ratio_low" in trigger_set:
+        return "execution_quality"
+    if "provider_degraded" in trigger_set or "health_degraded" in trigger_set:
+        return "provider_health"
+    return "runtime_regression"
+
+
+def _session_date(snapshot: dict[str, Any]) -> str:
+    parsed = _parse_utc(str(snapshot.get("timestamp") or ""))
+    if parsed is None:
+        return datetime.now(tz=timezone.utc).date().isoformat()
+    return parsed.date().isoformat()
+
+
+def _rolling_issue_key(snapshot_payload: dict[str, Any]) -> str:
+    snapshot = cast(dict[str, Any], snapshot_payload.get("snapshot") or {})
+    triggers = cast(list[str], snapshot_payload.get("triggers") or [])
+    return f"{_session_date(snapshot)}:{_regression_family(triggers)}"
+
+
+def _rolling_comment_enabled(args: dict[str, Any]) -> bool:
+    return _bool_arg(
+        args.get("rolling_comment_updates"),
+        default=_bool_arg(os.getenv("AI_TRADING_LINEAR_ROLLING_COMMENT_UPDATES"), default=True),
+    )
+
+
+def _rolling_throttle_seconds(args: dict[str, Any]) -> int:
+    raw = args.get("rolling_comment_interval_minutes")
+    if raw is None:
+        raw = os.getenv("AI_TRADING_LINEAR_ROLLING_COMMENT_INTERVAL_MINUTES", "30")
+    try:
+        minutes = max(1, int(raw))
+    except (TypeError, ValueError):
+        minutes = 30
+    return minutes * 60
+
+
+def _rolling_comment_body(snapshot_payload: dict[str, Any], *, event_count: int) -> str:
+    snapshot = cast(dict[str, Any], snapshot_payload.get("snapshot") or {})
+    triggers = cast(list[str], snapshot_payload.get("triggers") or [])
+    failed_checks = cast(list[str], snapshot.get("failed_checks") or [])
+    checks_text = ", ".join(failed_checks) if failed_checks else "none"
+    return "\n".join(
+        [
+            "Automated recurring runtime regression update.",
+            "",
+            f"- observed_at: {utc_now_iso()}",
+            f"- event_count_this_session: {event_count}",
+            f"- triggers: {', '.join(triggers) if triggers else 'none'}",
+            f"- go_no_go_gate_passed: {snapshot.get('gate_passed')}",
+            f"- go_no_go_failed_checks: {checks_text}",
+            f"- execution_capture_ratio: {snapshot.get('execution_capture_ratio')}",
+            f"- slippage_drag_bps: {snapshot.get('slippage_drag_bps')}",
+            f"- health_status: {snapshot.get('health_status')}",
+            f"- health_reason: {snapshot.get('health_reason')}",
+            f"- provider_status: {snapshot.get('provider_status')}",
+            f"- broker_status: {snapshot.get('broker_status')}",
+        ]
+    )
+
+
+def _create_linear_comment(
+    *,
+    issue_id: str,
+    body: str,
+    token: str,
+    endpoint: str,
+    timeout_s: float,
+) -> dict[str, Any]:
+    mutation = """
+mutation CommentCreate($input: CommentCreateInput!) {
+  commentCreate(input: $input) {
+    success
+    comment {
+      id
+      body
+    }
+  }
+}
+""".strip()
+    data = _linear_graphql(
+        query=mutation,
+        variables={"input": {"issueId": issue_id, "body": body}},
+        token=token,
+        endpoint=endpoint,
+        timeout_s=timeout_s,
+    )
+    result = cast(dict[str, Any], data.get("commentCreate") or {})
+    if not bool(result.get("success", False)):
+        raise RuntimeError("Linear commentCreate did not succeed")
+    return cast(dict[str, Any], result.get("comment") or {})
+
+
 def _runtime_regression_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     report = _runtime_report_payload()
     go_no_go = report.get("go_no_go") or {}
@@ -140,7 +255,7 @@ def _runtime_regression_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         triggers.append("provider_degraded")
 
     broker_status = str(broker.get("status") or "unknown").lower()
-    if broker_status not in {"connected", "unknown"}:
+    if broker_status not in {"connected", "reachable", "unknown"}:
         triggers.append("broker_disconnected")
 
     min_capture = _capture_ratio_threshold(args)
@@ -160,10 +275,23 @@ def _runtime_regression_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "broker_status": str(broker.get("status") or "unknown"),
         "timestamp": str(health.get("timestamp") or utc_now_iso()),
     }
+    capture_rounded = round(capture_ratio, 6) if capture_ratio is not None else None
+    slippage_rounded = round(slippage_drag, 6) if slippage_drag is not None else None
+    fingerprint_material = {
+        "triggers": sorted(set(triggers)),
+        "gate_passed": gate_passed,
+        "failed_checks": failed_checks,
+        "execution_capture_ratio": capture_rounded,
+        "slippage_drag_bps": slippage_rounded,
+        "health_ok": health_ok,
+        "health_status": snapshot["health_status"],
+        "health_reason": snapshot["health_reason"],
+        "provider_status": snapshot["provider_status"],
+        "provider_active": snapshot["provider_active"],
+        "broker_status": snapshot["broker_status"],
+    }
     fingerprint = hashlib.sha256(
-        json.dumps({"snapshot": snapshot, "triggers": sorted(set(triggers))}, sort_keys=True).encode(
-            "utf-8"
-        )
+        json.dumps(fingerprint_material, sort_keys=True).encode("utf-8")
     ).hexdigest()
 
     return {
@@ -290,12 +418,77 @@ def tool_create_regression_issue(args: dict[str, Any]) -> dict[str, Any]:
     dedupe = _bool_arg(args.get("dedupe"), default=True)
     fingerprint = str(snapshot_payload.get("fingerprint") or "")
     prior = _load_state(state_path)
+    rollups_raw = prior.get("rollups")
+    rollups = cast(dict[str, dict[str, Any]], rollups_raw if isinstance(rollups_raw, dict) else {})
     if dedupe and prior.get("fingerprint") == fingerprint:
         return {
             "created": False,
             "reason": "duplicate_fingerprint",
             "state_path": str(state_path),
             "existing_issue": prior.get("issue"),
+            "snapshot": snapshot_payload,
+        }
+
+    rolling_enabled = _bool_arg(
+        args.get("rolling_session_enabled"),
+        default=_bool_arg(os.getenv("AI_TRADING_LINEAR_ROLLING_SESSION_ENABLED"), default=True),
+    )
+    rolling_key = _rolling_issue_key(snapshot_payload)
+    rolling_entry = cast(dict[str, Any], rollups.get(rolling_key) or {})
+    rolling_issue = cast(dict[str, Any], rolling_entry.get("issue") or {})
+    rolling_issue_id = str(rolling_issue.get("id") or "").strip()
+    if rolling_enabled and rolling_issue_id and not force:
+        event_count = int(rolling_entry.get("event_count") or 0) + 1
+        comment_created = False
+        comment: dict[str, Any] = {}
+        now = datetime.now(tz=timezone.utc)
+        maybe_last = _parse_utc(str(rolling_entry.get("last_commented_at") or ""))
+        should_comment = _rolling_comment_enabled(args)
+        if should_comment:
+            throttle_seconds = _rolling_throttle_seconds(args)
+            elapsed_ok = maybe_last is None or (now - maybe_last).total_seconds() >= throttle_seconds
+            if elapsed_ok:
+                token = _linear_token(args)
+                endpoint = _linear_endpoint(args)
+                timeout_s = float(args.get("timeout_s") or 8.0)
+                comment = _create_linear_comment(
+                    issue_id=rolling_issue_id,
+                    body=_rolling_comment_body(snapshot_payload, event_count=event_count),
+                    token=token,
+                    endpoint=endpoint,
+                    timeout_s=timeout_s,
+                )
+                comment_created = True
+
+        updated_rollups: dict[str, dict[str, Any]] = dict(rollups)
+        next_entry: dict[str, Any] = dict(rolling_entry)
+        next_entry["event_count"] = event_count
+        next_entry["last_seen_at"] = utc_now_iso()
+        next_entry["last_fingerprint"] = fingerprint
+        next_entry["snapshot"] = snapshot_payload
+        if comment_created:
+            next_entry["last_commented_at"] = utc_now_iso()
+        updated_rollups[rolling_key] = next_entry
+        _save_state(
+            state_path,
+            {
+                "fingerprint": fingerprint,
+                "saved_at": utc_now_iso(),
+                "issue": rolling_issue,
+                "snapshot": snapshot_payload,
+                "rolling_key": rolling_key,
+                "rollups": updated_rollups,
+            },
+        )
+        return {
+            "created": False,
+            "reason": "rolling_session_existing_issue",
+            "state_path": str(state_path),
+            "issue": rolling_issue,
+            "rolling_key": rolling_key,
+            "event_count": event_count,
+            "comment_created": comment_created,
+            "comment": comment if comment_created else None,
             "snapshot": snapshot_payload,
         }
 
@@ -360,17 +553,30 @@ mutation IssueCreate($input: IssueCreateInput!) {
     if not bool(result.get("success", False)) or not issue:
         raise RuntimeError("Linear issueCreate did not return a created issue")
 
+    new_rollups: dict[str, dict[str, Any]] = dict(rollups)
+    new_rollups[rolling_key] = {
+        "issue": issue,
+        "first_seen_at": utc_now_iso(),
+        "last_seen_at": utc_now_iso(),
+        "last_commented_at": None,
+        "event_count": 1,
+        "last_fingerprint": fingerprint,
+        "snapshot": snapshot_payload,
+    }
     state_payload = {
         "fingerprint": fingerprint,
         "saved_at": utc_now_iso(),
         "issue": issue,
         "snapshot": snapshot_payload,
+        "rolling_key": rolling_key,
+        "rollups": new_rollups,
     }
     _save_state(state_path, state_payload)
     return {
         "created": True,
         "issue": issue,
         "state_path": str(state_path),
+        "rolling_key": rolling_key,
         "snapshot": snapshot_payload,
     }
 

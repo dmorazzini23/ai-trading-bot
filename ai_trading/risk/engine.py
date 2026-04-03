@@ -6,7 +6,6 @@ import builtins
 import os
 import random
 import threading
-from _thread import LockType
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -212,7 +211,7 @@ MAX_DRAWDOWN = 0.05
 class RiskEngine:
     """Cross-strategy risk manager."""
 
-    _lock: LockType | None = None
+    _lock: threading.Lock | None = None
 
     def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""

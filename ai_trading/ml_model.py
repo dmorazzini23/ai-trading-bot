@@ -15,7 +15,7 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from ai_trading import paths
 
 try:  # pragma: no cover - optional heavy dependency
@@ -273,7 +273,10 @@ def train_xgboost_with_optuna(
         cv = xgb.cv(
             params, dtrain, num_boost_round=100, nfold=3, metrics="logloss"
         )
-        return float(cv["test-logloss-mean"].iloc[-1])
+        test_logloss = cv["test-logloss-mean"]
+        if hasattr(test_logloss, "iloc"):
+            return float(test_logloss.iloc[-1])
+        return float(cast(Any, test_logloss)[-1])
 
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=50)

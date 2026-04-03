@@ -2722,6 +2722,232 @@ def _champion_challenger_ab_gate_bundle(
     }
 
 
+def _wilson_lower_bound(successes: int, trials: int, z_score: float) -> float | None:
+    """Return Wilson-score lower bound for a Bernoulli proportion."""
+
+    if trials <= 0:
+        return None
+    z = float(max(z_score, 0.0))
+    if z <= 0.0:
+        return None
+    s = max(0, min(int(successes), int(trials)))
+    n = float(trials)
+    p_hat = float(s) / n
+    z_sq = z * z
+    denom = 1.0 + (z_sq / n)
+    center = p_hat + (z_sq / (2.0 * n))
+    spread = z * math.sqrt((p_hat * (1.0 - p_hat) + (z_sq / (4.0 * n))) / n)
+    lower = (center - spread) / denom
+    return max(0.0, min(1.0, float(lower)))
+
+
+def _bootstrap_mean_confidence_bounds(
+    samples: Sequence[float],
+    *,
+    z_score: float,
+    rounds: int,
+) -> tuple[float | None, float | None]:
+    """Return bootstrap confidence bounds for the sample mean."""
+
+    values = [
+        float(value)
+        for value in samples
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    if len(values) < 2:
+        return None, None
+    z = max(0.0, float(z_score))
+    if z <= 0.0:
+        return None, None
+    tail = 1.0 - (0.5 * (1.0 + math.erf(z / math.sqrt(2.0))))
+    tail = max(1e-6, min(tail, 0.499999))
+    lower_q = float(tail)
+    upper_q = float(1.0 - tail)
+
+    draws = max(100, min(int(rounds), 5000))
+    rng = np.random.default_rng(42)
+    arr = np.asarray(values, dtype=float)
+    idx = rng.integers(0, arr.size, size=(draws, arr.size))
+    means = np.mean(arr[idx], axis=1)
+    lower = float(np.quantile(means, lower_q))
+    upper = float(np.quantile(means, upper_q))
+    return lower, upper
+
+
+def _promotion_confidence_gate_bundle(
+    *,
+    best: CandidateMetrics,
+    runtime_performance_gate: Mapping[str, Any] | None,
+    live_execution_quality_gate: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Gate promotion on confidence bounds for win rate and live execution realism."""
+
+    enabled = bool(get_env("AI_TRADING_PROMOTION_CONFIDENCE_ENABLED", False, cast=bool))
+    required_for_promotion = bool(enabled)
+    min_effective_trades = max(
+        1,
+        int(get_env("AI_TRADING_PROMOTION_MIN_EFFECTIVE_TRADES", 120, cast=int)),
+    )
+    win_rate_z = max(
+        0.0,
+        float(get_env("AI_TRADING_PROMOTION_WINRATE_CONFIDENCE_Z", 1.96, cast=float)),
+    )
+    capture_z = max(
+        0.0,
+        float(get_env("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_Z", 1.28, cast=float)),
+    )
+    bootstrap_rounds = max(
+        100,
+        int(get_env("AI_TRADING_PROMOTION_CAPTURE_BOOTSTRAP_ROUNDS", 800, cast=int)),
+    )
+    min_hit_rate = float(
+        get_env("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", 0.52, cast=float)
+    )
+    live_thresholds = (
+        dict(live_execution_quality_gate.get("thresholds", {}))
+        if isinstance(live_execution_quality_gate, Mapping)
+        else {}
+    )
+    min_capture_ratio = _as_float(live_thresholds.get("min_capture_ratio"))
+    if min_capture_ratio is None:
+        min_capture_ratio = float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_MIN_CAPTURE_RATIO",
+                0.10,
+                cast=float,
+            )
+        )
+    max_slippage_drag_bps = _as_float(live_thresholds.get("max_slippage_drag_bps"))
+    if max_slippage_drag_bps is None:
+        max_slippage_drag_bps = float(
+            get_env(
+                "AI_TRADING_AFTER_HOURS_PROMOTION_LIVE_EXEC_QUALITY_MAX_SLIPPAGE_DRAG_BPS",
+                9.0,
+                cast=float,
+            )
+        )
+    thresholds = {
+        "min_effective_trades": int(min_effective_trades),
+        "min_hit_rate": float(min_hit_rate),
+        "win_rate_confidence_z": float(win_rate_z),
+        "min_capture_ratio": float(min_capture_ratio),
+        "max_slippage_drag_bps": float(max_slippage_drag_bps),
+        "capture_confidence_z": float(capture_z),
+        "capture_bootstrap_rounds": int(bootstrap_rounds),
+    }
+    if not enabled:
+        return {
+            "enabled": False,
+            "required_for_promotion": required_for_promotion,
+            "gate_passed": True,
+            "reason": "disabled",
+            "thresholds": thresholds,
+            "observed": {},
+        }
+
+    effective_trades = max(0, int(best.support))
+    wins = int(round(float(best.mean_hit_rate) * float(effective_trades)))
+    wins = max(0, min(wins, effective_trades))
+    win_rate_lower = _wilson_lower_bound(wins, effective_trades, float(win_rate_z))
+    win_rate_confidence_pass = (
+        win_rate_lower is not None and float(win_rate_lower) >= float(min_hit_rate)
+    )
+
+    runtime_exec = (
+        dict(runtime_performance_gate.get("execution_vs_alpha", {}))
+        if isinstance(runtime_performance_gate, Mapping)
+        else {}
+    )
+    daily_rows_raw = runtime_exec.get("daily")
+    daily_rows = (
+        [dict(row) for row in daily_rows_raw if isinstance(row, Mapping)]
+        if isinstance(daily_rows_raw, list)
+        else []
+    )
+    capture_daily: list[float] = []
+    slippage_proxy_daily: list[float] = []
+    for row in daily_rows:
+        expected_bps = _as_float(row.get("expected_edge_per_accept_bps"))
+        realized_bps = _as_float(row.get("realized_net_edge_bps"))
+        if (
+            expected_bps is not None
+            and realized_bps is not None
+            and float(expected_bps) > 0.0
+        ):
+            capture_daily.append(float(realized_bps / expected_bps))
+            slippage_proxy_daily.append(float(expected_bps - realized_bps))
+
+    capture_ci_low, capture_ci_high = _bootstrap_mean_confidence_bounds(
+        capture_daily,
+        z_score=float(capture_z),
+        rounds=int(bootstrap_rounds),
+    )
+    slippage_ci_low, slippage_ci_high = _bootstrap_mean_confidence_bounds(
+        slippage_proxy_daily,
+        z_score=float(capture_z),
+        rounds=int(bootstrap_rounds),
+    )
+    capture_confidence_pass = (
+        capture_ci_low is not None
+        and float(capture_ci_low) >= float(min_capture_ratio)
+    )
+    slippage_confidence_pass = (
+        slippage_ci_high is not None
+        and float(slippage_ci_high) <= float(max_slippage_drag_bps)
+    )
+    sample_gate_pass = int(effective_trades) >= int(min_effective_trades)
+
+    gate_passed = bool(
+        sample_gate_pass
+        and win_rate_confidence_pass
+        and capture_confidence_pass
+        and slippage_confidence_pass
+    )
+    reason = "pass" if gate_passed else "promotion_confidence_gate_failed"
+    if not sample_gate_pass:
+        reason = "insufficient_effective_trades"
+    elif not win_rate_confidence_pass:
+        reason = "win_rate_confidence_gate"
+    elif not capture_confidence_pass:
+        reason = "capture_confidence_gate"
+    elif not slippage_confidence_pass:
+        reason = "slippage_confidence_gate"
+
+    observed = {
+        "effective_trades": int(effective_trades),
+        "wins": int(wins),
+        "win_rate": float(best.mean_hit_rate),
+        "win_rate_confidence_lower_bound": (
+            float(win_rate_lower) if win_rate_lower is not None else None
+        ),
+        "capture_ratio_point_estimate": _as_float(
+            runtime_exec.get("execution_capture_ratio")
+        ),
+        "capture_ratio_daily_samples": int(len(capture_daily)),
+        "capture_ratio_confidence_lower_bound": (
+            float(capture_ci_low) if capture_ci_low is not None else None
+        ),
+        "capture_ratio_confidence_upper_bound": (
+            float(capture_ci_high) if capture_ci_high is not None else None
+        ),
+        "slippage_proxy_daily_samples": int(len(slippage_proxy_daily)),
+        "slippage_proxy_confidence_lower_bound_bps": (
+            float(slippage_ci_low) if slippage_ci_low is not None else None
+        ),
+        "slippage_proxy_confidence_upper_bound_bps": (
+            float(slippage_ci_high) if slippage_ci_high is not None else None
+        ),
+    }
+    return {
+        "enabled": True,
+        "required_for_promotion": required_for_promotion,
+        "gate_passed": bool(gate_passed),
+        "reason": reason,
+        "thresholds": thresholds,
+        "observed": observed,
+    }
+
+
 def _promotion_gate_bundle(
     *,
     best: CandidateMetrics,
@@ -4461,6 +4687,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         prior_metrics=prior_model_metrics,
         runtime_performance_gate=runtime_performance_gate,
     )
+    promotion_confidence_gate = _promotion_confidence_gate_bundle(
+        best=best,
+        runtime_performance_gate=runtime_performance_gate,
+        live_execution_quality_gate=live_execution_quality_gate,
+    )
     roadmap_additional_gates: dict[str, bool] = {}
     if bool(phase1_week1.get("required_for_promotion", False)):
         roadmap_additional_gates["phase1_week1"] = bool(phase1_week1.get("gate_passed", False))
@@ -4475,6 +4706,10 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
     if bool(champion_challenger_ab.get("required_for_promotion", False)):
         roadmap_additional_gates["champion_challenger_ab"] = bool(
             champion_challenger_ab.get("gate_passed", False)
+        )
+    if bool(promotion_confidence_gate.get("required_for_promotion", False)):
+        roadmap_additional_gates["promotion_confidence"] = bool(
+            promotion_confidence_gate.get("gate_passed", False)
         )
     promotion = _promotion_gate_bundle(
         best=best,
@@ -4511,6 +4746,7 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "runtime_performance_gate": runtime_performance_gate,
             "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
+            "promotion_confidence_gate": promotion_confidence_gate,
         },
     )
 
@@ -4615,10 +4851,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
                 "phase_1_week_1": phase1_week1,
                 "live_execution_quality": live_execution_quality_gate,
                 "champion_challenger_ab": champion_challenger_ab,
+                "promotion_confidence": promotion_confidence_gate,
             },
             "runtime_performance_gate": runtime_performance_gate,
             "live_execution_quality_gate": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
+            "promotion_confidence_gate": promotion_confidence_gate,
         },
     )
     require_runtime_promotion_gate = bool(
@@ -4706,10 +4944,12 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "phase_1_week_1": phase1_week1,
             "live_execution_quality": live_execution_quality_gate,
             "champion_challenger_ab": champion_challenger_ab,
+            "promotion_confidence": promotion_confidence_gate,
         },
         "runtime_performance_gate": runtime_performance_gate,
         "live_execution_quality_gate": live_execution_quality_gate,
         "champion_challenger_ab": champion_challenger_ab,
+        "promotion_confidence_gate": promotion_confidence_gate,
         "prior_model_metrics": prior_model_metrics,
         "training_data_delta": training_data_delta,
         "rl_overlay": rl_overlay,
@@ -4759,6 +4999,16 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
             "promotion_min_consecutive_passes": int(promotion_streak.get("required", 1) or 1),
             "promotion_gate_passed": bool(promotion_streak.get("base_gate_passed", False)),
             "promotion_streak_gate_passed": bool(promotion_streak.get("gate_passed", False)),
+            "promotion_confidence_enabled": bool(promotion_confidence_gate.get("enabled", False)),
+            "promotion_confidence_gate_passed": bool(
+                promotion_confidence_gate.get("gate_passed", True)
+            ),
+            "promotion_confidence_reason": str(
+                promotion_confidence_gate.get("reason") or ""
+            ),
+            "promotion_confidence_observed": dict(
+                promotion_confidence_gate.get("observed", {})
+            ),
             "governance_status": str(status),
         }
     )
@@ -4804,9 +5054,11 @@ def run_after_hours_training(*, now: datetime | None = None) -> dict[str, Any]:
         "roadmap": {
             "phase_1_week_1": phase1_week1,
             "champion_challenger_ab": champion_challenger_ab,
+            "promotion_confidence": promotion_confidence_gate,
         },
         "runtime_performance_gate": runtime_performance_gate,
         "champion_challenger_ab": champion_challenger_ab,
+        "promotion_confidence_gate": promotion_confidence_gate,
         "rl_overlay": rl_overlay,
     }
 

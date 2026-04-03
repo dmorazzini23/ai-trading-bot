@@ -497,6 +497,26 @@ def test_execute_order_records_skip_outcome_for_duplicate_intent(engine_factory,
     assert detail_records[-1].reason == "duplicate_intent"
 
 
+def test_execute_order_propagates_precheck_failure_detail(engine_factory):
+    engine = engine_factory()
+
+    def _reject_with_detail(_order):
+        engine._last_pre_execution_order_check_failure = {
+            "reason": "symbol_reentry_cooldown",
+            "context": {"cooldown_minutes": 60},
+        }
+        return False
+
+    engine._pre_execution_order_checks = _reject_with_detail
+
+    result = engine.execute_order("AAPL", "buy", 1, order_type="market")
+
+    assert result is None
+    assert engine._last_submit_outcome.get("status") == "skipped"
+    assert engine._last_submit_outcome.get("reason") == "pre_execution_order_checks_failed"
+    assert engine._last_submit_outcome.get("detail") == "symbol_reentry_cooldown"
+
+
 def test_execute_order_records_skip_outcome_for_cycle_duplicate_intent(engine_factory, caplog):
     engine = engine_factory()
     engine._cycle_order_outcomes = []

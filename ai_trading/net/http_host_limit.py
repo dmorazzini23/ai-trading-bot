@@ -137,7 +137,7 @@ def _get_sync_semaphore(host: str) -> threading.Semaphore:
         if semaphore is None:
             semaphore = threading.Semaphore(_resolve_fallback_limit())
             _FALLBACK_SYNC_LIMITERS[host] = semaphore
-        return semaphore
+        return cast(threading.Semaphore, semaphore)
 
 
 def _get_async_semaphore(host: str) -> asyncio.Semaphore:
@@ -157,7 +157,7 @@ def _get_async_semaphore(host: str) -> asyncio.Semaphore:
         if semaphore is None:
             semaphore = asyncio.Semaphore(_resolve_fallback_limit())
             _FALLBACK_ASYNC_LIMITERS[host] = semaphore
-        return semaphore
+        return cast(asyncio.Semaphore, semaphore)
 
 
 def _register_acquire() -> None:

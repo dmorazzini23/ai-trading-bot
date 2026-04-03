@@ -289,7 +289,7 @@ class TaxAwareRebalancer:
                 recency_penalty = max(0, (31 - days_held) * 10) if days_held < 31 else 0
             else:
                 recency_penalty = 0
-            return base_score + loss_bonus - recency_penalty
+            return float(base_score + loss_bonus - recency_penalty)
         except (KeyError, ValueError, TypeError) as e:
             logger.error('HARVEST_PRIORITY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0

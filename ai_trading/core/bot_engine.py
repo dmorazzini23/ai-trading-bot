@@ -715,8 +715,8 @@ def _ensure_runtime_state(runtime: Any | None) -> dict[str, Any]:
         try:
             setattr(runtime, "state", state)
         except COMMON_EXC:  # pragma: no cover - defensive
-            return state
-    return state
+            return cast(dict[str, Any], state)
+    return cast(dict[str, Any], state)
 
 
 def _get_pending_tracker(runtime: Any | None) -> dict[str, float | None]:
@@ -735,7 +735,7 @@ def _get_pending_tracker(runtime: Any | None) -> dict[str, float | None]:
         tracker.setdefault(_PENDING_ORDER_FIRST_SEEN_KEY, None)
         tracker.setdefault(_PENDING_ORDER_LAST_LOG_KEY, None)
         tracker.setdefault(_PENDING_ORDER_WARMUP_REMAINING_KEY, 0.0)
-    return tracker
+    return cast(dict[str, float | None], tracker)
 
 
 def _alpaca_available() -> bool:
@@ -3638,6 +3638,16 @@ def _attempt_alpaca_quote(
             'ALPACA_AUTH_PREFLIGHT_FAILED',
             extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
         )
+        try:
+            from ai_trading.alpaca_api import _set_alpaca_service_available
+        except Exception as import_exc:
+            logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
+            _set_alpaca_service_available = None  # type: ignore[assignment]
+        if callable(_set_alpaca_service_available):
+            try:
+                _set_alpaca_service_available(False)
+            except Exception as set_exc:
+                logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
         _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
         cache['alpaca_auth_failed'] = True
         cache['quote_source'] = 'alpaca_auth_failed'
@@ -3666,6 +3676,16 @@ def _attempt_alpaca_quote(
                 'ALPACA_AUTH_PREFLIGHT_FAILED',
                 extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
             )
+            try:
+                from ai_trading.alpaca_api import _set_alpaca_service_available
+            except Exception as import_exc:
+                logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
+                _set_alpaca_service_available = None  # type: ignore[assignment]
+            if callable(_set_alpaca_service_available):
+                try:
+                    _set_alpaca_service_available(False)
+                except Exception as set_exc:
+                    logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
             _PRICE_SOURCE[symbol] = 'alpaca_auth_failed'
             cache['alpaca_auth_failed'] = True
             cache['quote_source'] = 'alpaca_auth_failed'
@@ -6514,6 +6534,7 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: optional requests
     HTTPError = Exception
 
 # AI-AGENT-REF: optional schedule dependency
+schedule: Any
 try:  # pragma: no cover - optional dependency
     import schedule  # type: ignore
 except ImportError:  # pragma: no cover - schedule may be absent in tests
@@ -21060,7 +21081,7 @@ def _ensure_data_quality_bucket(state: BotState | None) -> dict[str, dict[str, A
     if not isinstance(bucket, dict):
         bucket = {}
         setattr(state, "data_quality", bucket)
-    return bucket
+    return cast(dict[str, dict[str, Any]], bucket)
 
 
 def _update_data_quality(state: BotState | None, symbol: str, **updates: Any) -> None:
@@ -21694,7 +21715,7 @@ def _ensure_expectancy_history(state: BotState) -> dict[str, list[float]]:
     if not isinstance(history, dict):
         history = {}
         setattr(state, "expectancy_history", history)
-    return history
+    return cast(dict[str, list[float]], history)
 
 
 def _record_expectancy_outcome(
@@ -26468,8 +26489,8 @@ def update_signal_weights() -> None:
 
         new_weights = {}
         for tag, pnls in stats_all.items():
-            overall_wr = np.mean([1 if p > 0 else 0 for p in pnls]) if pnls else 0.0
-            recent_wr = (
+            overall_wr = float(np.mean([1 if p > 0 else 0 for p in pnls])) if pnls else 0.0
+            recent_wr = float(
                 np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])])
                 if stats_recent.get(tag)
                 else overall_wr
@@ -33959,7 +33980,7 @@ def _get_pending_symbol_decay_tracker(runtime: Any) -> dict[str, dict[str, Any]]
     if not isinstance(tracker, dict):
         tracker = {}
         state[_PENDING_SYMBOL_DECAY_TRACKER_KEY] = tracker
-    return tracker
+    return cast(dict[str, dict[str, Any]], tracker)
 
 
 def _pending_symbol_decay_config(*, force_cleanup_after: float) -> dict[str, Any]:
@@ -35000,7 +35021,7 @@ def _dependency_breakers(state: BotState) -> DependencyBreakers:
         return breakers
     breakers = DependencyBreakers()
     state.dependency_breakers = breakers
-    return breakers
+    return cast(DependencyBreakers, breakers)
 
 
 def _pretrade_rate_limiter(state: BotState) -> SlidingWindowRateLimiter:
@@ -35029,7 +35050,7 @@ def _pretrade_rate_limiter(state: BotState) -> SlidingWindowRateLimiter:
         cancel_loop_block_bars=int(get_env("AI_TRADING_CANCEL_LOOP_BLOCK_BARS", 3, cast=int)),
     )
     state.pretrade_rate_limiter = limiter
-    return limiter
+    return cast(SlidingWindowRateLimiter, limiter)
 
 
 def _handle_error(
@@ -43941,6 +43962,16 @@ def _get_latest_price_simple(symbol: str, *_, **__):
                 else:
                     continue
             except AlpacaAuthenticationError:
+                try:
+                    from ai_trading.alpaca_api import _set_alpaca_service_available
+                except Exception as import_exc:
+                    logger.debug("ALPACA_SERVICE_FLAG_IMPORT_FAILED", exc_info=import_exc)
+                    _set_alpaca_service_available = None  # type: ignore[assignment]
+                if callable(_set_alpaca_service_available):
+                    try:
+                        _set_alpaca_service_available(False)
+                    except Exception as set_exc:
+                        logger.debug("ALPACA_SERVICE_FLAG_SET_FAILED", exc_info=set_exc)
                 _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
                 _cache_feed_if_allowed(force=True)
                 return None

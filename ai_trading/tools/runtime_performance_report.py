@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 import json
+import math
 from pathlib import Path
 from statistics import median
 import sys
@@ -22,6 +23,7 @@ _DEFAULT_GATE_SUMMARY_PATH = "runtime/gate_effectiveness_summary.json"
 _DEFAULT_GATE_LOG_PATH = "runtime/gate_effectiveness.jsonl"
 _DEFAULT_TCA_PATH = "runtime/tca_records.jsonl"
 _DEFAULT_FILL_EVENTS_PATH = "runtime/fill_events.jsonl"
+_DEFAULT_EDGE_REALISM_STATE_PATH = "runtime/edge_realism_state.json"
 
 
 def _as_float(value: Any) -> float | None:
@@ -59,6 +61,57 @@ def _as_bool(value: Any) -> bool | None:
     return None
 
 
+def _confidence_z_from_level(level: float | None) -> float | None:
+    """Approximate z-score for common one-sided confidence levels."""
+
+    if level is None:
+        return None
+    if not math.isfinite(float(level)):
+        return None
+    clipped = max(0.0, min(float(level), 0.9999))
+    if clipped <= 0.0:
+        return 0.0
+    anchors = (
+        (0.80, 1.2816),
+        (0.85, 1.4395),
+        (0.90, 1.6449),
+        (0.95, 1.9600),
+        (0.975, 2.2414),
+        (0.99, 2.5758),
+    )
+    _, best_z = anchors[0]
+    best_distance = abs(clipped - float(anchors[0][0]))
+    for level_anchor, z_anchor in anchors[1:]:
+        distance = abs(clipped - float(level_anchor))
+        if distance < best_distance:
+            best_z = z_anchor
+            best_distance = distance
+    if clipped >= 0.995:
+        return 2.807
+    if clipped <= 0.55:
+        return 0.126
+    return float(best_z)
+
+
+def _wilson_lower_bound(successes: int, trials: int, z_score: float) -> float | None:
+    """Return Wilson-score lower bound for a Bernoulli proportion."""
+
+    if trials <= 0:
+        return None
+    z = float(max(z_score, 0.0))
+    if z <= 0.0:
+        return None
+    s = max(0, min(int(successes), int(trials)))
+    n = float(trials)
+    p_hat = float(s) / n
+    z_sq = z * z
+    denom = 1.0 + (z_sq / n)
+    center = p_hat + (z_sq / (2.0 * n))
+    spread = z * math.sqrt((p_hat * (1.0 - p_hat) + (z_sq / (4.0 * n))) / n)
+    lower = (center - spread) / denom
+    return max(0.0, min(1.0, float(lower)))
+
+
 def _env_text(name: str, default: str) -> str:
     value = str(get_env(name, default, cast=str) or "").strip()
     return value or default
@@ -91,6 +144,7 @@ def resolve_runtime_report_paths(
     gate_log_path: str | None = None,
     tca_path: str | None = None,
     fill_events_path: str | None = None,
+    edge_realism_state_path: str | None = None,
 ) -> dict[str, Path | None]:
     """Resolve runtime report paths with env/runtime-root parity."""
 
@@ -117,6 +171,13 @@ def resolve_runtime_report_paths(
         "AI_TRADING_RUNTIME_PERF_FILL_EVENTS_PATH",
         _env_text("AI_TRADING_FILL_EVENTS_PATH", _DEFAULT_FILL_EVENTS_PATH),
     )
+    configured_edge_realism_state = _env_text(
+        "AI_TRADING_RUNTIME_PERF_EDGE_REALISM_STATE_PATH",
+        _env_text(
+            "AI_TRADING_EDGE_REALISM_STATE_PATH",
+            _DEFAULT_EDGE_REALISM_STATE_PATH,
+        ),
+    )
 
     trade_history_raw = (
         _normalise_cli_path(trade_history_path)
@@ -137,6 +198,9 @@ def resolve_runtime_report_paths(
     fill_events_raw = _normalise_cli_path(fill_events_path)
     if fill_events_raw is None:
         fill_events_raw = configured_fill_events
+    edge_realism_state_raw = _normalise_cli_path(edge_realism_state_path)
+    if edge_realism_state_raw is None:
+        edge_realism_state_raw = configured_edge_realism_state
 
     resolved_gate_log: Path | None = None
     if gate_log_raw:
@@ -156,6 +220,12 @@ def resolve_runtime_report_paths(
             fill_events_raw,
             default_relative=_DEFAULT_FILL_EVENTS_PATH,
         )
+    resolved_edge_realism_state: Path | None = None
+    if edge_realism_state_raw:
+        resolved_edge_realism_state = resolve_runtime_artifact_path(
+            edge_realism_state_raw,
+            default_relative=_DEFAULT_EDGE_REALISM_STATE_PATH,
+        )
 
     return {
         "trade_history": resolve_runtime_artifact_path(
@@ -169,6 +239,7 @@ def resolve_runtime_report_paths(
         "gate_log": resolved_gate_log,
         "tca": resolved_tca,
         "fill_events": resolved_fill_events,
+        "edge_realism_state": resolved_edge_realism_state,
     }
 
 
@@ -203,6 +274,66 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
     if min_win_rate is None:
         min_win_rate = _as_float(
             get_env("AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE", 0.52, cast=float)
+        )
+    min_win_rate_confidence_floor = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_WIN_RATE_CONFIDENCE_FLOOR",
+            None,
+            cast=float,
+        )
+    )
+    if min_win_rate_confidence_floor is None:
+        min_win_rate_confidence_floor = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_MIN_WIN_RATE_CONFIDENCE_FLOOR",
+                0.0,
+                cast=float,
+            )
+        )
+    win_rate_confidence_z = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_WIN_RATE_CONFIDENCE_Z",
+            None,
+            cast=float,
+        )
+    )
+    if win_rate_confidence_z is None:
+        win_rate_confidence_z = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_WIN_RATE_CONFIDENCE_Z",
+                0.0,
+                cast=float,
+            )
+        )
+    win_rate_confidence_level = _as_float(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_WIN_RATE_CONFIDENCE_LEVEL",
+            None,
+            cast=float,
+        )
+    )
+    if win_rate_confidence_level is None:
+        win_rate_confidence_level = _as_float(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_WIN_RATE_CONFIDENCE_LEVEL",
+                0.0,
+                cast=float,
+            )
+        )
+    win_rate_confidence_min_trades = _as_int(
+        get_env(
+            "AI_TRADING_EXECUTION_RUNTIME_GONOGO_WIN_RATE_CONFIDENCE_MIN_TRADES",
+            None,
+            cast=int,
+        )
+    )
+    if win_rate_confidence_min_trades is None:
+        win_rate_confidence_min_trades = _as_int(
+            get_env(
+                "AI_TRADING_RUNTIME_GONOGO_WIN_RATE_CONFIDENCE_MIN_TRADES",
+                0,
+                cast=int,
+            )
         )
     min_net_pnl = _as_float(
         get_env("AI_TRADING_EXECUTION_RUNTIME_GONOGO_MIN_NET_PNL", None, cast=float)
@@ -483,6 +614,34 @@ def resolve_runtime_gonogo_thresholds() -> dict[str, Any]:
         "min_closed_trades": int(max(0, min_closed_trades or 50)),
         "min_profit_factor": float(min_profit_factor if min_profit_factor is not None else 1.0),
         "min_win_rate": float(max(0.0, min(1.0, min_win_rate if min_win_rate is not None else 0.52))),
+        "min_win_rate_confidence_floor": float(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    (
+                        min_win_rate_confidence_floor
+                        if min_win_rate_confidence_floor is not None
+                        else 0.0
+                    ),
+                ),
+            )
+        ),
+        "win_rate_confidence_z": float(
+            max(0.0, win_rate_confidence_z if win_rate_confidence_z is not None else 0.0)
+        ),
+        "win_rate_confidence_level": float(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    win_rate_confidence_level if win_rate_confidence_level is not None else 0.0,
+                ),
+            )
+        ),
+        "win_rate_confidence_min_trades": int(
+            max(0, win_rate_confidence_min_trades if win_rate_confidence_min_trades is not None else 0)
+        ),
         "min_net_pnl": float(min_net_pnl if min_net_pnl is not None else 0.0),
         "min_acceptance_rate": float(
             max(0.0, min(1.0, min_acceptance_rate if min_acceptance_rate is not None else 0.02))
@@ -2004,6 +2163,101 @@ def _top_negative_attr(
     ]
 
 
+def _rejection_concentration_rows(
+    top_gates: Sequence[Mapping[str, Any]],
+    *,
+    rejected_records: int,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    if rejected_records <= 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in list(top_gates)[: max(1, int(limit))]:
+        gate_name = str(item.get("gate") or "").strip()
+        gate_count = _as_int(item.get("count")) or 0
+        if not gate_name or gate_count <= 0:
+            continue
+        rows.append(
+            {
+                "gate": gate_name,
+                "count": int(gate_count),
+                "ratio": float(gate_count / float(rejected_records)),
+            }
+        )
+    return rows
+
+
+def summarize_edge_realism_state(path: Path) -> dict[str, Any]:
+    summary: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+    if not path.exists():
+        return summary
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        summary["valid"] = False
+        return summary
+
+    global_raw = payload.get("global")
+    global_obj = dict(global_raw) if isinstance(global_raw, Mapping) else {}
+    global_samples = max(0, _as_int(global_obj.get("samples")) or 0)
+    global_ratio = _as_float(global_obj.get("mean_realized_to_expected_ratio"))
+    mean_realized = _as_float(global_obj.get("mean_realized_net_edge_bps"))
+    mean_expected = _as_float(global_obj.get("mean_expected_net_edge_bps"))
+
+    buckets_raw = payload.get("buckets")
+    buckets_obj = dict(buckets_raw) if isinstance(buckets_raw, Mapping) else {}
+    bucket_rows: list[dict[str, Any]] = []
+    for key_raw, value in buckets_obj.items():
+        if not isinstance(value, Mapping):
+            continue
+        samples = max(0, _as_int(value.get("samples")) or 0)
+        if samples <= 0:
+            continue
+        ratio = _as_float(value.get("mean_realized_to_expected_ratio"))
+        if ratio is None:
+            continue
+        bucket_rows.append(
+            {
+                "bucket": str(key_raw),
+                "samples": int(samples),
+                "mean_realized_to_expected_ratio": float(ratio),
+                "mean_realized_net_edge_bps": _as_float(
+                    value.get("mean_realized_net_edge_bps")
+                ),
+                "mean_expected_net_edge_bps": _as_float(
+                    value.get("mean_expected_net_edge_bps")
+                ),
+            }
+        )
+    bucket_rows.sort(
+        key=lambda row: (
+            float(row.get("mean_realized_to_expected_ratio") or 1.0),
+            -int(row.get("samples") or 0),
+            str(row.get("bucket") or ""),
+        )
+    )
+
+    summary.update(
+        {
+            "valid": True,
+            "version": _as_int(payload.get("version")),
+            "updated_at": payload.get("updated_at"),
+            "global_samples": int(global_samples),
+            "global_mean_realized_to_expected_ratio": (
+                float(global_ratio) if global_ratio is not None else None
+            ),
+            "global_mean_realized_net_edge_bps": (
+                float(mean_realized) if mean_realized is not None else None
+            ),
+            "global_mean_expected_net_edge_bps": (
+                float(mean_expected) if mean_expected is not None else None
+            ),
+            "bucket_count": int(len(bucket_rows)),
+            "worst_buckets": bucket_rows[:5],
+        }
+    )
+    return summary
+
+
 def _summarize_gate_effectiveness_daily(path: Path) -> list[dict[str, Any]]:
     rows = _load_json_lines(path)
     buckets: dict[str, dict[str, Any]] = {}
@@ -2101,6 +2355,21 @@ def summarize_gate_effectiveness(
             key=lambda item: (-item[1], item[0]),
         )
         top_gates = [{"gate": name, "count": count} for name, count in ranked[:10]]
+    rejection_concentration = _rejection_concentration_rows(
+        top_gates,
+        rejected_records=int(rejected_records),
+        limit=5,
+    )
+    top_rejection_concentration_ratio = (
+        _as_float(rejection_concentration[0].get("ratio"))
+        if rejection_concentration
+        else None
+    )
+    top_rejection_concentration_gate = (
+        str(rejection_concentration[0].get("gate") or "")
+        if rejection_concentration
+        else None
+    )
 
     acceptance_rate = 0.0
     if total_records > 0:
@@ -2117,6 +2386,10 @@ def summarize_gate_effectiveness(
                 payload.get("total_expected_net_edge_bps")
             ),
             "top_gates": top_gates,
+            "top_rejection_reasons_by_count": top_gates,
+            "rejection_concentration": rejection_concentration,
+            "top_rejection_concentration_ratio": top_rejection_concentration_ratio,
+            "top_rejection_concentration_gate": top_rejection_concentration_gate,
             "top_negative_gates": _top_negative_attr(payload, "gate_attribution"),
             "top_negative_symbols": _top_negative_attr(payload, "symbol_attribution"),
             "top_negative_regimes": _top_negative_attr(payload, "regime_attribution"),
@@ -2162,6 +2435,13 @@ def summarize_execution_vs_alpha(
     realization_gap_bps = None
     if realized_net_edge_bps is not None and expected_edge_per_accept_bps is not None:
         realization_gap_bps = float(realized_net_edge_bps - expected_edge_per_accept_bps)
+    edge_realism_gap_ratio = None
+    if (
+        realized_net_edge_bps is not None
+        and expected_edge_per_accept_bps is not None
+        and expected_edge_per_accept_bps > 0.0
+    ):
+        edge_realism_gap_ratio = float(realized_net_edge_bps / expected_edge_per_accept_bps)
 
     daily_trade_rows_raw = trade_summary.get("daily_expectancy")
     daily_gate_rows_raw = gate_summary.get("daily_gate_stats")
@@ -2199,12 +2479,20 @@ def summarize_execution_vs_alpha(
         day_gap = None
         if day_realized is not None and day_expected_per_accept is not None:
             day_gap = float(day_realized - day_expected_per_accept)
+        day_ratio = None
+        if (
+            day_realized is not None
+            and day_expected_per_accept is not None
+            and day_expected_per_accept > 0.0
+        ):
+            day_ratio = float(day_realized / day_expected_per_accept)
         daily.append(
             {
                 "date": date_key,
                 "realized_net_edge_bps": day_realized,
                 "expected_edge_per_accept_bps": day_expected_per_accept,
                 "realization_gap_bps": day_gap,
+                "edge_realism_gap_ratio": day_ratio,
                 "trades": _as_int(trade_row.get("trades")) or 0,
                 "accepted_records": int(day_accepted),
             }
@@ -2223,6 +2511,7 @@ def summarize_execution_vs_alpha(
         "execution_drag_share": execution_drag_share,
         "expected_edge_per_accept_bps": expected_edge_per_accept_bps,
         "realization_gap_bps": realization_gap_bps,
+        "edge_realism_gap_ratio": edge_realism_gap_ratio,
         "daily": daily,
     }
 
@@ -2234,6 +2523,7 @@ def build_report(
     tca_path: Path | None = None,
     gate_log_path: Path | None = None,
     fill_events_path: Path | None = None,
+    edge_realism_state_path: Path | None = None,
 ) -> dict[str, Any]:
     trade_summary = summarize_trade_history(
         trade_history_path,
@@ -2244,6 +2534,17 @@ def build_report(
         gate_summary_path,
         gate_log_path=gate_log_path,
     )
+    resolved_edge_realism_path = (
+        Path(edge_realism_state_path)
+        if edge_realism_state_path is not None
+        else resolve_runtime_artifact_path(
+            _env_text(
+                "AI_TRADING_RUNTIME_PERF_EDGE_REALISM_STATE_PATH",
+                _env_text("AI_TRADING_EDGE_REALISM_STATE_PATH", _DEFAULT_EDGE_REALISM_STATE_PATH),
+            ),
+            default_relative=_DEFAULT_EDGE_REALISM_STATE_PATH,
+        )
+    )
     return {
         "trade_history": trade_summary,
         "gate_effectiveness": gate_summary,
@@ -2251,6 +2552,7 @@ def build_report(
             trade_summary=trade_summary,
             gate_summary=gate_summary,
         ),
+        "edge_realism": summarize_edge_realism_state(resolved_edge_realism_path),
     }
 
 
@@ -2272,6 +2574,33 @@ def evaluate_go_no_go(
     if min_win_rate is None:
         min_win_rate = 0.52
     min_win_rate = max(0.0, min(1.0, float(min_win_rate)))
+    min_win_rate_confidence_floor = _as_float(
+        threshold_map.get("min_win_rate_confidence_floor")
+    )
+    if min_win_rate_confidence_floor is None:
+        min_win_rate_confidence_floor = _as_float(
+            threshold_map.get("min_win_rate_confidence")
+        )
+    if min_win_rate_confidence_floor is None:
+        min_win_rate_confidence_floor = 0.0
+    min_win_rate_confidence_floor = max(
+        0.0, min(1.0, float(min_win_rate_confidence_floor))
+    )
+    win_rate_confidence_z = _as_float(threshold_map.get("win_rate_confidence_z"))
+    win_rate_confidence_level = _as_float(
+        threshold_map.get("win_rate_confidence_level")
+    )
+    if win_rate_confidence_z is None and win_rate_confidence_level is not None:
+        win_rate_confidence_z = _confidence_z_from_level(win_rate_confidence_level)
+    if win_rate_confidence_z is None:
+        win_rate_confidence_z = 0.0
+    win_rate_confidence_z = max(0.0, float(win_rate_confidence_z))
+    win_rate_confidence_min_trades = _as_int(
+        threshold_map.get("win_rate_confidence_min_trades")
+    )
+    if win_rate_confidence_min_trades is None:
+        win_rate_confidence_min_trades = 0
+    win_rate_confidence_min_trades = max(0, int(win_rate_confidence_min_trades))
     min_net_pnl = _as_float(threshold_map.get("min_net_pnl"))
     if min_net_pnl is None:
         min_net_pnl = 0.0
@@ -2483,6 +2812,7 @@ def evaluate_go_no_go(
     closed_trades = _as_int(trade.get("closed_trades"))
     if closed_trades is None:
         closed_trades = _as_int(trade.get("pnl_records")) or 0
+    wins_count = _as_int(trade.get("wins"))
     profit_factor = _as_float(trade.get("profit_factor"))
     win_rate = _as_float(trade.get("win_rate")) or 0.0
     net_pnl = _as_float(trade.get("pnl_sum")) or 0.0
@@ -2509,6 +2839,7 @@ def evaluate_go_no_go(
         if source_trade_rows:
             aggregated = _aggregate_trade_metric_rows(source_trade_rows)
             closed_trades = int(aggregated["closed_trades"])
+            wins_count = int(aggregated["wins"])
             profit_factor = _as_float(aggregated["profit_factor"])
             win_rate = float(aggregated["win_rate"])
             net_pnl = float(aggregated["net_pnl"])
@@ -2537,6 +2868,7 @@ def evaluate_go_no_go(
                     _as_float(source_pnl.get(trade_fill_source))
                     or 0.0
                 )
+            wins_count = None
             win_rate = 0.0
             profit_factor = None
             pnl_available = bool(trade.get("pnl_available")) and int(closed_trades) > 0
@@ -2561,6 +2893,7 @@ def evaluate_go_no_go(
             source_trade_rows = filtered_rows
             aggregated = _aggregate_trade_metric_rows(source_trade_rows)
             closed_trades = int(aggregated["closed_trades"])
+            wins_count = int(aggregated["wins"])
             profit_factor = _as_float(aggregated["profit_factor"])
             win_rate = float(aggregated["win_rate"])
             net_pnl = float(aggregated["net_pnl"])
@@ -2592,6 +2925,7 @@ def evaluate_go_no_go(
             trade_used_days = int(len(recent_trade_rows))
             aggregated = _aggregate_trade_metric_rows(recent_trade_rows)
             closed_trades = int(aggregated["closed_trades"])
+            wins_count = int(aggregated["wins"])
             win_rate = float(aggregated["win_rate"])
             profit_factor = _as_float(aggregated["profit_factor"])
             net_pnl = float(aggregated["net_pnl"])
@@ -2724,6 +3058,40 @@ def evaluate_go_no_go(
         execution_capture_ratio is None
         or execution_capture_ratio >= float(min_execution_capture_ratio)
     )
+    confidence_enabled = bool(
+        float(min_win_rate_confidence_floor) > 0.0 and float(win_rate_confidence_z) > 0.0
+    )
+    wins_for_confidence = (
+        int(wins_count)
+        if wins_count is not None
+        else (
+            int(round(float(win_rate) * float(closed_trades)))
+            if int(closed_trades) > 0
+            else 0
+        )
+    )
+    wins_for_confidence = max(0, min(int(wins_for_confidence), int(closed_trades)))
+    win_rate_confidence_lower_bound = _wilson_lower_bound(
+        wins_for_confidence,
+        int(closed_trades),
+        float(win_rate_confidence_z),
+    )
+    if not confidence_enabled:
+        win_rate_confidence_passes = True
+        win_rate_confidence_reason = "disabled"
+    elif int(closed_trades) < int(win_rate_confidence_min_trades):
+        win_rate_confidence_passes = True
+        win_rate_confidence_reason = "insufficient_trades"
+    elif win_rate_confidence_lower_bound is None:
+        win_rate_confidence_passes = False
+        win_rate_confidence_reason = "insufficient_samples"
+    else:
+        win_rate_confidence_passes = bool(
+            float(win_rate_confidence_lower_bound) >= float(min_win_rate_confidence_floor)
+        )
+        win_rate_confidence_reason = (
+            "ok" if win_rate_confidence_passes else "win_rate_confidence_gate"
+        )
 
     checks = {
         "pnl_available": (pnl_available if require_pnl_available else True),
@@ -2745,6 +3113,11 @@ def evaluate_go_no_go(
         ),
         "win_rate": (
             (float(win_rate) >= float(min_win_rate))
+            if require_pnl_available
+            else True
+        ),
+        "win_rate_confidence": (
+            bool(win_rate_confidence_passes)
             if require_pnl_available
             else True
         ),
@@ -2800,6 +3173,14 @@ def evaluate_go_no_go(
             "min_closed_trades": int(min_closed_trades),
             "min_profit_factor": float(min_profit_factor),
             "min_win_rate": float(min_win_rate),
+            "min_win_rate_confidence_floor": float(min_win_rate_confidence_floor),
+            "win_rate_confidence_z": float(win_rate_confidence_z),
+            "win_rate_confidence_level": (
+                float(win_rate_confidence_level)
+                if win_rate_confidence_level is not None
+                else None
+            ),
+            "win_rate_confidence_min_trades": int(win_rate_confidence_min_trades),
             "min_net_pnl": float(min_net_pnl),
             "min_acceptance_rate": float(min_acceptance_rate),
             "min_expected_net_edge_bps": float(min_expected_net_edge_bps),
@@ -2833,8 +3214,16 @@ def evaluate_go_no_go(
             "trade_used_days": int(trade_used_days),
             "gate_used_days": int(gate_used_days),
             "closed_trades": int(closed_trades),
+            "wins": int(wins_for_confidence),
             "profit_factor": profit_factor,
             "win_rate": float(win_rate),
+            "win_rate_confidence_enabled": bool(confidence_enabled),
+            "win_rate_confidence_reason": str(win_rate_confidence_reason),
+            "win_rate_confidence_lower_bound": (
+                float(win_rate_confidence_lower_bound)
+                if win_rate_confidence_lower_bound is not None
+                else None
+            ),
             "net_pnl": float(net_pnl),
             "gate_valid": gate_valid,
             "acceptance_rate": acceptance_rate,
@@ -2873,6 +3262,7 @@ def format_text_report(report: dict[str, Any]) -> str:
     trade = report.get("trade_history", {})
     gate = report.get("gate_effectiveness", {})
     attribution = report.get("execution_vs_alpha", {})
+    edge_realism = report.get("edge_realism", {})
     lines = [
         "Runtime Performance Report",
         f"- Trade history file: {trade.get('path')} (exists={trade.get('exists')})",
@@ -2988,6 +3378,14 @@ def format_text_report(report: dict[str, Any]) -> str:
             lines.append("- Top gate counts:")
             for item in top_gates:
                 lines.append(f"  - {item.get('gate')}: {item.get('count')}")
+        rejection_concentration = gate.get("rejection_concentration", [])
+        if isinstance(rejection_concentration, list) and rejection_concentration:
+            top_concentration = rejection_concentration[0]
+            lines.append(
+                "- Top rejection concentration: "
+                f"{top_concentration.get('gate')} "
+                f"({(float(top_concentration.get('ratio', 0.0)) * 100.0):.1f}% of rejected)"
+            )
         top_negative_gates = gate.get("top_negative_gates", [])
         if top_negative_gates:
             lines.append("- Worst expected edge gates:")
@@ -3010,7 +3408,15 @@ def format_text_report(report: dict[str, Any]) -> str:
             f"realized_edge_bps={attribution.get('realized_net_edge_bps')} "
             f"pre_exec_edge_bps={attribution.get('pre_execution_edge_bps_est')} "
             f"slippage_drag_bps={attribution.get('slippage_drag_bps')} "
-            f"capture_ratio={attribution.get('execution_capture_ratio')}"
+            f"capture_ratio={attribution.get('execution_capture_ratio')} "
+            f"realism_ratio={attribution.get('edge_realism_gap_ratio')}"
+        )
+    if isinstance(edge_realism, Mapping) and bool(edge_realism.get("valid")):
+        lines.append(
+            "- Edge realism calibration: "
+            f"samples={edge_realism.get('global_samples')} "
+            f"ratio={edge_realism.get('global_mean_realized_to_expected_ratio')} "
+            f"updated_at={edge_realism.get('updated_at')}"
         )
 
     return "\n".join(lines)
@@ -3044,6 +3450,11 @@ def main(argv: list[str] | None = None) -> int:
         "--fill-events-path",
         default=None,
         help="Optional path to fill events jsonl used for reconciliation.",
+    )
+    parser.add_argument(
+        "--edge-realism-state-path",
+        default=None,
+        help="Optional path to edge realism state json for calibration diagnostics.",
     )
     parser.add_argument(
         "--json",
@@ -3112,6 +3523,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_log_path=args.gate_log_path,
         tca_path=args.tca_path,
         fill_events_path=args.fill_events_path,
+        edge_realism_state_path=args.edge_realism_state_path,
     )
 
     report = build_report(
@@ -3130,6 +3542,11 @@ def main(argv: list[str] | None = None) -> int:
         fill_events_path=(
             Path(paths["fill_events"])
             if isinstance(paths.get("fill_events"), Path)
+            else None
+        ),
+        edge_realism_state_path=(
+            Path(paths["edge_realism_state"])
+            if isinstance(paths.get("edge_realism_state"), Path)
             else None
         ),
     )

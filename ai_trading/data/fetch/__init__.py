@@ -9123,6 +9123,13 @@ def _fetch_bars(
             raise ValueError("empty_result_unavailable")
 
         call_attempts = _state.setdefault("fallback_feeds_attempted", set())
+        # Record the active feed so we do not recursively re-attempt the same
+        # Alpaca source in fallback candidate loops for a single request chain.
+        if _feed:
+            try:
+                call_attempts.add(str(_feed).strip().lower())
+            except Exception:
+                call_attempts.add(_feed)
 
         skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
         alternate_history = _state.setdefault("alternate_feed_attempts", set())

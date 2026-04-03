@@ -359,7 +359,8 @@ class TechnicalSignalAnalyzer:
             avg_loss = losses.rolling(window=period).mean()
             rs = avg_gain / avg_loss
             rsi = 100 - 100 / (1 + rs)
-            return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
+            rsi_last = rsi.iloc[-1]
+            return float(rsi_last) if not pd.isna(rsi_last) else 50.0
         except (KeyError, ValueError, TypeError, IndexError, ZeroDivisionError):
             return 50.0
 

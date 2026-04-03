@@ -16,14 +16,14 @@ class _FallbackRegistry:
     def unregister(self, *_, **__) -> None:
         pass
 
-PROMETHEUS_AVAILABLE = False
-REGISTRY = None
-CollectorRegistry = None
-Gauge = None
-Counter = None
-Histogram = None
-Summary = None
-start_http_server = None
+PROMETHEUS_AVAILABLE: bool = False
+REGISTRY: Any = None
+CollectorRegistry: Any = None
+Gauge: Any = None
+Counter: Any = None
+Histogram: Any = None
+Summary: Any = None
+start_http_server: Any = None
 try:
     from prometheus_client import REGISTRY as _REGISTRY
     from prometheus_client import CollectorRegistry as _CollectorRegistry

@@ -57,18 +57,25 @@ def _json_lines(path: Path, limit: int) -> list[dict[str, Any]]:
     return rows[-limit:]
 
 
-def _extract_json_objects(lines: Iterable[str]) -> list[dict[str, Any]]:
+def _extract_json_objects(payload: str | Iterable[str]) -> list[dict[str, Any]]:
+    text = payload if isinstance(payload, str) else "\n".join(payload)
+    decoder = json.JSONDecoder()
     objects: list[dict[str, Any]] = []
-    for raw in lines:
-        text = raw.strip()
-        if not text or (not text.startswith("{") and not text.startswith("[")):
+    idx = 0
+    length = len(text)
+    while idx < length:
+        char = text[idx]
+        if char not in "{[":
+            idx += 1
             continue
         try:
-            parsed = json.loads(text)
+            parsed, next_idx = decoder.raw_decode(text, idx)
         except json.JSONDecodeError:
+            idx += 1
             continue
         if isinstance(parsed, dict):
             objects.append(parsed)
+        idx = next_idx
     return objects
 
 
@@ -84,9 +91,13 @@ def _run_module_json(module: str, extra_args: list[str]) -> dict[str, Any]:
         raise RuntimeError(
             f"module failed rc={proc.returncode}: {module}; stderr={proc.stderr.strip()}"
         )
-    objects = _extract_json_objects(proc.stdout.splitlines())
+    objects = _extract_json_objects(proc.stdout)
     if not objects:
-        raise RuntimeError(f"no JSON object emitted by {module}")
+        stdout_tail = proc.stdout.strip().splitlines()[-5:]
+        raise RuntimeError(
+            "no JSON object emitted by "
+            f"{module}; stdout_tail={' | '.join(stdout_tail)}; stderr={proc.stderr.strip()}"
+        )
     return objects[-1]
 
 

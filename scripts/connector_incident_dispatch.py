@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -15,6 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 SlackIncidentNotifier = Callable[[dict[str, Any]], dict[str, Any]]
 SlackEodNotifier = Callable[[dict[str, Any]], dict[str, Any]]
@@ -31,6 +34,64 @@ def _bool_env(value: str | None, *, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _resolve_runtime_env_path(*, env: Mapping[str, str], repo_root: Path) -> Path:
+    raw = str(env.get("AI_TRADING_RUNTIME_ENV_PATH") or "").strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = (repo_root / candidate).resolve()
+        return candidate
+    return (repo_root / ".env.runtime").resolve()
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    parsed: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in raw_line:
+            continue
+        key_raw, value_raw = raw_line.split("=", 1)
+        key = key_raw.strip()
+        if not _ENV_KEY_RE.match(key):
+            continue
+        value = value_raw.strip()
+        if len(value) >= 2 and (
+            (value.startswith('"') and value.endswith('"'))
+            or (value.startswith("'") and value.endswith("'"))
+        ):
+            value = value[1:-1]
+        parsed[key] = value
+    return parsed
+
+
+def _load_runtime_env_defaults(
+    *,
+    env: dict[str, str] | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    target_env = os.environ if env is None else env
+    root = REPO_ROOT if repo_root is None else repo_root
+    runtime_env_path = _resolve_runtime_env_path(env=target_env, repo_root=root)
+    parsed = _parse_env_file(runtime_env_path)
+    applied = 0
+    for key, value in parsed.items():
+        if not target_env.get(key):
+            target_env[key] = value
+            applied += 1
+    return {
+        "path": str(runtime_env_path),
+        "loaded": bool(parsed),
+        "entries": int(len(parsed)),
+        "applied": int(applied),
+    }
 
 
 def _load_connector_callables() -> tuple[
@@ -89,6 +150,27 @@ def run_dispatch(
             if min_capture:
                 try:
                     slack_args["min_capture_ratio"] = float(min_capture)
+                except ValueError:
+                    pass
+            for arg_name, env_name in {
+                "min_edge_realism_ratio": "AI_TRADING_INCIDENT_MIN_EDGE_REALISM_RATIO",
+                "min_expected_edge_bps_for_realism": "AI_TRADING_INCIDENT_MIN_EXPECTED_EDGE_BPS_FOR_REALISM",
+                "max_rejection_concentration_ratio": "AI_TRADING_INCIDENT_MAX_REJECTION_CONCENTRATION_RATIO",
+            }.items():
+                raw = (env_map.get(env_name) or "").strip()
+                if not raw:
+                    continue
+                try:
+                    slack_args[arg_name] = float(raw)
+                except ValueError:
+                    continue
+            min_rejected = (
+                env_map.get("AI_TRADING_INCIDENT_MIN_REJECTED_RECORDS_FOR_CONCENTRATION")
+                or ""
+            ).strip()
+            if min_rejected:
+                try:
+                    slack_args["min_rejected_records_for_concentration"] = int(min_rejected)
                 except ValueError:
                     pass
             state_path = (env_map.get("AI_TRADING_SLACK_INCIDENT_STATE_PATH") or "").strip()
@@ -252,6 +334,27 @@ def run_dispatch(
                 oncall_args["min_capture_ratio"] = float(min_capture)
             except ValueError:
                 pass
+        for arg_name, env_name in {
+            "min_edge_realism_ratio": "AI_TRADING_INCIDENT_MIN_EDGE_REALISM_RATIO",
+            "min_expected_edge_bps_for_realism": "AI_TRADING_INCIDENT_MIN_EXPECTED_EDGE_BPS_FOR_REALISM",
+            "max_rejection_concentration_ratio": "AI_TRADING_INCIDENT_MAX_REJECTION_CONCENTRATION_RATIO",
+        }.items():
+            raw = (env_map.get(env_name) or "").strip()
+            if not raw:
+                continue
+            try:
+                oncall_args[arg_name] = float(raw)
+            except ValueError:
+                continue
+        min_rejected = (
+            env_map.get("AI_TRADING_INCIDENT_MIN_REJECTED_RECORDS_FOR_CONCENTRATION")
+            or ""
+        ).strip()
+        if min_rejected:
+            try:
+                oncall_args["min_rejected_records_for_concentration"] = int(min_rejected)
+            except ValueError:
+                pass
         if _bool_env(env_map.get("AI_TRADING_CONNECTOR_ONCALL_FORCE"), default=False):
             oncall_args["force"] = True
 
@@ -277,6 +380,7 @@ def run_dispatch(
 
 def main(argv: list[str] | None = None) -> int:
     _ = argv
+    _load_runtime_env_defaults()
     slack_notifier, slack_eod_notifier, linear_creator, oncall_notifier = _load_connector_callables()
     summary = run_dispatch(
         slack_notifier=slack_notifier,

@@ -51,6 +51,9 @@ def test_build_report_summarizes_trade_and_gate_data(tmp_path: Path) -> None:
     assert trade["win_rate"] == 2 / 3
     assert gate["acceptance_rate"] == 0.25
     assert gate["top_gates"][0]["gate"] == "COST_GATE"
+    assert gate["top_rejection_reasons_by_count"] == gate["top_gates"]
+    assert gate["top_rejection_concentration_gate"] == "COST_GATE"
+    assert gate["top_rejection_concentration_ratio"] == pytest.approx(11 / 15)
 
 
 def test_build_report_treats_reward_as_realized_pnl(tmp_path: Path) -> None:
@@ -131,7 +134,62 @@ def test_build_report_includes_execution_vs_alpha_attribution(tmp_path: Path) ->
     assert attribution["realized_net_edge_bps"] is not None
     assert attribution["slippage_drag_bps"] is not None
     assert attribution["expected_edge_per_accept_bps"] == pytest.approx(10.0)
+    assert attribution["edge_realism_gap_ratio"] is not None
     assert isinstance(attribution["daily"], list)
+
+
+def test_build_report_includes_edge_realism_snapshot(tmp_path: Path) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    edge_realism_state_path = tmp_path / "edge_realism_state.json"
+    trade_history_path.write_text(
+        json.dumps(
+            [
+                {"symbol": "AAPL", "side": "buy", "pnl": 5.0},
+                {"symbol": "AAPL", "side": "sell", "pnl": -2.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_summary_path.write_text(
+        json.dumps({"total_records": 1, "total_accepted_records": 1, "total_rejected_records": 0}),
+        encoding="utf-8",
+    )
+    edge_realism_state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-04-01T00:00:00+00:00",
+                "global": {
+                    "samples": 12,
+                    "mean_realized_to_expected_ratio": 0.71,
+                    "mean_realized_net_edge_bps": 1.4,
+                    "mean_expected_net_edge_bps": 2.0,
+                },
+                "buckets": {
+                    "aapl:buy:midday:11:trend:normal": {
+                        "samples": 6,
+                        "mean_realized_to_expected_ratio": 0.66,
+                        "mean_realized_net_edge_bps": 1.2,
+                        "mean_expected_net_edge_bps": 1.8,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+        edge_realism_state_path=edge_realism_state_path,
+    )
+
+    edge_realism = report["edge_realism"]
+    assert edge_realism["valid"] is True
+    assert edge_realism["global_samples"] == 12
+    assert edge_realism["global_mean_realized_to_expected_ratio"] == pytest.approx(0.71)
+    assert edge_realism["bucket_count"] == 1
 
 
 def test_format_text_report_handles_missing_inputs(tmp_path: Path) -> None:
@@ -922,6 +980,51 @@ def test_evaluate_go_no_go_fails_when_metrics_are_weak() -> None:
     assert decision["gate_passed"] is False
     assert "pnl_available" in decision["failed_checks"]
     assert "profit_factor" in decision["failed_checks"]
+
+
+def test_evaluate_go_no_go_applies_win_rate_confidence_gate() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 20,
+            "wins": 12,
+            "profit_factor": 1.2,
+            "win_rate": 0.6,
+            "pnl_sum": 40.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.2,
+            "total_expected_net_edge_bps": 10.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 10,
+            "min_profit_factor": 1.0,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.05,
+            "min_expected_net_edge_bps": 0.0,
+            "min_win_rate_confidence_floor": 0.5,
+            "win_rate_confidence_z": 1.96,
+            "win_rate_confidence_min_trades": 10,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+            "require_open_position_reconciliation": False,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "win_rate_confidence" in decision["failed_checks"]
+    assert decision["observed"]["win_rate_confidence_enabled"] is True
+    assert decision["observed"]["win_rate_confidence_reason"] == "win_rate_confidence_gate"
+    assert (
+        decision["observed"]["win_rate_confidence_lower_bound"]
+        < decision["thresholds"]["min_win_rate_confidence_floor"]
+    )
 
 
 def test_build_report_includes_daily_gate_stats_from_log(tmp_path: Path) -> None:

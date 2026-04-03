@@ -820,8 +820,10 @@ class Settings(_ModelConfigCompatMixin, _SettingsBase):
 
     @data_feed.setter
     def data_feed(self, value: str) -> None:
-        normalized = type(self)._norm_feed(value)
-        normalized = type(self)._enforce_allowed_feed(normalized)
+        normalizer = cast(Any, type(self)._norm_feed)
+        enforcer = cast(Any, type(self)._enforce_allowed_feed)
+        normalized = normalizer(value)
+        normalized = enforcer(normalized)
         super().__setattr__("alpaca_data_feed", normalized)
         if not normalized:
             return

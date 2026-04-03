@@ -171,7 +171,7 @@ class KellyCriterion:
                 f'Kelly calculation: win_rate={win_rate:.3f}, avg_win={avg_win:.3f}, avg_loss={avg_loss:.3f}, '
                 f'kelly_fraction={capped_fraction:.3f}'
             )
-            return capped_fraction
+            return float(capped_fraction)
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating Kelly fraction: {e}')
             return 0.0
@@ -218,7 +218,7 @@ class KellyCriterion:
         """
         fractional = kelly_fraction * fraction
         fractional = max(0.0, fractional)
-        return min(fractional, self.max_fraction)
+        return float(min(fractional, self.max_fraction))
 
     def kelly_with_confidence(self, returns: list[float], confidence: float=None) -> tuple[float, float]:
         """

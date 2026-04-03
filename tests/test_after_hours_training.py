@@ -1137,6 +1137,123 @@ def test_promotion_gate_bundle_can_ignore_sensitivity_gate(
     assert promotion["status"] == "production"
 
 
+def test_promotion_confidence_gate_bundle_requires_effective_trades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=24,
+        mean_expectancy_bps=1.5,
+        max_drawdown_bps=180.0,
+        turnover_ratio=0.25,
+        mean_hit_rate=0.70,
+        hit_rate_stability=0.7,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.6, 0.7], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CONFIDENCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_MIN_EFFECTIVE_TRADES", "100")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_WINRATE_CONFIDENCE_Z", "1.28")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_Z", "1.0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_BOOTSTRAP_ROUNDS", "200")
+
+    gate = after_hours._promotion_confidence_gate_bundle(
+        best=best,
+        runtime_performance_gate={
+            "execution_vs_alpha": {
+                "execution_capture_ratio": 0.7,
+                "daily": [
+                    {
+                        "date": "2026-01-01",
+                        "expected_edge_per_accept_bps": 10.0,
+                        "realized_net_edge_bps": 7.0,
+                    },
+                    {
+                        "date": "2026-01-02",
+                        "expected_edge_per_accept_bps": 9.0,
+                        "realized_net_edge_bps": 6.0,
+                    },
+                ],
+            }
+        },
+        live_execution_quality_gate={
+            "thresholds": {"min_capture_ratio": 0.2, "max_slippage_drag_bps": 8.0}
+        },
+    )
+
+    assert gate["enabled"] is True
+    assert gate["gate_passed"] is False
+    assert gate["reason"] == "insufficient_effective_trades"
+
+
+def test_promotion_confidence_gate_bundle_passes_with_strong_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    best = after_hours.CandidateMetrics(
+        name="xgboost",
+        fold_count=5,
+        profitable_fold_count=5,
+        profitable_fold_ratio=1.0,
+        support=320,
+        mean_expectancy_bps=2.0,
+        max_drawdown_bps=160.0,
+        turnover_ratio=0.20,
+        mean_hit_rate=0.66,
+        hit_rate_stability=0.8,
+        regime_metrics={},
+        oof_probabilities=np.asarray([0.6, 0.7], dtype=float),
+    )
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CONFIDENCE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_MIN_EFFECTIVE_TRADES", "120")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_WINRATE_CONFIDENCE_Z", "1.28")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_CONFIDENCE_Z", "1.0")
+    monkeypatch.setenv("AI_TRADING_PROMOTION_CAPTURE_BOOTSTRAP_ROUNDS", "300")
+    monkeypatch.setenv("AI_TRADING_AFTER_HOURS_PROMOTION_MIN_HIT_RATE", "0.52")
+
+    gate = after_hours._promotion_confidence_gate_bundle(
+        best=best,
+        runtime_performance_gate={
+            "execution_vs_alpha": {
+                "execution_capture_ratio": 0.72,
+                "daily": [
+                    {
+                        "date": "2026-01-01",
+                        "expected_edge_per_accept_bps": 10.0,
+                        "realized_net_edge_bps": 7.0,
+                    },
+                    {
+                        "date": "2026-01-02",
+                        "expected_edge_per_accept_bps": 9.0,
+                        "realized_net_edge_bps": 6.5,
+                    },
+                    {
+                        "date": "2026-01-03",
+                        "expected_edge_per_accept_bps": 11.0,
+                        "realized_net_edge_bps": 8.0,
+                    },
+                    {
+                        "date": "2026-01-04",
+                        "expected_edge_per_accept_bps": 10.0,
+                        "realized_net_edge_bps": 7.2,
+                    },
+                ],
+            }
+        },
+        live_execution_quality_gate={
+            "thresholds": {"min_capture_ratio": 0.35, "max_slippage_drag_bps": 4.5}
+        },
+    )
+
+    assert gate["enabled"] is True
+    assert gate["gate_passed"] is True
+    assert gate["reason"] == "pass"
+    assert gate["observed"]["win_rate_confidence_lower_bound"] is not None
+    assert gate["observed"]["capture_ratio_confidence_lower_bound"] is not None
+
+
 def test_threshold_by_regime_uses_drawdown_penalty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -223,21 +223,22 @@ class ProductionExecutionCoordinator:
         try:
             self.pending_orders[order.id] = order
             await asyncio.sleep(0.1)
-            fill_price = order.price or 100.0
+            fill_price = float(order.price or 100.0)
             if order.side == OrderSide.BUY:
                 fill_price *= 1 + impact_analysis['estimated_slippage_bps'] / 10000
             else:
                 fill_price *= 1 - impact_analysis['estimated_slippage_bps'] / 10000
             order.status = OrderStatus.FILLED
             order.filled_quantity = order.quantity
-            order.average_fill_price = fill_price
+            order.average_fill_price = cast(Any, fill_price)
             order.executed_at = datetime.now(UTC)
             self.completed_orders[order.id] = order
             del self.pending_orders[order.id]
             self._update_position_tracking(order)
-            expected_price = order.price or fill_price
-            actual_slippage_bps = abs(fill_price - expected_price) / expected_price * 10000
-            return ExecutionResult(status='success', order_id=order.id, symbol=order.symbol, side=order.side.value if isinstance(order.side, OrderSide) else order.side, quantity=order.quantity, fill_price=fill_price, execution_time=order.executed_at, message=f'Order executed successfully at ${fill_price:.2f}', actual_slippage_bps=actual_slippage_bps, notional_value=order.quantity * fill_price)
+            expected_price = float(order.price or fill_price)
+            actual_slippage_bps = float(abs(fill_price - expected_price) / expected_price * 10000)
+            notional_value = float(order.quantity * fill_price)
+            return ExecutionResult(status='success', order_id=order.id, symbol=order.symbol, side=order.side.value if isinstance(order.side, OrderSide) else order.side, quantity=order.quantity, fill_price=fill_price, execution_time=order.executed_at, message=f'Order executed successfully at ${fill_price:.2f}', actual_slippage_bps=actual_slippage_bps, notional_value=notional_value)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ORDER_EXECUTION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
             order.status = OrderStatus.REJECTED

@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, cast
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -46,11 +46,11 @@ try:
 except Exception as exc:  # pragma: no cover - exercised in environments missing sqlalchemy
     _SQLALCHEMY_AVAILABLE = False
     _SQLALCHEMY_IMPORT_ERROR = exc
-    MetaData = None  # type: ignore[assignment]
-    Table = None  # type: ignore[assignment]
+    MetaData = None  # type: ignore[assignment,misc]
+    Table = None  # type: ignore[assignment,misc]
     Engine = Any  # type: ignore[assignment,misc]
-    sessionmaker = None  # type: ignore[assignment]
-    IntegrityError = Exception  # type: ignore[assignment]
+    sessionmaker = None  # type: ignore[assignment,misc]
+    IntegrityError = Exception  # type: ignore[assignment,misc]
 
 
 _TERMINAL_STATUSES: frozenset[str] = TERMINAL_INTENT_STATUSES
@@ -358,7 +358,7 @@ class IntentStore:
                     )
                 if row is None:  # pragma: no cover - defensive
                     raise
-                return (self._row_to_intent(row), False)
+                return (self._row_to_intent(cast(Mapping[str, Any], row)), False)
 
             with self._session_factory() as session:
                 row = (
@@ -370,7 +370,7 @@ class IntentStore:
                 )
             if row is None:  # pragma: no cover - defensive
                 raise RuntimeError("intent_insert_missing_row")
-            return (self._row_to_intent(row), True)
+            return (self._row_to_intent(cast(Mapping[str, Any], row)), True)
 
     def get_intent(self, intent_id: str) -> IntentRecord | None:
         """Return intent by ID."""
@@ -386,7 +386,7 @@ class IntentStore:
             )
         if row is None:
             return None
-        return self._row_to_intent(row)
+        return self._row_to_intent(cast(Mapping[str, Any], row))
 
     def get_intent_by_key(self, idempotency_key: str) -> IntentRecord | None:
         """Return intent by idempotency key."""
@@ -404,7 +404,7 @@ class IntentStore:
             )
         if row is None:
             return None
-        return self._row_to_intent(row)
+        return self._row_to_intent(cast(Mapping[str, Any], row))
 
     def get_open_intents(self) -> list[IntentRecord]:
         """Return all non-terminal intents."""
@@ -418,7 +418,7 @@ class IntentStore:
         )
         with self._lock, self._session_factory() as session:
             rows = session.execute(stmt).mappings().all()
-        return [self._row_to_intent(row) for row in rows]
+        return [self._row_to_intent(cast(Mapping[str, Any], row)) for row in rows]
 
     def claim_for_submit(
         self,
@@ -543,7 +543,7 @@ class IntentStore:
         )
         with self._lock, self._session_factory() as session:
             rows = session.execute(stmt).mappings().all()
-        return [self._row_to_fill(row) for row in rows]
+        return [self._row_to_fill(cast(Mapping[str, Any], row)) for row in rows]
 
     def close_intent(
         self,

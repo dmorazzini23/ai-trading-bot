@@ -115,3 +115,72 @@ def test_run_dispatch_forwards_oncall_jsm_ticket_env() -> None:
     assert captured["providers"] == "jsm_ticket"
     assert captured["jsm_site_url"] == "https://example.atlassian.net"
     assert captured["jsm_ticket_project_key"] == "OPS"
+
+
+def test_run_dispatch_forwards_incident_realism_and_concentration_thresholds() -> None:
+    slack_args: dict[str, Any] = {}
+    oncall_args: dict[str, Any] = {}
+
+    def _slack(args: dict[str, Any]) -> dict[str, Any]:
+        slack_args.update(args)
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    def _oncall(args: dict[str, Any]) -> dict[str, Any]:
+        oncall_args.update(args)
+        return {"sent": False, "reason": "no_incident_triggered"}
+
+    payload = dispatch.run_dispatch(
+        env={
+            "AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/abc",
+            "AI_TRADING_CONNECTOR_ONCALL_ENABLED": "1",
+            "AI_TRADING_INCIDENT_MIN_EDGE_REALISM_RATIO": "0.40",
+            "AI_TRADING_INCIDENT_MIN_EXPECTED_EDGE_BPS_FOR_REALISM": "0.8",
+            "AI_TRADING_INCIDENT_MAX_REJECTION_CONCENTRATION_RATIO": "0.70",
+            "AI_TRADING_INCIDENT_MIN_REJECTED_RECORDS_FOR_CONCENTRATION": "25",
+        },
+        slack_notifier=_slack,
+        slack_eod_notifier=lambda args: {"unused": args},
+        linear_creator=lambda args: {"unused": args},
+        oncall_notifier=_oncall,
+    )
+    assert payload["ok"] is True
+    assert slack_args["min_edge_realism_ratio"] == 0.40
+    assert slack_args["min_expected_edge_bps_for_realism"] == 0.8
+    assert slack_args["max_rejection_concentration_ratio"] == 0.70
+    assert slack_args["min_rejected_records_for_concentration"] == 25
+    assert oncall_args["min_edge_realism_ratio"] == 0.40
+    assert oncall_args["min_expected_edge_bps_for_realism"] == 0.8
+    assert oncall_args["max_rejection_concentration_ratio"] == 0.70
+    assert oncall_args["min_rejected_records_for_concentration"] == 25
+
+
+def test_load_runtime_env_defaults_populates_missing_values(tmp_path: Path) -> None:
+    runtime_env = tmp_path / ".env.runtime"
+    runtime_env.write_text(
+        "AI_TRADING_SLACK_WEBHOOK_URL=https://hooks.slack.test/from-runtime\n"
+        "AI_TRADING_LINEAR_API_KEY=lin_from_runtime\n",
+        encoding="utf-8",
+    )
+    env: dict[str, str] = {}
+
+    summary = dispatch._load_runtime_env_defaults(env=env, repo_root=tmp_path)
+
+    assert summary["loaded"] is True
+    assert summary["applied"] == 2
+    assert env["AI_TRADING_SLACK_WEBHOOK_URL"] == "https://hooks.slack.test/from-runtime"
+    assert env["AI_TRADING_LINEAR_API_KEY"] == "lin_from_runtime"
+
+
+def test_load_runtime_env_defaults_does_not_override_existing(tmp_path: Path) -> None:
+    runtime_env = tmp_path / ".env.runtime"
+    runtime_env.write_text(
+        "AI_TRADING_SLACK_WEBHOOK_URL=https://hooks.slack.test/from-runtime\n",
+        encoding="utf-8",
+    )
+    env: dict[str, str] = {"AI_TRADING_SLACK_WEBHOOK_URL": "https://hooks.slack.test/already-set"}
+
+    summary = dispatch._load_runtime_env_defaults(env=env, repo_root=tmp_path)
+
+    assert summary["loaded"] is True
+    assert summary["applied"] == 0
+    assert env["AI_TRADING_SLACK_WEBHOOK_URL"] == "https://hooks.slack.test/already-set"

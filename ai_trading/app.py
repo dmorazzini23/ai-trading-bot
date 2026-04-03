@@ -604,7 +604,7 @@ def create_app():
                 extra={"error": str(exc)},
             )
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-        return generate_latest(_PROM_REG), 200, {"Content-Type": CONTENT_TYPE_LATEST}
+        return generate_latest(cast(Any, _PROM_REG)), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
     _ensure_test_client(app, route_registry)
     original_test_client = getattr(app, "test_client", None)

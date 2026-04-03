@@ -123,25 +123,25 @@ class HealthChecker:
         start_time = time.time()
         try:
             if asyncio.iscoroutinefunction(self.check_func):
-                result = await asyncio.wait_for(self.check_func(), timeout=self.timeout_seconds)
+                check_result = await asyncio.wait_for(self.check_func(), timeout=self.timeout_seconds)
             else:
                 loop = asyncio.get_running_loop()
-                result = await asyncio.wait_for(
+                check_result = await asyncio.wait_for(
                     loop.run_in_executor(None, self.check_func), timeout=self.timeout_seconds
                 )
             response_time = (time.time() - start_time) * 1000
-            if isinstance(result, bool):
-                status = HealthStatus.HEALTHY if result else HealthStatus.CRITICAL
-                message = "Check passed" if result else "Check failed"
+            if isinstance(check_result, bool):
+                status = HealthStatus.HEALTHY if check_result else HealthStatus.CRITICAL
+                message = "Check passed" if check_result else "Check failed"
                 details = {}
-            elif isinstance(result, dict):
-                status = HealthStatus(result.get("status", HealthStatus.HEALTHY.value))
-                message = result.get("message", "No message")
-                details = result.get("details", {})
+            elif isinstance(check_result, dict):
+                status = HealthStatus(check_result.get("status", HealthStatus.HEALTHY.value))
+                message = check_result.get("message", "No message")
+                details = check_result.get("details", {})
             else:
                 status = HealthStatus.UNKNOWN
-                message = f"Unexpected result type: {type(result)}"
-                details = {"raw_result": str(result)}
+                message = f"Unexpected result type: {type(check_result)}"
+                details = {"raw_result": str(check_result)}
             self.consecutive_failures = (
                 0 if status == HealthStatus.HEALTHY else self.consecutive_failures + 1
             )
@@ -157,7 +157,7 @@ class HealthChecker:
             message = f"Health check failed: {str(e)}"
             details = {"error": str(e), "error_type": type(e).__name__}
             self.consecutive_failures += 1
-        result = HealthCheckResult(
+        health_result: HealthCheckResult = HealthCheckResult(
             component=self.name,
             component_type=self.component_type,
             status=status,
@@ -167,9 +167,9 @@ class HealthChecker:
             details=details,
             tags=[f"failures:{self.consecutive_failures}"],
         )
-        self.last_check = result.timestamp
-        self.last_result = result
-        return result
+        self.last_check = health_result.timestamp
+        self.last_result = health_result
+        return health_result
 
 
 class HealthMonitor:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from datetime import UTC, datetime, timedelta
 import hashlib
 import importlib
 import json
@@ -64,6 +66,15 @@ def _bool_arg(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _int_arg(value: Any, default: int = 0) -> int:
+    if value in (None, ""):
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _runtime_report_payload() -> dict[str, Any]:
@@ -154,22 +165,229 @@ def _save_state(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
 
 
+def _parse_iso_ts(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _tail_jsonl_rows(path: Path, *, max_rows: int) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    lines: deque[str] = deque(maxlen=max(1, int(max_rows)))
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if text:
+                    lines.append(text)
+    except OSError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for text in lines:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _runtime_event_path(args: dict[str, Any], *, env_key: str, default_relative: str) -> Path:
+    raw = str(os.getenv(env_key, "")).strip() or default_relative
+    expanded = Path(raw).expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    if raw.startswith("runtime/"):
+        relative = raw.removeprefix("runtime/").strip("/")
+    else:
+        relative = raw.strip("/")
+    return (_runtime_root(args) / relative).resolve()
+
+
+def _collect_execution_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+    window_minutes = _int_arg(
+        args.get("execution_window_minutes")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_EXEC_WINDOW_MINUTES"),
+        default=30,
+    )
+    window_minutes = max(5, min(window_minutes, 24 * 60))
+    max_rows = _int_arg(
+        args.get("execution_window_max_rows")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_EXEC_WINDOW_MAX_ROWS"),
+        default=5000,
+    )
+    max_rows = max(250, min(max_rows, 100_000))
+    cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
+
+    order_events_path = _runtime_event_path(
+        args,
+        env_key="AI_TRADING_ORDER_EVENTS_PATH",
+        default_relative="runtime/order_events.jsonl",
+    )
+    quality_events_path = _runtime_event_path(
+        args,
+        env_key="AI_TRADING_EXEC_QUALITY_EVENTS_PATH",
+        default_relative="runtime/execution_quality_events.jsonl",
+    )
+    order_rows = _tail_jsonl_rows(order_events_path, max_rows=max_rows)
+    quality_rows = _tail_jsonl_rows(quality_events_path, max_rows=max_rows)
+
+    final_by_order: dict[str, tuple[datetime | None, str]] = {}
+    for row in order_rows:
+        if str(row.get("event") or "").strip().lower() != "final_state":
+            continue
+        ts = _parse_iso_ts(row.get("ts") or row.get("timestamp"))
+        if ts is not None and ts < cutoff:
+            continue
+        order_id = str(row.get("order_id") or row.get("client_order_id") or "").strip()
+        if not order_id:
+            continue
+        status = str(row.get("status") or row.get("new_status") or "").strip().lower()
+        previous = final_by_order.get(order_id)
+        if previous is not None:
+            previous_ts, _ = previous
+            if previous_ts is not None and ts is not None and ts <= previous_ts:
+                continue
+        final_by_order[order_id] = (ts, status)
+
+    fill_statuses = {"filled", "partially_filled"}
+    fill_ratio_samples = len(final_by_order)
+    fill_ratio_filled = sum(
+        1 for _order_id, (_ts, status) in final_by_order.items() if status in fill_statuses
+    )
+    fill_ratio = (
+        float(fill_ratio_filled) / float(fill_ratio_samples)
+        if fill_ratio_samples > 0
+        else None
+    )
+
+    skipped_count = 0
+    precheck_failure_count = 0
+    precheck_failure_detail_counts: dict[str, int] = {}
+    for row in quality_rows:
+        ts = _parse_iso_ts(row.get("ts") or row.get("timestamp"))
+        if ts is not None and ts < cutoff:
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status != "skipped":
+            continue
+        skipped_count += 1
+        reason = str(row.get("reason") or "").strip().lower()
+        if reason == "pre_execution_order_checks_failed":
+            precheck_failure_count += 1
+            detail = str(row.get("detail") or "").strip().lower()
+            if not detail:
+                context_raw = row.get("context")
+                if isinstance(context_raw, dict):
+                    detail = str(
+                        context_raw.get("reason")
+                        or context_raw.get("detail")
+                        or ""
+                    ).strip().lower()
+            if not detail:
+                detail = "unspecified"
+            precheck_failure_detail_counts[detail] = (
+                precheck_failure_detail_counts.get(detail, 0) + 1
+            )
+    precheck_failure_ratio = (
+        float(precheck_failure_count) / float(skipped_count) if skipped_count > 0 else None
+    )
+    top_precheck_failure_details = [
+        {"detail": detail, "count": int(count)}
+        for detail, count in sorted(
+            precheck_failure_detail_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+    ]
+    top_precheck_failure_actionable_details = [
+        item for item in top_precheck_failure_details if item.get("detail") != "unspecified"
+    ][:5]
+
+    return {
+        "execution_window_minutes": int(window_minutes),
+        "execution_fill_ratio": fill_ratio,
+        "execution_fill_ratio_samples": int(fill_ratio_samples),
+        "execution_fill_ratio_filled": int(fill_ratio_filled),
+        "execution_skipped_count": int(skipped_count),
+        "precheck_failure_count": int(precheck_failure_count),
+        "precheck_failure_ratio": precheck_failure_ratio,
+        "precheck_failure_top_details": top_precheck_failure_details,
+        "precheck_failure_top_actionable_details": top_precheck_failure_actionable_details,
+        "order_events_path": str(order_events_path),
+        "exec_quality_events_path": str(quality_events_path),
+    }
+
+
 def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     report = _runtime_report_payload()
     go_no_go = report.get("go_no_go") or {}
     execution = report.get("execution_vs_alpha") or {}
+    gate_effectiveness = report.get("gate_effectiveness") or {}
 
     port = int(args.get("health_port") or os.getenv("HEALTHCHECK_PORT", "8081"))
     timeout_s = float(args.get("health_timeout_s") or 2.0)
     health = _health_payload(port=port, timeout_s=timeout_s)
     data_provider = health.get("data_provider") or {}
     broker = health.get("broker") or {}
+    execution_window = _collect_execution_window_snapshot(args)
 
     return {
         "go_no_go_gate_passed": go_no_go.get("gate_passed"),
         "go_no_go_failed_checks": list(go_no_go.get("failed_checks") or []),
         "execution_capture_ratio": _float_or_none(execution.get("execution_capture_ratio")),
         "slippage_drag_bps": _float_or_none(execution.get("slippage_drag_bps")),
+        "expected_edge_per_accept_bps": _float_or_none(
+            execution.get("expected_edge_per_accept_bps")
+        ),
+        "realization_gap_bps": _float_or_none(execution.get("realization_gap_bps")),
+        "edge_realism_gap_ratio": _float_or_none(
+            execution.get("edge_realism_gap_ratio")
+        ),
+        "gate_rejected_records": _int_arg(
+            gate_effectiveness.get("rejected_records"), default=0
+        ),
+        "top_rejection_concentration_gate": str(
+            gate_effectiveness.get("top_rejection_concentration_gate") or ""
+        ),
+        "top_rejection_concentration_ratio": _float_or_none(
+            gate_effectiveness.get("top_rejection_concentration_ratio")
+        ),
+        "execution_fill_ratio": _float_or_none(execution_window.get("execution_fill_ratio")),
+        "execution_fill_ratio_samples": _int_arg(
+            execution_window.get("execution_fill_ratio_samples"), default=0
+        ),
+        "execution_fill_ratio_filled": _int_arg(
+            execution_window.get("execution_fill_ratio_filled"), default=0
+        ),
+        "execution_window_minutes": _int_arg(
+            execution_window.get("execution_window_minutes"), default=30
+        ),
+        "execution_skipped_count": _int_arg(
+            execution_window.get("execution_skipped_count"), default=0
+        ),
+        "precheck_failure_count": _int_arg(
+            execution_window.get("precheck_failure_count"), default=0
+        ),
+        "precheck_failure_ratio": _float_or_none(
+            execution_window.get("precheck_failure_ratio")
+        ),
+        "precheck_failure_top_details": list(
+            execution_window.get("precheck_failure_top_details") or []
+        ),
+        "precheck_failure_top_actionable_details": list(
+            execution_window.get("precheck_failure_top_actionable_details") or []
+        ),
         "health_ok": bool(health.get("ok", False)),
         "health_status": str(health.get("status") or "unknown"),
         "health_reason": str(health.get("reason") or "unknown"),
@@ -221,6 +439,24 @@ def _extract_report_date(report: dict[str, Any]) -> str:
     return ""
 
 
+def _daily_trade_row_for_report_date(
+    trade_history: dict[str, Any], report_date: str
+) -> dict[str, Any]:
+    rows = trade_history.get("daily_trade_stats")
+    if not isinstance(rows, list):
+        return {}
+    if report_date:
+        for row in reversed(rows):
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("date") or "").strip() == report_date:
+                return row
+    for row in reversed(rows):
+        if isinstance(row, dict):
+            return row
+    return {}
+
+
 def _collect_learning_snapshot(args: dict[str, Any], health: dict[str, Any]) -> dict[str, Any]:
     runtime_root = _runtime_root(args)
     after_hours = _read_json_object(runtime_root / "after_hours_training_state.json")
@@ -241,6 +477,12 @@ def _collect_learning_snapshot(args: dict[str, Any], health: dict[str, Any]) -> 
             "governance_status": after_hours.get("governance_status"),
             "promotion_gate_passed": after_hours.get("promotion_gate_passed"),
             "promotion_consecutive_passes": after_hours.get("promotion_consecutive_passes"),
+            "promotion_confidence_enabled": after_hours.get("promotion_confidence_enabled"),
+            "promotion_confidence_gate_passed": after_hours.get(
+                "promotion_confidence_gate_passed"
+            ),
+            "promotion_confidence_reason": after_hours.get("promotion_confidence_reason"),
+            "promotion_confidence_observed": after_hours.get("promotion_confidence_observed"),
             "report_path": after_hours.get("report_path"),
         },
         "execution_learning": {
@@ -273,10 +515,12 @@ def _collect_learning_snapshot(args: dict[str, Any], health: dict[str, Any]) -> 
 
 def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     report = _runtime_report_payload()
-    if not _extract_report_date(report):
+    report_date = _extract_report_date(report)
+    if not report_date:
         fallback_report = _read_json_object(_runtime_root(args) / "runtime_performance_report_latest.json")
         if fallback_report:
             report = fallback_report
+            report_date = _extract_report_date(report)
     go_no_go = report.get("go_no_go")
     go_no_go_obj = go_no_go if isinstance(go_no_go, dict) else {}
     observed = go_no_go_obj.get("observed")
@@ -319,14 +563,28 @@ def _collect_eod_summary_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     if execution_capture_ratio is None:
         execution_capture_ratio = _float_or_none(execution_obj.get("execution_capture_ratio"))
 
+    daily_trade_row = _daily_trade_row_for_report_date(trade_history_obj, report_date)
+    net_pnl = _float_or_none(daily_trade_row.get("net_pnl"))
+    if net_pnl is None:
+        net_pnl = _float_or_none(observed_obj.get("net_pnl"))
+    profit_factor = _float_or_none(daily_trade_row.get("profit_factor"))
+    if profit_factor is None:
+        profit_factor = _float_or_none(observed_obj.get("profit_factor"))
+    win_rate = _float_or_none(daily_trade_row.get("win_rate"))
+    if win_rate is None:
+        win_rate = _float_or_none(observed_obj.get("win_rate"))
+    closed_trades = daily_trade_row.get("trades")
+    if closed_trades is None:
+        closed_trades = observed_obj.get("closed_trades")
+
     snapshot = {
-        "report_date": _extract_report_date(report),
+        "report_date": report_date,
         "go_no_go_gate_passed": go_no_go_obj.get("gate_passed"),
         "go_no_go_failed_checks": list(go_no_go_obj.get("failed_checks") or []),
-        "net_pnl": _float_or_none(observed_obj.get("net_pnl")),
-        "profit_factor": _float_or_none(observed_obj.get("profit_factor")),
-        "win_rate": _float_or_none(observed_obj.get("win_rate")),
-        "closed_trades": observed_obj.get("closed_trades"),
+        "net_pnl": net_pnl,
+        "profit_factor": profit_factor,
+        "win_rate": win_rate,
+        "closed_trades": closed_trades,
         "execution_capture_ratio": execution_capture_ratio,
         "slippage_drag_bps": slippage_drag_bps,
         "order_reject_rate_pct": _float_or_none(observed_obj.get("order_reject_rate_pct")),
@@ -419,6 +677,8 @@ def _should_suppress_startup_warmup_health_alert(
 
 def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) -> list[str]:
     triggers: list[str] = []
+    health_reason = str(snapshot.get("health_reason") or "").strip().lower()
+    startup_or_warmup = health_reason in _STARTUP_WARMUP_HEALTH_REASONS
 
     gate_passed = snapshot.get("go_no_go_gate_passed")
     failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
@@ -431,6 +691,108 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
     min_capture = _capture_ratio_threshold(args)
     if capture_ratio is not None and capture_ratio < min_capture:
         triggers.append("execution_capture_ratio_low")
+    fill_ratio = _float_or_none(snapshot.get("execution_fill_ratio"))
+    fill_ratio_samples = _int_arg(snapshot.get("execution_fill_ratio_samples"), default=0)
+    min_fill_ratio = _float_or_none(
+        args.get("min_fill_ratio")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_FILL_RATIO")
+    )
+    min_fill_ratio_samples = _int_arg(
+        args.get("min_fill_ratio_samples")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_FILL_RATIO_MIN_SAMPLES"),
+        default=20,
+    )
+    min_fill_ratio_samples = max(1, min_fill_ratio_samples)
+    if min_fill_ratio is not None:
+        min_fill_ratio = max(0.0, min(float(min_fill_ratio), 1.0))
+        if (
+            fill_ratio is not None
+            and fill_ratio_samples >= min_fill_ratio_samples
+            and fill_ratio < min_fill_ratio
+            and not startup_or_warmup
+        ):
+            triggers.append("execution_fill_ratio_low")
+
+    precheck_failure_count = _int_arg(snapshot.get("precheck_failure_count"), default=0)
+    execution_skipped_count = _int_arg(snapshot.get("execution_skipped_count"), default=0)
+    precheck_failure_ratio = _float_or_none(snapshot.get("precheck_failure_ratio"))
+    precheck_spike_min_count = _int_arg(
+        args.get("precheck_spike_min_count")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_PRECHECK_SPIKE_MIN_COUNT"),
+        default=10,
+    )
+    precheck_spike_min_ratio = _float_or_none(
+        args.get("precheck_spike_min_ratio")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_PRECHECK_SPIKE_MIN_RATIO")
+    )
+    if precheck_spike_min_ratio is None:
+        precheck_spike_min_ratio = 0.60
+    precheck_spike_min_ratio = max(0.0, min(float(precheck_spike_min_ratio), 1.0))
+    precheck_spike_min_skips = _int_arg(
+        args.get("precheck_spike_min_skipped")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_PRECHECK_SPIKE_MIN_SKIPPED"),
+        default=12,
+    )
+    if (
+        precheck_failure_count >= max(1, precheck_spike_min_count)
+        and execution_skipped_count >= max(1, precheck_spike_min_skips)
+        and precheck_failure_ratio is not None
+        and precheck_failure_ratio >= precheck_spike_min_ratio
+        and not startup_or_warmup
+    ):
+        triggers.append("pre_execution_checks_spike")
+
+    top_rejection_concentration_ratio = _float_or_none(
+        snapshot.get("top_rejection_concentration_ratio")
+    )
+    gate_rejected_records = _int_arg(snapshot.get("gate_rejected_records"), default=0)
+    max_rejection_concentration_ratio = _float_or_none(
+        args.get("max_rejection_concentration_ratio")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_MAX_REJECTION_CONCENTRATION_RATIO")
+    )
+    if max_rejection_concentration_ratio is None:
+        max_rejection_concentration_ratio = 0.65
+    max_rejection_concentration_ratio = max(
+        0.0,
+        min(float(max_rejection_concentration_ratio), 1.0),
+    )
+    min_rejected_records_for_concentration = _int_arg(
+        args.get("min_rejected_records_for_concentration")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_REJECTED_RECORDS_FOR_CONCENTRATION"),
+        default=20,
+    )
+    if (
+        top_rejection_concentration_ratio is not None
+        and gate_rejected_records >= max(1, min_rejected_records_for_concentration)
+        and top_rejection_concentration_ratio >= max_rejection_concentration_ratio
+        and not startup_or_warmup
+    ):
+        triggers.append("rejection_concentration_high")
+
+    expected_edge_per_accept_bps = _float_or_none(
+        snapshot.get("expected_edge_per_accept_bps")
+    )
+    edge_realism_gap_ratio = _float_or_none(snapshot.get("edge_realism_gap_ratio"))
+    min_expected_edge_bps_for_realism = _float_or_none(
+        args.get("min_expected_edge_bps_for_realism")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_EXPECTED_EDGE_BPS_FOR_REALISM")
+    )
+    if min_expected_edge_bps_for_realism is None:
+        min_expected_edge_bps_for_realism = 0.5
+    min_edge_realism_ratio = _float_or_none(
+        args.get("min_edge_realism_ratio")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_MIN_EDGE_REALISM_RATIO")
+    )
+    if min_edge_realism_ratio is None:
+        min_edge_realism_ratio = 0.35
+    if (
+        expected_edge_per_accept_bps is not None
+        and edge_realism_gap_ratio is not None
+        and expected_edge_per_accept_bps >= float(min_expected_edge_bps_for_realism)
+        and edge_realism_gap_ratio < float(min_edge_realism_ratio)
+        and not startup_or_warmup
+    ):
+        triggers.append("edge_realism_gap_high")
 
     health_ok = bool(snapshot.get("health_ok", False))
     health_status = str(snapshot.get("health_status") or "unknown").lower()
@@ -451,12 +813,44 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
 def _incident_fingerprint(snapshot: dict[str, Any], triggers: list[str]) -> str:
     capture_ratio = _float_or_none(snapshot.get("execution_capture_ratio"))
     slippage_drag = _float_or_none(snapshot.get("slippage_drag_bps"))
+    fill_ratio = _float_or_none(snapshot.get("execution_fill_ratio"))
+    precheck_failure_ratio = _float_or_none(snapshot.get("precheck_failure_ratio"))
+    top_rejection_concentration_ratio = _float_or_none(
+        snapshot.get("top_rejection_concentration_ratio")
+    )
+    edge_realism_gap_ratio = _float_or_none(snapshot.get("edge_realism_gap_ratio"))
     material = {
         "triggers": sorted(triggers),
         "go_no_go_gate_passed": snapshot.get("go_no_go_gate_passed"),
         "go_no_go_failed_checks": list(snapshot.get("go_no_go_failed_checks") or []),
         "execution_capture_ratio": round(capture_ratio, 6) if capture_ratio is not None else None,
         "slippage_drag_bps": round(slippage_drag, 6) if slippage_drag is not None else None,
+        "execution_fill_ratio": round(fill_ratio, 6) if fill_ratio is not None else None,
+        "execution_fill_ratio_samples": _int_arg(
+            snapshot.get("execution_fill_ratio_samples"), default=0
+        ),
+        "expected_edge_per_accept_bps": _float_or_none(
+            snapshot.get("expected_edge_per_accept_bps")
+        ),
+        "realization_gap_bps": _float_or_none(snapshot.get("realization_gap_bps")),
+        "edge_realism_gap_ratio": (
+            round(edge_realism_gap_ratio, 6)
+            if edge_realism_gap_ratio is not None
+            else None
+        ),
+        "gate_rejected_records": _int_arg(snapshot.get("gate_rejected_records"), default=0),
+        "top_rejection_concentration_gate": snapshot.get("top_rejection_concentration_gate"),
+        "top_rejection_concentration_ratio": (
+            round(top_rejection_concentration_ratio, 6)
+            if top_rejection_concentration_ratio is not None
+            else None
+        ),
+        "precheck_failure_count": _int_arg(snapshot.get("precheck_failure_count"), default=0),
+        "precheck_failure_ratio": (
+            round(precheck_failure_ratio, 6)
+            if precheck_failure_ratio is not None
+            else None
+        ),
         "health_status": snapshot.get("health_status"),
         "health_reason": snapshot.get("health_reason"),
         "provider_status": snapshot.get("provider_status"),
@@ -502,10 +896,37 @@ def _post_slack_message(webhook_url: str, payload: dict[str, Any], timeout_s: fl
 def _incident_message_text(snapshot: dict[str, Any], triggers: list[str]) -> str:
     failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
     checks_text = ", ".join(failed_checks) if failed_checks else "none"
+    window_minutes = _int_arg(snapshot.get("execution_window_minutes"), default=30)
+    fill_samples = _int_arg(snapshot.get("execution_fill_ratio_samples"), default=0)
+    fill_filled = _int_arg(snapshot.get("execution_fill_ratio_filled"), default=0)
+    precheck_fail_count = _int_arg(snapshot.get("precheck_failure_count"), default=0)
+    execution_skipped_count = _int_arg(snapshot.get("execution_skipped_count"), default=0)
+    precheck_top_details_raw = list(
+        snapshot.get("precheck_failure_top_actionable_details")
+        or snapshot.get("precheck_failure_top_details")
+        or []
+    )
+    precheck_top_details: list[str] = []
+    for item in precheck_top_details_raw[:3]:
+        if not isinstance(item, dict):
+            continue
+        detail = str(item.get("detail") or "").strip()
+        if not detail:
+            continue
+        count = _int_arg(item.get("count"), default=0)
+        precheck_top_details.append(f"{detail.replace('_', ' ')}={count}")
+    precheck_top_details_text = ", ".join(precheck_top_details) if precheck_top_details else "n/a"
+    top_concentration_gate = str(snapshot.get("top_rejection_concentration_gate") or "").strip()
+    top_concentration_ratio = _float_or_none(snapshot.get("top_rejection_concentration_ratio"))
+    rejected_records = _int_arg(snapshot.get("gate_rejected_records"), default=0)
     trigger_map = {
         "go_no_go_failed": "Go/no-go gate failed",
         "go_no_go_failed_checks": "Go/no-go reported failed checks",
         "execution_capture_ratio_low": "Execution capture ratio is below target",
+        "execution_fill_ratio_low": "Recent fill ratio is below target",
+        "pre_execution_checks_spike": "Pre-execution order-check failures are spiking",
+        "rejection_concentration_high": "One rejection reason is dominating decisions",
+        "edge_realism_gap_high": "Live realized edge is lagging expected edge",
         "health_degraded": "Runtime health is degraded",
         "data_provider_backup_active": "Data provider is running on backup feed",
         "broker_disconnected": "Broker connection is not healthy",
@@ -522,7 +943,31 @@ def _incident_message_text(snapshot: dict[str, Any], triggers: list[str]) -> str
             f"- Go/No-Go: {_fmt_gate_status(snapshot.get('go_no_go_gate_passed'))}",
             f"- Failed checks: {checks_text}",
             f"- Execution capture ratio: {_fmt_num(snapshot.get('execution_capture_ratio'), digits=3)}",
+            (
+                f"- Fill ratio ({window_minutes}m): "
+                f"{_fmt_num(snapshot.get('execution_fill_ratio'), digits=3)} "
+                f"(filled={fill_filled}, samples={fill_samples})"
+            ),
+            (
+                f"- Pre-check failure spike ({window_minutes}m): "
+                f"count={precheck_fail_count}, "
+                f"ratio={_fmt_num(snapshot.get('precheck_failure_ratio'), digits=3)}, "
+                f"skipped={execution_skipped_count}"
+            ),
+            f"- Top pre-check blockers ({window_minutes}m): {precheck_top_details_text}",
             f"- Slippage drag: {_fmt_num(snapshot.get('slippage_drag_bps'), digits=3)} bps",
+            (
+                "- Edge realism gap: "
+                f"ratio={_fmt_num(snapshot.get('edge_realism_gap_ratio'), digits=3)} "
+                f"(realized/expected), "
+                f"realization_gap_bps={_fmt_num(snapshot.get('realization_gap_bps'), digits=3)}"
+            ),
+            (
+                "- Rejection concentration: "
+                f"{top_concentration_gate or 'n/a'} "
+                f"({_fmt_pct(top_concentration_ratio, digits=1, assume_ratio=True)} "
+                f"of rejected, rejected_records={rejected_records})"
+            ),
             f"- Health: {snapshot.get('health_status')} ({snapshot.get('health_reason')})",
             (
                 f"- Data provider: {snapshot.get('provider_active')} / {snapshot.get('provider_status')} "
@@ -666,8 +1111,13 @@ def _eod_message_text(snapshot: dict[str, Any]) -> str:
                 f"- After-hours model: {after_hours_obj.get('model_name') or 'n/a'} "
                 f"[{after_hours_obj.get('governance_status') or 'n/a'}], "
                 f"promotion gate={after_hours_obj.get('promotion_gate_passed')}, "
+                f"confidence gate={after_hours_obj.get('promotion_confidence_gate_passed')}, "
                 f"rows={after_hours_obj.get('rows')}, "
                 f"model_id={after_hours_obj.get('model_id') or 'n/a'}"
+            ),
+            (
+                f"- Promotion confidence: enabled={_fmt_bool(after_hours_obj.get('promotion_confidence_enabled'))}, "
+                f"reason={after_hours_obj.get('promotion_confidence_reason') or 'n/a'}"
             ),
             (
                 f"- Execution learning: samples={exec_learning_obj.get('samples')}, "

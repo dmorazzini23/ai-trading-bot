@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from ai_trading.logging import get_logger
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:  # pragma: no cover - only for type checkers
     import numpy as np
@@ -241,7 +241,7 @@ def volatility_parity(weights: np.ndarray, volatilities: np.ndarray) -> np.ndarr
     total_weights = float(np.sum(weights))
     if total_scaled <= 0:
         return np.zeros_like(weights, dtype=float)
-    return (scaled / total_scaled) * total_weights
+    return cast("np.ndarray", (scaled / total_scaled) * total_weights)
 
 def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
     """Return scaling factor based on CVaR at ``alpha`` level."""
@@ -249,7 +249,8 @@ def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
     sorted_returns = np.sort(returns)
     var = sorted_returns[int(len(sorted_returns) * alpha)]
     cvar = np.mean(sorted_returns[sorted_returns <= var])
-    return abs(cvar) if cvar < 0 else 1.0
+    cvar_value = float(cvar)
+    return abs(cvar_value) if cvar_value < 0 else 1.0
 
 __all__ = [
     'update_if_present',
