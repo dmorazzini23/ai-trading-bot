@@ -112,6 +112,30 @@ def _wilson_lower_bound(successes: int, trials: int, z_score: float) -> float | 
     return max(0.0, min(1.0, float(lower)))
 
 
+def _percentile(values: Sequence[float], quantile: float) -> float | None:
+    """Return linear-interpolated percentile for finite numeric values."""
+
+    ordered = sorted(
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    )
+    if not ordered:
+        return None
+    q = max(0.0, min(1.0, float(quantile)))
+    if len(ordered) == 1:
+        return float(ordered[0])
+    position = q * float(len(ordered) - 1)
+    lower_idx = int(math.floor(position))
+    upper_idx = int(math.ceil(position))
+    lower_value = float(ordered[lower_idx])
+    upper_value = float(ordered[upper_idx])
+    if lower_idx == upper_idx:
+        return lower_value
+    weight = position - float(lower_idx)
+    return float(lower_value + ((upper_value - lower_value) * weight))
+
+
 def _env_text(name: str, default: str) -> str:
     value = str(get_env(name, default, cast=str) or "").strip()
     return value or default
@@ -135,6 +159,61 @@ def _runtime_fee_bps_fallback() -> float:
         if value is not None and value > 0.0:
             return float(value)
     return 0.0
+
+
+def _expected_edge_clip_config() -> dict[str, float]:
+    """Resolve expected-edge clipping controls for execution-vs-alpha attribution."""
+
+    lower_q = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_EXPECTED_EDGE_CLIP_LOWER_Q",
+            0.05,
+            cast=float,
+        )
+    )
+    if lower_q is None:
+        lower_q = 0.05
+    lower_q = max(0.0, min(float(lower_q), 0.49))
+
+    upper_q = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_EXPECTED_EDGE_CLIP_UPPER_Q",
+            0.95,
+            cast=float,
+        )
+    )
+    if upper_q is None:
+        upper_q = 0.95
+    upper_q = max(float(lower_q) + 0.01, min(float(upper_q), 1.0))
+
+    min_samples = _as_int(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_EXPECTED_EDGE_CLIP_MIN_SAMPLES",
+            8,
+            cast=int,
+        )
+    )
+    if min_samples is None:
+        min_samples = 8
+    min_samples = max(3, min(int(min_samples), 1000))
+
+    abs_cap_bps = _as_float(
+        get_env(
+            "AI_TRADING_RUNTIME_PERF_EXPECTED_EDGE_ABS_CAP_BPS",
+            250.0,
+            cast=float,
+        )
+    )
+    if abs_cap_bps is None:
+        abs_cap_bps = 250.0
+    abs_cap_bps = max(5.0, min(float(abs_cap_bps), 10_000.0))
+
+    return {
+        "lower_q": float(lower_q),
+        "upper_q": float(upper_q),
+        "min_samples": float(min_samples),
+        "abs_cap_bps": float(abs_cap_bps),
+    }
 
 
 def resolve_runtime_report_paths(
@@ -1830,6 +1909,7 @@ def _aggregate_closed_trades(
                     "avg_net_pnl": avg_net,
                     "fee_cost": bucket["fee_cost"],
                     "slippage_cost": bucket["slippage_cost"],
+                    "entry_notional": entry_notional,
                     "net_edge_bps": net_edge_bps,
                 }
             )
@@ -2429,19 +2509,11 @@ def summarize_execution_vs_alpha(
 
     expected_edge_sum_bps = _as_float(gate_summary.get("total_expected_net_edge_bps"))
     accepted_records = _as_int(gate_summary.get("accepted_records")) or 0
-    expected_edge_per_accept_bps = None
+    expected_edge_per_accept_bps_raw = None
     if expected_edge_sum_bps is not None and accepted_records > 0:
-        expected_edge_per_accept_bps = float(expected_edge_sum_bps / float(accepted_records))
-    realization_gap_bps = None
-    if realized_net_edge_bps is not None and expected_edge_per_accept_bps is not None:
-        realization_gap_bps = float(realized_net_edge_bps - expected_edge_per_accept_bps)
-    edge_realism_gap_ratio = None
-    if (
-        realized_net_edge_bps is not None
-        and expected_edge_per_accept_bps is not None
-        and expected_edge_per_accept_bps > 0.0
-    ):
-        edge_realism_gap_ratio = float(realized_net_edge_bps / expected_edge_per_accept_bps)
+        expected_edge_per_accept_bps_raw = float(
+            expected_edge_sum_bps / float(accepted_records)
+        )
 
     daily_trade_rows_raw = trade_summary.get("daily_expectancy")
     daily_gate_rows_raw = gate_summary.get("daily_gate_stats")
@@ -2473,35 +2545,124 @@ def summarize_execution_vs_alpha(
         day_realized = _as_float(trade_row.get("net_edge_bps"))
         day_expected_sum = _as_float(gate_row.get("total_expected_net_edge_bps"))
         day_accepted = _as_int(gate_row.get("accepted_records")) or 0
+        day_trades = _as_int(trade_row.get("trades")) or 0
+        day_entry_notional = _as_float(trade_row.get("entry_notional")) or 0.0
         day_expected_per_accept = None
         if day_expected_sum is not None and day_accepted > 0:
             day_expected_per_accept = float(day_expected_sum / float(day_accepted))
-        day_gap = None
-        if day_realized is not None and day_expected_per_accept is not None:
-            day_gap = float(day_realized - day_expected_per_accept)
-        day_ratio = None
-        if (
-            day_realized is not None
-            and day_expected_per_accept is not None
-            and day_expected_per_accept > 0.0
-        ):
-            day_ratio = float(day_realized / day_expected_per_accept)
         daily.append(
             {
                 "date": date_key,
                 "realized_net_edge_bps": day_realized,
-                "expected_edge_per_accept_bps": day_expected_per_accept,
-                "realization_gap_bps": day_gap,
-                "edge_realism_gap_ratio": day_ratio,
-                "trades": _as_int(trade_row.get("trades")) or 0,
+                "expected_edge_per_accept_bps_raw": day_expected_per_accept,
+                "expected_edge_per_accept_bps": None,
+                "realization_gap_bps": None,
+                "edge_realism_gap_ratio": None,
+                "trades": int(day_trades),
                 "accepted_records": int(day_accepted),
+                "entry_notional": float(day_entry_notional),
             }
         )
+
+    clip_cfg = _expected_edge_clip_config()
+    clip_min_samples = max(3, int(clip_cfg.get("min_samples", 8.0)))
+    clip_abs_cap_bps = float(clip_cfg.get("abs_cap_bps", 250.0))
+    lower_q = float(clip_cfg.get("lower_q", 0.05))
+    upper_q = float(clip_cfg.get("upper_q", 0.95))
+    expected_samples = [
+        float(row["expected_edge_per_accept_bps_raw"])
+        for row in daily
+        if row.get("expected_edge_per_accept_bps_raw") is not None
+    ]
+    clip_lower_bound_bps = None
+    clip_upper_bound_bps = None
+    if len(expected_samples) >= clip_min_samples and upper_q > lower_q:
+        clip_lower_bound_bps = _percentile(expected_samples, lower_q)
+        clip_upper_bound_bps = _percentile(expected_samples, upper_q)
+        if (
+            clip_lower_bound_bps is not None
+            and clip_upper_bound_bps is not None
+            and clip_upper_bound_bps < clip_lower_bound_bps
+        ):
+            clip_lower_bound_bps = None
+            clip_upper_bound_bps = None
+
+    def _clip_expected_edge(value: float | None) -> float | None:
+        if value is None:
+            return None
+        clipped = float(value)
+        if clip_lower_bound_bps is not None:
+            clipped = max(clipped, float(clip_lower_bound_bps))
+        if clip_upper_bound_bps is not None:
+            clipped = min(clipped, float(clip_upper_bound_bps))
+        clipped = max(min(clipped, clip_abs_cap_bps), -clip_abs_cap_bps)
+        return float(clipped)
+
+    clipped_accept_weighted_sum = 0.0
+    clipped_accept_weight = 0.0
+    clipped_notional_weighted_sum = 0.0
+    clipped_notional_weight = 0.0
+    clip_changed_count = 0
+
+    for row in daily:
+        day_expected_raw = _as_float(row.get("expected_edge_per_accept_bps_raw"))
+        day_expected_clipped = _clip_expected_edge(day_expected_raw)
+        if (
+            day_expected_raw is not None
+            and day_expected_clipped is not None
+            and not math.isclose(
+                float(day_expected_raw),
+                float(day_expected_clipped),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+        ):
+            clip_changed_count += 1
+        row["expected_edge_per_accept_bps"] = day_expected_clipped
+        day_realized = _as_float(row.get("realized_net_edge_bps"))
+        if day_realized is not None and day_expected_clipped is not None:
+            row["realization_gap_bps"] = float(day_realized - day_expected_clipped)
+            if day_expected_clipped > 0.0:
+                row["edge_realism_gap_ratio"] = float(day_realized / day_expected_clipped)
+        day_accepted = _as_int(row.get("accepted_records")) or 0
+        if day_expected_clipped is not None and day_accepted > 0:
+            clipped_accept_weighted_sum += float(day_expected_clipped) * float(day_accepted)
+            clipped_accept_weight += float(day_accepted)
+        day_notional = _as_float(row.get("entry_notional")) or 0.0
+        if day_expected_clipped is not None and day_notional > 0.0:
+            clipped_notional_weighted_sum += float(day_expected_clipped) * float(day_notional)
+            clipped_notional_weight += float(day_notional)
+
+    expected_edge_per_accept_bps = (
+        float(clipped_accept_weighted_sum / clipped_accept_weight)
+        if clipped_accept_weight > 0.0
+        else expected_edge_per_accept_bps_raw
+    )
+    expected_edge_per_traded_notional_bps = (
+        float(clipped_notional_weighted_sum / clipped_notional_weight)
+        if clipped_notional_weight > 0.0
+        else None
+    )
+    expected_edge_for_realism_bps = (
+        expected_edge_per_traded_notional_bps
+        if expected_edge_per_traded_notional_bps is not None
+        else expected_edge_per_accept_bps
+    )
+    realization_gap_bps = None
+    if realized_net_edge_bps is not None and expected_edge_for_realism_bps is not None:
+        realization_gap_bps = float(realized_net_edge_bps - expected_edge_for_realism_bps)
+    edge_realism_gap_ratio = None
+    if (
+        realized_net_edge_bps is not None
+        and expected_edge_for_realism_bps is not None
+        and expected_edge_for_realism_bps > 0.0
+    ):
+        edge_realism_gap_ratio = float(realized_net_edge_bps / expected_edge_for_realism_bps)
 
     return {
         "available": bool(
             realized_net_edge_bps is not None
-            or expected_edge_per_accept_bps is not None
+            or expected_edge_for_realism_bps is not None
             or slippage_drag_bps is not None
         ),
         "realized_net_edge_bps": realized_net_edge_bps,
@@ -2509,7 +2670,29 @@ def summarize_execution_vs_alpha(
         "slippage_drag_bps": slippage_drag_bps,
         "execution_capture_ratio": execution_capture_ratio,
         "execution_drag_share": execution_drag_share,
+        "expected_edge_per_accept_bps_raw": expected_edge_per_accept_bps_raw,
         "expected_edge_per_accept_bps": expected_edge_per_accept_bps,
+        "expected_edge_per_traded_notional_bps": expected_edge_per_traded_notional_bps,
+        "expected_edge_for_realism_bps": expected_edge_for_realism_bps,
+        "expected_edge_clip": {
+            "applied": bool(clip_changed_count > 0),
+            "sample_count": int(len(expected_samples)),
+            "changed_samples": int(clip_changed_count),
+            "lower_q": float(lower_q),
+            "upper_q": float(upper_q),
+            "lower_bound_bps": (
+                float(clip_lower_bound_bps)
+                if clip_lower_bound_bps is not None
+                else None
+            ),
+            "upper_bound_bps": (
+                float(clip_upper_bound_bps)
+                if clip_upper_bound_bps is not None
+                else None
+            ),
+            "abs_cap_bps": float(clip_abs_cap_bps),
+            "method": "winsorized_daily_per_accept_bps",
+        },
         "realization_gap_bps": realization_gap_bps,
         "edge_realism_gap_ratio": edge_realism_gap_ratio,
         "daily": daily,

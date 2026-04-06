@@ -134,8 +134,67 @@ def test_build_report_includes_execution_vs_alpha_attribution(tmp_path: Path) ->
     assert attribution["realized_net_edge_bps"] is not None
     assert attribution["slippage_drag_bps"] is not None
     assert attribution["expected_edge_per_accept_bps"] == pytest.approx(10.0)
+    assert attribution["expected_edge_per_accept_bps_raw"] == pytest.approx(10.0)
     assert attribution["edge_realism_gap_ratio"] is not None
     assert isinstance(attribution["daily"], list)
+
+
+def test_summarize_execution_vs_alpha_clips_outlier_expected_edge_and_uses_notional_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_EXPECTED_EDGE_ABS_CAP_BPS", "20.0")
+    monkeypatch.setenv("AI_TRADING_RUNTIME_PERF_EXPECTED_EDGE_CLIP_MIN_SAMPLES", "99")
+
+    attribution = rpt.summarize_execution_vs_alpha(
+        trade_summary={
+            "total_entry_notional": 200_000.0,
+            "pnl_sum": 200.0,
+            "slippage_drag_bps": 4.0,
+            "daily_expectancy": [
+                {
+                    "date": "2026-04-01",
+                    "trades": 12,
+                    "entry_notional": 150_000.0,
+                    "net_edge_bps": 8.0,
+                },
+                {
+                    "date": "2026-04-02",
+                    "trades": 3,
+                    "entry_notional": 50_000.0,
+                    "net_edge_bps": 16.0,
+                },
+            ],
+        },
+        gate_summary={
+            "total_expected_net_edge_bps": 1_000.0,
+            "accepted_records": 20,
+            "daily_gate_stats": [
+                {
+                    "date": "2026-04-01",
+                    "accepted_records": 10,
+                    "total_expected_net_edge_bps": 30.0,
+                },
+                {
+                    "date": "2026-04-02",
+                    "accepted_records": 10,
+                    "total_expected_net_edge_bps": 970.0,
+                },
+            ],
+        },
+    )
+
+    assert attribution["realized_net_edge_bps"] == pytest.approx(10.0)
+    assert attribution["expected_edge_per_accept_bps_raw"] == pytest.approx(50.0)
+    assert attribution["expected_edge_per_accept_bps"] == pytest.approx(11.5)
+    assert attribution["expected_edge_per_traded_notional_bps"] == pytest.approx(7.25)
+    assert attribution["expected_edge_for_realism_bps"] == pytest.approx(7.25)
+    assert attribution["edge_realism_gap_ratio"] == pytest.approx(10.0 / 7.25)
+    clip = attribution["expected_edge_clip"]
+    assert clip["applied"] is True
+    assert clip["changed_samples"] == 1
+    assert clip["abs_cap_bps"] == pytest.approx(20.0)
+    assert attribution["daily"][1]["expected_edge_per_accept_bps_raw"] == pytest.approx(97.0)
+    assert attribution["daily"][1]["expected_edge_per_accept_bps"] == pytest.approx(20.0)
 
 
 def test_build_report_includes_edge_realism_snapshot(tmp_path: Path) -> None:

@@ -326,7 +326,83 @@ def test_notify_incident_channel_dedupes(monkeypatch, tmp_path: Path) -> None:
 
     assert first["sent"] is True
     assert second["sent"] is False
-    assert second["reason"] == "duplicate_fingerprint"
+    assert second["reason"] == "repeat_cooldown_active"
+    assert len(posts) == 1
+
+
+def test_notify_incident_channel_dedupes_on_signature_drift(monkeypatch, tmp_path: Path) -> None:
+    snapshots = [
+        {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.12,
+            "slippage_drag_bps": 7.0,
+            "execution_fill_ratio": 0.22,
+            "execution_fill_ratio_samples": 30,
+            "execution_fill_ratio_filled": 7,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 15,
+            "precheck_failure_count": 14,
+            "precheck_failure_ratio": 0.8,
+            "health_ok": True,
+            "health_status": "healthy",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca",
+            "provider_reason": "data_available_netting",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-03-28T20:00:00Z",
+        },
+        {
+            "go_no_go_gate_passed": True,
+            "go_no_go_failed_checks": [],
+            "execution_capture_ratio": 0.121,
+            "slippage_drag_bps": 7.01,
+            "execution_fill_ratio": 0.219,
+            "execution_fill_ratio_samples": 31,
+            "execution_fill_ratio_filled": 7,
+            "execution_window_minutes": 30,
+            "execution_skipped_count": 16,
+            "precheck_failure_count": 15,
+            "precheck_failure_ratio": 0.82,
+            "health_ok": True,
+            "health_status": "healthy",
+            "health_reason": "runtime_health_ok",
+            "provider_status": "healthy",
+            "provider_active": "alpaca",
+            "provider_reason": "data_available_netting",
+            "using_backup": False,
+            "broker_status": "connected",
+            "timestamp": "2026-03-28T20:05:00Z",
+        },
+    ]
+
+    posts: list[dict[str, object]] = []
+
+    def _fake_collect(_args: dict[str, object]) -> dict[str, object]:
+        idx = min(len(posts), len(snapshots) - 1)
+        return snapshots[idx]
+
+    def _fake_post(webhook_url: str, payload: dict[str, object], timeout_s: float = 5.0) -> int:
+        posts.append({"webhook_url": webhook_url, "payload": payload, "timeout_s": timeout_s})
+        return 200
+
+    monkeypatch.setattr(slack_srv, "_collect_runtime_snapshot", _fake_collect)
+    monkeypatch.setattr(slack_srv, "_post_slack_message", _fake_post)
+
+    state_path = tmp_path / "slack_state.json"
+    args = {
+        "state_path": str(state_path),
+        "webhook_url": "https://hooks.slack.test/example",
+        "repeat_cooldown_minutes": 120,
+    }
+    first = slack_srv.tool_notify_incident_channel(args)
+    second = slack_srv.tool_notify_incident_channel(args)
+
+    assert first["sent"] is True
+    assert second["sent"] is False
+    assert second["reason"] == "repeat_cooldown_active"
     assert len(posts) == 1
 
 

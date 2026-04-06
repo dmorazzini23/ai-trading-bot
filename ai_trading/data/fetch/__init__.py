@@ -8708,12 +8708,29 @@ def _fetch_bars(
     if pytest_active and skip_until_dt is not None:
         preserve_skip = bool(get_env("ENABLE_HTTP_FALLBACK"))
         if not preserve_skip:
-            _clear_backup_skip(symbol, _interval)
-            skip_until_dt = None
+            # Keep active per-symbol skip windows set by the current fallback
+            # flow, but allow explicit cooldown-expiry recovery paths to probe
+            # primary again when fallback state was intentionally cleared.
+            skip_marked = tf_key in _SKIPPED_SYMBOLS
+            fallback_state_active = bool(
+                _FALLBACK_UNTIL.get(tf_key) is not None
+                or _fallback_key(symbol, _interval, _start, _end) in _FALLBACK_WINDOWS
+            )
+            disable_expired = bool(
+                _alpaca_disabled_until is not None and now >= _alpaca_disabled_until
+            )
+            if (not skip_marked) or (disable_expired and not fallback_state_active):
+                _clear_backup_skip(symbol, _interval)
+                skip_until_dt = None
     if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
-        _clear_backup_skip(symbol, _interval)
-        _clear_global_backup_skip(_interval)
-        skip_until_dt = None
+        preserve_backup_skip = (
+            isinstance(skip_until_dt, datetime)
+            and skip_until_dt > now
+        )
+        if not preserve_backup_skip:
+            _clear_backup_skip(symbol, _interval)
+            _clear_global_backup_skip(_interval)
+            skip_until_dt = None
     if skip_until_dt is not None and not isinstance(skip_until_dt, datetime):
         try:
             skip_until_dt = datetime.fromtimestamp(float(skip_until_dt), tz=UTC)
@@ -8828,25 +8845,29 @@ def _fetch_bars(
     disable_expired = False
     if _alpaca_disabled_until is not None and now >= _alpaca_disabled_until:
         disable_expired = True
+        preserve_backup_skip = bool(skip_window_active)
         prev_disable_count = _alpaca_disable_count
         _alpaca_disabled_until = None
         _ALPACA_DISABLED_ALERTED = False
         _alpaca_empty_streak = 0
         provider_disabled.labels(provider="alpaca").set(0)
-        try:
-            _clear_backup_skip(symbol, _interval)
-        except Exception:
-            pass
+        if not preserve_backup_skip:
+            try:
+                _clear_backup_skip(symbol, _interval)
+            except Exception:
+                pass
         provider_monitor.record_success("alpaca")
         _alpaca_disable_count = 0
         try:
             tf_key = (symbol, _interval)
             _FALLBACK_UNTIL.pop(tf_key, None)
-            _SKIPPED_SYMBOLS.discard(tf_key)
+            if not preserve_backup_skip:
+                _SKIPPED_SYMBOLS.discard(tf_key)
             _FALLBACK_WINDOWS.discard(_fallback_key(symbol, _interval, _start, _end))
-            _clear_backup_skip(symbol, _interval)
-            _clear_global_backup_skip(_interval)
-            _clear_minute_fallback_state(symbol, _interval, _start, _end)
+            if not preserve_backup_skip:
+                _clear_backup_skip(symbol, _interval)
+                _clear_global_backup_skip(_interval)
+                _clear_minute_fallback_state(symbol, _interval, _start, _end)
         except Exception:
             pass
         try:

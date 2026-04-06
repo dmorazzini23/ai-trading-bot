@@ -1588,12 +1588,38 @@ def run_cycle() -> None:
         logger.info("CYCLE_STOP_REQUESTED", extra={"stage": "start"})
         return
 
-    from ai_trading.alpaca_api import (
-        AlpacaAuthenticationError,
-        alpaca_get,
-        is_alpaca_service_available,
-        _set_alpaca_service_available,
-    )
+    import ai_trading.alpaca_api as alpaca_api
+
+    alpaca_namespace = vars(alpaca_api)
+    alpaca_get = alpaca_namespace.get("alpaca_get")
+    if not callable(alpaca_get):
+        alpaca_get = getattr(alpaca_api, "alpaca_get", None)
+    is_service_available = alpaca_namespace.get("is_alpaca_service_available")
+    if not callable(is_service_available):
+        is_service_available = getattr(alpaca_api, "is_alpaca_service_available", None)
+    set_service_available = alpaca_namespace.get("_set_alpaca_service_available")
+    if not callable(set_service_available):
+        set_service_available = getattr(alpaca_api, "_set_alpaca_service_available", None)
+    auth_error_type = alpaca_namespace.get("AlpacaAuthenticationError")
+    if not isinstance(auth_error_type, type):
+        auth_error_type = getattr(alpaca_api, "AlpacaAuthenticationError", None)
+
+    def _set_alpaca_service_state(value: bool) -> None:
+        if callable(set_service_available):
+            try:
+                set_service_available(bool(value))
+                return
+            except Exception:
+                pass
+        alpaca_namespace["_ALPACA_SERVICE_AVAILABLE"] = bool(value)
+
+    def _alpaca_service_available() -> bool:
+        if callable(is_service_available):
+            try:
+                return bool(is_service_available())
+            except Exception:
+                pass
+        return bool(alpaca_namespace.get("_ALPACA_SERVICE_AVAILABLE", True))
 
     execution_mode = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim").lower()
     warmup_mode = str(_managed_env("AI_TRADING_WARMUP_MODE", "") or "").strip().lower() in {
@@ -1610,7 +1636,7 @@ def run_cycle() -> None:
     elif _STARTUP_PENDING_RECONCILED:
         _set_execution_phase("active")
     if execution_mode == "disabled":
-        _set_alpaca_service_available(False)
+        _set_alpaca_service_state(False)
         _log_auth_preflight_failure(
             detail="Execution mode is disabled",
             action="Set AI_TRADING_EXECUTION_MODE to paper or live",
@@ -1620,7 +1646,7 @@ def run_cycle() -> None:
     if execution_mode in {"paper", "live"}:
         has_key, has_secret = alpaca_credential_status()
         if not (has_key and has_secret):
-            _set_alpaca_service_available(False)
+            _set_alpaca_service_state(False)
             _log_auth_preflight_failure(
                 detail="Missing Alpaca API credentials",
                 action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
@@ -1734,10 +1760,18 @@ def run_cycle() -> None:
         except Exception:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
 
-    if not is_alpaca_service_available():
+    if not _alpaca_service_available():
         _log_auth_preflight_failure(
             detail="Alpaca authentication previously marked unavailable",
             action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
+        )
+        return
+
+    if not callable(alpaca_get):
+        _set_alpaca_service_state(False)
+        _log_auth_preflight_failure(
+            detail="Alpaca API client is unavailable",
+            action="Verify Alpaca SDK/runtime initialization",
         )
         return
 
@@ -1746,15 +1780,18 @@ def run_cycle() -> None:
     except Exception as exc:  # pragma: no cover - defensive
         # Handle stale-module exception identity mismatches during reload-heavy
         # test flows by matching the canonical auth exception name as fallback.
-        is_auth_failure = isinstance(exc, AlpacaAuthenticationError) or exc.__class__.__name__ == "AlpacaAuthenticationError"
+        is_auth_failure = (
+            isinstance(auth_error_type, type)
+            and isinstance(exc, auth_error_type)
+        ) or exc.__class__.__name__ == "AlpacaAuthenticationError"
         if is_auth_failure:
-            _set_alpaca_service_available(False)
+            _set_alpaca_service_state(False)
             _log_auth_preflight_failure(
                 detail=str(exc),
                 action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
             )
             return
-        _set_alpaca_service_available(False)
+        _set_alpaca_service_state(False)
         _log_auth_preflight_failure(
             detail=f"Unexpected Alpaca preflight error: {exc}",
             action="Verify Alpaca credentials and network connectivity",

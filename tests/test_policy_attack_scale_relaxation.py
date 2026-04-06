@@ -70,3 +70,22 @@ def test_attack_scale_uses_base_multiplier_when_reject_rate_high() -> None:
     assert approval.adjusted_delta_shares == 14
     assert "SAFETY_TIER_ATTACK_SCALE_RELAXED" not in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE" in approval.reasons
+
+
+def test_attack_scale_degrades_multiplier_when_reject_rate_very_high() -> None:
+    policy = compile_effective_policy(
+        SimpleNamespace(trading_mode="balanced"),
+        env={
+            "AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0",
+            "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER": "1.40",
+            "AI_TRADING_POLICY_ATTACK_DEGRADE_REJECT_RATE_PCT": "8.0",
+            "AI_TRADING_POLICY_ATTACK_DEGRADE_SIZE_MULTIPLIER": "1.05",
+        },
+    )
+
+    approval = approve_execution_candidate(policy, _base_candidate(reject_rate_pct=12.0))
+
+    assert approval.allowed is True
+    assert approval.adjusted_delta_shares == 10
+    assert "SAFETY_TIER_ATTACK_SCALE_DEGRADED" in approval.reasons
+    assert "SAFETY_TIER_ATTACK_SCALE" in approval.reasons

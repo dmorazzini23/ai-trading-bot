@@ -95,6 +95,8 @@ KNOWN_POLICY_KEYS: frozenset[str] = frozenset(
         "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER",
         "AI_TRADING_POLICY_ATTACK_RELAX_REJECT_RATE_PCT",
         "AI_TRADING_POLICY_ATTACK_RELAX_SIZE_MULTIPLIER",
+        "AI_TRADING_POLICY_ATTACK_DEGRADE_REJECT_RATE_PCT",
+        "AI_TRADING_POLICY_ATTACK_DEGRADE_SIZE_MULTIPLIER",
     }
 )
 
@@ -198,6 +200,8 @@ class SafetyPolicy:
     attack_size_multiplier: float
     attack_relax_reject_rate_pct: float
     attack_relax_size_multiplier: float
+    attack_degrade_reject_rate_pct: float
+    attack_degrade_size_multiplier: float
 
 
 @dataclass(frozen=True)
@@ -695,6 +699,18 @@ def compile_effective_policy(cfg: Any, env: Mapping[str, str] | None = None) -> 
             min_value=1.0,
             max_value=3.0,
         ),
+        attack_degrade_reject_rate_pct=_as_float(
+            env_values.get("AI_TRADING_POLICY_ATTACK_DEGRADE_REJECT_RATE_PCT"),
+            8.0,
+            min_value=0.0,
+            max_value=100.0,
+        ),
+        attack_degrade_size_multiplier=_as_float(
+            env_values.get("AI_TRADING_POLICY_ATTACK_DEGRADE_SIZE_MULTIPLIER"),
+            1.0,
+            min_value=1.0,
+            max_value=3.0,
+        ),
     )
 
     source_pairs = sorted(
@@ -867,11 +883,21 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
         reject_rate = max(0.0, float(candidate.reject_rate_pct))
         relax_threshold = max(0.0, float(policy.safety.attack_relax_reject_rate_pct))
         relax_scale = max(1.0, float(policy.safety.attack_relax_size_multiplier))
+        degrade_threshold = max(
+            0.0,
+            float(policy.safety.attack_degrade_reject_rate_pct),
+        )
+        degrade_scale = max(1.0, float(policy.safety.attack_degrade_size_multiplier))
         if reject_rate <= relax_threshold:
             bounded_relax_scale = min(attack_scale, relax_scale)
             if bounded_relax_scale < attack_scale - 1e-9:
                 attack_scale = bounded_relax_scale
                 reasons.append("SAFETY_TIER_ATTACK_SCALE_RELAXED")
+        elif reject_rate >= degrade_threshold:
+            bounded_degrade_scale = min(attack_scale, degrade_scale)
+            if bounded_degrade_scale < attack_scale - 1e-9:
+                attack_scale = bounded_degrade_scale
+                reasons.append("SAFETY_TIER_ATTACK_SCALE_DEGRADED")
         qty = _scale_qty(qty, attack_scale)
         reasons.append("SAFETY_TIER_ATTACK_SCALE")
 

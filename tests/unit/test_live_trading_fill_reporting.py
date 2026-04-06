@@ -125,3 +125,91 @@ def test_record_runtime_fill_event_preserves_existing_canonical_fill_fields(monk
     assert isinstance(payload, dict)
     assert payload["fill_price"] == 212.5
     assert payload["fill_qty"] == 3.0
+
+
+def test_record_runtime_fill_event_backfills_edge_fields(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: True,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_append_runtime_jsonl(*, env_key, default_relative, payload, failure_log):
+        del env_key, default_relative, failure_log
+        captured["payload"] = dict(payload)
+
+    monkeypatch.setattr(engine, "_append_runtime_jsonl", _fake_append_runtime_jsonl)
+
+    engine._record_runtime_fill_event(
+        {
+            "event": "fill_recorded",
+            "symbol": "AAPL",
+            "entry_price": 101.5,
+            "qty": 2,
+            "expected_edge_bps": "4.25",
+            "realized_edge_bps": "1.5",
+        }
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["expected_net_edge_bps"] == 4.25
+    assert payload["realized_net_edge_bps"] == 1.5
+
+
+def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(live_trading, "record_trade_fill", lambda _payload: None)
+    monkeypatch.setattr(
+        engine,
+        "_record_runtime_fill_event",
+        lambda payload: captured.update({"payload": dict(payload)}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_update_symbol_loss_cooldown_from_fill",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_arm_symbol_reentry_cooldown_from_fill",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_pending_tca_from_fill",
+        lambda **_kwargs: None,
+    )
+
+    engine._persist_fill_derived_trade_record(
+        symbol="AAPL",
+        side="buy",
+        filled_qty=5.0,
+        fill_price=100.0,
+        expected_price=100.2,
+        order_id="oid-1",
+        client_order_id="cid-1",
+        order_status="filled",
+        signal=None,
+        timestamp=live_trading.datetime.now(live_trading.UTC),
+        runtime_payload={"source": "live"},
+        closing_position=False,
+        expected_net_edge_bps=3.25,
+        realized_net_edge_bps=1.75,
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["event"] == "fill_recorded"
+    assert payload["symbol"] == "AAPL"
+    assert payload["expected_net_edge_bps"] == 3.25
+    assert payload["realized_net_edge_bps"] == 1.75

@@ -1162,6 +1162,79 @@ def test_runtime_gonogo_can_enforce_in_paper_when_enabled(monkeypatch, tmp_path)
     assert "profit_factor" in context["failed_checks"]
 
 
+def test_runtime_gonogo_persists_latest_report_snapshot(monkeypatch, tmp_path):
+    engine = _engine_stub()
+    engine.execution_mode = "live"
+
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_CACHE_TTL_SEC", "1")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_RUNTIME_PERF_REPORT_LATEST_PATH",
+        "runtime/runtime_performance_report_latest.json",
+    )
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_PERF_REPORT_REFRESH_SEC", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_RUNTIME_PERF_REPORT_PERSIST_ENABLED", "1")
+
+    monkeypatch.setattr(
+        engine,
+        "_runtime_gonogo_hourly_guard_allows_openings",
+        lambda **_kwargs: (True, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_preopen_readiness_allows_openings",
+        lambda **_kwargs: (True, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_intraday_pnl_kill_switch_allows_openings",
+        lambda **_kwargs: (True, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_intraday_slippage_kill_switch_allows_openings",
+        lambda **_kwargs: (True, {}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_runtime_pending_new_pressure_allows_openings",
+        lambda: (True, {}),
+    )
+    monkeypatch.setattr(engine, "_emit_execution_vs_alpha_alerts", lambda **_kwargs: None)
+
+    from ai_trading.tools import runtime_performance_report as runtime_perf_report
+
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "build_report",
+        lambda *args, **kwargs: {
+            "trade_history": {},
+            "gate_effectiveness": {},
+            "execution_vs_alpha": {"expected_edge_for_realism_bps": 12.0},
+        },
+    )
+    monkeypatch.setattr(
+        runtime_perf_report,
+        "evaluate_go_no_go",
+        lambda *_args, **_kwargs: {
+            "gate_passed": True,
+            "failed_checks": [],
+            "thresholds": {"min_win_rate": 0.5},
+            "observed": {"win_rate": 0.6},
+        },
+    )
+
+    allowed, _context = engine._runtime_gonogo_openings_allowed()
+
+    assert allowed is True
+    report_path = tmp_path / "runtime" / "runtime_performance_report_latest.json"
+    assert report_path.exists()
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["go_no_go"]["gate_passed"] is True
+    assert payload["report"]["execution_vs_alpha"]["expected_edge_for_realism_bps"] == pytest.approx(12.0)
+
+
 def test_runtime_gonogo_eval_failure_forces_fail_closed_outside_pytest(monkeypatch):
     engine = _engine_stub()
     engine.execution_mode = "live"
@@ -2558,6 +2631,88 @@ def test_submit_failure_records_execution_quality_event(monkeypatch):
     assert payload["symbol"] == "MSFT"
     assert payload["side"] == "sell"
     assert payload["status_code"] == 503
+
+
+def test_record_cycle_outcome_records_live_submit_outcome_edge_telemetry(monkeypatch):
+    engine = _engine_stub()
+    captured: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_append_runtime_jsonl",
+        lambda **kwargs: captured.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(engine, "_update_edge_realism_feedback", lambda **_kwargs: None)
+
+    engine._record_cycle_order_outcome(
+        symbol="AAPL",
+        side="buy",
+        status="filled",
+        fill_source="live",
+        expected_net_edge_bps=8.5,
+        realized_net_edge_bps=2.0,
+        turnover_notional=1500.0,
+        ack_timed_out=False,
+    )
+
+    quality_rows = [
+        row
+        for row in captured
+        if row.get("env_key") == "AI_TRADING_EXEC_QUALITY_EVENTS_PATH"
+    ]
+    assert quality_rows
+    payload = quality_rows[-1]["payload"]
+    assert payload["event"] == "submit_outcome"
+    assert payload["status"] == "filled"
+    assert payload["symbol"] == "AAPL"
+    assert payload["side"] == "buy"
+    assert payload["expected_net_edge_bps"] == pytest.approx(8.5)
+    assert payload["realized_net_edge_bps"] == pytest.approx(2.0)
+    assert payload["realization_gap_bps"] == pytest.approx(-6.5)
+
+
+def test_record_cycle_outcome_treats_broker_reconcile_fill_source_as_live(monkeypatch):
+    engine = _engine_stub()
+    captured: list[dict[str, Any]] = []
+    edge_updates: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(engine, "_runtime_exec_event_persistence_enabled", lambda: True)
+    monkeypatch.setattr(
+        engine,
+        "_append_runtime_jsonl",
+        lambda **kwargs: captured.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_update_edge_realism_feedback",
+        lambda **kwargs: edge_updates.append(dict(kwargs)),
+    )
+
+    engine._record_cycle_order_outcome(
+        symbol="MSFT",
+        side="sell",
+        status="filled",
+        fill_source="broker_reconcile",
+        expected_net_edge_bps=10.0,
+        realized_net_edge_bps=4.0,
+        turnover_notional=2000.0,
+        ack_timed_out=False,
+    )
+
+    quality_rows = [
+        row
+        for row in captured
+        if row.get("env_key") == "AI_TRADING_EXEC_QUALITY_EVENTS_PATH"
+    ]
+    assert quality_rows
+    payload = quality_rows[-1]["payload"]
+    assert payload["event"] == "submit_outcome"
+    assert payload["status"] == "filled"
+    assert payload["fill_source"] == "live"
+    assert payload["expected_net_edge_bps"] == pytest.approx(10.0)
+    assert payload["realized_net_edge_bps"] == pytest.approx(4.0)
+    assert edge_updates
 
 
 def test_execution_kpi_snapshot_and_alerts(monkeypatch, caplog):

@@ -205,6 +205,34 @@ logger = get_logger(__name__)
 _BACKUP_QUOTE_MAX_AGE_MS = 2000.0
 
 
+_RECONCILE_BACKFILL_FILL_SOURCES: frozenset[str] = frozenset(
+    {"reconcile_backfill", "backfill_fill_events", "backfill"}
+)
+_LIVE_FILL_SOURCE_TOKENS: frozenset[str] = frozenset(
+    {"live", "initial", "poll", "final", "manual_probe"}
+)
+
+
+def _normalize_fill_source(value: Any) -> str:
+    """Normalize fill source labels for runtime telemetry consistency."""
+
+    token = str(value or "").strip().lower()
+    if not token:
+        return "live"
+    if token.startswith("broker_reconcile"):
+        return "live"
+    if token in _RECONCILE_BACKFILL_FILL_SOURCES:
+        return "reconcile_backfill"
+    return token
+
+
+def _is_live_fill_source(value: Any) -> bool:
+    """Return whether ``value`` maps to a live execution fill source."""
+
+    normalized = _normalize_fill_source(value)
+    return normalized in _LIVE_FILL_SOURCE_TOKENS
+
+
 def _as_positive_float(value: Any) -> float | None:
     """Return a finite positive float for ``value`` when possible."""
 
@@ -2983,6 +3011,74 @@ class ExecutionEngine:
             return 0.0
         return max(0.0, min(float(value), 3600.0))
 
+    def _precheck_guardrail_relax_scale(
+        self,
+        *,
+        detail: str,
+        default_scale: float,
+    ) -> float:
+        """Return adaptive relax scale for repeated precheck blocker details."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_PRECHECK_GUARDRAIL_RELAX_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return 1.0
+
+        default_scale_value = max(0.1, min(float(default_scale), 1.0))
+        if default_scale_value >= 1.0:
+            return 1.0
+
+        context_raw = getattr(self, "_precheck_failure_pressure_context", None)
+        context = dict(context_raw) if isinstance(context_raw, Mapping) else {}
+        updated_at_mono = _safe_float(context.get("updated_at_mono")) or 0.0
+        if updated_at_mono <= 0.0:
+            return 1.0
+
+        max_age_s = _config_float(
+            "AI_TRADING_EXECUTION_PRECHECK_GUARDRAIL_RELAX_MAX_AGE_SEC",
+            900.0,
+        )
+        if max_age_s is None or not math.isfinite(float(max_age_s)):
+            max_age_s = 900.0
+        max_age_s = max(30.0, min(float(max_age_s), 3600.0))
+        if (float(monotonic_time()) - float(updated_at_mono)) > float(max_age_s):
+            return 1.0
+
+        precheck_failure_count = max(
+            0,
+            _safe_int(context.get("precheck_failure_count"), 0),
+        )
+        if precheck_failure_count <= 0:
+            return 1.0
+
+        detail_counts_raw = context.get("precheck_detail_counts")
+        detail_counts = (
+            dict(detail_counts_raw) if isinstance(detail_counts_raw, Mapping) else {}
+        )
+        detail_count = max(
+            0,
+            _safe_int(detail_counts.get(str(detail).strip().lower()), 0),
+        )
+        min_count = _config_int(
+            "AI_TRADING_EXECUTION_PRECHECK_GUARDRAIL_RELAX_MIN_COUNT",
+            6,
+        )
+        if min_count is None:
+            min_count = 6
+        min_count = max(1, min(int(min_count), 500))
+        min_ratio = _config_float(
+            "AI_TRADING_EXECUTION_PRECHECK_GUARDRAIL_RELAX_MIN_RATIO",
+            0.5,
+        )
+        if min_ratio is None:
+            min_ratio = 0.5
+        min_ratio = max(0.0, min(float(min_ratio), 1.0))
+        detail_ratio = float(detail_count) / float(precheck_failure_count)
+        if detail_count < int(min_count) or detail_ratio < float(min_ratio):
+            return 1.0
+        return float(default_scale_value)
+
     def _symbol_reentry_cooldown_seconds(self) -> float:
         """Return same-side symbol re-entry cooldown in seconds."""
 
@@ -2993,7 +3089,30 @@ class ExecutionEngine:
             value = 300.0
         if not math.isfinite(float(value)):
             value = 300.0
-        return max(0.0, min(float(value), 3600.0))
+        cooldown_seconds = max(0.0, min(float(value), 3600.0))
+        if cooldown_seconds <= 0.0:
+            return cooldown_seconds
+        relax_scale = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_RELAX_SCALE",
+            0.6,
+        )
+        if relax_scale is None:
+            relax_scale = 0.6
+        adaptive_scale = self._precheck_guardrail_relax_scale(
+            detail="symbol_reentry_cooldown",
+            default_scale=float(relax_scale),
+        )
+        if adaptive_scale >= 1.0:
+            return cooldown_seconds
+        min_cooldown_s = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_MIN_SEC",
+            30.0,
+        )
+        if min_cooldown_s is None or not math.isfinite(float(min_cooldown_s)):
+            min_cooldown_s = 30.0
+        min_cooldown_s = max(0.0, min(float(min_cooldown_s), 3600.0))
+        adjusted = max(float(min_cooldown_s), float(cooldown_seconds) * float(adaptive_scale))
+        return max(0.0, min(float(adjusted), 3600.0))
 
     def _opening_min_notional_dollars(self) -> float:
         """Return minimum opening notional required before submitting an order."""
@@ -3005,7 +3124,30 @@ class ExecutionEngine:
             return 0.0
         if not math.isfinite(float(value)):
             return 0.0
-        return max(0.0, min(float(value), 1_000_000.0))
+        min_notional = max(0.0, min(float(value), 1_000_000.0))
+        if min_notional <= 0.0:
+            return 0.0
+        relax_scale = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_RELAX_SCALE",
+            0.5,
+        )
+        if relax_scale is None:
+            relax_scale = 0.5
+        adaptive_scale = self._precheck_guardrail_relax_scale(
+            detail="opening_min_notional",
+            default_scale=float(relax_scale),
+        )
+        if adaptive_scale >= 1.0:
+            return min_notional
+        floor_notional = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_RELAX_FLOOR",
+            0.0,
+        )
+        if floor_notional is None or not math.isfinite(float(floor_notional)):
+            floor_notional = 0.0
+        floor_notional = max(0.0, min(float(floor_notional), float(min_notional)))
+        adjusted = max(float(floor_notional), float(min_notional) * float(adaptive_scale))
+        return max(0.0, min(float(adjusted), float(min_notional)))
 
     def _symbol_reentry_cooldown_allows_opening(
         self,
@@ -4080,6 +4222,103 @@ class ExecutionEngine:
                     adaptive_weight * ewma_cost_bps
                 )
                 base_bps = blended
+
+        hint_order = {
+            "annotations": annotations if isinstance(annotations, Mapping) else {},
+            "metadata": metadata if isinstance(metadata, Mapping) else {},
+        }
+        spread_bps_value, _spread_source = self._order_numeric_value(
+            hint_order,
+            keys=("spread_bps", "quoted_spread_bps", "bid_ask_spread_bps"),
+        )
+        if spread_bps_value is not None:
+            tight_spread_bps = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_TIGHT_SPREAD_BPS",
+                6.0,
+            )
+            if tight_spread_bps is None:
+                tight_spread_bps = 6.0
+            wide_spread_bps = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_WIDE_SPREAD_BPS",
+                24.0,
+            )
+            if wide_spread_bps is None:
+                wide_spread_bps = 24.0
+            tight_mult = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_TIGHT_SPREAD_MULTIPLIER",
+                1.15,
+            )
+            if tight_mult is None:
+                tight_mult = 1.15
+            wide_mult = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_WIDE_SPREAD_MULTIPLIER",
+                0.8,
+            )
+            if wide_mult is None:
+                wide_mult = 0.8
+            if spread_bps_value <= float(tight_spread_bps):
+                base_bps = float(base_bps) * max(0.25, float(tight_mult))
+            elif spread_bps_value >= float(wide_spread_bps):
+                base_bps = float(base_bps) * max(0.1, float(wide_mult))
+
+        volatility_bps_value, _vol_source = self._order_numeric_value(
+            hint_order,
+            keys=("volatility_bps", "atr_bps", "realized_volatility_bps"),
+        )
+        if volatility_bps_value is not None:
+            high_vol_bps = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_HIGH_VOL_BPS",
+                80.0,
+            )
+            if high_vol_bps is None:
+                high_vol_bps = 80.0
+            high_vol_mult = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_HIGH_VOL_MULTIPLIER",
+                0.85,
+            )
+            if high_vol_mult is None:
+                high_vol_mult = 0.85
+            if volatility_bps_value >= float(high_vol_bps):
+                base_bps = float(base_bps) * max(0.1, float(high_vol_mult))
+
+        expected_edge_bps_value, _edge_source = self._order_numeric_value(
+            hint_order,
+            keys=(
+                "expected_net_edge_bps",
+                "expected_edge_bps",
+                "edge_bps",
+                "alpha_edge_bps",
+            ),
+        )
+        if expected_edge_bps_value is not None:
+            low_edge_bps = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_LOW_EDGE_BPS",
+                8.0,
+            )
+            if low_edge_bps is None:
+                low_edge_bps = 8.0
+            high_edge_bps = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_HIGH_EDGE_BPS",
+                24.0,
+            )
+            if high_edge_bps is None:
+                high_edge_bps = 24.0
+            low_edge_mult = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_LOW_EDGE_MULTIPLIER",
+                0.8,
+            )
+            if low_edge_mult is None:
+                low_edge_mult = 0.8
+            high_edge_mult = _config_float(
+                "AI_TRADING_MIDPOINT_LIMIT_HIGH_EDGE_MULTIPLIER",
+                1.2,
+            )
+            if high_edge_mult is None:
+                high_edge_mult = 1.2
+            if expected_edge_bps_value <= float(low_edge_bps):
+                base_bps = float(base_bps) * max(0.1, float(low_edge_mult))
+            elif expected_edge_bps_value >= float(high_edge_bps):
+                base_bps = float(base_bps) * max(0.25, float(high_edge_mult))
 
         lower = max(0.0, float(min_bps))
         upper = max(lower, float(hard_cap_bps))
@@ -6669,7 +6908,7 @@ class ExecutionEngine:
         min_samples = max(5, min(int(min_samples), 5000))
 
         now_utc = datetime.now(UTC)
-        payload = {
+        payload: dict[str, Any] = {
             "generated_at": now_utc.isoformat(),
             "date": now_utc.date().isoformat(),
             "enabled": True,
@@ -7077,15 +7316,8 @@ class ExecutionEngine:
         }
         if status_token not in terminal_statuses:
             return
-        source_token = str(fill_source or "").strip().lower()
-        source_is_live = source_token in {
-            "",
-            "live",
-            "initial",
-            "poll",
-            "final",
-            "manual_probe",
-        }
+        source_label = _normalize_fill_source(fill_source)
+        source_is_live = _is_live_fill_source(fill_source)
         if not source_is_live:
             return
 
@@ -7232,7 +7464,7 @@ class ExecutionEngine:
                 "symbol": str(symbol) if symbol else None,
                 "side": str(side) if side else None,
                 "status": status_token,
-                "fill_source": source_token or "live",
+                "fill_source": source_label or "live",
                 "bucket_key": bucket_key,
                 "bucket_samples": int(
                     _safe_int(
@@ -7777,15 +8009,8 @@ class ExecutionEngine:
         status_token = _normalize_status(status) or str(status or "").strip().lower()
         if status_token not in {"filled", "partially_filled"}:
             return
-        source_token = str(fill_source or "").strip().lower()
-        source_is_live = source_token in {
-            "",
-            "live",
-            "initial",
-            "poll",
-            "final",
-            "manual_probe",
-        }
+        source_label = _normalize_fill_source(fill_source)
+        source_is_live = _is_live_fill_source(fill_source)
         if not source_is_live:
             return
         parsed_edge = self._coerce_finite_float(realized_net_edge_bps)
@@ -7838,7 +8063,7 @@ class ExecutionEngine:
                 "symbol": str(symbol) if symbol else None,
                 "side": str(side) if side else None,
                 "status": status_token,
-                "fill_source": source_token or "live",
+                "fill_source": source_label or "live",
                 "realized_net_edge_bps": float(parsed_edge),
                 "markout_mean_bps": float(mean_bps),
                 "markout_samples": int(len(markout_history_raw)),
@@ -7855,7 +8080,7 @@ class ExecutionEngine:
                     "symbol": str(symbol) if symbol else None,
                     "side": str(side) if side else None,
                     "status": status_token,
-                    "fill_source": source_token or "live",
+                    "fill_source": source_label or "live",
                     "realized_net_edge_bps": float(parsed_edge),
                     "markout_mean_bps": float(mean_bps),
                     "markout_samples": int(len(markout_history_raw)),
@@ -8931,7 +9156,7 @@ class ExecutionEngine:
         if parsed_realized_net_edge_bps is not None and math.isfinite(float(parsed_realized_net_edge_bps)):
             payload["realized_net_edge_bps"] = float(parsed_realized_net_edge_bps)
         if fill_source not in (None, ""):
-            payload["fill_source"] = str(fill_source).strip().lower()
+            payload["fill_source"] = _normalize_fill_source(fill_source)
         if execution_profile not in (None, ""):
             payload["execution_profile"] = str(execution_profile).strip().lower()
         if session_regime not in (None, ""):
@@ -8959,15 +9184,44 @@ class ExecutionEngine:
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
 
-        source_token = str(fill_source or "").strip().lower()
-        source_is_live = source_token in {
-            "",
-            "live",
-            "initial",
-            "poll",
-            "final",
-            "manual_probe",
-        }
+        normalized_fill_source = _normalize_fill_source(fill_source)
+        source_is_live = _is_live_fill_source(fill_source)
+        if normalized_status in {"filled", "partially_filled"} and source_is_live:
+            quality_payload: dict[str, Any] = {
+                "event": "submit_outcome",
+                "status": normalized_status,
+                "ack_timed_out": bool(ack_timed_out),
+            }
+            if symbol:
+                quality_payload["symbol"] = str(symbol)
+            if side:
+                quality_payload["side"] = str(side)
+            if reason:
+                quality_payload["reason"] = str(reason)
+            if normalized_fill_source:
+                quality_payload["fill_source"] = str(normalized_fill_source)
+            if parsed_expected_net_edge_bps is not None and math.isfinite(
+                float(parsed_expected_net_edge_bps)
+            ):
+                quality_payload["expected_net_edge_bps"] = float(
+                    parsed_expected_net_edge_bps
+                )
+            if parsed_realized_net_edge_bps is not None and math.isfinite(
+                float(parsed_realized_net_edge_bps)
+            ):
+                quality_payload["realized_net_edge_bps"] = float(
+                    parsed_realized_net_edge_bps
+                )
+            if parsed_turnover_notional is not None and math.isfinite(
+                float(parsed_turnover_notional)
+            ):
+                quality_payload["turnover_notional"] = float(parsed_turnover_notional)
+            if parsed_realized_net_edge_bps is not None and parsed_expected_net_edge_bps is not None:
+                quality_payload["realization_gap_bps"] = float(
+                    float(parsed_realized_net_edge_bps)
+                    - float(parsed_expected_net_edge_bps)
+                )
+            self._record_execution_quality_event(quality_payload)
         if (
             normalized_status in {"filled", "partially_filled"}
             and source_is_live
@@ -9203,6 +9457,7 @@ class ExecutionEngine:
             if status in {"canceled", "cancelled", "expired", "done_for_day"}
         )
         skip_reason_counts: dict[str, int] = {}
+        precheck_detail_counts: dict[str, int] = {}
         for item, status in normalized_outcomes:
             if status != "skipped":
                 continue
@@ -9213,7 +9468,21 @@ class ExecutionEngine:
             if not reason:
                 reason = "unspecified"
             skip_reason_counts[reason] = skip_reason_counts.get(reason, 0) + 1
+            if reason != "pre_execution_order_checks_failed":
+                continue
+            detail = str(item.get("detail") or "").strip().lower()
+            if not detail:
+                context_raw = item.get("context")
+                if isinstance(context_raw, Mapping):
+                    detail = str(context_raw.get("reason") or "").strip().lower()
+            if not detail:
+                detail = "unspecified"
+            precheck_detail_counts[detail] = precheck_detail_counts.get(detail, 0) + 1
         skip_reason_counts = {key: skip_reason_counts[key] for key in sorted(skip_reason_counts)}
+        precheck_detail_counts = {
+            key: precheck_detail_counts[key]
+            for key in sorted(precheck_detail_counts)
+        }
         decision_count = len(normalized_outcomes)
         pacing_cap_hits = int(skip_reason_counts.get("order_pacing_cap", 0))
         precheck_failure_count = int(
@@ -9222,6 +9491,14 @@ class ExecutionEngine:
         precheck_failure_ratio = (
             (float(precheck_failure_count) / float(skipped)) if skipped > 0 else 0.0
         )
+        self._precheck_failure_pressure_context = {
+            "updated_at": datetime.now(UTC).isoformat(),
+            "updated_at_mono": float(monotonic_time()),
+            "decision_count": int(decision_count),
+            "skipped": int(skipped),
+            "precheck_failure_count": int(precheck_failure_count),
+            "precheck_detail_counts": dict(precheck_detail_counts),
+        }
         pacing_cap_hit_rate_pct = (
             (float(pacing_cap_hits) / float(decision_count) * 100.0)
             if decision_count > 0
@@ -9257,15 +9534,7 @@ class ExecutionEngine:
         for item, status in normalized_outcomes:
             if status != "filled":
                 continue
-            fill_source = str(item.get("fill_source") or "").strip().lower()
-            source_is_live = fill_source in {
-                "",
-                "live",
-                "initial",
-                "poll",
-                "final",
-                "manual_probe",
-            }
+            source_is_live = _is_live_fill_source(item.get("fill_source"))
             if not source_is_live:
                 continue
             edge_bps = _safe_float(item.get("realized_net_edge_bps"))
@@ -9379,6 +9648,7 @@ class ExecutionEngine:
                 "skip_reason_counts": skip_reason_counts,
                 "precheck_failure_count": int(precheck_failure_count),
                 "precheck_failure_ratio": round(float(precheck_failure_ratio), 4),
+                "precheck_detail_counts": dict(precheck_detail_counts),
                 "order_pacing_cap_hit_rate_pct": round(pacing_cap_hit_rate_pct, 4),
                 "fill_ratio": round(fill_ratio, 4),
                 "cancel_ratio": round(cancel_ratio, 4),
@@ -9779,6 +10049,87 @@ class ExecutionEngine:
         )
         return self._capacity_exhausted_reason
 
+    def _retry_capacity_precheck_with_suggested_qty(
+        self,
+        *,
+        capacity: CapacityCheck,
+        symbol: str,
+        side: Any,
+        price_hint: Any,
+        quantity: int,
+        broker: Any | None,
+        account_snapshot: Any | None,
+        closing_position: bool,
+    ) -> CapacityCheck:
+        """Retry capacity precheck with broker-suggested downsize when feasible."""
+
+        if capacity.can_submit:
+            return capacity
+        if quantity <= 0:
+            return capacity
+        reason = str(capacity.reason or "").strip().lower()
+        if not _is_capacity_exhaustion_reason(reason):
+            return capacity
+        enabled = _resolve_bool_env("AI_TRADING_CAPACITY_SUGGESTED_QTY_RETRY_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return capacity
+        suggested_qty = max(0, int(capacity.suggested_qty))
+        if suggested_qty <= 0 or suggested_qty >= int(quantity):
+            return capacity
+        min_qty = _config_int("AI_TRADING_CAPACITY_SUGGESTED_QTY_RETRY_MIN_QTY", 1)
+        if min_qty is None:
+            min_qty = 1
+        min_qty = max(1, min(int(min_qty), int(quantity)))
+        min_fraction = _config_float(
+            "AI_TRADING_CAPACITY_SUGGESTED_QTY_RETRY_MIN_FRACTION",
+            0.25,
+        )
+        if min_fraction is None or not math.isfinite(float(min_fraction)):
+            min_fraction = 0.25
+        min_fraction = max(0.0, min(float(min_fraction), 1.0))
+        if suggested_qty < int(min_qty):
+            return capacity
+        if float(suggested_qty) < (float(quantity) * float(min_fraction)):
+            return capacity
+
+        capacity_account = self._account_with_cycle_capacity_reservation(
+            account_snapshot,
+            side=side,
+            closing_position=closing_position,
+        )
+        retried = _call_preflight_capacity(
+            symbol,
+            side,
+            price_hint,
+            suggested_qty,
+            broker,
+            capacity_account,
+        )
+        if not retried.can_submit:
+            return capacity
+        logger.info(
+            "BROKER_CAPACITY_PRECHECK_SUGGESTED_QTY_RETRY",
+            extra={
+                "symbol": symbol,
+                "side": str(side),
+                "requested_qty": int(quantity),
+                "suggested_qty": int(suggested_qty),
+                "initial_reason": str(capacity.reason or ""),
+                "retry_reason": str(retried.reason or ""),
+                "retry_can_submit": bool(retried.can_submit),
+            },
+        )
+        return CapacityCheck(
+            can_submit=True,
+            suggested_qty=int(suggested_qty),
+            reason=(
+                str(retried.reason or "").strip().lower()
+                or "suggested_qty_retry"
+            ),
+        )
+
     def _retry_capacity_precheck_with_fresh_account(
         self,
         *,
@@ -9796,17 +10147,37 @@ class ExecutionEngine:
         if capacity.can_submit:
             return capacity, account_snapshot
         reason = str(capacity.reason or "").strip().lower()
-        if reason != "insufficient_buying_power":
+        if not _is_capacity_exhaustion_reason(reason):
             return capacity, account_snapshot
         refresh_retry_enabled = _resolve_bool_env("AI_TRADING_CAPACITY_REFRESH_RETRY_ENABLED")
         if refresh_retry_enabled is None:
             refresh_retry_enabled = True
         if not refresh_retry_enabled:
-            return capacity, account_snapshot
+            retried = self._retry_capacity_precheck_with_suggested_qty(
+                capacity=capacity,
+                symbol=symbol,
+                side=side,
+                price_hint=price_hint,
+                quantity=quantity,
+                broker=broker,
+                account_snapshot=account_snapshot,
+                closing_position=closing_position,
+            )
+            return retried, account_snapshot
 
         refreshed_account = self._refresh_cycle_account()
         if refreshed_account is None:
-            return capacity, account_snapshot
+            retried = self._retry_capacity_precheck_with_suggested_qty(
+                capacity=capacity,
+                symbol=symbol,
+                side=side,
+                price_hint=price_hint,
+                quantity=quantity,
+                broker=broker,
+                account_snapshot=account_snapshot,
+                closing_position=closing_position,
+            )
+            return retried, account_snapshot
 
         refreshed_capacity_account = self._account_with_cycle_capacity_reservation(
             refreshed_account,
@@ -9840,7 +10211,17 @@ class ExecutionEngine:
                     "retry_can_submit": bool(refreshed_capacity.can_submit),
                 },
             )
-        return refreshed_capacity, refreshed_account
+        retried_capacity = self._retry_capacity_precheck_with_suggested_qty(
+            capacity=refreshed_capacity,
+            symbol=symbol,
+            side=side,
+            price_hint=price_hint,
+            quantity=quantity,
+            broker=broker,
+            account_snapshot=refreshed_account,
+            closing_position=closing_position,
+        )
+        return retried_capacity, refreshed_account
 
     def _get_account_snapshot(self) -> Any | None:
         """Return the cached account snapshot, refreshing once per cycle."""
@@ -9929,6 +10310,33 @@ class ExecutionEngine:
                 row["fill_price"] = float(resolved_fill_price)
             if resolved_fill_qty is not None and resolved_fill_qty > 0.0:
                 row["fill_qty"] = float(resolved_fill_qty)
+            resolved_expected_edge = _safe_float(row.get("expected_net_edge_bps"))
+            if resolved_expected_edge is None:
+                for candidate_key in (
+                    "expected_edge_bps",
+                    "edge_bps",
+                    "alpha_edge_bps",
+                ):
+                    resolved_expected_edge = _safe_float(row.get(candidate_key))
+                    if resolved_expected_edge is not None:
+                        break
+            if resolved_expected_edge is not None and math.isfinite(
+                float(resolved_expected_edge)
+            ):
+                row["expected_net_edge_bps"] = float(resolved_expected_edge)
+            resolved_realized_edge = _safe_float(row.get("realized_net_edge_bps"))
+            if resolved_realized_edge is None:
+                for candidate_key in (
+                    "realized_edge_bps",
+                    "edge_realized_bps",
+                ):
+                    resolved_realized_edge = _safe_float(row.get(candidate_key))
+                    if resolved_realized_edge is not None:
+                        break
+            if resolved_realized_edge is not None and math.isfinite(
+                float(resolved_realized_edge)
+            ):
+                row["realized_net_edge_bps"] = float(resolved_realized_edge)
         self._append_runtime_jsonl(
             env_key="AI_TRADING_FILL_EVENTS_PATH",
             default_relative="runtime/fill_events.jsonl",
@@ -10124,6 +10532,8 @@ class ExecutionEngine:
         timestamp: datetime,
         runtime_payload: Mapping[str, Any] | None = None,
         closing_position: bool | None = None,
+        expected_net_edge_bps: float | None = None,
+        realized_net_edge_bps: float | None = None,
     ) -> None:
         """Persist canonical fill-derived record for learning and truth reporting."""
 
@@ -10157,6 +10567,63 @@ class ExecutionEngine:
         fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
         if fee_amount is None and fee_bps > 0:
             fee_amount = abs(float(qty_value) * float(fill_price) * (float(fee_bps) / 10000.0))
+        parsed_expected_net_edge_bps = _safe_float(expected_net_edge_bps)
+        if parsed_expected_net_edge_bps is None and runtime_payload is not None:
+            for key in (
+                "expected_net_edge_bps",
+                "expected_edge_bps",
+                "edge_bps",
+                "alpha_edge_bps",
+            ):
+                candidate = _safe_float(runtime_payload.get(key))
+                if candidate is not None:
+                    parsed_expected_net_edge_bps = float(candidate)
+                    break
+            if parsed_expected_net_edge_bps is None:
+                for container_key in ("metadata", "annotations"):
+                    nested_raw = runtime_payload.get(container_key)
+                    if not isinstance(nested_raw, Mapping):
+                        continue
+                    for key in (
+                        "expected_net_edge_bps",
+                        "expected_edge_bps",
+                        "edge_bps",
+                        "alpha_edge_bps",
+                    ):
+                        candidate = _safe_float(nested_raw.get(key))
+                        if candidate is not None:
+                            parsed_expected_net_edge_bps = float(candidate)
+                            break
+                    if parsed_expected_net_edge_bps is not None:
+                        break
+        parsed_realized_net_edge_bps = _safe_float(realized_net_edge_bps)
+        if parsed_realized_net_edge_bps is None and runtime_payload is not None:
+            for key in (
+                "realized_net_edge_bps",
+                "realized_edge_bps",
+                "edge_realized_bps",
+            ):
+                candidate = _safe_float(runtime_payload.get(key))
+                if candidate is not None:
+                    parsed_realized_net_edge_bps = float(candidate)
+                    break
+        if (
+            parsed_realized_net_edge_bps is None
+            and expected_price is not None
+            and expected_price > 0.0
+            and fill_price is not None
+            and fill_price > 0.0
+        ):
+            try:
+                fill_px = float(fill_price)
+                expected_px = float(expected_price)
+                if side_normalized == "buy":
+                    improvement_bps = ((expected_px - fill_px) / expected_px) * 10000.0
+                else:
+                    improvement_bps = ((fill_px - expected_px) / expected_px) * 10000.0
+                parsed_realized_net_edge_bps = float(improvement_bps - float(fee_bps))
+            except (TypeError, ValueError, ZeroDivisionError):
+                parsed_realized_net_edge_bps = None
         signal_tags = getattr(signal, "signal_tags", None) or getattr(signal, "tags", "")
         try:
             confidence = float(getattr(signal, "confidence", 0.0))
@@ -10189,10 +10656,24 @@ class ExecutionEngine:
             "status": order_status,
             "client_order_id": client_order_id,
         }
+        if (
+            parsed_expected_net_edge_bps is not None
+            and math.isfinite(float(parsed_expected_net_edge_bps))
+        ):
+            fill_record["expected_net_edge_bps"] = float(parsed_expected_net_edge_bps)
+        if (
+            parsed_realized_net_edge_bps is not None
+            and math.isfinite(float(parsed_realized_net_edge_bps))
+        ):
+            fill_record["realized_net_edge_bps"] = float(parsed_realized_net_edge_bps)
         if runtime_payload is not None:
             source_value = runtime_payload.get("source")
             if source_value not in (None, ""):
-                fill_record["source"] = str(source_value)
+                normalized_source = _normalize_fill_source(source_value)
+                fill_record["source"] = str(normalized_source)
+                raw_source = str(source_value).strip().lower()
+                if raw_source and raw_source != normalized_source:
+                    fill_record["source_detail"] = raw_source
         try:
             record_trade_fill(fill_record)
         except Exception:
@@ -15151,6 +15632,8 @@ class ExecutionEngine:
         }
         if benchmark_price is not None and benchmark_price > 0:
             final_payload["expected_price"] = float(benchmark_price)
+        if expected_edge_hint is not None and math.isfinite(float(expected_edge_hint)):
+            final_payload["expected_net_edge_bps"] = float(expected_edge_hint)
         if event_sequence > 0:
             final_payload["event_seq"] = event_sequence
         if last_prev_status is not None:
@@ -15189,6 +15672,8 @@ class ExecutionEngine:
                 pending_entry["qty"] = requested_qty
                 if benchmark_price is not None and benchmark_price > 0:
                     pending_entry["expected_price"] = float(benchmark_price)
+                if expected_edge_hint is not None and math.isfinite(float(expected_edge_hint)):
+                    pending_entry["expected_net_edge_bps"] = float(expected_edge_hint)
                 pending_entry["updated_at"] = datetime.now(UTC).isoformat()
             self._pending_orders = store
 
@@ -15366,6 +15851,24 @@ class ExecutionEngine:
                 execution_drift_bps = None
         if execution_drift_bps is not None:
             realized_slippage_bps = float(abs(execution_drift_bps))
+        realized_net_edge_bps: float | None = None
+        if (
+            resolved_fill_price is not None
+            and float(resolved_fill_price) > 0.0
+            and benchmark_price is not None
+            and float(benchmark_price) > 0.0
+        ):
+            fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
+            try:
+                fill_px = float(resolved_fill_price)
+                bench_px = float(benchmark_price)
+                if mapped_side == "buy":
+                    improvement_bps = ((bench_px - fill_px) / bench_px) * 10000.0
+                else:
+                    improvement_bps = ((fill_px - bench_px) / bench_px) * 10000.0
+                realized_net_edge_bps = float(improvement_bps - float(fee_bps))
+            except (TypeError, ValueError, ZeroDivisionError):
+                realized_net_edge_bps = None
         if (
             order_status_lower in {"filled", "partially_filled"}
             and resolved_fill_price is not None
@@ -15415,27 +15918,13 @@ class ExecutionEngine:
                 timestamp=fill_timestamp,
                 runtime_payload=runtime_fill_payload,
                 closing_position=bool(closing_position),
+                expected_net_edge_bps=(
+                    float(expected_edge_hint) if expected_edge_hint is not None else None
+                ),
+                realized_net_edge_bps=realized_net_edge_bps,
             )
         else:
             runtime_source = None
-        realized_net_edge_bps: float | None = None
-        if (
-            resolved_fill_price is not None
-            and float(resolved_fill_price) > 0.0
-            and benchmark_price is not None
-            and float(benchmark_price) > 0.0
-        ):
-            fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
-            try:
-                fill_px = float(resolved_fill_price)
-                bench_px = float(benchmark_price)
-                if mapped_side == "buy":
-                    improvement_bps = ((bench_px - fill_px) / bench_px) * 10000.0
-                else:
-                    improvement_bps = ((fill_px - bench_px) / bench_px) * 10000.0
-                realized_net_edge_bps = float(improvement_bps - float(fee_bps))
-            except (TypeError, ValueError, ZeroDivisionError):
-                realized_net_edge_bps = None
         outcome_reason: str | None = None
         if order_status_lower == "rejected":
             outcome_reason = parsed_rejection or "rejected"
@@ -16677,11 +17166,142 @@ class ExecutionEngine:
         token = str(value or "").strip().lower()
         if token in {"live"}:
             return 3
+        if token.startswith("broker_reconcile"):
+            return 3
         if token in {"reconcile_backfill"}:
             return 2
         if token in {"mixed", "unknown"}:
             return 1
         return 0
+
+    def _runtime_performance_report_latest_path(self) -> Path:
+        """Return the canonical runtime performance report latest artifact path."""
+
+        configured = str(
+            (
+                _config_get_env(
+                    "AI_TRADING_EXECUTION_RUNTIME_PERF_REPORT_LATEST_PATH",
+                    "",
+                )
+                if _config_get_env
+                else ""
+            )
+            or ""
+        ).strip()
+        if not configured:
+            configured = str(
+                (
+                    _config_get_env(
+                        "AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH",
+                        "",
+                    )
+                    if _config_get_env
+                    else ""
+                )
+                or ""
+            ).strip()
+        if not configured:
+            configured = "runtime/runtime_performance_report_latest.json"
+        return resolve_runtime_artifact_path(
+            configured,
+            default_relative="runtime/runtime_performance_report_latest.json",
+        )
+
+    def _runtime_performance_report_min_interval_s(self) -> float:
+        """Return minimum interval between runtime performance report snapshots."""
+
+        value = _config_float(
+            "AI_TRADING_EXECUTION_RUNTIME_PERF_REPORT_REFRESH_SEC",
+            None,
+        )
+        if value is None:
+            value = _config_float(
+                "AI_TRADING_RUNTIME_PERF_REPORT_REFRESH_SEC",
+                60.0,
+            )
+        if value is None or not math.isfinite(float(value)):
+            value = 60.0
+        return max(5.0, min(float(value), 3600.0))
+
+    def _persist_runtime_performance_report_snapshot(
+        self,
+        *,
+        report: Mapping[str, Any],
+        gate_passed: bool,
+        context: Mapping[str, Any],
+    ) -> None:
+        """Persist latest runtime performance report snapshot for external observability."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_RUNTIME_PERF_REPORT_PERSIST_ENABLED"
+        )
+        if enabled is None:
+            enabled = _resolve_bool_env("AI_TRADING_RUNTIME_PERF_REPORT_PERSIST_ENABLED")
+        if enabled is None:
+            enabled = True
+        if not bool(enabled):
+            return
+
+        now_mono = float(monotonic_time())
+        min_interval_s = self._runtime_performance_report_min_interval_s()
+        last_mono = float(
+            getattr(self, "_runtime_perf_report_last_persist_mono", 0.0) or 0.0
+        )
+        if last_mono > 0.0 and (now_mono - last_mono) < float(min_interval_s):
+            return
+
+        latest_path = self._runtime_performance_report_latest_path()
+        paths_payload: dict[str, Any] = {"report_latest": str(latest_path)}
+        payload: dict[str, Any] = {
+            "generated_at": datetime.now(UTC).isoformat(),
+            "source": "execution_runtime_gonogo",
+            "go_no_go": {
+                "gate_passed": bool(gate_passed),
+                "failed_checks": (
+                    list(context.get("failed_checks", []))
+                    if isinstance(context.get("failed_checks"), Sequence)
+                    and not isinstance(context.get("failed_checks"), (str, bytes))
+                    else []
+                ),
+                "reason": str(context.get("reason") or ""),
+                "thresholds": (
+                    dict(context.get("thresholds", {}))
+                    if isinstance(context.get("thresholds"), Mapping)
+                    else {}
+                ),
+                "observed": (
+                    dict(context.get("observed", {}))
+                    if isinstance(context.get("observed"), Mapping)
+                    else {}
+                ),
+            },
+            "report": dict(report),
+            "paths": paths_payload,
+        }
+        paths_context = context.get("paths")
+        if isinstance(paths_context, Mapping):
+            paths_payload.update(
+                {
+                    str(key): value
+                    for key, value in paths_context.items()
+                    if str(key).strip()
+                }
+            )
+        try:
+            latest_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = latest_path.with_suffix(f"{latest_path.suffix}.tmp")
+            temp_path.write_text(
+                json.dumps(payload, sort_keys=True, default=str),
+                encoding="utf-8",
+            )
+            temp_path.replace(latest_path)
+            self._runtime_perf_report_last_persist_mono = now_mono
+        except Exception:
+            logger.debug(
+                "RUNTIME_PERFORMANCE_REPORT_PERSIST_FAILED",
+                extra={"path": str(latest_path)},
+                exc_info=True,
+            )
 
     def _runtime_gonogo_reconciliation_retry_enabled(self) -> bool:
         """Return True when a one-shot reconciliation retry is enabled."""
@@ -19959,6 +20579,11 @@ class ExecutionEngine:
                             "paths": paths_payload,
                         },
                     )
+            self._persist_runtime_performance_report_snapshot(
+                report=report,
+                gate_passed=bool(allowed),
+                context=context,
+            )
             self._emit_execution_vs_alpha_alerts(
                 report=report,
                 thresholds=effective_thresholds,
@@ -21895,6 +22520,11 @@ class ExecutionEngine:
                 or _extract_value(refreshed, "type", "order_type")
                 or ""
             ).strip().lower() or None
+            expected_net_edge_hint = None
+            if isinstance(refreshed, Mapping):
+                expected_net_edge_hint = self._order_expected_edge_bps(refreshed)
+            if expected_net_edge_hint is None and isinstance(entry, Mapping):
+                expected_net_edge_hint = self._order_expected_edge_bps(entry)
             changed = refreshed_status != prev_status
             event_seq = _safe_int(_extract_value(entry, "event_seq"), 0)
             if changed:
@@ -21916,6 +22546,13 @@ class ExecutionEngine:
                 }
                 if expected_price_value is not None and expected_price_value > 0:
                     transition_payload["expected_price"] = float(expected_price_value)
+                if (
+                    expected_net_edge_hint is not None
+                    and math.isfinite(float(expected_net_edge_hint))
+                ):
+                    transition_payload["expected_net_edge_bps"] = float(
+                        expected_net_edge_hint
+                    )
                 self._record_runtime_order_event(transition_payload)
                 reconciled += 1
 
@@ -21938,6 +22575,11 @@ class ExecutionEngine:
                 }
                 if expected_price_value is not None and expected_price_value > 0:
                     final_payload["expected_price"] = float(expected_price_value)
+                if (
+                    expected_net_edge_hint is not None
+                    and math.isfinite(float(expected_net_edge_hint))
+                ):
+                    final_payload["expected_net_edge_bps"] = float(expected_net_edge_hint)
                 self._record_runtime_order_event(final_payload)
 
                 fill_qty_value = float(max(float(refreshed_filled_qty or 0.0), 0.0))
@@ -22005,6 +22647,7 @@ class ExecutionEngine:
                         timestamp=fill_timestamp,
                         runtime_payload=runtime_fill_payload,
                         closing_position=bool(entry.get("closing_position")),
+                        expected_net_edge_bps=expected_net_edge_hint,
                     )
 
                 store.pop(key, None)
@@ -22034,6 +22677,11 @@ class ExecutionEngine:
             updated_entry["updated_at"] = now_iso
             if expected_price_value is not None and expected_price_value > 0:
                 updated_entry["expected_price"] = float(expected_price_value)
+            if (
+                expected_net_edge_hint is not None
+                and math.isfinite(float(expected_net_edge_hint))
+            ):
+                updated_entry["expected_net_edge_bps"] = float(expected_net_edge_hint)
             if key != resolved_order_id:
                 store.pop(key, None)
             store[resolved_order_id] = updated_entry

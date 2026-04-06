@@ -19597,6 +19597,24 @@ def submit_order(
     else:
         exec_kwargs.pop("annotations", None)
 
+    if exec_kwargs.get("expected_net_edge_bps") is None:
+        for candidate_key in (
+            "expected_net_edge_bps",
+            "expected_edge_bps",
+            "edge_bps",
+            "alpha_edge_bps",
+        ):
+            candidate = annotations.get(candidate_key)
+            if candidate in (None, ""):
+                continue
+            try:
+                parsed = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed):
+                exec_kwargs["expected_net_edge_bps"] = float(parsed)
+                break
+
     if exec_kwargs.get("price_hint") is None and price is not None:
         exec_kwargs["price_hint"] = price
 
@@ -19745,6 +19763,7 @@ def _call_submit_order(
     price: float,
     annotations: Mapping[str, Any] | None = None,
     price_hint: float | None = None,
+    expected_net_edge_bps: float | None = None,
 ) -> Any | None:
     """Invoke ``submit_order`` while tolerating monkeypatched call-sites."""
 
@@ -19761,6 +19780,14 @@ def _call_submit_order(
 
     if price_hint is not None:
         extra_kwargs["price_hint"] = price_hint
+
+    if expected_net_edge_bps is not None:
+        try:
+            parsed_expected = float(expected_net_edge_bps)
+        except (TypeError, ValueError):
+            parsed_expected = None
+        if parsed_expected is not None and math.isfinite(parsed_expected):
+            extra_kwargs["expected_net_edge_bps"] = parsed_expected
 
     if fallback_flag:
         extra_kwargs["using_fallback_price"] = True
@@ -24554,6 +24581,20 @@ def _enter_long(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
     order_annotations = dict(annotations)
+    expected_edge_bps = _expected_edge_bps(
+        final_score=float(final_score),
+        confidence=float(conf),
+        atr=float(atr_value),
+        price=float(current_price),
+    )
+    entry_cost_components = _estimate_entry_cost_components_bps(
+        quote_metadata if isinstance(quote_metadata, MappingABC) else None,
+    )
+    expected_net_edge_bps = float(
+        expected_edge_bps - float(entry_cost_components.get("total_cost_bps", 0.0))
+    )
+    order_annotations["expected_edge_bps"] = float(expected_edge_bps)
+    order_annotations["expected_net_edge_bps"] = float(expected_net_edge_bps)
 
     quote_source_for_log = str(quote_metadata.get("source", price_source))
     normalized_quote_source = quote_source_for_log.lower()
@@ -24576,6 +24617,7 @@ def _enter_long(
         price=current_price,
         annotations=order_annotations,
         price_hint=current_price,
+        expected_net_edge_bps=float(expected_net_edge_bps),
     )
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
@@ -25342,6 +25384,20 @@ def _enter_short(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
     order_annotations = dict(annotations)
+    expected_edge_bps = _expected_edge_bps(
+        final_score=float(final_score),
+        confidence=float(conf),
+        atr=float(atr),
+        price=float(current_price),
+    )
+    entry_cost_components = _estimate_entry_cost_components_bps(
+        quote_metadata if isinstance(quote_metadata, MappingABC) else None,
+    )
+    expected_net_edge_bps = float(
+        expected_edge_bps - float(entry_cost_components.get("total_cost_bps", 0.0))
+    )
+    order_annotations["expected_edge_bps"] = float(expected_edge_bps)
+    order_annotations["expected_net_edge_bps"] = float(expected_net_edge_bps)
 
     quote_source_for_log = str(quote_metadata.get("source", price_source))
     normalized_quote_source = quote_source_for_log.lower()
@@ -25385,6 +25441,7 @@ def _enter_short(
         price=current_price,
         annotations=order_annotations,
         price_hint=current_price,
+        expected_net_edge_bps=float(expected_net_edge_bps),
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
@@ -40709,6 +40766,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 side,
                 price=price,
                 client_order_id=client_order_id,
+                expected_net_edge_bps=float(approval.expected_net_edge_bps),
             )
             breakers.record_success("broker_submit")
         except Exception as exc:
@@ -44233,11 +44291,11 @@ if __name__ == "__main__":
 
     import time
 
-    import schedule
+    import schedule as schedule_lib
 
     while True:
         try:
-            schedule.run_pending()
+            schedule_lib.run_pending()
         except (
             FileNotFoundError,
             PermissionError,

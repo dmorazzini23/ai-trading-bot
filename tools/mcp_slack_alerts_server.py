@@ -862,6 +862,32 @@ def _incident_fingerprint(snapshot: dict[str, Any], triggers: list[str]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _incident_signature(snapshot: dict[str, Any], triggers: list[str]) -> str:
+    """Stable trigger signature for anti-spam dedupe across metric drift."""
+    material = {
+        "triggers": sorted(triggers),
+        "go_no_go_gate_passed": snapshot.get("go_no_go_gate_passed"),
+        "go_no_go_failed_checks": sorted(set(snapshot.get("go_no_go_failed_checks") or [])),
+        "health_status": snapshot.get("health_status"),
+        "health_reason": snapshot.get("health_reason"),
+        "provider_status": snapshot.get("provider_status"),
+        "provider_reason": snapshot.get("provider_reason"),
+        "broker_status": snapshot.get("broker_status"),
+        "using_backup": bool(snapshot.get("using_backup", False)),
+        "top_rejection_concentration_gate": snapshot.get("top_rejection_concentration_gate"),
+    }
+    encoded = json.dumps(material, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _incident_repeat_cooldown_minutes(args: dict[str, Any]) -> int:
+    raw = (
+        args.get("repeat_cooldown_minutes")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_REPEAT_COOLDOWN_MINUTES")
+    )
+    return max(0, _int_arg(raw, default=45))
+
+
 def _slack_webhook_url(args: dict[str, Any]) -> str:
     direct = str(args.get("webhook_url") or "").strip()
     if direct:
@@ -1160,8 +1186,10 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     snapshot = _collect_runtime_snapshot(args)
     triggers = _evaluate_incident_triggers(snapshot, args)
     fingerprint = _incident_fingerprint(snapshot, triggers)
+    signature = _incident_signature(snapshot, triggers)
     force = _bool_arg(args.get("force"), default=False)
     on_change_only = _bool_arg(args.get("on_change_only"), default=True)
+    repeat_cooldown_minutes = _incident_repeat_cooldown_minutes(args)
     should_alert = bool(triggers) or force
     if not should_alert:
         return {
@@ -1175,11 +1203,45 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
     state_path = _incident_state_path(args)
     prior = _load_state(state_path)
     prior_fp = str(prior.get("fingerprint") or "")
+    prior_signature = str(
+        prior.get("incident_signature")
+        or prior.get("trigger_signature")
+        or ""
+    )
+    prior_sent_at = _parse_iso_ts(prior.get("sent_at"))
+    now = datetime.now(UTC)
+    if on_change_only and prior_signature and prior_signature == signature and not force:
+        if repeat_cooldown_minutes > 0 and prior_sent_at is not None:
+            elapsed = now - prior_sent_at
+            cooldown = timedelta(minutes=repeat_cooldown_minutes)
+            if elapsed < cooldown:
+                next_eligible_at = (prior_sent_at + cooldown).isoformat().replace("+00:00", "Z")
+                return {
+                    "sent": False,
+                    "reason": "repeat_cooldown_active",
+                    "fingerprint": fingerprint,
+                    "incident_signature": signature,
+                    "state_path": str(state_path),
+                    "triggers": triggers,
+                    "snapshot": snapshot,
+                    "next_eligible_at": next_eligible_at,
+                }
+        else:
+            return {
+                "sent": False,
+                "reason": "duplicate_signature",
+                "fingerprint": fingerprint,
+                "incident_signature": signature,
+                "state_path": str(state_path),
+                "triggers": triggers,
+                "snapshot": snapshot,
+            }
     if on_change_only and prior_fp == fingerprint and not force:
         return {
             "sent": False,
             "reason": "duplicate_fingerprint",
             "fingerprint": fingerprint,
+            "incident_signature": signature,
             "state_path": str(state_path),
             "triggers": triggers,
             "snapshot": snapshot,
@@ -1195,6 +1257,7 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
 
     state_payload = {
         "fingerprint": fingerprint,
+        "incident_signature": signature,
         "sent_at": utc_now_iso(),
         "triggers": triggers,
         "snapshot": snapshot,
@@ -1205,6 +1268,7 @@ def tool_notify_incident_channel(args: dict[str, Any]) -> dict[str, Any]:
         "sent": True,
         "status_code": status_code,
         "fingerprint": fingerprint,
+        "incident_signature": signature,
         "state_path": str(state_path),
         "triggers": triggers,
         "snapshot": snapshot,
