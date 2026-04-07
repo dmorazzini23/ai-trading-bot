@@ -1,0 +1,14 @@
+[Unit]
+Description=Prune AI Trading Runtime JSONL Artifacts
+
+[Timer]
+OnBootSec=8m
+OnUnitActiveSec=30m
+RandomizedDelaySec=30s
+AccuracySec=30s
+Persistent=true
+Unit=ai-trading-runtime-prune.service
+
+[Install]
+WantedBy=timers.target
+

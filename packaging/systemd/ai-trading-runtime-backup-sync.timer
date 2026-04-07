@@ -1,0 +1,14 @@
+[Unit]
+Description=Sync AI Trading Runtime Backup Archives to S3
+
+[Timer]
+OnBootSec=12m
+OnUnitActiveSec=30m
+RandomizedDelaySec=60s
+AccuracySec=30s
+Persistent=true
+Unit=ai-trading-runtime-backup-sync.service
+
+[Install]
+WantedBy=timers.target
+

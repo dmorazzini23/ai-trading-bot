@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync AI Trading Runtime Backup Archives to S3
+After=network-online.target ai-trading-runtime-prune.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=aiuser
+Group=aiuser
+WorkingDirectory=/home/aiuser/ai-trading-bot
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
+EnvironmentFile=-/home/aiuser/ai-trading-bot/.env.runtime
+ExecStart=/bin/bash -lc 'bash /home/aiuser/ai-trading-bot/scripts/sync_runtime_backups_to_s3.sh'

@@ -565,19 +565,46 @@ def _load_recent_execution_quality_metrics(
     decision_path: Path,
     window_seconds: float,
     max_rows: int,
+    max_scan_bytes: int,
 ) -> dict[str, float]:
     """Return dup/ok gate rates for records inside the recent decision window."""
 
-    if window_seconds <= 0.0 or max_rows <= 0:
+    if window_seconds <= 0.0 or max_rows <= 0 or max_scan_bytes <= 0:
         return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
 
+    # Read only the trailing budget so SLO checks do not rescan large decision logs every cycle.
     tail_rows: deque[str] = deque(maxlen=max_rows)
     try:
-        with decision_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                text = line.strip()
-                if text:
-                    tail_rows.append(text)
+        file_size = decision_path.stat().st_size
+        if file_size <= 0:
+            return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
+        target_bytes = min(file_size, max_scan_bytes)
+        read_size = min(128 * 1024, target_bytes)
+        bytes_read = 0
+        newline_count = 0
+        chunks: list[bytes] = []
+        with decision_path.open("rb") as handle:
+            cursor = file_size
+            while cursor > 0 and bytes_read < target_bytes:
+                step = min(read_size, cursor, target_bytes - bytes_read)
+                if step <= 0:
+                    break
+                cursor -= step
+                handle.seek(cursor)
+                chunk = handle.read(step)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                bytes_read += len(chunk)
+                newline_count += chunk.count(b"\n")
+                if newline_count >= (max_rows + 1):
+                    break
+        if not chunks:
+            return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
+        for line in b"".join(reversed(chunks)).decode("utf-8", errors="ignore").splitlines():
+            text = line.strip()
+            if text:
+                tail_rows.append(text)
     except OSError:
         return {"rows": 0.0, "dup_rate": 0.0, "ok_rate": 0.0}
 
@@ -644,6 +671,14 @@ def _emit_execution_quality_alert(*, cycle_index: int, closed: bool) -> None:
     window_seconds = float(window_minutes) * 60.0
     max_rows = int(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_MAX_ROWS", 5000, cast=int))
     max_rows = max(100, min(max_rows, 50000))
+    max_scan_bytes = int(
+        get_env(
+            "AI_TRADING_SLO_EXECUTION_QUALITY_MAX_SCAN_BYTES",
+            16 * 1024 * 1024,
+            cast=int,
+        )
+    )
+    max_scan_bytes = max(512 * 1024, min(max_scan_bytes, 256 * 1024 * 1024))
     min_rows = int(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_MIN_ROWS", 100, cast=int))
     min_rows = max(1, min(min_rows, max_rows))
     dup_rate_max = float(get_env("AI_TRADING_SLO_EXECUTION_QUALITY_DUP_RATE_MAX", 0.70, cast=float))
@@ -664,6 +699,7 @@ def _emit_execution_quality_alert(*, cycle_index: int, closed: bool) -> None:
         decision_path=decision_path,
         window_seconds=window_seconds,
         max_rows=max_rows,
+        max_scan_bytes=max_scan_bytes,
     )
     rows = int(metrics.get("rows", 0.0))
     if rows < min_rows:

@@ -68,6 +68,64 @@ def test_evaluate_incident_triggers_flags_fill_and_precheck_spikes() -> None:
     assert "pre_execution_checks_spike" in triggers
 
 
+def test_evaluate_incident_triggers_suppresses_gonogo_when_openings_not_blocked() -> None:
+    snapshot = {
+        "runtime_gonogo_block_openings_enabled": False,
+        "go_no_go_gate_passed": False,
+        "go_no_go_failed_checks": ["profit_factor", "win_rate"],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "runtime_health_ok",
+        "provider_status": "healthy",
+        "provider_active": "alpaca",
+        "provider_reason": "data_available_netting",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(snapshot, {"min_capture_ratio": 0.08})
+    assert "go_no_go_failed" not in triggers
+    assert "go_no_go_failed_checks" not in triggers
+
+
+def test_evaluate_incident_triggers_suppresses_precheck_spike_when_fill_ratio_healthy() -> None:
+    snapshot = {
+        "go_no_go_gate_passed": True,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "execution_fill_ratio": 0.62,
+        "execution_fill_ratio_samples": 40,
+        "execution_fill_ratio_filled": 25,
+        "execution_window_minutes": 30,
+        "execution_skipped_count": 20,
+        "precheck_failure_count": 18,
+        "precheck_failure_ratio": 0.9,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "runtime_health_ok",
+        "provider_status": "healthy",
+        "provider_active": "alpaca",
+        "provider_reason": "data_available_netting",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {
+            "min_capture_ratio": 0.08,
+            "min_fill_ratio": 0.25,
+            "min_fill_ratio_samples": 20,
+            "precheck_spike_min_count": 10,
+            "precheck_spike_min_ratio": 0.6,
+            "precheck_spike_min_skipped": 12,
+        },
+    )
+    assert "execution_fill_ratio_low" not in triggers
+    assert "pre_execution_checks_spike" not in triggers
+
+
 def test_evaluate_incident_triggers_flags_rejection_concentration_and_realism_gap() -> None:
     snapshot = {
         "go_no_go_gate_passed": True,

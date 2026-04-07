@@ -1,10 +1,13 @@
 [Unit]
-Description=Refresh AI Trading Runtime Reports After Market Close
+Description=Refresh AI Trading Runtime Reports (Intraday + EOD)
 
 [Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
 OnCalendar=Mon..Fri 16:20
 Timezone=America/New_York
-RandomizedDelaySec=5m
+RandomizedDelaySec=30s
+AccuracySec=30s
 Persistent=true
 Unit=ai-trading-runtime-report.service
 

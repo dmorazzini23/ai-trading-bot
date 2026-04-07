@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import json
 import logging
 
 from ai_trading import main
@@ -397,3 +398,31 @@ def test_emit_cycle_slo_alerts_skips_execution_quality_alert_when_ok_trade_rate_
     main._emit_cycle_slo_alerts(cycle_index=8, compute_ms=10.0, closed=False)
 
     assert "ALERT_EXECUTION_QUALITY_DEGRADED" not in emitted
+
+
+def test_load_recent_execution_quality_metrics_reads_recent_tail_only(tmp_path) -> None:
+    decision_path = tmp_path / "decision_records.jsonl"
+    now = datetime.now(UTC)
+    old_ts = (now - timedelta(days=2)).isoformat()
+    recent_ts = (now - timedelta(seconds=30)).isoformat()
+
+    rows: list[str] = []
+    for _ in range(800):
+        rows.append(json.dumps({"bar_ts": old_ts, "gates": ["CYCLE_DUPLICATE_INTENT"]}))
+    for idx in range(20):
+        gates = ["OK_TRADE"]
+        if idx % 2 == 0:
+            gates.append("CYCLE_DUPLICATE_INTENT")
+        rows.append(json.dumps({"bar_ts": recent_ts, "gates": gates}))
+    decision_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    metrics = main._load_recent_execution_quality_metrics(
+        decision_path=decision_path,
+        window_seconds=300.0,
+        max_rows=10,
+        max_scan_bytes=32 * 1024,
+    )
+
+    assert metrics["rows"] == 10.0
+    assert metrics["dup_rate"] == 0.5
+    assert metrics["ok_rate"] == 1.0

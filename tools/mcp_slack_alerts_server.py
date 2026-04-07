@@ -343,6 +343,7 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     execution_window = _collect_execution_window_snapshot(args)
 
     return {
+        "runtime_gonogo_block_openings_enabled": _runtime_gonogo_block_openings_enabled(args),
         "go_no_go_gate_passed": go_no_go.get("gate_passed"),
         "go_no_go_failed_checks": list(go_no_go.get("failed_checks") or []),
         "execution_capture_ratio": _float_or_none(execution.get("execution_capture_ratio")),
@@ -644,6 +645,15 @@ def _capture_ratio_threshold(args: dict[str, Any]) -> float:
     return max(0.0, float(raw))
 
 
+def _runtime_gonogo_block_openings_enabled(args: dict[str, Any]) -> bool:
+    raw = args.get("runtime_gonogo_block_openings_enabled")
+    if raw in (None, ""):
+        raw = os.getenv("AI_TRADING_EXECUTION_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED")
+    if raw in (None, ""):
+        raw = os.getenv("AI_TRADING_RUNTIME_GONOGO_BLOCK_OPENINGS_ENABLED")
+    return _bool_arg(raw, default=True)
+
+
 def _block_eod_on_training_gate(args: dict[str, Any]) -> bool:
     return _bool_arg(
         args.get("block_on_training_gate"),
@@ -680,12 +690,17 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
     startup_or_warmup = health_reason in _STARTUP_WARMUP_HEALTH_REASONS
 
+    runtime_gonogo_block_openings_enabled = _bool_arg(
+        snapshot.get("runtime_gonogo_block_openings_enabled"),
+        default=True,
+    )
     gate_passed = snapshot.get("go_no_go_gate_passed")
     failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
-    if gate_passed is False:
-        triggers.append("go_no_go_failed")
-    if failed_checks:
-        triggers.append("go_no_go_failed_checks")
+    if runtime_gonogo_block_openings_enabled:
+        if gate_passed is False:
+            triggers.append("go_no_go_failed")
+        if failed_checks:
+            triggers.append("go_no_go_failed_checks")
 
     capture_ratio = _float_or_none(snapshot.get("execution_capture_ratio"))
     min_capture = _capture_ratio_threshold(args)
@@ -712,6 +727,12 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
             and not startup_or_warmup
         ):
             triggers.append("execution_fill_ratio_low")
+    fill_ratio_healthy = bool(
+        min_fill_ratio is not None
+        and fill_ratio is not None
+        and fill_ratio_samples >= min_fill_ratio_samples
+        and fill_ratio >= min_fill_ratio
+    )
 
     precheck_failure_count = _int_arg(snapshot.get("precheck_failure_count"), default=0)
     execution_skipped_count = _int_arg(snapshot.get("execution_skipped_count"), default=0)
@@ -738,6 +759,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and execution_skipped_count >= max(1, precheck_spike_min_skips)
         and precheck_failure_ratio is not None
         and precheck_failure_ratio >= precheck_spike_min_ratio
+        and not fill_ratio_healthy
         and not startup_or_warmup
     ):
         triggers.append("pre_execution_checks_spike")
