@@ -40,6 +40,11 @@ def _iter_runtime_roots() -> list[Path]:
         if key not in seen:
             seen.add(key)
             roots.append(managed_root)
+    canonical_root = (Path("/var/lib") / _APP_NAME).resolve()
+    canonical_key = str(canonical_root)
+    if canonical_key not in seen:
+        seen.add(canonical_key)
+        roots.append(canonical_root)
     return roots
 
 
@@ -92,6 +97,23 @@ def resolve_runtime_artifact_path(
     candidates.append((_REPO_ROOT / target).resolve())
 
     if not for_write:
+        preferred_data_dir = str(get_env("AI_TRADING_DATA_DIR", "", cast=str) or "").strip()
+        if preferred_data_dir:
+            return candidates[0]
+        existing: list[Path] = [candidate for candidate in candidates if candidate.exists()]
+        canonical_root = (Path("/var/lib") / _APP_NAME).resolve()
+        preferred_existing = [
+            candidate
+            for candidate in existing
+            if not candidate.is_relative_to(canonical_root)
+        ]
+        if preferred_existing:
+            existing = preferred_existing
+        if existing:
+            try:
+                return max(existing, key=lambda value: value.stat().st_mtime)
+            except OSError:
+                return existing[0]
         return candidates[0]
 
     for candidate in candidates:

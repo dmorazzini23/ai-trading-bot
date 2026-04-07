@@ -3439,6 +3439,42 @@ def test_execution_prediction_uncertainty_gate_blocks_high_uncertainty(
     assert "high_uncertainty" in context["violations"]
 
 
+def test_execution_meta_label_gate_blocks_low_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_META_LABEL_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_META_LABEL_MIN_SCORE", "0.6")
+
+    allowed, context = engine._execution_meta_label_allows_opening(
+        order={
+            "symbol": "AAPL",
+            "metadata": {"meta_label_probability": 0.42},
+        }
+    )
+
+    assert allowed is False
+    assert context["reason"] == "meta_label_veto_gate"
+    assert context["meta_label_score"] == pytest.approx(0.42)
+    assert context["min_meta_label_score"] == pytest.approx(0.6)
+
+
+def test_execution_meta_label_gate_can_require_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_META_LABEL_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_META_LABEL_REQUIRE_SCORE", "1")
+
+    allowed, context = engine._execution_meta_label_allows_opening(
+        order={"symbol": "AAPL", "metadata": {}}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "meta_label_score_required_missing"
+    assert context["required"] is True
+
+
 def test_execution_prediction_uncertainty_gate_uses_after_hours_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3476,6 +3512,59 @@ def test_execution_prediction_uncertainty_gate_uses_after_hours_overrides(
     assert context["min_confidence_threshold_source"] == "after_hours_override"
     assert context["max_uncertainty_threshold_source"] == "after_hours_override"
     assert context["session_regime"] == "offhours"
+
+
+def test_pre_execution_order_checks_meta_label_gate_stops_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    engine._enforce_opposite_side_policy = lambda *_, **__: (True, None)
+    engine._resolve_exposure_normalization_settings = lambda: {"block_openings": False}
+    engine._runtime_gonogo_openings_allowed = lambda: (True, {"reason": "ok"})
+    engine._apply_runtime_execution_capture_derisk = (
+        lambda order, gonogo_context: (True, {"reason": "none"})
+    )
+    engine._execution_quality_allows_openings = lambda: (True, {"reason": "ok"})
+    engine._execution_entry_edge_budget_allows_opening = (
+        lambda order: (True, {"reason": "ok"})
+    )
+    engine._execution_edge_realism_allows_opening = (
+        lambda order: (True, {"reason": "ok"})
+    )
+    engine._execution_prediction_uncertainty_allows_opening = (
+        lambda order: (True, {"reason": "ok"})
+    )
+    engine._execution_fill_probability_score_allows_opening = (
+        lambda order: (True, {"reason": "ok"})
+    )
+    engine._execution_symbol_live_expectancy_allows_opening = (
+        lambda order: (True, {"reason": "ok"})
+    )
+    engine._symbol_reentry_cooldown_allows_opening = lambda **_: (True, {})
+    engine._symbol_slippage_budget_allows_opening = lambda **_: (True, {})
+    engine._opening_min_notional_dollars = lambda: 0.0
+    engine._capacity_precheck = (
+        lambda **_: lt.CapacityCheck(can_submit=True, suggested_qty=1, reason="")
+    )
+    engine._get_account_snapshot = lambda: {"buying_power": "100000"}
+
+    monkeypatch.setenv("AI_TRADING_EXECUTION_META_LABEL_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_META_LABEL_MIN_SCORE", "0.7")
+
+    allowed = engine._pre_execution_order_checks(
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 2,
+            "price_hint": 100.0,
+            "asset_class": "equity",
+            "metadata": {"meta_label_probability": 0.2},
+            "account_snapshot": {"buying_power": "100000"},
+        }
+    )
+
+    assert allowed is False
+    assert engine._last_pre_execution_order_check_failure["reason"] == "meta_label_veto_gate"
 
 
 def test_execution_fill_probability_score_gate_blocks_low_score(

@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from collections import Counter, OrderedDict, deque
 from collections.abc import Iterator as IteratorABC, Mapping as MappingABC
 from dataclasses import dataclass, field
+from statistics import NormalDist
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
 
@@ -1464,6 +1465,67 @@ def _apply_acceptance_rate_governor_symbol_cap(
         },
     )
     return capped
+
+
+def _bandit_ucb_score(
+    *,
+    mean_reward_bps: float,
+    samples: int,
+    total_samples: int,
+    exploration: float,
+) -> float:
+    """Return UCB score in bps for one arm."""
+
+    safe_samples = max(int(samples), 1)
+    safe_total = max(int(total_samples), safe_samples)
+    exploration_term = max(float(exploration), 0.0)
+    bonus = exploration_term * math.sqrt(
+        math.log(float(safe_total) + 1.0) / float(safe_samples)
+    )
+    return float(mean_reward_bps + bonus)
+
+
+def _geometric_growth_tiebreak_score(
+    *,
+    expected_edge_bps: float,
+    returns_window: Sequence[float],
+    drawdown: float,
+    variance_penalty: float,
+    downside_penalty: float,
+    drawdown_penalty: float,
+) -> float:
+    """Approximate log-growth score in bps with downside and drawdown penalties."""
+
+    expected_return = float(expected_edge_bps) / 10000.0
+    clean_returns = [
+        float(value)
+        for value in returns_window
+        if isinstance(value, (int, float)) and math.isfinite(float(value))
+    ]
+    if clean_returns:
+        sample_count = float(len(clean_returns))
+        mean_return = float(sum(clean_returns) / sample_count)
+        variance = float(
+            sum((value - mean_return) ** 2 for value in clean_returns) / sample_count
+        )
+        downside = float(
+            math.sqrt(
+                sum((min(value, 0.0) ** 2) for value in clean_returns) / sample_count
+            )
+        )
+    else:
+        mean_return = 0.0
+        variance = 0.0
+        downside = 0.0
+    drawdown_term = max(float(drawdown), 0.0) * abs(expected_return)
+    growth_score = (
+        expected_return
+        + mean_return
+        - (max(float(variance_penalty), 0.0) * variance)
+        - (max(float(downside_penalty), 0.0) * downside)
+        - (max(float(drawdown_penalty), 0.0) * drawdown_term)
+    )
+    return float(growth_score * 10000.0)
 
 
 def _record_prerank_shadow_snapshot(
@@ -39288,25 +39350,305 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             float(getattr(cfg, "disagree_ratio_threshold", 0.35)),
         )
 
+    def _session_bucket(ts_value: datetime | None) -> str:
+        if ts_value is None:
+            return "offhours"
+        try:
+            eastern = ts_value.astimezone(ZoneInfo("America/New_York"))
+        except Exception:
+            eastern = ts_value
+        hour = int(getattr(eastern, "hour", 0))
+        minute = int(getattr(eastern, "minute", 0))
+        minutes_since_midnight = hour * 60 + minute
+        if 570 <= minutes_since_midnight < 630:
+            return "opening"
+        if 930 <= minutes_since_midnight <= 960:
+            return "closing"
+        if 630 <= minutes_since_midnight < 930:
+            return "midday"
+        return "offhours"
+
+    clip_expected_edge_enabled = bool(
+        get_env("AI_TRADING_ALLOC_EXPECTED_EDGE_CLIP_ENABLED", True, cast=bool)
+    )
+    clip_multiplier = max(
+        0.5,
+        float(get_env("AI_TRADING_ALLOC_EXPECTED_EDGE_CLIP_MULTIPLIER", 3.0, cast=float)),
+    )
+    clip_min_cap_bps = max(
+        1.0,
+        float(get_env("AI_TRADING_ALLOC_EXPECTED_EDGE_CLIP_MIN_BPS", 20.0, cast=float)),
+    )
+    clip_max_cap_bps = max(
+        clip_min_cap_bps,
+        float(get_env("AI_TRADING_ALLOC_EXPECTED_EDGE_CLIP_MAX_BPS", 250.0, cast=float)),
+    )
+    net_edge_raw_by_symbol: dict[str, float] = {}
+    for symbol, target in targets.items():
+        net_edge_raw_by_symbol[symbol] = float(
+            sum(
+                compute_expected_net_edge_bps(
+                    float(proposal.expected_edge_bps),
+                    float(proposal.expected_cost_bps),
+                    fee_bps=float(effective_policy.objective.fee_bps),
+                    borrow_bps=float(effective_policy.objective.borrow_bps),
+                )
+                for proposal in target.proposals
+            )
+        )
+    abs_edges = [
+        abs(float(value))
+        for value in net_edge_raw_by_symbol.values()
+        if math.isfinite(float(value))
+    ]
+    median_abs_edge_bps = 0.0
+    if abs_edges:
+        sorted_abs = sorted(abs_edges)
+        mid = len(sorted_abs) // 2
+        if len(sorted_abs) % 2 == 0:
+            median_abs_edge_bps = float((sorted_abs[mid - 1] + sorted_abs[mid]) / 2.0)
+        else:
+            median_abs_edge_bps = float(sorted_abs[mid])
+    dynamic_cap_bps = max(
+        clip_min_cap_bps,
+        min(clip_max_cap_bps, float(median_abs_edge_bps) * float(clip_multiplier)),
+    )
+    edge_clip_cap_bps = (
+        float(dynamic_cap_bps) if clip_expected_edge_enabled else float(clip_max_cap_bps)
+    )
+
+    bandit_enabled = bool(get_env("AI_TRADING_EXEC_BANDIT_ROUTING_ENABLED", False, cast=bool))
+    bandit_method = str(get_env("AI_TRADING_EXEC_BANDIT_METHOD", "ucb", cast=str) or "ucb").strip().lower()
+    if bandit_method not in {"ucb", "thompson"}:
+        bandit_method = "ucb"
+    bandit_weight = max(
+        0.0,
+        min(
+            5.0,
+            float(get_env("AI_TRADING_EXEC_BANDIT_SCORE_WEIGHT", 1.0, cast=float)),
+        ),
+    )
+    bandit_exploration = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_BANDIT_EXPLORATION", 1.0, cast=float)),
+    )
+    bandit_min_samples = max(
+        1,
+        int(get_env("AI_TRADING_EXEC_BANDIT_MIN_SAMPLES", 8, cast=int)),
+    )
+    bandit_window_trades = max(
+        bandit_min_samples,
+        int(get_env("AI_TRADING_EXEC_BANDIT_WINDOW_TRADES", 200, cast=int)),
+    )
+    bandit_session_bucket_enabled = bool(
+        get_env("AI_TRADING_EXEC_BANDIT_SESSION_BUCKET_ENABLED", True, cast=bool)
+    )
+    geometric_tiebreak_enabled = bool(
+        get_env("AI_TRADING_EXEC_GEOMETRIC_TIEBREAK_ENABLED", False, cast=bool)
+    )
+    geometric_tiebreak_weight = max(
+        0.0,
+        min(
+            1.0,
+            float(get_env("AI_TRADING_EXEC_GEOMETRIC_TIEBREAK_WEIGHT", 0.15, cast=float)),
+        ),
+    )
+    geometric_variance_penalty = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_GEOMETRIC_VARIANCE_PENALTY", 1.0, cast=float)),
+    )
+    geometric_downside_penalty = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_GEOMETRIC_DOWNSIDE_PENALTY", 0.75, cast=float)),
+    )
+    geometric_drawdown_penalty = max(
+        0.0,
+        float(get_env("AI_TRADING_EXEC_GEOMETRIC_DRAWDOWN_PENALTY", 1.25, cast=float)),
+    )
+
+    bandit_rewards_by_symbol: dict[str, list[float]] = {}
+    bandit_rewards_by_symbol_session: dict[str, list[float]] = {}
+    bandit_active_session = _session_bucket(now)
+    if bandit_enabled and targets:
+        bandit_rows = _read_jsonl_records(
+            str(_resolved_tca_path()),
+            max_records=max(
+                500,
+                int(
+                    get_env(
+                        "AI_TRADING_EXEC_BANDIT_MAX_RECORDS",
+                        bandit_window_trades * max(len(targets), 1) * 8,
+                        cast=int,
+                    )
+                ),
+            ),
+        )
+        for row in bandit_rows:
+            symbol = str(row.get("symbol", "")).strip().upper()
+            if not symbol or symbol not in targets:
+                continue
+            status = str(row.get("status", "")).strip().lower()
+            if status in {"rejected", "canceled", "cancelled"}:
+                continue
+            reward_bps: float | None = None
+            for key in ("realized_net_edge_bps", "net_edge_bps", "realized_edge_bps"):
+                try:
+                    candidate = float(row.get(key))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(candidate):
+                    reward_bps = float(candidate)
+                    break
+            if reward_bps is None:
+                try:
+                    is_bps = float(row.get("is_bps"))
+                except (TypeError, ValueError):
+                    is_bps = None
+                if is_bps is not None and math.isfinite(float(is_bps)):
+                    reward_bps = float(-is_bps)
+            if reward_bps is None:
+                continue
+            reward_bps = max(-200.0, min(float(reward_bps), 200.0))
+            bandit_rewards_by_symbol.setdefault(symbol, []).append(float(reward_bps))
+            session_token = str(row.get("session_regime", "")).strip().lower()
+            if session_token not in {"opening", "midday", "closing", "offhours"}:
+                ts = _parse_iso_timestamp(row.get("ts"))
+                session_token = _session_bucket(ts)
+            bucket_key = f"{symbol}:{session_token}"
+            bandit_rewards_by_symbol_session.setdefault(bucket_key, []).append(
+                float(reward_bps)
+            )
+        for symbol, values in list(bandit_rewards_by_symbol.items()):
+            if len(values) > bandit_window_trades:
+                bandit_rewards_by_symbol[symbol] = values[-bandit_window_trades:]
+        for key, values in list(bandit_rewards_by_symbol_session.items()):
+            if len(values) > bandit_window_trades:
+                bandit_rewards_by_symbol_session[key] = values[-bandit_window_trades:]
+
+    candidate_expected_net_edge: dict[str, float] = {}
     candidate_rank: dict[str, float] = {}
     for symbol, target in targets.items():
-        net_edge_total = sum(
-            compute_expected_net_edge_bps(
-                float(proposal.expected_edge_bps),
-                float(proposal.expected_cost_bps),
-                fee_bps=float(effective_policy.objective.fee_bps),
-                borrow_bps=float(effective_policy.objective.borrow_bps),
-            )
-            for proposal in target.proposals
+        raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
+        clipped_net_edge_total = (
+            max(-float(edge_clip_cap_bps), min(float(edge_clip_cap_bps), raw_net_edge_total))
+            if clip_expected_edge_enabled
+            else raw_net_edge_total
         )
+        candidate_expected_net_edge[symbol] = float(clipped_net_edge_total)
         max_conf = max((float(proposal.confidence) for proposal in target.proposals), default=0.0)
         disagreement = float(target.disagreement_ratio) if target.disagreement_ratio is not None else 1.0
         if not math.isfinite(disagreement):
             disagreement = 1.0
         disagreement = max(0.05, min(disagreement, 1.0))
-        rank_score = max(net_edge_total, -1000.0) * max(max_conf, 0.05) * disagreement
+        rank_score = (
+            max(clipped_net_edge_total, -1000.0)
+            * max(max_conf, 0.05)
+            * disagreement
+        )
+        if bandit_enabled:
+            reward_series = bandit_rewards_by_symbol.get(symbol, [])
+            bandit_source = "symbol"
+            if bandit_session_bucket_enabled:
+                session_series = bandit_rewards_by_symbol_session.get(
+                    f"{symbol}:{bandit_active_session}",
+                    [],
+                )
+                if len(session_series) >= bandit_min_samples:
+                    reward_series = session_series
+                    bandit_source = "symbol_session"
+            if len(reward_series) >= bandit_min_samples:
+                sample_count = int(len(reward_series))
+                mean_reward = float(sum(reward_series) / max(sample_count, 1))
+                if bandit_method == "thompson":
+                    variance = float(
+                        sum((value - mean_reward) ** 2 for value in reward_series)
+                        / max(sample_count, 1)
+                    )
+                    std_error = math.sqrt(max(variance, 0.0) / max(sample_count, 1))
+                    digest = hashlib.blake2b(
+                        f"{symbol}:{bandit_active_session}:{now.isoformat()}".encode("utf-8"),
+                        digest_size=8,
+                    ).digest()
+                    u01 = int.from_bytes(digest, byteorder="big", signed=False) / float(
+                        2**64
+                    )
+                    u01 = min(max(u01, 1e-6), 1.0 - 1e-6)
+                    sampled_z = float(NormalDist().inv_cdf(u01))
+                    sampled_z = max(-3.0, min(3.0, sampled_z))
+                    bandit_score = float(
+                        mean_reward + sampled_z * float(bandit_exploration) * float(std_error)
+                    )
+                else:
+                    total_samples = int(
+                        sum(
+                            len(values)
+                            for key, values in bandit_rewards_by_symbol_session.items()
+                            if key.endswith(f":{bandit_active_session}")
+                        )
+                    )
+                    if total_samples <= 0:
+                        total_samples = int(
+                            sum(len(values) for values in bandit_rewards_by_symbol.values())
+                        )
+                    bandit_score = _bandit_ucb_score(
+                        mean_reward_bps=mean_reward,
+                        samples=sample_count,
+                        total_samples=total_samples,
+                        exploration=bandit_exploration,
+                    )
+                rank_score += (
+                    float(bandit_weight)
+                    * float(bandit_score)
+                    * max(max_conf, 0.05)
+                    * disagreement
+                )
+                target.reasons.append(
+                    f"BANDIT_{bandit_method.upper()}_{bandit_source.upper()}"
+                )
+        if geometric_tiebreak_enabled and geometric_tiebreak_weight > 0.0:
+            returns_window = symbol_returns.get(symbol, [])
+            cumulative = 0.0
+            peak = 0.0
+            max_drawdown = 0.0
+            for value in returns_window:
+                cumulative += float(value)
+                peak = max(peak, cumulative)
+                max_drawdown = max(max_drawdown, peak - cumulative)
+            growth_score = _geometric_growth_tiebreak_score(
+                expected_edge_bps=float(clipped_net_edge_total),
+                returns_window=returns_window,
+                drawdown=float(max_drawdown),
+                variance_penalty=float(geometric_variance_penalty),
+                downside_penalty=float(geometric_downside_penalty),
+                drawdown_penalty=float(geometric_drawdown_penalty),
+            )
+            rank_score += (
+                float(geometric_tiebreak_weight)
+                * float(growth_score)
+                * max(max_conf, 0.05)
+                * disagreement
+            )
         candidate_rank[symbol] = rank_score
     setattr(runtime, "execution_candidate_rank", candidate_rank)
+    setattr(
+        runtime,
+        "execution_candidate_rank_expected_edge_bps",
+        candidate_expected_net_edge,
+    )
+    setattr(
+        runtime,
+        "execution_candidate_rank_context",
+        {
+            "expected_edge_clip_enabled": bool(clip_expected_edge_enabled),
+            "expected_edge_clip_cap_bps": float(edge_clip_cap_bps),
+            "expected_edge_clip_median_abs_bps": float(median_abs_edge_bps),
+            "bandit_enabled": bool(bandit_enabled),
+            "bandit_method": str(bandit_method),
+            "bandit_active_session": str(bandit_active_session),
+            "geometric_tiebreak_enabled": bool(geometric_tiebreak_enabled),
+            "geometric_tiebreak_weight": float(geometric_tiebreak_weight),
+        },
+    )
 
     apply_global_caps(
         targets,
@@ -39620,9 +39962,9 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             logger.warning("DERISK_SLO_BREACH", extra=slo_derisk_details)
 
     expected_net_edge_cycle = 0.0
-    if candidate_rank:
+    if candidate_expected_net_edge:
         try:
-            expected_net_edge_cycle = float(max(candidate_rank.values()))
+            expected_net_edge_cycle = float(max(candidate_expected_net_edge.values()))
         except Exception:
             expected_net_edge_cycle = 0.0
     pending_symbol_count = len(blocked_symbols)

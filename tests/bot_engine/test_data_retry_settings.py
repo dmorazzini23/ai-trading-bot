@@ -50,6 +50,45 @@ def test_data_retry_settings_flatten_mode(monkeypatch):
     assert delay == 0.0
 
 
+def test_bandit_ucb_score_rewards_uncertainty() -> None:
+    low_samples = bot_engine._bandit_ucb_score(
+        mean_reward_bps=2.0,
+        samples=4,
+        total_samples=200,
+        exploration=1.5,
+    )
+    high_samples = bot_engine._bandit_ucb_score(
+        mean_reward_bps=2.0,
+        samples=40,
+        total_samples=200,
+        exploration=1.5,
+    )
+
+    assert low_samples > high_samples
+    assert low_samples > 2.0
+
+
+def test_geometric_growth_tiebreak_score_penalizes_risk() -> None:
+    calm_score = bot_engine._geometric_growth_tiebreak_score(
+        expected_edge_bps=8.0,
+        returns_window=[0.002, 0.0015, 0.0018, 0.0012],
+        drawdown=0.001,
+        variance_penalty=1.0,
+        downside_penalty=1.0,
+        drawdown_penalty=1.0,
+    )
+    stressed_score = bot_engine._geometric_growth_tiebreak_score(
+        expected_edge_bps=8.0,
+        returns_window=[0.01, -0.02, 0.006, -0.015],
+        drawdown=0.03,
+        variance_penalty=1.0,
+        downside_penalty=1.0,
+        drawdown_penalty=1.0,
+    )
+
+    assert calm_score > stressed_score
+
+
 def test_pre_rank_execution_candidates_preserves_input_order_without_weights(monkeypatch):
     monkeypatch.delenv("AI_TRADING_EXEC_CANDIDATE_TOP_N", raising=False)
 

@@ -2728,15 +2728,52 @@ def build_report(
             default_relative=_DEFAULT_EDGE_REALISM_STATE_PATH,
         )
     )
-    return {
+    execution_vs_alpha = summarize_execution_vs_alpha(
+        trade_summary=trade_summary,
+        gate_summary=gate_summary,
+    )
+    expected_edge_clip_raw = execution_vs_alpha.get("expected_edge_clip")
+    expected_edge_clip = (
+        dict(expected_edge_clip_raw)
+        if isinstance(expected_edge_clip_raw, Mapping)
+        else None
+    )
+    expected_edge_for_realism_bps = _as_float(
+        execution_vs_alpha.get("expected_edge_for_realism_bps")
+    )
+    expected_edge_per_filled_trade_bps = _as_float(
+        execution_vs_alpha.get("expected_edge_per_traded_notional_bps")
+    )
+    if expected_edge_per_filled_trade_bps is None:
+        expected_edge_per_filled_trade_bps = expected_edge_for_realism_bps
+    report_payload = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "report_schema_version": 2,
         "trade_history": trade_summary,
         "gate_effectiveness": gate_summary,
-        "execution_vs_alpha": summarize_execution_vs_alpha(
-            trade_summary=trade_summary,
-            gate_summary=gate_summary,
-        ),
+        "execution_vs_alpha": execution_vs_alpha,
         "edge_realism": summarize_edge_realism_state(resolved_edge_realism_path),
+        # Flatten key execution-edge realism fields for compatibility with
+        # runtime snapshots and Slack alert consumers.
+        "expected_edge_for_realism_bps": expected_edge_for_realism_bps,
+        "expected_edge_per_filled_trade_bps": expected_edge_per_filled_trade_bps,
+        "expected_edge_clip": expected_edge_clip,
+        "expected_edge_clip_bps": (
+            _as_float(expected_edge_clip.get("abs_cap_bps"))
+            if expected_edge_clip is not None
+            else None
+        ),
+        "realized_net_edge_bps": _as_float(
+            execution_vs_alpha.get("realized_net_edge_bps")
+        ),
+        "realization_gap_bps": _as_float(
+            execution_vs_alpha.get("realization_gap_bps")
+        ),
+        "edge_realism_gap_ratio": _as_float(
+            execution_vs_alpha.get("edge_realism_gap_ratio")
+        ),
     }
+    return report_payload
 
 
 def evaluate_go_no_go(

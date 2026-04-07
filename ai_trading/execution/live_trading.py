@@ -1535,6 +1535,7 @@ class _SignalMeta:
     signal_weight: float | None
     reported_fill_qty: int = 0
     expected_price: float | None = None
+    expected_net_edge_bps: float | None = None
 
 
 @lru_cache(maxsize=8)
@@ -5343,6 +5344,71 @@ class ExecutionEngine:
             "fill_probability_score_source": score_source,
             "min_fill_probability_score": float(min_score),
             "fill_probability_score_threshold_source": min_score_source,
+            "session_regime": session_regime,
+        }
+
+    def _execution_meta_label_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when live meta-label quality score is below threshold."""
+
+        enabled = _resolve_bool_env("AI_TRADING_EXECUTION_META_LABEL_GATE_ENABLED")
+        if enabled is None:
+            enabled = False
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        require_score = _resolve_bool_env("AI_TRADING_EXECUTION_META_LABEL_REQUIRE_SCORE")
+        if require_score is None:
+            require_score = False
+        base_min_score = _config_float("AI_TRADING_EXECUTION_META_LABEL_MIN_SCORE", 0.55)
+        if base_min_score is None:
+            base_min_score = 0.55
+        min_score, min_score_source, session_regime = self._session_threshold_override(
+            base_value=float(base_min_score),
+            market_env_key="AI_TRADING_EXECUTION_META_LABEL_MIN_SCORE_MARKET",
+            after_hours_env_key="AI_TRADING_EXECUTION_META_LABEL_MIN_SCORE_AFTER_HOURS",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        score, score_source = self._order_probability_score(
+            order,
+            keys=(
+                "meta_label_probability",
+                "meta_label_score",
+                "meta_probability",
+                "meta_prob",
+                "meta_veto_score",
+                "meta_label",
+            ),
+        )
+        if score is None:
+            allowed_missing = not bool(require_score)
+            return bool(allowed_missing), {
+                "enabled": True,
+                "reason": (
+                    "meta_label_score_missing"
+                    if allowed_missing
+                    else "meta_label_score_required_missing"
+                ),
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+                "required": bool(require_score),
+                "min_meta_label_score": float(min_score),
+                "meta_label_threshold_source": min_score_source,
+                "session_regime": session_regime,
+            }
+
+        allowed = float(score) >= float(min_score)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "meta_label_veto_gate",
+            "symbol": str(order.get("symbol") or "").strip().upper() or None,
+            "meta_label_score": float(score),
+            "meta_label_score_source": score_source,
+            "min_meta_label_score": float(min_score),
+            "meta_label_threshold_source": min_score_source,
             "session_regime": session_regime,
         }
 
@@ -10302,6 +10368,51 @@ class ExecutionEngine:
     ) -> CapacityCheck:
         """Retry capacity precheck with broker-suggested downsize when feasible."""
 
+        def _fallback_capacity_qty() -> int:
+            if account_snapshot is None or closing_position:
+                return 0
+            price = _safe_float(price_hint)
+            if price is None or float(price) <= 0.0:
+                return 0
+            available_candidates: list[float] = []
+            for key in (
+                "daytrading_buying_power",
+                "day_trading_buying_power",
+                "regt_buying_power",
+                "buying_power",
+                "cash",
+                "available_cash",
+                "portfolio_cash",
+                "non_marginable_buying_power",
+                "non_marginable_cash",
+            ):
+                candidate = _safe_float(_extract_value(account_snapshot, key))
+                if candidate is None or not math.isfinite(float(candidate)):
+                    continue
+                available_candidates.append(max(float(candidate), 0.0))
+            if not available_candidates:
+                return 0
+            available_notional = max(available_candidates)
+            if available_notional <= 0.0:
+                return 0
+            reserve_fraction = _config_float(
+                "AI_TRADING_CAPACITY_FALLBACK_NOTIONAL_RESERVE_FRACTION",
+                0.08,
+            )
+            if reserve_fraction is None or not math.isfinite(float(reserve_fraction)):
+                reserve_fraction = 0.08
+            reserve_fraction = max(0.0, min(float(reserve_fraction), 0.5))
+            usable_notional = max(
+                available_notional * (1.0 - float(reserve_fraction)),
+                0.0,
+            )
+            if usable_notional <= 0.0:
+                return 0
+            fallback_qty = int(math.floor(usable_notional / float(price)))
+            if fallback_qty <= 0:
+                return 0
+            return max(0, min(int(fallback_qty), max(int(quantity) - 1, 0)))
+
         if capacity.can_submit:
             return capacity
         if quantity <= 0:
@@ -10316,7 +10427,9 @@ class ExecutionEngine:
             return capacity
         suggested_qty = max(0, int(capacity.suggested_qty))
         if suggested_qty <= 0 or suggested_qty >= int(quantity):
-            return capacity
+            suggested_qty = _fallback_capacity_qty()
+            if suggested_qty <= 0 or suggested_qty >= int(quantity):
+                return capacity
         min_qty = _config_int("AI_TRADING_CAPACITY_SUGGESTED_QTY_RETRY_MIN_QTY", 1)
         if min_qty is None:
             min_qty = 1
@@ -10328,6 +10441,14 @@ class ExecutionEngine:
         if min_fraction is None or not math.isfinite(float(min_fraction)):
             min_fraction = 0.10
         min_fraction = max(0.0, min(float(min_fraction), 1.0))
+        adaptive_relax = self._precheck_guardrail_relax_scale(
+            detail="insufficient_buying_power",
+            default_scale=0.7,
+            severe_scale=0.45,
+        )
+        if adaptive_relax < 1.0:
+            min_fraction = max(0.0, min(float(min_fraction) * float(adaptive_relax), 1.0))
+            min_qty = max(1, int(math.floor(float(min_qty) * float(adaptive_relax))))
         if suggested_qty < int(min_qty):
             return capacity
         if float(suggested_qty) < (float(quantity) * float(min_fraction)):
@@ -10837,6 +10958,25 @@ class ExecutionEngine:
                             break
                     if parsed_expected_net_edge_bps is not None:
                         break
+        if parsed_expected_net_edge_bps is None:
+            meta_store = getattr(self, "_order_signal_meta", None)
+            if isinstance(meta_store, Mapping):
+                for candidate_key in (order_id, client_order_id):
+                    if candidate_key in (None, ""):
+                        continue
+                    meta_entry = meta_store.get(str(candidate_key))
+                    if isinstance(meta_entry, _SignalMeta):
+                        candidate = _safe_float(meta_entry.expected_net_edge_bps)
+                        if candidate is not None and math.isfinite(float(candidate)):
+                            parsed_expected_net_edge_bps = float(candidate)
+                            break
+                    elif isinstance(meta_entry, Mapping):
+                        candidate = _safe_float(
+                            meta_entry.get("expected_net_edge_bps")
+                        )
+                        if candidate is not None and math.isfinite(float(candidate)):
+                            parsed_expected_net_edge_bps = float(candidate)
+                            break
         parsed_realized_net_edge_bps = _safe_float(realized_net_edge_bps)
         if parsed_realized_net_edge_bps is None and runtime_payload is not None:
             for key in (
@@ -15848,6 +15988,12 @@ class ExecutionEngine:
                     requested_qty_int,
                     meta_weight,
                     expected_price=benchmark_price,
+                    expected_net_edge_bps=(
+                        float(expected_edge_hint)
+                        if expected_edge_hint is not None
+                        and math.isfinite(float(expected_edge_hint))
+                        else None
+                    ),
                 )
                 self._order_signal_meta = store
             else:
@@ -21317,6 +21463,36 @@ class ExecutionEngine:
                 )
                 _mark_precheck_failure("edge_realism_gate", edge_realism_context)
                 return False
+            meta_label_allowed, meta_label_context = (
+                self._execution_meta_label_allows_opening(order=order)
+            )
+            if not meta_label_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "meta_label_veto_gate",
+                    "context": meta_label_context,
+                }
+                logger.warning("ENTRY_CONSTRAINED_META_LABEL_VETO", extra=skip_payload)
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "meta_label_veto_gate",
+                    meta_label_context,
+                    extra=skip_payload | {"detail": "meta_label_veto_gate"},
+                )
+                _mark_precheck_failure("meta_label_veto_gate", meta_label_context)
+                return False
             uncertainty_allowed, uncertainty_context = (
                 self._execution_prediction_uncertainty_allows_opening(order=order)
             )
@@ -22960,6 +23136,18 @@ class ExecutionEngine:
                 expected_net_edge_hint = self._order_expected_edge_bps(refreshed)
             if expected_net_edge_hint is None and isinstance(entry, Mapping):
                 expected_net_edge_hint = self._order_expected_edge_bps(entry)
+            if expected_net_edge_hint is None and isinstance(meta_store_ref, Mapping):
+                meta_for_edge = meta_store_ref.get(resolved_order_id)
+                if meta_for_edge is None and resolved_client_order_id:
+                    meta_for_edge = meta_store_ref.get(str(resolved_client_order_id))
+                if isinstance(meta_for_edge, _SignalMeta):
+                    expected_net_edge_hint = _safe_float(
+                        meta_for_edge.expected_net_edge_bps
+                    )
+                elif isinstance(meta_for_edge, Mapping):
+                    expected_net_edge_hint = _safe_float(
+                        meta_for_edge.get("expected_net_edge_bps")
+                    )
             changed = refreshed_status != prev_status
             event_seq = _safe_int(_extract_value(entry, "event_seq"), 0)
             if changed:
