@@ -707,8 +707,8 @@ def compile_effective_policy(cfg: Any, env: Mapping[str, str] | None = None) -> 
         ),
         attack_degrade_size_multiplier=_as_float(
             env_values.get("AI_TRADING_POLICY_ATTACK_DEGRADE_SIZE_MULTIPLIER"),
-            1.0,
-            min_value=1.0,
+            0.85,
+            min_value=0.25,
             max_value=3.0,
         ),
     )
@@ -887,19 +887,24 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
             0.0,
             float(policy.safety.attack_degrade_reject_rate_pct),
         )
-        degrade_scale = max(1.0, float(policy.safety.attack_degrade_size_multiplier))
+        degrade_scale = max(0.25, min(float(policy.safety.attack_degrade_size_multiplier), attack_scale))
+        attack_scale_reason: str | None = None
         if reject_rate <= relax_threshold:
             bounded_relax_scale = min(attack_scale, relax_scale)
             if bounded_relax_scale < attack_scale - 1e-9:
                 attack_scale = bounded_relax_scale
-                reasons.append("SAFETY_TIER_ATTACK_SCALE_RELAXED")
+                attack_scale_reason = "SAFETY_TIER_ATTACK_SCALE_RELAXED"
         elif reject_rate >= degrade_threshold:
-            bounded_degrade_scale = min(attack_scale, degrade_scale)
+            bounded_degrade_scale = max(0.25, min(attack_scale, degrade_scale))
             if bounded_degrade_scale < attack_scale - 1e-9:
                 attack_scale = bounded_degrade_scale
-                reasons.append("SAFETY_TIER_ATTACK_SCALE_DEGRADED")
+                attack_scale_reason = "SAFETY_TIER_ATTACK_SCALE_DEGRADED"
+        qty_before_attack_scale = int(qty)
         qty = _scale_qty(qty, attack_scale)
-        reasons.append("SAFETY_TIER_ATTACK_SCALE")
+        if qty != qty_before_attack_scale:
+            reasons.append("SAFETY_TIER_ATTACK_SCALE")
+            if attack_scale_reason:
+                reasons.append(attack_scale_reason)
 
     if qty == 0 and "ZERO_QTY" not in reasons:
         reasons.append("ZERO_QTY")

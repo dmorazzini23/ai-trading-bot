@@ -3016,6 +3016,7 @@ class ExecutionEngine:
         *,
         detail: str,
         default_scale: float,
+        severe_scale: float | None = None,
     ) -> float:
         """Return adaptive relax scale for repeated precheck blocker details."""
 
@@ -3028,6 +3029,12 @@ class ExecutionEngine:
         default_scale_value = max(0.1, min(float(default_scale), 1.0))
         if default_scale_value >= 1.0:
             return 1.0
+        severe_scale_value = default_scale_value
+        if severe_scale is not None:
+            severe_scale_value = max(
+                0.05,
+                min(float(severe_scale), float(default_scale_value)),
+            )
 
         context_raw = getattr(self, "_precheck_failure_pressure_context", None)
         context = dict(context_raw) if isinstance(context_raw, Mapping) else {}
@@ -3077,7 +3084,47 @@ class ExecutionEngine:
         detail_ratio = float(detail_count) / float(precheck_failure_count)
         if detail_count < int(min_count) or detail_ratio < float(min_ratio):
             return 1.0
-        return float(default_scale_value)
+        severe_min_count_default = max(
+            int(min_count) + 4,
+            int(math.ceil(float(min_count) * 1.75)),
+        )
+        severe_min_count = _config_int(
+            "AI_TRADING_EXECUTION_PRECHECK_GUARDRAIL_RELAX_SEVERE_MIN_COUNT",
+            severe_min_count_default,
+        )
+        if severe_min_count is None:
+            severe_min_count = severe_min_count_default
+        severe_min_count = max(int(min_count), min(int(severe_min_count), 5000))
+        severe_min_ratio_default = min(float(min_ratio) + 0.2, 0.9)
+        severe_min_ratio = _config_float(
+            "AI_TRADING_EXECUTION_PRECHECK_GUARDRAIL_RELAX_SEVERE_MIN_RATIO",
+            severe_min_ratio_default,
+        )
+        if severe_min_ratio is None:
+            severe_min_ratio = severe_min_ratio_default
+        severe_min_ratio = max(float(min_ratio), min(float(severe_min_ratio), 1.0))
+        if detail_count < int(severe_min_count) or detail_ratio < float(severe_min_ratio):
+            return float(default_scale_value)
+        if severe_scale_value >= float(default_scale_value):
+            return float(default_scale_value)
+
+        severe_count_span = max(float(severe_min_count), 1.0)
+        severe_count_target = float(severe_min_count) + severe_count_span
+        count_progress = (
+            (float(detail_count) - float(severe_min_count))
+            / max(severe_count_target - float(severe_min_count), 1.0)
+        )
+        count_progress = max(0.0, min(float(count_progress), 1.0))
+        ratio_progress = (
+            (float(detail_ratio) - float(severe_min_ratio))
+            / max(1.0 - float(severe_min_ratio), 1e-9)
+        )
+        ratio_progress = max(0.0, min(float(ratio_progress), 1.0))
+        severity = max(float(count_progress), float(ratio_progress))
+        blended_scale = float(default_scale_value) + (
+            float(severe_scale_value) - float(default_scale_value)
+        ) * float(severity)
+        return max(float(severe_scale_value), min(float(blended_scale), float(default_scale_value)))
 
     def _symbol_reentry_cooldown_seconds(self) -> float:
         """Return same-side symbol re-entry cooldown in seconds."""
@@ -3098,9 +3145,16 @@ class ExecutionEngine:
         )
         if relax_scale is None:
             relax_scale = 0.6
+        severe_relax_scale = _config_float(
+            "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEVERE_RELAX_SCALE",
+            0.35,
+        )
+        if severe_relax_scale is None:
+            severe_relax_scale = 0.35
         adaptive_scale = self._precheck_guardrail_relax_scale(
             detail="symbol_reentry_cooldown",
             default_scale=float(relax_scale),
+            severe_scale=float(severe_relax_scale),
         )
         if adaptive_scale >= 1.0:
             return cooldown_seconds
@@ -3133,9 +3187,16 @@ class ExecutionEngine:
         )
         if relax_scale is None:
             relax_scale = 0.5
+        severe_relax_scale = _config_float(
+            "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_SEVERE_RELAX_SCALE",
+            0.25,
+        )
+        if severe_relax_scale is None:
+            severe_relax_scale = 0.25
         adaptive_scale = self._precheck_guardrail_relax_scale(
             detail="opening_min_notional",
             default_scale=float(relax_scale),
+            severe_scale=float(severe_relax_scale),
         )
         if adaptive_scale >= 1.0:
             return min_notional
@@ -4320,6 +4381,46 @@ class ExecutionEngine:
             elif expected_edge_bps_value >= float(high_edge_bps):
                 base_bps = float(base_bps) * max(0.25, float(high_edge_mult))
 
+        quality_offset_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_QUALITY_OFFSET_ADAPTIVE_ENABLED"
+        )
+        if quality_offset_enabled is None:
+            quality_offset_enabled = True
+        if quality_offset_enabled:
+            quality_context = self._execution_quality_context()
+            fill_ratio_rolling = _safe_float(quality_context.get("fill_ratio_rolling"))
+            trigger_ratio = _config_float(
+                "AI_TRADING_EXECUTION_QUALITY_OFFSET_FILL_RATIO_TRIGGER",
+                0.45,
+            )
+            if trigger_ratio is None:
+                trigger_ratio = 0.45
+            trigger_ratio = max(0.05, min(float(trigger_ratio), 0.95))
+            floor_ratio = _config_float(
+                "AI_TRADING_EXECUTION_QUALITY_OFFSET_FILL_RATIO_FLOOR",
+                0.18,
+            )
+            if floor_ratio is None:
+                floor_ratio = 0.18
+            floor_ratio = max(0.01, min(float(floor_ratio), float(trigger_ratio) - 0.01))
+            max_add_bps = _config_float(
+                "AI_TRADING_EXECUTION_QUALITY_OFFSET_MAX_ADD_BPS",
+                6.0,
+            )
+            if max_add_bps is None:
+                max_add_bps = 6.0
+            max_add_bps = max(0.0, min(float(max_add_bps), 25.0))
+            if (
+                fill_ratio_rolling is not None
+                and math.isfinite(float(fill_ratio_rolling))
+                and float(fill_ratio_rolling) < float(trigger_ratio)
+                and max_add_bps > 0.0
+            ):
+                shortfall = max(float(trigger_ratio) - float(fill_ratio_rolling), 0.0)
+                span = max(float(trigger_ratio) - float(floor_ratio), 1e-6)
+                pressure = max(0.0, min(shortfall / span, 1.0))
+                base_bps = float(base_bps) + (float(max_add_bps) * float(pressure))
+
         lower = max(0.0, float(min_bps))
         upper = max(lower, float(hard_cap_bps))
         resolved = max(lower, min(float(base_bps), upper))
@@ -4870,6 +4971,43 @@ class ExecutionEngine:
                 maximum=2.0,
             )
         )
+        min_realism_score_base = float(min_realism_score)
+        min_score_relax_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_RELAX_ENABLED"
+        )
+        if min_score_relax_enabled is None:
+            min_score_relax_enabled = True
+        min_score_relax_scale = _config_float(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_RELAX_SCALE",
+            0.7,
+        )
+        if min_score_relax_scale is None:
+            min_score_relax_scale = 0.7
+        min_score_relax_severe_scale = _config_float(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_SEVERE_RELAX_SCALE",
+            0.35,
+        )
+        if min_score_relax_severe_scale is None:
+            min_score_relax_severe_scale = 0.35
+        min_score_relax_floor = _config_float(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_RELAX_FLOOR",
+            0.12,
+        )
+        if min_score_relax_floor is None:
+            min_score_relax_floor = 0.12
+        min_score_relax_floor = max(0.0, min(float(min_score_relax_floor), 2.0))
+        min_score_relax_applied = 1.0
+        if bool(min_score_relax_enabled):
+            min_score_relax_applied = self._precheck_guardrail_relax_scale(
+                detail="edge_realism_gate",
+                default_scale=float(min_score_relax_scale),
+                severe_scale=float(min_score_relax_severe_scale),
+            )
+            if min_score_relax_applied < 1.0:
+                min_realism_score = max(
+                    float(min_score_relax_floor),
+                    float(min_realism_score_base) * float(min_score_relax_applied),
+                )
 
         normalized_side = self._normalized_order_side(order.get("side"))
         snapshot = self._execution_learning_snapshot(
@@ -4897,15 +5035,72 @@ class ExecutionEngine:
                 "mean_realized_net_edge_bps": float(realized_mean_edge_bps),
             }
 
-        effective_realized_edge_bps = max(float(realized_mean_edge_bps) + float(margin_bps), 0.0)
-        baseline_realism_score = float(effective_realized_edge_bps) / max(
-            float(expected_edge_bps), 0.1
-        )
         ratio_snapshot = self._edge_realism_ratio_snapshot(
             order=order,
             min_samples=int(min_samples),
         )
+        expected_edge_for_score_bps = float(expected_edge_bps)
+        expected_edge_clip_enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_CLIP_ENABLED"
+        )
+        if expected_edge_clip_enabled is None:
+            expected_edge_clip_enabled = True
+        expected_edge_clip_multiplier = _config_float(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_CAP_MULTIPLIER",
+            0.75,
+        )
+        if expected_edge_clip_multiplier is None:
+            expected_edge_clip_multiplier = 0.75
+        expected_edge_clip_multiplier = max(
+            0.05,
+            min(float(expected_edge_clip_multiplier), 10.0),
+        )
+        expected_edge_clip_min_cap_bps = _config_float(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_MIN_CAP_BPS",
+            6.0,
+        )
+        if expected_edge_clip_min_cap_bps is None:
+            expected_edge_clip_min_cap_bps = 6.0
+        expected_edge_clip_max_cap_bps = _config_float(
+            "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_MAX_CAP_BPS",
+            35.0,
+        )
+        if expected_edge_clip_max_cap_bps is None:
+            expected_edge_clip_max_cap_bps = 35.0
+        expected_edge_clip_min_cap_bps = max(
+            0.1,
+            min(float(expected_edge_clip_min_cap_bps), 1000.0),
+        )
+        expected_edge_clip_max_cap_bps = max(
+            float(expected_edge_clip_min_cap_bps),
+            min(float(expected_edge_clip_max_cap_bps), 5000.0),
+        )
+        expected_edge_clip_cap_bps: float | None = None
+        expected_edge_clip_reference_bps = self._coerce_finite_float(
+            ratio_snapshot.get("mean_expected_net_edge_bps")
+        )
+        if (
+            bool(expected_edge_clip_enabled)
+            and expected_edge_clip_reference_bps is not None
+            and float(expected_edge_clip_reference_bps) > 0.0
+        ):
+            expected_edge_clip_cap_bps = max(
+                float(expected_edge_clip_min_cap_bps),
+                min(
+                    float(expected_edge_clip_reference_bps)
+                    * float(expected_edge_clip_multiplier),
+                    float(expected_edge_clip_max_cap_bps),
+                ),
+            )
+            expected_edge_for_score_bps = min(
+                float(expected_edge_for_score_bps),
+                float(expected_edge_clip_cap_bps),
+            )
         historical_ratio = self._coerce_finite_float(ratio_snapshot.get("ratio"))
+        effective_realized_edge_bps = max(float(realized_mean_edge_bps) + float(margin_bps), 0.0)
+        baseline_realism_score = float(effective_realized_edge_bps) / max(
+            float(expected_edge_for_score_bps), 0.1
+        )
         blended_realism_score = float(baseline_realism_score)
         if bool(calibrator_enabled) and historical_ratio is not None:
             blended_realism_score = (
@@ -4921,13 +5116,32 @@ class ExecutionEngine:
             "samples": int(learning_samples),
             "min_samples": int(min_samples),
             "expected_edge_bps": float(expected_edge_bps),
+            "expected_edge_bps_for_score": float(expected_edge_for_score_bps),
+            "expected_edge_clipped": bool(
+                expected_edge_clip_cap_bps is not None
+                and float(expected_edge_for_score_bps) < float(expected_edge_bps)
+            ),
+            "expected_edge_clip_cap_bps": (
+                float(expected_edge_clip_cap_bps)
+                if expected_edge_clip_cap_bps is not None
+                else None
+            ),
+            "expected_edge_clip_reference_bps": (
+                float(expected_edge_clip_reference_bps)
+                if expected_edge_clip_reference_bps is not None
+                else None
+            ),
             "mean_realized_net_edge_bps": float(realized_mean_edge_bps),
             "margin_bps": float(margin_bps),
             "effective_realized_edge_bps": float(effective_realized_edge_bps),
             "baseline_edge_realism_score": float(baseline_realism_score),
             "edge_realism_score": float(realism_score),
             "required_edge_realism_score": float(min_realism_score),
+            "required_edge_realism_score_base": float(min_realism_score_base),
             "edge_realism_score_threshold_source": realism_threshold_source,
+            "edge_realism_min_score_relax_enabled": bool(min_score_relax_enabled),
+            "edge_realism_min_score_relax_applied": float(min_score_relax_applied),
+            "edge_realism_min_score_relax_floor": float(min_score_relax_floor),
             "session_regime": session_regime,
             "edge_realism_calibrator_enabled": bool(calibrator_enabled),
             "edge_realism_shrinkage": float(shrinkage),
@@ -6374,6 +6588,7 @@ class ExecutionEngine:
             resolve_runtime_artifact_path(
                 configured,
                 default_relative="runtime/execution_learning_state.json",
+                for_write=True,
             ),
         )
 
@@ -6392,6 +6607,7 @@ class ExecutionEngine:
             resolve_runtime_artifact_path(
                 configured,
                 default_relative="runtime/execution_autotune.json",
+                for_write=True,
             ),
         )
 
@@ -6426,6 +6642,7 @@ class ExecutionEngine:
             resolve_runtime_artifact_path(
                 configured,
                 default_relative="runtime/edge_realism_state.json",
+                for_write=True,
             ),
         )
 
@@ -6638,6 +6855,12 @@ class ExecutionEngine:
             ratio = max(0.0, min(float(ratio), 5.0))
         else:
             ratio = None
+        mean_expected = self._coerce_finite_float(
+            selected.get("mean_expected_net_edge_bps")
+        )
+        mean_realized = self._coerce_finite_float(
+            selected.get("mean_realized_net_edge_bps")
+        )
         return {
             "source": str(source),
             "ratio": float(ratio) if ratio is not None else None,
@@ -6645,6 +6868,12 @@ class ExecutionEngine:
             "bucket": context,
             "bucket_samples": int(max(0, _safe_int(bucket_entry.get("samples"), 0))),
             "global_samples": int(max(0, _safe_int(global_entry.get("samples"), 0))),
+            "mean_expected_net_edge_bps": (
+                float(mean_expected) if mean_expected is not None else None
+            ),
+            "mean_realized_net_edge_bps": (
+                float(mean_realized) if mean_realized is not None else None
+            ),
         }
 
     def _update_edge_realism_feedback(
@@ -7751,6 +7980,7 @@ class ExecutionEngine:
             resolve_runtime_artifact_path(
                 configured,
                 default_relative="runtime/markout_execution_override.json",
+                for_write=True,
             ),
         )
 
@@ -10028,6 +10258,7 @@ class ExecutionEngine:
         reason: Any,
         side: Any,
         closing_position: bool,
+        suggested_qty: int | None = None,
     ) -> str | None:
         """Cache capacity exhaustion reason to avoid repeated preflight failures in-cycle."""
 
@@ -10038,6 +10269,14 @@ class ExecutionEngine:
         normalized_reason = str(reason or "").strip().lower()
         if not _is_capacity_exhaustion_reason(normalized_reason):
             return None
+        if int(max(_safe_int(suggested_qty, 0), 0)) > 0:
+            skip_cache_when_suggested = _resolve_bool_env(
+                "AI_TRADING_CAPACITY_CYCLE_BLOCK_SKIP_WHEN_SUGGESTED_QTY_AVAILABLE"
+            )
+            if skip_cache_when_suggested is None:
+                skip_cache_when_suggested = True
+            if bool(skip_cache_when_suggested):
+                return None
         self._capacity_exhausted_cycle = True
         self._capacity_exhausted_reason = normalized_reason or "insufficient_buying_power"
         log_throttled_event(
@@ -10084,10 +10323,10 @@ class ExecutionEngine:
         min_qty = max(1, min(int(min_qty), int(quantity)))
         min_fraction = _config_float(
             "AI_TRADING_CAPACITY_SUGGESTED_QTY_RETRY_MIN_FRACTION",
-            0.25,
+            0.10,
         )
         if min_fraction is None or not math.isfinite(float(min_fraction)):
-            min_fraction = 0.25
+            min_fraction = 0.10
         min_fraction = max(0.0, min(float(min_fraction), 1.0))
         if suggested_qty < int(min_qty):
             return capacity
@@ -10255,6 +10494,7 @@ class ExecutionEngine:
         target_path = resolve_runtime_artifact_path(
             configured_path,
             default_relative=default_relative,
+            for_write=True,
         )
         row = dict(payload)
         row.setdefault("ts", datetime.now(UTC).isoformat())
@@ -10534,6 +10774,7 @@ class ExecutionEngine:
         closing_position: bool | None = None,
         expected_net_edge_bps: float | None = None,
         realized_net_edge_bps: float | None = None,
+        fill_source: str | None = None,
     ) -> None:
         """Persist canonical fill-derived record for learning and truth reporting."""
 
@@ -10666,14 +10907,15 @@ class ExecutionEngine:
             and math.isfinite(float(parsed_realized_net_edge_bps))
         ):
             fill_record["realized_net_edge_bps"] = float(parsed_realized_net_edge_bps)
-        if runtime_payload is not None:
+        source_value = fill_source
+        if source_value in (None, "") and runtime_payload is not None:
             source_value = runtime_payload.get("source")
-            if source_value not in (None, ""):
-                normalized_source = _normalize_fill_source(source_value)
-                fill_record["source"] = str(normalized_source)
-                raw_source = str(source_value).strip().lower()
-                if raw_source and raw_source != normalized_source:
-                    fill_record["source_detail"] = raw_source
+        if source_value not in (None, ""):
+            normalized_source = _normalize_fill_source(source_value)
+            fill_record["source"] = str(normalized_source)
+            raw_source = str(source_value).strip().lower()
+            if raw_source and raw_source != normalized_source:
+                fill_record["source_detail"] = raw_source
         try:
             record_trade_fill(fill_record)
         except Exception:
@@ -10708,10 +10950,8 @@ class ExecutionEngine:
                 side=side_normalized,
             )
         runtime_source = None
-        if runtime_payload is not None:
-            source_value = runtime_payload.get("source")
-            if source_value not in (None, ""):
-                runtime_source = str(source_value)
+        if source_value not in (None, ""):
+            runtime_source = str(source_value)
         self._reconcile_pending_tca_from_fill(
             symbol=symbol,
             side=side_normalized,
@@ -12367,6 +12607,7 @@ class ExecutionEngine:
                     reason=failure_reason,
                     side=capacity_side,
                     closing_position=closing_position,
+                    suggested_qty=int(max(capacity.suggested_qty, 0)),
                 )
                 self._skip_submit(
                     symbol=symbol,
@@ -12953,6 +13194,7 @@ class ExecutionEngine:
                     reason=failure_reason,
                     side=capacity_side,
                     closing_position=closing_position,
+                    suggested_qty=int(max(capacity.suggested_qty, 0)),
                 )
                 self._skip_submit(
                     symbol=symbol,
@@ -14815,6 +15057,7 @@ class ExecutionEngine:
                 reason=failure_reason,
                 side=capacity_side,
                 closing_position=closing_position,
+                suggested_qty=int(max(capacity.suggested_qty, 0)),
             )
             self._skip_submit(
                 symbol=symbol,
@@ -15900,10 +16143,13 @@ class ExecutionEngine:
                     if parsed_fill_ts.tzinfo is None:
                         parsed_fill_ts = parsed_fill_ts.replace(tzinfo=UTC)
                     fill_timestamp = parsed_fill_ts.astimezone(UTC)
-            runtime_fill_payload = final_order if isinstance(final_order, Mapping) else None
+            runtime_fill_payload = (
+                dict(final_order) if isinstance(final_order, Mapping) else None
+            )
             runtime_source = "live"
             if isinstance(runtime_fill_payload, dict):
-                runtime_fill_payload.setdefault("source", "live")
+                if runtime_fill_payload.get("source") in (None, ""):
+                    runtime_fill_payload["source"] = "live"
                 runtime_source = str(runtime_fill_payload.get("source") or "live")
             self._persist_fill_derived_trade_record(
                 symbol=symbol,
@@ -15922,6 +16168,7 @@ class ExecutionEngine:
                     float(expected_edge_hint) if expected_edge_hint is not None else None
                 ),
                 realized_net_edge_bps=realized_net_edge_bps,
+                fill_source=runtime_source,
             )
         else:
             runtime_source = None
@@ -17205,6 +17452,7 @@ class ExecutionEngine:
         return resolve_runtime_artifact_path(
             configured,
             default_relative="runtime/runtime_performance_report_latest.json",
+            for_write=True,
         )
 
     def _runtime_performance_report_min_interval_s(self) -> float:
@@ -17252,6 +17500,33 @@ class ExecutionEngine:
 
         latest_path = self._runtime_performance_report_latest_path()
         paths_payload: dict[str, Any] = {"report_latest": str(latest_path)}
+        report_payload = dict(report)
+        execution_payload_raw = report_payload.get("execution_vs_alpha")
+        execution_payload = (
+            dict(execution_payload_raw)
+            if isinstance(execution_payload_raw, Mapping)
+            else {}
+        )
+        edge_realism_payload_raw = report_payload.get("edge_realism")
+        edge_realism_payload = (
+            dict(edge_realism_payload_raw)
+            if isinstance(edge_realism_payload_raw, Mapping)
+            else None
+        )
+        expected_edge_clip_raw = execution_payload.get("expected_edge_clip")
+        expected_edge_clip = (
+            dict(expected_edge_clip_raw)
+            if isinstance(expected_edge_clip_raw, Mapping)
+            else None
+        )
+        expected_edge_for_realism_bps = _safe_float(
+            execution_payload.get("expected_edge_for_realism_bps")
+        )
+        expected_edge_per_filled_trade_bps = _safe_float(
+            execution_payload.get("expected_edge_per_traded_notional_bps")
+        )
+        if expected_edge_per_filled_trade_bps is None:
+            expected_edge_per_filled_trade_bps = expected_edge_for_realism_bps
         payload: dict[str, Any] = {
             "generated_at": datetime.now(UTC).isoformat(),
             "source": "execution_runtime_gonogo",
@@ -17275,7 +17550,25 @@ class ExecutionEngine:
                     else {}
                 ),
             },
-            "report": dict(report),
+            "expected_edge_for_realism_bps": expected_edge_for_realism_bps,
+            "expected_edge_per_filled_trade_bps": expected_edge_per_filled_trade_bps,
+            "expected_edge_clip": expected_edge_clip,
+            "expected_edge_clip_bps": (
+                _safe_float(expected_edge_clip.get("abs_cap_bps"))
+                if expected_edge_clip is not None
+                else None
+            ),
+            "realized_net_edge_bps": _safe_float(
+                execution_payload.get("realized_net_edge_bps")
+            ),
+            "realization_gap_bps": _safe_float(
+                execution_payload.get("realization_gap_bps")
+            ),
+            "edge_realism_gap_ratio": _safe_float(
+                execution_payload.get("edge_realism_gap_ratio")
+            ),
+            "edge_realism_report": edge_realism_payload,
+            "report": report_payload,
             "paths": paths_payload,
         }
         paths_context = context.get("paths")
@@ -18593,6 +18886,61 @@ class ExecutionEngine:
             "stale_labels": stale_labels,
         }
 
+    def _runtime_preopen_artifact_write_readiness_context(self) -> dict[str, Any]:
+        """Summarize whether runtime artifact destinations are writable."""
+
+        targets: list[tuple[str, str, str]] = [
+            ("order_events", "AI_TRADING_ORDER_EVENTS_PATH", "runtime/order_events.jsonl"),
+            ("fill_events", "AI_TRADING_FILL_EVENTS_PATH", "runtime/fill_events.jsonl"),
+            (
+                "execution_quality_events",
+                "AI_TRADING_EXEC_QUALITY_EVENTS_PATH",
+                "runtime/execution_quality_events.jsonl",
+            ),
+            (
+                "runtime_report_latest",
+                "AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH",
+                "runtime/runtime_performance_report_latest.json",
+            ),
+            (
+                "edge_realism_state",
+                "AI_TRADING_EDGE_REALISM_STATE_PATH",
+                "runtime/edge_realism_state.json",
+            ),
+        ]
+        contexts: list[dict[str, Any]] = []
+        unwritable_labels: list[str] = []
+        for label, env_key, default_relative in targets:
+            configured = str(_runtime_env(env_key, default_relative) or default_relative)
+            target_path = resolve_runtime_artifact_path(
+                configured,
+                default_relative=default_relative,
+                for_write=True,
+            )
+            writable = False
+            error: str | None = None
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                writable = bool(os.access(target_path.parent, os.W_OK))
+            except OSError as exc:
+                error = str(exc)
+                writable = False
+            if not writable:
+                unwritable_labels.append(str(label))
+            contexts.append(
+                {
+                    "label": str(label),
+                    "path": str(target_path),
+                    "writable": bool(writable),
+                    "error": error,
+                }
+            )
+        return {
+            "artifacts": contexts,
+            "all_writable": len(unwritable_labels) == 0,
+            "unwritable_labels": unwritable_labels,
+        }
+
     def _execution_vs_alpha_alert_cooldown_seconds(self) -> float:
         """Return minimum seconds between repeated execution-vs-alpha alerts."""
 
@@ -18743,6 +19091,7 @@ class ExecutionEngine:
         execution = dict(execution_raw) if isinstance(execution_raw, Mapping) else {}
         capture_ratio = _safe_float(execution.get("execution_capture_ratio"))
         slippage_drag_bps = _safe_float(execution.get("slippage_drag_bps"))
+        edge_realism_gap_ratio = _safe_float(execution.get("edge_realism_gap_ratio"))
 
         min_capture = _safe_float(thresholds.get("min_execution_capture_ratio"))
         if min_capture is None:
@@ -18758,9 +19107,60 @@ class ExecutionEngine:
             slippage_drag_bps is None
             or float(slippage_drag_bps) <= max(0.0, float(max_slippage) * 1.25)
         )
+        min_edge_realism_ratio = _config_float(
+            "AI_TRADING_EXECUTION_PREOPEN_MIN_EDGE_REALISM_RATIO",
+            0.08,
+        )
+        if min_edge_realism_ratio is None:
+            min_edge_realism_ratio = 0.08
+        min_edge_realism_ratio = max(0.0, min(float(min_edge_realism_ratio), 1.5))
+        edge_realism_ok = (
+            edge_realism_gap_ratio is None
+            or float(edge_realism_gap_ratio) >= float(min_edge_realism_ratio)
+        )
+
+        gate_raw = report.get("gate_effectiveness")
+        gate = dict(gate_raw) if isinstance(gate_raw, Mapping) else {}
+        top_rejection_gate = str(
+            gate.get("top_rejection_concentration_gate") or ""
+        ).strip()
+        top_rejection_ratio = _safe_float(gate.get("top_rejection_concentration_ratio"))
+        rejected_records = max(0, _safe_int(gate.get("rejected_records"), 0))
+        concentration_gate_name = str(
+            _runtime_env(
+                "AI_TRADING_EXECUTION_PREOPEN_REJECTION_CONCENTRATION_GATE",
+                "SAFETY_TIER_ATTACK_SCALE",
+            )
+            or "SAFETY_TIER_ATTACK_SCALE"
+        ).strip().upper()
+        max_concentration_ratio = _config_float(
+            "AI_TRADING_EXECUTION_PREOPEN_MAX_REJECTION_CONCENTRATION_RATIO",
+            0.55,
+        )
+        if max_concentration_ratio is None:
+            max_concentration_ratio = 0.55
+        max_concentration_ratio = max(0.05, min(float(max_concentration_ratio), 1.0))
+        concentration_rejected_min = _config_int(
+            "AI_TRADING_EXECUTION_PREOPEN_REJECTION_CONCENTRATION_MIN_REJECTED",
+            500,
+        )
+        if concentration_rejected_min is None:
+            concentration_rejected_min = 500
+        concentration_rejected_min = max(0, min(int(concentration_rejected_min), 5_000_000))
+        rejection_concentration_ok = True
+        if (
+            top_rejection_ratio is not None
+            and top_rejection_gate.strip().upper() == concentration_gate_name
+            and int(rejected_records) >= int(concentration_rejected_min)
+            and float(top_rejection_ratio) > float(max_concentration_ratio)
+        ):
+            rejection_concentration_ok = False
+
         artifact_freshness = self._runtime_preopen_artifact_freshness_context(report=report)
         stale_labels = list(artifact_freshness.get("stale_labels") or [])
         artifact_fresh = len(stale_labels) == 0
+        artifact_write_readiness = self._runtime_preopen_artifact_write_readiness_context()
+        artifact_writable = bool(artifact_write_readiness.get("all_writable"))
 
         failed_checks: list[str] = []
         if not provider_ready:
@@ -18771,8 +19171,14 @@ class ExecutionEngine:
             failed_checks.append("capture_ratio_low")
         if not slippage_ok:
             failed_checks.append("slippage_drag_high")
+        if not edge_realism_ok:
+            failed_checks.append("edge_realism_gap")
+        if not rejection_concentration_ok:
+            failed_checks.append("rejection_concentration")
         if not artifact_fresh:
             failed_checks.append("artifact_freshness")
+        if not artifact_writable:
+            failed_checks.append("artifact_path_writable")
         allowed = not failed_checks
         return bool(allowed), {
             "enabled": True,
@@ -18788,10 +19194,25 @@ class ExecutionEngine:
             "slippage_drag_bps": (
                 float(slippage_drag_bps) if slippage_drag_bps is not None else None
             ),
+            "edge_realism_gap_ratio": (
+                float(edge_realism_gap_ratio)
+                if edge_realism_gap_ratio is not None
+                else None
+            ),
             "min_capture_ratio_effective": float(max(0.0, float(min_capture) * 0.8)),
             "max_slippage_drag_effective": float(max(0.0, float(max_slippage) * 1.25)),
+            "min_edge_realism_gap_ratio": float(min_edge_realism_ratio),
+            "top_rejection_concentration_gate": top_rejection_gate or None,
+            "top_rejection_concentration_ratio": (
+                float(top_rejection_ratio) if top_rejection_ratio is not None else None
+            ),
+            "rejected_records": int(rejected_records),
+            "rejection_concentration_gate": concentration_gate_name,
+            "max_rejection_concentration_ratio": float(max_concentration_ratio),
+            "rejection_concentration_min_rejected": int(concentration_rejected_min),
             "artifact_fresh": bool(artifact_fresh),
             "artifact_freshness": artifact_freshness,
+            "artifact_write_readiness": artifact_write_readiness,
             "failed_checks": failed_checks,
         }
 
@@ -19955,7 +20376,14 @@ class ExecutionEngine:
         if now_mono < cache_until:
             cached_allowed = bool(getattr(self, "_runtime_gonogo_cache_allowed", True))
             cached_context = getattr(self, "_runtime_gonogo_cache_context", {}) or {}
+            cached_report = getattr(self, "_runtime_gonogo_cache_report", {}) or {}
             if isinstance(cached_context, dict):
+                if isinstance(cached_report, Mapping):
+                    self._persist_runtime_performance_report_snapshot(
+                        report=cached_report,
+                        gate_passed=bool(cached_allowed),
+                        context=cached_context,
+                    )
                 return cached_allowed, dict(cached_context)
             return cached_allowed, {}
 
@@ -20327,6 +20755,7 @@ class ExecutionEngine:
         resolved_gate_log_path = gate_log_path
         if resolved_gate_log_path is None:
             resolved_gate_log_path = gate_summary_path.parent / "gate_effectiveness.jsonl"
+        report: Mapping[str, Any] = {}
 
         try:
             from ai_trading.tools import runtime_performance_report as performance_report
@@ -20622,9 +21051,15 @@ class ExecutionEngine:
                     "allowed": bool(allowed),
                 },
             )
+            self._persist_runtime_performance_report_snapshot(
+                report={},
+                gate_passed=bool(allowed),
+                context=context,
+            )
 
         self._runtime_gonogo_cache_allowed = bool(allowed)
         self._runtime_gonogo_cache_context = dict(context)
+        self._runtime_gonogo_cache_report = dict(report) if isinstance(report, Mapping) else {}
         self._runtime_gonogo_cache_until_mono = now_mono + ttl
         return bool(allowed), dict(context)
 
@@ -22631,9 +23066,12 @@ class ExecutionEngine:
                             meta = meta_store.get(str(resolved_client_order_id))
                         if isinstance(meta, _SignalMeta):
                             signal = meta.signal
-                    runtime_fill_payload = refreshed if isinstance(refreshed, Mapping) else None
+                    runtime_fill_payload = (
+                        dict(refreshed) if isinstance(refreshed, Mapping) else None
+                    )
                     if isinstance(runtime_fill_payload, dict):
-                        runtime_fill_payload.setdefault("source", "broker_reconcile")
+                        if runtime_fill_payload.get("source") in (None, ""):
+                            runtime_fill_payload["source"] = "broker_reconcile"
                     self._persist_fill_derived_trade_record(
                         symbol=symbol_token or "",
                         side=side_token,
@@ -22648,6 +23086,72 @@ class ExecutionEngine:
                         runtime_payload=runtime_fill_payload,
                         closing_position=bool(entry.get("closing_position")),
                         expected_net_edge_bps=expected_net_edge_hint,
+                        fill_source="broker_reconcile",
+                    )
+                    reconciled_execution_drift_bps: float | None = None
+                    reconciled_realized_net_edge_bps: float | None = None
+                    if (
+                        expected_price_value is not None
+                        and float(expected_price_value) > 0.0
+                    ):
+                        try:
+                            expected_px = float(expected_price_value)
+                            fill_px = float(fill_price_value)
+                            reconciled_execution_drift_bps = abs(
+                                (fill_px - expected_px) / expected_px * 10000.0
+                            )
+                            fee_bps = _config_float("AI_TRADING_ESTIMATED_FEE_BPS", 0.0) or 0.0
+                            if side_token == "buy":
+                                improvement_bps = (
+                                    (expected_px - fill_px) / expected_px
+                                ) * 10000.0
+                            else:
+                                improvement_bps = (
+                                    (fill_px - expected_px) / expected_px
+                                ) * 10000.0
+                            reconciled_realized_net_edge_bps = float(
+                                improvement_bps - float(fee_bps)
+                            )
+                        except (TypeError, ValueError, ZeroDivisionError):
+                            reconciled_execution_drift_bps = None
+                            reconciled_realized_net_edge_bps = None
+                    self._record_cycle_order_outcome(
+                        symbol=symbol_token or None,
+                        side=side_token,
+                        status=refreshed_status,
+                        submit_started_at=None,
+                        ack_timed_out=False,
+                        execution_drift_bps=reconciled_execution_drift_bps,
+                        realized_slippage_bps=reconciled_execution_drift_bps,
+                        filled_qty=float(fill_qty_value),
+                        fill_price=float(fill_price_value),
+                        expected_price=(
+                            float(expected_price_value)
+                            if expected_price_value is not None
+                            and float(expected_price_value) > 0.0
+                            else None
+                        ),
+                        expected_net_edge_bps=expected_net_edge_hint,
+                        turnover_notional=abs(float(fill_qty_value) * float(fill_price_value)),
+                        realized_net_edge_bps=reconciled_realized_net_edge_bps,
+                        fill_source="broker_reconcile",
+                    )
+                    self._update_markout_feedback(
+                        symbol=symbol_token,
+                        side=side_token,
+                        status=refreshed_status,
+                        realized_net_edge_bps=reconciled_realized_net_edge_bps,
+                        realized_slippage_bps=reconciled_execution_drift_bps,
+                        fill_source="broker_reconcile",
+                    )
+                    self._update_execution_learning_feedback(
+                        symbol=symbol_token,
+                        side=side_token,
+                        status=refreshed_status,
+                        fill_source="broker_reconcile",
+                        realized_net_edge_bps=reconciled_realized_net_edge_bps,
+                        realized_slippage_bps=reconciled_execution_drift_bps,
+                        execution_profile_context=None,
                     )
 
                 store.pop(key, None)

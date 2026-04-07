@@ -79,13 +79,34 @@ def test_attack_scale_degrades_multiplier_when_reject_rate_very_high() -> None:
             "AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0",
             "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER": "1.40",
             "AI_TRADING_POLICY_ATTACK_DEGRADE_REJECT_RATE_PCT": "8.0",
-            "AI_TRADING_POLICY_ATTACK_DEGRADE_SIZE_MULTIPLIER": "1.05",
+            "AI_TRADING_POLICY_ATTACK_DEGRADE_SIZE_MULTIPLIER": "0.80",
         },
     )
 
     approval = approve_execution_candidate(policy, _base_candidate(reject_rate_pct=12.0))
 
     assert approval.allowed is True
-    assert approval.adjusted_delta_shares == 10
+    assert approval.adjusted_delta_shares == 8
     assert "SAFETY_TIER_ATTACK_SCALE_DEGRADED" in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE" in approval.reasons
+
+
+def test_attack_scale_omits_reason_when_scale_has_no_effect() -> None:
+    policy = compile_effective_policy(
+        SimpleNamespace(trading_mode="balanced"),
+        env={
+            "AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0",
+            "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER": "1.05",
+            "AI_TRADING_POLICY_ATTACK_RELAX_REJECT_RATE_PCT": "2.0",
+            "AI_TRADING_POLICY_ATTACK_RELAX_SIZE_MULTIPLIER": "1.0",
+        },
+    )
+
+    candidate = _base_candidate(reject_rate_pct=5.0)
+    candidate = ExecutionCandidate(**{**candidate.__dict__, "proposed_delta_shares": 1})
+    approval = approve_execution_candidate(policy, candidate)
+
+    assert approval.allowed is True
+    assert approval.adjusted_delta_shares == 1
+    assert "SAFETY_TIER_ATTACK_SCALE" not in approval.reasons
+    assert "SAFETY_TIER_ATTACK_SCALE_RELAXED" not in approval.reasons

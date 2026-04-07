@@ -35,3 +35,20 @@ def test_resolve_runtime_artifact_path_keeps_absolute(
     )
 
     assert resolved == target
+
+
+def test_resolve_runtime_artifact_path_for_write_uses_data_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "runtime-root"
+    monkeypatch.setenv("AI_TRADING_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("STATE_DIRECTORY", raising=False)
+
+    resolved = resolve_runtime_artifact_path(
+        "runtime/order_events.jsonl",
+        default_relative="runtime/order_events.jsonl",
+        for_write=True,
+    )
+
+    assert resolved == (data_dir / "runtime/order_events.jsonl").resolve()

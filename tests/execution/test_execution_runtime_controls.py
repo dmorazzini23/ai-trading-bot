@@ -505,6 +505,53 @@ def test_symbol_reentry_cooldown_blocks_same_side_then_expires(monkeypatch):
     assert context_after["reason"] == "cooldown_inactive"
 
 
+def test_symbol_reentry_cooldown_relaxes_more_under_severe_precheck_pressure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    clock = {"value": 200.0}
+    monkeypatch.setattr(lt, "monotonic_time", lambda: clock["value"])
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEC", "120")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_RELAX_SCALE", "0.6")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_SYMBOL_REENTRY_COOLDOWN_SEVERE_RELAX_SCALE",
+        "0.3",
+    )
+    engine._precheck_failure_pressure_context = {
+        "updated_at_mono": 180.0,
+        "precheck_failure_count": 60,
+        "precheck_detail_counts": {"symbol_reentry_cooldown": 54},
+    }
+
+    cooldown_seconds = engine._symbol_reentry_cooldown_seconds()
+
+    assert cooldown_seconds < 72.0
+    assert cooldown_seconds >= 30.0
+
+
+def test_opening_min_notional_relaxes_more_under_severe_precheck_pressure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 200.0)
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL", "200")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_RELAX_SCALE", "0.5")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_OPENING_MIN_NOTIONAL_SEVERE_RELAX_SCALE",
+        "0.25",
+    )
+    engine._precheck_failure_pressure_context = {
+        "updated_at_mono": 180.0,
+        "precheck_failure_count": 60,
+        "precheck_detail_counts": {"opening_min_notional": 54},
+    }
+
+    min_notional = engine._opening_min_notional_dollars()
+
+    assert min_notional < 100.0
+    assert min_notional >= 0.0
+
+
 def test_cycle_intent_reservation_dedupes_symbol_side():
     engine = _engine_stub()
 
@@ -1211,7 +1258,15 @@ def test_runtime_gonogo_persists_latest_report_snapshot(monkeypatch, tmp_path):
         lambda *args, **kwargs: {
             "trade_history": {},
             "gate_effectiveness": {},
-            "execution_vs_alpha": {"expected_edge_for_realism_bps": 12.0},
+            "execution_vs_alpha": {
+                "expected_edge_for_realism_bps": 12.0,
+                "expected_edge_per_traded_notional_bps": 8.5,
+                "expected_edge_clip": {"abs_cap_bps": 250.0, "applied": True},
+                "realized_net_edge_bps": 3.2,
+                "realization_gap_bps": -8.8,
+                "edge_realism_gap_ratio": 0.376,
+            },
+            "edge_realism": {"valid": True, "global_samples": 44},
         },
     )
     monkeypatch.setattr(
@@ -1233,6 +1288,11 @@ def test_runtime_gonogo_persists_latest_report_snapshot(monkeypatch, tmp_path):
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     assert payload["go_no_go"]["gate_passed"] is True
     assert payload["report"]["execution_vs_alpha"]["expected_edge_for_realism_bps"] == pytest.approx(12.0)
+    assert payload["expected_edge_for_realism_bps"] == pytest.approx(12.0)
+    assert payload["expected_edge_per_filled_trade_bps"] == pytest.approx(8.5)
+    assert payload["expected_edge_clip_bps"] == pytest.approx(250.0)
+    assert payload["edge_realism_gap_ratio"] == pytest.approx(0.376)
+    assert payload["edge_realism_report"]["global_samples"] == 44
 
 
 def test_runtime_gonogo_eval_failure_forces_fail_closed_outside_pytest(monkeypatch):
@@ -3261,6 +3321,95 @@ def test_execution_edge_realism_gate_uses_market_threshold_override(
     assert context["required_edge_realism_score"] == pytest.approx(0.6)
     assert context["edge_realism_score_threshold_source"] == "market_override"
     assert context["session_regime"] == "opening"
+
+
+def test_execution_edge_realism_gate_relaxes_under_pressure_with_expected_edge_clip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SAMPLES", "20")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_MARGIN_BPS", "1.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE", "0.35")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_MARKET", "0.45")
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_RELAX_SCALE",
+        "0.7",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_SEVERE_RELAX_SCALE",
+        "0.35",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_MIN_SCORE_RELAX_FLOOR",
+        "0.12",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_CLIP_ENABLED",
+        "1",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_CAP_MULTIPLIER",
+        "0.75",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_MIN_CAP_BPS",
+        "6.0",
+    )
+    monkeypatch.setenv(
+        "AI_TRADING_EXECUTION_EDGE_REALISM_EXPECTED_EDGE_MAX_CAP_BPS",
+        "35.0",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_execution_time_of_day_regime",
+        lambda: {"session_regime": "opening"},
+    )
+    engine._execution_learning_state = {
+        "version": 1,
+        "updated_at": "2026-03-30T00:00:00+00:00",
+        "global": {
+            "samples": 80,
+            "fills": 40,
+            "fill_rate": 0.5,
+            "slippage_samples": 80,
+            "mean_slippage_bps": 5.0,
+            "edge_samples": 80,
+            "mean_net_edge_bps": 2.5,
+        },
+        "buckets": {},
+    }
+    engine._edge_realism_state = {
+        "version": 1,
+        "updated_at": "2026-03-30T00:00:00+00:00",
+        "global": {
+            "samples": 90,
+            "mean_realized_to_expected_ratio": 0.12,
+            "mean_realized_net_edge_bps": 2.4,
+            "mean_expected_net_edge_bps": 20.0,
+        },
+        "buckets": {},
+    }
+    engine._precheck_failure_pressure_context = {
+        "updated_at_mono": 95.0,
+        "precheck_failure_count": 60,
+        "precheck_detail_counts": {"edge_realism_gate": 54},
+    }
+    monkeypatch.setattr(lt, "monotonic_time", lambda: 100.0)
+
+    allowed, context = engine._execution_edge_realism_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "expected_net_edge_bps": 16.0}
+    )
+
+    assert allowed is True
+    assert context["expected_edge_clipped"] is True
+    assert context["expected_edge_bps_for_score"] < context["expected_edge_bps"]
+    assert (
+        context["required_edge_realism_score"]
+        < context["required_edge_realism_score_base"]
+    )
+    assert context["edge_realism_min_score_relax_applied"] < 1.0
+    assert context["edge_realism_score"] >= context["required_edge_realism_score"]
 
 
 def test_execution_prediction_uncertainty_gate_blocks_high_uncertainty(

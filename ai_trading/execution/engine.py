@@ -148,6 +148,8 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "client_order_id",
         "closing_position",
         "execution_algorithm",
+        "expected_edge_bps",
+        "expected_net_edge_bps",
         "expected_price",
         "expected_price_source",
         "expected_price_timestamp",

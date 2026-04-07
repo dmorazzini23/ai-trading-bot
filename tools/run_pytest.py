@@ -114,6 +114,13 @@ def echo_command(cmd: list[str]) -> str:
     return "[run_pytest] " + " ".join(cmd)
 
 
+def _emit_runner_echo(logger: logging.Logger, message: str) -> None:
+    """Emit runner command echoes to both stderr and configured log sinks."""
+
+    print(message, file=sys.stderr, flush=True)
+    logger.info(message)
+
+
 def _ensure_repo_on_path() -> None:
     """Prepend repository root to sys.path and PYTHONPATH for deterministic imports."""
     # AI-AGENT-REF: prepend repo root so smoke tests import workspace modules
@@ -186,10 +193,10 @@ def main(argv: list[str] | None = None) -> int:
     child_env = _build_subprocess_env(repo_root)
     cmd = build_pytest_cmd(args)
     # AI-AGENT-REF: echo exact command for smoke test assertions
-    logger.info(echo_command(cmd))
+    _emit_runner_echo(logger, echo_command(cmd))
     rc = subprocess.call(cmd, env=child_env)
     if rc != 0 and "-n" in cmd and os.environ.get("NO_XDIST") != "1":
-        logger.info("[run_pytest] xdist run failed; retrying without xdist…")
+        _emit_runner_echo(logger, "[run_pytest] xdist run failed; retrying without xdist…")
         xdist_pairs = [
             ("-p", "xdist.plugin"),
             ("-n", os.environ.get("PYTEST_XDIST_N", "auto")),
@@ -204,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                 skip = True
                 continue
             cmd_wo.append(c)
-        logger.info(echo_command(cmd_wo))
+        _emit_runner_echo(logger, echo_command(cmd_wo))
         rc = subprocess.call(cmd_wo, env=child_env)
     if rc in {4, 5}:  # 5: no tests collected, 4: early exit via pytest.exit
         return 0

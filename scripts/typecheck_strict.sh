@@ -2,6 +2,14 @@
 set -euo pipefail
 
 # High-signal strict type checks for critical runtime paths.
+if [[ -z "${MYPY_CACHE_DIR:-}" ]]; then
+  if [[ -w ".mypy_cache" ]] || [[ ! -e ".mypy_cache" && -w "." ]]; then
+    export MYPY_CACHE_DIR=".mypy_cache"
+  else
+    export MYPY_CACHE_DIR="/tmp/mypy_cache_ai_trading"
+  fi
+fi
+
 python3 -m mypy --config-file mypy_strict.ini \
   ai_trading/config/management.py \
   ai_trading/config/alpaca.py \
