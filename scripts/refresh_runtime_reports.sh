@@ -68,18 +68,55 @@ def _pctl(values: list[float], pct: float) -> float | None:
 
 ensure_dotenv_loaded()
 paths = resolve_runtime_report_paths()
+runtime_root = Path("/var/lib/ai-trading-bot/runtime")
+
+
+def _prefer_runtime_root(path_value: Any, fallback_name: str) -> Path:
+    canonical = (runtime_root / fallback_name).resolve()
+    candidate = Path(path_value).resolve() if path_value else canonical
+    if not candidate.exists() and canonical.exists():
+        return canonical
+    return candidate
+
+
 report = build_report(
-    trade_history_path=Path(paths["trade_history"]),
-    gate_summary_path=Path(paths["gate_summary"]),
-    tca_path=Path(paths["tca"]) if paths.get("tca") else None,
-    gate_log_path=Path(paths["gate_log"]) if paths.get("gate_log") else None,
+    trade_history_path=_prefer_runtime_root(
+        paths.get("trade_history"),
+        "trade_history.parquet",
+    ),
+    gate_summary_path=_prefer_runtime_root(
+        paths.get("gate_summary"),
+        "gate_effectiveness_summary.json",
+    ),
+    tca_path=_prefer_runtime_root(paths.get("tca"), "tca_records.jsonl")
+    if (paths.get("tca") or (runtime_root / "tca_records.jsonl").exists())
+    else None,
+    gate_log_path=_prefer_runtime_root(
+        paths.get("gate_log"),
+        "gate_effectiveness.jsonl",
+    )
+    if (paths.get("gate_log") or (runtime_root / "gate_effectiveness.jsonl").exists())
+    else None,
+    fill_events_path=_prefer_runtime_root(
+        paths.get("fill_events"),
+        "fill_events.jsonl",
+    )
+    if (paths.get("fill_events") or (runtime_root / "fill_events.jsonl").exists())
+    else None,
+    edge_realism_state_path=_prefer_runtime_root(
+        paths.get("edge_realism_state"),
+        "edge_realism_state.json",
+    )
+    if (
+        paths.get("edge_realism_state")
+        or (runtime_root / "edge_realism_state.json").exists()
+    )
+    else None,
 )
 report["go_no_go"] = evaluate_go_no_go(
     report,
     thresholds=resolve_runtime_gonogo_thresholds(),
 )
-
-runtime_root = Path("/var/lib/ai-trading-bot/runtime")
 report_targets = [
     runtime_root / "runtime_performance_report_latest.json",
     runtime_root / "daily_performance_report.json",

@@ -78,6 +78,17 @@ def _int_arg(value: Any, default: int = 0) -> int:
 
 
 def _runtime_report_payload() -> dict[str, Any]:
+    report_path_raw = str(
+        os.getenv("AI_TRADING_RUNTIME_PERF_REPORT_LATEST_PATH")
+        or (_DEFAULT_RUNTIME_ROOT / "runtime_performance_report_latest.json")
+    ).strip()
+    report_path = Path(report_path_raw).expanduser()
+    if not report_path.is_absolute():
+        report_path = (_DEFAULT_RUNTIME_ROOT / report_path).resolve()
+    if report_path.exists():
+        cached = _read_json_object(report_path)
+        if cached:
+            return cached
     return _run_module_json(
         "ai_trading.tools.runtime_performance_report",
         ["--json", "--go-no-go"],
@@ -329,6 +340,72 @@ def _collect_execution_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _collect_gate_window_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+    window_minutes = _int_arg(
+        args.get("gate_window_minutes")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_GATE_WINDOW_MINUTES"),
+        default=60,
+    )
+    window_minutes = max(5, min(window_minutes, 24 * 60))
+    max_rows = _int_arg(
+        args.get("gate_window_max_rows")
+        or os.getenv("AI_TRADING_SLACK_INCIDENT_GATE_WINDOW_MAX_ROWS"),
+        default=500,
+    )
+    max_rows = max(100, min(max_rows, 10_000))
+    cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
+
+    gate_events_path = _runtime_event_path(
+        args,
+        env_key="AI_TRADING_GATE_EFFECTIVENESS_LOG_PATH",
+        default_relative="runtime/gate_effectiveness.jsonl",
+    )
+    rows = _tail_jsonl_rows(gate_events_path, max_rows=max_rows)
+    blocked_by_gate: dict[str, float] = {}
+    rejected_records_total = 0
+    sampled_rows = 0
+    for row in rows:
+        ts = _parse_iso_ts(row.get("ts") or row.get("timestamp"))
+        if ts is not None and ts < cutoff:
+            continue
+        sampled_rows += 1
+        rejected_records_total += max(0, _int_arg(row.get("rejected_records"), default=0))
+        gate_attribution = row.get("gate_attribution")
+        if not isinstance(gate_attribution, dict):
+            continue
+        for gate_name, payload in gate_attribution.items():
+            if not isinstance(payload, dict):
+                continue
+            blocked = _float_or_none(payload.get("blocked_records"))
+            if blocked is None or blocked <= 0.0:
+                continue
+            key = str(gate_name or "").strip()
+            if not key:
+                continue
+            blocked_by_gate[key] = blocked_by_gate.get(key, 0.0) + float(blocked)
+
+    top_gate = ""
+    top_blocked = 0.0
+    if blocked_by_gate:
+        top_gate, top_blocked = max(
+            blocked_by_gate.items(),
+            key=lambda item: item[1],
+        )
+    top_ratio = (
+        (float(top_blocked) / float(rejected_records_total))
+        if rejected_records_total > 0 and top_blocked > 0.0
+        else None
+    )
+    return {
+        "gate_window_minutes": int(window_minutes),
+        "gate_window_rows": int(sampled_rows),
+        "gate_window_events_path": str(gate_events_path),
+        "gate_rejected_records": int(rejected_records_total),
+        "top_rejection_concentration_gate": top_gate or "",
+        "top_rejection_concentration_ratio": top_ratio,
+    }
+
+
 def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     report = _runtime_report_payload()
     go_no_go = report.get("go_no_go") or {}
@@ -341,6 +418,25 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     data_provider = health.get("data_provider") or {}
     broker = health.get("broker") or {}
     execution_window = _collect_execution_window_snapshot(args)
+    gate_window = _collect_gate_window_snapshot(args)
+
+    gate_rejected_records = _int_arg(gate_window.get("gate_rejected_records"), default=0)
+    if gate_rejected_records <= 0:
+        gate_rejected_records = _int_arg(
+            gate_effectiveness.get("rejected_records"), default=0
+        )
+    top_rejection_gate = str(
+        gate_window.get("top_rejection_concentration_gate")
+        or gate_effectiveness.get("top_rejection_concentration_gate")
+        or ""
+    )
+    top_rejection_ratio = _float_or_none(
+        gate_window.get("top_rejection_concentration_ratio")
+    )
+    if top_rejection_ratio is None:
+        top_rejection_ratio = _float_or_none(
+            gate_effectiveness.get("top_rejection_concentration_ratio")
+        )
 
     return {
         "runtime_gonogo_block_openings_enabled": _runtime_gonogo_block_openings_enabled(args),
@@ -355,14 +451,16 @@ def _collect_runtime_snapshot(args: dict[str, Any]) -> dict[str, Any]:
         "edge_realism_gap_ratio": _float_or_none(
             execution.get("edge_realism_gap_ratio")
         ),
-        "gate_rejected_records": _int_arg(
-            gate_effectiveness.get("rejected_records"), default=0
+        "gate_rejected_records": int(gate_rejected_records),
+        "top_rejection_concentration_gate": top_rejection_gate,
+        "top_rejection_concentration_ratio": top_rejection_ratio,
+        "gate_window_minutes": _int_arg(
+            gate_window.get("gate_window_minutes"),
+            default=60,
         ),
-        "top_rejection_concentration_gate": str(
-            gate_effectiveness.get("top_rejection_concentration_gate") or ""
-        ),
-        "top_rejection_concentration_ratio": _float_or_none(
-            gate_effectiveness.get("top_rejection_concentration_ratio")
+        "gate_window_rows": _int_arg(gate_window.get("gate_window_rows"), default=0),
+        "gate_window_events_path": str(
+            gate_window.get("gate_window_events_path") or ""
         ),
         "execution_fill_ratio": _float_or_none(execution_window.get("execution_fill_ratio")),
         "execution_fill_ratio_samples": _int_arg(
@@ -688,7 +786,9 @@ def _should_suppress_startup_warmup_health_alert(
 def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) -> list[str]:
     triggers: list[str] = []
     health_reason = str(snapshot.get("health_reason") or "").strip().lower()
+    provider_reason = str(snapshot.get("provider_reason") or "").strip().lower()
     startup_or_warmup = health_reason in _STARTUP_WARMUP_HEALTH_REASONS
+    market_closed = health_reason == "market_closed" or provider_reason == "market_closed"
 
     runtime_gonogo_block_openings_enabled = _bool_arg(
         snapshot.get("runtime_gonogo_block_openings_enabled"),
@@ -696,10 +796,23 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
     )
     gate_passed = snapshot.get("go_no_go_gate_passed")
     failed_checks = list(snapshot.get("go_no_go_failed_checks") or [])
+    availability_only_checks = {
+        "closed_trades",
+        "gate_used_days",
+        "live_samples_sufficient",
+        "open_position_reconciliation_available",
+        "pnl_available",
+        "trade_used_days",
+    }
+    material_failed_checks = [
+        str(check)
+        for check in failed_checks
+        if str(check) not in availability_only_checks
+    ]
     if runtime_gonogo_block_openings_enabled:
-        if gate_passed is False:
+        if gate_passed is False and (not failed_checks or bool(material_failed_checks)):
             triggers.append("go_no_go_failed")
-        if failed_checks:
+        if material_failed_checks:
             triggers.append("go_no_go_failed_checks")
 
     capture_ratio = _float_or_none(snapshot.get("execution_capture_ratio"))
@@ -813,6 +926,7 @@ def _evaluate_incident_triggers(snapshot: dict[str, Any], args: dict[str, Any]) 
         and expected_edge_per_accept_bps >= float(min_expected_edge_bps_for_realism)
         and edge_realism_gap_ratio < float(min_edge_realism_ratio)
         and not startup_or_warmup
+        and not market_closed
     ):
         triggers.append("edge_realism_gap_high")
 

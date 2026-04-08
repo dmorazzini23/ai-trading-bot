@@ -110,3 +110,23 @@ def test_attack_scale_omits_reason_when_scale_has_no_effect() -> None:
     assert approval.adjusted_delta_shares == 1
     assert "SAFETY_TIER_ATTACK_SCALE" not in approval.reasons
     assert "SAFETY_TIER_ATTACK_SCALE_RELAXED" not in approval.reasons
+
+
+def test_attack_scale_reason_not_emitted_when_hard_block_rejects_candidate() -> None:
+    policy = compile_effective_policy(
+        SimpleNamespace(trading_mode="balanced"),
+        env={
+            "AI_TRADING_POLICY_STRICT_CONFIG_GOVERNANCE": "0",
+            "AI_TRADING_POLICY_ATTACK_SIZE_MULTIPLIER": "1.40",
+        },
+    )
+
+    candidate = _base_candidate(reject_rate_pct=5.0)
+    candidate = ExecutionCandidate(**{**candidate.__dict__, "pacing_headroom": 0})
+    approval = approve_execution_candidate(policy, candidate)
+
+    assert approval.allowed is False
+    assert "ORDER_PACING_CAP_BLOCK" in approval.reasons
+    assert "SAFETY_TIER_ATTACK_SCALE" not in approval.reasons
+    assert "SAFETY_TIER_ATTACK_SCALE_RELAXED" not in approval.reasons
+    assert "SAFETY_TIER_ATTACK_SCALE_DEGRADED" not in approval.reasons

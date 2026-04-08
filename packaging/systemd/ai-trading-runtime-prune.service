@@ -1,6 +1,7 @@
 [Unit]
 Description=Prune AI Trading Runtime JSONL Artifacts
 After=ai-trading.service
+OnFailure=ai-trading-systemd-failure-alert@%p.service
 
 [Service]
 Type=oneshot
@@ -8,4 +9,3 @@ User=aiuser
 Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 ExecStart=/bin/bash -lc 'bash /home/aiuser/ai-trading-bot/scripts/prune_runtime_jsonl.sh'
-

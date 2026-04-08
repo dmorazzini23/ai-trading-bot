@@ -161,6 +161,37 @@ def test_evaluate_incident_triggers_flags_rejection_concentration_and_realism_ga
     assert "edge_realism_gap_high" in triggers
 
 
+def test_evaluate_incident_triggers_suppresses_edge_realism_when_market_closed() -> None:
+    snapshot = {
+        "go_no_go_gate_passed": True,
+        "go_no_go_failed_checks": [],
+        "execution_capture_ratio": 0.2,
+        "slippage_drag_bps": 7.0,
+        "expected_edge_per_accept_bps": 8.0,
+        "realization_gap_bps": -6.0,
+        "edge_realism_gap_ratio": 0.2,
+        "gate_rejected_records": 0,
+        "top_rejection_concentration_ratio": None,
+        "health_ok": True,
+        "health_status": "healthy",
+        "health_reason": "market_closed",
+        "provider_status": "warming_up",
+        "provider_active": "alpaca",
+        "provider_reason": "market_closed",
+        "using_backup": False,
+        "broker_status": "connected",
+    }
+    triggers = slack_srv._evaluate_incident_triggers(
+        snapshot,
+        {
+            "min_capture_ratio": 0.08,
+            "min_expected_edge_bps_for_realism": 0.5,
+            "min_edge_realism_ratio": 0.35,
+        },
+    )
+    assert "edge_realism_gap_high" not in triggers
+
+
 def test_evaluate_incident_triggers_suppresses_fill_and_precheck_during_startup() -> None:
     snapshot = {
         "go_no_go_gate_passed": None,

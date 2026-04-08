@@ -2714,6 +2714,9 @@ def test_record_cycle_outcome_records_live_submit_outcome_edge_telemetry(monkeyp
         realized_net_edge_bps=2.0,
         turnover_notional=1500.0,
         ack_timed_out=False,
+        model_id="ml-main",
+        model_version="2026-04-07",
+        config_snapshot_hash="cfg-123",
     )
 
     quality_rows = [
@@ -2730,6 +2733,9 @@ def test_record_cycle_outcome_records_live_submit_outcome_edge_telemetry(monkeyp
     assert payload["expected_net_edge_bps"] == pytest.approx(8.5)
     assert payload["realized_net_edge_bps"] == pytest.approx(2.0)
     assert payload["realization_gap_bps"] == pytest.approx(-6.5)
+    assert payload["model_id"] == "ml-main"
+    assert payload["model_version"] == "2026-04-07"
+    assert payload["config_snapshot_hash"] == "cfg-123"
 
 
 def test_record_cycle_outcome_treats_broker_reconcile_fill_source_as_live(monkeypatch):
@@ -3410,6 +3416,51 @@ def test_execution_edge_realism_gate_relaxes_under_pressure_with_expected_edge_c
     )
     assert context["edge_realism_min_score_relax_applied"] < 1.0
     assert context["edge_realism_score"] >= context["required_edge_realism_score"]
+
+
+def test_execution_expected_edge_confidence_gate_blocks_overstated_expectancy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MIN_SAMPLES", "12")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_WINDOW_FILLS", "32")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_LEVEL", "0.95")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MAX_RATIO", "2.0")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MARGIN_BPS", "0.5")
+    engine._symbol_live_edge_bps_history = {
+        "AAPL": deque([1.0, 1.2, 0.8, 1.1, 0.9, 1.0, 1.3, 1.1, 0.7, 1.0, 0.9, 1.1], maxlen=256)
+    }
+
+    allowed, context = engine._execution_expected_edge_confidence_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "expected_net_edge_bps": 8.0}
+    )
+
+    assert allowed is False
+    assert context["reason"] == "expected_edge_confidence_gate"
+    assert context["expected_to_confidence_ratio"] > context["max_expected_to_confidence_ratio"]
+
+
+def test_execution_expected_edge_confidence_gate_allows_when_lcb_supports_expectancy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine_stub()
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_GATE_ENABLED", "1")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MIN_SAMPLES", "10")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MAX_RATIO", "2.5")
+    monkeypatch.setenv("AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MARGIN_BPS", "0.5")
+    engine._symbol_live_edge_bps_history = {
+        "AAPL": deque([5.1, 4.9, 5.4, 5.0, 5.3, 5.2, 4.8, 5.5, 5.1, 5.0, 5.2, 5.3], maxlen=256)
+    }
+
+    allowed, context = engine._execution_expected_edge_confidence_allows_opening(
+        order={"symbol": "AAPL", "side": "buy", "expected_net_edge_bps": 8.0}
+    )
+
+    assert allowed is True
+    assert context["reason"] == "ok"
+    assert context["lcb_passes"] is True
+    assert context["ratio_passes"] is True
 
 
 def test_execution_prediction_uncertainty_gate_blocks_high_uncertainty(

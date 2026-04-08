@@ -213,3 +213,76 @@ def test_persist_fill_derived_trade_record_includes_edge_telemetry(monkeypatch):
     assert payload["symbol"] == "AAPL"
     assert payload["expected_net_edge_bps"] == 3.25
     assert payload["realized_net_edge_bps"] == 1.75
+
+
+def test_persist_fill_derived_trade_record_includes_lineage_fields(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        engine,
+        "_runtime_exec_event_persistence_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(live_trading, "record_trade_fill", lambda _payload: None)
+    monkeypatch.setattr(
+        engine,
+        "_record_runtime_fill_event",
+        lambda payload: captured.update({"payload": dict(payload)}),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_update_symbol_loss_cooldown_from_fill",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_arm_symbol_reentry_cooldown_from_fill",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_pending_tca_from_fill",
+        lambda **_kwargs: None,
+    )
+    engine._order_signal_meta = {
+        "oid-2": live_trading._SignalMeta(
+            signal=None,
+            requested_qty=5,
+            signal_weight=None,
+            model_id="meta-model",
+            model_version="meta-v2",
+            config_snapshot_hash="cfg-meta",
+        )
+    }
+
+    engine._persist_fill_derived_trade_record(
+        symbol="MSFT",
+        side="buy",
+        filled_qty=5.0,
+        fill_price=201.0,
+        expected_price=201.2,
+        order_id="oid-2",
+        client_order_id="cid-2",
+        order_status="filled",
+        signal=None,
+        timestamp=live_trading.datetime.now(live_trading.UTC),
+        runtime_payload={
+            "source": "live",
+            "metadata": {
+                "model_id": "runtime-model",
+                "model_version": "runtime-v3",
+                "config_snapshot_hash": "cfg-runtime",
+            },
+        },
+        closing_position=False,
+        expected_net_edge_bps=2.0,
+        realized_net_edge_bps=1.0,
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["event"] == "fill_recorded"
+    assert payload["model_id"] == "runtime-model"
+    assert payload["model_version"] == "runtime-v3"
+    assert payload["config_snapshot_hash"] == "cfg-runtime"

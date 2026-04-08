@@ -84,6 +84,52 @@ def test_build_report_treats_reward_as_realized_pnl(tmp_path: Path) -> None:
     assert trade["closed_trades"] == 2
 
 
+def test_build_report_uses_blocked_gate_counts_for_rejection_concentration(
+    tmp_path: Path,
+) -> None:
+    trade_history_path = tmp_path / "trade_history.json"
+    gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
+    trade_history_path.write_text("[]", encoding="utf-8")
+    gate_summary_path.write_text(
+        json.dumps(
+            {
+                "total_records": 100,
+                "total_accepted_records": 30,
+                "total_rejected_records": 70,
+                "gate_totals": {
+                    "SAFETY_TIER_ATTACK_SCALE": 60,
+                    "RISK_PORTFOLIO_HARD_BLOCK": 8,
+                    "OK_TRADE": 30,
+                },
+                "gate_attribution": {
+                    "SAFETY_TIER_ATTACK_SCALE": {
+                        "count": 60,
+                        "accepted_records": 30,
+                        "blocked_records": 2,
+                    },
+                    "RISK_PORTFOLIO_HARD_BLOCK": {
+                        "count": 8,
+                        "accepted_records": 0,
+                        "blocked_records": 8,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = rpt.build_report(
+        trade_history_path=trade_history_path,
+        gate_summary_path=gate_summary_path,
+    )
+
+    gate = report["gate_effectiveness"]
+    assert gate["top_gates"][0]["gate"] == "SAFETY_TIER_ATTACK_SCALE"
+    assert gate["top_rejection_reasons_by_count"][0]["gate"] == "RISK_PORTFOLIO_HARD_BLOCK"
+    assert gate["top_rejection_concentration_gate"] == "RISK_PORTFOLIO_HARD_BLOCK"
+    assert gate["top_rejection_concentration_ratio"] == pytest.approx(8 / 70)
+
+
 def test_build_report_includes_execution_vs_alpha_attribution(tmp_path: Path) -> None:
     trade_history_path = tmp_path / "trade_history.json"
     gate_summary_path = tmp_path / "gate_effectiveness_summary.json"
@@ -1004,6 +1050,94 @@ def test_evaluate_go_no_go_uses_thresholds() -> None:
 
     assert decision["gate_passed"] is True
     assert decision["failed_checks"] == []
+
+
+def test_evaluate_go_no_go_expected_edge_uses_per_fill_metric_when_available() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 40,
+            "profit_factor": 1.35,
+            "win_rate": 0.58,
+            "pnl_sum": 245.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.18,
+            "accepted_records": 1_000,
+            "total_expected_net_edge_bps": 200_000.0,
+        },
+        "expected_edge_per_filled_trade_bps": 4.5,
+        "execution_vs_alpha": {
+            "expected_edge_per_traded_notional_bps": 5.0,
+            "expected_edge_for_realism_bps": 5.2,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 20,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.1,
+            "min_expected_net_edge_bps": 10.0,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "expected_net_edge_bps" in decision["failed_checks"]
+    assert decision["observed"]["expected_net_edge_bps"] == pytest.approx(4.5)
+    assert decision["observed"]["expected_net_edge_bps_source"] == "execution_vs_alpha_per_fill"
+    assert decision["observed"]["expected_net_edge_bps_raw_sum"] == pytest.approx(200_000.0)
+
+
+def test_evaluate_go_no_go_expected_edge_falls_back_to_gate_per_accept() -> None:
+    report = {
+        "trade_history": {
+            "pnl_available": True,
+            "closed_trades": 40,
+            "profit_factor": 1.35,
+            "win_rate": 0.58,
+            "pnl_sum": 245.0,
+        },
+        "gate_effectiveness": {
+            "valid": True,
+            "acceptance_rate": 0.18,
+            "accepted_records": 50,
+            "total_expected_net_edge_bps": 250.0,
+        },
+    }
+
+    decision = rpt.evaluate_go_no_go(
+        report,
+        thresholds={
+            "min_closed_trades": 20,
+            "min_profit_factor": 1.1,
+            "min_win_rate": 0.5,
+            "min_net_pnl": 0.0,
+            "min_acceptance_rate": 0.1,
+            "min_expected_net_edge_bps": 10.0,
+            "trade_fill_source": "all",
+            "auto_live_fail_closed": False,
+            "require_open_position_reconciliation": False,
+            "require_pnl_available": True,
+            "require_gate_valid": True,
+        },
+    )
+
+    assert decision["gate_passed"] is False
+    assert "expected_net_edge_bps" in decision["failed_checks"]
+    assert decision["observed"]["expected_net_edge_bps"] == pytest.approx(5.0)
+    assert decision["observed"]["expected_net_edge_bps_source"] == "gate_per_accept"
+    assert decision["observed"]["expected_net_edge_per_accept_bps"] == pytest.approx(5.0)
+    assert decision["observed"]["expected_net_edge_bps_raw_sum"] == pytest.approx(250.0)
 
 
 def test_evaluate_go_no_go_fails_when_metrics_are_weak() -> None:

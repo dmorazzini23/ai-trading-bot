@@ -811,6 +811,8 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
     """Approve/reject model-proposed execution candidate under effective policy."""
 
     reasons: list[str] = []
+    attack_scale_applied = False
+    attack_scale_reason: str | None = None
     qty = int(candidate.proposed_delta_shares)
     net_edge_bps = compute_expected_net_edge_bps(
         candidate.expected_edge_bps,
@@ -888,7 +890,6 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
             float(policy.safety.attack_degrade_reject_rate_pct),
         )
         degrade_scale = max(0.25, min(float(policy.safety.attack_degrade_size_multiplier), attack_scale))
-        attack_scale_reason: str | None = None
         if reject_rate <= relax_threshold:
             bounded_relax_scale = min(attack_scale, relax_scale)
             if bounded_relax_scale < attack_scale - 1e-9:
@@ -902,15 +903,17 @@ def approve_execution_candidate(policy: EffectivePolicy, candidate: ExecutionCan
         qty_before_attack_scale = int(qty)
         qty = _scale_qty(qty, attack_scale)
         if qty != qty_before_attack_scale:
-            reasons.append("SAFETY_TIER_ATTACK_SCALE")
-            if attack_scale_reason:
-                reasons.append(attack_scale_reason)
+            attack_scale_applied = True
 
     if qty == 0 and "ZERO_QTY" not in reasons:
         reasons.append("ZERO_QTY")
     hard_blocks = [r for r in reasons if r.endswith("_BLOCK")]
     if hard_blocks:
         return ExecutionApproval(False, 0, net_edge_bps, tuple(reasons))
+    if attack_scale_applied:
+        reasons.append("SAFETY_TIER_ATTACK_SCALE")
+        if attack_scale_reason:
+            reasons.append(attack_scale_reason)
     if qty == 0:
         return ExecutionApproval(False, 0, net_edge_bps, tuple(reasons))
     return ExecutionApproval(True, qty, net_edge_bps, tuple(reasons))

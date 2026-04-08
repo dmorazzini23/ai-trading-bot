@@ -75,3 +75,49 @@ def test_submit_order_records_execution_timing(monkeypatch):
     order = bot_engine.submit_order(SimpleNamespace(), "AAPL", 1, "buy", price=100.0)
     assert order is not None
     assert execution_timing.cycle_seconds() > 0.0
+
+
+def test_submit_order_forwards_annotations_and_lineage(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    captured: dict[str, object] = {}
+
+    class _ExecEngine:
+        @staticmethod
+        def execute_order(symbol, side, qty, price=None, **kwargs):  # noqa: ARG004
+            captured["kwargs"] = dict(kwargs)
+            return {"id": "order-2", "symbol": symbol, "side": side, "qty": qty}
+
+    monkeypatch.setattr(bot_engine, "_exec_engine", _ExecEngine())
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_trading_config",
+        lambda _ctx: SimpleNamespace(rth_only=False, allow_extended=True),
+    )
+    monkeypatch.setattr(bot_engine, "_kill_switch_active", lambda _cfg: (False, None))
+    monkeypatch.setattr(bot_engine, "get_price_source", lambda _symbol: "primary")
+
+    order = bot_engine.submit_order(
+        SimpleNamespace(),
+        "AAPL",
+        2,
+        "buy",
+        price=101.0,
+        annotations={"strategy_label": "unit", "expected_net_edge_bps": 5.0},
+        using_fallback_price=True,
+        price_hint=101.0,
+        model_id="ml-main",
+        model_version="v2026.04.07",
+        config_snapshot_hash="cfg-abc",
+        metadata={"model_id": "ml-main"},
+    )
+
+    assert order is not None
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["annotations"]["strategy_label"] == "unit"
+    assert kwargs["annotations"]["using_fallback_price"] is True
+    assert kwargs["price_hint"] == 101.0
+    assert kwargs["model_id"] == "ml-main"
+    assert kwargs["model_version"] == "v2026.04.07"
+    assert kwargs["config_snapshot_hash"] == "cfg-abc"

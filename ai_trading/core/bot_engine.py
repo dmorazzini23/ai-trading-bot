@@ -1528,6 +1528,139 @@ def _geometric_growth_tiebreak_score(
     return float(growth_score * 10000.0)
 
 
+def _portfolio_optimizer_decision_token(decision: Any) -> str:
+    """Normalize optimizer decision enum/value to a lowercase token."""
+
+    raw_value = getattr(decision, "value", decision)
+    token = str(raw_value or "").strip().lower()
+    return token or "unknown"
+
+
+def _build_symbol_return_correlation_matrix(
+    symbol_returns: Mapping[str, Sequence[float]],
+) -> dict[str, dict[str, float]]:
+    """Build a finite pairwise correlation matrix from per-symbol return windows."""
+
+    symbols = [
+        str(symbol).strip().upper()
+        for symbol, values in symbol_returns.items()
+        if str(symbol).strip() and isinstance(values, Sequence)
+    ]
+    matrix: dict[str, dict[str, float]] = {symbol: {} for symbol in symbols}
+    for left_symbol in symbols:
+        left_values_raw = symbol_returns.get(left_symbol, ())
+        left_values = [
+            float(value)
+            for value in left_values_raw
+            if isinstance(value, (int, float)) and math.isfinite(float(value))
+        ]
+        for right_symbol in symbols:
+            right_values_raw = symbol_returns.get(right_symbol, ())
+            right_values = [
+                float(value)
+                for value in right_values_raw
+                if isinstance(value, (int, float)) and math.isfinite(float(value))
+            ]
+            if left_symbol == right_symbol:
+                matrix[left_symbol][right_symbol] = 1.0
+                continue
+            overlap = min(len(left_values), len(right_values))
+            if overlap < 2:
+                matrix[left_symbol][right_symbol] = 0.0
+                continue
+            left_window = np.asarray(left_values[-overlap:], dtype=float)
+            right_window = np.asarray(right_values[-overlap:], dtype=float)
+            if (
+                left_window.size < 2
+                or right_window.size < 2
+                or np.std(left_window) <= 0.0
+                or np.std(right_window) <= 0.0
+            ):
+                matrix[left_symbol][right_symbol] = 0.0
+                continue
+            corr_val = float(np.corrcoef(left_window, right_window)[0, 1])
+            if not math.isfinite(corr_val):
+                corr_val = 0.0
+            matrix[left_symbol][right_symbol] = max(-1.0, min(1.0, corr_val))
+    return matrix
+
+
+def _execution_model_lineage() -> dict[str, str]:
+    """Return model lineage fields for execution telemetry."""
+
+    model_id = str(get_env("AI_TRADING_MODEL_ID", "", cast=str) or "").strip()
+    model_version = str(get_env("AI_TRADING_MODEL_VERSION", "", cast=str) or "").strip()
+    model_meta = _MODEL_CACHE_META if isinstance(_MODEL_CACHE_META, MappingABC) else {}
+
+    if not model_id:
+        for key in ("path", "module", "kind"):
+            value = model_meta.get(key)
+            if value in (None, ""):
+                continue
+            if key == "path":
+                model_id = Path(str(value)).name
+            else:
+                model_id = str(value).strip()
+            if model_id:
+                break
+
+    if not model_version:
+        signature = model_meta.get("signature")
+        if (
+            isinstance(signature, tuple)
+            and len(signature) >= 2
+            and all(isinstance(v, int) for v in signature[:2])
+        ):
+            model_version = f"{int(signature[0])}:{int(signature[1])}"
+        elif model_meta.get("module") not in (None, ""):
+            model_version = str(model_meta.get("module")).strip()
+
+    resolved: dict[str, str] = {}
+    if model_id:
+        resolved["model_id"] = str(model_id)
+    if model_version:
+        resolved["model_version"] = str(model_version)
+    return resolved
+
+
+def _portfolio_optimizer_allows_trade(
+    *,
+    optimizer: Any | None,
+    symbol: str,
+    proposed_position: float,
+    current_positions: Mapping[str, float],
+    market_data: Mapping[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Return allow/block decision from portfolio optimizer."""
+
+    if optimizer is None:
+        return True, {"enabled": False, "reason": "optimizer_unavailable"}
+    try:
+        decision_raw, reason_raw = optimizer.make_portfolio_decision(
+            symbol=symbol,
+            proposed_position=float(proposed_position),
+            current_positions=dict(current_positions),
+            market_data=dict(market_data),
+        )
+    except Exception as exc:
+        return True, {
+            "enabled": True,
+            "reason": "decision_error_fail_open",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "symbol": str(symbol).upper(),
+        }
+    decision_token = _portfolio_optimizer_decision_token(decision_raw)
+    allowed = decision_token == "approve"
+    return bool(allowed), {
+        "enabled": True,
+        "decision": decision_token,
+        "reason": str(reason_raw or ""),
+        "symbol": str(symbol).upper(),
+        "proposed_position": float(proposed_position),
+    }
+
+
 def _record_prerank_shadow_snapshot(
     *,
     ranked_symbols: Sequence[str],
@@ -19788,11 +19921,7 @@ def submit_order(
                 price = get_latest_close(md) if md is not None else 0.0
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.
-        engine_kwargs = {
-            key: value
-            for key, value in exec_kwargs.items()
-            if key not in {"annotations", "using_fallback_price", "price_hint"}
-        }
+        engine_kwargs = dict(exec_kwargs)
         timing_meta = {"symbol": symbol, "side": side_norm, "qty": int(max(qty, 0))}
         with execution_span(None, **timing_meta):
             return _exec_engine.execute_order(
@@ -19824,6 +19953,7 @@ def _call_submit_order(
     *,
     price: float,
     annotations: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
     price_hint: float | None = None,
     expected_net_edge_bps: float | None = None,
 ) -> Any | None:
@@ -19839,6 +19969,12 @@ def _call_submit_order(
             extra_kwargs["annotations"] = annotations
     elif annotations is not None:
         extra_kwargs["annotations"] = annotations
+
+    if isinstance(metadata, MappingABC):
+        if metadata:
+            extra_kwargs["metadata"] = dict(metadata)
+    elif metadata is not None:
+        extra_kwargs["metadata"] = metadata
 
     if price_hint is not None:
         extra_kwargs["price_hint"] = price_hint
@@ -39465,11 +39601,91 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         0.0,
         float(get_env("AI_TRADING_EXEC_GEOMETRIC_DRAWDOWN_PENALTY", 1.25, cast=float)),
     )
+    edge_realism_rank_calibration_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_ENABLED",
+            False,
+            cast=bool,
+        )
+    )
+    edge_realism_rank_calibration_session_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_SESSION_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
+    edge_realism_rank_calibration_min_samples = max(
+        1,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_MIN_SAMPLES",
+                20,
+                cast=int,
+            )
+        ),
+    )
+    edge_realism_rank_calibration_window_trades = max(
+        edge_realism_rank_calibration_min_samples,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_WINDOW_TRADES",
+                300,
+                cast=int,
+            )
+        ),
+    )
+    edge_realism_rank_calibration_prior_samples = max(
+        0,
+        int(
+            get_env(
+                "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_PRIOR_SAMPLES",
+                24,
+                cast=int,
+            )
+        ),
+    )
+    edge_realism_rank_calibration_ratio_floor = max(
+        0.01,
+        min(
+            1.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_RATIO_FLOOR",
+                    0.15,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    edge_realism_rank_calibration_ratio_cap = max(
+        edge_realism_rank_calibration_ratio_floor,
+        min(
+            3.0,
+            float(
+                get_env(
+                    "AI_TRADING_EXEC_EDGE_REALISM_RANK_CALIBRATION_RATIO_CAP",
+                    1.0,
+                    cast=float,
+                )
+            ),
+        ),
+    )
+    edge_realism_apply_to_approval_enabled = bool(
+        get_env(
+            "AI_TRADING_EXEC_EDGE_REALISM_APPLY_TO_APPROVAL_ENABLED",
+            True,
+            cast=bool,
+        )
+    )
 
     bandit_rewards_by_symbol: dict[str, list[float]] = {}
     bandit_rewards_by_symbol_session: dict[str, list[float]] = {}
+    edge_realism_ratio_by_symbol: dict[str, list[float]] = {}
+    edge_realism_ratio_by_symbol_session: dict[str, list[float]] = {}
+    edge_realism_rank_factor_by_symbol: dict[str, float] = {}
     bandit_active_session = _session_bucket(now)
-    if bandit_enabled and targets:
+    if (bandit_enabled or edge_realism_rank_calibration_enabled) and targets:
         bandit_rows = _read_jsonl_records(
             str(_resolved_tca_path()),
             max_records=max(
@@ -39490,6 +39706,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             status = str(row.get("status", "")).strip().lower()
             if status in {"rejected", "canceled", "cancelled"}:
                 continue
+            session_token = str(row.get("session_regime", "")).strip().lower()
+            if session_token not in {"opening", "midday", "closing", "offhours"}:
+                ts = _parse_iso_timestamp(row.get("ts"))
+                session_token = _session_bucket(ts)
+            bucket_key = f"{symbol}:{session_token}"
             reward_bps: float | None = None
             for key in ("realized_net_edge_bps", "net_edge_bps", "realized_edge_bps"):
                 try:
@@ -39506,33 +39727,125 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     is_bps = None
                 if is_bps is not None and math.isfinite(float(is_bps)):
                     reward_bps = float(-is_bps)
+            if edge_realism_rank_calibration_enabled and reward_bps is not None:
+                expected_bps: float | None = None
+                for key in (
+                    "expected_net_edge_bps",
+                    "expected_edge_bps",
+                    "edge_bps",
+                    "alpha_edge_bps",
+                ):
+                    try:
+                        candidate = float(row.get(key))
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(candidate) and candidate > 0.0:
+                        expected_bps = float(candidate)
+                        break
+                if expected_bps is not None and float(expected_bps) > 0.0:
+                    ratio = float(reward_bps) / max(float(expected_bps), 0.1)
+                    ratio = max(0.0, min(ratio, 5.0))
+                    edge_realism_ratio_by_symbol.setdefault(symbol, []).append(float(ratio))
+                    edge_realism_ratio_by_symbol_session.setdefault(
+                        bucket_key,
+                        [],
+                    ).append(float(ratio))
             if reward_bps is None:
                 continue
             reward_bps = max(-200.0, min(float(reward_bps), 200.0))
-            bandit_rewards_by_symbol.setdefault(symbol, []).append(float(reward_bps))
-            session_token = str(row.get("session_regime", "")).strip().lower()
-            if session_token not in {"opening", "midday", "closing", "offhours"}:
-                ts = _parse_iso_timestamp(row.get("ts"))
-                session_token = _session_bucket(ts)
-            bucket_key = f"{symbol}:{session_token}"
-            bandit_rewards_by_symbol_session.setdefault(bucket_key, []).append(
-                float(reward_bps)
-            )
+            if bandit_enabled:
+                bandit_rewards_by_symbol.setdefault(symbol, []).append(float(reward_bps))
+                bandit_rewards_by_symbol_session.setdefault(bucket_key, []).append(
+                    float(reward_bps)
+                )
         for symbol, values in list(bandit_rewards_by_symbol.items()):
             if len(values) > bandit_window_trades:
                 bandit_rewards_by_symbol[symbol] = values[-bandit_window_trades:]
         for key, values in list(bandit_rewards_by_symbol_session.items()):
             if len(values) > bandit_window_trades:
                 bandit_rewards_by_symbol_session[key] = values[-bandit_window_trades:]
+        for symbol, values in list(edge_realism_ratio_by_symbol.items()):
+            if len(values) > edge_realism_rank_calibration_window_trades:
+                edge_realism_ratio_by_symbol[symbol] = values[
+                    -edge_realism_rank_calibration_window_trades:
+                ]
+        for key, values in list(edge_realism_ratio_by_symbol_session.items()):
+            if len(values) > edge_realism_rank_calibration_window_trades:
+                edge_realism_ratio_by_symbol_session[key] = values[
+                    -edge_realism_rank_calibration_window_trades:
+                ]
+
+    if edge_realism_rank_calibration_enabled and targets:
+        all_ratios = [
+            float(value)
+            for values in edge_realism_ratio_by_symbol.values()
+            for value in values
+            if math.isfinite(float(value))
+        ]
+        global_ratio = (
+            float(sum(all_ratios) / max(len(all_ratios), 1))
+            if all_ratios
+            else None
+        )
+        for symbol in targets.keys():
+            selected_ratios = edge_realism_ratio_by_symbol.get(symbol, [])
+            if edge_realism_rank_calibration_session_enabled:
+                session_key = f"{symbol}:{bandit_active_session}"
+                session_ratios = edge_realism_ratio_by_symbol_session.get(session_key, [])
+                if len(session_ratios) >= edge_realism_rank_calibration_min_samples:
+                    selected_ratios = session_ratios
+            symbol_ratio: float | None = None
+            if len(selected_ratios) >= edge_realism_rank_calibration_min_samples:
+                symbol_ratio = float(
+                    sum(float(value) for value in selected_ratios)
+                    / max(len(selected_ratios), 1)
+                )
+            blended_ratio: float | None = symbol_ratio
+            if blended_ratio is None:
+                blended_ratio = global_ratio
+            elif (
+                global_ratio is not None
+                and edge_realism_rank_calibration_prior_samples > 0
+            ):
+                numerator = (
+                    float(blended_ratio) * float(len(selected_ratios))
+                    + float(global_ratio)
+                    * float(edge_realism_rank_calibration_prior_samples)
+                )
+                denom = float(
+                    len(selected_ratios) + edge_realism_rank_calibration_prior_samples
+                )
+                if denom > 0.0:
+                    blended_ratio = float(numerator / denom)
+            if blended_ratio is None:
+                edge_realism_rank_factor_by_symbol[symbol] = 1.0
+                continue
+            edge_realism_rank_factor_by_symbol[symbol] = float(
+                max(
+                    edge_realism_rank_calibration_ratio_floor,
+                    min(edge_realism_rank_calibration_ratio_cap, float(blended_ratio)),
+                )
+            )
 
     candidate_expected_net_edge: dict[str, float] = {}
     candidate_rank: dict[str, float] = {}
     for symbol, target in targets.items():
         raw_net_edge_total = float(net_edge_raw_by_symbol.get(symbol, 0.0) or 0.0)
+        edge_realism_rank_factor = float(
+            edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
+        )
+        adjusted_net_edge_total = float(raw_net_edge_total)
+        if edge_realism_rank_calibration_enabled and adjusted_net_edge_total > 0.0:
+            adjusted_net_edge_total = float(adjusted_net_edge_total) * float(
+                edge_realism_rank_factor
+            )
         clipped_net_edge_total = (
-            max(-float(edge_clip_cap_bps), min(float(edge_clip_cap_bps), raw_net_edge_total))
+            max(
+                -float(edge_clip_cap_bps),
+                min(float(edge_clip_cap_bps), adjusted_net_edge_total),
+            )
             if clip_expected_edge_enabled
-            else raw_net_edge_total
+            else adjusted_net_edge_total
         )
         candidate_expected_net_edge[symbol] = float(clipped_net_edge_total)
         max_conf = max((float(proposal.confidence) for proposal in target.proposals), default=0.0)
@@ -39637,6 +39950,11 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
     )
     setattr(
         runtime,
+        "execution_candidate_rank_realism_factor",
+        edge_realism_rank_factor_by_symbol,
+    )
+    setattr(
+        runtime,
         "execution_candidate_rank_context",
         {
             "expected_edge_clip_enabled": bool(clip_expected_edge_enabled),
@@ -39647,7 +39965,118 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             "bandit_active_session": str(bandit_active_session),
             "geometric_tiebreak_enabled": bool(geometric_tiebreak_enabled),
             "geometric_tiebreak_weight": float(geometric_tiebreak_weight),
+            "edge_realism_rank_calibration_enabled": bool(
+                edge_realism_rank_calibration_enabled
+            ),
+            "edge_realism_rank_calibration_session_enabled": bool(
+                edge_realism_rank_calibration_session_enabled
+            ),
+            "edge_realism_rank_calibration_min_samples": int(
+                edge_realism_rank_calibration_min_samples
+            ),
+            "edge_realism_rank_calibration_prior_samples": int(
+                edge_realism_rank_calibration_prior_samples
+            ),
+            "edge_realism_rank_calibration_ratio_floor": float(
+                edge_realism_rank_calibration_ratio_floor
+            ),
+            "edge_realism_rank_calibration_ratio_cap": float(
+                edge_realism_rank_calibration_ratio_cap
+            ),
+            "edge_realism_apply_to_approval_enabled": bool(
+                edge_realism_apply_to_approval_enabled
+            ),
         },
+    )
+    portfolio_optimizer_enabled = bool(
+        get_env("AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_ENABLED", False, cast=bool)
+    )
+    portfolio_optimizer_openings_only = bool(
+        get_env(
+            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_OPENINGS_ONLY",
+            True,
+            cast=bool,
+        )
+    )
+    portfolio_optimizer: Any | None = None
+    portfolio_optimizer_context: dict[str, Any] = {
+        "enabled": bool(portfolio_optimizer_enabled),
+        "openings_only": bool(portfolio_optimizer_openings_only),
+    }
+    if portfolio_optimizer_enabled:
+        try:
+            from ai_trading.portfolio import create_portfolio_optimizer
+
+            portfolio_optimizer = create_portfolio_optimizer(
+                {
+                    "improvement_threshold": float(
+                        get_env(
+                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_IMPROVEMENT_THRESHOLD",
+                            0.02,
+                            cast=float,
+                        )
+                    ),
+                    "max_correlation_penalty": float(
+                        get_env(
+                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_MAX_CORRELATION_PENALTY",
+                            0.15,
+                            cast=float,
+                        )
+                    ),
+                    "rebalance_drift_threshold": float(
+                        get_env(
+                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_REBALANCE_DRIFT_THRESHOLD",
+                            0.05,
+                            cast=float,
+                        )
+                    ),
+                    "turnover_penalty": float(
+                        get_env(
+                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_TURNOVER_PENALTY",
+                            0.01,
+                            cast=float,
+                        )
+                    ),
+                    "mode": str(
+                        get_env(
+                            "AI_TRADING_EXEC_PORTFOLIO_OPTIMIZER_MODE",
+                            "execution_live",
+                            cast=str,
+                        )
+                        or "execution_live"
+                    ).strip(),
+                }
+            )
+            portfolio_optimizer_context["active"] = True
+        except Exception as exc:
+            portfolio_optimizer = None
+            portfolio_optimizer_enabled = False
+            portfolio_optimizer_context["active"] = False
+            portfolio_optimizer_context["init_failed"] = True
+            portfolio_optimizer_context["error_type"] = exc.__class__.__name__
+            portfolio_optimizer_context["error"] = str(exc)
+            logger.warning(
+                "PORTFOLIO_OPTIMIZER_INIT_FAILED",
+                extra=dict(portfolio_optimizer_context),
+            )
+    portfolio_optimizer_market_data: dict[str, Any] = {
+        "prices": {
+            str(symbol): float(price)
+            for symbol, price in latest_price.items()
+            if isinstance(price, (int, float)) and math.isfinite(float(price)) and float(price) > 0.0
+        },
+        "returns": {
+            str(symbol): [
+                float(value)
+                for value in values
+                if isinstance(value, (int, float)) and math.isfinite(float(value))
+            ]
+            for symbol, values in symbol_returns.items()
+            if isinstance(values, Sequence)
+        },
+    }
+    portfolio_optimizer_market_data["correlations"] = _build_symbol_return_correlation_matrix(
+        cast(Mapping[str, Sequence[float]], portfolio_optimizer_market_data["returns"])
     )
 
     apply_global_caps(
@@ -39726,6 +40155,7 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
         sleeve_configs=sleeve_snapshot,
         liquidity_regime=None,
     )
+    execution_model_lineage = _execution_model_lineage()
     rate_limiter = _pretrade_rate_limiter(state)
     tca_stale_reason = _tca_stale_block_reason(now)
     if tca_stale_reason:
@@ -40753,9 +41183,20 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     _write_decision_record(record, decision_path)
                     continue
 
-        expected_edge_total = sum(
+        expected_edge_total_raw = sum(
             max(float(proposal.expected_edge_bps), 0.0) for proposal in net_target.proposals
         )
+        expected_edge_realism_factor = float(
+            edge_realism_rank_factor_by_symbol.get(symbol, 1.0)
+        )
+        expected_edge_total = float(expected_edge_total_raw)
+        if (
+            edge_realism_apply_to_approval_enabled
+            and float(expected_edge_total) > 0.0
+        ):
+            expected_edge_total = float(expected_edge_total) * float(
+                expected_edge_realism_factor
+            )
         expected_cost_total = sum(
             max(float(proposal.expected_cost_bps), 0.0) for proposal in net_target.proposals
         )
@@ -40867,7 +41308,14 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                     gates=gates,
                     metrics={
                         "cost_aware_entry_guard": {
+                            "expected_edge_bps_raw": float(expected_edge_total_raw),
                             "expected_edge_bps": float(expected_edge_total),
+                            "expected_edge_realism_factor": float(
+                                expected_edge_realism_factor
+                            ),
+                            "expected_edge_realism_applied": bool(
+                                edge_realism_apply_to_approval_enabled
+                            ),
                             "expected_cost_bps": float(expected_cost_total),
                             "spread_bps": float(spread_bps_est),
                             "slippage_bps": float(slippage_bps_est),
@@ -40983,6 +41431,53 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             net_target.target_shares = current_shares + delta_shares
             net_target.target_dollars = net_target.target_shares * price
         side = "buy" if delta_shares > 0 else "sell"
+        if (
+            portfolio_optimizer_enabled
+            and portfolio_optimizer is not None
+            and (
+                not bool(portfolio_optimizer_openings_only)
+                or bool(opening_trade)
+            )
+        ):
+            current_positions_for_optimizer: dict[str, float] = {}
+            for sym, pos in positions.items():
+                try:
+                    parsed_pos = float(pos)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(parsed_pos):
+                    continue
+                current_positions_for_optimizer[str(sym)] = float(parsed_pos)
+            current_positions_for_optimizer[str(symbol)] = float(current_shares)
+            proposed_position = float(current_shares + delta_shares)
+            opt_allowed, opt_context = _portfolio_optimizer_allows_trade(
+                optimizer=portfolio_optimizer,
+                symbol=symbol,
+                proposed_position=float(proposed_position),
+                current_positions=current_positions_for_optimizer,
+                market_data=portfolio_optimizer_market_data,
+            )
+            symbol_snapshot["portfolio_optimizer"] = dict(
+                portfolio_optimizer_context | opt_context
+            )
+            if not opt_allowed:
+                decision_token = str(opt_context.get("decision") or "reject").strip().lower()
+                gate_token = "".join(
+                    ch if ch.isalnum() else "_"
+                    for ch in decision_token.upper()
+                ).strip("_") or "REJECT"
+                gates.append(f"PORTFOLIO_OPTIMIZER_{gate_token}")
+                record = DecisionRecord(
+                    symbol=symbol,
+                    bar_ts=net_target.bar_ts,
+                    sleeves=net_target.proposals,
+                    net_target=net_target,
+                    gates=gates,
+                    metrics={"portfolio_optimizer": dict(opt_context)},
+                    config_snapshot=symbol_snapshot,
+                )
+                _write_decision_record(record, decision_path)
+                continue
         auth_forbidden_retry_after = _auth_forbidden_cooldown_remaining_seconds(
             state,
             symbol=symbol,
@@ -41100,6 +41595,18 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
             _write_decision_record(record, decision_path)
             continue
 
+        order_lineage_metadata: dict[str, Any] = {}
+        model_id_for_order = str(execution_model_lineage.get("model_id") or "").strip()
+        model_version_for_order = str(execution_model_lineage.get("model_version") or "").strip()
+        config_snapshot_hash_for_order = str(
+            symbol_snapshot.get("config_snapshot_hash") or ""
+        ).strip()
+        if model_id_for_order:
+            order_lineage_metadata["model_id"] = model_id_for_order
+        if model_version_for_order:
+            order_lineage_metadata["model_version"] = model_version_for_order
+        if config_snapshot_hash_for_order:
+            order_lineage_metadata["config_snapshot_hash"] = config_snapshot_hash_for_order
         try:
             order = submit_order(
                 runtime,
@@ -41109,6 +41616,10 @@ def _run_netting_cycle(state: BotState, runtime, loop_id: str, loop_start: float
                 price=price,
                 client_order_id=client_order_id,
                 expected_net_edge_bps=float(approval.expected_net_edge_bps),
+                model_id=model_id_for_order or None,
+                model_version=model_version_for_order or None,
+                config_snapshot_hash=config_snapshot_hash_for_order or None,
+                metadata=(order_lineage_metadata or None),
             )
             breakers.record_success("broker_submit")
         except Exception as exc:

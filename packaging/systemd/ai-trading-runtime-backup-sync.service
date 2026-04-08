@@ -2,6 +2,7 @@
 Description=Sync AI Trading Runtime Backup Archives to S3
 After=network-online.target ai-trading-runtime-prune.service
 Wants=network-online.target
+OnFailure=ai-trading-systemd-failure-alert@%p.service
 
 [Service]
 Type=oneshot

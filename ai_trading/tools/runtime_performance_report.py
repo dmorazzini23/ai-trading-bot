@@ -2267,6 +2267,40 @@ def _rejection_concentration_rows(
     return rows
 
 
+def _top_rejection_gates_from_attribution(
+    gate_attribution: Mapping[str, Any] | None,
+    *,
+    fallback_top_gates: Sequence[Mapping[str, Any]],
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    if isinstance(gate_attribution, Mapping):
+        ranked: list[tuple[str, int]] = []
+        for name, payload in gate_attribution.items():
+            if not isinstance(payload, Mapping):
+                continue
+            blocked = _as_int(payload.get("blocked_records"))
+            if blocked is None or blocked <= 0:
+                continue
+            gate_name = str(name or "").strip()
+            if not gate_name:
+                continue
+            ranked.append((gate_name, int(blocked)))
+        if ranked:
+            ranked.sort(key=lambda item: (-item[1], item[0]))
+            return [
+                {"gate": gate_name, "count": gate_count}
+                for gate_name, gate_count in ranked[: max(1, int(limit))]
+            ]
+    fallback_rows: list[dict[str, Any]] = []
+    for item in list(fallback_top_gates)[: max(1, int(limit))]:
+        gate_name = str(item.get("gate") or "").strip()
+        gate_count = _as_int(item.get("count")) or 0
+        if not gate_name or gate_count <= 0:
+            continue
+        fallback_rows.append({"gate": gate_name, "count": int(gate_count)})
+    return fallback_rows
+
+
 def summarize_edge_realism_state(path: Path) -> dict[str, Any]:
     summary: dict[str, Any] = {"path": str(path), "exists": path.exists()}
     if not path.exists():
@@ -2428,6 +2462,7 @@ def summarize_gate_effectiveness(
     accepted_records = int(payload.get("total_accepted_records", 0) or 0)
     rejected_records = int(payload.get("total_rejected_records", 0) or 0)
     gate_totals = payload.get("gate_totals", {})
+    gate_attribution = payload.get("gate_attribution", {})
     top_gates: list[dict[str, Any]] = []
     if isinstance(gate_totals, dict):
         ranked = sorted(
@@ -2435,8 +2470,13 @@ def summarize_gate_effectiveness(
             key=lambda item: (-item[1], item[0]),
         )
         top_gates = [{"gate": name, "count": count} for name, count in ranked[:10]]
+    top_rejection_gates = _top_rejection_gates_from_attribution(
+        gate_attribution if isinstance(gate_attribution, Mapping) else None,
+        fallback_top_gates=top_gates,
+        limit=10,
+    )
     rejection_concentration = _rejection_concentration_rows(
-        top_gates,
+        top_rejection_gates,
         rejected_records=int(rejected_records),
         limit=5,
     )
@@ -2466,7 +2506,8 @@ def summarize_gate_effectiveness(
                 payload.get("total_expected_net_edge_bps")
             ),
             "top_gates": top_gates,
-            "top_rejection_reasons_by_count": top_gates,
+            "top_rejection_gates": top_rejection_gates,
+            "top_rejection_reasons_by_count": top_rejection_gates,
             "rejection_concentration": rejection_concentration,
             "top_rejection_concentration_ratio": top_rejection_concentration_ratio,
             "top_rejection_concentration_gate": top_rejection_concentration_gate,
@@ -3039,6 +3080,7 @@ def evaluate_go_no_go(
     gate_valid = bool(gate.get("valid"))
     acceptance_rate = _as_float(gate.get("acceptance_rate"))
     expected_net_edge_bps = _as_float(gate.get("total_expected_net_edge_bps"))
+    accepted_records = _as_int(gate.get("accepted_records")) or 0
     trade_metric_scope: dict[str, Any] = {
         "mode": "full_history",
         "fill_source": trade_fill_source,
@@ -3194,6 +3236,7 @@ def evaluate_go_no_go(
                 _as_float(row.get("total_expected_net_edge_bps")) or 0.0
                 for row in recent_gate_rows
             )
+            accepted_records = int(accepted_records_window)
             gate_metric_scope = {
                 "mode": "rolling_days",
                 "lookback_days": int(lookback_days),
@@ -3230,6 +3273,28 @@ def evaluate_go_no_go(
         if isinstance(execution_attribution_raw, Mapping)
         else {}
     )
+    expected_net_edge_bps_raw_sum = expected_net_edge_bps
+    expected_net_edge_per_accept_bps = (
+        float(expected_net_edge_bps_raw_sum) / float(accepted_records)
+        if expected_net_edge_bps_raw_sum is not None and accepted_records > 0
+        else None
+    )
+    expected_net_edge_bps = _as_float(report.get("expected_edge_per_filled_trade_bps"))
+    if expected_net_edge_bps is None:
+        expected_net_edge_bps = _as_float(
+            execution_attribution.get("expected_edge_per_traded_notional_bps")
+        )
+    if expected_net_edge_bps is None:
+        expected_net_edge_bps = _as_float(
+            execution_attribution.get("expected_edge_for_realism_bps")
+        )
+    expected_net_edge_source = "execution_vs_alpha_per_fill"
+    if expected_net_edge_bps is None:
+        expected_net_edge_bps = expected_net_edge_per_accept_bps
+        expected_net_edge_source = "gate_per_accept"
+    if expected_net_edge_bps is None:
+        expected_net_edge_bps = expected_net_edge_bps_raw_sum
+        expected_net_edge_source = "gate_sum_fallback"
     execution_capture_ratio = _as_float(
         execution_attribution.get("execution_capture_ratio")
     )
@@ -3448,6 +3513,9 @@ def evaluate_go_no_go(
             "gate_valid": gate_valid,
             "acceptance_rate": acceptance_rate,
             "expected_net_edge_bps": expected_net_edge_bps,
+            "expected_net_edge_bps_source": str(expected_net_edge_source),
+            "expected_net_edge_bps_raw_sum": expected_net_edge_bps_raw_sum,
+            "expected_net_edge_per_accept_bps": expected_net_edge_per_accept_bps,
             "slippage_drag_bps": slippage_drag_bps,
             "execution_capture_ratio": execution_capture_ratio,
             "execution_drag_share": execution_drag_share,

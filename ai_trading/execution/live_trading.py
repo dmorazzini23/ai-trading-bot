@@ -1536,6 +1536,9 @@ class _SignalMeta:
     reported_fill_qty: int = 0
     expected_price: float | None = None
     expected_net_edge_bps: float | None = None
+    model_id: str | None = None
+    model_version: str | None = None
+    config_snapshot_hash: str | None = None
 
 
 @lru_cache(maxsize=8)
@@ -4732,8 +4735,8 @@ class ExecutionEngine:
             },
         }
 
-    def _order_expected_edge_bps(self, order: Mapping[str, Any]) -> float | None:
-        """Extract expected-edge estimate from order payload when available."""
+    def _order_expected_edge_bps_raw(self, order: Mapping[str, Any]) -> float | None:
+        """Extract raw expected-edge estimate from order payload when available."""
 
         for key in (
             "expected_net_edge_bps",
@@ -4767,6 +4770,127 @@ class ExecutionEngine:
                 if parsed is not None:
                     return float(parsed)
         return None
+
+    def _calibrate_expected_edge_bps(
+        self,
+        *,
+        order: Mapping[str, Any],
+        expected_edge_bps: float,
+    ) -> float:
+        """Down-calibrate expected edge using live realized-vs-expected realism ratios."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_ENABLED"
+        )
+        if enabled is None:
+            enabled = False
+        if not bool(enabled):
+            return float(expected_edge_bps)
+        raw_expected_edge = float(expected_edge_bps)
+        if raw_expected_edge <= 0.0:
+            return float(raw_expected_edge)
+
+        min_samples = _config_int(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_MIN_SAMPLES",
+            20,
+        )
+        if min_samples is None:
+            min_samples = 20
+        min_samples = max(1, min(int(min_samples), 5000))
+        prior_samples = _config_int(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_PRIOR_SAMPLES",
+            24,
+        )
+        if prior_samples is None:
+            prior_samples = 24
+        prior_samples = max(0, min(int(prior_samples), 5000))
+        ratio_floor = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_RATIO_FLOOR",
+            0.15,
+        )
+        if ratio_floor is None:
+            ratio_floor = 0.15
+        ratio_cap = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_REALISM_CALIBRATION_RATIO_CAP",
+            1.0,
+        )
+        if ratio_cap is None:
+            ratio_cap = 1.0
+        ratio_floor = max(0.01, min(float(ratio_floor), 1.0))
+        ratio_cap = max(float(ratio_floor), min(float(ratio_cap), 3.0))
+
+        ratio_snapshot = self._edge_realism_ratio_snapshot(order=order, min_samples=1)
+        symbol_ratio = self._coerce_finite_float(ratio_snapshot.get("ratio"))
+        symbol_samples = max(0, _safe_int(ratio_snapshot.get("samples"), 0))
+        if symbol_ratio is not None:
+            symbol_ratio = max(0.0, min(float(symbol_ratio), 5.0))
+        if symbol_ratio is None or symbol_samples < int(min_samples):
+            symbol_ratio = None
+            symbol_samples = 0
+
+        global_ratio: float | None = None
+        state_raw = getattr(self, "_edge_realism_state", None)
+        if isinstance(state_raw, Mapping):
+            global_raw = state_raw.get("global")
+            if isinstance(global_raw, Mapping):
+                global_ratio = self._coerce_finite_float(
+                    global_raw.get("mean_realized_to_expected_ratio")
+                )
+        if global_ratio is not None:
+            global_ratio = max(0.0, min(float(global_ratio), 5.0))
+
+        blended_ratio = symbol_ratio
+        ratio_source = "symbol"
+        if blended_ratio is None:
+            blended_ratio = global_ratio
+            ratio_source = "global"
+        elif global_ratio is not None and int(prior_samples) > 0:
+            numerator = (
+                float(blended_ratio) * float(symbol_samples)
+                + float(global_ratio) * float(prior_samples)
+            )
+            denom = float(symbol_samples + prior_samples)
+            if denom > 0.0:
+                blended_ratio = numerator / denom
+                ratio_source = "symbol_global_blend"
+
+        if blended_ratio is None:
+            return float(raw_expected_edge)
+        calibration_factor = max(
+            float(ratio_floor),
+            min(float(ratio_cap), float(blended_ratio)),
+        )
+        calibrated_expected = float(raw_expected_edge) * float(calibration_factor)
+        setattr(
+            self,
+            "_last_expected_edge_calibration",
+            {
+                "symbol": str(order.get("symbol") or "").strip().upper() or None,
+                "raw_expected_edge_bps": float(raw_expected_edge),
+                "calibrated_expected_edge_bps": float(calibrated_expected),
+                "calibration_factor": float(calibration_factor),
+                "ratio_source": str(ratio_source),
+                "symbol_samples": int(symbol_samples),
+                "min_samples": int(min_samples),
+                "prior_samples": int(prior_samples),
+                "ratio_floor": float(ratio_floor),
+                "ratio_cap": float(ratio_cap),
+            },
+        )
+        return float(calibrated_expected)
+
+    def _order_expected_edge_bps(self, order: Mapping[str, Any]) -> float | None:
+        """Extract expected-edge estimate and apply optional realism calibration."""
+
+        parsed = self._order_expected_edge_bps_raw(order)
+        if parsed is None:
+            return None
+        return float(
+            self._calibrate_expected_edge_bps(
+                order=order,
+                expected_edge_bps=float(parsed),
+            )
+        )
 
     @staticmethod
     def _normalize_probability_score(value: Any) -> float | None:
@@ -4893,6 +5017,233 @@ class ExecutionEngine:
             source = "after_hours_override"
         resolved = max(float(minimum), min(float(resolved), float(maximum)))
         return float(resolved), source, (session_regime or "unknown")
+
+    @staticmethod
+    def _confidence_z_from_level(level: float | None) -> float:
+        """Return one-sided z-score approximation for common confidence levels."""
+
+        parsed = _safe_float(level)
+        if parsed is None:
+            parsed = 0.90
+        parsed = max(0.5, min(float(parsed), 0.9999))
+        lookup = (
+            (0.999, 3.0902),
+            (0.995, 2.5758),
+            (0.99, 2.3263),
+            (0.975, 1.96),
+            (0.95, 1.6449),
+            (0.90, 1.2816),
+            (0.84, 1.0),
+            (0.80, 0.8416),
+        )
+        for threshold, z_score in lookup:
+            if parsed >= threshold:
+                return float(z_score)
+        try:
+            return float(statistics.NormalDist().inv_cdf(parsed))
+        except Exception:
+            return 1.2816
+
+    def _execution_expected_edge_confidence_allows_opening(
+        self,
+        *,
+        order: Mapping[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Gate openings when expected edge meaningfully exceeds confidence-bounded live edge."""
+
+        enabled = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_GATE_ENABLED"
+        )
+        if enabled is None:
+            enabled = _resolve_bool_env("AI_TRADING_EXPECTED_EDGE_CONFIDENCE_GATE_ENABLED")
+        if enabled is None:
+            enabled = False
+        if not bool(enabled):
+            return True, {"enabled": False, "reason": "disabled"}
+
+        symbol = str(order.get("symbol") or "").strip().upper()
+        if not symbol:
+            return True, {"enabled": True, "reason": "symbol_missing"}
+        expected_edge_bps = self._order_expected_edge_bps(order)
+        if expected_edge_bps is None:
+            return True, {"enabled": True, "reason": "expected_edge_missing", "symbol": symbol}
+        if float(expected_edge_bps) <= 0.0:
+            return False, {
+                "enabled": True,
+                "reason": "expected_edge_nonpositive",
+                "symbol": symbol,
+                "expected_edge_bps": float(expected_edge_bps),
+            }
+
+        min_samples = _config_int(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MIN_SAMPLES",
+            20,
+        )
+        if min_samples is None:
+            min_samples = 20
+        min_samples = max(2, min(int(min_samples), 5000))
+        window_fills = _config_int(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_WINDOW_FILLS",
+            64,
+        )
+        if window_fills is None:
+            window_fills = 64
+        window_fills = max(int(min_samples), min(int(window_fills), 5000))
+        confidence_level = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_LEVEL",
+            0.90,
+        )
+        z_score = self._confidence_z_from_level(confidence_level)
+        margin_bps = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MARGIN_BPS",
+            0.5,
+        )
+        if margin_bps is None:
+            margin_bps = 0.5
+        margin_bps = max(-25.0, min(float(margin_bps), 25.0))
+        required_lcb_bps = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MIN_LCB_BPS",
+            0.0,
+        )
+        if required_lcb_bps is None:
+            required_lcb_bps = 0.0
+        required_lcb_bps = max(-100.0, min(float(required_lcb_bps), 100.0))
+        max_ratio = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_MAX_RATIO",
+            2.5,
+        )
+        if max_ratio is None:
+            max_ratio = 2.5
+        max_ratio = max(0.1, min(float(max_ratio), 20.0))
+        denominator_floor = _config_float(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_DENOMINATOR_FLOOR_BPS",
+            0.5,
+        )
+        if denominator_floor is None:
+            denominator_floor = 0.5
+        denominator_floor = max(0.01, min(float(denominator_floor), 100.0))
+        require_session = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_REQUIRE_SESSION_MATCH"
+        )
+        if require_session is None:
+            require_session = True
+        allow_symbol_fallback = _resolve_bool_env(
+            "AI_TRADING_EXECUTION_EXPECTED_EDGE_CONFIDENCE_ALLOW_SYMBOL_FALLBACK"
+        )
+        if allow_symbol_fallback is None:
+            allow_symbol_fallback = True
+        session_regime = str(
+            self._execution_time_of_day_regime().get("session_regime") or "offhours"
+        ).strip().lower() or "offhours"
+
+        history_by_symbol_raw = getattr(self, "_symbol_live_edge_bps_history", None)
+        history_by_symbol = (
+            history_by_symbol_raw if isinstance(history_by_symbol_raw, dict) else {}
+        )
+        history_by_symbol_session_raw = getattr(
+            self,
+            "_symbol_session_live_edge_bps_history",
+            None,
+        )
+        history_by_symbol_session = (
+            history_by_symbol_session_raw
+            if isinstance(history_by_symbol_session_raw, dict)
+            else {}
+        )
+        history_values: list[float] = []
+        source = "symbol"
+        if bool(require_session):
+            session_key = f"{symbol}:{session_regime}"
+            session_history = history_by_symbol_session.get(session_key)
+            if isinstance(session_history, deque):
+                history_values = [
+                    float(v)
+                    for v in session_history
+                    if isinstance(v, (int, float)) and math.isfinite(float(v))
+                ]
+                source = "symbol_session"
+        if (
+            (not history_values or len(history_values) < int(min_samples))
+            and bool(allow_symbol_fallback)
+        ):
+            symbol_history = history_by_symbol.get(symbol)
+            if isinstance(symbol_history, deque):
+                history_values = [
+                    float(v)
+                    for v in symbol_history
+                    if isinstance(v, (int, float)) and math.isfinite(float(v))
+                ]
+                source = "symbol"
+        if not history_values:
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_samples",
+                "symbol": symbol,
+                "session_regime": session_regime,
+                "source": source,
+                "samples": 0,
+                "min_samples": int(min_samples),
+                "window_fills": int(window_fills),
+                "expected_edge_bps": float(expected_edge_bps),
+            }
+        tail_values = history_values[-int(window_fills):]
+        sample_count = int(len(tail_values))
+        if sample_count < int(min_samples):
+            return True, {
+                "enabled": True,
+                "reason": "insufficient_samples",
+                "symbol": symbol,
+                "session_regime": session_regime,
+                "source": source,
+                "samples": int(sample_count),
+                "min_samples": int(min_samples),
+                "window_fills": int(window_fills),
+                "expected_edge_bps": float(expected_edge_bps),
+            }
+        mean_edge_bps = float(statistics.mean(tail_values))
+        edge_std_bps = 0.0
+        if sample_count > 1:
+            try:
+                edge_std_bps = float(statistics.pstdev(tail_values))
+            except statistics.StatisticsError:
+                edge_std_bps = 0.0
+        stderr_bps = (
+            float(edge_std_bps) / math.sqrt(float(sample_count))
+            if sample_count > 1
+            else 0.0
+        )
+        lower_confidence_edge_bps = float(mean_edge_bps) - (float(z_score) * float(stderr_bps))
+        conservative_edge_bps = float(lower_confidence_edge_bps) + float(margin_bps)
+        ratio = float(expected_edge_bps) / max(float(conservative_edge_bps), float(denominator_floor))
+        lcb_passes = float(conservative_edge_bps) >= float(required_lcb_bps)
+        ratio_passes = float(ratio) <= float(max_ratio)
+        allowed = bool(lcb_passes and ratio_passes)
+        return bool(allowed), {
+            "enabled": True,
+            "reason": "ok" if allowed else "expected_edge_confidence_gate",
+            "symbol": symbol,
+            "session_regime": session_regime,
+            "source": source,
+            "samples": int(sample_count),
+            "window_fills": int(window_fills),
+            "expected_edge_bps": float(expected_edge_bps),
+            "mean_live_edge_bps": float(mean_edge_bps),
+            "live_edge_std_bps": float(edge_std_bps),
+            "edge_standard_error_bps": float(stderr_bps),
+            "confidence_level": float(
+                _safe_float(confidence_level) if _safe_float(confidence_level) is not None else 0.90
+            ),
+            "confidence_z": float(z_score),
+            "lower_confidence_edge_bps": float(lower_confidence_edge_bps),
+            "confidence_margin_bps": float(margin_bps),
+            "conservative_edge_bps": float(conservative_edge_bps),
+            "required_lcb_bps": float(required_lcb_bps),
+            "expected_to_confidence_ratio": float(ratio),
+            "max_expected_to_confidence_ratio": float(max_ratio),
+            "ratio_denominator_floor_bps": float(denominator_floor),
+            "lcb_passes": bool(lcb_passes),
+            "ratio_passes": bool(ratio_passes),
+        }
 
     def _execution_edge_realism_allows_opening(
         self,
@@ -9377,6 +9728,9 @@ class ExecutionEngine:
         queue_pressure_level: str | None = None,
         passive_fill_probability: float | None = None,
         route_urgency: str | None = None,
+        model_id: str | None = None,
+        model_version: str | None = None,
+        config_snapshot_hash: str | None = None,
     ) -> None:
         """Append a normalized order outcome entry for cycle-level KPI reporting."""
 
@@ -9477,6 +9831,12 @@ class ExecutionEngine:
             payload["passive_fill_probability"] = float(parsed_fill_probability)
         if route_urgency not in (None, ""):
             payload["route_urgency"] = str(route_urgency).strip().lower()
+        if model_id not in (None, ""):
+            payload["model_id"] = str(model_id).strip()
+        if model_version not in (None, ""):
+            payload["model_version"] = str(model_version).strip()
+        if config_snapshot_hash not in (None, ""):
+            payload["config_snapshot_hash"] = str(config_snapshot_hash).strip()
         outcomes.append(payload)
         self._cycle_order_outcomes = outcomes
 
@@ -9496,6 +9856,12 @@ class ExecutionEngine:
                 quality_payload["reason"] = str(reason)
             if normalized_fill_source:
                 quality_payload["fill_source"] = str(normalized_fill_source)
+            if model_id not in (None, ""):
+                quality_payload["model_id"] = str(model_id).strip()
+            if model_version not in (None, ""):
+                quality_payload["model_version"] = str(model_version).strip()
+            if config_snapshot_hash not in (None, ""):
+                quality_payload["config_snapshot_hash"] = str(config_snapshot_hash).strip()
             if parsed_expected_net_edge_bps is not None and math.isfinite(
                 float(parsed_expected_net_edge_bps)
             ):
@@ -10896,6 +11262,9 @@ class ExecutionEngine:
         expected_net_edge_bps: float | None = None,
         realized_net_edge_bps: float | None = None,
         fill_source: str | None = None,
+        model_id: str | None = None,
+        model_version: str | None = None,
+        config_snapshot_hash: str | None = None,
     ) -> None:
         """Persist canonical fill-derived record for learning and truth reporting."""
 
@@ -11005,6 +11374,113 @@ class ExecutionEngine:
                 parsed_realized_net_edge_bps = float(improvement_bps - float(fee_bps))
             except (TypeError, ValueError, ZeroDivisionError):
                 parsed_realized_net_edge_bps = None
+        resolved_model_id = (
+            str(model_id).strip() if model_id not in (None, "") else None
+        )
+        resolved_model_version = (
+            str(model_version).strip() if model_version not in (None, "") else None
+        )
+        resolved_config_snapshot_hash = (
+            str(config_snapshot_hash).strip()
+            if config_snapshot_hash not in (None, "")
+            else None
+        )
+        if runtime_payload is not None:
+            if resolved_model_id is None:
+                for key in ("model_id", "model_name", "model"):
+                    candidate = runtime_payload.get(key)
+                    if candidate not in (None, ""):
+                        resolved_model_id = str(candidate).strip()
+                        if resolved_model_id:
+                            break
+                        resolved_model_id = None
+            if resolved_model_version is None:
+                for key in ("model_version", "model_rev", "model_revision"):
+                    candidate = runtime_payload.get(key)
+                    if candidate not in (None, ""):
+                        resolved_model_version = str(candidate).strip()
+                        if resolved_model_version:
+                            break
+                        resolved_model_version = None
+            if resolved_config_snapshot_hash is None:
+                candidate = runtime_payload.get("config_snapshot_hash")
+                if candidate not in (None, ""):
+                    parsed = str(candidate).strip()
+                    if parsed:
+                        resolved_config_snapshot_hash = parsed
+            for container_key in ("metadata", "annotations"):
+                nested_raw = runtime_payload.get(container_key)
+                if not isinstance(nested_raw, Mapping):
+                    continue
+                if resolved_model_id is None:
+                    for key in ("model_id", "model_name", "model"):
+                        candidate = nested_raw.get(key)
+                        if candidate not in (None, ""):
+                            parsed = str(candidate).strip()
+                            if parsed:
+                                resolved_model_id = parsed
+                                break
+                if resolved_model_version is None:
+                    for key in ("model_version", "model_rev", "model_revision"):
+                        candidate = nested_raw.get(key)
+                        if candidate not in (None, ""):
+                            parsed = str(candidate).strip()
+                            if parsed:
+                                resolved_model_version = parsed
+                                break
+                if resolved_config_snapshot_hash is None:
+                    candidate = nested_raw.get("config_snapshot_hash")
+                    if candidate not in (None, ""):
+                        parsed = str(candidate).strip()
+                        if parsed:
+                            resolved_config_snapshot_hash = parsed
+                if (
+                    resolved_model_id is not None
+                    and resolved_model_version is not None
+                    and resolved_config_snapshot_hash is not None
+                ):
+                    break
+        if (
+            resolved_model_id is None
+            or resolved_model_version is None
+            or resolved_config_snapshot_hash is None
+        ):
+            meta_store = getattr(self, "_order_signal_meta", None)
+            if isinstance(meta_store, Mapping):
+                for candidate_key in (order_id, client_order_id):
+                    if candidate_key in (None, ""):
+                        continue
+                    meta_entry = meta_store.get(str(candidate_key))
+                    if isinstance(meta_entry, _SignalMeta):
+                        if resolved_model_id is None and meta_entry.model_id not in (None, ""):
+                            resolved_model_id = str(meta_entry.model_id).strip()
+                        if (
+                            resolved_model_version is None
+                            and meta_entry.model_version not in (None, "")
+                        ):
+                            resolved_model_version = str(meta_entry.model_version).strip()
+                        if (
+                            resolved_config_snapshot_hash is None
+                            and meta_entry.config_snapshot_hash not in (None, "")
+                        ):
+                            resolved_config_snapshot_hash = str(
+                                meta_entry.config_snapshot_hash
+                            ).strip()
+                        break
+                    if isinstance(meta_entry, Mapping):
+                        if resolved_model_id is None:
+                            candidate = meta_entry.get("model_id")
+                            if candidate not in (None, ""):
+                                resolved_model_id = str(candidate).strip()
+                        if resolved_model_version is None:
+                            candidate = meta_entry.get("model_version")
+                            if candidate not in (None, ""):
+                                resolved_model_version = str(candidate).strip()
+                        if resolved_config_snapshot_hash is None:
+                            candidate = meta_entry.get("config_snapshot_hash")
+                            if candidate not in (None, ""):
+                                resolved_config_snapshot_hash = str(candidate).strip()
+                        break
         signal_tags = getattr(signal, "signal_tags", None) or getattr(signal, "tags", "")
         try:
             confidence = float(getattr(signal, "confidence", 0.0))
@@ -11047,6 +11523,12 @@ class ExecutionEngine:
             and math.isfinite(float(parsed_realized_net_edge_bps))
         ):
             fill_record["realized_net_edge_bps"] = float(parsed_realized_net_edge_bps)
+        if resolved_model_id not in (None, ""):
+            fill_record["model_id"] = str(resolved_model_id)
+        if resolved_model_version not in (None, ""):
+            fill_record["model_version"] = str(resolved_model_version)
+        if resolved_config_snapshot_hash not in (None, ""):
+            fill_record["config_snapshot_hash"] = str(resolved_config_snapshot_hash)
         source_value = fill_source
         if source_value in (None, "") and runtime_payload is not None:
             source_value = runtime_payload.get("source")
@@ -12469,11 +12951,17 @@ class ExecutionEngine:
         )
         if expected_edge_hint is None:
             expected_edge_hint = self._coerce_finite_float(kwargs.get("expected_edge_bps"))
-        if expected_edge_hint is not None:
-            precheck_order["expected_net_edge_bps"] = float(expected_edge_hint)
         metadata_raw = kwargs.get("metadata")
         if isinstance(metadata_raw, Mapping):
             precheck_order["metadata"] = dict(metadata_raw)
+        if expected_edge_hint is not None:
+            precheck_order["expected_net_edge_bps_raw"] = float(expected_edge_hint)
+            precheck_order["expected_net_edge_bps"] = float(
+                self._calibrate_expected_edge_bps(
+                    order=precheck_order,
+                    expected_edge_bps=float(expected_edge_hint),
+                )
+            )
 
         if precheck_order["account_snapshot"] is None:
             if not self.is_initialized and not self._ensure_initialized():
@@ -13146,11 +13634,17 @@ class ExecutionEngine:
         )
         if expected_edge_hint is None:
             expected_edge_hint = self._coerce_finite_float(kwargs.get("expected_edge_bps"))
-        if expected_edge_hint is not None:
-            precheck_order["expected_net_edge_bps"] = float(expected_edge_hint)
         metadata_raw = kwargs.get("metadata")
         if isinstance(metadata_raw, Mapping):
             precheck_order["metadata"] = dict(metadata_raw)
+        if expected_edge_hint is not None:
+            precheck_order["expected_net_edge_bps_raw"] = float(expected_edge_hint)
+            precheck_order["expected_net_edge_bps"] = float(
+                self._calibrate_expected_edge_bps(
+                    order=precheck_order,
+                    expected_edge_bps=float(expected_edge_hint),
+                )
+            )
         if precheck_order["account_snapshot"] is None:
             if not self.is_initialized and not self._ensure_initialized():
                 return None
@@ -13768,6 +14262,53 @@ class ExecutionEngine:
                 "max_participation_rate": metadata_raw.get("max_participation_rate"),
                 "participation_mode": metadata_raw.get("participation_mode"),
             }
+        def _lineage_text(value: Any) -> str | None:
+            if value in (None, ""):
+                return None
+            parsed = str(value).strip()
+            return parsed or None
+
+        model_id_hint = _lineage_text(kwargs.get("model_id"))
+        model_version_hint = _lineage_text(kwargs.get("model_version"))
+        config_snapshot_hash_hint = _lineage_text(kwargs.get("config_snapshot_hash"))
+        if model_id_hint is None and isinstance(annotations, Mapping):
+            model_id_hint = (
+                _lineage_text(annotations.get("model_id"))
+                or _lineage_text(annotations.get("model_name"))
+                or _lineage_text(annotations.get("model"))
+            )
+        if model_version_hint is None and isinstance(annotations, Mapping):
+            model_version_hint = (
+                _lineage_text(annotations.get("model_version"))
+                or _lineage_text(annotations.get("model_rev"))
+                or _lineage_text(annotations.get("model_revision"))
+            )
+        if (
+            config_snapshot_hash_hint is None
+            and isinstance(annotations, Mapping)
+        ):
+            config_snapshot_hash_hint = _lineage_text(
+                annotations.get("config_snapshot_hash")
+            )
+        if model_id_hint is None and isinstance(metadata_raw, Mapping):
+            model_id_hint = (
+                _lineage_text(metadata_raw.get("model_id"))
+                or _lineage_text(metadata_raw.get("model_name"))
+                or _lineage_text(metadata_raw.get("model"))
+            )
+        if model_version_hint is None and isinstance(metadata_raw, Mapping):
+            model_version_hint = (
+                _lineage_text(metadata_raw.get("model_version"))
+                or _lineage_text(metadata_raw.get("model_rev"))
+                or _lineage_text(metadata_raw.get("model_revision"))
+            )
+        if (
+            config_snapshot_hash_hint is None
+            and isinstance(metadata_raw, Mapping)
+        ):
+            config_snapshot_hash_hint = _lineage_text(
+                metadata_raw.get("config_snapshot_hash")
+            )
         ignored_keys = {key for key in original_kwarg_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
         for key in list(ignored_keys):
             kwargs.pop(key, None)
@@ -13858,12 +14399,24 @@ class ExecutionEngine:
             "closing_position": closing_position,
             "account_snapshot": getattr(self, "_cycle_account", None),
         }
-        if expected_edge_hint is not None:
-            precheck_order["expected_net_edge_bps"] = float(expected_edge_hint)
         if isinstance(metadata_raw, Mapping):
             precheck_order["metadata"] = dict(metadata_raw)
         if isinstance(annotations, Mapping):
             precheck_order["annotations"] = dict(annotations)
+        if model_id_hint is not None:
+            precheck_order["model_id"] = str(model_id_hint)
+        if model_version_hint is not None:
+            precheck_order["model_version"] = str(model_version_hint)
+        if config_snapshot_hash_hint is not None:
+            precheck_order["config_snapshot_hash"] = str(config_snapshot_hash_hint)
+        if expected_edge_hint is not None:
+            precheck_order["expected_net_edge_bps_raw"] = float(expected_edge_hint)
+            precheck_order["expected_net_edge_bps"] = float(
+                self._calibrate_expected_edge_bps(
+                    order=precheck_order,
+                    expected_edge_bps=float(expected_edge_hint),
+                )
+            )
         if time_in_force_pref:
             precheck_order["time_in_force"] = time_in_force_pref
 
@@ -15994,6 +16547,9 @@ class ExecutionEngine:
                         and math.isfinite(float(expected_edge_hint))
                         else None
                     ),
+                    model_id=model_id_hint,
+                    model_version=model_version_hint,
+                    config_snapshot_hash=config_snapshot_hash_hint,
                 )
                 self._order_signal_meta = store
             else:
@@ -16023,6 +16579,12 @@ class ExecutionEngine:
             final_payload["expected_price"] = float(benchmark_price)
         if expected_edge_hint is not None and math.isfinite(float(expected_edge_hint)):
             final_payload["expected_net_edge_bps"] = float(expected_edge_hint)
+        if model_id_hint is not None:
+            final_payload["model_id"] = str(model_id_hint)
+        if model_version_hint is not None:
+            final_payload["model_version"] = str(model_version_hint)
+        if config_snapshot_hash_hint is not None:
+            final_payload["config_snapshot_hash"] = str(config_snapshot_hash_hint)
         if event_sequence > 0:
             final_payload["event_seq"] = event_sequence
         if last_prev_status is not None:
@@ -16063,6 +16625,12 @@ class ExecutionEngine:
                     pending_entry["expected_price"] = float(benchmark_price)
                 if expected_edge_hint is not None and math.isfinite(float(expected_edge_hint)):
                     pending_entry["expected_net_edge_bps"] = float(expected_edge_hint)
+                if model_id_hint is not None:
+                    pending_entry["model_id"] = str(model_id_hint)
+                if model_version_hint is not None:
+                    pending_entry["model_version"] = str(model_version_hint)
+                if config_snapshot_hash_hint is not None:
+                    pending_entry["config_snapshot_hash"] = str(config_snapshot_hash_hint)
                 pending_entry["updated_at"] = datetime.now(UTC).isoformat()
             self._pending_orders = store
 
@@ -16296,6 +16864,20 @@ class ExecutionEngine:
             if isinstance(runtime_fill_payload, dict):
                 if runtime_fill_payload.get("source") in (None, ""):
                     runtime_fill_payload["source"] = "live"
+                if model_id_hint is not None and runtime_fill_payload.get("model_id") in (None, ""):
+                    runtime_fill_payload["model_id"] = str(model_id_hint)
+                if (
+                    model_version_hint is not None
+                    and runtime_fill_payload.get("model_version") in (None, "")
+                ):
+                    runtime_fill_payload["model_version"] = str(model_version_hint)
+                if (
+                    config_snapshot_hash_hint is not None
+                    and runtime_fill_payload.get("config_snapshot_hash") in (None, "")
+                ):
+                    runtime_fill_payload["config_snapshot_hash"] = str(
+                        config_snapshot_hash_hint
+                    )
                 runtime_source = str(runtime_fill_payload.get("source") or "live")
             self._persist_fill_derived_trade_record(
                 symbol=symbol,
@@ -16315,6 +16897,9 @@ class ExecutionEngine:
                 ),
                 realized_net_edge_bps=realized_net_edge_bps,
                 fill_source=runtime_source,
+                model_id=model_id_hint,
+                model_version=model_version_hint,
+                config_snapshot_hash=config_snapshot_hash_hint,
             )
         else:
             runtime_source = None
@@ -16380,6 +16965,9 @@ class ExecutionEngine:
                 float(fill_probability) if fill_probability is not None else None
             ),
             route_urgency=str(smart_route_context.get("urgency") or ""),
+            model_id=model_id_hint,
+            model_version=model_version_hint,
+            config_snapshot_hash=config_snapshot_hash_hint,
         )
         self._update_markout_feedback(
             symbol=symbol,
@@ -21462,6 +22050,42 @@ class ExecutionEngine:
                     extra=skip_payload | {"detail": "edge_realism_gate"},
                 )
                 _mark_precheck_failure("edge_realism_gate", edge_realism_context)
+                return False
+            edge_confidence_allowed, edge_confidence_context = (
+                self._execution_expected_edge_confidence_allows_opening(order=order)
+            )
+            if not edge_confidence_allowed:
+                self.stats.setdefault("capacity_skips", 0)
+                self.stats.setdefault("skipped_orders", 0)
+                self.stats["capacity_skips"] += 1
+                self.stats["skipped_orders"] += 1
+                skip_payload = {
+                    "symbol": order.get("symbol"),
+                    "side": order.get("side"),
+                    "quantity": order.get("quantity"),
+                    "client_order_id": order.get("client_order_id"),
+                    "asset_class": order.get("asset_class"),
+                    "price_hint": order.get("price_hint"),
+                    "order_type": order.get("order_type", "unknown"),
+                    "using_fallback_price": bool(order.get("using_fallback_price")),
+                    "reason": "expected_edge_confidence_gate",
+                    "context": edge_confidence_context,
+                }
+                logger.warning(
+                    "ENTRY_CONSTRAINED_EXPECTED_EDGE_CONFIDENCE",
+                    extra=skip_payload,
+                )
+                logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=skip_payload)
+                logger.warning(
+                    "ORDER_SKIPPED_NONRETRYABLE_DETAIL | detail=%s context=%s",
+                    "expected_edge_confidence_gate",
+                    edge_confidence_context,
+                    extra=skip_payload | {"detail": "expected_edge_confidence_gate"},
+                )
+                _mark_precheck_failure(
+                    "expected_edge_confidence_gate",
+                    edge_confidence_context,
+                )
                 return False
             meta_label_allowed, meta_label_context = (
                 self._execution_meta_label_allows_opening(order=order)
